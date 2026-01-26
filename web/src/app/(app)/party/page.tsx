@@ -23,21 +23,21 @@ type PartyForm = {
 const parties = [
   {
     title: "소매A",
-    subtitle: "customer",
+    subtitle: "고객",
     meta: "서울 · 010-1111-1111",
-    badge: { label: "Active", tone: "active" as const },
+    badge: { label: "활성", tone: "active" as const },
   },
   {
     title: "소매B",
-    subtitle: "customer",
+    subtitle: "고객",
     meta: "부산 · 010-2222-2222",
-    badge: { label: "Active", tone: "active" as const },
+    badge: { label: "활성", tone: "active" as const },
   },
   {
     title: "공장AB",
-    subtitle: "vendor",
+    subtitle: "공장",
     meta: "중국 · 010-9999-0000",
-    badge: { label: "Vendor", tone: "neutral" as const },
+    badge: { label: "공장", tone: "neutral" as const },
   },
 ];
 
@@ -55,23 +55,23 @@ export default function PartyPage() {
   return (
     <div className="space-y-6" id="party.root">
       <ActionBar
-        title="Party"
+        title="거래처"
         subtitle="거래처 명부"
-        actions={<Button>+ New Party</Button>}
+        actions={<Button>+ 새 거래처</Button>}
         id="party.actionBar"
       />
       <FilterBar id="party.filterBar">
         <Select>
-          <option>customer</option>
-          <option>vendor</option>
+          <option>고객</option>
+          <option>공장</option>
         </Select>
         <Select>
-          <option>Region</option>
+          <option>지역</option>
         </Select>
         <Select>
-          <option>Active</option>
+          <option>활성</option>
         </Select>
-        <Input placeholder="name / phone" />
+        <Input placeholder="이름 / 연락처" />
       </FilterBar>
       <div id="party.body">
         <SplitLayout
@@ -87,29 +87,29 @@ export default function PartyPage() {
             <div id="party.detailPanel">
               <Card id="party.detail.basic">
                 <CardHeader>
-                  <ActionBar title="Basic Information" />
+                  <ActionBar title="기본 정보" />
                 </CardHeader>
                 <CardBody>
                   <form
                     className="grid gap-4"
                     onSubmit={form.handleSubmit((values) => mutation.mutate(values))}
                   >
-                    <Input placeholder="name*" {...form.register("name", { required: true })} />
+                    <Input placeholder="거래처명*" {...form.register("name", { required: true })} />
                     <Select {...form.register("party_type", { required: true })}>
-                      <option value="customer">customer</option>
-                      <option value="vendor">vendor</option>
+                      <option value="customer">고객</option>
+                      <option value="vendor">공장</option>
                     </Select>
-                    <Input placeholder="phone" {...form.register("phone")} />
-                    <Input placeholder="region" {...form.register("region")} />
-                    <Input placeholder="address" {...form.register("address")} />
-                    <Textarea placeholder="note" {...form.register("note")} />
+                    <Input placeholder="연락처" {...form.register("phone")} />
+                    <Input placeholder="지역" {...form.register("region")} />
+                    <Input placeholder="주소" {...form.register("address")} />
+                    <Textarea placeholder="메모" {...form.register("note")} />
                     <div className="flex justify-end">
                       <Button type="submit" disabled={!canSave || mutation.isPending}>
                         저장
                       </Button>
                       {!canSave ? (
                         <p className="mt-2 text-xs text-[var(--muted)]">
-                          ms_s 계약의 party upsert RPC명이 필요합니다.
+                          ms_s 계약의 거래처 등록 RPC명이 필요합니다.
                         </p>
                       ) : null}
                     </div>

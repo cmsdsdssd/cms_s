@@ -16,7 +16,8 @@ export function getSupabaseClient() {
 export function getSchemaClient() {
   const supabase = getSupabaseClient();
   if (!supabase) return null;
-  return supabase.schema(MS_SCHEMA);
+  const schemaFn = supabase.schema as unknown as (schema: string) => typeof supabase;
+  return schemaFn(MS_SCHEMA);
 }
 
 export function assertSupabaseConfig() {

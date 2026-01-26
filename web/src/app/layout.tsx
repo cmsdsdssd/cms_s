@@ -14,8 +14,8 @@ const jetbrainsMono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "CMS_S Phase1",
-  description: "Phase1 operations UI",
+  title: "MS_S 1차 운영",
+  description: "1차 운영 UI",
 };
 
 export default function RootLayout({

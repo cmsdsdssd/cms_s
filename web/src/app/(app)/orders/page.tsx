@@ -28,15 +28,15 @@ type OrderForm = {
 const orders = [
   {
     title: "AB-10293R",
-    subtitle: "ORDER_PENDING · Qty 2",
+    subtitle: "대기 · 수량 2",
     meta: "소매A · 2026-01-26",
-    badge: { label: "ORDER_PENDING", tone: "warning" as const },
+    badge: { label: "대기", tone: "warning" as const },
   },
   {
     title: "GC-4410W",
-    subtitle: "READY_TO_SHIP · Qty 1",
+    subtitle: "출고 준비 · 수량 1",
     meta: "소매B · 2026-01-25",
-    badge: { label: "READY", tone: "active" as const },
+    badge: { label: "준비", tone: "active" as const },
   },
 ];
 
@@ -46,7 +46,7 @@ const customerOptions = [
 ];
 
 const platingOptions = [
-  { label: "G (Phase1)", value: "9f0c15f2-82df-4909-87d6-b13aa628571e" },
+  { label: "G (1차)", value: "9f0c15f2-82df-4909-87d6-b13aa628571e" },
 ];
 
 export default function OrdersPage() {
@@ -66,20 +66,20 @@ export default function OrdersPage() {
   return (
     <div className="space-y-6" id="orders.root">
       <ActionBar
-        title="Orders"
+        title="주문"
         subtitle="주문 라인 관리"
-        actions={<Button>+ New Order Line</Button>}
+        actions={<Button>+ 신규 주문</Button>}
         id="orders.actionBar"
       />
       <FilterBar id="orders.filterBar">
-        <Input placeholder="Search model" />
+        <Input placeholder="모델명 검색" />
         <Select>
-          <option>Status</option>
+          <option>상태</option>
         </Select>
         <Select>
-          <option>Customer</option>
+          <option>거래처</option>
         </Select>
-        <Button variant="secondary">More Filters</Button>
+        <Button variant="secondary">추가 필터</Button>
       </FilterBar>
       <div id="orders.body">
         <SplitLayout
@@ -87,7 +87,7 @@ export default function OrdersPage() {
             <div className="space-y-4" id="orders.listPanel">
               <Card id="orders.quickCreate">
                 <CardHeader>
-                  <ActionBar title="Quick Create" />
+                  <ActionBar title="빠른 등록" />
                 </CardHeader>
                 <CardBody>
                   <form
@@ -95,7 +95,7 @@ export default function OrdersPage() {
                     onSubmit={form.handleSubmit((values) => mutation.mutate(values))}
                   >
                     <SearchSelect
-                      label="customer*"
+                      label="거래처*"
                       placeholder="검색"
                       options={customerOptions}
                       value={selectedCustomer}
@@ -104,17 +104,17 @@ export default function OrdersPage() {
                         form.setValue("customer_party_id", value);
                       }}
                     />
-                    <Input placeholder="model_name*" {...form.register("model_name", { required: true })} />
-                    <Input placeholder="suffix*" {...form.register("suffix", { required: true })} />
-                    <Input placeholder="color*" {...form.register("color", { required: true })} />
+                    <Input placeholder="모델명*" {...form.register("model_name", { required: true })} />
+                    <Input placeholder="종류*" {...form.register("suffix", { required: true })} />
+                    <Input placeholder="색상*" {...form.register("color", { required: true })} />
                     <Input
                       type="number"
                       min={1}
-                      placeholder="qty"
+                      placeholder="수량"
                       {...form.register("qty", { valueAsNumber: true })}
                     />
                     <SearchSelect
-                      label="plating_variant"
+                      label="도금 옵션"
                       placeholder="검색"
                       options={platingOptions}
                       value={selectedPlating}
@@ -124,11 +124,11 @@ export default function OrdersPage() {
                       }}
                     />
                     <Button type="submit" disabled={!canCreate || mutation.isPending}>
-                      생성
+                      등록
                     </Button>
                     {!canCreate ? (
                       <p className="text-xs text-[var(--muted)]">
-                        ms_s 계약의 order upsert RPC명이 필요합니다.
+                        ms_s 계약의 주문 등록 RPC명이 필요합니다.
                       </p>
                     ) : null}
                   </form>
@@ -140,7 +140,7 @@ export default function OrdersPage() {
                 ))}
               </div>
               <Button variant="secondary" onClick={() => setModalOpen(true)}>
-                Create Shipment from Selected
+                선택 항목 출고 생성
               </Button>
             </div>
           }
@@ -148,16 +148,16 @@ export default function OrdersPage() {
             <div id="orders.detailPanel">
               <Card id="orders.detail.basic">
                 <CardHeader>
-                  <ActionBar title="Order Detail" />
+                  <ActionBar title="주문 상세" />
                 </CardHeader>
                 <CardBody>
                   <form className="grid gap-3">
-                    <SearchSelect label="customer" placeholder="검색" options={customerOptions} />
-                    <Input placeholder="model_name" />
-                    <Input placeholder="suffix" />
-                    <Input placeholder="color" />
-                    <Input type="number" min={1} placeholder="qty" />
-                    <Textarea placeholder="memo" />
+                    <SearchSelect label="거래처" placeholder="검색" options={customerOptions} />
+                    <Input placeholder="모델명" />
+                    <Input placeholder="종류" />
+                    <Input placeholder="색상" />
+                    <Input type="number" min={1} placeholder="수량" />
+                    <Textarea placeholder="메모" />
                     <div className="flex justify-end">
                       <Button>저장</Button>
                     </div>
@@ -168,7 +168,7 @@ export default function OrdersPage() {
           }
         />
       </div>
-      <Modal open={modalOpen} onClose={() => setModalOpen(false)} title="Create Shipment">
+      <Modal open={modalOpen} onClose={() => setModalOpen(false)} title="출고 생성">
         <div className="space-y-4">
           <p className="text-sm text-[var(--muted)]">
             선택된 라인을 거래처별로 묶어 출고 문서를 생성합니다.
@@ -180,7 +180,7 @@ export default function OrdersPage() {
             <Button variant="secondary" onClick={() => setModalOpen(false)}>
               취소
             </Button>
-            <Button onClick={() => setModalOpen(false)}>Confirm</Button>
+            <Button onClick={() => setModalOpen(false)}>확인</Button>
           </div>
         </div>
       </Modal>

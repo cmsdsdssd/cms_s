@@ -2,15 +2,15 @@ import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "@/lib/utils";
 
 const buttonVariants = cva(
-  "inline-flex items-center justify-center gap-2 rounded-[12px] px-4 py-2 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-60",
+  "inline-flex items-center justify-center gap-2 rounded-[12px] px-4 py-2 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-60 shadow-[0_6px_16px_rgba(47,109,246,0.12)]",
   {
     variants: {
       variant: {
         primary: "bg-[var(--primary)] text-white hover:bg-[var(--primary-strong)]",
         secondary:
-          "border border-[var(--panel-border)] bg-white text-[var(--foreground)] hover:bg-[var(--chip)]",
-        ghost: "text-[var(--foreground)] hover:bg-[var(--chip)]",
-        danger: "bg-[var(--danger)] text-white hover:bg-[#991b1b]",
+          "border border-[var(--panel-border)] bg-white text-[var(--foreground)] shadow-none hover:bg-[var(--chip)]",
+        ghost: "text-[var(--foreground)] shadow-none hover:bg-[var(--chip)]",
+        danger: "bg-[var(--danger)] text-white hover:bg-[#991b1b] shadow-[0_6px_16px_rgba(192,38,45,0.18)]",
       },
       size: {
         sm: "h-8 px-3 text-xs",

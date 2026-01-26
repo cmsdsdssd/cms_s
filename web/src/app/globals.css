@@ -1,20 +1,20 @@
 @import "tailwindcss";
 
 :root {
-  --background: #f7f6f3;
-  --foreground: #1b1b1f;
+  --background: #f4f7fb;
+  --foreground: #1a1f2c;
   --panel: #ffffff;
-  --panel-border: #e7e4de;
-  --muted: #6b6f76;
-  --muted-weak: #8a8f97;
-  --primary: #2b6cb0;
-  --primary-strong: #1f4f86;
-  --accent: #d97706;
-  --success: #15803d;
-  --danger: #b91c1c;
-  --chip: #eef2f6;
-  --shadow: 0 10px 25px rgba(19, 24, 35, 0.08);
-  --radius: 14px;
+  --panel-border: #e5ecf5;
+  --muted: #6b7384;
+  --muted-weak: #8b94a6;
+  --primary: #2f6df6;
+  --primary-strong: #1f56d8;
+  --accent: #f59e0b;
+  --success: #1e8e5f;
+  --danger: #c0262d;
+  --chip: #f1f5fb;
+  --shadow: 0 12px 28px rgba(16, 24, 40, 0.08);
+  --radius: 16px;
 }
 
 @theme inline {
@@ -27,8 +27,8 @@
 body {
   background: radial-gradient(
       circle at top,
-      rgba(222, 228, 237, 0.6),
-      transparent 55%
+      rgba(220, 233, 255, 0.5),
+      transparent 60%
     )
     var(--background);
   color: var(--foreground);

@@ -15,13 +15,13 @@ import {
 import { cn } from "@/lib/utils";
 
 const navItems = [
-  { href: "/dashboard", label: "Dashboard", icon: Gauge },
-  { href: "/catalog", label: "Catalog", icon: Boxes },
-  { href: "/orders", label: "Orders", icon: ClipboardList },
-  { href: "/party", label: "Party", icon: Store },
-  { href: "/repairs", label: "Repairs", icon: Wrench },
-  { href: "/shipments", label: "Shipments", icon: PackageCheck },
-  { href: "/ar", label: "AR", icon: CreditCard },
+  { href: "/dashboard", label: "대시보드", icon: Gauge },
+  { href: "/catalog", label: "카탈로그", icon: Boxes },
+  { href: "/orders", label: "주문", icon: ClipboardList },
+  { href: "/party", label: "거래처", icon: Store },
+  { href: "/repairs", label: "수리", icon: Wrench },
+  { href: "/shipments", label: "출고", icon: PackageCheck },
+  { href: "/ar", label: "미수", icon: CreditCard },
 ];
 
 export function Sidebar() {
@@ -34,8 +34,8 @@ export function Sidebar() {
           CS
         </div>
         <div>
-          <p className="text-sm font-semibold text-[var(--foreground)]">CMS_S</p>
-          <p className="text-xs text-[var(--muted)]">Phase1 Ops</p>
+          <p className="text-sm font-semibold text-[var(--foreground)]">MS_S</p>
+          <p className="text-xs text-[var(--muted)]">1차 운영</p>
         </div>
       </div>
       <nav className="flex-1 space-y-1">
@@ -70,7 +70,7 @@ export function Sidebar() {
           )}
         >
           <Settings size={18} />
-          Settings
+          설정
         </Link>
       </div>
     </aside>

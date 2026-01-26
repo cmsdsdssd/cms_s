@@ -13,22 +13,22 @@ const kpis = [
 
 const recent = [
   {
-    title: "Shipment #S-240126-04",
-    subtitle: "소매A · 6 lines",
+    title: "출고 #S-240126-04",
+    subtitle: "소매A · 6라인",
     meta: "방금 전",
-    badge: { label: "CONFIRMED", tone: "active" as const },
+    badge: { label: "확정", tone: "active" as const },
   },
   {
-    title: "Order #O-240126-11",
-    subtitle: "소매B · 3 lines",
+    title: "주문 #O-240126-11",
+    subtitle: "소매B · 3라인",
     meta: "15분 전",
-    badge: { label: "READY", tone: "warning" as const },
+    badge: { label: "준비", tone: "warning" as const },
   },
   {
-    title: "AR Payment",
+    title: "미수 결제",
     subtitle: "소매A · ₩2,000,000",
     meta: "1시간 전",
-    badge: { label: "PAYMENT", tone: "neutral" as const },
+    badge: { label: "결제", tone: "neutral" as const },
   },
 ];
 
@@ -36,9 +36,9 @@ export default function DashboardPage() {
   return (
     <div className="space-y-6" id="dashboard.root">
       <ActionBar
-        title="Dashboard"
-        subtitle="Phase1 operations overview"
-        actions={<Button variant="secondary">Quick Actions</Button>}
+        title="대시보드"
+        subtitle="1차 운영 요약"
+        actions={<Button variant="secondary">빠른 작업</Button>}
         className="mb-2"
         id="dashboard.actionBar"
       />
@@ -50,7 +50,7 @@ export default function DashboardPage() {
           최근 30일
         </Button>
         <Button variant="ghost" size="sm">
-          커스텀
+          기간 설정
         </Button>
       </FilterBar>
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-4" id="dashboard.body">
@@ -59,7 +59,7 @@ export default function DashboardPage() {
         ))}
       </div>
       <div className="space-y-4">
-        <ActionBar title="Recent Activity" />
+        <ActionBar title="최근 활동" />
         <div className="space-y-3">
           {recent.map((item) => (
             <ListCard key={item.title} {...item} />

@@ -24,7 +24,7 @@ export function ListCard({
   return (
     <Card
       className={cn(
-        "flex w-full items-center justify-between px-5 py-4",
+        "flex w-full items-center justify-between px-5 py-4 transition hover:shadow-[0_12px_24px_rgba(16,24,40,0.08)]",
         selected && "ring-2 ring-[var(--primary)]",
         className
       )}

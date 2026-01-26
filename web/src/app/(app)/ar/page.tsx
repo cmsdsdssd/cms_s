@@ -14,15 +14,15 @@ import { SearchSelect } from "@/components/ui/search-select";
 const parties = [
   {
     title: "소매A",
-    subtitle: "balance ₩4,100,000",
-    meta: "last activity: 2026-01-26",
-    badge: { label: "DUE", tone: "warning" as const },
+    subtitle: "잔액 ₩4,100,000",
+    meta: "최근 활동: 2026-01-26",
+    badge: { label: "미수", tone: "warning" as const },
   },
   {
     title: "소매B",
-    subtitle: "balance -₩500,000",
-    meta: "last activity: 2026-01-25",
-    badge: { label: "CREDIT", tone: "active" as const },
+    subtitle: "잔액 -₩500,000",
+    meta: "최근 활동: 2026-01-25",
+    badge: { label: "크레딧", tone: "active" as const },
   },
 ];
 
@@ -43,22 +43,22 @@ export default function ArPage() {
   return (
     <div className="space-y-6" id="ar.root">
       <ActionBar
-        title="AR"
+        title="미수"
         subtitle="미수/결제/반품"
         actions={
           <div className="flex items-center gap-2">
             <Button variant="secondary" onClick={() => setPaymentOpen(true)}>
-              + Record Payment
+              + 결제 등록
             </Button>
-            <Button onClick={() => setReturnOpen(true)}>+ Record Return</Button>
+            <Button onClick={() => setReturnOpen(true)}>+ 반품 등록</Button>
           </div>
         }
         id="ar.actionBar"
       />
       <FilterBar id="ar.filterBar">
-        <Input placeholder="Search party" />
+        <Input placeholder="거래처 검색" />
         <Select>
-          <option>Balance range</option>
+          <option>잔액 범위</option>
         </Select>
         <Input type="date" />
       </FilterBar>
@@ -75,25 +75,25 @@ export default function ArPage() {
             <div id="ar.detailPanel">
               <Card id="ar.detail.ledgerTable">
                 <CardHeader>
-                  <ActionBar title="Ledger" />
+                  <ActionBar title="원장" />
                 </CardHeader>
                 <CardBody>
                   <div className="space-y-3">
                     <div className="grid grid-cols-4 text-xs uppercase tracking-[0.12em] text-[var(--muted)]">
-                      <span>Date</span>
-                      <span>Type</span>
-                      <span>Amount</span>
-                      <span>Memo</span>
+                      <span>일자</span>
+                      <span>구분</span>
+                      <span>금액</span>
+                      <span>메모</span>
                     </div>
                     <div className="grid grid-cols-4 text-sm text-[var(--foreground)]">
                       <span>2026-01-26</span>
-                      <span>SHIPMENT</span>
+                      <span>출고</span>
                       <span>+₩1,200,000</span>
-                      <span>Shipment S-240126-04</span>
+                      <span>출고 S-240126-04</span>
                     </div>
                     <div className="grid grid-cols-4 text-sm text-[var(--foreground)]">
                       <span>2026-01-25</span>
-                      <span>PAYMENT</span>
+                      <span>결제</span>
                       <span>-₩2,000,000</span>
                       <span>입금</span>
                     </div>
@@ -104,27 +104,27 @@ export default function ArPage() {
           }
         />
       </div>
-      <Modal open={paymentOpen} onClose={() => setPaymentOpen(false)} title="Record Payment">
+      <Modal open={paymentOpen} onClose={() => setPaymentOpen(false)} title="결제 등록">
         <div className="grid gap-3">
-          <SearchSelect label="party*" placeholder="검색" options={partyOptions} />
+          <SearchSelect label="거래처*" placeholder="검색" options={partyOptions} />
           <Input type="date" />
-          <Input placeholder="method" />
-          <Input type="number" min={0} placeholder="amount" />
-          <Textarea placeholder="memo" />
+          <Input placeholder="결제 수단" />
+          <Input type="number" min={0} placeholder="금액" />
+          <Textarea placeholder="메모" />
           <div className="flex justify-end">
-            <Button onClick={() => setPaymentOpen(false)}>Confirm</Button>
+            <Button onClick={() => setPaymentOpen(false)}>확인</Button>
           </div>
         </div>
       </Modal>
-      <Modal open={returnOpen} onClose={() => setReturnOpen(false)} title="Record Return">
+      <Modal open={returnOpen} onClose={() => setReturnOpen(false)} title="반품 등록">
         <div className="grid gap-3">
-          <SearchSelect label="party*" placeholder="검색" options={partyOptions} />
-          <SearchSelect label="shipment_line*" placeholder="검색" options={shipmentLineOptions} />
-          <Input type="number" min={1} placeholder="return_qty" />
-          <Input type="number" min={0} placeholder="amount" />
-          <Textarea placeholder="memo" />
+          <SearchSelect label="거래처*" placeholder="검색" options={partyOptions} />
+          <SearchSelect label="출고 라인*" placeholder="검색" options={shipmentLineOptions} />
+          <Input type="number" min={1} placeholder="반품 수량" />
+          <Input type="number" min={0} placeholder="금액" />
+          <Textarea placeholder="메모" />
           <div className="flex justify-end">
-            <Button onClick={() => setReturnOpen(false)}>Confirm</Button>
+            <Button onClick={() => setReturnOpen(false)}>확인</Button>
           </div>
         </div>
       </Modal>

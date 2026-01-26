@@ -31,15 +31,15 @@ type RepairForm = {
 const repairs = [
   {
     title: "소매A",
-    subtitle: "RECEIVED · 2 items",
+    subtitle: "접수 · 2건",
     meta: "2026-01-25",
-    badge: { label: "RECEIVED", tone: "warning" as const },
+    badge: { label: "접수", tone: "warning" as const },
   },
   {
     title: "소매B",
-    subtitle: "READY_TO_SHIP · 1 item",
+    subtitle: "출고 준비 · 1건",
     meta: "2026-01-24",
-    badge: { label: "READY", tone: "active" as const },
+    badge: { label: "준비", tone: "active" as const },
   },
 ];
 
@@ -49,7 +49,7 @@ const customerOptions = [
 ];
 
 const platingOptions = [
-  { label: "G (Phase1)", value: "9f0c15f2-82df-4909-87d6-b13aa628571e" },
+  { label: "G (1차)", value: "9f0c15f2-82df-4909-87d6-b13aa628571e" },
 ];
 
 export default function RepairsPage() {
@@ -68,20 +68,20 @@ export default function RepairsPage() {
   return (
     <div className="space-y-6" id="repairs.root">
       <ActionBar
-        title="Repairs"
+        title="수리"
         subtitle="수리 접수"
-        actions={<Button>+ New Repair</Button>}
+        actions={<Button>+ 신규 수리</Button>}
         id="repairs.actionBar"
       />
       <FilterBar id="repairs.filterBar">
-        <Input placeholder="Search model" />
+        <Input placeholder="모델명 검색" />
         <Select>
-          <option>Status</option>
+          <option>상태</option>
         </Select>
         <Select>
-          <option>Customer</option>
+          <option>거래처</option>
         </Select>
-        <Input type="date" placeholder="received_at" />
+        <Input type="date" placeholder="접수일" />
       </FilterBar>
       <div id="repairs.body">
         <SplitLayout
@@ -96,7 +96,7 @@ export default function RepairsPage() {
             <div id="repairs.detailPanel">
               <Card id="repairs.detail.basic">
                 <CardHeader>
-                  <ActionBar title="Repair Detail" />
+                  <ActionBar title="수리 상세" />
                 </CardHeader>
                 <CardBody>
                   <form
@@ -104,7 +104,7 @@ export default function RepairsPage() {
                     onSubmit={form.handleSubmit((values) => mutation.mutate(values))}
                   >
                     <SearchSelect
-                      label="customer*"
+                      label="거래처*"
                       placeholder="검색"
                       options={customerOptions}
                       value={selectedCustomer}
@@ -113,22 +113,22 @@ export default function RepairsPage() {
                         form.setValue("customer_party_id", value);
                       }}
                     />
-                    <Input type="date" placeholder="received_at*" {...form.register("received_at")} />
-                    <Input placeholder="model_name" {...form.register("model_name")} />
-                    <Input placeholder="suffix" {...form.register("suffix")} />
+                    <Input type="date" placeholder="접수일*" {...form.register("received_at")} />
+                    <Input placeholder="모델명" {...form.register("model_name")} />
+                    <Input placeholder="종류" {...form.register("suffix")} />
                     <Select {...form.register("material_code")}>
-                      <option>material</option>
+                      <option>재질</option>
                       <option value="14">14</option>
                       <option value="18">18</option>
                       <option value="24">24</option>
                       <option value="925">925</option>
                       <option value="00">00</option>
                     </Select>
-                    <Input type="number" min={1} placeholder="qty" {...form.register("qty", { valueAsNumber: true })} />
-                    <Input type="number" min={0} placeholder="measured_weight" {...form.register("measured_weight_g", { valueAsNumber: true })} />
-                    <Input type="number" min={0} placeholder="repair_fee_krw" {...form.register("repair_fee_krw", { valueAsNumber: true })} />
+                    <Input type="number" min={1} placeholder="수량" {...form.register("qty", { valueAsNumber: true })} />
+                    <Input type="number" min={0} placeholder="실측중량" {...form.register("measured_weight_g", { valueAsNumber: true })} />
+                    <Input type="number" min={0} placeholder="수리비" {...form.register("repair_fee_krw", { valueAsNumber: true })} />
                     <SearchSelect
-                      label="plating_variant"
+                      label="도금 옵션"
                       placeholder="검색"
                       options={platingOptions}
                       value={selectedPlating}
@@ -137,14 +137,14 @@ export default function RepairsPage() {
                         form.setValue("plating_variant_id", value);
                       }}
                     />
-                    <Textarea placeholder="memo" {...form.register("memo")} />
+                    <Textarea placeholder="메모" {...form.register("memo")} />
                     <div className="flex justify-end">
                       <Button type="submit" disabled={!canSave || mutation.isPending}>
                         저장
                       </Button>
                       {!canSave ? (
                         <p className="mt-2 text-xs text-[var(--muted)]">
-                          ms_s 계약의 repair upsert RPC명이 필요합니다.
+                          ms_s 계약의 수리 등록 RPC명이 필요합니다.
                         </p>
                       ) : null}
                     </div>
