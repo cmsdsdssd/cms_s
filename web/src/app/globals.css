@@ -1,41 +1,77 @@
 @import "tailwindcss";
 
 :root {
-  --background: #f4f7fb;
-  --foreground: #1a1f2c;
+  --background: #f8f9fc;
+  --foreground: #0f172a;
+  
+  /* Retool-like crisp panels */
   --panel: #ffffff;
-  --panel-border: #e5ecf5;
-  --muted: #6b7384;
-  --muted-weak: #8b94a6;
-  --primary: #2f6df6;
-  --primary-strong: #1f56d8;
+  --panel-border: #e2e8f0;
+  --panel-hover: #fcfdfe;
+  
+  /* Sophisticated Grays */
+  --muted: #64748b;
+  --muted-weak: #94a3b8;
+  --muted-strong: #475569;
+
+  /* Brand Colors - Modern Blue */
+  --primary: #2563eb;
+  --primary-strong: #1d4ed8;
+  --primary-foreground: #ffffff;
+
+  /* Accents */
   --accent: #f59e0b;
-  --success: #1e8e5f;
-  --danger: #c0262d;
-  --chip: #f1f5fb;
-  --shadow: 0 12px 28px rgba(16, 24, 40, 0.08);
-  --radius: 16px;
+  --success: #10b981;
+  --danger: #ef4444;
+  --warning: #f59e0b;
+  
+  /* Interaction */
+  --input-bg: #ffffff;
+  --input-border: #cbd5e1;
+  --ring: rgba(37, 99, 235, 0.2);
+
+  /* UI Tokens */
+  --chip: #f1f5f9;
+  --radius: 8px; /* Tighter radius for SaaS feel */
+  --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+  --shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px -1px rgba(0, 0, 0, 0.1);
+  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -4px rgba(0, 0, 0, 0.1);
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
+  --color-panel: var(--panel);
+  --color-panel-border: var(--panel-border);
+  --color-muted: var(--muted);
+  --color-primary: var(--primary);
   --font-sans: var(--font-manrope);
   --font-mono: var(--font-jetbrains-mono);
+  --radius-card: var(--radius);
+  --shadow-card: var(--shadow);
 }
 
 body {
-  background: radial-gradient(
-      circle at top,
-      rgba(220, 233, 255, 0.5),
-      transparent 60%
-    )
-    var(--background);
+  background-color: var(--background);
   color: var(--foreground);
-  font-family: var(--font-manrope), sans-serif;
+  font-family: var(--font-manrope), system-ui, sans-serif;
   min-height: 100vh;
+  letter-spacing: -0.01em; /* Modern typography tightening */
+  -webkit-font-smoothing: antialiased;
 }
 
-* {
-  box-sizing: border-box;
+/* Scrollbar refinement */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--muted-weak);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--muted);
 }

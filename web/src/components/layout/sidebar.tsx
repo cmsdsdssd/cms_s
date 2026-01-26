@@ -28,14 +28,14 @@ export function Sidebar() {
   const pathname = usePathname();
 
   return (
-    <aside className="flex h-screen w-[260px] flex-col border-r border-[var(--panel-border)] bg-white px-4 py-6">
-      <div className="mb-8 flex items-center gap-2 px-3">
-        <div className="flex h-9 w-9 items-center justify-center rounded-[12px] bg-[var(--primary)] text-white">
-          CS
+    <aside className="sticky top-0 flex h-screen w-[260px] flex-col border-r border-[var(--panel-border)] bg-[var(--panel)] px-4 py-6 shadow-[var(--shadow-sm)] z-10">
+      <div className="mb-8 flex items-center gap-3 px-3">
+        <div className="flex h-10 w-10 items-center justify-center rounded-[var(--radius)] bg-[var(--primary)] text-white shadow-md">
+          <span className="font-bold">CS</span>
         </div>
         <div>
-          <p className="text-sm font-semibold text-[var(--foreground)]">MS_S</p>
-          <p className="text-xs text-[var(--muted)]">1차 운영</p>
+          <p className="font-bold text-[var(--foreground)] tracking-tight">MS_S System</p>
+          <p className="text-xs font-medium text-[var(--muted)]">Production v1</p>
         </div>
       </div>
       <nav className="flex-1 space-y-1">
@@ -47,29 +47,43 @@ export function Sidebar() {
               key={item.href}
               href={item.href}
               className={cn(
-                "flex items-center gap-3 rounded-[12px] px-3 py-2 text-sm font-medium",
+                "group flex items-center gap-3 rounded-[var(--radius)] px-3 py-2.5 text-sm font-medium transition-all duration-200",
                 active
-                  ? "bg-[#eef2f6] text-[var(--foreground)]"
-                  : "text-[var(--muted)] hover:bg-[#f6f7f9]"
+                  ? "bg-[var(--chip)] text-[var(--primary-strong)] shadow-sm"
+                  : "text-[var(--muted-strong)] hover:bg-[var(--panel-hover)] hover:text-[var(--foreground)]"
               )}
             >
-              <Icon size={18} />
+              <Icon
+                size={18}
+                className={cn(
+                  "transition-colors",
+                  active ? "text-[var(--primary)]" : "text-[var(--muted-weak)] group-hover:text-[var(--foreground)]"
+                )}
+              />
               {item.label}
             </Link>
           );
         })}
       </nav>
-      <div className="mt-6">
+      <div className="mt-6 border-t border-[var(--panel-border)] pt-4">
         <Link
           href="/settings"
           className={cn(
-            "flex items-center gap-3 rounded-[12px] px-3 py-2 text-sm font-medium",
+            "group flex items-center gap-3 rounded-[var(--radius)] px-3 py-2.5 text-sm font-medium transition-all",
             pathname === "/settings"
-              ? "bg-[#eef2f6] text-[var(--foreground)]"
-              : "text-[var(--muted)] hover:bg-[#f6f7f9]"
+              ? "bg-[var(--chip)] text-[var(--primary-strong)]"
+              : "text-[var(--muted-strong)] hover:bg-[var(--panel-hover)] hover:text-[var(--foreground)]"
           )}
         >
-          <Settings size={18} />
+          <Settings
+            size={18}
+            className={cn(
+              "transition-colors",
+              pathname === "/settings"
+                ? "text-[var(--primary)]"
+                : "text-[var(--muted-weak)] group-hover:text-[var(--foreground)]"
+            )}
+          />
           설정
         </Link>
       </div>

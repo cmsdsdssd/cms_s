@@ -4,7 +4,7 @@ export function Input({ className, ...props }: React.InputHTMLAttributes<HTMLInp
   return (
     <input
       className={cn(
-        "h-10 w-full rounded-[12px] border border-[var(--panel-border)] bg-[#f7f9fc] px-3 text-sm text-[var(--foreground)] placeholder:text-[var(--muted-weak)] focus:border-[var(--primary)] focus:outline-none",
+        "flex h-10 w-full rounded-[var(--radius)] border border-[var(--input-border)] bg-[var(--input-bg)] px-3 py-2 text-sm text-[var(--foreground)] ring-offset-[var(--background)] file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-[var(--muted-weak)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:border-[var(--primary)] disabled:cursor-not-allowed disabled:opacity-50 transition-all",
         className
       )}
       {...props}
@@ -16,7 +16,7 @@ export function Select({ className, ...props }: React.SelectHTMLAttributes<HTMLS
   return (
     <select
       className={cn(
-        "h-10 w-full rounded-[12px] border border-[var(--panel-border)] bg-[#f7f9fc] px-3 text-sm text-[var(--foreground)] focus:border-[var(--primary)] focus:outline-none",
+        "flex h-10 w-full rounded-[var(--radius)] border border-[var(--input-border)] bg-[var(--input-bg)] px-3 py-2 text-sm text-[var(--foreground)] ring-offset-[var(--background)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:border-[var(--primary)] disabled:cursor-not-allowed disabled:opacity-50 transition-all",
         className
       )}
       {...props}
@@ -28,7 +28,7 @@ export function Textarea({ className, ...props }: React.TextareaHTMLAttributes<H
   return (
     <textarea
       className={cn(
-        "min-h-[96px] w-full rounded-[12px] border border-[var(--panel-border)] bg-[#f7f9fc] px-3 py-2 text-sm text-[var(--foreground)] placeholder:text-[var(--muted-weak)] focus:border-[var(--primary)] focus:outline-none",
+        "flex min-h-[80px] w-full rounded-[var(--radius)] border border-[var(--input-border)] bg-[var(--input-bg)] px-3 py-2 text-sm text-[var(--foreground)] ring-offset-[var(--background)] placeholder:text-[var(--muted-weak)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:border-[var(--primary)] disabled:cursor-not-allowed disabled:opacity-50 transition-all",
         className
       )}
       {...props}

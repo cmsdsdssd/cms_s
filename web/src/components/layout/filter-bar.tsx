@@ -4,7 +4,7 @@ export function FilterBar({ className, children }: React.HTMLAttributes<HTMLDivE
   return (
     <div
       className={cn(
-        "flex flex-wrap items-center gap-3 rounded-[var(--radius)] border border-[var(--panel-border)] bg-[var(--panel)] px-4 py-3 shadow-[var(--shadow)]",
+        "flex flex-wrap items-center gap-3 rounded-[var(--radius)] border border-[var(--panel-border)] bg-[var(--panel)] px-4 py-3 shadow-[var(--shadow-sm)]",
         className
       )}
     >

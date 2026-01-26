@@ -24,10 +24,11 @@ export function ListCard({
   return (
     <Card
       className={cn(
-        "flex w-full items-center justify-between px-5 py-4 transition hover:shadow-[0_12px_24px_rgba(16,24,40,0.08)]",
-        selected && "ring-2 ring-[var(--primary)]",
+        "flex w-full items-center justify-between border-b border-[var(--panel-border)] bg-[var(--panel)] px-5 py-4 transition first:rounded-t-[var(--radius)] last:rounded-b-[var(--radius)] last:border-b-0 hover:bg-[var(--panel-hover)]",
+        selected && "bg-[var(--chip)] shadow-inner",
         className
       )}
+      style={{ boxShadow: "none" }}
     >
       <div className="flex flex-col gap-1">
         <div className="flex items-center gap-2">

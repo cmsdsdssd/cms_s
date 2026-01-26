@@ -11,7 +11,7 @@ export function ActionBar({ title, subtitle, actions, className, ...props }: Act
     <div className={cn("flex items-center justify-between", className)} {...props}>
       <div>
         <div className="flex items-center gap-3">
-          <h1 className="text-2xl font-semibold text-[var(--foreground)]">{title}</h1>
+          <h1 className="text-xl font-bold tracking-tight text-[var(--foreground)]">{title}</h1>
         </div>
         {subtitle ? <p className="text-sm text-[var(--muted)]">{subtitle}</p> : null}
       </div>
