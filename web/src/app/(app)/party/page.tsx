@@ -1,132 +1,216 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { useForm } from "react-hook-form";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useRouter, useSearchParams } from "next/navigation";
 import { ActionBar } from "@/components/layout/action-bar";
 import { FilterBar } from "@/components/layout/filter-bar";
 import { SplitLayout } from "@/components/layout/split-layout";
 import { Button } from "@/components/ui/button";
-import { Input, Select, Textarea } from "@/components/ui/field";
-import { ListCard } from "@/components/ui/list-card";
-import { Card, CardBody, CardHeader } from "@/components/ui/card";
+import { Input, Select } from "@/components/ui/field";
 import { useRpcMutation } from "@/hooks/use-rpc-mutation";
 import { CONTRACTS, isFnConfigured } from "@/lib/contracts";
-
-type PartyForm = {
-  name: string;
-  party_type: string;
-  phone?: string;
-  region?: string;
-  address?: string;
-  note?: string;
-};
-
-const parties = [
-  {
-    title: "소매A",
-    subtitle: "고객",
-    meta: "서울 · 010-1111-1111",
-    badge: { label: "활성", tone: "active" as const },
-  },
-  {
-    title: "소매B",
-    subtitle: "고객",
-    meta: "부산 · 010-2222-2222",
-    badge: { label: "활성", tone: "active" as const },
-  },
-  {
-    title: "공장AB",
-    subtitle: "공장",
-    meta: "중국 · 010-9999-0000",
-    badge: { label: "공장", tone: "neutral" as const },
-  },
-];
+import { fetchParties, fetchPartyDetail } from "@/lib/api/cmsParty";
+import { PartyList } from "@/components/party/PartyList";
+import { PartyDetail } from "@/components/party/PartyDetail";
+import type { PartyForm } from "@/components/party/types";
 
 export default function PartyPage() {
-  const form = useForm<PartyForm>({
-    defaultValues: { party_type: "customer" },
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const queryClient = useQueryClient();
+  const [typeFilter, setTypeFilter] = useState("customer");
+  const [activeOnly, setActiveOnly] = useState(true);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+  const [regionFilter, setRegionFilter] = useState("");
+  const [page, setPage] = useState(1);
+  const [selectedPartyId, setSelectedPartyId] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<"basic" | "address" | "contact" | "prefix">("basic");
+
+  useEffect(() => {
+    const type = searchParams.get("type");
+    if (type === "customer" || type === "vendor") {
+      setTypeFilter(type);
+    }
+  }, [searchParams]);
+
+  useEffect(() => {
+    const params = new URLSearchParams(searchParams.toString());
+    params.set("type", typeFilter);
+    router.replace(`/party?${params.toString()}`);
+  }, [router, searchParams, typeFilter]);
+
+  // Debounce search
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearch(searchQuery);
+      setPage(1); // Reset page on search change
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
+
+  // Reset page on filter change
+  useEffect(() => {
+    setPage(1);
+    setSelectedPartyId(null);
+    setActiveTab("basic");
+  }, [typeFilter, activeOnly, regionFilter]);
+
+  // List Query
+  const { data: listData, isLoading: isListLoading, error: listError } = useQuery({
+    queryKey: ["cms", "parties", typeFilter, activeOnly, debouncedSearch, regionFilter, page],
+    queryFn: () =>
+      fetchParties({
+        type: typeFilter,
+        activeOnly,
+        search: debouncedSearch,
+        region: regionFilter || undefined,
+        page,
+        pageSize: 50,
+      }),
   });
+
+  // Detail Query
+  const { data: detailData, isLoading: isDetailLoading } = useQuery({
+    queryKey: ["cms", "party", selectedPartyId],
+    queryFn: () => fetchPartyDetail(selectedPartyId!),
+    enabled: !!selectedPartyId && selectedPartyId !== "new",
+  });
+
+  const form = useForm<PartyForm>({
+    defaultValues: {
+      party_type: "customer",
+      is_active: true,
+    },
+  });
+
+  // Reset form when selection changes
+  useEffect(() => {
+    if (selectedPartyId === "new") {
+      form.reset({
+        party_type: typeFilter, // Default to current filter
+        name: "",
+        phone: "",
+        region: "",
+        address: "",
+        note: "",
+        is_active: true,
+      });
+    } else if (detailData) {
+      form.reset({
+        party_type: detailData.party_type,
+        name: detailData.name,
+        phone: detailData.phone ?? "",
+        region: detailData.region ?? "",
+        address: detailData.address ?? "",
+        note: detailData.note ?? "",
+        is_active: detailData.is_active,
+      });
+    }
+  }, [selectedPartyId, detailData, form, typeFilter]);
+
+  useEffect(() => {
+    if (!selectedPartyId && listData?.data.length) {
+      setSelectedPartyId(listData.data[0]?.party_id ?? null);
+    }
+  }, [listData, selectedPartyId]);
 
   const mutation = useRpcMutation<string>({
     fn: CONTRACTS.functions.partyUpsert,
     successMessage: "저장 완료",
+    onSuccess: (partyId) => {
+      queryClient.invalidateQueries({ queryKey: ["cms", "parties"] });
+      queryClient.invalidateQueries({ queryKey: ["cms", "party", partyId] });
+      if (selectedPartyId === "new") {
+        setSelectedPartyId(partyId);
+      }
+    },
   });
+
   const canSave = isFnConfigured(CONTRACTS.functions.partyUpsert);
+
+  const handleCreate = () => {
+    setSelectedPartyId("new");
+    setActiveTab("basic");
+  };
+
+  const onSubmit = (values: PartyForm) => {
+    mutation.mutate({
+      p_party_type: values.party_type,
+      p_name: values.name,
+      p_phone: values.phone || null,
+      p_region: values.region || null,
+      p_address: values.address || null,
+      p_memo: values.note || null,
+      p_party_id: selectedPartyId === "new" ? null : selectedPartyId,
+      p_is_active: values.is_active,
+    });
+  };
 
   return (
     <div className="space-y-6" id="party.root">
       <ActionBar
         title="거래처"
         subtitle="거래처 명부"
-        actions={<Button>+ 새 거래처</Button>}
+        actions={<Button onClick={handleCreate}>+ 거래처 추가</Button>}
         id="party.actionBar"
       />
       <FilterBar id="party.filterBar">
-        <Select>
-          <option>고객</option>
-          <option>공장</option>
+        <Select
+          value={typeFilter}
+          onChange={(e) => setTypeFilter(e.target.value)}
+        >
+          <option value="customer">고객</option>
+          <option value="vendor">공장</option>
         </Select>
-        <Select>
-          <option>지역</option>
+        <Input
+          placeholder="지역"
+          value={regionFilter}
+          onChange={(e) => setRegionFilter(e.target.value)}
+        />
+        <Select
+          value={activeOnly ? "active" : "all"}
+          onChange={(e) => setActiveOnly(e.target.value === "active")}
+        >
+          <option value="active">활성만</option>
+          <option value="all">전체</option>
         </Select>
-        <Select>
-          <option>활성</option>
-        </Select>
-        <Input placeholder="이름 / 연락처" />
+        <Input
+          placeholder="이름 검색"
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+        />
       </FilterBar>
+
       <div id="party.body">
         <SplitLayout
           className="pt-2"
           left={
-            <div className="space-y-3" id="party.listPanel">
-              {parties.map((party) => (
-                <ListCard key={party.title} {...party} />
-              ))}
-            </div>
+            <PartyList
+              parties={listData?.data ?? []}
+              isLoading={isListLoading}
+              error={listError as Error}
+              selectedPartyId={selectedPartyId}
+              page={page}
+              totalCount={listData?.count}
+              onSelect={setSelectedPartyId}
+              onPageChange={setPage}
+            />
           }
           right={
-            <div id="party.detailPanel">
-              <Card id="party.detail.basic">
-                <CardHeader>
-                  <ActionBar title="기본 정보" />
-                </CardHeader>
-                <CardBody>
-                  <form
-                    className="grid gap-4"
-                    onSubmit={form.handleSubmit((values) =>
-                      mutation.mutate({
-                        p_party_type: values.party_type,
-                        p_name: values.name,
-                        p_phone: values.phone ?? null,
-                        p_region: values.region ?? null,
-                        p_address: values.address ?? null,
-                        p_memo: values.note ?? null,
-                        p_party_id: null,
-                      })
-                    )}
-                  >
-                    <Input placeholder="거래처명*" {...form.register("name", { required: true })} />
-                    <Select {...form.register("party_type", { required: true })}>
-                      <option value="customer">고객</option>
-                      <option value="vendor">공장</option>
-                    </Select>
-                    <Input placeholder="연락처" {...form.register("phone")} />
-                    <Input placeholder="지역" {...form.register("region")} />
-                    <Input placeholder="주소" {...form.register("address")} />
-                    <Textarea placeholder="메모" {...form.register("note")} />
-                    <div className="flex justify-end">
-                      <Button type="submit" disabled={!canSave || mutation.isPending}>
-                        저장
-                      </Button>
-                      {!canSave ? (
-                        <p className="mt-2 text-xs text-[var(--muted)]">
-                          cms 계약의 거래처 등록 RPC명이 필요합니다.
-                        </p>
-                      ) : null}
-                    </div>
-                  </form>
-                </CardBody>
-              </Card>
-            </div>
+            <PartyDetail
+              selectedPartyId={selectedPartyId}
+              detail={detailData}
+              isLoading={isDetailLoading}
+              activeTab={activeTab}
+              onTabChange={setActiveTab}
+              form={form}
+              canSave={canSave}
+              isSaving={mutation.isPending}
+              onSubmit={onSubmit}
+            />
           }
         />
       </div>

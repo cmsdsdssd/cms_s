@@ -6,10 +6,10 @@ export async function callRpc<T>(fn: string, params: Record<string, unknown>) {
   if (!schema) {
     throw new Error("Supabase env is missing");
   }
-  const rpc = schema.rpc as unknown as (
+  const rpc = (schema.rpc as unknown as (
     fn: string,
     params?: Record<string, unknown>
-  ) => Promise<{ data: T | null; error: unknown }>;
+  ) => Promise<{ data: T | null; error: unknown }>).bind(schema);
   const { data, error } = await rpc(fn, params);
   if (error) {
     throw error;

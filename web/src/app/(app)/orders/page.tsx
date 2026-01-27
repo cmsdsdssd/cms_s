@@ -1,976 +1,1004 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { useForm } from "react-hook-form";
+import { useMemo, useRef, useState } from "react";
+import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { ActionBar } from "@/components/layout/action-bar";
-import { FilterBar } from "@/components/layout/filter-bar";
-import { SplitLayout } from "@/components/layout/split-layout";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input, Select, Textarea } from "@/components/ui/field";
-import { Modal } from "@/components/ui/modal";
 import { Badge } from "@/components/ui/badge";
-import { SearchSelect } from "@/components/ui/search-select";
-import { CONTRACTS, isFnConfigured } from "@/lib/contracts";
-import { useRpcMutation } from "@/hooks/use-rpc-mutation";
+import { CONTRACTS } from "@/lib/contracts";
 import { getSchemaClient } from "@/lib/supabase/client";
 import { callRpc } from "@/lib/supabase/rpc";
 import { cn } from "@/lib/utils";
 
-type OrderRow = {
-  order_line_id?: string;
-  customer_party_id?: string;
-  customer_name?: string;
+type ClientSummary = {
+  client_id?: string;
+  client_name?: string;
+  balance_krw?: number | null;
+  last_tx_at?: string | null;
+  open_invoices_count?: number | null;
+  credit_limit_krw?: number | null;
+  risk_flag?: string | null;
+};
+
+type MasterLookup = {
+  master_item_id?: string;
   model_name?: string;
-  model_name_raw?: string | null;
-  suffix?: string;
-  color?: string;
-  size?: string | null;
-  qty?: number;
-  is_plated?: boolean;
-  plating_variant_id?: string | null;
-  requested_due_date?: string | null;
-  priority_code?: string | null;
-  status?: string;
-  match_state?: string | null;
-  memo?: string | null;
-  source_channel?: string | null;
-  created_at?: string | null;
+  photo_url?: string | null;
+  vendor_name?: string | null;
+  material_code_default?: string | null;
+  category_code?: string | null;
+  weight_default_g?: number | null;
+  deduction_weight_default_g?: number | null;
+  center_qty_default?: number | null;
+  sub1_qty_default?: number | null;
+  sub2_qty_default?: number | null;
+  material_price?: number | null;
+  labor_basic?: number | null;
+  labor_center?: number | null;
+  labor_side1?: number | null;
+  labor_side2?: number | null;
 };
 
-type PartyRow = {
-  party_id?: string;
-  name?: string;
-  party_type?: string;
-  is_active?: boolean;
+type StoneRow = {
+  stone_id?: string;
+  stone_name?: string;
 };
 
-type PlatingVariantRow = {
-  plating_variant_id?: string;
-  display_name?: string | null;
-  plating_type?: string | null;
-  color_code?: string | null;
-  thickness_code?: string | null;
-  is_active?: boolean;
+type PlatingColorRow = {
+  color_code?: string;
 };
 
-type VendorPrefixRow = {
-  prefix?: string;
-  vendor_party_id?: string;
-};
-
-type EnumValueRow = {
-  value?: string;
-};
-
-type OrderForm = {
-  customer_party_id: string;
-  model_name: string;
+type GridRow = {
+  id: string;
+  order_line_id?: string | null;
+  client_input: string;
+  client_id: string | null;
+  client_name: string | null;
+  model_input: string;
+  model_name: string | null;
   suffix: string;
   color: string;
-  qty: number;
-  size?: string;
-  is_plated?: boolean;
-  plating_variant_id?: string;
-  requested_due_date?: string;
-  priority_code?: string;
-  source_channel?: string;
-  memo?: string;
+  qty: string;
+  center_stone: string;
+  center_qty: string;
+  sub1_stone: string;
+  sub1_qty: string;
+  sub2_stone: string;
+  sub2_qty: string;
+  is_plated: boolean;
+  plating_color: string;
+  memo: string;
+  master_item_id: string | null;
+  photo_url: string | null;
+  material_price: number | null;
+  labor_basic: number | null;
+  labor_center: number | null;
+  labor_side1: number | null;
+  labor_side2: number | null;
 };
 
-const normalizeText = (value?: string) => (value ?? "").trim();
-const toNullable = (value?: string) => {
-  const trimmed = normalizeText(value);
-  return trimmed.length > 0 ? trimmed : null;
+type RowErrors = {
+  client?: string;
+  model?: string;
+  category?: string;
+  color?: string;
+  qty?: string;
+  plating?: string;
+  stones?: string;
 };
 
-const formatDate = (value?: string | null) => {
-  if (!value) return "-";
-  return value.slice(0, 10);
+const PAGE_SIZE = 10;
+const INITIAL_PAGES = 2;
+const EMPTY_ROWS = PAGE_SIZE * INITIAL_PAGES;
+
+const createRowId = () => {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return crypto.randomUUID();
+  }
+  return `row-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 };
 
-const normalizeDate = (value?: string | null) => {
-  if (!value) return null;
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? null : date;
+const createEmptyRow = (index: number): GridRow => ({
+  id: `row-${index}-${createRowId()}`,
+  order_line_id: null,
+  client_input: "",
+  client_id: null,
+  client_name: null,
+  model_input: "",
+  model_name: null,
+  suffix: "",
+  color: "",
+  qty: "",
+  center_stone: "",
+  center_qty: "",
+  sub1_stone: "",
+  sub1_qty: "",
+  sub2_stone: "",
+  sub2_qty: "",
+  is_plated: false,
+  plating_color: "",
+  memo: "",
+  master_item_id: null,
+  photo_url: null,
+  material_price: null,
+  labor_basic: null,
+  labor_center: null,
+  labor_side1: null,
+  labor_side2: null,
+});
+
+const normalizeText = (value: string) => value.trim();
+const toNumber = (value: string) => {
+  const parsed = Number(value);
+  if (Number.isNaN(parsed)) return null;
+  return parsed;
+};
+
+const resolveSignedImageUrl = async (path: string | null) => {
+  if (!path) return null;
+  if (path.startsWith("http://") || path.startsWith("https://")) return path;
+  const params = new URLSearchParams({ path });
+  const res = await fetch(`/api/master-image?${params.toString()}`);
+  if (!res.ok) return null;
+  const json = (await res.json()) as { signedUrl?: string };
+  return json.signedUrl ?? null;
 };
 
 export default function OrdersPage() {
-  const [selectedCustomer, setSelectedCustomer] = useState("");
-  const [selectedPlating, setSelectedPlating] = useState("");
-  const [selectedDetailCustomer, setSelectedDetailCustomer] = useState("");
-  const [selectedDetailPlating, setSelectedDetailPlating] = useState("");
-  const [keepCustomer, setKeepCustomer] = useState(true);
-  const [highlightId, setHighlightId] = useState<string | null>(null);
-  const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
-  const [selectedOrderIds, setSelectedOrderIds] = useState<Set<string>>(new Set());
-  const [shipmentModalOpen, setShipmentModalOpen] = useState(false);
-  const [shipmentDate, setShipmentDate] = useState("");
-  const [shipmentMemo, setShipmentMemo] = useState("");
-  const [statusTo, setStatusTo] = useState("");
-  const [statusReason, setStatusReason] = useState("");
-  const [filterStatus, setFilterStatus] = useState("");
-  const [filterCustomer, setFilterCustomer] = useState("");
-  const [filterModel, setFilterModel] = useState("");
-  const [filterVendor, setFilterVendor] = useState("");
-  const [filterPlated, setFilterPlated] = useState("all");
-  const [filterDue, setFilterDue] = useState("all");
-
-  const quickForm = useForm<OrderForm>({
-    defaultValues: { qty: 1, is_plated: false },
-  });
-  const detailForm = useForm<OrderForm>({
-    defaultValues: { qty: 1, is_plated: false },
-  });
-
   const schemaClient = getSchemaClient();
-  const enumFn = CONTRACTS.functions.enumValues;
   const orderUpsertFn = CONTRACTS.functions.orderUpsertV2;
-  const canUpsert = isFnConfigured(orderUpsertFn);
-  const canSetStatus = isFnConfigured(CONTRACTS.functions.orderSetStatus);
-  const canCreateShipment = isFnConfigured(CONTRACTS.functions.shipmentCreateFromOrders);
-
-  const actorId = process.env.NEXT_PUBLIC_CMS_ACTOR_ID ?? "";
-
-  const customersQuery = useQuery({
-    queryKey: ["cms", "customers"],
-    queryFn: async () => {
-      if (!schemaClient) throw new Error("Supabase env is missing");
-      const { data, error } = await schemaClient
-        .from("cms_party")
-        .select("party_id, name, party_type, is_active")
-        .eq("party_type", "customer")
-        .eq("is_active", true)
-        .order("name");
-      if (error) throw error;
-      return (data ?? []) as PartyRow[];
-    },
-  });
-
-  const vendorsQuery = useQuery({
-    queryKey: ["cms", "vendors"],
-    queryFn: async () => {
-      if (!schemaClient) throw new Error("Supabase env is missing");
-      const { data, error } = await schemaClient
-        .from("cms_party")
-        .select("party_id, name, party_type, is_active")
-        .eq("party_type", "vendor")
-        .eq("is_active", true)
-        .order("name");
-      if (error) throw error;
-      return (data ?? []) as PartyRow[];
-    },
-  });
-
-  const platingQuery = useQuery({
-    queryKey: ["cms", "plating_variants"],
-    queryFn: async () => {
-      if (!schemaClient) throw new Error("Supabase env is missing");
-      const { data, error } = await schemaClient
-        .from("cms_plating_variant")
-        .select("plating_variant_id, display_name, plating_type, color_code, thickness_code, is_active")
-        .eq("is_active", true)
-        .order("display_name");
-      if (error) throw error;
-      return (data ?? []) as PlatingVariantRow[];
-    },
-  });
-
-  const vendorPrefixQuery = useQuery({
-    queryKey: ["cms", "vendor_prefix"],
-    queryFn: async () => {
-      if (!schemaClient) throw new Error("Supabase env is missing");
-      const { data, error } = await schemaClient
-        .from("cms_vendor_prefix_map")
-        .select("prefix, vendor_party_id");
-      if (error) throw error;
-      return (data ?? []) as VendorPrefixRow[];
-    },
-  });
-
-  const ordersQuery = useQuery({
-    queryKey: ["cms", "orders", "worklist"],
-    queryFn: async () => {
-      if (!schemaClient) throw new Error("Supabase env is missing");
-      const { data, error } = await schemaClient
-        .from(CONTRACTS.views.ordersWorklist)
-        .select("*")
-        .order("created_at", { ascending: false })
-        .limit(200);
-      if (error) throw error;
-      return (data ?? []) as OrderRow[];
-    },
-  });
-
-  const orderStatusQuery = useQuery({
-    queryKey: ["cms", "enum", "order_status"],
-    queryFn: async () => {
-      if (!isFnConfigured(enumFn)) return [] as EnumValueRow[];
-      const data = await callRpc<EnumValueRow[]>(enumFn, { p_enum: "cms_e_order_status" });
-      return data ?? [];
-    },
-  });
-
-  const priorityQuery = useQuery({
-    queryKey: ["cms", "enum", "priority"],
-    queryFn: async () => {
-      if (!isFnConfigured(enumFn)) return [] as EnumValueRow[];
-      const data = await callRpc<EnumValueRow[]>(enumFn, { p_enum: "cms_e_priority_code" });
-      return data ?? [];
-    },
-  });
-
-
-  const customerOptions = useMemo(() => {
-    return (customersQuery.data ?? [])
-      .filter((row) => row.party_id && row.name)
-      .map((row) => ({ label: row.name ?? "-", value: row.party_id ?? "" }));
-  }, [customersQuery.data]);
-
-  const platingOptions = useMemo(() => {
-    return (platingQuery.data ?? [])
-      .filter((row) => row.plating_variant_id)
-      .map((row) => {
-        const label = row.display_name
-          ? String(row.display_name)
-          : [row.plating_type, row.color_code, row.thickness_code].filter(Boolean).join("/") || "도금";
-        return { label, value: row.plating_variant_id ?? "" };
-      });
-  }, [platingQuery.data]);
-
-  const platingLabelById = useMemo(() => {
-    const map = new Map<string, string>();
-    platingOptions.forEach((option) => map.set(option.value, option.label));
-    return map;
-  }, [platingOptions]);
-
-  const vendorNameById = useMemo(() => {
-    const map = new Map<string, string>();
-    (vendorsQuery.data ?? []).forEach((row) => {
-      if (row.party_id && row.name) map.set(row.party_id, row.name);
-    });
-    return map;
-  }, [vendorsQuery.data]);
-
-  const vendorPrefixes = useMemo(() => {
-    return (vendorPrefixQuery.data ?? [])
-      .filter((row) => row.prefix && row.vendor_party_id)
-      .map((row) => ({
-        prefix: String(row.prefix ?? ""),
-        vendorPartyId: String(row.vendor_party_id ?? ""),
-      }))
-      .sort((a, b) => b.prefix.length - a.prefix.length);
-  }, [vendorPrefixQuery.data]);
-
-  const ordersWithGuess = useMemo(() => {
-    return (ordersQuery.data ?? []).map((order) => {
-      const model = (order.model_name ?? "").toLowerCase();
-      let vendorPartyId = "";
-      for (const row of vendorPrefixes) {
-        if (model.startsWith(row.prefix.toLowerCase())) {
-          vendorPartyId = row.vendorPartyId;
-          break;
-        }
-      }
-      const vendorGuess = vendorPartyId ? vendorNameById.get(vendorPartyId) ?? vendorPartyId : "";
-      return { ...order, vendor_guess: vendorGuess, vendor_guess_id: vendorPartyId } as OrderRow & {
-        vendor_guess: string;
-        vendor_guess_id: string;
-      };
-    });
-  }, [ordersQuery.data, vendorPrefixes, vendorNameById]);
-
-  const vendorOptions = useMemo(() => {
-    const unique = new Map<string, string>();
-    ordersWithGuess.forEach((order) => {
-      if (order.vendor_guess_id && order.vendor_guess) {
-        unique.set(order.vendor_guess_id, order.vendor_guess);
-      }
-    });
-    return Array.from(unique.entries()).map(([value, label]) => ({ value, label }));
-  }, [ordersWithGuess]);
-
-  const filteredOrders = useMemo(() => {
-    const today = new Date();
-    return ordersWithGuess.filter((order) => {
-      if (filterStatus && order.status !== filterStatus) return false;
-      if (filterCustomer && order.customer_party_id !== filterCustomer) return false;
-      if (filterModel) {
-        const target = [order.model_name, order.suffix, order.color]
-          .filter(Boolean)
-          .join(" ")
-          .toLowerCase();
-        if (!target.includes(filterModel.toLowerCase())) return false;
-      }
-      if (filterVendor && order.vendor_guess_id !== filterVendor) return false;
-      if (filterPlated === "plated" && !order.is_plated) return false;
-      if (filterPlated === "not_plated" && order.is_plated) return false;
-
-      if (filterDue !== "all") {
-        const dueDate = normalizeDate(order.requested_due_date ?? null);
-        if (!dueDate) return false;
-        const diff = Math.ceil((dueDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
-        if (filterDue === "overdue" && diff >= 0) return false;
-        if (filterDue === "7" && diff > 7) return false;
-        if (filterDue === "14" && diff > 14) return false;
-      }
-      return true;
-    });
-  }, [
-    ordersWithGuess,
-    filterStatus,
-    filterCustomer,
-    filterVendor,
-    filterModel,
-    filterPlated,
-    filterDue,
-  ]);
-
-  const selectedOrder = useMemo(
-    () => ordersWithGuess.find((order) => order.order_line_id === selectedOrderId) ?? null,
-    [ordersWithGuess, selectedOrderId]
+  const [rows, setRows] = useState<GridRow[]>(() =>
+    Array.from({ length: EMPTY_ROWS }, (_, idx) => createEmptyRow(idx))
   );
+  const [rowErrors, setRowErrors] = useState<Record<string, RowErrors>>({});
+  const [headerClient, setHeaderClient] = useState<ClientSummary | null>(null);
+  const [headerMode, setHeaderMode] = useState<"client" | "model" | null>("client");
+  const [headerModelName, setHeaderModelName] = useState<string>("");
+  const [receiptDate, setReceiptDate] = useState("");
+  const [activeMaster, setActiveMaster] = useState<MasterLookup | null>(null);
+  const [imageLoading, setImageLoading] = useState(false);
+  const saveCache = useRef(new Map<string, string>());
+  const saveInFlight = useRef(new Set<string>());
+  const [pageIndex, setPageIndex] = useState(1);
 
-  const statusOptions = useMemo(() => {
-    return (orderStatusQuery.data ?? []).map((row) => row.value ?? "").filter(Boolean);
-  }, [orderStatusQuery.data]);
+  const clientCache = useRef(new Map<string, ClientSummary>());
+  const masterCache = useRef(new Map<string, MasterLookup>());
 
-  const priorityOptions = useMemo(() => {
-    return (priorityQuery.data ?? []).map((row) => row.value ?? "").filter(Boolean);
-  }, [priorityQuery.data]);
-
-  const selectionSummary = useMemo(() => {
-    const groups = new Map<string, { name: string; count: number }>();
-    selectedOrderIds.forEach((id) => {
-      const order = ordersWithGuess.find((row) => row.order_line_id === id);
-      if (!order?.customer_party_id) return;
-      const name = order.customer_name ?? order.customer_party_id;
-      const current = groups.get(order.customer_party_id) ?? { name, count: 0 };
-      current.count += 1;
-      groups.set(order.customer_party_id, current);
-    });
-    return Array.from(groups.values());
-  }, [ordersWithGuess, selectedOrderIds]);
-
-  const quickIsPlated = quickForm.watch("is_plated");
-  const detailIsPlated = detailForm.watch("is_plated");
-
-  const createMutation = useRpcMutation<string>({
-    fn: orderUpsertFn,
-    successMessage: "생성 완료",
-    onSuccess: (orderLineId) => {
-      const createdId = String(orderLineId ?? "");
-      setHighlightId(createdId || null);
-      ordersQuery.refetch();
-      if (keepCustomer) {
-        const values = quickForm.getValues();
-        quickForm.reset({
-          ...values,
-          model_name: "",
-          color: "",
-        });
-      } else {
-        quickForm.reset({ qty: 1, is_plated: false });
-        setSelectedCustomer("");
-      }
+  const stoneQuery = useQuery({
+    queryKey: ["cms", "stone_catalog"],
+    queryFn: async () => {
+      if (!schemaClient) throw new Error("Supabase env is missing");
+      const { data, error } = await schemaClient
+        .from(CONTRACTS.views.stoneCatalog)
+        .select("stone_id, stone_name")
+        .order("stone_name");
+      if (error) throw error;
+      return (data ?? []) as StoneRow[];
     },
   });
 
-  const updateMutation = useRpcMutation<string>({
-    fn: orderUpsertFn,
-    successMessage: "저장 완료",
-    onSuccess: () => {
-      ordersQuery.refetch();
+  const platingColorQuery = useQuery({
+    queryKey: ["cms", "plating_color"],
+    queryFn: async () => {
+      if (!schemaClient) throw new Error("Supabase env is missing");
+      const { data, error } = await schemaClient
+        .from(CONTRACTS.views.platingColor)
+        .select("color_code")
+        .order("color_code");
+      if (error) throw error;
+      return (data ?? []) as PlatingColorRow[];
     },
   });
 
-  const statusMutation = useRpcMutation<{ ok: boolean }>({
-    fn: CONTRACTS.functions.orderSetStatus,
-    successMessage: "상태 변경 완료",
-    onSuccess: () => {
-      ordersQuery.refetch();
-    },
-  });
+  const stoneOptions = useMemo(() => {
+    return (stoneQuery.data ?? [])
+      .map((row) => row.stone_name ?? "")
+      .filter(Boolean);
+  }, [stoneQuery.data]);
 
-  const shipmentMutation = useRpcMutation<{ ok: boolean }>({
-    fn: CONTRACTS.functions.shipmentCreateFromOrders,
-    successMessage: "출고 생성 완료",
-    onSuccess: () => {
-      ordersQuery.refetch();
-      setSelectedOrderIds(new Set());
-      setShipmentDate("");
-      setShipmentMemo("");
-      setShipmentModalOpen(false);
-    },
-  });
+  const platingColors = useMemo(() => {
+    return (platingColorQuery.data ?? [])
+      .map((row) => row.color_code ?? "")
+      .filter(Boolean);
+  }, [platingColorQuery.data]);
 
-  const handleQuickSubmit = quickForm.handleSubmit((values) => {
-    if (!canUpsert) {
-      toast.error("처리 실패", { description: "주문 등록 RPC(V2)가 필요합니다." });
-      return;
-    }
-    if (!values.customer_party_id) {
-      toast.error("입력 오류", { description: "거래처를 선택해 주세요." });
-      return;
-    }
-    if (!values.model_name || !values.suffix || !values.color) {
-      toast.error("입력 오류", { description: "모델명/종류/색상은 필수입니다." });
-      return;
-    }
-    if (values.qty && values.qty < 1) {
-      toast.error("입력 오류", { description: "수량은 1 이상이어야 합니다." });
-      return;
-    }
-    if (values.is_plated && !values.plating_variant_id) {
-      toast.error("입력 오류", { description: "도금 옵션을 선택해 주세요." });
-      return;
-    }
-
-    const modelNameRaw = values.model_name;
-
-    createMutation.mutate({
-      p_customer_party_id: values.customer_party_id,
-      p_model_name: normalizeText(values.model_name),
-      p_suffix: normalizeText(values.suffix),
-      p_color: normalizeText(values.color),
-      p_qty: values.qty ?? 1,
-      p_size: toNullable(values.size),
-      p_is_plated: values.is_plated ?? false,
-      p_plating_variant_id: values.is_plated ? values.plating_variant_id ?? null : null,
-      p_requested_due_date: values.requested_due_date || null,
-      p_priority_code: values.priority_code || null,
-      p_source_channel: toNullable(values.source_channel),
-      p_model_name_raw: modelNameRaw,
-      p_memo: toNullable(values.memo),
-      p_order_line_id: null,
-    });
-  });
-
-  const handleUpdateSubmit = detailForm.handleSubmit((values) => {
-    if (!selectedOrder?.order_line_id) {
-      toast.error("입력 오류", { description: "편집할 주문을 선택해 주세요." });
-      return;
-    }
-    if (!canUpsert) {
-      toast.error("처리 실패", { description: "주문 수정 RPC(V2)가 필요합니다." });
-      return;
-    }
-    if (!values.customer_party_id || !values.model_name || !values.suffix || !values.color) {
-      toast.error("입력 오류", { description: "거래처/모델명/종류/색상은 필수입니다." });
-      return;
-    }
-    if (values.qty && values.qty < 1) {
-      toast.error("입력 오류", { description: "수량은 1 이상이어야 합니다." });
-      return;
-    }
-    if (values.is_plated && !values.plating_variant_id) {
-      toast.error("입력 오류", { description: "도금 옵션을 선택해 주세요." });
-      return;
-    }
-
-    updateMutation.mutate({
-      p_customer_party_id: values.customer_party_id,
-      p_model_name: normalizeText(values.model_name),
-      p_suffix: normalizeText(values.suffix),
-      p_color: normalizeText(values.color),
-      p_qty: values.qty ?? 1,
-      p_size: toNullable(values.size),
-      p_is_plated: values.is_plated ?? false,
-      p_plating_variant_id: values.is_plated ? values.plating_variant_id ?? null : null,
-      p_requested_due_date: values.requested_due_date || null,
-      p_priority_code: values.priority_code || null,
-      p_source_channel: toNullable(values.source_channel),
-      p_model_name_raw: values.model_name,
-      p_memo: toNullable(values.memo),
-      p_order_line_id: selectedOrder.order_line_id,
-    });
-  });
-
-  const handleStatusChange = () => {
-    if (!selectedOrder?.order_line_id) {
-      toast.error("처리 실패", { description: "주문 라인을 선택해 주세요." });
-      return;
-    }
-    if (!canSetStatus) {
-      toast.error("처리 실패", { description: "상태 변경 RPC가 필요합니다." });
-      return;
-    }
-    if (!statusTo) {
-      toast.error("입력 오류", { description: "변경할 상태를 선택해 주세요." });
-      return;
-    }
-    if (!actorId) {
-      toast.error("처리 실패", { description: "담당자 ID가 필요합니다." });
-      return;
-    }
-
-    statusMutation.mutate({
-      p_order_line_id: selectedOrder.order_line_id,
-      p_to_status: statusTo,
-      p_actor_person_id: actorId,
-      p_reason: toNullable(statusReason),
-    });
+  const updateRow = (rowId: string, patch: Partial<GridRow>) => {
+    setRows((prev) => prev.map((row) => (row.id === rowId ? { ...row, ...patch } : row)));
   };
 
-  const handleShipmentCreate = () => {
-    if (!canCreateShipment) {
-      toast.error("처리 실패", { description: "출고 생성 RPC가 필요합니다." });
-      return;
-    }
-    if (!actorId) {
-      toast.error("처리 실패", { description: "담당자 ID가 필요합니다." });
-      return;
-    }
-    if (selectedOrderIds.size === 0) {
-      toast.error("입력 오류", { description: "출고로 보낼 라인을 선택해 주세요." });
-      return;
-    }
-    shipmentMutation.mutate({
-      p_order_line_ids: Array.from(selectedOrderIds),
-      p_ship_date: shipmentDate || null,
-      p_memo: toNullable(shipmentMemo),
-      p_actor_person_id: actorId,
-    });
+  const setRowError = (rowId: string, patch: RowErrors) => {
+    setRowErrors((prev) => ({ ...prev, [rowId]: { ...prev[rowId], ...patch } }));
   };
 
-  const toggleSelection = (orderId: string) => {
-    setSelectedOrderIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(orderId)) {
-        next.delete(orderId);
-      } else {
-        next.add(orderId);
-      }
+  const clearRowError = (rowId: string, key: keyof RowErrors) => {
+    setRowErrors((prev) => ({ ...prev, [rowId]: { ...prev[rowId], [key]: undefined } }));
+  };
+
+  const handleDeleteRow = (rowId: string) => {
+    setRows((prev) => prev.map((row, idx) => (row.id === rowId ? createEmptyRow(idx) : row)));
+    setRowErrors((prev) => {
+      const next = { ...prev };
+      delete next[rowId];
       return next;
     });
   };
 
-  const isLoading =
-    customersQuery.isLoading ||
-    ordersQuery.isLoading ||
-    platingQuery.isLoading ||
-    vendorPrefixQuery.isLoading;
+  const applyHeaderClient = (rowId: string, client: ClientSummary | null) => {
+    setHeaderClient(client);
+    setHeaderMode("client");
+    setRows((prev) =>
+      prev.map((row) =>
+        row.id === rowId
+          ? {
+              ...row,
+              client_input: client?.client_name ?? row.client_input,
+              client_id: client?.client_id ?? null,
+              client_name: client?.client_name ?? null,
+            }
+          : row
+      )
+    );
+  };
 
-  const quickSubmitDisabled = !canUpsert || createMutation.isPending;
-  const updateDisabled = !canUpsert || updateMutation.isPending || !selectedOrder;
-  const statusDisabled = !canSetStatus || statusMutation.isPending || !selectedOrder;
+  const resolveClient = async (rowId: string, rawInput: string) => {
+    if (!schemaClient) {
+      toast.error("Supabase 환경 변수가 설정되지 않았습니다.");
+      return;
+    }
+    const row = rows.find((item) => item.id === rowId);
+    if (!row) return;
+    const input = normalizeText(rawInput);
+    if (!input) {
+      setRowError(rowId, { client: "거래처를 입력해 주세요." });
+      applyHeaderClient(rowId, null);
+      return;
+    }
 
-  useEffect(() => {
-    if (!selectedOrder) return;
-    setSelectedDetailCustomer(selectedOrder.customer_party_id ?? "");
-    setSelectedDetailPlating(selectedOrder.plating_variant_id ?? "");
-    detailForm.reset({
-      customer_party_id: selectedOrder.customer_party_id ?? "",
-      model_name: selectedOrder.model_name ?? "",
-      suffix: selectedOrder.suffix ?? "",
-      color: selectedOrder.color ?? "",
-      qty: selectedOrder.qty ?? 1,
-      size: selectedOrder.size ?? "",
-      is_plated: selectedOrder.is_plated ?? false,
-      plating_variant_id: selectedOrder.plating_variant_id ?? "",
-      requested_due_date: selectedOrder.requested_due_date ?? "",
-      priority_code: selectedOrder.priority_code ?? "",
-      source_channel: selectedOrder.source_channel ?? "",
-      memo: selectedOrder.memo ?? "",
+    const cacheKey = input.toLowerCase();
+    if (clientCache.current.has(cacheKey)) {
+      const cached = clientCache.current.get(cacheKey) ?? null;
+      applyHeaderClient(rowId, cached);
+      clearRowError(rowId, "client");
+      return;
+    }
+
+    const { data, error } = await schemaClient
+      .from(CONTRACTS.views.arClientSummary)
+      .select("*")
+      .ilike("client_name", `%${input}%`)
+      .limit(5);
+    if (error) {
+      toast.error("거래처 조회 실패", { description: error.message });
+      return;
+    }
+    const matches = (data ?? []) as ClientSummary[];
+    const exact = matches.find(
+      (item) => (item.client_name ?? "").toLowerCase() === input.toLowerCase()
+    );
+    const resolved = exact ?? (matches.length === 1 ? matches[0] : null);
+    if (!resolved?.client_id) {
+      setRowError(rowId, { client: "거래처를 찾을 수 없습니다." });
+      applyHeaderClient(rowId, null);
+      return;
+    }
+    clientCache.current.set(cacheKey, resolved);
+    applyHeaderClient(rowId, resolved);
+    clearRowError(rowId, "client");
+  };
+
+  const resolveMaster = async (rowId: string, rawInput: string) => {
+    if (!schemaClient) {
+      toast.error("Supabase 환경 변수가 설정되지 않았습니다.");
+      return;
+    }
+    const row = rows.find((item) => item.id === rowId);
+    if (!row) return;
+    const input = normalizeText(rawInput);
+    if (!input) {
+      setRowError(rowId, { model: "모델명을 입력해 주세요." });
+      updateRow(rowId, {
+        model_name: null,
+        master_item_id: null,
+        photo_url: null,
+        material_price: null,
+        labor_basic: null,
+        labor_center: null,
+        labor_side1: null,
+        labor_side2: null,
+      });
+      setActiveMaster(null);
+      return;
+    }
+
+    setHeaderMode("model");
+    setHeaderModelName(input);
+
+    if (row.model_name && row.model_name.toLowerCase() === input.toLowerCase() && row.master_item_id) {
+      clearRowError(rowId, "model");
+      return;
+    }
+
+    const cacheKey = input.toLowerCase();
+    if (masterCache.current.has(cacheKey)) {
+      const cached = masterCache.current.get(cacheKey) ?? null;
+      if (cached?.master_item_id) {
+        updateRow(rowId, {
+          model_name: cached.model_name ?? input,
+          master_item_id: cached.master_item_id ?? null,
+          photo_url: cached.photo_url ?? null,
+          material_price: cached.material_price ?? null,
+          labor_basic: cached.labor_basic ?? null,
+          labor_center: cached.labor_center ?? null,
+          labor_side1: cached.labor_side1 ?? null,
+          labor_side2: cached.labor_side2 ?? null,
+        });
+        setActiveMaster(cached);
+        setImageLoading(Boolean(cached.photo_url));
+        clearRowError(rowId, "model");
+        return;
+      }
+    }
+
+    const { data, error } = await schemaClient
+      .from(CONTRACTS.views.masterItemLookup)
+      .select("*")
+      .ilike("model_name", `%${input}%`)
+      .limit(5);
+    if (error) {
+      toast.error("마스터 조회 실패", { description: error.message });
+      return;
+    }
+    const matches = (data ?? []) as MasterLookup[];
+    const exact = matches.find(
+      (item) => (item.model_name ?? "").toLowerCase() === input.toLowerCase()
+    );
+    const resolved = exact ?? (matches.length === 1 ? matches[0] : null);
+    if (!resolved?.master_item_id) {
+      setRowError(rowId, { model: "모델을 찾을 수 없습니다." });
+      updateRow(rowId, {
+        model_name: null,
+        master_item_id: null,
+        photo_url: null,
+        material_price: null,
+        labor_basic: null,
+        labor_center: null,
+        labor_side1: null,
+        labor_side2: null,
+      });
+      setActiveMaster(null);
+      return;
+    }
+    const signedUrl = await resolveSignedImageUrl(resolved.photo_url ?? null);
+    const resolvedWithUrl = {
+      ...resolved,
+      photo_url: signedUrl,
+    };
+    masterCache.current.set(cacheKey, resolvedWithUrl);
+    updateRow(rowId, {
+      model_name: resolvedWithUrl.model_name ?? input,
+      master_item_id: resolvedWithUrl.master_item_id ?? null,
+      photo_url: resolvedWithUrl.photo_url ?? null,
+      material_price: resolvedWithUrl.material_price ?? null,
+      labor_basic: resolvedWithUrl.labor_basic ?? null,
+      labor_center: resolvedWithUrl.labor_center ?? null,
+      labor_side1: resolvedWithUrl.labor_side1 ?? null,
+      labor_side2: resolvedWithUrl.labor_side2 ?? null,
     });
-  }, [detailForm, selectedOrder]);
+    setActiveMaster(resolvedWithUrl);
+    setImageLoading(Boolean(resolvedWithUrl.photo_url));
+    clearRowError(rowId, "model");
+  };
 
-  useEffect(() => {
-    if (!quickIsPlated) {
-      setSelectedPlating("");
-      quickForm.setValue("plating_variant_id", "", { shouldDirty: true });
+  const validateRow = (row: GridRow): RowErrors => {
+    const errors: RowErrors = {};
+    const qty = toNumber(row.qty);
+    if (!normalizeText(row.client_input) || !row.client_id) {
+      errors.client = "거래처를 확인해 주세요.";
     }
-  }, [quickForm, quickIsPlated]);
+    if (!normalizeText(row.model_input)) {
+      errors.model = "모델명을 입력해 주세요.";
+    }
+    if (!normalizeText(row.suffix)) {
+      errors.category = "분류를 입력해 주세요.";
+    }
+    if (!normalizeText(row.color)) {
+      errors.color = "색상을 입력해 주세요.";
+    }
+    if (!qty || qty <= 0) {
+      errors.qty = "수량은 1 이상입니다.";
+    }
 
-  useEffect(() => {
-    if (!detailIsPlated) {
-      setSelectedDetailPlating("");
-      detailForm.setValue("plating_variant_id", "", { shouldDirty: true });
+    if (row.is_plated && !row.plating_color) {
+      errors.plating = "도금색상은 필수입니다.";
     }
-  }, [detailForm, detailIsPlated]);
+
+    const centerQty = toNumber(row.center_qty) ?? 0;
+    const sub1Qty = toNumber(row.sub1_qty) ?? 0;
+    const sub2Qty = toNumber(row.sub2_qty) ?? 0;
+    const stoneIssues =
+      (row.center_stone && centerQty <= 0) ||
+      (!row.center_stone && centerQty > 0) ||
+      (row.sub1_stone && sub1Qty <= 0) ||
+      (!row.sub1_stone && sub1Qty > 0) ||
+      (row.sub2_stone && sub2Qty <= 0) ||
+      (!row.sub2_stone && sub2Qty > 0);
+    if (stoneIssues) {
+      errors.stones = "스톤/개수 입력을 확인해 주세요.";
+    }
+    return errors;
+  };
+
+  const rowSnapshot = (row: GridRow) =>
+    JSON.stringify({
+      client_id: row.client_id,
+      model_input: normalizeText(row.model_input),
+      suffix: normalizeText(row.suffix),
+      color: normalizeText(row.color),
+      qty: toNumber(row.qty),
+      center_stone: normalizeText(row.center_stone),
+      center_qty: toNumber(row.center_qty),
+      sub1_stone: normalizeText(row.sub1_stone),
+      sub1_qty: toNumber(row.sub1_qty),
+      sub2_stone: normalizeText(row.sub2_stone),
+      sub2_qty: toNumber(row.sub2_qty),
+      is_plated: row.is_plated,
+      plating_color: normalizeText(row.plating_color),
+      memo: normalizeText(row.memo),
+    });
+
+  const saveRow = async (row: GridRow) => {
+    if (!orderUpsertFn) return;
+    const snapshot = rowSnapshot(row);
+    const cached = saveCache.current.get(row.id);
+    if (cached === snapshot) return;
+    if (saveInFlight.current.has(row.id)) return;
+
+    const errors = validateRow(row);
+    if (Object.keys(errors).length > 0) {
+      setRowErrors((prev) => ({ ...prev, [row.id]: { ...prev[row.id], ...errors } }));
+      return;
+    }
+
+    saveInFlight.current.add(row.id);
+    try {
+      const savedId = await callRpc<string>(orderUpsertFn, {
+        p_customer_party_id: row.client_id,
+        p_model_name: normalizeText(row.model_input),
+        p_suffix: normalizeText(row.suffix),
+        p_color: normalizeText(row.color),
+        p_qty: toNumber(row.qty) ?? 1,
+        p_size: null,
+        p_is_plated: row.is_plated,
+        p_plating_variant_id: null,
+        p_requested_due_date: receiptDate || null,
+        p_priority_code: null,
+        p_source_channel: null,
+        p_model_name_raw: row.model_input,
+        p_memo: normalizeText(row.memo) || null,
+        p_order_line_id: row.order_line_id ?? null,
+        p_center_stone_name: normalizeText(row.center_stone) || null,
+        p_center_stone_qty: toNumber(row.center_qty),
+        p_sub1_stone_name: normalizeText(row.sub1_stone) || null,
+        p_sub1_stone_qty: toNumber(row.sub1_qty),
+        p_sub2_stone_name: normalizeText(row.sub2_stone) || null,
+        p_sub2_stone_qty: toNumber(row.sub2_qty),
+        p_plating_color_code: normalizeText(row.plating_color) || null,
+      });
+      saveCache.current.set(row.id, snapshot);
+      if (savedId) {
+        updateRow(row.id, { order_line_id: String(savedId) });
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "저장 실패";
+      toast.error("자동 저장 실패", { description: message });
+    } finally {
+      saveInFlight.current.delete(row.id);
+    }
+  };
 
   return (
-    <div className="space-y-6" id="orders.root">
-      <ActionBar
-        title="주문"
-        subtitle="주문 라인 관리"
-        actions={
-          <div className="flex items-center gap-2">
-            <Button variant="secondary" onClick={() => ordersQuery.refetch()}>
-              새로고침
+    <div className="flex flex-col gap-6 font-[family-name:var(--font-manrope)] text-[var(--foreground)] pb-20">
+      <div className="flex items-center justify-between">
+        <div>
+          <nav className="text-xs text-[var(--muted)] mb-1">Home / Sales / Order Registration</nav>
+          <h1 className="text-2xl font-bold tracking-tight">주문 등록 (Order Registration)</h1>
+        </div>
+        <div className="flex items-center gap-2">
+          <Link href="/orders_main">
+            <Button variant="secondary" className="bg-white border-[var(--panel-border)] text-[var(--foreground)]">
+              ✕ 닫기
             </Button>
-            <Button
-              variant="secondary"
-              disabled={selectedOrderIds.size === 0}
-              onClick={() => setShipmentModalOpen(true)}
-            >
-              출고 만들기
-            </Button>
-          </div>
-        }
-        id="orders.actionBar"
-      />
-      <Card id="orders.quickCreate">
-        <CardHeader>
-          <ActionBar title="빠른 주문 입력" subtitle="필수 4개 항목 + 옵션" />
-        </CardHeader>
-        <CardBody>
-          <form className="grid gap-3 lg:grid-cols-3" onSubmit={handleQuickSubmit}>
-            <SearchSelect
-              label="거래처*"
-              placeholder="검색"
-              options={customerOptions}
-              value={selectedCustomer}
-              onChange={(value) => {
-                setSelectedCustomer(value);
-                quickForm.setValue("customer_party_id", value, { shouldDirty: true });
-              }}
-            />
-            <Input placeholder="모델명*" {...quickForm.register("model_name", { required: true })} />
-            <Input placeholder="종류*" {...quickForm.register("suffix", { required: true })} />
-            <Input placeholder="색상*" {...quickForm.register("color", { required: true })} />
-            <Input type="number" min={1} placeholder="수량" {...quickForm.register("qty", { valueAsNumber: true })} />
-            <Input placeholder="사이즈" {...quickForm.register("size")} />
-            <div className="flex items-center gap-2">
-              <input
-                type="checkbox"
-                id="orders.quick.is_plated"
-                className="h-4 w-4 rounded border border-[var(--panel-border)]"
-                {...quickForm.register("is_plated")}
+          </Link>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-[280px_1fr] gap-6">
+        <Card className="h-full min-h-[200px] flex flex-col items-center justify-center border-dashed border-2 border-[var(--panel-border)] bg-[var(--input-bg)] shadow-none">
+          {activeMaster?.photo_url ? (
+            <div className="relative w-full h-full">
+              {imageLoading ? (
+                <div className="absolute inset-0 flex items-center justify-center text-xs text-[var(--muted)]">
+                  이미지 로딩 중...
+                </div>
+              ) : null}
+              <img
+                src={activeMaster.photo_url}
+                alt={activeMaster.model_name ?? "model"}
+                className="w-full h-full object-cover rounded-[10px]"
+                onLoad={() => setImageLoading(false)}
+                onError={() => setImageLoading(false)}
               />
-              <label htmlFor="orders.quick.is_plated" className="text-sm text-[var(--foreground)]">
-                도금 있음
+            </div>
+          ) : (
+            <div className="flex flex-col items-center gap-3 text-[var(--muted-weak)]">
+              <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1">
+                <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+                <circle cx="8.5" cy="8.5" r="1.5" />
+                <polyline points="21 15 16 10 5 21" />
+              </svg>
+              <span className="text-sm font-medium">모델 이미지를 표시합니다</span>
+            </div>
+          )}
+        </Card>
+
+        <Card className="shadow-sm">
+          <CardHeader className="flex flex-row items-center justify-between py-4 border-b border-[var(--panel-border)]">
+            <div className="flex items-center gap-2">
+              <svg className="text-[var(--primary)]" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M3 3h18v18H3zM12 8v8M8 12h8" />
+              </svg>
+              <span className="font-bold text-sm">기본 정보</span>
+            </div>
+            <span className="text-[10px] text-red-500 bg-red-50 px-2 py-0.5 rounded">거래처는 1개 고정</span>
+          </CardHeader>
+          <CardBody className="grid grid-cols-1 md:grid-cols-2 gap-6 py-6">
+            <div className="space-y-1.5">
+              <label className="text-xs font-semibold text-[var(--foreground)]">
+                {headerMode === "model" ? "모델명" : "거래처"}
               </label>
-            </div>
-            <SearchSelect
-              label="도금 옵션"
-              placeholder={quickIsPlated ? "검색" : "도금 없음"}
-              options={platingOptions}
-              value={selectedPlating}
-              onChange={(value) => {
-                if (!quickIsPlated) return;
-                setSelectedPlating(value);
-                quickForm.setValue("plating_variant_id", value, { shouldDirty: true });
-              }}
-              className={quickIsPlated ? undefined : "opacity-60"}
-            />
-            <Input type="date" placeholder="납기" {...quickForm.register("requested_due_date")} />
-            <Select {...quickForm.register("priority_code")}>
-              <option value="">우선순위</option>
-              {priorityOptions.map((value) => (
-                <option key={value} value={value}>
-                  {value}
-                </option>
-              ))}
-            </Select>
-            <Input placeholder="주문 경로" {...quickForm.register("source_channel")} />
-            <Textarea placeholder="메모" {...quickForm.register("memo")} />
-            <div className="flex items-center justify-between lg:col-span-3">
               <div className="flex items-center gap-2">
-                <input
-                  type="checkbox"
-                  id="orders.quick.keepCustomer"
-                  className="h-4 w-4 rounded border border-[var(--panel-border)]"
-                  checked={keepCustomer}
-                  onChange={(event) => setKeepCustomer(event.target.checked)}
-                />
-                <label htmlFor="orders.quick.keepCustomer" className="text-sm text-[var(--muted)]">
-                  저장 후 거래처 유지 (모델명/색상만 초기화)
-                </label>
-              </div>
-              <div className="flex items-center gap-2">
-                <Button type="submit" disabled={quickSubmitDisabled || isLoading}>
-                  저장
-                </Button>
-                {!canUpsert ? (
-                  <p className="text-xs text-[var(--muted)]">
-                    cms 계약의 주문 등록 RPC(V2)가 필요합니다.
-                  </p>
+                <span className="text-sm font-semibold">
+                  {headerMode === "model"
+                    ? headerModelName || "-"
+                    : headerClient?.client_name ?? "-"}
+                </span>
+                {headerMode === "client" && headerClient?.client_id ? (
+                  <Badge className="whitespace-nowrap bg-blue-50 text-blue-600 border-blue-100 rounded-[4px] px-2">
+                    확정
+                  </Badge>
                 ) : null}
+                        {headerMode === "model" && activeMaster?.master_item_id ? (
+                          <Badge className="whitespace-nowrap bg-emerald-50 text-emerald-600 border-emerald-100 rounded-[4px] px-2">
+                            매칭
+                          </Badge>
+                        ) : headerMode === "model" ? (
+                          <Badge className="whitespace-nowrap bg-red-50 text-red-600 border-red-100 rounded-[4px] px-2">
+                            UNMATCHED
+                          </Badge>
+                        ) : null}
+              </div>
+              {headerMode === "client" ? (
+                headerClient?.balance_krw !== undefined ? (
+                  <p className="text-xs text-[var(--muted)]">
+                    미수금 {headerClient.balance_krw?.toLocaleString() ?? 0}원
+                  </p>
+                ) : (
+                  <p className="text-xs text-[var(--muted)]">거래처를 입력하면 미수 정보가 표시됩니다.</p>
+                )
+              ) : (
+                <p className="text-xs text-[var(--muted)]">모델명을 입력하면 마스터 정보가 연결됩니다.</p>
+              )}
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-xs font-semibold text-[var(--foreground)]">
+                {headerMode === "model" ? "매칭 상태" : "마지막 거래일"}
+              </label>
+              <div className="text-sm text-[var(--foreground)]">
+                {headerMode === "model"
+                  ? activeMaster?.master_item_id
+                    ? "MATCHED"
+                    : "UNMATCHED"
+                  : headerClient?.last_tx_at
+                    ? headerClient.last_tx_at.slice(0, 10)
+                    : "-"}
+              </div>
+              <div className="text-xs text-[var(--muted)]">
+                {headerMode === "client" && headerClient?.open_invoices_count !== null && headerClient?.open_invoices_count !== undefined
+                  ? `미수 건수 ${headerClient.open_invoices_count}`
+                  : ""}
               </div>
             </div>
-          </form>
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-semibold text-[var(--foreground)]">접수일</label>
+                      <Input
+                        type="date"
+                        className="bg-[var(--input-bg)]"
+                        value={receiptDate}
+                        onChange={(event) => setReceiptDate(event.target.value)}
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-semibold text-[var(--foreground)]">리스크</label>
+                      <div className="text-sm text-[var(--foreground)]">{headerClient?.risk_flag ?? "-"}</div>
+                    </div>
+                  </CardBody>
+                </Card>
+              </div>
+
+      <Card className="shadow-sm">
+        <CardHeader className="flex items-center justify-between py-4 border-b border-[var(--panel-border)]">
+          <div className="flex items-center gap-2">
+            <svg className="text-[var(--muted)]" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <circle cx="12" cy="12" r="10" />
+              <polyline points="12 6 12 12 16 14" />
+            </svg>
+            <span className="font-bold text-sm">가격 패널</span>
+          </div>
+          <span className="text-xs text-[var(--muted)]">모델 선택 시 자동 갱신</span>
+        </CardHeader>
+        <CardBody className="grid grid-cols-2 md:grid-cols-5 gap-2 text-[11px]">
+          <div>
+            <p className="text-[var(--muted)]">소재가격</p>
+            <p className="text-sm font-semibold">
+              {activeMaster?.material_price ? `${activeMaster.material_price.toLocaleString()}원` : "-"}
+            </p>
+          </div>
+          <div>
+            <p className="text-[var(--muted)]">기본공임</p>
+            <p className="text-sm font-semibold">{activeMaster?.labor_basic ?? "-"}</p>
+          </div>
+          <div>
+            <p className="text-[var(--muted)]">중심공임</p>
+            <p className="text-sm font-semibold">{activeMaster?.labor_center ?? "-"}</p>
+          </div>
+          <div>
+            <p className="text-[var(--muted)]">보조1공임</p>
+            <p className="text-sm font-semibold">{activeMaster?.labor_side1 ?? "-"}</p>
+          </div>
+          <div>
+            <p className="text-[var(--muted)]">보조2공임</p>
+            <p className="text-sm font-semibold">{activeMaster?.labor_side2 ?? "-"}</p>
+          </div>
         </CardBody>
       </Card>
-      <FilterBar id="orders.filterBar">
-        <Input
-          placeholder="모델명/색상 검색"
-          value={filterModel}
-          onChange={(event) => setFilterModel(event.target.value)}
-        />
-        <Select value={filterStatus} onChange={(event) => setFilterStatus(event.target.value)}>
-          <option value="">상태</option>
-          {statusOptions.map((value) => (
-            <option key={value} value={value}>
-              {value}
-            </option>
-          ))}
-        </Select>
-        <Select value={filterCustomer} onChange={(event) => setFilterCustomer(event.target.value)}>
-          <option value="">거래처</option>
-          {customerOptions.map((option) => (
-            <option key={option.value} value={option.value}>
-              {option.label}
-            </option>
-          ))}
-        </Select>
-        <Select value={filterVendor} onChange={(event) => setFilterVendor(event.target.value)}>
-          <option value="">공장 추정</option>
-          {vendorOptions.map((option) => (
-            <option key={option.value} value={option.value}>
-              {option.label}
-            </option>
-          ))}
-        </Select>
-        <Select value={filterPlated} onChange={(event) => setFilterPlated(event.target.value)}>
-          <option value="all">도금 전체</option>
-          <option value="plated">도금</option>
-          <option value="not_plated">비도금</option>
-        </Select>
-        <Select value={filterDue} onChange={(event) => setFilterDue(event.target.value)}>
-          <option value="all">납기</option>
-          <option value="7">7일 이내</option>
-          <option value="14">14일 이내</option>
-          <option value="overdue">지연</option>
-        </Select>
-      </FilterBar>
-      <div id="orders.body">
-        <SplitLayout
-          left={
-            <div className="space-y-4" id="orders.listPanel">
-              <Card id="orders.list">
-                <CardHeader>
-                  <ActionBar title="주문 리스트" subtitle={`총 ${filteredOrders.length}건`} />
-                </CardHeader>
-                <CardBody>
-                  <div className="grid grid-cols-[32px_96px_140px_1.5fr_80px_120px_140px_110px_110px_1fr] gap-2 text-xs uppercase tracking-[0.12em] text-[var(--muted)]">
-                    <span></span>
-                    <span>생성일</span>
-                    <span>거래처</span>
-                    <span>모델/종류/색상/사이즈</span>
-                    <span>수량</span>
-                    <span>도금</span>
-                    <span>납기/우선</span>
-                    <span>상태</span>
-                    <span>매칭</span>
-                    <span>메모</span>
-                  </div>
-                  <div className="mt-2 space-y-2">
-                    {filteredOrders.map((order) => {
-                      const orderId = order.order_line_id ?? "";
-                      const selected = orderId === selectedOrderId;
-                      const isUnmatched = order.match_state === "UNMATCHED";
-                      const isHighlighted = highlightId && orderId === highlightId;
-                      const platingLabel = order.is_plated
-                        ? platingLabelById.get(order.plating_variant_id ?? "") ?? "도금"
-                        : "없음";
-                      return (
-                        <button
-                          key={orderId}
-                          type="button"
-                          className={cn(
-                            "grid w-full grid-cols-[32px_96px_140px_1.5fr_80px_120px_140px_110px_110px_1fr] items-center gap-2 rounded-[12px] border border-[var(--panel-border)] px-3 py-2 text-left text-sm",
-                            selected ? "bg-[#eef2f6]" : "hover:bg-[#f6f7f9]",
-                            isUnmatched ? "border-red-200 bg-red-50/60" : "bg-white",
-                            isHighlighted ? "ring-2 ring-emerald-200" : ""
-                          )}
-                          onClick={() => setSelectedOrderId(orderId)}
-                        >
-                          <input
-                            type="checkbox"
-                            checked={selectedOrderIds.has(orderId)}
-                            onChange={() => toggleSelection(orderId)}
-                            onClick={(event) => event.stopPropagation()}
-                            className="h-4 w-4 rounded border border-[var(--panel-border)]"
-                          />
-                          <span className="text-xs text-[var(--muted)]">{formatDate(order.created_at)}</span>
-                          <span className="text-xs text-[var(--foreground)]">{order.customer_name ?? "-"}</span>
-                          <span className="text-xs text-[var(--foreground)]">
-                            {order.model_name ?? "-"} / {order.suffix ?? "-"} / {order.color ?? "-"}
-                            {order.size ? ` / ${order.size}` : ""}
-                          </span>
-                          <span className="text-xs text-[var(--foreground)]">{order.qty ?? 0}</span>
-                          <span className="text-xs text-[var(--foreground)]">{platingLabel}</span>
-                          <span className="text-xs text-[var(--foreground)]">
-                            {formatDate(order.requested_due_date)} / {order.priority_code ?? "-"}
-                          </span>
-                          <span className="text-xs text-[var(--foreground)]">{order.status ?? "-"}</span>
-                          <span className="text-xs">
-                            {isUnmatched ? <Badge tone="danger">UNMATCHED</Badge> : order.match_state ?? "-"}
-                          </span>
-                          <span className="text-xs text-[var(--muted)] line-clamp-1">{order.memo ?? "-"}</span>
-                        </button>
-                      );
-                    })}
-                    {filteredOrders.length === 0 ? (
-                      <p className="text-xs text-[var(--muted)]">주문 데이터 없음</p>
-                    ) : null}
-                  </div>
-                </CardBody>
-              </Card>
-            </div>
-          }
-          right={
-            <div className="space-y-4" id="orders.detailPanel">
-              <Card id="orders.detail.basic">
-                <CardHeader>
-                  <ActionBar title="주문 상세" subtitle="선택된 라인 편집" />
-                </CardHeader>
-                <CardBody>
-                  <form className="grid gap-3" onSubmit={handleUpdateSubmit}>
-                    <SearchSelect
-                      label="거래처*"
-                      placeholder="검색"
-                      options={customerOptions}
-                      value={selectedDetailCustomer}
-                      onChange={(value) => {
-                        setSelectedDetailCustomer(value);
-                        detailForm.setValue("customer_party_id", value, { shouldDirty: true });
-                      }}
-                    />
-                    <Input placeholder="모델명*" {...detailForm.register("model_name", { required: true })} />
-                    <Input placeholder="종류*" {...detailForm.register("suffix", { required: true })} />
-                    <Input placeholder="색상*" {...detailForm.register("color", { required: true })} />
-                    <Input type="number" min={1} placeholder="수량" {...detailForm.register("qty", { valueAsNumber: true })} />
-                    <Input placeholder="사이즈" {...detailForm.register("size")} />
-                    <div className="flex items-center gap-2">
+
+      <Card className="shadow-sm">
+        <CardHeader className="flex items-center justify-between py-4 border-b border-[var(--panel-border)]">
+          <div className="flex items-center gap-2">
+            <span className="font-bold text-sm">모델 기본정보</span>
+          </div>
+          <span className="text-xs text-[var(--muted)]">마스터 기준</span>
+        </CardHeader>
+        <CardBody className="grid grid-cols-2 md:grid-cols-4 gap-2 text-[11px]">
+          <div>
+            <p className="text-[var(--muted)]">공급처</p>
+            <p className="text-sm font-semibold">{activeMaster?.vendor_name ?? "-"}</p>
+          </div>
+          <div>
+            <p className="text-[var(--muted)]">기본재질</p>
+            <p className="text-sm font-semibold">{activeMaster?.material_code_default ?? "-"}</p>
+          </div>
+          <div>
+            <p className="text-[var(--muted)]">카테고리</p>
+            <p className="text-sm font-semibold">{activeMaster?.category_code ?? "-"}</p>
+          </div>
+          <div>
+            <p className="text-[var(--muted)]">기본중량</p>
+            <p className="text-sm font-semibold">{activeMaster?.weight_default_g ?? "-"}</p>
+          </div>
+          <div>
+            <p className="text-[var(--muted)]">차감중량</p>
+            <p className="text-sm font-semibold">{activeMaster?.deduction_weight_default_g ?? "-"}</p>
+          </div>
+          <div>
+            <p className="text-[var(--muted)]">기본공임</p>
+            <p className="text-sm font-semibold">{activeMaster?.labor_basic ?? "-"}</p>
+          </div>
+          <div>
+            <p className="text-[var(--muted)]">센터공임</p>
+            <p className="text-sm font-semibold">{activeMaster?.labor_center ?? "-"}</p>
+          </div>
+          <div>
+            <p className="text-[var(--muted)]">보조1공임</p>
+            <p className="text-sm font-semibold">{activeMaster?.labor_side1 ?? "-"}</p>
+          </div>
+          <div>
+            <p className="text-[var(--muted)]">보조2공임</p>
+            <p className="text-sm font-semibold">{activeMaster?.labor_side2 ?? "-"}</p>
+          </div>
+          <div>
+            <p className="text-[var(--muted)]">센터스톤수</p>
+            <p className="text-sm font-semibold">{activeMaster?.center_qty_default ?? "-"}</p>
+          </div>
+          <div>
+            <p className="text-[var(--muted)]">보조1스톤수</p>
+            <p className="text-sm font-semibold">{activeMaster?.sub1_qty_default ?? "-"}</p>
+          </div>
+          <div>
+            <p className="text-[var(--muted)]">보조2스톤수</p>
+            <p className="text-sm font-semibold">{activeMaster?.sub2_qty_default ?? "-"}</p>
+          </div>
+        </CardBody>
+      </Card>
+
+      <Card className="shadow-sm overflow-hidden min-h-[500px] flex flex-col">
+        <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--panel-border)]">
+          <div className="flex items-center gap-3">
+            <span className="font-bold text-sm">Order Items</span>
+          </div>
+          <div className="flex items-center gap-2 text-[var(--muted)]">
+            <span className="text-xs">자동 저장은 blur 시 수행됩니다.</span>
+          </div>
+        </div>
+        <div className="flex-1 overflow-auto bg-white">
+          <table className="w-full text-xs text-left border-collapse">
+            <thead className="bg-[#f8f9fc] text-[var(--foreground)] font-semibold border-b border-[var(--panel-border)] sticky top-0 z-10">
+              <tr>
+                <th className="px-3 py-2 border-r border-[var(--panel-border)] w-10 text-center">No</th>
+                <th className="px-3 py-2 border-r border-[var(--panel-border)] w-10 text-center">취소</th>
+                <th className="px-3 py-2 border-r border-[var(--panel-border)] min-w-[140px]">
+                  <span className="text-red-500">*</span> 거래처
+                </th>
+                <th className="px-3 py-2 border-r border-[var(--panel-border)] min-w-[140px]">
+                  <span className="text-red-500">*</span> 모델번호
+                </th>
+                <th className="px-3 py-2 border-r border-[var(--panel-border)] w-24">분류</th>
+                <th className="px-3 py-2 border-r border-[var(--panel-border)] w-20">색상</th>
+                <th className="px-3 py-2 border-r border-[var(--panel-border)] w-16 text-center">수량</th>
+                <th className="px-3 py-2 border-r border-[var(--panel-border)] min-w-[90px] whitespace-nowrap">중심석</th>
+                <th className="px-3 py-2 border-r border-[var(--panel-border)] w-16 text-center whitespace-nowrap">중심개수</th>
+                <th className="px-3 py-2 border-r border-[var(--panel-border)] min-w-[90px] whitespace-nowrap">보조1석</th>
+                <th className="px-3 py-2 border-r border-[var(--panel-border)] w-16 text-center whitespace-nowrap">보조1개수</th>
+                <th className="px-3 py-2 border-r border-[var(--panel-border)] min-w-[90px] whitespace-nowrap">보조2석</th>
+                <th className="px-3 py-2 border-r border-[var(--panel-border)] w-16 text-center whitespace-nowrap">보조2개수</th>
+                <th className="px-3 py-2 border-r border-[var(--panel-border)] w-16 text-center">도금</th>
+                <th className="px-3 py-2 border-r border-[var(--panel-border)] min-w-[120px]">도금색상</th>
+                <th className="px-3 py-2 min-w-[160px]">비고</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-[var(--panel-border)]">
+              {rows.slice((pageIndex - 1) * PAGE_SIZE, pageIndex * PAGE_SIZE).map((row, idx) => {
+                const errors = rowErrors[row.id] ?? {};
+                return (
+                  <tr
+                    key={row.id}
+                    className="hover:bg-blue-50/30"
+                    onBlur={(event) => {
+                      const next = event.relatedTarget as Node | null;
+                      if (next && event.currentTarget.contains(next)) return;
+                      const current = rows.find((item) => item.id === row.id);
+                      if (current) {
+                        void saveRow(current);
+                      }
+                    }}
+                  >
+                    <td className="px-3 py-2 text-center text-[var(--muted)] border-r border-[var(--panel-border)]">
+                      {(pageIndex - 1) * PAGE_SIZE + idx + 1}
+                    </td>
+                    <td className="px-3 py-2 text-center border-r border-[var(--panel-border)]">
+                      <button
+                        className="text-blue-500 hover:text-blue-700 transition-colors"
+                        type="button"
+                        onClick={() => handleDeleteRow(row.id)}
+                      >
+                        ✕
+                      </button>
+                    </td>
+                    <td className="px-2 py-1 border-r border-[var(--panel-border)]">
+                      <input
+                        className={cn(
+                          "w-full bg-transparent border-none focus:ring-0 focus:bg-blue-50 rounded px-1.5 py-1 text-xs",
+                          errors.client ? "bg-red-50" : ""
+                        )}
+                        value={row.client_input}
+                        onChange={(event) => updateRow(row.id, { client_input: event.target.value })}
+                        onBlur={(event) => resolveClient(row.id, event.currentTarget.value)}
+                      />
+                    </td>
+                    <td className="px-2 py-1 border-r border-[var(--panel-border)]">
+                      <input
+                        className={cn(
+                          "w-full bg-transparent border-none focus:ring-0 focus:bg-blue-50 rounded px-1.5 py-1 text-xs font-semibold",
+                          errors.model ? "bg-red-50" : ""
+                        )}
+                        value={row.model_input}
+                        onChange={(event) => updateRow(row.id, { model_input: event.target.value })}
+                        onBlur={(event) => resolveMaster(row.id, event.currentTarget.value)}
+                      />
+                    </td>
+                    <td className="px-2 py-1 border-r border-[var(--panel-border)]">
+                      <input
+                        className={cn(
+                          "w-full bg-transparent border-none focus:ring-0 focus:bg-blue-50 rounded px-1.5 py-1 text-xs",
+                          errors.category ? "bg-red-50" : ""
+                        )}
+                        value={row.suffix}
+                        onChange={(event) => updateRow(row.id, { suffix: event.target.value })}
+                      />
+                    </td>
+                    <td className="px-2 py-1 border-r border-[var(--panel-border)]">
+                      <input
+                        className={cn(
+                          "w-full bg-transparent border-none focus:ring-0 focus:bg-blue-50 rounded px-1.5 py-1 text-xs",
+                          errors.color ? "bg-red-50" : ""
+                        )}
+                        value={row.color}
+                        onChange={(event) => updateRow(row.id, { color: event.target.value })}
+                      />
+                    </td>
+                    <td className="px-2 py-1 border-r border-[var(--panel-border)]">
+                      <input
+                        type="number"
+                        className={cn(
+                          "w-full bg-transparent border-none focus:ring-0 focus:bg-blue-50 rounded px-1.5 py-1 text-center font-mono text-xs",
+                          errors.qty ? "bg-red-50" : ""
+                        )}
+                        value={row.qty}
+                        onChange={(event) => updateRow(row.id, { qty: event.target.value })}
+                      />
+                    </td>
+                    <td className="px-2 py-1 border-r border-[var(--panel-border)]">
+                      <select
+                        className={cn(
+                          "w-full bg-transparent border-none focus:ring-0 text-xs py-0",
+                          errors.stones ? "bg-red-50" : ""
+                        )}
+                        value={row.center_stone}
+                        onChange={(event) => updateRow(row.id, { center_stone: event.target.value })}
+                      >
+                        <option value="">선택</option>
+                        {stoneOptions.map((stone) => (
+                          <option key={stone} value={stone}>
+                            {stone}
+                          </option>
+                        ))}
+                      </select>
+                    </td>
+                    <td className="px-2 py-1 border-r border-[var(--panel-border)]">
+                      <input
+                        type="number"
+                        className={cn(
+                          "w-full bg-transparent border-none focus:ring-0 focus:bg-blue-50 rounded px-1.5 py-1 text-center text-xs",
+                          errors.stones ? "bg-red-50" : ""
+                        )}
+                        value={row.center_qty}
+                        onChange={(event) => updateRow(row.id, { center_qty: event.target.value })}
+                      />
+                    </td>
+                    <td className="px-2 py-1 border-r border-[var(--panel-border)]">
+                      <select
+                        className={cn(
+                          "w-full bg-transparent border-none focus:ring-0 text-xs py-0",
+                          errors.stones ? "bg-red-50" : ""
+                        )}
+                        value={row.sub1_stone}
+                        onChange={(event) => updateRow(row.id, { sub1_stone: event.target.value })}
+                      >
+                        <option value="">선택</option>
+                        {stoneOptions.map((stone) => (
+                          <option key={stone} value={stone}>
+                            {stone}
+                          </option>
+                        ))}
+                      </select>
+                    </td>
+                    <td className="px-2 py-1 border-r border-[var(--panel-border)]">
+                      <input
+                        type="number"
+                        className={cn(
+                          "w-full bg-transparent border-none focus:ring-0 focus:bg-blue-50 rounded px-1.5 py-1 text-center text-xs",
+                          errors.stones ? "bg-red-50" : ""
+                        )}
+                        value={row.sub1_qty}
+                        onChange={(event) => updateRow(row.id, { sub1_qty: event.target.value })}
+                      />
+                    </td>
+                    <td className="px-2 py-1 border-r border-[var(--panel-border)]">
+                      <select
+                        className={cn(
+                          "w-full bg-transparent border-none focus:ring-0 text-xs py-0",
+                          errors.stones ? "bg-red-50" : ""
+                        )}
+                        value={row.sub2_stone}
+                        onChange={(event) => updateRow(row.id, { sub2_stone: event.target.value })}
+                      >
+                        <option value="">선택</option>
+                        {stoneOptions.map((stone) => (
+                          <option key={stone} value={stone}>
+                            {stone}
+                          </option>
+                        ))}
+                      </select>
+                    </td>
+                    <td className="px-2 py-1 border-r border-[var(--panel-border)]">
+                      <input
+                        type="number"
+                        className={cn(
+                          "w-full bg-transparent border-none focus:ring-0 focus:bg-blue-50 rounded px-1.5 py-1 text-center text-xs",
+                          errors.stones ? "bg-red-50" : ""
+                        )}
+                        value={row.sub2_qty}
+                        onChange={(event) => updateRow(row.id, { sub2_qty: event.target.value })}
+                      />
+                    </td>
+                    <td className="px-2 py-1 border-r border-[var(--panel-border)] text-center">
                       <input
                         type="checkbox"
-                        id="orders.detail.is_plated"
-                        className="h-4 w-4 rounded border border-[var(--panel-border)]"
-                        {...detailForm.register("is_plated")}
+                        checked={row.is_plated}
+                        onChange={(event) =>
+                          updateRow(row.id, {
+                            is_plated: event.target.checked,
+                            plating_color: event.target.checked ? row.plating_color : "",
+                          })
+                        }
+                        className="rounded border-gray-300 text-[var(--primary)] focus:ring-[var(--primary)]"
                       />
-                      <label htmlFor="orders.detail.is_plated" className="text-sm text-[var(--foreground)]">
-                        도금 있음
-                      </label>
-                    </div>
-                    <SearchSelect
-                      label="도금 옵션"
-                      placeholder={detailIsPlated ? "검색" : "도금 없음"}
-                      options={platingOptions}
-                      value={selectedDetailPlating}
-                      onChange={(value) => {
-                        if (!detailIsPlated) return;
-                        setSelectedDetailPlating(value);
-                        detailForm.setValue("plating_variant_id", value, { shouldDirty: true });
-                      }}
-                      className={detailIsPlated ? undefined : "opacity-60"}
-                    />
-                    <Input type="date" placeholder="납기" {...detailForm.register("requested_due_date")} />
-                    <Select {...detailForm.register("priority_code")}>
-                      <option value="">우선순위</option>
-                      {priorityOptions.map((value) => (
-                        <option key={value} value={value}>
-                          {value}
-                        </option>
-                      ))}
-                    </Select>
-                    <Input placeholder="주문 경로" {...detailForm.register("source_channel")} />
-                    <Textarea placeholder="메모" {...detailForm.register("memo")} />
-                    <div className="flex justify-end">
-                      <Button type="submit" disabled={updateDisabled}>
-                        저장
-                      </Button>
-                    </div>
-                  </form>
-                </CardBody>
-              </Card>
-              <Card id="orders.detail.status">
-                <CardHeader>
-                  <ActionBar title="상태 변경" subtitle="상태 변경 이벤트 기록" />
-                </CardHeader>
-                <CardBody className="grid gap-3">
-                  <Select value={statusTo} onChange={(event) => setStatusTo(event.target.value)}>
-                    <option value="">변경할 상태</option>
-                    {statusOptions.map((value) => (
-                      <option key={value} value={value}>
-                        {value}
-                      </option>
-                    ))}
-                  </Select>
-                  <Textarea
-                    placeholder="사유 (선택)"
-                    value={statusReason}
-                    onChange={(event) => setStatusReason(event.target.value)}
-                  />
-                  <div className="flex items-center justify-between">
-                    <p className="text-xs text-[var(--muted)]">
-                      {actorId ? "담당자 ID 설정됨" : "담당자 ID 필요"}
-                    </p>
-                    <Button type="button" disabled={statusDisabled} onClick={handleStatusChange}>
-                      상태 변경
-                    </Button>
-                  </div>
-                </CardBody>
-              </Card>
-              <Card id="orders.detail.meta">
-                <CardHeader>
-                  <ActionBar title="매칭 상태" subtitle="매칭 상태 강조" />
-                </CardHeader>
-                <CardBody>
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm text-[var(--muted)]">현재 매칭</span>
-                    {selectedOrder?.match_state === "UNMATCHED" ? (
-                      <Badge tone="danger">UNMATCHED</Badge>
-                    ) : (
-                      <Badge tone="neutral">{selectedOrder?.match_state ?? "-"}</Badge>
-                    )}
-                  </div>
-                  <div className="mt-2 text-xs text-[var(--muted)]">
-                    매칭 상태는 자동 보강되며, UNMATCHED는 우선 확인 대상입니다.
-                  </div>
-                </CardBody>
-              </Card>
-            </div>
-          }
-        />
-      </div>
-      <Modal open={shipmentModalOpen} onClose={() => setShipmentModalOpen(false)} title="출고 만들기">
-        <div className="space-y-4">
-          <p className="text-sm text-[var(--muted)]">
-            선택된 라인을 거래처별로 묶어 출고 문서를 생성합니다.
-          </p>
-          <div className="space-y-2 rounded-[12px] border border-dashed border-[var(--panel-border)] px-4 py-4">
-            {selectionSummary.length === 0 ? (
-              <p className="text-sm text-[var(--muted)]">선택된 라인이 없습니다.</p>
-            ) : (
-              selectionSummary.map((group) => (
-                <div key={group.name} className="flex items-center justify-between text-sm">
-                  <span>{group.name}</span>
-                  <span>{group.count}건</span>
-                </div>
-              ))
-            )}
-          </div>
-          <Input
-            type="date"
-            placeholder="출고일"
-            value={shipmentDate}
-            onChange={(event) => setShipmentDate(event.target.value)}
-          />
-          <Textarea
-            placeholder="메모"
-            value={shipmentMemo}
-            onChange={(event) => setShipmentMemo(event.target.value)}
-          />
-          <div className="flex justify-end gap-2">
-            <Button variant="secondary" onClick={() => setShipmentModalOpen(false)}>
-              취소
+                    </td>
+                    <td className="px-2 py-1 border-r border-[var(--panel-border)]">
+                      <select
+                        className={cn(
+                          "w-full bg-transparent border-none focus:ring-0 text-xs py-0",
+                          errors.plating ? "bg-red-50" : ""
+                        )}
+                        value={row.plating_color}
+                        onChange={(event) => updateRow(row.id, { plating_color: event.target.value })}
+                        disabled={!row.is_plated}
+                      >
+                        <option value="">선택</option>
+                        {platingColors.map((color) => (
+                          <option key={color} value={color}>
+                            {color}
+                          </option>
+                        ))}
+                      </select>
+                    </td>
+                    <td className="px-2 py-1">
+                      <input
+                        className="w-full bg-transparent border-none focus:ring-0 focus:bg-blue-50 rounded px-1.5 py-1 text-xs"
+                        value={row.memo}
+                        onChange={(event) => updateRow(row.id, { memo: event.target.value })}
+                      />
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+        <div className="px-4 py-3 border-t border-[var(--panel-border)] flex items-center justify-between text-xs text-[var(--muted)]">
+          <span>라인 {rows.length}개</span>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="secondary"
+              onClick={() => setPageIndex((prev) => Math.max(1, prev - 1))}
+              disabled={pageIndex === 1}
+            >
+              이전
             </Button>
-            <Button onClick={handleShipmentCreate} disabled={!canCreateShipment || shipmentMutation.isPending}>
-              생성
+            <span className="text-xs">
+              {pageIndex} / {Math.max(1, Math.ceil(rows.length / PAGE_SIZE))}
+            </span>
+            <Button
+              variant="secondary"
+              onClick={() => {
+                const pageCount = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
+                if (pageIndex >= pageCount) {
+                  setRows((prev) => [
+                    ...prev,
+                    ...Array.from({ length: PAGE_SIZE }, (_, idx) => createEmptyRow(prev.length + idx)),
+                  ]);
+                }
+                setPageIndex((prev) => prev + 1);
+              }}
+            >
+              다음
             </Button>
           </div>
         </div>
-      </Modal>
-      {!isFnConfigured(enumFn) ? (
-        <p className="text-xs text-[var(--muted)]">
-          enum 값 조회 RPC가 없어 필터 옵션이 제한됩니다.
-        </p>
-      ) : null}
-      {isLoading ? <p className="text-xs text-[var(--muted)]">데이터 로딩 중...</p> : null}
+      </Card>
     </div>
   );
 }

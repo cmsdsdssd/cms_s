@@ -7,6 +7,12 @@ export const CONTRACTS = {
     arBalanceByParty: "cms_v_ar_balance_by_party",
     arPositionByParty: "cms_v_ar_position_by_party",
     masterItems: "cms_master_item",
+    arClientSummary: "v_cms_ar_client_summary",
+    masterItemLookup: "v_cms_master_item_lookup",
+    stoneCatalog: "v_cms_stone_catalog",
+    platingColor: "v_cms_plating_color",
+    orderLookup: "v_cms_order_lookup",
+    shipmentPrefill: "v_cms_shipment_prefill",
   },
   functions: {
     partyUpsert: process.env.NEXT_PUBLIC_CMS_FN_PARTY_UPSERT ?? "",
@@ -23,8 +29,13 @@ export const CONTRACTS = {
     shipmentUpdateLine: process.env.NEXT_PUBLIC_CMS_FN_SHIPMENT_UPDATE_LINE ?? "",
     shipmentDeleteLine: process.env.NEXT_PUBLIC_CMS_FN_SHIPMENT_DELETE_LINE ?? "",
     shipmentConfirm: process.env.NEXT_PUBLIC_CMS_FN_SHIPMENT_CONFIRM ?? "",
+    shipmentUpsertFromOrder:
+      process.env.NEXT_PUBLIC_CMS_FN_SHIPMENT_UPSERT_FROM_ORDER ?? "",
     recordPayment: process.env.NEXT_PUBLIC_CMS_FN_RECORD_PAYMENT ?? "",
-    recordReturn: process.env.NEXT_PUBLIC_CMS_FN_RECORD_RETURN ?? "",
+    recordReturn:
+      process.env.NEXT_PUBLIC_CMS_FN_RECORD_RETURN_V2 ??
+      process.env.NEXT_PUBLIC_CMS_FN_RECORD_RETURN ??
+      "",
     enumValues: process.env.NEXT_PUBLIC_CMS_FN_ENUM_VALUES ?? "cms_fn_enum_values_v1",
   },
 };

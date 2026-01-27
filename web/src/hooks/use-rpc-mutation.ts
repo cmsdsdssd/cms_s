@@ -4,7 +4,7 @@ import { callRpc } from "@/lib/supabase/rpc";
 
 type RpcMutationOptions<TResult> = {
   fn: string;
-  successMessage: string;
+  successMessage?: string;
   onSuccess?: (result: TResult) => void;
 };
 
@@ -14,7 +14,9 @@ export function useRpcMutation<TResult>(
   return useMutation({
     mutationFn: (params: Record<string, unknown>) => callRpc<TResult>(options.fn, params),
     onSuccess: (data) => {
-      toast.success(options.successMessage);
+      if (options.successMessage) {
+        toast.success(options.successMessage);
+      }
       options.onSuccess?.(data as TResult);
     },
     onError: (error) => {

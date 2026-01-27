@@ -17,10 +17,10 @@ import { cn } from "@/lib/utils";
 const navItems = [
   { href: "/dashboard", label: "대시보드", icon: Gauge },
   { href: "/catalog", label: "카탈로그", icon: Boxes },
-  { href: "/orders", label: "주문", icon: ClipboardList },
+  { href: "/orders_main", label: "주문", icon: ClipboardList },
   { href: "/party", label: "거래처", icon: Store },
   { href: "/repairs", label: "수리", icon: Wrench },
-  { href: "/shipments", label: "출고", icon: PackageCheck },
+  { href: "/shipments_main", label: "출고", icon: PackageCheck },
   { href: "/ar", label: "미수", icon: CreditCard },
 ];
 
@@ -40,7 +40,11 @@ export function Sidebar() {
       </div>
       <nav className="flex-1 space-y-1">
         {navItems.map((item) => {
-          const active = pathname === item.href;
+          const active = item.href === "/orders_main"
+            ? pathname.startsWith("/orders") || pathname.startsWith("/orders_main")
+            : item.href === "/shipments_main"
+              ? pathname.startsWith("/shipments") || pathname.startsWith("/shipments_main")
+              : pathname === item.href;
           const Icon = item.icon;
           return (
             <Link
