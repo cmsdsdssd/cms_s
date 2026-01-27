@@ -52,6 +52,28 @@ export async function POST(request: Request) {
   return NextResponse.json({ publicUrl: data.publicUrl, path: filePath });
 }
 
+export async function GET(request: Request) {
+  const supabase = getSupabaseAdmin();
+  if (!supabase) {
+    return NextResponse.json({ error: "Supabase 환경 변수가 설정되지 않았습니다." }, { status: 500 });
+  }
+
+  const { searchParams } = new URL(request.url);
+  const path = String(searchParams.get("path") ?? "").trim();
+  if (!path) {
+    return NextResponse.json({ error: "path 값이 필요합니다." }, { status: 400 });
+  }
+
+  const bucket = getBucketName();
+  const normalized = path.startsWith(`${bucket}/`) ? path.slice(bucket.length + 1) : path;
+  const { data, error } = await supabase.storage.from(bucket).createSignedUrl(normalized, 60 * 60);
+  if (error || !data?.signedUrl) {
+    return NextResponse.json({ error: error?.message ?? "signed url 생성 실패" }, { status: 500 });
+  }
+
+  return NextResponse.json({ signedUrl: data.signedUrl });
+}
+
 export async function DELETE(request: Request) {
   const supabase = getSupabaseAdmin();
   if (!supabase) {

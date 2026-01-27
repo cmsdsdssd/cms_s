@@ -33,16 +33,22 @@ async function buildImageUrl(supabase: SupabaseClient<unknown>, path: string | n
   return `${url}/storage/v1/object/public/${bucket}/${normalized}`;
 }
 
-export async function GET() {
+export async function GET(request: Request) {
   const supabase = getSupabaseAdmin();
   if (!supabase) {
     return NextResponse.json({ error: "Supabase 환경 변수가 설정되지 않았습니다." }, { status: 500 });
   }
 
-  const { data, error } = await supabase
-    .from("cms_master_item")
-    .select("*")
-    .limit(100);
+  const { searchParams } = new URL(request.url);
+  const model = String(searchParams.get("model") ?? "").trim();
+
+  let query = supabase.from("cms_master_item").select("*");
+  if (model) {
+    query = query.ilike("model_name", `%${model}%`).limit(5);
+  } else {
+    query = query.limit(100);
+  }
+  const { data, error } = await query;
   if (error) {
     return NextResponse.json({ error: error.message ?? "데이터 조회 실패" }, { status: 500 });
   }
