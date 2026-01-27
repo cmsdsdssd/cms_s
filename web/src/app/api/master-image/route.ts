@@ -11,6 +11,10 @@ function getSupabaseAdmin() {
   return createClient(url, key);
 }
 
+function getBucketName() {
+  return process.env.SUPABASE_BUCKET ?? "master_images";
+}
+
 export async function POST(request: Request) {
   const supabase = getSupabaseAdmin();
   if (!supabase) {
@@ -35,15 +39,16 @@ export async function POST(request: Request) {
   const filePath = `master/${fileName}`;
 
   const arrayBuffer = await file.arrayBuffer();
+  const bucket = getBucketName();
   const { error } = await supabase.storage
-    .from("master_images")
+    .from(bucket)
     .upload(filePath, arrayBuffer, { contentType: file.type, upsert: true });
 
   if (error) {
     return NextResponse.json({ error: "이미지 업로드에 실패했습니다." }, { status: 500 });
   }
 
-  const { data } = supabase.storage.from("master_images").getPublicUrl(filePath);
+  const { data } = supabase.storage.from(bucket).getPublicUrl(filePath);
   return NextResponse.json({ publicUrl: data.publicUrl, path: filePath });
 }
 
@@ -59,7 +64,8 @@ export async function DELETE(request: Request) {
     return NextResponse.json({ error: "삭제 경로가 올바르지 않습니다." }, { status: 400 });
   }
 
-  const { error } = await supabase.storage.from("master_images").remove([path]);
+  const bucket = getBucketName();
+  const { error } = await supabase.storage.from(bucket).remove([path]);
   if (error) {
     return NextResponse.json({ error: "이미지 삭제에 실패했습니다." }, { status: 500 });
   }

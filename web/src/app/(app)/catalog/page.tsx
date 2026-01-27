@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ActionBar } from "@/components/layout/action-bar";
 import { FilterBar } from "@/components/layout/filter-bar";
 import { SplitLayout } from "@/components/layout/split-layout";
@@ -8,8 +8,11 @@ import { Card, CardBody, CardHeader } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input, Select, Textarea } from "@/components/ui/field";
 import { Badge } from "@/components/ui/badge";
+import { Modal } from "@/components/ui/modal";
 import { Grid2x2, List } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { toast } from "sonner";
+/* eslint-disable @next/next/no-img-element */
 
 type CatalogItem = {
   id: string;
@@ -25,6 +28,34 @@ type CatalogItem = {
   color: string;
   cost: string;
   grades: string[];
+  imageUrl?: string | null;
+};
+
+type CatalogDetail = {
+  categoryCode: string;
+  materialCode: string;
+  weight: string;
+  deductionWeight: string;
+  centerQty: number;
+  sub1Qty: number;
+  sub2Qty: number;
+  laborBaseSell: number;
+  laborCenterSell: number;
+  laborSub1Sell: number;
+  laborSub2Sell: number;
+  laborTotalSell: number;
+  laborBaseCost: number;
+  laborCenterCost: number;
+  laborSub1Cost: number;
+  laborSub2Cost: number;
+  laborTotalCost: number;
+  platingSell: number;
+  platingCost: number;
+  laborProfileMode: string;
+  laborBandCode: string;
+  note: string;
+  releaseDate: string;
+  modifiedDate: string;
 };
 
 const catalogItems: CatalogItem[] = [
@@ -182,33 +213,473 @@ const catalogItems: CatalogItem[] = [
 
 const pageSize = 5;
 
+const categoryOptions = [
+  { label: "팔찌", value: "BRACELET" },
+  { label: "목걸이", value: "NECKLACE" },
+  { label: "귀걸이", value: "EARRING" },
+  { label: "반지", value: "RING" },
+  { label: "피어싱", value: "PIERCING" },
+  { label: "펜던트", value: "PENDANT" },
+  { label: "시계", value: "WATCH" },
+  { label: "키링", value: "KEYRING" },
+  { label: "상징", value: "SYMBOL" },
+  { label: "기타", value: "ETC" },
+];
+
+const materialOptions = [
+  { label: "14K", value: "14" },
+  { label: "18K", value: "18" },
+  { label: "24K", value: "24" },
+  { label: "925", value: "925" },
+  { label: "00", value: "00" },
+];
+
+type VendorOption = { label: string; value: string };
+
+const laborProfileOptions = [
+  { label: "수동", value: "MANUAL" },
+  { label: "밴드", value: "BAND" },
+];
+
+type FieldProps = {
+  label: string;
+  children: React.ReactNode;
+};
+
+function Field({ label, children }: FieldProps) {
+  return (
+    <div className="space-y-2">
+      <p className="text-xs font-semibold text-[var(--muted)]">{label}</p>
+      {children}
+    </div>
+  );
+}
+
+function toNumber(value: string) {
+  const parsed = Number(value);
+  return Number.isNaN(parsed) ? 0 : parsed;
+}
+
+function isUuid(value: string) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+}
+
+function materialCodeFromLabel(label: string) {
+  if (label.includes("14K")) return "14";
+  if (label.includes("18K")) return "18";
+  if (label.includes("24K")) return "24";
+  if (label.includes("925")) return "925";
+  if (label.includes("00")) return "00";
+  return "";
+}
+
 export default function CatalogPage() {
+  const [catalogItemsState, setCatalogItemsState] = useState<CatalogItem[]>(catalogItems);
   const [view, setView] = useState<"list" | "gallery">("list");
   const [page, setPage] = useState(1);
+  const [registerOpen, setRegisterOpen] = useState(false);
+  const [isEditMode, setIsEditMode] = useState(false);
+  const [selectedItemId, setSelectedItemId] = useState<string | null>(catalogItems[0]?.id ?? null);
+  const [masterId, setMasterId] = useState("");
+  const [modelName, setModelName] = useState("");
+  const [vendorId, setVendorId] = useState("");
+  const [vendorOptions, setVendorOptions] = useState<VendorOption[]>([]);
+  const [masterRowsById, setMasterRowsById] = useState<Record<string, Record<string, unknown>>>({});
+  const [categoryCode, setCategoryCode] = useState("");
+  const [materialCode, setMaterialCode] = useState("");
+  const [weightDefault, setWeightDefault] = useState("");
+  const [deductionWeight, setDeductionWeight] = useState("");
+  const [platingSell, setPlatingSell] = useState(0);
+  const [platingCost, setPlatingCost] = useState(0);
+  const [laborProfileMode, setLaborProfileMode] = useState("MANUAL");
+  const [laborBandCode, setLaborBandCode] = useState("");
+  const [note, setNote] = useState("");
+  const [releaseDate, setReleaseDate] = useState("");
+  const [modifiedDate, setModifiedDate] = useState("");
+  const [imageUrl, setImageUrl] = useState<string | null>(null);
+  const [imagePath, setImagePath] = useState<string | null>(null);
+  const [uploadingImage, setUploadingImage] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [centerQty, setCenterQty] = useState(0);
+  const [sub1Qty, setSub1Qty] = useState(0);
+  const [sub2Qty, setSub2Qty] = useState(0);
+  const [laborBaseSell, setLaborBaseSell] = useState(0);
+  const [laborCenterSell, setLaborCenterSell] = useState(0);
+  const [laborSub1Sell, setLaborSub1Sell] = useState(0);
+  const [laborSub2Sell, setLaborSub2Sell] = useState(0);
+  const [laborBaseCost, setLaborBaseCost] = useState(0);
+  const [laborCenterCost, setLaborCenterCost] = useState(0);
+  const [laborSub1Cost, setLaborSub1Cost] = useState(0);
+  const [laborSub2Cost, setLaborSub2Cost] = useState(0);
 
-  const totalPages = Math.ceil(catalogItems.length / pageSize);
+  const canSave = true;
+
+  const today = new Date().toISOString().slice(0, 10);
+  const totalLaborSell =
+    laborBaseSell + laborCenterSell * centerQty + laborSub1Sell * sub1Qty + laborSub2Sell * sub2Qty;
+  const totalLaborCost =
+    laborBaseCost + laborCenterCost * centerQty + laborSub1Cost * sub1Qty + laborSub2Cost * sub2Qty;
+
+  const totalPages = Math.ceil(catalogItemsState.length / pageSize);
   const pageItems = useMemo(() => {
     const start = (page - 1) * pageSize;
-    return catalogItems.slice(start, start + pageSize);
-  }, [page]);
+    return catalogItemsState.slice(start, start + pageSize);
+  }, [catalogItemsState, page]);
+
+  const selectedItem = useMemo(
+    () => catalogItemsState.find((item) => item.id === selectedItemId) ?? null,
+    [catalogItemsState, selectedItemId]
+  );
+
+  const fetchVendors = useCallback(async () => {
+    try {
+      const response = await fetch("/api/vendors");
+      const result = (await response.json()) as {
+        data?: { party_id?: string; name?: string }[];
+        error?: string;
+      };
+      if (!response.ok || !result.data) {
+        throw new Error(result.error ?? "공급처 조회 실패");
+      }
+      setVendorOptions(
+        result.data.map((row) => ({
+          label: row.name ?? "-",
+          value: row.party_id ?? "",
+        }))
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "공급처 조회 실패";
+      toast.error("처리 실패", { description: message });
+    }
+  }, []);
+
+  const fetchCatalogItems = useCallback(async () => {
+    try {
+      const response = await fetch("/api/master-items");
+      const result = (await response.json()) as { data?: Record<string, unknown>[]; error?: string };
+      if (!response.ok || !result.data) {
+        throw new Error(result.error ?? "데이터 조회 실패");
+      }
+      const mapped = result.data.map((row: Record<string, unknown>) => {
+        const modelName = String(row.model_name ?? "-");
+        const masterId = String(row.master_id ?? modelName);
+        const createdAt = String(row.created_at ?? "");
+        const materialCode = String(row.material_code_default ?? "-");
+        const weight = row.weight_default_g ? `${row.weight_default_g} g` : "-";
+        const laborTotal = row.labor_total_cost ?? row.labor_total_sell;
+        const cost = typeof laborTotal === "number" ? `₩${new Intl.NumberFormat("ko-KR").format(laborTotal)}` : "-";
+        const active = "판매 중";
+
+        return {
+          id: masterId,
+          model: modelName,
+          name: String(row.name ?? modelName),
+          date: createdAt ? createdAt.slice(0, 10) : "-",
+          status: active,
+          tone: "active" as const,
+          weight,
+          material: materialCode,
+          stone: "없음",
+          vendor: String(row.vendor_party_id ?? "-") as string,
+          color: "-",
+          cost,
+          grades: ["-", "-", "-"],
+          imageUrl: row.image_url ? String(row.image_url) : null,
+        } as CatalogItem;
+      });
+      const rowsById: Record<string, Record<string, unknown>> = {};
+      result.data.forEach((row) => {
+        const id = String(row.master_id ?? row.model_name ?? "");
+        if (id) rowsById[id] = row;
+      });
+      setCatalogItemsState(mapped);
+      setMasterRowsById(rowsById);
+      if (mapped.length > 0 && !selectedItemId) {
+        setSelectedItemId(mapped[0].id);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "데이터 조회 실패";
+      toast.error("처리 실패", { description: message });
+    }
+  }, [selectedItemId]);
+
+  useEffect(() => {
+    fetchCatalogItems();
+  }, [fetchCatalogItems]);
+
+  useEffect(() => {
+    fetchVendors();
+  }, [fetchVendors]);
+
+  const selectedDetail: CatalogDetail | null = useMemo(() => {
+    if (!selectedItem) return null;
+    const row = masterRowsById[selectedItem.id];
+    if (!row) {
+      const materialCodeValue = materialCodeFromLabel(selectedItem.material);
+      return {
+        categoryCode: "",
+        materialCode: materialCodeValue,
+        weight: selectedItem.weight,
+        deductionWeight: "",
+        centerQty: selectedItem.stone === "없음" ? 0 : 1,
+        sub1Qty: 0,
+        sub2Qty: 0,
+        laborBaseSell: 0,
+        laborCenterSell: 0,
+        laborSub1Sell: 0,
+        laborSub2Sell: 0,
+        laborTotalSell: 0,
+        laborBaseCost: 0,
+        laborCenterCost: 0,
+        laborSub1Cost: 0,
+        laborSub2Cost: 0,
+        laborTotalCost: 0,
+        platingSell: 0,
+        platingCost: 0,
+        laborProfileMode: "MANUAL",
+        laborBandCode: "",
+        note: "",
+        releaseDate: selectedItem.date,
+        modifiedDate: "",
+      };
+    }
+
+    const laborTotalSellValue =
+      (row.labor_total_sell as number | undefined) ??
+      (row.labor_base_sell as number | undefined) ??
+      0;
+    const laborTotalCostValue =
+      (row.labor_total_cost as number | undefined) ??
+      (row.labor_base_cost as number | undefined) ??
+      0;
+
+    return {
+      categoryCode: String(row.category_code ?? ""),
+      materialCode: String(row.material_code_default ?? ""),
+      weight: row.weight_default_g ? `${row.weight_default_g} g` : "",
+      deductionWeight: row.deduction_weight_default_g ? String(row.deduction_weight_default_g) : "",
+      centerQty: Number(row.center_qty_default ?? 0),
+      sub1Qty: Number(row.sub1_qty_default ?? 0),
+      sub2Qty: Number(row.sub2_qty_default ?? 0),
+      laborBaseSell: Number(row.labor_base_sell ?? 0),
+      laborCenterSell: Number(row.labor_center_sell ?? 0),
+      laborSub1Sell: Number(row.labor_sub1_sell ?? 0),
+      laborSub2Sell: Number(row.labor_sub2_sell ?? 0),
+      laborTotalSell: Number(laborTotalSellValue),
+      laborBaseCost: Number(row.labor_base_cost ?? 0),
+      laborCenterCost: Number(row.labor_center_cost ?? 0),
+      laborSub1Cost: Number(row.labor_sub1_cost ?? 0),
+      laborSub2Cost: Number(row.labor_sub2_cost ?? 0),
+      laborTotalCost: Number(laborTotalCostValue),
+      platingSell: Number(row.plating_price_sell_default ?? 0),
+      platingCost: Number(row.plating_price_cost_default ?? 0),
+      laborProfileMode: String(row.labor_profile_mode ?? "MANUAL"),
+      laborBandCode: String(row.labor_band_code ?? ""),
+      note: String(row.note ?? ""),
+      releaseDate: String(row.created_at ?? "").slice(0, 10),
+      modifiedDate: String(row.updated_at ?? "").slice(0, 10),
+    };
+  }, [masterRowsById, selectedItem]);
+
+  const handleImageUpload = async (file: File) => {
+    setUploadError(null);
+    setUploadingImage(true);
+    try {
+      const formData = new FormData();
+      const previewUrl = URL.createObjectURL(file);
+      setImageUrl(previewUrl);
+      formData.append("file", file);
+      const response = await fetch("/api/master-image", {
+        method: "POST",
+        body: formData,
+      });
+      const result = (await response.json()) as { publicUrl?: string; path?: string; error?: string };
+      if (!response.ok || !result.publicUrl || !result.path) {
+        throw new Error(result.error ?? "이미지 업로드에 실패했습니다.");
+      }
+      setImageUrl(result.publicUrl);
+      setImagePath(result.path);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "이미지 업로드에 실패했습니다.";
+      setUploadError(message);
+      toast.error("처리 실패", { description: message });
+    } finally {
+      setUploadingImage(false);
+    }
+  };
+
+  const handleImageRemove = async () => {
+    if (!imagePath) {
+      setImageUrl(null);
+      setImagePath(null);
+      return;
+    }
+    try {
+      const response = await fetch("/api/master-image", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: imagePath }),
+      });
+      const result = (await response.json()) as { error?: string };
+      if (!response.ok) {
+        throw new Error(result.error ?? "이미지 삭제에 실패했습니다.");
+      }
+      setImageUrl(null);
+      setImagePath(null);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "이미지 삭제에 실패했습니다.";
+      setUploadError(message);
+      toast.error("처리 실패", { description: message });
+    }
+  };
+
+  const resetForm = () => {
+    setMasterId(crypto.randomUUID());
+    setModelName("");
+    setVendorId("");
+    setCategoryCode("");
+    setMaterialCode("");
+    setWeightDefault("");
+    setDeductionWeight("");
+    setCenterQty(0);
+    setSub1Qty(0);
+    setSub2Qty(0);
+    setLaborBaseSell(0);
+    setLaborCenterSell(0);
+    setLaborSub1Sell(0);
+    setLaborSub2Sell(0);
+    setLaborBaseCost(0);
+    setLaborCenterCost(0);
+    setLaborSub1Cost(0);
+    setLaborSub2Cost(0);
+    setPlatingSell(0);
+    setPlatingCost(0);
+    setLaborProfileMode("MANUAL");
+    setLaborBandCode("");
+    setNote("");
+    setReleaseDate(today);
+    setModifiedDate("");
+  };
+
+  const handleOpenNew = () => {
+    setIsEditMode(false);
+    resetForm();
+    setRegisterOpen(true);
+  };
+
+  const handleOpenEdit = () => {
+    if (!selectedItem || !selectedItemId) return;
+    const detail = selectedDetail;
+    setIsEditMode(true);
+    setMasterId(selectedItem.id);
+    setModelName(selectedItem.model);
+    setVendorId(vendorOptions.find((option) => option.label === selectedItem.vendor)?.value ?? "");
+    setCategoryCode(detail?.categoryCode ?? "");
+    setMaterialCode(detail?.materialCode ?? materialCodeFromLabel(selectedItem.material));
+    setWeightDefault(detail?.weight ?? selectedItem.weight);
+    setDeductionWeight(detail?.deductionWeight ?? "");
+    setCenterQty(detail?.centerQty ?? 0);
+    setSub1Qty(detail?.sub1Qty ?? 0);
+    setSub2Qty(detail?.sub2Qty ?? 0);
+    setLaborBaseSell(detail?.laborBaseSell ?? 0);
+    setLaborCenterSell(detail?.laborCenterSell ?? 0);
+    setLaborSub1Sell(detail?.laborSub1Sell ?? 0);
+    setLaborSub2Sell(detail?.laborSub2Sell ?? 0);
+    setLaborBaseCost(detail?.laborBaseCost ?? 0);
+    setLaborCenterCost(detail?.laborCenterCost ?? 0);
+    setLaborSub1Cost(detail?.laborSub1Cost ?? 0);
+    setLaborSub2Cost(detail?.laborSub2Cost ?? 0);
+    setPlatingSell(detail?.platingSell ?? 0);
+    setPlatingCost(detail?.platingCost ?? 0);
+    setLaborProfileMode(detail?.laborProfileMode ?? "MANUAL");
+    setLaborBandCode(detail?.laborBandCode ?? "");
+    setNote(detail?.note ?? "");
+    setReleaseDate(detail?.releaseDate ?? selectedItem.date);
+    setModifiedDate(today);
+    setRegisterOpen(true);
+  };
+
+  const handleSave = () => {
+    if (!canSave) {
+      toast.error("처리 실패", { description: "잠시 후 다시 시도해 주세요" });
+      return;
+    }
+    if (!modelName) {
+      toast.error("처리 실패", { description: "모델명이 필요합니다." });
+      return;
+    }
+
+      const payload = {
+        master_id: masterId || null,
+        model_name: modelName,
+        category_code: categoryCode || null,
+        material_code_default: materialCode || null,
+      weight_default_g: weightDefault ? Number(weightDefault) : null,
+      deduction_weight_default_g: deductionWeight ? Number(deductionWeight) : 0,
+      center_qty_default: centerQty,
+      sub1_qty_default: sub1Qty,
+      sub2_qty_default: sub2Qty,
+      labor_base_sell: laborBaseSell,
+      labor_center_sell: laborCenterSell,
+      labor_sub1_sell: laborSub1Sell,
+      labor_sub2_sell: laborSub2Sell,
+      labor_base_cost: laborBaseCost,
+      labor_center_cost: laborCenterCost,
+      labor_sub1_cost: laborSub1Cost,
+      labor_sub2_cost: laborSub2Cost,
+      plating_price_sell_default: platingSell,
+        plating_price_cost_default: platingCost,
+        labor_profile_mode: laborProfileMode,
+        labor_band_code: laborBandCode || null,
+        vendor_party_id: isUuid(vendorId) ? vendorId : null,
+        note,
+        image_path: imagePath || null,
+      } as const;
+
+    setIsSaving(true);
+    fetch("/api/master-item", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    })
+      .then(async (response) => {
+        const result = (await response.json()) as { error?: string };
+        if (!response.ok) {
+          throw new Error(result.error ?? "저장에 실패했습니다.");
+        }
+        toast.success("저장 완료");
+        setSelectedItemId(masterId);
+        await fetchCatalogItems();
+        setRegisterOpen(false);
+      })
+      .catch((error) => {
+        const message = error instanceof Error ? error.message : "저장에 실패했습니다.";
+        toast.error("처리 실패", { description: message });
+      })
+      .finally(() => setIsSaving(false));
+
+  };
 
   return (
-    <div className="space-y-6" id="catalog.root">
-      <ActionBar
-        title={
-          <div className="flex items-center gap-3">
-            <span>상품 카탈로그</span>
+    <>
+      <div className="space-y-4" id="catalog.root">
+        <ActionBar
+          title={
+            <div className="flex items-center gap-3">
+              <span>상품 카탈로그</span>
             <span className="rounded-full bg-[var(--chip)] px-2.5 py-1 text-xs font-semibold text-[var(--muted)]">
               410개
             </span>
           </div>
         }
         subtitle="마스터카드 관리"
-        actions={
-          <div className="flex items-center gap-2">
-            <Button variant="secondary" size="sm">
-              새 상품 등록
-            </Button>
+          actions={
+            <div className="flex items-center gap-2">
+              <Button variant="secondary" size="sm" onClick={handleOpenNew}>
+                새 상품 등록
+              </Button>
             <div className="flex items-center rounded-[12px] border border-[var(--panel-border)] bg-white p-1">
               <button
                 type="button"
@@ -241,33 +712,39 @@ export default function CatalogPage() {
         }
         id="catalog.actionBar"
       />
-      <FilterBar id="catalog.filterBar">
-        <Input placeholder="모델명, 태그 검색" />
-        <Select>
-          <option>전체 카테고리</option>
-        </Select>
-        <Select>
-          <option>재질 전체</option>
-        </Select>
-        <Select>
-          <option>상태: 판매중</option>
-        </Select>
-        <Button variant="secondary">추가 필터</Button>
-      </FilterBar>
       <div id="catalog.body">
         <SplitLayout
+          className="gap-4"
           left={
-            <div className="space-y-4" id="catalog.listPanel">
+            <div className="flex min-h-[720px] flex-col gap-3" id="catalog.listPanel">
               {view === "list" ? (
-                <div className="space-y-4">
+                <div className="space-y-3">
                   {pageItems.map((item) => (
-                    <Card key={item.id} className="p-5">
+                    <Card
+                      key={item.id}
+                      className={cn(
+                        "cursor-pointer p-5 transition",
+                        item.id === selectedItemId ? "ring-2 ring-[var(--primary)]" : "hover:bg-[#f7f9fc]"
+                      )}
+                      onClick={() => setSelectedItemId(item.id)}
+                    >
                       <div className="flex gap-6">
                         <div className="relative h-28 w-28 overflow-hidden rounded-[14px] bg-gradient-to-br from-[#e7edf5] to-[#f7faff]">
                           <div className="absolute right-2 top-2 h-6 w-6 rounded-full border border-white/80 bg-white/80" />
                           <div className="absolute inset-0 flex items-center justify-center text-xs text-[var(--muted)]">
                             이미지
                           </div>
+                          {item.imageUrl ? (
+                            <img
+                              src={item.imageUrl}
+                              alt={`${item.model} 이미지`}
+                              className="absolute inset-0 h-full w-full object-cover"
+                              loading="lazy"
+                              onError={(event) => {
+                                event.currentTarget.style.display = "none";
+                              }}
+                            />
+                          ) : null}
                         </div>
                         <div className="flex-1 space-y-3">
                           <div className="flex items-center justify-between">
@@ -316,9 +793,31 @@ export default function CatalogPage() {
               ) : (
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
                   {pageItems.map((item) => (
-                    <Card key={item.id} className="overflow-hidden">
-                      <div className="h-40 bg-gradient-to-br from-[#e7edf5] to-[#f7faff]" />
-                      <div className="p-4 space-y-2">
+                    <Card
+                      key={item.id}
+                      className={cn(
+                        "cursor-pointer overflow-hidden transition",
+                        item.id === selectedItemId ? "ring-2 ring-[var(--primary)]" : "hover:bg-[#f7f9fc]"
+                      )}
+                      onClick={() => setSelectedItemId(item.id)}
+                    >
+                      <div className="relative h-40 bg-gradient-to-br from-[#e7edf5] to-[#f7faff]">
+                        <div className="absolute inset-0 flex items-center justify-center text-xs text-[var(--muted)]">
+                          이미지
+                        </div>
+                        {item.imageUrl ? (
+                          <img
+                            src={item.imageUrl}
+                            alt={`${item.model} 이미지`}
+                            className="absolute inset-0 h-full w-full object-cover"
+                            loading="lazy"
+                            onError={(event) => {
+                              event.currentTarget.style.display = "none";
+                            }}
+                          />
+                        ) : null}
+                      </div>
+                      <div className="space-y-2 p-4">
                         <div className="flex items-center justify-between">
                           <p className="text-sm font-semibold text-[var(--foreground)]">{item.model}</p>
                           <Badge tone={item.tone}>{item.status}</Badge>
@@ -330,9 +829,9 @@ export default function CatalogPage() {
                   ))}
                 </div>
               )}
-              <div className="flex items-center justify-between rounded-[12px] border border-[var(--panel-border)] bg-white px-4 py-3">
+              <div className="mt-auto flex items-center justify-between rounded-[12px] border border-[var(--panel-border)] bg-white px-4 py-3">
                 <p className="text-xs text-[var(--muted)]">
-                  {(page - 1) * pageSize + 1} - {Math.min(page * pageSize, catalogItems.length)} / {catalogItems.length}
+                  {(page - 1) * pageSize + 1} - {Math.min(page * pageSize, catalogItemsState.length)} / {catalogItemsState.length}
                 </p>
                 <div className="flex gap-2">
                   <Button variant="secondary" size="sm" disabled={page === 1} onClick={() => setPage((p) => p - 1)}>
@@ -351,31 +850,77 @@ export default function CatalogPage() {
             </div>
           }
           right={
-            <div className="space-y-4" id="catalog.detailPanel">
+            <div className="space-y-3" id="catalog.detailPanel">
+              <FilterBar id="catalog.filterBar">
+                <Input placeholder="모델명, 태그 검색" />
+                <Select>
+                  <option>전체 카테고리</option>
+                </Select>
+                <Select>
+                  <option>재질 전체</option>
+                </Select>
+                <Select>
+                  <option>상태: 판매중</option>
+                </Select>
+              </FilterBar>
               <Card id="catalog.detail.basic">
                 <CardHeader>
-                  <ActionBar title="기본 정보" />
+                  <ActionBar
+                    title="기본 정보"
+                    actions={
+                      <Button variant="secondary" size="sm" onClick={handleOpenEdit} disabled={!selectedItem}>
+                        마스터 수정
+                      </Button>
+                    }
+                  />
                 </CardHeader>
-                <CardBody className="grid gap-3">
-                  <Input placeholder="공급처" />
-                  <Input placeholder="모델명" />
-                  <Input placeholder="상품명" />
-                  <Select>
-                    <option>카테고리</option>
+                <CardBody className="grid gap-2">
+                  <Input placeholder="공급처" value={selectedItem?.vendor ?? ""} readOnly />
+                  <Input placeholder="모델명" value={selectedItem?.model ?? ""} readOnly />
+                  <Input placeholder="상품명" value={selectedItem?.name ?? ""} readOnly />
+                  <Select value={selectedDetail?.categoryCode ?? ""} disabled>
+                    <option value="">카테고리</option>
+                    {categoryOptions.map((category) => (
+                      <option key={category.value} value={category.value}>
+                        {category.label}
+                      </option>
+                    ))}
                   </Select>
-                  <Select>
-                    <option>기본 재질</option>
+                  <Select value={selectedDetail?.materialCode ?? ""} disabled>
+                    <option value="">기본 재질</option>
+                    {materialOptions.map((material) => (
+                      <option key={material.value} value={material.value}>
+                        {material.label}
+                      </option>
+                    ))}
                   </Select>
-                  <Input type="date" />
+                  <div className="grid grid-cols-2 gap-2">
+                    <Input type="date" value={selectedDetail?.releaseDate ?? ""} readOnly />
+                    <Input type="date" value={selectedDetail?.modifiedDate ?? ""} readOnly />
+                  </div>
                 </CardBody>
               </Card>
               <Card id="catalog.detail.table">
                 <CardHeader>
                   <ActionBar title="공임 및 가격" actions={<Button variant="secondary">이전 항목 복사</Button>} />
                 </CardHeader>
-                <CardBody className="grid gap-3">
-                  <div className="rounded-[12px] border border-dashed border-[var(--panel-border)] px-4 py-6 text-center text-sm text-[var(--muted)]">
-                    가격 테이블 자리
+                <CardBody className="grid gap-2">
+                  <div className="grid gap-4 md:grid-cols-2">
+                    <div className="space-y-2">
+                      <p className="text-xs font-semibold text-[var(--muted)]">판매 가격</p>
+                      <Input placeholder="공임 기본(판매)" value={selectedDetail?.laborBaseSell ?? ""} readOnly />
+                      <Input placeholder="공임 합계(판매)" value={selectedDetail?.laborTotalSell ?? ""} readOnly />
+                      <Input placeholder="도금 판매" value={selectedDetail?.platingSell ?? ""} readOnly />
+                    </div>
+                    <div className="space-y-2">
+                      <p className="text-xs font-semibold text-[var(--muted)]">구매 가격</p>
+                      <Input placeholder="공임 기본(원가)" value={selectedDetail?.laborBaseCost ?? ""} readOnly />
+                      <Input placeholder="공임 합계(원가)" value={selectedDetail?.laborTotalCost ?? ""} readOnly />
+                      <Input placeholder="도금 원가" value={selectedDetail?.platingCost ?? ""} readOnly />
+                    </div>
+                  </div>
+                  <div className="rounded-[12px] border border-[var(--panel-border)] bg-[#f7f9fc] px-3 py-2 text-xs text-[var(--muted)]">
+                    원가: {selectedItem?.cost ?? "-"} · 등급: {selectedItem?.grades?.join(" / ") ?? "-"}
                   </div>
                 </CardBody>
               </Card>
@@ -383,8 +928,8 @@ export default function CatalogPage() {
                 <CardHeader>
                   <ActionBar title="추가 메모" />
                 </CardHeader>
-                <CardBody>
-                  <Textarea placeholder="내부 메모" />
+                <CardBody className="py-3">
+                  <Textarea placeholder="내부 메모" value={selectedDetail?.note ?? ""} readOnly />
                 </CardBody>
               </Card>
             </div>
@@ -392,5 +937,325 @@ export default function CatalogPage() {
         />
       </div>
     </div>
+      <Modal
+        open={registerOpen}
+        onClose={() => setRegisterOpen(false)}
+        title="새 상품 등록"
+        className="max-w-6xl max-h-[86vh] overflow-hidden"
+      >
+        <div className="grid gap-6 lg:grid-cols-[320px,1fr]">
+          <div className="space-y-4">
+            <div className="rounded-[18px] border border-dashed border-[var(--panel-border)] bg-[#f8fafc] p-4">
+              <div className="mb-3 flex items-center justify-between text-sm font-semibold text-[var(--foreground)]">
+                <span>대표 이미지</span>
+                {uploadingImage ? <span className="text-xs text-[var(--muted)]">업로드 중...</span> : null}
+              </div>
+              <label className="group relative flex h-56 cursor-pointer flex-col items-center justify-center overflow-hidden rounded-[16px] border border-[var(--panel-border)] bg-white text-center">
+                <input
+                  type="file"
+                  accept="image/*"
+                  className="sr-only"
+                  ref={fileInputRef}
+                  onChange={(event) => {
+                    const file = event.target.files?.[0];
+                    if (file) {
+                      handleImageUpload(file);
+                    }
+                    event.currentTarget.value = "";
+                  }}
+                />
+                {imageUrl ? (
+                  <img
+                    src={imageUrl}
+                    alt="업로드 이미지"
+                    className="h-full w-full object-cover"
+                  />
+                ) : (
+                  <div className="space-y-2 px-6">
+                    <div className="text-sm font-semibold text-[var(--foreground)]">이미지 업로드</div>
+                    <div className="text-xs text-[var(--muted)]">
+                      JPG, PNG 파일을 드래그하거나 클릭해서 추가하세요.
+                    </div>
+                    <div className="text-[11px] text-[var(--muted-weak)]">권장 비율 1:1 · 최대 10MB</div>
+                  </div>
+                )}
+              </label>
+              {uploadError ? <p className="mt-2 text-xs text-red-500">{uploadError}</p> : null}
+              {imageUrl ? (
+              <div className="mt-3 flex justify-between gap-2">
+                <Button
+                    variant="secondary"
+                    size="sm"
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                  >
+                    변경
+                  </Button>
+                  <Button variant="secondary" size="sm" type="button" onClick={handleImageRemove}>
+                    삭제
+                  </Button>
+                </div>
+              ) : null}
+            </div>
+          </div>
+          <form
+            className="flex max-h-[68vh] flex-col"
+            onSubmit={(event) => {
+              event.preventDefault();
+              handleSave();
+            }}
+          >
+            <div className="flex-1 space-y-4 overflow-y-auto pr-2">
+              <div className="grid gap-4 lg:grid-cols-2">
+                <div className="rounded-[18px] border border-[var(--panel-border)] bg-white p-4">
+                  <div className="mb-4 flex items-center justify-between">
+                    <p className="text-sm font-semibold text-[var(--foreground)]">기본 정보</p>
+                    <span className="text-xs text-[var(--muted)]">필수 항목 포함</span>
+                  </div>
+                  <div className="grid gap-4 md:grid-cols-2">
+                    <Field label="모델명">
+                      <Input placeholder="모델명*" value={modelName} onChange={(event) => setModelName(event.target.value)} />
+                    </Field>
+                    <Field label="공급처">
+                      <Select value={vendorId} onChange={(event) => setVendorId(event.target.value)}>
+                        <option value="">공급처 선택</option>
+                        {vendorOptions.map((vendor) => (
+                          <option key={vendor.value} value={vendor.value}>
+                            {vendor.label}
+                          </option>
+                        ))}
+                      </Select>
+                    </Field>
+                    <Field label="기본 재질">
+                      <Select value={materialCode} onChange={(event) => setMaterialCode(event.target.value)}>
+                        <option value="">기본 재질 선택</option>
+                        {materialOptions.map((material) => (
+                          <option key={material.value} value={material.value}>
+                            {material.label}
+                          </option>
+                        ))}
+                      </Select>
+                    </Field>
+                    <Field label="카테고리">
+                      <Select value={categoryCode} onChange={(event) => setCategoryCode(event.target.value)}>
+                        <option value="">카테고리 선택*</option>
+                        {categoryOptions.map((category) => (
+                          <option key={category.value} value={category.value}>
+                            {category.label}
+                          </option>
+                        ))}
+                      </Select>
+                    </Field>
+                    <Field label="기본 중량 (g)">
+                      <Input
+                        type="number"
+                        min={0}
+                        placeholder="중량"
+                        value={weightDefault}
+                        onChange={(event) => setWeightDefault(event.target.value)}
+                      />
+                    </Field>
+                    <Field label="차감 중량 (g)">
+                      <Input
+                        type="number"
+                        min={0}
+                        placeholder="차감 중량"
+                        value={deductionWeight}
+                        onChange={(event) => setDeductionWeight(event.target.value)}
+                      />
+                    </Field>
+                  </div>
+                </div>
+                <div className="rounded-[18px] border border-[var(--panel-border)] bg-white p-4">
+                  <p className="mb-4 text-sm font-semibold text-[var(--foreground)]">스톤 기본값</p>
+                  <div className="grid gap-4 md:grid-cols-3">
+                    <Field label="센터 스톤 수">
+                      <Input
+                        type="number"
+                        min={0}
+                        placeholder="센터"
+                        value={centerQty}
+                        onChange={(event) => setCenterQty(toNumber(event.target.value))}
+                      />
+                    </Field>
+                    <Field label="서브1 스톤 수">
+                      <Input
+                        type="number"
+                        min={0}
+                        placeholder="서브1"
+                        value={sub1Qty}
+                        onChange={(event) => setSub1Qty(toNumber(event.target.value))}
+                      />
+                    </Field>
+                    <Field label="서브2 스톤 수">
+                      <Input
+                        type="number"
+                        min={0}
+                        placeholder="서브2"
+                        value={sub2Qty}
+                        onChange={(event) => setSub2Qty(toNumber(event.target.value))}
+                      />
+                    </Field>
+                  </div>
+                  <div className="mt-4 rounded-[14px] border border-[var(--panel-border)] bg-[#f8fafc] p-3">
+                    <p className="mb-3 text-xs font-semibold text-[var(--muted)]">도금 기본값</p>
+                    <div className="grid gap-3 md:grid-cols-2">
+                      <Field label="도금 판매 기본값">
+                        <Input
+                          type="number"
+                          min={0}
+                          placeholder="판매"
+                          value={platingSell}
+                          onChange={(event) => setPlatingSell(toNumber(event.target.value))}
+                        />
+                      </Field>
+                      <Field label="도금 원가 기본값">
+                        <Input
+                          type="number"
+                          min={0}
+                          placeholder="원가"
+                          value={platingCost}
+                          onChange={(event) => setPlatingCost(toNumber(event.target.value))}
+                        />
+                      </Field>
+                    </div>
+                  </div>
+                </div>
+                <div className="rounded-[18px] border border-[var(--panel-border)] bg-white p-4">
+                  <p className="mb-4 text-sm font-semibold text-[var(--foreground)]">공임 (판매)</p>
+                  <div className="grid gap-4 md:grid-cols-3">
+                    <Field label="기본 공임">
+                      <Input
+                        type="number"
+                        min={0}
+                        placeholder="기본"
+                        value={laborBaseSell}
+                        onChange={(event) => setLaborBaseSell(toNumber(event.target.value))}
+                      />
+                    </Field>
+                    <Field label="센터 공임">
+                      <Input
+                        type="number"
+                        min={0}
+                        placeholder="센터"
+                        value={laborCenterSell}
+                        onChange={(event) => setLaborCenterSell(toNumber(event.target.value))}
+                      />
+                    </Field>
+                    <Field label="서브1 공임">
+                      <Input
+                        type="number"
+                        min={0}
+                        placeholder="서브1"
+                        value={laborSub1Sell}
+                        onChange={(event) => setLaborSub1Sell(toNumber(event.target.value))}
+                      />
+                    </Field>
+                    <Field label="서브2 공임">
+                      <Input
+                        type="number"
+                        min={0}
+                        placeholder="서브2"
+                        value={laborSub2Sell}
+                        onChange={(event) => setLaborSub2Sell(toNumber(event.target.value))}
+                      />
+                    </Field>
+                    <Field label="합계 공임">
+                      <Input type="number" min={0} placeholder="합계" value={totalLaborSell} readOnly />
+                    </Field>
+                  </div>
+                </div>
+                <div className="rounded-[18px] border border-[var(--panel-border)] bg-white p-4">
+                  <p className="mb-4 text-sm font-semibold text-[var(--foreground)]">공임 (원가)</p>
+                  <div className="grid gap-4 md:grid-cols-3">
+                    <Field label="기본 공임">
+                      <Input
+                        type="number"
+                        min={0}
+                        placeholder="기본"
+                        value={laborBaseCost}
+                        onChange={(event) => setLaborBaseCost(toNumber(event.target.value))}
+                      />
+                    </Field>
+                    <Field label="센터 공임">
+                      <Input
+                        type="number"
+                        min={0}
+                        placeholder="센터"
+                        value={laborCenterCost}
+                        onChange={(event) => setLaborCenterCost(toNumber(event.target.value))}
+                      />
+                    </Field>
+                    <Field label="서브1 공임">
+                      <Input
+                        type="number"
+                        min={0}
+                        placeholder="서브1"
+                        value={laborSub1Cost}
+                        onChange={(event) => setLaborSub1Cost(toNumber(event.target.value))}
+                      />
+                    </Field>
+                    <Field label="서브2 공임">
+                      <Input
+                        type="number"
+                        min={0}
+                        placeholder="서브2"
+                        value={laborSub2Cost}
+                        onChange={(event) => setLaborSub2Cost(toNumber(event.target.value))}
+                      />
+                    </Field>
+                    <Field label="합계 공임">
+                      <Input type="number" min={0} placeholder="합계" value={totalLaborCost} readOnly />
+                    </Field>
+                  </div>
+                </div>
+                <div className="rounded-[18px] border border-[var(--panel-border)] bg-white p-4">
+                  <p className="mb-3 text-sm font-semibold text-[var(--foreground)]">비고</p>
+                  <Textarea
+                    placeholder="좌측에 대표 이미지를 올리고, 우측에서 상품 정보를 입력하세요."
+                    value={note}
+                    onChange={(event) => setNote(event.target.value)}
+                  />
+                </div>
+                <div className="rounded-[18px] border border-[var(--panel-border)] bg-white p-4 lg:col-span-2">
+                  <p className="mb-4 text-sm font-semibold text-[var(--foreground)]">프로파일 및 메모</p>
+                  <div className="grid gap-4 md:grid-cols-2">
+                    <Field label="공임 프로파일">
+                      <Select value={laborProfileMode} onChange={(event) => setLaborProfileMode(event.target.value)}>
+                        {laborProfileOptions.map((option) => (
+                          <option key={option.value} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </Select>
+                    </Field>
+                    <Field label="공임 밴드 코드">
+                      <Input placeholder="B1 ~ B6" value={laborBandCode} onChange={(event) => setLaborBandCode(event.target.value)} />
+                    </Field>
+                    {isEditMode ? (
+                      <Field label="수정일">
+                        <Input type="date" value={modifiedDate} readOnly />
+                      </Field>
+                    ) : (
+                      <Field label="생성일">
+                        <Input type="date" value={releaseDate} readOnly />
+                      </Field>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div className="sticky bottom-0 flex items-center justify-end gap-2 border-t border-[var(--panel-border)] bg-white pt-4">
+              <Button variant="secondary" type="button" onClick={() => setRegisterOpen(false)}>
+                취소
+              </Button>
+              <Button type="submit" disabled={!canSave || isSaving}>
+                저장
+              </Button>
+            </div>
+          </form>
+        </div>
+      </Modal>
+    </>
   );
 }

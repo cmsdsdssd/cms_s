@@ -1,5 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
-import { MS_SCHEMA } from "@/lib/contracts";
+import { CMS_SCHEMA } from "@/lib/contracts";
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? "";
@@ -17,7 +17,7 @@ export function getSchemaClient() {
   const supabase = getSupabaseClient();
   if (!supabase) return null;
   const schemaFn = supabase.schema as unknown as (schema: string) => typeof supabase;
-  return schemaFn(MS_SCHEMA);
+  return schemaFn(CMS_SCHEMA);
 }
 
 export function assertSupabaseConfig() {

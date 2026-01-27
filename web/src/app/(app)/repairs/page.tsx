@@ -101,7 +101,23 @@ export default function RepairsPage() {
                 <CardBody>
                   <form
                     className="grid gap-3"
-                    onSubmit={form.handleSubmit((values) => mutation.mutate(values))}
+                    onSubmit={form.handleSubmit((values) =>
+                      mutation.mutate({
+                        p_customer_party_id: values.customer_party_id,
+                        p_model_name: values.model_name ?? null,
+                        p_suffix: values.suffix ?? null,
+                        p_color: null,
+                        p_material_code: values.material_code ?? null,
+                        p_qty: values.qty ?? 1,
+                        p_measured_weight_g: values.measured_weight_g ?? null,
+                        p_is_plated: values.is_plated ?? false,
+                        p_plating_variant_id: values.plating_variant_id ?? null,
+                        p_repair_fee_krw: values.repair_fee_krw ?? null,
+                        p_received_at: values.received_at,
+                        p_memo: values.memo ?? null,
+                        p_repair_line_id: null,
+                      })
+                    )}
                   >
                     <SearchSelect
                       label="거래처*"
@@ -144,7 +160,7 @@ export default function RepairsPage() {
                       </Button>
                       {!canSave ? (
                         <p className="mt-2 text-xs text-[var(--muted)]">
-                          ms_s 계약의 수리 등록 RPC명이 필요합니다.
+                          cms 계약의 수리 등록 RPC명이 필요합니다.
                         </p>
                       ) : null}
                     </div>

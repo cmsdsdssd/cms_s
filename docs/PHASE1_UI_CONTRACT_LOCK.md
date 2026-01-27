@@ -114,4 +114,4 @@ order by 1,2;
 -
 ### 3.5 Catalog/Master (마스터카드)
 - **READ:** `cms_master_item` (read-only select)
-- **WRITE:** `fn_admin_master_item_upsert_v1`
+- **WRITE:** 없음 (Phase1은 서버 API에서 `cms_master_item` upsert)

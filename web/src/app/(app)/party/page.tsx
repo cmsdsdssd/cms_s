@@ -92,7 +92,17 @@ export default function PartyPage() {
                 <CardBody>
                   <form
                     className="grid gap-4"
-                    onSubmit={form.handleSubmit((values) => mutation.mutate(values))}
+                    onSubmit={form.handleSubmit((values) =>
+                      mutation.mutate({
+                        p_party_type: values.party_type,
+                        p_name: values.name,
+                        p_phone: values.phone ?? null,
+                        p_region: values.region ?? null,
+                        p_address: values.address ?? null,
+                        p_memo: values.note ?? null,
+                        p_party_id: null,
+                      })
+                    )}
                   >
                     <Input placeholder="거래처명*" {...form.register("name", { required: true })} />
                     <Select {...form.register("party_type", { required: true })}>
@@ -109,7 +119,7 @@ export default function PartyPage() {
                       </Button>
                       {!canSave ? (
                         <p className="mt-2 text-xs text-[var(--muted)]">
-                          ms_s 계약의 거래처 등록 RPC명이 필요합니다.
+                          cms 계약의 거래처 등록 RPC명이 필요합니다.
                         </p>
                       ) : null}
                     </div>

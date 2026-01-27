@@ -17,8 +17,9 @@ export function useRpcMutation<TResult>(
       toast.success(options.successMessage);
       options.onSuccess?.(data as TResult);
     },
-    onError: () => {
-      toast.error("처리 실패", { description: "잠시 후 다시 시도해 주세요" });
+    onError: (error) => {
+      const message = error instanceof Error ? error.message : "잠시 후 다시 시도해 주세요";
+      toast.error("처리 실패", { description: message });
     },
   });
 }

@@ -14,23 +14,25 @@ import { useRpcMutation } from "@/hooks/use-rpc-mutation";
 import { SearchSelect } from "@/components/ui/search-select";
 import { useQuery } from "@tanstack/react-query";
 import { readView } from "@/lib/supabase/read";
-import { CONFIRM_USE_LIVE, CONTRACTS } from "@/lib/contracts";
+import { CONTRACTS, isFnConfigured } from "@/lib/contracts";
 import { cn } from "@/lib/utils";
 
 type ShipReadyRow = {
-  customer_name?: string;
   shipment_id?: string;
+  shipment_header_id?: string;
+  customer_name?: string;
   line_count?: number;
   status?: string;
   ship_date?: string;
-  customer_id?: string;
+  created_at?: string;
 };
 
 type ShipReadyLineRow = {
+  shipment_line_id?: string;
+  shipment_header_id?: string;
   order_line_id?: string;
   ref_key?: string;
   qty?: number;
-  remaining_qty?: number;
   ship_status?: string;
   customer_name?: string;
 };
@@ -69,31 +71,27 @@ export default function ShipmentsPage() {
   const [adHocModal, setAdHocModal] = useState(false);
   const [selectedLineId, setSelectedLineId] = useState<string | null>(null);
 
-  const confirmFn = CONFIRM_USE_LIVE
-    ? CONTRACTS.functions.confirmShipmentLineLive
-    : CONTRACTS.functions.confirmShipmentLine;
+  const confirmFn = CONTRACTS.functions.shipmentConfirm;
 
   const confirmMutation = useRpcMutation<{ ok: boolean }>({
     fn: confirmFn,
     successMessage: "출고 확정 완료",
   });
 
-  const lineView = process.env.NEXT_PUBLIC_MS_VIEW_SHIP_READY_LINE ?? "";
-  const actorType = process.env.NEXT_PUBLIC_MS_ACTOR_TYPE ?? "staff";
-  const actorId = process.env.NEXT_PUBLIC_MS_ACTOR_ID ?? "";
+  const actorType = process.env.NEXT_PUBLIC_CMS_ACTOR_TYPE ?? "staff";
+  const actorId = process.env.NEXT_PUBLIC_CMS_ACTOR_ID ?? "";
   const correlationId =
-    process.env.NEXT_PUBLIC_MS_CORRELATION_ID ??
+    process.env.NEXT_PUBLIC_CMS_CORRELATION_ID ??
     (typeof crypto !== "undefined" ? crypto.randomUUID() : "");
 
   const readyQuery = useQuery({
-    queryKey: ["ms_s", CONTRACTS.views.shipmentsReady],
-    queryFn: () => readView<ShipReadyRow>(CONTRACTS.views.shipmentsReady, 50),
+    queryKey: ["cms", "cms_shipment_header"],
+    queryFn: () => readView<ShipReadyRow>("cms_shipment_header", 50),
   });
 
   const readyLineQuery = useQuery({
-    queryKey: ["ms_s", lineView],
-    queryFn: () => (lineView ? readView<ShipReadyLineRow>(lineView, 100) : []),
-    enabled: Boolean(lineView),
+    queryKey: ["cms", "cms_shipment_line"],
+    queryFn: () => readView<ShipReadyLineRow>("cms_shipment_line", 100),
   });
 
   const toStatusLabel = (value?: string) => {
@@ -125,38 +123,40 @@ export default function ShipmentsPage() {
   const shipments = (readyQuery.data ?? []).map((row, index) => ({
     title: row.shipment_id ? String(row.shipment_id).slice(0, 10) : `S-${index + 1}`,
     subtitle: `${row.customer_name ?? "-"} · ${row.line_count ?? 0}라인`,
-    meta: row.ship_date ?? "-",
+    meta: row.ship_date ?? row.created_at ?? "-",
     badge: { label: toStatusLabel(row.status), tone: "warning" as const },
   }));
 
   const lines = readyLineQuery.data ?? [];
-  const selectedLine = lines.find((line) => line.order_line_id === selectedLineId);
+  const selectedLine = lines.find(
+    (line) => (line.shipment_line_id ?? line.order_line_id ?? null) === selectedLineId
+  );
   const canConfirm =
-    Boolean(selectedLine?.order_line_id) &&
+    Boolean(selectedLine?.shipment_header_id) &&
     typeof selectedLine?.qty === "number" &&
     Boolean(actorId) &&
     Boolean(correlationId) &&
-    Boolean(lineView);
+    isFnConfigured(confirmFn);
   const confirmDisabled = !canConfirm;
 
   const handleConfirm = () => {
     if (!selectedLine) return;
     confirmMutation.mutate({
-      order_line_id: selectedLine.order_line_id,
-      qty: selectedLine.qty,
-      idempotency_key: `confirm-${Date.now()}`,
-      actor_type: actorType,
-      actor_id: actorId,
-      correlation_id: correlationId,
+      p_shipment_header_id: selectedLine.shipment_header_id,
+      p_qty: selectedLine.qty,
+      p_idempotency_key: `confirm-${Date.now()}`,
+      p_actor_type: actorType,
+      p_actor_id: actorId,
+      p_correlation_id: correlationId,
     });
   };
 
   const confirmNote = useMemo(() => {
-    if (!lineView) return "출고 확정 불가: 라인 뷰 계약 필요";
+    if (!isFnConfigured(confirmFn)) return "출고 확정 불가: cms 계약 필요";
     if (!selectedLine) return "출고 확정 불가: 라인을 선택해 주세요";
     if (!actorId) return "출고 확정 불가: 담당자 ID 필요";
     return "확정 가능";
-  }, [lineView, selectedLine, actorId]);
+  }, [confirmFn, selectedLine, actorId]);
 
   return (
     <div className="space-y-6" id="shipments.root">
@@ -194,43 +194,37 @@ export default function ShipmentsPage() {
               ))}
               <Card className="mt-4" id="shipments.detail.lineSelect">
                 <CardHeader>
-                  <ActionBar title="출고 대기 라인" subtitle="ms_s 라인 뷰" />
+                  <ActionBar title="출고 대기 라인" subtitle="cms 라인 목록" />
                 </CardHeader>
                 <CardBody>
-                  {!lineView ? (
-                    <p className="text-sm text-[var(--muted)]">
-                      ms_s 라인 뷰 이름을 `NEXT_PUBLIC_MS_VIEW_SHIP_READY_LINE`에 설정하세요.
-                    </p>
-                  ) : (
-                    <div className="space-y-2">
-                      {lines.map((line) => (
-                        <button
-                          key={line.order_line_id}
-                          type="button"
-                          onClick={() => setSelectedLineId(line.order_line_id ?? null)}
-                          className={cn(
-                            "w-full rounded-[12px] border border-[var(--panel-border)] px-3 py-2 text-left text-xs",
-                            line.order_line_id === selectedLineId
-                              ? "bg-[#eef2f6]"
-                              : "hover:bg-[#f6f7f9]"
-                          )}
-                        >
-                          <div className="flex items-center justify-between">
-                            <span className="font-semibold text-[var(--foreground)]">
-                              {line.ref_key ?? line.order_line_id}
-                            </span>
-                            <span className="text-[var(--muted)]">수량 {line.qty ?? 0}</span>
-                          </div>
-                          <div className="mt-1 text-[var(--muted)]">
-                            {line.customer_name ?? "-"} · {toStatusLabel(line.ship_status)}
-                          </div>
-                        </button>
-                      ))}
-                      {lines.length === 0 ? (
-                        <p className="text-xs text-[var(--muted)]">라인 데이터 없음</p>
-                      ) : null}
-                    </div>
-                  )}
+                  <div className="space-y-2">
+                    {lines.map((line) => (
+                      <button
+                        key={line.shipment_line_id ?? line.order_line_id}
+                        type="button"
+                        onClick={() => setSelectedLineId(line.shipment_line_id ?? line.order_line_id ?? null)}
+                        className={cn(
+                          "w-full rounded-[12px] border border-[var(--panel-border)] px-3 py-2 text-left text-xs",
+                          (line.shipment_line_id ?? line.order_line_id) === selectedLineId
+                            ? "bg-[#eef2f6]"
+                            : "hover:bg-[#f6f7f9]"
+                        )}
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="font-semibold text-[var(--foreground)]">
+                            {line.ref_key ?? line.order_line_id ?? line.shipment_line_id}
+                          </span>
+                          <span className="text-[var(--muted)]">수량 {line.qty ?? 0}</span>
+                        </div>
+                        <div className="mt-1 text-[var(--muted)]">
+                          {line.customer_name ?? "-"} · {toStatusLabel(line.ship_status)}
+                        </div>
+                      </button>
+                    ))}
+                    {lines.length === 0 ? (
+                      <p className="text-xs text-[var(--muted)]">라인 데이터 없음</p>
+                    ) : null}
+                  </div>
                 </CardBody>
               </Card>
             </div>
