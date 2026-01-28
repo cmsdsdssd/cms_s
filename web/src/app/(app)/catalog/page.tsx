@@ -9,9 +9,10 @@ import { Button } from "@/components/ui/button";
 import { Input, Select, Textarea } from "@/components/ui/field";
 import { Badge } from "@/components/ui/badge";
 import { Modal } from "@/components/ui/modal";
-import { Grid2x2, List } from "lucide-react";
+import { Grid2x2, List, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
+import { compressImage } from "@/lib/image-utils";
 /* eslint-disable @next/next/no-img-element */
 
 type CatalogItem = {
@@ -211,7 +212,7 @@ const catalogItems: CatalogItem[] = [
   },
 ];
 
-const pageSize = 5;
+// pageSize is dynamic based on view
 
 const categoryOptions = [
   { label: "팔찌", value: "BRACELET" },
@@ -255,6 +256,15 @@ function Field({ label, children }: FieldProps) {
   );
 }
 
+
+function getMaterialBgColor(materialCode: string): string {
+  if (materialCode === "925") return "bg-gradient-to-br from-[#d8dfe7] to-[#e8ecf0]"; // Silver
+  if (materialCode === "14" || materialCode === "18") return "bg-gradient-to-br from-[#f9e8e5] to-[#fdf5f3]"; // Rose Gold (light)
+  if (materialCode === "24") return "bg-gradient-to-br from-[#fef3d9] to-[#fffcf3]"; // Gold (light)
+  if (materialCode === "00") return "bg-white"; // White
+  return "bg-white"; // Default
+}
+
 function toNumber(value: string) {
   const parsed = Number(value);
   return Number.isNaN(parsed) ? 0 : parsed;
@@ -275,8 +285,10 @@ function materialCodeFromLabel(label: string) {
 
 export default function CatalogPage() {
   const [catalogItemsState, setCatalogItemsState] = useState<CatalogItem[]>(catalogItems);
-  const [view, setView] = useState<"list" | "gallery">("list");
+  const [view, setView] = useState<"list" | "gallery">("gallery");
   const [page, setPage] = useState(1);
+  const [sortBy, setSortBy] = useState<"model" | "modified">("model");
+  const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc");
   const [registerOpen, setRegisterOpen] = useState(false);
   const [isEditMode, setIsEditMode] = useState(false);
   const [selectedItemId, setSelectedItemId] = useState<string | null>(catalogItems[0]?.id ?? null);
@@ -313,6 +325,33 @@ export default function CatalogPage() {
   const [laborCenterCost, setLaborCenterCost] = useState(0);
   const [laborSub1Cost, setLaborSub1Cost] = useState(0);
   const [laborSub2Cost, setLaborSub2Cost] = useState(0);
+  const [previewImage, setPreviewImage] = useState<string | null>(null);
+  const [goldPrice, setGoldPrice] = useState(0);
+  const [silverModifiedPrice, setSilverModifiedPrice] = useState(0);
+
+  // Fetch market prices
+  useEffect(() => {
+    const fetchPrices = async () => {
+      try {
+        const response = await fetch("/api/market-ticks");
+        const result = await response.json();
+        if (result.data) {
+          setGoldPrice(result.data.gold);
+          setSilverModifiedPrice(result.data.silver);
+        }
+      } catch (error) {
+        console.error("Failed to fetch market ticks:", error);
+      }
+    };
+    fetchPrices();
+  }, []);
+
+  // Reset saving state when modal opens/closes to prevent stuck state
+  useEffect(() => {
+    if (!registerOpen) {
+      setIsSaving(false);
+    }
+  }, [registerOpen]);
 
   const canSave = true;
 
@@ -322,16 +361,52 @@ export default function CatalogPage() {
   const totalLaborCost =
     laborBaseCost + laborCenterCost * centerQty + laborSub1Cost * sub1Qty + laborSub2Cost * sub2Qty;
 
-  const totalPages = Math.ceil(catalogItemsState.length / pageSize);
+
+  const sortedCatalogItems = useMemo(() => {
+    const sorted = [...catalogItemsState].sort((a, b) => {
+      if (sortBy === "model") {
+        return sortOrder === "asc"
+          ? a.model.localeCompare(b.model)
+          : b.model.localeCompare(a.model);
+      } else {
+        // Sort by modified date (using date field as proxy for modified)
+        return sortOrder === "asc"
+          ? a.date.localeCompare(b.date)
+          : b.date.localeCompare(a.date);
+      }
+    });
+    return sorted;
+  }, [catalogItemsState, sortBy, sortOrder]);
+
+  const activePageSize = view === "gallery" ? 12 : 5;
+  const totalPages = Math.ceil(sortedCatalogItems.length / activePageSize);
   const pageItems = useMemo(() => {
-    const start = (page - 1) * pageSize;
-    return catalogItemsState.slice(start, start + pageSize);
-  }, [catalogItemsState, page]);
+    const start = (page - 1) * activePageSize;
+    return sortedCatalogItems.slice(start, start + activePageSize);
+  }, [sortedCatalogItems, page, activePageSize]);
 
   const selectedItem = useMemo(
     () => catalogItemsState.find((item) => item.id === selectedItemId) ?? null,
     [catalogItemsState, selectedItemId]
   );
+
+  // Calculate material price based on material code
+  const calculateMaterialPrice = (material: string, weight: number, deduction: number) => {
+    const netWeight = weight - deduction;
+    if (material === "925") {
+      return silverModifiedPrice * netWeight;
+    } else if (material === "14K" || material === "14") {
+      return goldPrice * netWeight * 0.6435;
+    } else if (material === "18K" || material === "18") {
+      return goldPrice * netWeight * 0.825;
+    } else if (material === "24K" || material === "24") {
+      return goldPrice * netWeight;
+    } else if (material === "00") {
+      return 0;
+    }
+    return 0;
+  };
+
 
   const fetchVendors = useCallback(async () => {
     try {
@@ -483,14 +558,26 @@ export default function CatalogPage() {
     };
   }, [masterRowsById, selectedItem]);
 
+  const materialPrice = useMemo(() => {
+    if (!selectedItem || !selectedDetail) return 0;
+    const weight = parseFloat(selectedDetail.weight ?? "0") || 0;
+    const deduction = parseFloat(selectedDetail.deductionWeight ?? "0") || 0;
+    return calculateMaterialPrice(selectedDetail.materialCode ?? "00", weight, deduction);
+  }, [selectedItem, selectedDetail, goldPrice, silverModifiedPrice]);
+
+  const totalEstimatedCost = materialPrice + totalLaborCost;
+  const totalEstimatedSell = materialPrice + totalLaborSell;
+
+
   const handleImageUpload = async (file: File) => {
     setUploadError(null);
     setUploadingImage(true);
     try {
+      const compressedFile = await compressImage(file); // Compress to ~300KB
       const formData = new FormData();
-      const previewUrl = URL.createObjectURL(file);
+      const previewUrl = URL.createObjectURL(compressedFile);
       setImageUrl(previewUrl);
-      formData.append("file", file);
+      formData.append("file", compressedFile);
       const response = await fetch("/api/master-image", {
         method: "POST",
         body: formData,
@@ -561,6 +648,8 @@ export default function CatalogPage() {
     setNote("");
     setReleaseDate(today);
     setModifiedDate("");
+    setImageUrl(null);
+    setImagePath(null);
   };
 
   const handleOpenNew = () => {
@@ -572,14 +661,16 @@ export default function CatalogPage() {
   const handleOpenEdit = () => {
     if (!selectedItem || !selectedItemId) return;
     const detail = selectedDetail;
+    const row = masterRowsById[selectedItemId];
+
     setIsEditMode(true);
     setMasterId(selectedItem.id);
     setModelName(selectedItem.model);
     setVendorId(vendorOptions.find((option) => option.label === selectedItem.vendor)?.value ?? "");
     setCategoryCode(detail?.categoryCode ?? "");
     setMaterialCode(detail?.materialCode ?? materialCodeFromLabel(selectedItem.material));
-    setWeightDefault(detail?.weight ?? selectedItem.weight);
-    setDeductionWeight(detail?.deductionWeight ?? "");
+    setWeightDefault(row?.weight_default_g ? String(row.weight_default_g) : "");
+    setDeductionWeight(row?.deduction_weight_default_g ? String(row.deduction_weight_default_g) : "");
     setCenterQty(detail?.centerQty ?? 0);
     setSub1Qty(detail?.sub1Qty ?? 0);
     setSub2Qty(detail?.sub2Qty ?? 0);
@@ -598,6 +689,11 @@ export default function CatalogPage() {
     setNote(detail?.note ?? "");
     setReleaseDate(detail?.releaseDate ?? selectedItem.date);
     setModifiedDate(today);
+
+    // Populate image data
+    setImageUrl(row?.image_url ? String(row.image_url) : null);
+    setImagePath(row?.image_path ? String(row.image_path) : null);
+
     setRegisterOpen(true);
   };
 
@@ -611,11 +707,11 @@ export default function CatalogPage() {
       return;
     }
 
-      const payload = {
-        master_id: masterId || null,
-        model_name: modelName,
-        category_code: categoryCode || null,
-        material_code_default: materialCode || null,
+    const payload = {
+      master_id: masterId || null,
+      model_name: modelName,
+      category_code: categoryCode || null,
+      material_code_default: materialCode || null,
       weight_default_g: weightDefault ? Number(weightDefault) : null,
       deduction_weight_default_g: deductionWeight ? Number(deductionWeight) : 0,
       center_qty_default: centerQty,
@@ -630,13 +726,13 @@ export default function CatalogPage() {
       labor_sub1_cost: laborSub1Cost,
       labor_sub2_cost: laborSub2Cost,
       plating_price_sell_default: platingSell,
-        plating_price_cost_default: platingCost,
-        labor_profile_mode: laborProfileMode,
-        labor_band_code: laborBandCode || null,
-        vendor_party_id: isUuid(vendorId) ? vendorId : null,
-        note,
-        image_path: imagePath || null,
-      } as const;
+      plating_price_cost_default: platingCost,
+      labor_profile_mode: laborProfileMode,
+      labor_band_code: laborBandCode || null,
+      vendor_party_id: isUuid(vendorId) ? vendorId : null,
+      note,
+      image_path: imagePath || null,
+    } as const;
 
     setIsSaving(true);
     fetch("/api/master-item", {
@@ -650,15 +746,17 @@ export default function CatalogPage() {
           throw new Error(result.error ?? "저장에 실패했습니다.");
         }
         toast.success("저장 완료");
-        setSelectedItemId(masterId);
         await fetchCatalogItems();
+        setSelectedItemId(masterId);
         setRegisterOpen(false);
       })
       .catch((error) => {
         const message = error instanceof Error ? error.message : "저장에 실패했습니다.";
         toast.error("처리 실패", { description: message });
       })
-      .finally(() => setIsSaving(false));
+      .finally(() => {
+        setIsSaving(false);
+      });
 
   };
 
@@ -669,274 +767,398 @@ export default function CatalogPage() {
           title={
             <div className="flex items-center gap-3">
               <span>상품 카탈로그</span>
-            <span className="rounded-full bg-[var(--chip)] px-2.5 py-1 text-xs font-semibold text-[var(--muted)]">
-              410개
-            </span>
-          </div>
-        }
-        subtitle="마스터카드 관리"
+              <span className="rounded-full bg-[var(--chip)] px-2.5 py-1 text-xs font-semibold text-[var(--muted)]">
+                410개
+              </span>
+            </div>
+          }
+          subtitle="마스터카드 관리"
           actions={
             <div className="flex items-center gap-2">
+              <Select value={`${sortBy}-${sortOrder}`} onChange={(e) => {
+                const [newSortBy, newSortOrder] = e.target.value.split('-') as ["model" | "modified", "asc" | "desc"];
+                setSortBy(newSortBy);
+                setSortOrder(newSortOrder);
+              }} className="text-sm">
+                <option value="model-asc">모델명 (오름차순)</option>
+                <option value="model-desc">모델명 (내림차순)</option>
+                <option value="modified-asc">수정순 (오래된순)</option>
+                <option value="modified-desc">수정순 (최신순)</option>
+              </Select>
               <Button variant="secondary" size="sm" onClick={handleOpenNew}>
                 새 상품 등록
               </Button>
-            <div className="flex items-center rounded-[12px] border border-[var(--panel-border)] bg-white p-1">
-              <button
-                type="button"
-                onClick={() => {
-                  setView("list");
-                  setPage(1);
-                }}
-                className={cn(
-                  "flex h-8 w-8 items-center justify-center rounded-[10px]",
-                  view === "list" ? "bg-[var(--chip)] text-[var(--foreground)]" : "text-[var(--muted)]"
-                )}
-              >
-                <List size={16} />
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setView("gallery");
-                  setPage(1);
-                }}
-                className={cn(
-                  "flex h-8 w-8 items-center justify-center rounded-[10px]",
-                  view === "gallery" ? "bg-[var(--chip)] text-[var(--foreground)]" : "text-[var(--muted)]"
-                )}
-              >
-                <Grid2x2 size={16} />
-              </button>
-            </div>
-          </div>
-        }
-        id="catalog.actionBar"
-      />
-      <div id="catalog.body">
-        <SplitLayout
-          className="gap-4"
-          left={
-            <div className="flex min-h-[720px] flex-col gap-3" id="catalog.listPanel">
-              {view === "list" ? (
-                <div className="space-y-3">
-                  {pageItems.map((item) => (
-                    <Card
-                      key={item.id}
-                      className={cn(
-                        "cursor-pointer p-5 transition",
-                        item.id === selectedItemId ? "ring-2 ring-[var(--primary)]" : "hover:bg-[#f7f9fc]"
-                      )}
-                      onClick={() => setSelectedItemId(item.id)}
-                    >
-                      <div className="flex gap-6">
-                        <div className="relative h-28 w-28 overflow-hidden rounded-[14px] bg-gradient-to-br from-[#e7edf5] to-[#f7faff]">
-                          <div className="absolute right-2 top-2 h-6 w-6 rounded-full border border-white/80 bg-white/80" />
-                          <div className="absolute inset-0 flex items-center justify-center text-xs text-[var(--muted)]">
-                            이미지
-                          </div>
-                          {item.imageUrl ? (
-                            <img
-                              src={item.imageUrl}
-                              alt={`${item.model} 이미지`}
-                              className="absolute inset-0 h-full w-full object-cover"
-                              loading="lazy"
-                              onError={(event) => {
-                                event.currentTarget.style.display = "none";
-                              }}
-                            />
-                          ) : null}
-                        </div>
-                        <div className="flex-1 space-y-3">
-                          <div className="flex items-center justify-between">
-                            <div className="flex items-center gap-2">
-                              <p className="text-lg font-semibold text-[var(--foreground)]">{item.model}</p>
-                              <Badge tone={item.tone}>{item.status}</Badge>
-                            </div>
-                            <div className="text-xs text-[var(--muted)]">{item.date}</div>
-                          </div>
-                          <p className="text-sm text-[var(--muted)]">{item.name}</p>
-                          <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
-                            {[
-                              { label: "중량", value: item.weight },
-                              { label: "재질", value: item.material },
-                              { label: "스톤", value: item.stone },
-                              { label: "공급처", value: item.vendor },
-                            ].map((meta) => (
-                              <div
-                                key={meta.label}
-                                className="rounded-[12px] border border-[var(--panel-border)] bg-[#f7f9fc] px-3 py-2"
-                              >
-                                <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">
-                                  {meta.label}
-                                </p>
-                                <p className="text-xs font-semibold text-[var(--foreground)]">{meta.value}</p>
-                              </div>
-                            ))}
-                          </div>
-                          <div className="grid grid-cols-5 gap-2 text-xs">
-                            <div className="text-[var(--muted)]">색상</div>
-                            <div className="text-[var(--muted)]">원가</div>
-                            <div className="text-[var(--muted)]">등급1</div>
-                            <div className="text-[var(--muted)]">등급2</div>
-                            <div className="text-[var(--muted)]">등급3</div>
-                            <div className="font-semibold text-[var(--foreground)]">{item.color}</div>
-                            <div className="font-semibold text-[var(--foreground)]">{item.cost}</div>
-                            <div className="font-semibold text-[var(--foreground)]">{item.grades[0]}</div>
-                            <div className="font-semibold text-[var(--foreground)]">{item.grades[1]}</div>
-                            <div className="font-semibold text-[var(--foreground)]">{item.grades[2]}</div>
-                          </div>
-                        </div>
-                      </div>
-                    </Card>
-                  ))}
-                </div>
-              ) : (
-                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-                  {pageItems.map((item) => (
-                    <Card
-                      key={item.id}
-                      className={cn(
-                        "cursor-pointer overflow-hidden transition",
-                        item.id === selectedItemId ? "ring-2 ring-[var(--primary)]" : "hover:bg-[#f7f9fc]"
-                      )}
-                      onClick={() => setSelectedItemId(item.id)}
-                    >
-                      <div className="relative h-40 bg-gradient-to-br from-[#e7edf5] to-[#f7faff]">
-                        <div className="absolute inset-0 flex items-center justify-center text-xs text-[var(--muted)]">
-                          이미지
-                        </div>
-                        {item.imageUrl ? (
-                          <img
-                            src={item.imageUrl}
-                            alt={`${item.model} 이미지`}
-                            className="absolute inset-0 h-full w-full object-cover"
-                            loading="lazy"
-                            onError={(event) => {
-                              event.currentTarget.style.display = "none";
-                            }}
-                          />
-                        ) : null}
-                      </div>
-                      <div className="space-y-2 p-4">
-                        <div className="flex items-center justify-between">
-                          <p className="text-sm font-semibold text-[var(--foreground)]">{item.model}</p>
-                          <Badge tone={item.tone}>{item.status}</Badge>
-                        </div>
-                        <p className="text-xs text-[var(--muted)]">{item.name}</p>
-                        <div className="text-xs text-[var(--muted)]">{item.material}</div>
-                      </div>
-                    </Card>
-                  ))}
-                </div>
-              )}
-              <div className="mt-auto flex items-center justify-between rounded-[12px] border border-[var(--panel-border)] bg-white px-4 py-3">
-                <p className="text-xs text-[var(--muted)]">
-                  {(page - 1) * pageSize + 1} - {Math.min(page * pageSize, catalogItemsState.length)} / {catalogItemsState.length}
-                </p>
-                <div className="flex gap-2">
-                  <Button variant="secondary" size="sm" disabled={page === 1} onClick={() => setPage((p) => p - 1)}>
-                    이전
-                  </Button>
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    disabled={page === totalPages}
-                    onClick={() => setPage((p) => p + 1)}
-                  >
-                    다음
-                  </Button>
-                </div>
+              <div className="flex items-center rounded-[12px] border border-[var(--panel-border)] bg-white p-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setView("list");
+                    setPage(1);
+                  }}
+                  className={cn(
+                    "flex h-8 w-8 items-center justify-center rounded-[10px]",
+                    view === "list" ? "bg-[var(--chip)] text-[var(--foreground)]" : "text-[var(--muted)]"
+                  )}
+                >
+                  <List size={16} />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setView("gallery");
+                    setPage(1);
+                  }}
+                  className={cn(
+                    "flex h-8 w-8 items-center justify-center rounded-[10px]",
+                    view === "gallery" ? "bg-[var(--chip)] text-[var(--foreground)]" : "text-[var(--muted)]"
+                  )}
+                >
+                  <Grid2x2 size={16} />
+                </button>
               </div>
             </div>
           }
-          right={
-            <div className="space-y-3" id="catalog.detailPanel">
-              <FilterBar id="catalog.filterBar">
-                <Input placeholder="모델명, 태그 검색" />
-                <Select>
-                  <option>전체 카테고리</option>
-                </Select>
-                <Select>
-                  <option>재질 전체</option>
-                </Select>
-                <Select>
-                  <option>상태: 판매중</option>
-                </Select>
-              </FilterBar>
-              <Card id="catalog.detail.basic">
-                <CardHeader>
-                  <ActionBar
-                    title="기본 정보"
-                    actions={
-                      <Button variant="secondary" size="sm" onClick={handleOpenEdit} disabled={!selectedItem}>
-                        마스터 수정
-                      </Button>
-                    }
-                  />
-                </CardHeader>
-                <CardBody className="grid gap-2">
-                  <Input placeholder="공급처" value={selectedItem?.vendor ?? ""} readOnly />
-                  <Input placeholder="모델명" value={selectedItem?.model ?? ""} readOnly />
-                  <Input placeholder="상품명" value={selectedItem?.name ?? ""} readOnly />
-                  <Select value={selectedDetail?.categoryCode ?? ""} disabled>
-                    <option value="">카테고리</option>
-                    {categoryOptions.map((category) => (
-                      <option key={category.value} value={category.value}>
-                        {category.label}
-                      </option>
-                    ))}
-                  </Select>
-                  <Select value={selectedDetail?.materialCode ?? ""} disabled>
-                    <option value="">기본 재질</option>
+          id="catalog.actionBar"
+        />
+        <div id="catalog.body">
+          <SplitLayout
+            className="gap-4 items-stretch"
+            left={
+              <div className="flex flex-col gap-3 h-full" id="catalog.listPanel">
+                <div className="flex-1">
+                  {view === "list" ? (
+                    <div className="space-y-3">
+                      {pageItems.map((item) => (
+                        <Card
+                          key={item.id}
+                          className={cn(
+                            "cursor-pointer p-3 transition",
+                            getMaterialBgColor(String(masterRowsById[item.id]?.material_code_default ?? "00")),
+                            item.id === selectedItemId ? "ring-2 ring-[var(--primary)]" : "hover:opacity-90"
+                          )}
+                          onClick={() => setSelectedItemId(item.id)}
+                          onDoubleClick={() => item.imageUrl && setPreviewImage(item.imageUrl)}
+                        >
+                          <div className="flex gap-4">
+                            <div className="relative h-28 w-28 shrink-0 overflow-hidden rounded-[14px] bg-gradient-to-br from-[#e7edf5] to-[#f7faff]">
+                              <div className="absolute right-2 top-2 h-6 w-6 rounded-full border border-white/80 bg-white/80" />
+                              <div className="absolute inset-0 flex items-center justify-center text-xs text-[var(--muted)]">
+                                이미지
+                              </div>
+                              {item.imageUrl ? (
+                                <img
+                                  src={item.imageUrl}
+                                  alt={`${item.model} 이미지`}
+                                  className="absolute inset-0 h-full w-full object-cover"
+                                  loading="lazy"
+                                  onError={(event) => {
+                                    event.currentTarget.style.display = "none";
+                                  }}
+                                />
+                              ) : null}
+                            </div>
+                            <div className="flex-1 space-y-1.5">
+                              <div className="flex items-center justify-between">
+                                <div className="flex items-center gap-2">
+                                  <p className="text-lg font-semibold text-[var(--foreground)]">{item.model}</p>
+                                </div>
+                                <div className="text-xs text-[var(--muted)]">{item.date}</div>
+                              </div>
+                              <p className="text-sm text-[var(--muted)]">{item.name}</p>
+                              <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
+                                {[
+                                  { label: "중량", value: item.weight },
+                                  { label: "재질", value: item.material },
+                                  { label: "스톤", value: item.stone },
+                                  { label: "공급처", value: item.vendor },
+                                ].map((meta) => (
+                                  <div
+                                    key={meta.label}
+                                    className="rounded-[8px] border border-[var(--panel-border)] bg-[#f7f9fc] px-2 py-1"
+                                  >
+                                    <p className="text-[9px] font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">
+                                      {meta.label}
+                                    </p>
+                                    <p className="text-xs font-semibold text-[var(--foreground)]">{meta.value}</p>
+                                  </div>
+                                ))}
+                              </div>
+                              <div className="grid grid-cols-5 gap-2 text-xs">
+                                <div className="text-[var(--muted)]">색상</div>
+                                <div className="text-[var(--muted)]">원가</div>
+                                <div className="text-[var(--muted)]">등급1</div>
+                                <div className="text-[var(--muted)]">등급2</div>
+                                <div className="text-[var(--muted)]">등급3</div>
+                                <div className="font-semibold text-[var(--foreground)]">{item.color}</div>
+                                <div className="font-semibold text-[var(--foreground)]">{item.cost}</div>
+                                <div className="font-semibold text-[var(--foreground)]">{item.grades[0]}</div>
+                                <div className="font-semibold text-[var(--foreground)]">{item.grades[1]}</div>
+                                <div className="font-semibold text-[var(--foreground)]">{item.grades[2]}</div>
+                              </div>
+                            </div>
+                          </div>
+                        </Card>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="grid gap-4 grid-cols-2 lg:grid-cols-4 auto-rows-fr">
+                      {pageItems.map((item) => (
+                        <Card
+                          key={item.id}
+                          className={cn(
+                            "cursor-pointer overflow-hidden transition h-full flex flex-col",
+                            getMaterialBgColor(String(masterRowsById[item.id]?.material_code_default ?? "00")),
+                            item.id === selectedItemId ? "ring-2 ring-[var(--primary)]" : "hover:opacity-90"
+                          )}
+                          onClick={() => setSelectedItemId(item.id)}
+                          onDoubleClick={() => item.imageUrl && setPreviewImage(item.imageUrl)}
+                        >
+                          <div className="relative aspect-square bg-gradient-to-br from-[#e7edf5] to-[#f7faff]">
+                            <div className="absolute inset-0 flex items-center justify-center text-xs text-[var(--muted)]">
+                              이미지
+                            </div>
+                            {item.imageUrl ? (
+                              <img
+                                src={item.imageUrl}
+                                alt={`${item.model} 이미지`}
+                                className="absolute inset-0 h-full w-full object-cover"
+                                loading="lazy"
+                                onError={(event) => {
+                                  event.currentTarget.style.display = "none";
+                                }}
+                              />
+                            ) : null}
+                          </div>
+                          <div className="space-y-2 p-4 flex-1">
+                            <p className="text-sm font-semibold text-black truncate">{item.model}</p>
+                            <div className="grid grid-cols-10 gap-2 text-xs">
+                              <div className="col-span-4">
+                                <p className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)] mb-0.5">예상 총 금액</p>
+                                <p className="font-semibold text-[var(--foreground)]">
+                                  {(() => {
+                                    const row = masterRowsById[item.id];
+                                    if (!row) return "-";
+                                    const weight = parseFloat(item.weight) || 0;
+                                    const deduction = parseFloat(String(row.deduction_weight_default_g ?? 0)) || 0;
+                                    const materialCode = String(row.material_code_default ?? "00");
+                                    const matPrice = calculateMaterialPrice(materialCode, weight, deduction);
+                                    const laborSell = (row.labor_total_sell as number | undefined) ?? (row.labor_base_sell as number | undefined) ?? 0;
+                                    return Math.round(matPrice + laborSell).toLocaleString("ko-KR") + " 원";
+                                  })()}
+                                </p>
+                              </div>
+                              <div className="col-span-3">
+                                <p className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)] mb-0.5">예상 중량</p>
+                                <p className="font-semibold text-[var(--foreground)]">
+                                  {(() => {
+                                    const row = masterRowsById[item.id];
+                                    const weight = parseFloat(item.weight) || 0;
+                                    const deduction = parseFloat(String(row?.deduction_weight_default_g ?? 0)) || 0;
+                                    if (deduction > 0) {
+                                      return `${weight.toFixed(2)}g (-${deduction.toFixed(2)})`;
+                                    }
+                                    return `${weight.toFixed(2)}g`;
+                                  })()}
+                                </p>
+                              </div>
+                              <div className="col-span-3">
+                                <p className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)] mb-0.5">판매 합계공임</p>
+                                <p className="font-semibold text-[var(--foreground)]">
+                                  {(() => {
+                                    const row = masterRowsById[item.id];
+                                    const laborSell = (row?.labor_total_sell as number | undefined) ?? (row?.labor_base_sell as number | undefined) ?? 0;
+                                    return laborSell.toLocaleString("ko-KR") + " 원";
+                                  })()}
+                                </p>
+                              </div>
+                            </div>
+                          </div>
+                        </Card>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                <div className="mt-auto flex items-center justify-between rounded-[12px] border border-[var(--panel-border)] bg-white px-4 py-3">
+                  <p className="text-xs text-[var(--muted)]">
+                    {(page - 1) * activePageSize + 1} - {Math.min(page * activePageSize, catalogItemsState.length)} / {catalogItemsState.length}
+                  </p>
+                  <div className="flex gap-2">
+                    <Button variant="secondary" size="sm" disabled={page === 1} onClick={() => setPage((p) => p - 1)}>
+                      이전
+                    </Button>
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      disabled={page === totalPages}
+                      onClick={() => setPage((p) => p + 1)}
+                    >
+                      다음
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            }
+            right={
+              <div className="space-y-3" id="catalog.detailPanel">
+                <div className="grid grid-cols-12 gap-2">
+                  <Select className="col-span-12 md:col-span-2">
+                    <option>재질 전체</option>
                     {materialOptions.map((material) => (
                       <option key={material.value} value={material.value}>
                         {material.label}
                       </option>
                     ))}
                   </Select>
-                  <div className="grid grid-cols-2 gap-2">
-                    <Input type="date" value={selectedDetail?.releaseDate ?? ""} readOnly />
-                    <Input type="date" value={selectedDetail?.modifiedDate ?? ""} readOnly />
-                  </div>
-                </CardBody>
-              </Card>
-              <Card id="catalog.detail.table">
-                <CardHeader>
-                  <ActionBar title="공임 및 가격" actions={<Button variant="secondary">이전 항목 복사</Button>} />
-                </CardHeader>
-                <CardBody className="grid gap-2">
-                  <div className="grid gap-4 md:grid-cols-2">
-                    <div className="space-y-2">
-                      <p className="text-xs font-semibold text-[var(--muted)]">판매 가격</p>
-                      <Input placeholder="공임 기본(판매)" value={selectedDetail?.laborBaseSell ?? ""} readOnly />
-                      <Input placeholder="공임 합계(판매)" value={selectedDetail?.laborTotalSell ?? ""} readOnly />
-                      <Input placeholder="도금 판매" value={selectedDetail?.platingSell ?? ""} readOnly />
+                  <Select className="col-span-12 md:col-span-2">
+                    <option>전체 카테고리</option>
+                    {categoryOptions.map((category) => (
+                      <option key={category.value} value={category.value}>
+                        {category.label}
+                      </option>
+                    ))}
+                  </Select>
+                  <Input placeholder="모델명, 태그 검색" className="col-span-12 md:col-span-8" />
+                </div>
+                <div className="flex gap-4">
+                  {selectedItem?.imageUrl && (
+                    <div className="h-[300px] w-[300px] shrink-0 overflow-hidden rounded-[12px] border border-[var(--panel-border)] bg-white cursor-pointer"
+                      onDoubleClick={() => setPreviewImage(selectedItem.imageUrl)}>
+                      <img
+                        src={selectedItem.imageUrl}
+                        alt={selectedItem.model}
+                        className="h-full w-full object-cover"
+                      />
                     </div>
-                    <div className="space-y-2">
-                      <p className="text-xs font-semibold text-[var(--muted)]">구매 가격</p>
-                      <Input placeholder="공임 기본(원가)" value={selectedDetail?.laborBaseCost ?? ""} readOnly />
-                      <Input placeholder="공임 합계(원가)" value={selectedDetail?.laborTotalCost ?? ""} readOnly />
-                      <Input placeholder="도금 원가" value={selectedDetail?.platingCost ?? ""} readOnly />
+                  )}
+                  <div className="flex flex-col gap-2 w-[300px] shrink-0">
+                    <div className="rounded-[12px] border border-[var(--panel-border)] bg-white px-3 py-2">
+                      <p className="text-xs text-[var(--muted)]">예상 총 금액 (판매)</p>
+                      <p className="text-sm font-semibold text-[var(--foreground)]">
+                        {Math.round(totalEstimatedSell).toLocaleString("ko-KR")} 원
+                      </p>
+                    </div>
+                    <div className="rounded-[12px] border border-[var(--panel-border)] bg-white px-3 py-2">
+                      <p className="text-xs text-[var(--muted)]">예상 총 금액 (원가)</p>
+                      <p className="text-sm font-semibold text-[var(--foreground)]">
+                        {Math.round(totalEstimatedCost).toLocaleString("ko-KR")} 원
+                      </p>
+                    </div>
+                    <div className="rounded-[12px] border border-[var(--panel-border)] bg-white px-3 py-2">
+                      <p className="text-xs text-[var(--muted)]">판매 합계공임</p>
+                      <p className="text-sm font-semibold text-[var(--foreground)]">
+                        {totalLaborSell.toLocaleString("ko-KR")} 원
+                      </p>
+                    </div>
+                    <div className="rounded-[12px] border border-[var(--panel-border)] bg-white px-3 py-2">
+                      <p className="text-xs text-[var(--muted)]">원가 합계공임</p>
+                      <p className="text-sm font-semibold text-[var(--foreground)]">
+                        {totalLaborCost.toLocaleString("ko-KR")} 원
+                      </p>
                     </div>
                   </div>
-                  <div className="rounded-[12px] border border-[var(--panel-border)] bg-[#f7f9fc] px-3 py-2 text-xs text-[var(--muted)]">
-                    원가: {selectedItem?.cost ?? "-"} · 등급: {selectedItem?.grades?.join(" / ") ?? "-"}
+                  <div className="flex-1 h-[300px] rounded-[12px] border border-dashed border-[var(--panel-border)] bg-[#f8fafc] flex items-center justify-center">
+                    <p className="text-xs text-[var(--muted)]">예약 공간</p>
                   </div>
-                </CardBody>
-              </Card>
-              <Card id="catalog.detail.raw">
-                <CardHeader>
-                  <ActionBar title="추가 메모" />
-                </CardHeader>
-                <CardBody className="py-3">
-                  <Textarea placeholder="내부 메모" value={selectedDetail?.note ?? ""} readOnly />
-                </CardBody>
-              </Card>
-            </div>
-          }
-        />
+                </div>
+                <Card id="catalog.detail.merged">
+                  <CardHeader>
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <span className="text-lg font-bold text-[var(--foreground)]">상세 정보</span>
+                        <Button variant="secondary" size="sm" onClick={handleOpenEdit} disabled={!selectedItem}>
+                          마스터 수정
+                        </Button>
+                      </div>
+                    </div>
+                  </CardHeader>
+                  <CardBody className="space-y-3">
+                    <div className="grid grid-cols-2 gap-2">
+                      <Input placeholder="모델명" value={selectedItem?.model ?? ""} readOnly />
+                      <Input placeholder="공급처" value={selectedItem?.vendor ?? ""} readOnly />
+                      <Select value={selectedDetail?.materialCode ?? ""} disabled>
+                        <option value="">기본 재질</option>
+                        {materialOptions.map((material) => (
+                          <option key={material.value} value={material.value}>
+                            {material.label}
+                          </option>
+                        ))}
+                      </Select>
+                      <Select value={selectedDetail?.categoryCode ?? ""} disabled>
+                        <option value="">카테고리</option>
+                        {categoryOptions.map((category) => (
+                          <option key={category.value} value={category.value}>
+                            {category.label}
+                          </option>
+                        ))}
+                      </Select>
+                      <Input placeholder="기본 중량 (g)" value={selectedDetail?.weight ?? ""} readOnly />
+                      <Input placeholder="차감 중량 (g)" value={selectedDetail?.deductionWeight ?? ""} readOnly />
+                    </div>
+                    <div>
+                      <div className="mb-2 grid grid-cols-10 gap-2 text-xs font-semibold text-[var(--muted)]">
+                        <div className="col-span-3 text-center">항목</div>
+                        <div className="col-span-3 text-center">공임 (판매)</div>
+                        <div className="col-span-1 text-center">수량</div>
+                        <div className="col-span-3 text-center">공임 (원가)</div>
+                      </div>
+                      <div className="space-y-2">
+                        <div className="grid grid-cols-10 gap-2">
+                          <div className="col-span-3 flex items-center justify-center rounded-[8px] border border-[var(--panel-border)] bg-[#f7f9fc] px-2 py-2">
+                            <span className="text-xs font-semibold text-[var(--foreground)]">합계공임</span>
+                          </div>
+                          <Input className="col-span-3 text-center" placeholder="합계 (판매)" value={selectedDetail?.laborTotalSell ?? ""} readOnly />
+                          <div className="col-span-1" />
+                          <Input className="col-span-3 text-center" placeholder="합계 (원가)" value={selectedDetail?.laborTotalCost ?? ""} readOnly />
+                        </div>
+                        <div className="grid grid-cols-10 gap-2">
+                          <div className="col-span-3 flex items-center justify-center rounded-[8px] border border-[var(--panel-border)] bg-[#f7f9fc] px-2 py-2">
+                            <span className="text-xs font-semibold text-[var(--foreground)]">기본공임</span>
+                          </div>
+                          <Input className="col-span-3 text-center" placeholder="기본 (판매)" value={selectedDetail?.laborBaseSell ?? ""} readOnly />
+                          <div className="col-span-1" />
+                          <Input className="col-span-3 text-center" placeholder="기본 (원가)" value={selectedDetail?.laborBaseCost ?? ""} readOnly />
+                        </div>
+                        <div className="grid grid-cols-10 gap-2">
+                          <div className="col-span-3 flex items-center justify-center rounded-[8px] border border-[var(--panel-border)] bg-[#f7f9fc] px-2 py-2">
+                            <span className="text-xs font-semibold text-[var(--foreground)]">중심공임</span>
+                          </div>
+                          <Input className="col-span-3 text-center" placeholder="센터 (판매)" value={selectedDetail?.laborCenterSell ?? ""} readOnly />
+                          <Input className="col-span-1 text-center" placeholder="중심석" value={selectedDetail?.centerQty ?? ""} readOnly />
+                          <Input className="col-span-3 text-center" placeholder="센터 (원가)" value={selectedDetail?.laborCenterCost ?? ""} readOnly />
+                        </div>
+                        <div className="grid grid-cols-10 gap-2">
+                          <div className="col-span-3 flex items-center justify-center rounded-[8px] border border-[var(--panel-border)] bg-[#f7f9fc] px-2 py-2">
+                            <span className="text-xs font-semibold text-[var(--foreground)]">보조1공임</span>
+                          </div>
+                          <Input className="col-span-3 text-center" placeholder="서브1 (판매)" value={selectedDetail?.laborSub1Sell ?? ""} readOnly />
+                          <Input className="col-span-1 text-center" placeholder="보조1석" value={selectedDetail?.sub1Qty ?? ""} readOnly />
+                          <Input className="col-span-3 text-center" placeholder="서브1 (원가)" value={selectedDetail?.laborSub1Cost ?? ""} readOnly />
+                        </div>
+                        <div className="grid grid-cols-10 gap-2">
+                          <div className="col-span-3 flex items-center justify-center rounded-[8px] border border-[var(--panel-border)] bg-[#f7f9fc] px-2 py-2">
+                            <span className="text-xs font-semibold text-[var(--foreground)]">보조2공임</span>
+                          </div>
+                          <Input className="col-span-3 text-center" placeholder="서브2 (판매)" value={selectedDetail?.laborSub2Sell ?? ""} readOnly />
+                          <Input className="col-span-1 text-center" placeholder="보조2석" value={selectedDetail?.sub2Qty ?? ""} readOnly />
+                          <Input className="col-span-3 text-center" placeholder="서브2 (원가)" value={selectedDetail?.laborSub2Cost ?? ""} readOnly />
+                        </div>
+                      </div>
+                    </div>
+                  </CardBody>
+                </Card>
+                <Card id="catalog.detail.raw">
+                  <CardHeader>
+                    <ActionBar title="추가 메모" />
+                  </CardHeader>
+                  <CardBody className="py-3">
+                    <Textarea placeholder="내부 메모" value={selectedDetail?.note ?? ""} readOnly />
+                  </CardBody>
+                </Card>
+              </div>
+            }
+          />
+        </div>
       </div>
-    </div>
       <Modal
         open={registerOpen}
         onClose={() => setRegisterOpen(false)}
@@ -950,7 +1172,7 @@ export default function CatalogPage() {
                 <span>대표 이미지</span>
                 {uploadingImage ? <span className="text-xs text-[var(--muted)]">업로드 중...</span> : null}
               </div>
-              <label className="group relative flex h-56 cursor-pointer flex-col items-center justify-center overflow-hidden rounded-[16px] border border-[var(--panel-border)] bg-white text-center">
+              <label className="group relative flex h-56 w-56 mx-auto cursor-pointer flex-col items-center justify-center overflow-hidden rounded-[16px] border border-[var(--panel-border)] bg-white text-center">
                 <input
                   type="file"
                   accept="image/*"
@@ -982,8 +1204,8 @@ export default function CatalogPage() {
               </label>
               {uploadError ? <p className="mt-2 text-xs text-red-500">{uploadError}</p> : null}
               {imageUrl ? (
-              <div className="mt-3 flex justify-between gap-2">
-                <Button
+                <div className="mt-3 flex justify-between gap-2">
+                  <Button
                     variant="secondary"
                     size="sm"
                     type="button"
@@ -1006,6 +1228,15 @@ export default function CatalogPage() {
             }}
           >
             <div className="flex-1 space-y-4 overflow-y-auto pr-2">
+              <div className="rounded-[18px] border border-[var(--panel-border)] bg-white p-4">
+                <p className="mb-3 text-sm font-semibold text-[var(--foreground)]">비고</p>
+                <Textarea
+                  placeholder="상품에 대한 상세 정보를 입력하세요."
+                  value={note}
+                  onChange={(event) => setNote(event.target.value)}
+                  className="min-h-[80px]"
+                />
+              </div>
               <div className="grid gap-4 lg:grid-cols-2">
                 <div className="rounded-[18px] border border-[var(--panel-border)] bg-white p-4">
                   <div className="mb-4 flex items-center justify-between">
@@ -1049,6 +1280,7 @@ export default function CatalogPage() {
                     <Field label="기본 중량 (g)">
                       <Input
                         type="number"
+                        step="0.01"
                         min={0}
                         placeholder="중량"
                         value={weightDefault}
@@ -1058,6 +1290,7 @@ export default function CatalogPage() {
                     <Field label="차감 중량 (g)">
                       <Input
                         type="number"
+                        step="0.01"
                         min={0}
                         placeholder="차감 중량"
                         value={deductionWeight}
@@ -1209,14 +1442,7 @@ export default function CatalogPage() {
                     </Field>
                   </div>
                 </div>
-                <div className="rounded-[18px] border border-[var(--panel-border)] bg-white p-4">
-                  <p className="mb-3 text-sm font-semibold text-[var(--foreground)]">비고</p>
-                  <Textarea
-                    placeholder="좌측에 대표 이미지를 올리고, 우측에서 상품 정보를 입력하세요."
-                    value={note}
-                    onChange={(event) => setNote(event.target.value)}
-                  />
-                </div>
+
                 <div className="rounded-[18px] border border-[var(--panel-border)] bg-white p-4 lg:col-span-2">
                   <p className="mb-4 text-sm font-semibold text-[var(--foreground)]">프로파일 및 메모</p>
                   <div className="grid gap-4 md:grid-cols-2">
@@ -1256,6 +1482,30 @@ export default function CatalogPage() {
           </form>
         </div>
       </Modal>
+
+      {/* Custom Lightbox Overlay */}
+      {previewImage && (
+        <div
+          className="fixed inset-0 z-[100] flex items-center justify-center bg-black/90 p-4 animate-in fade-in duration-200"
+          onClick={() => setPreviewImage(null)}
+        >
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              setPreviewImage(null);
+            }}
+            className="absolute right-6 top-6 z-[101] flex h-12 w-12 items-center justify-center rounded-full bg-white/10 text-white hover:bg-white/20 transition-colors"
+          >
+            <X size={32} />
+          </button>
+          <img
+            src={previewImage}
+            alt="원본 확대"
+            className="max-h-[90vh] max-w-[90vw] object-contain rounded-lg shadow-2xl"
+            onClick={(e) => e.stopPropagation()} // Prevent close when clicking image
+          />
+        </div>
+      )}
     </>
   );
 }

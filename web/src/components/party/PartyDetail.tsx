@@ -99,9 +99,9 @@ export function PartyDetail({
           </CardBody>
         </Card>
       ) : (
-        <>
+        <div className="space-y-4">
           {detail?.party_type === "customer" && (
-            <Card className="mb-4">
+            <Card>
               <CardHeader>
                 <ActionBar title="AR 요약" />
               </CardHeader>
@@ -132,7 +132,7 @@ export function PartyDetail({
             </Card>
           )}
 
-          <div className="mb-4 flex items-center gap-2">
+          <div className="flex items-center gap-2">
             {tabs.map((tab) => (
               <button
                 key={tab.key}
@@ -165,7 +165,7 @@ export function PartyDetail({
           {activeTab === "contact" && <ContactsTab links={detail?.links ?? []} />}
 
           {activeTab === "prefix" && <PrefixMapTab prefixes={detail?.prefixes ?? []} />}
-        </>
+        </div>
       )}
     </div>
   );

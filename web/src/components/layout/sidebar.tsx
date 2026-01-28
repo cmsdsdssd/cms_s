@@ -7,9 +7,11 @@ import {
   ClipboardList,
   CreditCard,
   Gauge,
+  Package,
   PackageCheck,
   Settings,
   Store,
+  TrendingUp,
   Wrench,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -22,6 +24,9 @@ const navItems = [
   { href: "/repairs", label: "수리", icon: Wrench },
   { href: "/shipments_main", label: "출고", icon: PackageCheck },
   { href: "/ar", label: "미수", icon: CreditCard },
+  { href: "/market", label: "시세", icon: TrendingUp },
+  { href: "/inventory", label: "재고", icon: Package },
+  { href: "/parts", label: "부속", icon: Package },
 ];
 
 export function Sidebar() {

@@ -37,10 +37,13 @@ export default function PartyPage() {
   }, [searchParams]);
 
   useEffect(() => {
-    const params = new URLSearchParams(searchParams.toString());
-    params.set("type", typeFilter);
-    router.replace(`/party?${params.toString()}`);
-  }, [router, searchParams, typeFilter]);
+    const currentType = searchParams.get("type");
+    if (currentType !== typeFilter) {
+      const params = new URLSearchParams(searchParams.toString());
+      params.set("type", typeFilter);
+      router.replace(`/party?${params.toString()}`);
+    }
+  }, [router, typeFilter, searchParams]);
 
   // Debounce search
   useEffect(() => {
@@ -201,6 +204,7 @@ export default function PartyPage() {
           }
           right={
             <PartyDetail
+              key={selectedPartyId || "none"}
               selectedPartyId={selectedPartyId}
               detail={detailData}
               isLoading={isDetailLoading}

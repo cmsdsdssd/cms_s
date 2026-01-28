@@ -280,6 +280,9 @@ export default function ShipmentsPage() {
       setWeightG("");
       setTotalLabor("");
       setSearchQuery("");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      toast.error("출고 확정 실패", { description: message });
     } finally {
       setConfirming(false);
     }
