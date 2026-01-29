@@ -24,7 +24,7 @@ const navItems = [
   { href: "/ar", label: "미수", icon: CreditCard },
   { href: "/market", label: "시세", icon: TrendingUp },
   { href: "/inventory", label: "재고", icon: Package },
-  { href: "/parts", label: "부속", icon: Package },
+  { href: "/purchase_cost_worklist", label: "원가마감", icon: ClipboardList },
   { href: "/repairs", label: "수리", icon: Wrench },
 ];
 

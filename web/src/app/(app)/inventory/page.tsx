@@ -924,7 +924,7 @@ export default function InventoryPage() {
                                         <Button
                                             type="button"
                                             size="sm"
-                                            variant="outline"
+                                            variant="secondary"
                                             onClick={handleCopyFromMaster}
                                             disabled={!selectedMaster}
                                             className="text-xs bg-white"
@@ -1088,7 +1088,7 @@ export default function InventoryPage() {
                                                 <Button
                                                     onClick={onVoidSession}
                                                     disabled={voidSessionMutation.isPending}
-                                                    variant="outline"
+                                                    variant="secondary"
                                                     size="sm"
                                                 >
                                                     취소

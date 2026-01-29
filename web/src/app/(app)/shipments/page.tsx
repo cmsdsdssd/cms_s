@@ -4,18 +4,19 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ActionBar } from "@/components/layout/action-bar";
 import { FilterBar } from "@/components/layout/filter-bar";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
-import { ListCard } from "@/components/ui/list-card";
 import { Button } from "@/components/ui/button";
 import Link from "next/link";
 import { Input } from "@/components/ui/field";
 import { Badge } from "@/components/ui/badge";
+import { Modal } from "@/components/ui/modal";
+import { SearchSelect } from "@/components/ui/search-select";
 import { useQuery } from "@tanstack/react-query";
 import { useRpcMutation } from "@/hooks/use-rpc-mutation";
 import { CONTRACTS, isFnConfigured } from "@/lib/contracts";
 import { readView } from "@/lib/supabase/read";
-import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 
+// --- Types ---
 type ShipReadyRow = {
   shipment_id?: string;
   shipment_header_id?: string;
@@ -100,10 +101,22 @@ type ShipmentHistoryRow = {
 
 type ShipmentLineSummary = {
   shipment_id?: string;
+  shipment_line_id?: string;
   model_name?: string | null;
   color?: string | null;
   measured_weight_g?: number | null;
   manual_labor_krw?: number | null;
+  qty?: number;
+};
+
+type ReceiptRow = {
+  receipt_id: string;
+  received_at: string;
+  file_path: string;
+  file_bucket: string;
+  status: string;
+  vendor_party_id?: string;
+  file_size_bytes?: number;
 };
 
 const debounceMs = 250;
@@ -116,11 +129,18 @@ export default function ShipmentsPage() {
   const [weightG, setWeightG] = useState("");
   const [totalLabor, setTotalLabor] = useState("");
   const [prefill, setPrefill] = useState<ShipmentPrefill | null>(null);
-  const [confirming, setConfirming] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [orderLookupCache, setOrderLookupCache] = useState<Record<string, OrderLookupRow[]>>({});
   const [masterInfo, setMasterInfo] = useState<MasterSummary | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const popoverRef = useRef<HTMLDivElement | null>(null);
+
+  // Confirm Modal State
+  const [confirmModalOpen, setConfirmModalOpen] = useState(false);
+  const [currentShipmentId, setCurrentShipmentId] = useState<string | null>(null);
+  const [costMode, setCostMode] = useState<"PROVISIONAL" | "MANUAL" | "RECEIPT">("PROVISIONAL");
+  const [costReceiptId, setCostReceiptId] = useState<string | null>(null);
+  const [costInputs, setCostInputs] = useState<Record<string, string>>({}); // lineId -> cost
 
   const actorId = (process.env.NEXT_PUBLIC_CMS_ACTOR_ID || "").trim();
   const idempotencyKey = useMemo(
@@ -128,6 +148,7 @@ export default function ShipmentsPage() {
     []
   );
 
+  // --- Queries ---
   const readyQuery = useQuery({
     queryKey: ["cms", "shipment_header"],
     queryFn: () => readView<ShipReadyRow>("cms_shipment_header", 50),
@@ -138,10 +159,26 @@ export default function ShipmentsPage() {
     queryFn: () =>
       readView<ShipmentLineSummary>(
         "cms_shipment_line",
-        200,
-        undefined,
-        undefined
+        200, undefined, undefined
       ),
+  });
+
+  // Load lines for current shipment (for manual cost input)
+  const currentLinesQuery = useQuery({
+    queryKey: ["cms", "shipment_line", currentShipmentId],
+    queryFn: () => readView<ShipmentLineSummary>("cms_shipment_line", 50, "shipment_id", currentShipmentId ?? "nil"),
+    enabled: Boolean(currentShipmentId),
+  });
+
+  // Load receipts for selection
+  const receiptsQuery = useQuery({
+    queryKey: ["receipts", "uploaded"],
+    queryFn: async () => {
+      const res = await fetch("/api/receipts?status=UPLOADED&limit=50");
+      const json = await res.json();
+      return (json.data ?? []) as ReceiptRow[];
+    },
+    enabled: confirmModalOpen && costMode === "RECEIPT",
   });
 
   useEffect(() => {
@@ -208,13 +245,6 @@ export default function ShipmentsPage() {
     }
   }, [masterQuery.data]);
 
-  const shipments = (readyQuery.data ?? []).map((row, index) => ({
-    title: row.shipment_id ? String(row.shipment_id).slice(0, 10) : `S-${index + 1}`,
-    subtitle: `${row.customer_name ?? "-"} · ${row.line_count ?? 0}라인`,
-    meta: row.ship_date ?? row.created_at ?? "-",
-    badge: { label: row.status ?? "DRAFT", tone: "warning" as const },
-  }));
-
   const handleSelectOrder = async (row: OrderLookupRow) => {
     if (!row.order_line_id) return;
     setSelectedOrderLineId(row.order_line_id);
@@ -238,10 +268,10 @@ export default function ShipmentsPage() {
 
   const confirmMutation = useRpcMutation<{ ok: boolean }>({
     fn: confirmFn,
-    successMessage: "출고 확정 완료",
+    successMessage: "출고 확정 및 원가 적용 완료",
   });
 
-  const canConfirm =
+  const canSave =
     Boolean(selectedOrderLineId) &&
     Boolean(actorId) &&
     Boolean(weightG) &&
@@ -249,7 +279,8 @@ export default function ShipmentsPage() {
     isFnConfigured(upsertFn) &&
     isFnConfigured(confirmFn);
 
-  const handleConfirm = async () => {
+  // 1. Initial Confirm (Save -> Open Modal)
+  const handleInitialConfirm = async () => {
     if (!selectedOrderLineId) return;
     const weightValue = Number(weightG);
     const laborValue = Number(totalLabor);
@@ -257,8 +288,9 @@ export default function ShipmentsPage() {
     if (Number.isNaN(laborValue) || laborValue <= 0) return;
     if (!actorId) return;
 
-    setConfirming(true);
+    setSaving(true);
     try {
+      // Upsert shipment first to ensure it exists
       const saved = await saveMutation.mutateAsync({
         p_order_line_id: selectedOrderLineId,
         p_weight_g: weightValue,
@@ -268,11 +300,51 @@ export default function ShipmentsPage() {
       });
       const shipmentId = saved?.shipment_id;
       if (!shipmentId) return;
+
+      // Set state and open modal
+      setCurrentShipmentId(shipmentId);
+      setConfirmModalOpen(true);
+      setCostMode("PROVISIONAL");
+      setCostReceiptId(null);
+      setCostInputs({});
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      toast.error("출고 저장 실패", { description: message });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  // 2. Final Confirm (Call RPC)
+  const handleFinalConfirm = async () => {
+    if (!currentShipmentId || !actorId) return;
+
+    // Validate inputs
+    if (costMode === "RECEIPT" && !costReceiptId) {
+      toast.error("영수증을 선택해주세요.");
+      return;
+    }
+
+    const costLines = Object.entries(costInputs).map(([lineId, cost]) => ({
+      shipment_line_id: lineId,
+      unit_cost_krw: Number(cost)
+    })).filter(x => !Number.isNaN(x.unit_cost_krw) && x.unit_cost_krw >= 0);
+
+    // If manual/receipt, warn if no cost entered? No, PROVISIONAL fallback is allowed.
+
+    try {
       await confirmMutation.mutateAsync({
-        p_shipment_id: shipmentId,
-        p_actor_person_id: actorId || null,
-        p_note: "confirm from order lookup",
+        p_shipment_id: currentShipmentId,
+        p_actor_person_id: actorId,
+        p_note: "confirm from web",
+        p_cost_mode: costMode,
+        p_receipt_id: costReceiptId,
+        p_cost_lines: costLines,
+        p_emit_inventory: true
       });
+
+      // Cleanup
+      setConfirmModalOpen(false);
       readyQuery.refetch();
       lineSummaryQuery.refetch();
       historyQuery.refetch();
@@ -281,11 +353,11 @@ export default function ShipmentsPage() {
       setWeightG("");
       setTotalLabor("");
       setSearchQuery("");
+      setCurrentShipmentId(null);
+
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       toast.error("출고 확정 실패", { description: message });
-    } finally {
-      setConfirming(false);
     }
   };
 
@@ -302,6 +374,20 @@ export default function ShipmentsPage() {
     return () => document.removeEventListener("mousedown", handleClick);
   }, [searchOpen]);
 
+  const handlePreviewReceipt = async () => {
+    if (!costReceiptId) return;
+    const r = receiptsQuery.data?.find(x => x.receipt_id === costReceiptId);
+    if (r) {
+      const res = await fetch(`/api/receipt-file?bucket=${r.file_bucket}&path=${encodeURIComponent(r.file_path)}`);
+      const json = await res.json();
+      if (json.signedUrl) {
+        window.open(json.signedUrl, "_blank");
+      } else {
+        toast.error("프리뷰 로드 실패");
+      }
+    }
+  };
+
   return (
     <div className="space-y-6" id="shipments.root">
       <ActionBar
@@ -312,13 +398,87 @@ export default function ShipmentsPage() {
             <Link href="/shipments_main">
               <Button variant="secondary">출고 조회</Button>
             </Link>
-            <Button disabled={!canConfirm || confirming} onClick={handleConfirm}>
-              출고 확정
+            <Button disabled={!canSave || saving} onClick={handleInitialConfirm}>
+              {saving ? "저장 중..." : "출고 확정"}
             </Button>
           </div>
         }
         id="shipments.actionBar"
       />
+
+      {/* Confirm Modal */}
+      <Modal
+        open={confirmModalOpen}
+        onClose={() => setConfirmModalOpen(false)}
+        title="출고 확정 (원가 적용)"
+        className="max-w-lg"
+      >
+        <div className="space-y-4">
+          <div>
+            <label className="block text-sm font-semibold text-[var(--foreground)] mb-2">원가 모드</label>
+            <div className="flex gap-2">
+              {["PROVISIONAL", "MANUAL", "RECEIPT"].map(mode => (
+                <button
+                  key={mode}
+                  onClick={() => setCostMode(mode as any)}
+                  className={`px-3 py-2 rounded-md text-sm border ${costMode === mode ? "bg-blue-50 border-blue-500 text-blue-700" : "bg-white border-gray-300"}`}
+                >
+                  {mode}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {costMode === "RECEIPT" && (
+            <div>
+              <label className="block text-sm font-semibold text-[var(--foreground)] mb-2">영수증 선택</label>
+              <div className="flex gap-2">
+                <div className="flex-1">
+                  <SearchSelect
+                    placeholder="영수증 검색..."
+                    options={(receiptsQuery.data ?? []).map(r => ({
+                      label: `${r.received_at.slice(0, 10)} (${r.file_path.split('/').pop()})`,
+                      value: r.receipt_id
+                    }))}
+                    value={costReceiptId ?? undefined}
+                    onChange={setCostReceiptId}
+                  />
+                </div>
+                <Button variant="secondary" onClick={handlePreviewReceipt} disabled={!costReceiptId}>보기</Button>
+              </div>
+            </div>
+          )}
+
+          {(costMode === "MANUAL" || costMode === "RECEIPT") && (
+            <div>
+              <label className="block text-sm font-semibold text-[var(--foreground)] mb-2">실제 원가 입력 (선택)</label>
+              <div className="space-y-2 max-h-40 overflow-auto border rounded p-2">
+                {(currentLinesQuery.data ?? []).length === 0 && <span className="text-xs text-gray-500">라인 로딩 중...</span>}
+                {(currentLinesQuery.data ?? []).map(line => (
+                  <div key={line.shipment_line_id} className="grid grid-cols-[1fr_80px] gap-2 items-center">
+                    <span className="text-xs">{line.model_name} (Qty: {line.qty ?? 1})</span>
+                    <Input
+                      className="h-8 text-right"
+                      placeholder="단가"
+                      value={costInputs[line.shipment_line_id!] || ""}
+                      onChange={e => setCostInputs(prev => ({ ...prev, [line.shipment_line_id!]: e.target.value }))}
+                    />
+                  </div>
+                ))}
+              </div>
+              {costMode === "RECEIPT" && <p className="text-xs text-gray-500 mt-1">※ 미입력 시 마스터 임시원가 사용</p>}
+            </div>
+          )}
+
+          <div className="flex justify-end gap-2 pt-4">
+            <Button variant="secondary" onClick={() => setConfirmModalOpen(false)}>취소</Button>
+            <Button onClick={handleFinalConfirm} disabled={confirmMutation.isPending}>
+              {confirmMutation.isPending ? "확정 중..." : "확정 적용"}
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
       <FilterBar id="shipments.filterBar">
         <div className="relative w-full">
           <Input

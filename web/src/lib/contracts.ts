@@ -46,10 +46,9 @@ export const CONTRACTS = {
 
     shipmentAddAdHoc: process.env.NEXT_PUBLIC_CMS_FN_SHIPMENT_ADD_ADHOC ?? "",
     shipmentUpdateLine: process.env.NEXT_PUBLIC_CMS_FN_SHIPMENT_UPDATE_LINE ?? "",
-    shipmentDeleteLine: process.env.NEXT_PUBLIC_CMS_FN_SHIPMENT_DELETE_LINE ?? "",
-    shipmentConfirm: process.env.NEXT_PUBLIC_CMS_FN_SHIPMENT_CONFIRM ?? "",
-    shipmentUpsertFromOrder:
-      process.env.NEXT_PUBLIC_CMS_FN_SHIPMENT_UPSERT_FROM_ORDER ?? "",
+    shipmentUpsertFromOrder: process.env.NEXT_PUBLIC_RPC_SHIPMENT_UPSERT_FROM_ORDER || "cms_fn_upsert_shipment_from_order_line_v2",
+    shipmentConfirm: process.env.NEXT_PUBLIC_RPC_SHIPMENT_CONFIRM || "cms_fn_confirm_shipment_v3_cost_v1",
+    applyPurchaseCost: process.env.NEXT_PUBLIC_RPC_APPLY_PURCHASE_COST || "cms_fn_apply_purchase_cost_to_shipment_v1",
     recordPayment: process.env.NEXT_PUBLIC_CMS_FN_RECORD_PAYMENT ?? "",
     recordReturn:
       process.env.NEXT_PUBLIC_CMS_FN_RECORD_RETURN_V2 ??
