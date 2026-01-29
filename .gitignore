@@ -11,3 +11,7 @@ supabase/.temp/
 
 supabase/.temp/
 
+
+_*.sql
+nul
+
