@@ -149,7 +149,7 @@ const resolveSignedImageUrl = async (path: string | null) => {
 
 export default function OrdersPage() {
   const schemaClient = getSchemaClient();
-  const orderUpsertFn = CONTRACTS.functions.orderUpsertV2;
+  // const orderUpsertFn = CONTRACTS.functions.orderUpsertV2; // Removed in favor of V3
   const [rows, setRows] = useState<GridRow[]>(() =>
     Array.from({ length: EMPTY_ROWS }, (_, idx) => createEmptyRow(idx))
   );
@@ -233,11 +233,11 @@ export default function OrdersPage() {
       prev.map((row) =>
         row.id === rowId
           ? {
-              ...row,
-              client_input: client?.client_name ?? row.client_input,
-              client_id: client?.client_id ?? null,
-              client_name: client?.client_name ?? null,
-            }
+            ...row,
+            client_input: client?.client_name ?? row.client_input,
+            client_id: client?.client_id ?? null,
+            client_name: client?.client_name ?? null,
+          }
           : row
       )
     );
@@ -450,7 +450,18 @@ export default function OrdersPage() {
     });
 
   const saveRow = async (row: GridRow) => {
-    if (!orderUpsertFn) return;
+    // Strict Validation: Master Item is required
+    if (!row.master_item_id && normalizeText(row.model_input)) {
+      // If user typed something but didn't select from dropdown, it's an error.
+      // We do strictly enforce selection.
+      setRowError(row.id, { model: "모델을 목록에서 선택해야 합니다." });
+      return;
+    }
+
+    // Pass V3 function
+    const upsertFn = CONTRACTS.functions.orderUpsertV3;
+    if (!upsertFn) return;
+
     const snapshot = rowSnapshot(row);
     const cached = saveCache.current.get(row.id);
     if (cached === snapshot) return;
@@ -462,21 +473,24 @@ export default function OrdersPage() {
       return;
     }
 
+    if (!row.master_item_id) {
+      // Should be caught above or in validateRow, but double check
+      return;
+    }
+
     saveInFlight.current.add(row.id);
     try {
-      const savedId = await callRpc<string>(orderUpsertFn, {
+      const savedId = await callRpc<string>(upsertFn, {
         p_customer_party_id: row.client_id,
-        p_model_name: normalizeText(row.model_input),
-        p_suffix: normalizeText(row.suffix),
-        p_color: normalizeText(row.color),
+        p_master_id: row.master_item_id, // STRICT
         p_qty: toNumber(row.qty) ?? 1,
         p_size: null,
         p_is_plated: row.is_plated,
         p_plating_variant_id: null,
+        p_plating_color_code: normalizeText(row.plating_color) || null,
         p_requested_due_date: receiptDate || null,
         p_priority_code: null,
         p_source_channel: null,
-        p_model_name_raw: row.model_input,
         p_memo: normalizeText(row.memo) || null,
         p_order_line_id: row.order_line_id ?? null,
         p_center_stone_name: normalizeText(row.center_stone) || null,
@@ -485,15 +499,23 @@ export default function OrdersPage() {
         p_sub1_stone_qty: toNumber(row.sub1_qty),
         p_sub2_stone_name: normalizeText(row.sub2_stone) || null,
         p_sub2_stone_qty: toNumber(row.sub2_qty),
-        p_plating_color_code: normalizeText(row.plating_color) || null,
+        p_actor_person_id: process.env.NEXT_PUBLIC_CMS_ACTOR_ID ?? null
       });
       saveCache.current.set(row.id, snapshot);
       if (savedId) {
         updateRow(row.id, { order_line_id: String(savedId) });
+        // Clear errors if successful
+        setRowErrors((prev) => {
+          const next = { ...prev };
+          delete next[row.id];
+          return next;
+        });
+        toast.success("저장 완료");
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : "저장 실패";
-      toast.error("자동 저장 실패", { description: message });
+      // Handle strict P0001 error specifically if needed, but toast is fine
+      toast.error("저장 실패", { description: message });
     } finally {
       saveInFlight.current.delete(row.id);
     }
@@ -570,15 +592,15 @@ export default function OrdersPage() {
                     확정
                   </Badge>
                 ) : null}
-                        {headerMode === "model" && activeMaster?.master_item_id ? (
-                          <Badge className="whitespace-nowrap bg-emerald-50 text-emerald-600 border-emerald-100 rounded-[4px] px-2">
-                            매칭
-                          </Badge>
-                        ) : headerMode === "model" ? (
-                          <Badge className="whitespace-nowrap bg-red-50 text-red-600 border-red-100 rounded-[4px] px-2">
-                            UNMATCHED
-                          </Badge>
-                        ) : null}
+                {headerMode === "model" && activeMaster?.master_item_id ? (
+                  <Badge className="whitespace-nowrap bg-emerald-50 text-emerald-600 border-emerald-100 rounded-[4px] px-2">
+                    매칭
+                  </Badge>
+                ) : headerMode === "model" ? (
+                  <Badge className="whitespace-nowrap bg-red-50 text-red-600 border-red-100 rounded-[4px] px-2">
+                    UNMATCHED
+                  </Badge>
+                ) : null}
               </div>
               {headerMode === "client" ? (
                 headerClient?.balance_krw !== undefined ? (
@@ -611,22 +633,22 @@ export default function OrdersPage() {
                   : ""}
               </div>
             </div>
-                    <div className="space-y-1.5">
-                      <label className="text-xs font-semibold text-[var(--foreground)]">접수일</label>
-                      <Input
-                        type="date"
-                        className="bg-[var(--input-bg)]"
-                        value={receiptDate}
-                        onChange={(event) => setReceiptDate(event.target.value)}
-                      />
-                    </div>
-                    <div className="space-y-1.5">
-                      <label className="text-xs font-semibold text-[var(--foreground)]">리스크</label>
-                      <div className="text-sm text-[var(--foreground)]">{headerClient?.risk_flag ?? "-"}</div>
-                    </div>
-                  </CardBody>
-                </Card>
-              </div>
+            <div className="space-y-1.5">
+              <label className="text-xs font-semibold text-[var(--foreground)]">접수일</label>
+              <Input
+                type="date"
+                className="bg-[var(--input-bg)]"
+                value={receiptDate}
+                onChange={(event) => setReceiptDate(event.target.value)}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-xs font-semibold text-[var(--foreground)]">리스크</label>
+              <div className="text-sm text-[var(--foreground)]">{headerClient?.risk_flag ?? "-"}</div>
+            </div>
+          </CardBody>
+        </Card>
+      </div>
 
       <Card className="shadow-sm">
         <CardHeader className="flex items-center justify-between py-4 border-b border-[var(--panel-border)]">

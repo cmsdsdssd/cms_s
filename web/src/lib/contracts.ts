@@ -34,6 +34,7 @@ export const CONTRACTS = {
     partyUpsert: process.env.NEXT_PUBLIC_CMS_FN_PARTY_UPSERT ?? "",
     orderUpsert: process.env.NEXT_PUBLIC_CMS_FN_ORDER_UPSERT ?? "",
     orderUpsertV2: process.env.NEXT_PUBLIC_CMS_FN_ORDER_UPSERT_V2 ?? "",
+    orderUpsertV3: "cms_fn_upsert_order_line_v3",
     orderSetStatus: process.env.NEXT_PUBLIC_CMS_FN_ORDER_SET_STATUS ?? "",
     shipmentCreateFromOrders:
       process.env.NEXT_PUBLIC_CMS_FN_CREATE_SHIPMENTS_FROM_ORDERS ?? "",

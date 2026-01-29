@@ -21,7 +21,7 @@ export async function GET() {
 
         const goldPrice = data?.gold_price_krw_per_g ?? 0;
         const silverBasePrice = data?.silver_price_krw_per_g ?? 0;
-        const silverPrice = silverBasePrice * 1.2;
+        const silverPrice = silverBasePrice * 1.2 * 0.925;
 
         return NextResponse.json({
             data: {
