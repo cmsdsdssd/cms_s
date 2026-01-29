@@ -3,7 +3,7 @@ export const CMS_SCHEMA = "public";
 export const CONTRACTS = {
   views: {
     ordersWorklist: "cms_v_order_worklist",
-    repairsEnriched: "cms_v_repair_line_enriched_v1",
+
     arBalanceByParty: "cms_v_ar_balance_by_party",
     arPositionByParty: "cms_v_ar_position_by_party",
     masterItems: "cms_master_item",
@@ -20,6 +20,8 @@ export const CONTRACTS = {
     marketRoleActive: "cms_v_market_symbol_role_v1",
     inventoryPositionByItemLabel: "cms_v_inventory_position_by_item_label_v1",
     inventoryPositionByMaster: "cms_v_inventory_position_by_master_item_v1",
+    inventoryPositionByMasterLocation: "cms_v_inventory_position_by_master_item_location_v1",
+    inventoryLocationSummary: "cms_v_inventory_location_summary_v1",
     inventoryMoveWorklist: "cms_v_inventory_move_worklist_v1",
     inventoryMoveLinesEnriched: "cms_v_inventory_move_lines_enriched_v1",
     inventoryCountSessions: "cms_v_inventory_count_sessions_v1",
@@ -38,11 +40,10 @@ export const CONTRACTS = {
     orderSetStatus: process.env.NEXT_PUBLIC_CMS_FN_ORDER_SET_STATUS ?? "",
     shipmentCreateFromOrders:
       process.env.NEXT_PUBLIC_CMS_FN_CREATE_SHIPMENTS_FROM_ORDERS ?? "",
-    repairUpsert: process.env.NEXT_PUBLIC_CMS_FN_REPAIR_UPSERT ?? "",
-    repairUpsertV2: process.env.NEXT_PUBLIC_CMS_FN_REPAIR_UPSERT_V2 ?? "cms_fn_upsert_repair_line_v2",
+
     shipmentCreateHeader: process.env.NEXT_PUBLIC_CMS_FN_SHIPMENT_CREATE_HEADER ?? "",
     shipmentAddFromOrder: process.env.NEXT_PUBLIC_CMS_FN_SHIPMENT_ADD_FROM_ORDER ?? "",
-    shipmentAddFromRepair: process.env.NEXT_PUBLIC_CMS_FN_SHIPMENT_ADD_FROM_REPAIR ?? "",
+
     shipmentAddAdHoc: process.env.NEXT_PUBLIC_CMS_FN_SHIPMENT_ADD_ADHOC ?? "",
     shipmentUpdateLine: process.env.NEXT_PUBLIC_CMS_FN_SHIPMENT_UPDATE_LINE ?? "",
     shipmentDeleteLine: process.env.NEXT_PUBLIC_CMS_FN_SHIPMENT_DELETE_LINE ?? "",
@@ -56,7 +57,8 @@ export const CONTRACTS = {
       "",
     enumValues: process.env.NEXT_PUBLIC_CMS_FN_ENUM_VALUES ?? "cms_fn_enum_values_v1",
     marketTickUpsertByRole: process.env.NEXT_PUBLIC_CMS_FN_MARKET_TICK_UPSERT_BY_ROLE ?? "cms_fn_upsert_market_tick_by_role_v1",
-    quickInventoryMove: "cms_fn_quick_inventory_move_v1",
+    quickInventoryMove: "cms_fn_quick_inventory_move_v2",
+    inventoryTransfer: "cms_fn_transfer_inventory_v1",
     inventoryMoveHeaderUpsert: "cms_fn_upsert_inventory_move_header_v1",
     inventoryMoveLineUpsert: "cms_fn_upsert_inventory_move_line_v1",
     inventoryMoveLineAdd: "cms_fn_add_inventory_move_line_v1",

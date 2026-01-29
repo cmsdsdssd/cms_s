@@ -13,13 +13,20 @@ import { CONTRACTS } from "@/lib/contracts";
 import { getSchemaClient } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
 
+const LOCATION_OPTIONS = [
+    { value: "MAIN", label: "메인" },
+    { value: "WAREHOUSE", label: "창고" },
+    { value: "SHOP", label: "매장" },
+    { value: "FACTORY", label: "공장" },
+] as const;
+
 // ===================== TYPES =====================
 type PositionRow = {
-    item_ref_type: string;
-    item_name: string;
-    variant_hint?: string;
+    location_code?: string | null;
+    master_id: string;
+    model_name: string;
     on_hand_qty: number;
-    last_move_at?: string;
+    last_move_at?: string | null;
 };
 
 type MoveRow = {
@@ -48,6 +55,7 @@ type SessionRow = {
     generated_move_id?: string;
     generated_move_status?: string;
     created_at: string;
+    location_code?: string | null;
 };
 
 type CountLineRow = {
@@ -93,10 +101,12 @@ type MasterItem = {
 
 type QuickMoveForm = {
     move_type: "RECEIPT" | "ISSUE" | "ADJUST";
-    model_name: string; // Changed from item_name
+    location_code: string;
+    model_name: string;
     master_id?: string;
-    session_id?: string; // New: Link to session
+    session_id?: string;
     qty: number;
+
     // Master-derived fields
     material_code?: string;
     category_code?: string;
@@ -108,9 +118,8 @@ type QuickMoveForm = {
     plating_sell?: number;
     plating_cost?: number;
     labor_base_sell?: number;
-    labor_center_sell?: number;
-    labor_sub1_sell?: number;
-    labor_sub2_sell?: number;
+    labor_base_cost?: number;
+
     memo: string;
 };
 
@@ -158,34 +167,19 @@ const getKstNow = () => {
 const getImageUrl = (path?: string | null): string | null => {
     if (!path) return null;
 
-    // If already a full URL, return as is
-    if (path.startsWith("http://") || path.startsWith("https://")) {
-        return path;
-    }
+    if (path.startsWith("http://") || path.startsWith("https://")) return path;
 
-    // Convert relative path to Supabase Storage URL
-    // Format: master/c0bc6c7e-70df-42fb-bf11-5b50c94493e7.png
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
     if (!supabaseUrl) {
         console.warn("NEXT_PUBLIC_SUPABASE_URL not set");
         return null;
     }
 
-    // Use SUPABASE_BUCKET environment variable, default to master_images
-    // Note: process.env.SUPABASE_BUCKET is usually server-only. If undefined on client, we fallback to string.
-    const bucketName = process.env.NEXT_PUBLIC_SUPABASE_BUCKET || process.env.SUPABASE_BUCKET || "master_images";
+    const bucketName =
+        process.env.NEXT_PUBLIC_SUPABASE_BUCKET || process.env.SUPABASE_BUCKET || "master_images";
 
-    // If path already starts with bucket name, strip it to avoid duplication
-    // e.g. "master_images/master/..." -> "master/..."
     const cleanPath = path.startsWith(`${bucketName}/`) ? path.slice(bucketName.length + 1) : path;
-
-    // Build the URL
-    const fullUrl = `${supabaseUrl}/storage/v1/object/public/${bucketName}/${cleanPath}`;
-
-    // Only log error if needed, reduce console noise
-    // console.log("Generated image URL:", fullUrl);
-
-    return fullUrl;
+    return `${supabaseUrl}/storage/v1/object/public/${bucketName}/${cleanPath}`;
 };
 
 // ===================== MAIN COMPONENT =====================
@@ -201,24 +195,53 @@ export default function InventoryPage() {
     const [masterSearchQuery, setMasterSearchQuery] = useState("");
     const [showMasterSearch, setShowMasterSearch] = useState(false);
 
+    // ===================== POSITION TAB STATE =====================
+    const [positionMode, setPositionMode] = useState<"total" | "byLocation">("total");
+    const [selectedLocation, setSelectedLocation] = useState<string>("");
+
     // ===================== POSITION TAB DATA =====================
     const { data: positionData = [], isLoading: positionLoading } = useQuery({
-        queryKey: ["inventory", "position"],
+        queryKey: ["inventory", "position", positionMode, selectedLocation],
         queryFn: async () => {
             const client = getSchemaClient();
-            const { data, error } = await client
-                .from(CONTRACTS.views.inventoryPositionByItemLabel)
-                .select("*")
-                .order("on_hand_qty", { ascending: false })
-                .limit(50);
+            if (!client) throw new Error("No client");
+            const view =
+                positionMode === "total"
+                    ? CONTRACTS.views.inventoryPositionByMaster
+                    : CONTRACTS.views.inventoryPositionByMasterLocation;
+
+            let q = client.from(view).select("*").order("on_hand_qty", { ascending: false });
+
+            if (positionMode === "byLocation" && selectedLocation) {
+                if (selectedLocation === "__NULL__") q = q.is("location_code", null);
+                else q = q.eq("location_code", selectedLocation);
+            }
+
+            const { data, error } = await q.limit(200);
             if (error) throw error;
             return (data as PositionRow[]) ?? [];
         },
     });
 
     const filteredPosition = positionData.filter((row) =>
-        row.item_name.toLowerCase().includes(searchTerm.toLowerCase())
+        (row.model_name || "").toLowerCase().includes(searchTerm.toLowerCase())
     );
+
+    // ===================== STOCKTAKE: SESSIONS (also used by QuickMove link) =====================
+    const { data: sessionsData = [] } = useQuery({
+        queryKey: ["inventory", "stocktake", "sessions"],
+        queryFn: async () => {
+            const client = getSchemaClient();
+            if (!client) throw new Error("No client");
+            const { data, error } = await client
+                .from(CONTRACTS.views.inventoryCountSessions)
+                .select("*")
+                .order("created_at", { ascending: false })
+                .limit(20);
+            if (error) throw error;
+            return (data as SessionRow[]) ?? [];
+        },
+    });
 
     // ===================== MASTER SEARCH FOR MOVES TAB =====================
     const { data: masterSearchResults = [] } = useQuery({
@@ -226,6 +249,7 @@ export default function InventoryPage() {
         queryFn: async () => {
             if (!masterSearchQuery || masterSearchQuery.length < 1) return [];
             const client = getSchemaClient();
+            if (!client) throw new Error("No client");
             const { data, error } = await client
                 .from(CONTRACTS.views.masterItemLookup)
                 .select("*")
@@ -242,6 +266,7 @@ export default function InventoryPage() {
         queryKey: ["inventory", "moves"],
         queryFn: async () => {
             const client = getSchemaClient();
+            if (!client) throw new Error("No client");
             const { data, error } = await client
                 .from(CONTRACTS.views.inventoryMoveLinesEnriched)
                 .select("*")
@@ -252,9 +277,11 @@ export default function InventoryPage() {
         },
     });
 
+    // ===================== QUICK MOVE =====================
     const quickMoveForm = useForm<QuickMoveForm>({
         defaultValues: {
             move_type: "RECEIPT",
+            location_code: "",
             model_name: "",
             master_id: undefined,
             session_id: undefined,
@@ -269,9 +296,7 @@ export default function InventoryPage() {
             plating_sell: undefined,
             plating_cost: undefined,
             labor_base_sell: undefined,
-            labor_center_sell: undefined,
-            labor_sub1_sell: undefined,
-            labor_sub2_sell: undefined,
+            labor_base_cost: undefined,
             memo: "",
         },
     });
@@ -302,21 +327,25 @@ export default function InventoryPage() {
             return;
         }
 
-        // Resolve Session Reference if selected
-        let refType: any = null;
-        let refId = null;
+        const resolvedLocation =
+            values.location_code ||
+            (values.session_id
+                ? sessionsData.find((s) => s.session_id === values.session_id)?.location_code
+                : null) ||
+            null;
 
-        if (values.session_id) {
-            refType = "STOCKTAKE_SESSION";
-            refId = values.session_id;
+        if (!resolvedLocation) {
+            toast.error("위치를 선택해주세요");
+            return;
         }
 
         quickMoveMutation.mutate({
             p_move_type: values.move_type,
-            p_item_name: values.model_name, // Use model_name as item_name
+            p_item_name: values.model_name,
             p_qty: values.qty,
             p_occurred_at: new Date().toISOString(),
             p_party_id: null,
+            p_location_code: resolvedLocation,
             p_master_id: values.master_id || null,
             p_variant_hint: values.material_code || null,
             p_unit: "EA",
@@ -325,7 +354,7 @@ export default function InventoryPage() {
             p_meta: values.session_id ? { session_id: values.session_id } : {},
             p_idempotency_key: null,
             p_actor_person_id: null,
-            p_note: refId ? `Linked to session` : null,
+            p_note: values.session_id ? `Linked to session` : null,
             p_correlation_id: crypto.randomUUID(),
         });
     };
@@ -354,9 +383,7 @@ export default function InventoryPage() {
         quickMoveForm.setValue("plating_sell", selectedMaster.plating_price_sell_default || 0);
         quickMoveForm.setValue("plating_cost", selectedMaster.plating_price_cost_default || 0);
         quickMoveForm.setValue("labor_base_sell", selectedMaster.labor_base_sell || 0);
-        quickMoveForm.setValue("labor_center_sell", selectedMaster.labor_center_sell || 0);
-        quickMoveForm.setValue("labor_sub1_sell", selectedMaster.labor_sub1_sell || 0);
-        quickMoveForm.setValue("labor_sub2_sell", selectedMaster.labor_sub2_sell || 0);
+        quickMoveForm.setValue("labor_base_cost", selectedMaster.labor_base_cost || 0);
 
         // STRICT RULE: DO NOT copy weight fields
         // quickMoveForm.setValue("base_weight_g", ...) // FORBIDDEN
@@ -366,25 +393,12 @@ export default function InventoryPage() {
     };
 
     // ===================== STOCKTAKE TAB DATA =====================
-    const { data: sessionsData = [] } = useQuery({
-        queryKey: ["inventory", "stocktake", "sessions"],
-        queryFn: async () => {
-            const client = getSchemaClient();
-            const { data, error } = await client
-                .from(CONTRACTS.views.inventoryCountSessions)
-                .select("*")
-                .order("created_at", { ascending: false })
-                .limit(20);
-            if (error) throw error;
-            return (data as SessionRow[]) ?? [];
-        },
-    });
-
     const { data: sessionLinesData = [] } = useQuery({
         queryKey: ["inventory", "stocktake", "lines", selectedSessionId],
         queryFn: async () => {
             if (!selectedSessionId) return [];
             const client = getSchemaClient();
+            if (!client) throw new Error("No client");
             const { data, error } = await client
                 .from(CONTRACTS.views.inventoryCountLinesEnriched)
                 .select("*")
@@ -457,6 +471,11 @@ export default function InventoryPage() {
     });
 
     const onCreateSession = (values: SessionForm) => {
+        if (!values.location_code) {
+            toast.error("세션 위치를 선택해주세요");
+            return;
+        }
+
         createSessionMutation.mutate({
             p_snapshot_at: new Date().toISOString(),
             p_location_code: values.location_code || null,
@@ -569,16 +588,61 @@ export default function InventoryPage() {
                 <div className="space-y-4">
                     <Card>
                         <CardHeader>
-                            <div className="flex items-center justify-between">
-                                <ActionBar title="현재 재고" />
+                            <div className="flex items-center justify-between gap-2">
+                                <div className="flex items-center gap-2">
+                                    <ActionBar title="현재 재고" />
+                                    <div className="flex overflow-hidden rounded border border-[var(--panel-border)]">
+                                        <button
+                                            type="button"
+                                            onClick={() => setPositionMode("total")}
+                                            className={cn(
+                                                "px-3 py-1 text-xs",
+                                                positionMode === "total"
+                                                    ? "bg-[var(--panel-hover)] font-semibold"
+                                                    : "text-[var(--muted)]"
+                                            )}
+                                        >
+                                            전체
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={() => setPositionMode("byLocation")}
+                                            className={cn(
+                                                "px-3 py-1 text-xs",
+                                                positionMode === "byLocation"
+                                                    ? "bg-[var(--panel-hover)] font-semibold"
+                                                    : "text-[var(--muted)]"
+                                            )}
+                                        >
+                                            위치별
+                                        </button>
+                                    </div>
+
+                                    {positionMode === "byLocation" && (
+                                        <Select
+                                            value={selectedLocation}
+                                            onChange={(e) => setSelectedLocation(e.target.value)}
+                                        >
+                                            <option value="">(전체 위치)</option>
+                                            <option value="__NULL__">미지정</option>
+                                            {LOCATION_OPTIONS.map((o) => (
+                                                <option key={o.value} value={o.value}>
+                                                    {o.label}
+                                                </option>
+                                            ))}
+                                        </Select>
+                                    )}
+                                </div>
+
                                 <Input
-                                    placeholder="품목 검색..."
+                                    placeholder="모델 검색..."
                                     value={searchTerm}
                                     onChange={(e) => setSearchTerm(e.target.value)}
                                     className="w-64"
                                 />
                             </div>
                         </CardHeader>
+
                         <CardBody>
                             {positionLoading ? (
                                 <p className="text-sm text-[var(--muted)]">로딩 중...</p>
@@ -589,17 +653,23 @@ export default function InventoryPage() {
                                     <table className="w-full text-sm">
                                         <thead className="border-b border-[var(--panel-border)] text-xs text-[var(--muted)]">
                                             <tr>
-                                                <th className="text-left pb-2">품목명</th>
-                                                <th className="text-left pb-2">변종</th>
+                                                {positionMode === "byLocation" && (
+                                                    <th className="text-left pb-2">위치</th>
+                                                )}
+                                                <th className="text-left pb-2">모델명</th>
                                                 <th className="text-right pb-2">재고</th>
                                                 <th className="text-left pb-2">최종이동</th>
                                             </tr>
                                         </thead>
                                         <tbody className="divide-y divide-[var(--panel-border)]">
                                             {filteredPosition.map((row, idx) => (
-                                                <tr key={idx} className="hover:bg-[var(--panel-hover)]">
-                                                    <td className="py-2 font-medium">{row.item_name}</td>
-                                                    <td className="py-2 text-xs text-[var(--muted)]">{row.variant_hint || "-"}</td>
+                                                <tr key={`${row.master_id}-${row.location_code ?? "NA"}-${idx}`} className="hover:bg-[var(--panel-hover)]">
+                                                    {positionMode === "byLocation" && (
+                                                        <td className="py-2 text-xs text-[var(--muted)]">
+                                                            {row.location_code || "미지정"}
+                                                        </td>
+                                                    )}
+                                                    <td className="py-2 font-medium">{row.model_name}</td>
                                                     <td className="py-2 text-right font-mono">
                                                         <span
                                                             className={cn(
@@ -652,7 +722,11 @@ export default function InventoryPage() {
                                         <tbody className="divide-y divide-[var(--panel-border)]">
                                             {movesData.map((move: any) => (
                                                 <tr key={move.move_line_id || move.move_id} className="hover:bg-[var(--panel-hover)]">
-                                                    <td className="py-2 text-xs text-[var(--muted)] whitespace-nowrap">{formatKst(move.occurred_at).split(' ')[0]}<br />{formatKst(move.occurred_at).split(' ')[1]}</td>
+                                                    <td className="py-2 text-xs text-[var(--muted)] whitespace-nowrap">
+                                                        {formatKst(move.occurred_at).split(" ")[0]}
+                                                        <br />
+                                                        {formatKst(move.occurred_at).split(" ")[1]}
+                                                    </td>
                                                     <td className="py-2 text-center text-xs text-[var(--muted)] font-mono">{move.move_no}</td>
                                                     <td className="py-2 font-medium">{move.master_model_name || move.item_name}</td>
                                                     <td className="py-2 text-center">
@@ -669,8 +743,14 @@ export default function InventoryPage() {
                                                             {move.move_type}
                                                         </span>
                                                     </td>
-                                                    <td className={cn("py-2 text-right font-mono", move.direction === 'IN' ? "text-blue-600" : "text-orange-600")}>
-                                                        {move.direction === 'IN' ? '+' : '-'}{move.qty}
+                                                    <td
+                                                        className={cn(
+                                                            "py-2 text-right font-mono",
+                                                            move.direction === "IN" ? "text-blue-600" : "text-orange-600"
+                                                        )}
+                                                    >
+                                                        {move.direction === "IN" ? "+" : "-"}
+                                                        {move.qty}
                                                     </td>
                                                 </tr>
                                             ))}
@@ -688,9 +768,7 @@ export default function InventoryPage() {
                         </CardHeader>
                         <CardBody>
                             {!selectedMaster ? (
-                                <p className="text-xs text-[var(--muted)] text-center py-8">
-                                    마스터를 선택하세요
-                                </p>
+                                <p className="text-xs text-[var(--muted)] text-center py-8">마스터를 선택하세요</p>
                             ) : (
                                 <div className="space-y-4">
                                     {/* Image */}
@@ -725,14 +803,17 @@ export default function InventoryPage() {
 
                                         <div className="col-span-2 font-semibold border-b pb-1 mt-2">스톤 (EA)</div>
                                         <div>Center: {selectedMaster.center_qty_default}</div>
-                                        <div>Sub: {selectedMaster.sub1_qty_default} / {selectedMaster.sub2_qty_default}</div>
+                                        <div>
+                                            Sub: {selectedMaster.sub1_qty_default} / {selectedMaster.sub2_qty_default}
+                                        </div>
 
                                         <div className="col-span-2 font-semibold border-b pb-1 mt-2 flex justify-between">
                                             <span>공임/도금</span>
-                                            <span className="flex gap-4"><span className="text-gray-500">원가</span> <span>판매</span></span>
+                                            <span className="flex gap-4">
+                                                <span className="text-gray-500">원가</span> <span>판매</span>
+                                            </span>
                                         </div>
 
-                                        {/* Cost (Left) | Sell (Right) */}
                                         <div className="text-gray-500">{selectedMaster.labor_base_cost?.toLocaleString() || 0}</div>
                                         <div>{selectedMaster.labor_base_sell?.toLocaleString() || 0}</div>
 
@@ -764,17 +845,31 @@ export default function InventoryPage() {
                                             <option value="ADJUST">조정</option>
                                         </Select>
                                     </div>
+
                                     <div className="space-y-1">
-                                        <label className="text-[10px] font-semibold uppercase text-[var(--muted)]">위치 (세션)</label>
+                                        <label className="text-[10px] font-semibold uppercase text-[var(--muted)]">위치</label>
+                                        <Select {...quickMoveForm.register("location_code")}>
+                                            <option value="">선택</option>
+                                            {LOCATION_OPTIONS.map((o) => (
+                                                <option key={o.value} value={o.value}>
+                                                    {o.label}
+                                                </option>
+                                            ))}
+                                        </Select>
+                                    </div>
+
+                                    <div className="space-y-1 col-span-2">
+                                        <label className="text-[10px] font-semibold uppercase text-[var(--muted)]">실사 세션 연결(선택)</label>
                                         <Select {...quickMoveForm.register("session_id")}>
                                             <option value="">(선택 안함)</option>
-                                            {sessionsData.map(s => (
+                                            {sessionsData.map((s) => (
                                                 <option key={s.session_id} value={s.session_id}>
                                                     {s.location_code || s.session_code || `Session #${s.session_no}`}
                                                 </option>
                                             ))}
                                         </Select>
                                     </div>
+
                                     <div className="space-y-1 col-span-1">
                                         <label className="text-[10px] font-semibold uppercase text-[var(--muted)]">모델명</label>
                                         <div className="relative">
@@ -805,17 +900,18 @@ export default function InventoryPage() {
                                             )}
                                         </div>
                                     </div>
+
                                     <div className="space-y-1 col-span-1">
                                         <label className="text-[10px] font-semibold uppercase text-[var(--muted)]">수량</label>
                                         <Input type="number" {...quickMoveForm.register("qty", { valueAsNumber: true })} />
                                     </div>
                                 </div>
+
                                 <div className="space-y-1">
                                     <label className="text-[10px] font-semibold uppercase text-[var(--muted)]">메모</label>
                                     <Input {...quickMoveForm.register("memo")} placeholder="Memo..." />
                                 </div>
 
-                                {/* Register Button Block - Visually matching image height? */}
                                 <Button type="submit" variant="primary" className="w-full py-6 text-lg font-bold shadow-md">
                                     등 록
                                 </Button>
@@ -825,7 +921,6 @@ export default function InventoryPage() {
                                 {/* Bottom Section: Detailed Input (2 Cols: Cost | Sell) */}
                                 <div className="space-y-3 p-3 bg-gray-50 rounded border border-[var(--panel-border)]">
                                     <div className="flex justify-between items-center">
-                                        {/* Master Copy Button */}
                                         <Button
                                             type="button"
                                             size="sm"
@@ -839,32 +934,33 @@ export default function InventoryPage() {
                                         <span className="text-[10px] text-[var(--muted)]">중량은 복사되지 않음</span>
                                     </div>
 
-                                    {/* 2-Col Grid */}
                                     <div className="grid grid-cols-2 gap-x-3 gap-y-2 text-xs">
-                                        {/* Headers */}
                                         <div className="text-center text-[var(--muted)] font-semibold border-b pb-1">원가 (Cost)</div>
                                         <div className="text-center text-[var(--muted)] font-semibold border-b pb-1">판매 (Sell)</div>
 
-                                        {/* Material / Category */}
                                         <Input {...quickMoveForm.register("material_code")} placeholder="Material Code" />
                                         <Input {...quickMoveForm.register("category_code")} placeholder="Category Code" />
 
-                                        {/* Weight */}
                                         <div className="col-span-2 text-center text-[var(--muted)] mt-1">- 중량 (g) -</div>
-                                        <Input {...quickMoveForm.register("base_weight_g", { valueAsNumber: true })} placeholder="기본 중량 *" className="bg-yellow-50" />
-                                        <Input {...quickMoveForm.register("deduction_weight_g", { valueAsNumber: true })} placeholder="차감 중량 *" className="bg-yellow-50" />
+                                        <Input
+                                            {...quickMoveForm.register("base_weight_g", { valueAsNumber: true })}
+                                            placeholder="기본 중량 *"
+                                            className="bg-yellow-50"
+                                        />
+                                        <Input
+                                            {...quickMoveForm.register("deduction_weight_g", { valueAsNumber: true })}
+                                            placeholder="차감 중량 *"
+                                            className="bg-yellow-50"
+                                        />
 
-                                        {/* Stone */}
                                         <div className="col-span-2 text-center text-[var(--muted)] mt-1">- 스톤 (Qty) -</div>
                                         <Input {...quickMoveForm.register("sub1_qty", { valueAsNumber: true })} placeholder="Sub 1" />
                                         <Input {...quickMoveForm.register("center_qty", { valueAsNumber: true })} placeholder="Center" />
 
-                                        {/* Plating */}
                                         <div className="col-span-2 text-center text-[var(--muted)] mt-1">- 도금 -</div>
                                         <Input {...quickMoveForm.register("plating_cost", { valueAsNumber: true })} placeholder="Cost" />
                                         <Input {...quickMoveForm.register("plating_sell", { valueAsNumber: true })} placeholder="Sell" />
 
-                                        {/* Labor */}
                                         <div className="col-span-2 text-center text-[var(--muted)] mt-1">- 공임 -</div>
                                         <Input {...quickMoveForm.register("labor_base_cost", { valueAsNumber: true })} placeholder="Base Cost" />
                                         <Input {...quickMoveForm.register("labor_base_sell", { valueAsNumber: true })} placeholder="Base Sell" />
@@ -875,7 +971,6 @@ export default function InventoryPage() {
                     </Card>
                 </div>
             )}
-
 
             {/* Stocktake Tab */}
             {activeTab === "stocktake" && (
@@ -889,10 +984,25 @@ export default function InventoryPage() {
                             <form onSubmit={sessionForm.handleSubmit(onCreateSession)} className="space-y-3 mb-4 pb-4 border-b">
                                 <div className="space-y-1">
                                     <label className="text-xs font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">
+                                        위치
+                                    </label>
+                                    <Select {...sessionForm.register("location_code")}>
+                                        <option value="">선택</option>
+                                        {LOCATION_OPTIONS.map((o) => (
+                                            <option key={o.value} value={o.value}>
+                                                {o.label}
+                                            </option>
+                                        ))}
+                                    </Select>
+                                </div>
+
+                                <div className="space-y-1">
+                                    <label className="text-xs font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">
                                         세션명 (이름)
                                     </label>
                                     <Input {...sessionForm.register("session_code")} placeholder="예: 사무실 금고, 1층 매장" />
                                 </div>
+
                                 <Button type="submit" className="w-full" disabled={createSessionMutation.isPending}>
                                     {createSessionMutation.isPending ? "생성 중..." : "새 세션 생성"}
                                 </Button>
@@ -909,7 +1019,7 @@ export default function InventoryPage() {
 
                             <div className="space-y-2 max-h-64 overflow-auto">
                                 {sessionsData
-                                    .filter(s => {
+                                    .filter((s) => {
                                         const q = sessionSearchQuery.toLowerCase().trim();
                                         if (!q) return true;
                                         return (
@@ -933,7 +1043,8 @@ export default function InventoryPage() {
                                                 <span className="text-sm font-semibold">
                                                     {session.session_code ? (
                                                         <>
-                                                            {session.session_code} <span className="text-xs text-[var(--muted)] font-normal">#{session.session_no}</span>
+                                                            {session.session_code}{" "}
+                                                            <span className="text-xs text-[var(--muted)] font-normal">#{session.session_no}</span>
                                                         </>
                                                     ) : (
                                                         `#${session.session_no}`
@@ -1010,11 +1121,7 @@ export default function InventoryPage() {
                                                     placeholder="품목명 (마스터 검색) *"
                                                     disabled={isFinalized}
                                                     autoComplete="off"
-                                                    onFocus={() => {
-                                                        setShowMasterSearch(true);
-                                                        // Reuse existing master search logic, clearing if needed?
-                                                        // Assuming masterSearchResults is shared state.
-                                                    }}
+                                                    onFocus={() => setShowMasterSearch(true)}
                                                     onChange={(e) => {
                                                         countLineForm.setValue("item_name", e.target.value);
                                                         setMasterSearchQuery(e.target.value);

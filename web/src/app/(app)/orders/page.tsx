@@ -663,6 +663,11 @@ export default function OrdersPage() {
       const savedId = await callOrderUpsertV3({
         p_customer_party_id: row.client_id,
         p_master_id: row.master_item_id, // STRICT
+
+        // ✅ NOT NULL 컬럼 보장용: 화면 입력값을 RPC로 전달
+        p_suffix: normalizeText(row.suffix) || null,
+        p_color: normalizeText(row.color) || null,
+
         p_qty: toNumber(row.qty) ?? 1,
         p_size: null,
         p_is_plated: row.is_plated,

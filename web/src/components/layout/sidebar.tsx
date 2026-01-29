@@ -21,7 +21,7 @@ const navItems = [
   { href: "/catalog", label: "카탈로그", icon: Boxes },
   { href: "/orders_main", label: "주문", icon: ClipboardList },
   { href: "/party", label: "거래처", icon: Store },
-  { href: "/repairs", label: "수리", icon: Wrench },
+
   { href: "/shipments_main", label: "출고", icon: PackageCheck },
   { href: "/ar", label: "미수", icon: CreditCard },
   { href: "/market", label: "시세", icon: TrendingUp },

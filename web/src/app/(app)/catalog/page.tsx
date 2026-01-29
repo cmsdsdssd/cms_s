@@ -13,6 +13,7 @@ import { Grid2x2, List, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { compressImage } from "@/lib/image-utils";
+import { deriveCategoryCodeFromModelName } from "@/lib/model-name";
 /* eslint-disable @next/next/no-img-element */
 
 type CatalogItem = {
@@ -216,6 +217,7 @@ const catalogItems: CatalogItem[] = [
 
 const categoryOptions = [
   { label: "팔찌", value: "BRACELET" },
+  { label: "발찌", value: "ANKLET" },     // ✅ 추가
   { label: "목걸이", value: "NECKLACE" },
   { label: "귀걸이", value: "EARRING" },
   { label: "반지", value: "RING" },
@@ -224,6 +226,7 @@ const categoryOptions = [
   { label: "시계", value: "WATCH" },
   { label: "키링", value: "KEYRING" },
   { label: "상징", value: "SYMBOL" },
+  { label: "부속", value: "ACCESSORY" }, // ✅ 추가
   { label: "기타", value: "ETC" },
 ];
 
@@ -298,6 +301,7 @@ export default function CatalogPage() {
   const [vendorOptions, setVendorOptions] = useState<VendorOption[]>([]);
   const [masterRowsById, setMasterRowsById] = useState<Record<string, Record<string, unknown>>>({});
   const [categoryCode, setCategoryCode] = useState("");
+  const [categoryTouched, setCategoryTouched] = useState(false);
   const [materialCode, setMaterialCode] = useState("");
   const [weightDefault, setWeightDefault] = useState("");
   const [deductionWeight, setDeductionWeight] = useState("");
@@ -1022,7 +1026,7 @@ export default function CatalogPage() {
                 <div className="flex gap-4">
                   {selectedItem?.imageUrl && (
                     <div className="h-[300px] w-[300px] shrink-0 overflow-hidden rounded-[12px] border border-[var(--panel-border)] bg-white cursor-pointer"
-                      onDoubleClick={() => setPreviewImage(selectedItem.imageUrl)}>
+                      onDoubleClick={() => setPreviewImage(selectedItem.imageUrl ?? null)}>
                       <img
                         src={selectedItem.imageUrl}
                         alt={selectedItem.model}
@@ -1245,7 +1249,18 @@ export default function CatalogPage() {
                   </div>
                   <div className="grid gap-4 md:grid-cols-2">
                     <Field label="모델명">
-                      <Input placeholder="모델명*" value={modelName} onChange={(event) => setModelName(event.target.value)} />
+                      <Input
+                        placeholder="모델명*"
+                        value={modelName}
+                        onChange={(event) => setModelName(event.target.value)}
+                        onBlur={() => {
+                          const derived = deriveCategoryCodeFromModelName(modelName);
+                          // 사용자가 이미 카테고리를 손으로 바꿨으면 자동 덮어쓰기 금지
+                          if (!categoryTouched && derived) {
+                            setCategoryCode(derived);
+                          }
+                        }}
+                      />
                     </Field>
                     <Field label="공급처">
                       <Select value={vendorId} onChange={(event) => setVendorId(event.target.value)}>
@@ -1268,7 +1283,13 @@ export default function CatalogPage() {
                       </Select>
                     </Field>
                     <Field label="카테고리">
-                      <Select value={categoryCode} onChange={(event) => setCategoryCode(event.target.value)}>
+                      <Select
+                        value={categoryCode}
+                        onChange={(event) => {
+                          setCategoryTouched(true);
+                          setCategoryCode(event.target.value);
+                        }}
+                      >
                         <option value="">카테고리 선택*</option>
                         {categoryOptions.map((category) => (
                           <option key={category.value} value={category.value}>
