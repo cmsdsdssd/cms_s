@@ -1,7 +1,7 @@
 -- 20260128300300_cms_0210_inventory_views.sql
 set search_path = public, pg_temp;
-
-create or replace view public.cms_v_inventory_move_worklist_v1
+drop view if exists public.cms_v_inventory_move_worklist_v1;
+create view public.cms_v_inventory_move_worklist_v1
 with (security_invoker = true)
 as
 select
@@ -35,8 +35,8 @@ group by
   h.party_id, p.name, h.location_code, h.ref_doc_type, h.ref_doc_id,
   h.memo, h.source, h.meta, h.idempotency_key, h.posted_at,
   h.voided_at, h.void_reason, h.created_at, h.updated_at;
-
-create or replace view public.cms_v_inventory_move_lines_enriched_v1
+drop view if exists public.cms_v_inventory_move_lines_enriched_v1;
+create view public.cms_v_inventory_move_lines_enriched_v1
 with (security_invoker = true)
 as
 select
@@ -62,7 +62,6 @@ select
   l.item_ref_type,
   l.master_id,
   m.model_name as master_model_name,
-  l.part_id,
   l.item_name,
   l.variant_hint,
   l.note as line_note,
@@ -80,8 +79,8 @@ from public.cms_inventory_move_header h
 join public.cms_inventory_move_line l on l.move_id = h.move_id
 left join public.cms_party p on p.party_id = h.party_id
 left join public.cms_master_item m on m.master_id = l.master_id;
-
-create or replace view public.cms_v_inventory_position_by_item_label_v1
+drop view if exists public.cms_v_inventory_position_by_item_label_v1 cascade;
+create view public.cms_v_inventory_position_by_item_label_v1
 with (security_invoker = true)
 as
 select
@@ -95,8 +94,8 @@ join public.cms_inventory_move_header h on h.move_id = l.move_id
 where h.status = 'POSTED'
   and l.is_void = false
 group by l.item_ref_type, l.item_name, nullif(trim(coalesce(l.variant_hint,'')), '');
-
-create or replace view public.cms_v_inventory_position_by_master_item_v1
+drop view if exists public.cms_v_inventory_position_by_master_item_v1;
+create view public.cms_v_inventory_position_by_master_item_v1
 with (security_invoker = true)
 as
 select
@@ -111,8 +110,8 @@ where h.status = 'POSTED'
   and l.is_void = false
   and l.master_id is not null
 group by l.master_id, m.model_name;
-
-create or replace view public.cms_v_inventory_exceptions_v1
+drop view if exists public.cms_v_inventory_exceptions_v1;
+create view public.cms_v_inventory_exceptions_v1
 with (security_invoker = true)
 as
 select

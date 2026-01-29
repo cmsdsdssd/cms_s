@@ -133,7 +133,7 @@ create table if not exists cms_plating_variant (
   created_at timestamptz not null default now()
 );
 
--- 9) plating price rule (B + C ?숈떆 吏??
+-- 9) plating price rule (B + C ?숈떆 吏??
 create table if not exists cms_plating_price_rule (
   rule_id uuid primary key default gen_random_uuid(),
   plating_variant_id uuid not null references cms_plating_variant(plating_variant_id),
@@ -143,7 +143,7 @@ create table if not exists cms_plating_price_rule (
   is_active boolean not null default true,
   priority int not null default 100,
 
-  -- charge: fixed + per_g (????媛??
+  -- charge: fixed + per_g (????媛??
   sell_fixed_krw numeric not null default 0,
   cost_fixed_krw numeric not null default 0,
   sell_per_g_krw numeric not null default 0,

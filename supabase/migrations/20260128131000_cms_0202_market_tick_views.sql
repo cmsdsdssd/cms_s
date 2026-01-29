@@ -4,7 +4,8 @@
 set search_path = public;
 
 -- Latest per symbol
-create or replace view public.cms_v_market_tick_latest_by_symbol_v1 as
+drop view if exists public.cms_v_market_tick_latest_by_symbol_v1 cascade;
+create view public.cms_v_market_tick_latest_by_symbol_v1 as
 with ranked as (
   select
     t.symbol,
@@ -39,7 +40,8 @@ is 'Latest active tick per symbol (KRW per g).';
 
 
 -- GOLD/SILVER one-row view via role mapping table
-create or replace view public.cms_v_market_tick_latest_gold_silver_v1 as
+drop view if exists public.cms_v_market_tick_latest_gold_silver_v1;
+create view public.cms_v_market_tick_latest_gold_silver_v1 as
 with latest as (
   select * from public.cms_v_market_tick_latest_by_symbol_v1
 ),
@@ -75,7 +77,8 @@ is 'Single-row latest GOLD/SILVER using cms_market_symbol_role mapping (KRW per 
 
 
 -- Series
-create or replace view public.cms_v_market_tick_series_v1 as
+drop view if exists public.cms_v_market_tick_series_v1;
+create view public.cms_v_market_tick_series_v1 as
 select
   t.tick_id,
   t.symbol,
@@ -94,7 +97,8 @@ is 'Active tick time-series (KRW per g).';
 
 
 -- Daily OHLC
-create or replace view public.cms_v_market_tick_daily_ohlc_v1 as
+drop view if exists public.cms_v_market_tick_daily_ohlc_v1;
+create view public.cms_v_market_tick_daily_ohlc_v1 as
 with base as (
   select
     date_trunc('day', t.observed_at)::date as day,
@@ -130,7 +134,8 @@ is 'Daily OHLC+avg for ticks (KRW per g).';
 
 
 -- Health (no hardcoded labels)
-create or replace view public.cms_v_market_tick_health_v1 as
+drop view if exists public.cms_v_market_tick_health_v1;
+create view public.cms_v_market_tick_health_v1 as
 with symbols as (
   select unnest(enum_range(null::public.cms_e_market_symbol)) as symbol
 ),

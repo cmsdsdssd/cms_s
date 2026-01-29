@@ -4,8 +4,8 @@ set search_path = public, pg_temp;
 
 alter table if exists public.cms_shipment_line
   add column if not exists manual_labor_krw numeric;
-
-create or replace view public.v_cms_order_lookup
+drop view if exists public.v_cms_order_lookup;
+create view public.v_cms_order_lookup
 with (security_invoker = true)
 as
 select
@@ -22,8 +22,8 @@ select
   o.plating_color_code as plating_color
 from public.cms_order_line o
 join public.cms_party p on p.party_id = o.customer_party_id;
-
-create or replace view public.v_cms_shipment_prefill
+drop view if exists public.v_cms_shipment_prefill;
+create view public.v_cms_shipment_prefill
 with (security_invoker = true)
 as
 select

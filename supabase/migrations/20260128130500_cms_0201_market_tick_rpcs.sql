@@ -24,7 +24,8 @@ comment on table public.cms_market_symbol_role
 is 'Maps business roles (GOLD/SILVER) to actual cms_e_market_symbol enum labels.';
 
 -- Role view
-create or replace view public.cms_v_market_symbol_role_v1 as
+drop view if exists public.cms_v_market_symbol_role_v1;
+create view public.cms_v_market_symbol_role_v1 as
 select
   role_code,
   symbol,

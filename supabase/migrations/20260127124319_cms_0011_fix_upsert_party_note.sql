@@ -50,7 +50,7 @@ begin
   return v_id;
 end $$;
 
--- (?좏깮) 沅뚰븳: 湲곗〈 0008_security.sql?먯꽌 EXECUTE瑜?二쇨퀬 ?덈떎硫??앸왂 媛??
+-- (?좏깮) 沅뚰븳: 湲곗〈 0008_security.sql?먯꽌 EXECUTE瑜?二쇨퀬 ?덈떎硫??앸왂 媛??
 -- grant execute on function public.cms_fn_upsert_party_v1(
 --   cms_e_party_type, text, text, text, text, text, uuid
 -- ) to authenticated;

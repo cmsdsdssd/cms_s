@@ -1,4 +1,4 @@
--- 20260128302400_cms_0218_stocktake_entity_type.sql
+-- 20260128302400_cms_0219_stocktake_entity_type.sql
 set search_path = public, pg_temp;
 
 do $$
@@ -24,7 +24,7 @@ begin
       and t.typname='cms_e_entity_type'
       and e.enumlabel='STOCKTAKE_SESSION'
   ) then
-    execute $$alter type public.cms_e_entity_type add value 'STOCKTAKE_SESSION'$$;
+    execute 'alter type public.cms_e_entity_type add value ''STOCKTAKE_SESSION''';
   end if;
 
   -- (미래 대비) STOCKTAKE_LINE도 같이 추가
@@ -37,6 +37,6 @@ begin
       and t.typname='cms_e_entity_type'
       and e.enumlabel='STOCKTAKE_LINE'
   ) then
-    execute $$alter type public.cms_e_entity_type add value 'STOCKTAKE_LINE'$$;
+    execute 'alter type public.cms_e_entity_type add value ''STOCKTAKE_LINE''';
   end if;
 end $$;

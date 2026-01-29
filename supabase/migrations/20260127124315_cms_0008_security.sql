@@ -5,7 +5,7 @@ set search_path = public, pg_temp;
 -- ?먯튃: ?뚯씠釉?DML 湲덉?(anon/authenticated) + RPC留?EXEC ?덉슜 + RLS??read留??댁뼱?먭린
 
 -- ------------------------------------------------------------
--- 1) 湲곕낯 沅뚰븳: ?꾨? 類뤾퀬(read留?理쒖냼 遺??
+-- 1) 湲곕낯 沅뚰븳: ?꾨? 類뤾퀬(read留?理쒖냼 遺??
 -- ------------------------------------------------------------
 revoke all on all tables    in schema public from anon, authenticated;
 revoke all on all sequences in schema public from anon, authenticated;
@@ -51,7 +51,7 @@ begin
 end $$;
 
 -- ------------------------------------------------------------
--- 4) ?듭떖 RPC 3醫? SECURITY DEFINER + EXEC ?덉슜(議곌굔遺)
+-- 4) ?듭떖 RPC 3醫? SECURITY DEFINER + EXEC ?덉슜(議곌굔遺)
 -- ------------------------------------------------------------
 do $$
 begin

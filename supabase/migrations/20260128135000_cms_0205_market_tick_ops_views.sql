@@ -4,7 +4,8 @@
 set search_path = public;
 
 -- 1) Ops-safe latest per symbol
-create or replace view public.cms_v_market_tick_latest_by_symbol_ops_v1 as
+drop view if exists public.cms_v_market_tick_latest_by_symbol_ops_v1 cascade;
+create view public.cms_v_market_tick_latest_by_symbol_ops_v1 as
 with base as (
   select
     t.symbol,
@@ -50,7 +51,8 @@ is 'Ops-safe latest tick per symbol (excludes TEST/DEMO; tie-break prefers MANUA
 
 
 -- 2) Ops-safe GOLD/SILVER single row using role mapping
-create or replace view public.cms_v_market_tick_latest_gold_silver_ops_v1 as
+drop view if exists public.cms_v_market_tick_latest_gold_silver_ops_v1;
+create view public.cms_v_market_tick_latest_gold_silver_ops_v1 as
 with latest as (
   select * from public.cms_v_market_tick_latest_by_symbol_ops_v1
 ),

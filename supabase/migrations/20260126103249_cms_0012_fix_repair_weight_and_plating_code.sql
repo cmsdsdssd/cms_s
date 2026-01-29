@@ -1,14 +1,12 @@
 -- cms_0012: fix repair weight column usage + plating_code derivation
--- 목적:
--- 1) cms_fn_upsert_repair_line_v1: measured_weight_g 파라미터를 실제 컬럼 weight_received_g에 저장
--- 2) repair view에서 pv.code 같은 없는 컬럼 참조 제거하고 plating_code 파생
+-- 紐⑹쟻:
+-- 1) cms_fn_upsert_repair_line_v1: measured_weight_g ?뚮씪誘명꽣瑜??ㅼ젣 而щ읆 weight_received_g?????-- 2) repair view?먯꽌 pv.code 媛숈? ?녿뒗 而щ읆 李몄“ ?쒓굅?섍퀬 plating_code ?뚯깮
 
 begin;
 
 -- ------------------------------------------------------------
--- 2-1) DROP + CREATE (default 문제 회피)
---   - 과거 시도/순서 변경으로 여러 시그니처가 남아있을 수 있어 방어적으로 DROP 여러개
--- ------------------------------------------------------------
+-- 2-1) DROP + CREATE (default 臾몄젣 ?뚰뵾)
+--   - 怨쇨굅 ?쒕룄/?쒖꽌 蹂寃쎌쑝濡??щ윭 ?쒓렇?덉쿂媛 ?⑥븘?덉쓣 ???덉뼱 諛⑹뼱?곸쑝濡?DROP ?щ윭媛?-- ------------------------------------------------------------
 drop function if exists public.cms_fn_upsert_repair_line_v1(
   uuid, uuid, text, text, text, cms_e_material_code, integer, numeric, boolean, uuid, numeric, date, text
 );
@@ -17,7 +15,7 @@ drop function if exists public.cms_fn_upsert_repair_line_v1(
   uuid, text, text, text, cms_e_material_code, integer, numeric, boolean, uuid, numeric, date, text, uuid
 );
 
--- (현재 프로젝트가 쓰는 표준 시그니처: customer_party_id로 시작)
+-- (?꾩옱 ?꾨줈?앺듃媛 ?곕뒗 ?쒖? ?쒓렇?덉쿂: customer_party_id濡??쒖옉)
 drop function if exists public.cms_fn_upsert_repair_line_v1(
   uuid, text, text, text, cms_e_material_code, integer, numeric, boolean, uuid, numeric, date, text, uuid
 );
@@ -54,7 +52,7 @@ begin
 
   v_id := coalesce(p_repair_line_id, gen_random_uuid());
 
-  -- 이미 SHIPPED/CANCELLED면 수정 차단 (enum 안전: text 비교)
+  -- ?대? SHIPPED/CANCELLED硫??섏젙 李⑤떒 (enum ?덉쟾: text 鍮꾧탳)
   select r.status::text
     into v_status_text
   from public.cms_repair_line r
@@ -74,7 +72,7 @@ begin
     material_code,
     color,
     qty,
-    weight_received_g,      -- ✅ 실제 컬럼
+    weight_received_g,      -- ???ㅼ젣 而щ읆
     is_plated,
     plating_variant_id,
     repair_fee_krw,
@@ -90,7 +88,7 @@ begin
     p_material_code,
     trim(p_color),
     p_qty,
-    p_measured_weight_g,    -- ✅ 파라미터명은 유지(호출부 호환), 저장은 weight_received_g
+    p_measured_weight_g,    -- ???뚮씪誘명꽣紐낆? ?좎?(?몄텧遺 ?명솚), ??μ? weight_received_g
     coalesce(p_is_plated,false),
     p_plating_variant_id,
     coalesce(p_repair_fee_krw,0),
@@ -115,17 +113,17 @@ begin
   return v_id;
 end $$;
 
--- 권한(프로젝트 정책대로 authenticated만)
+-- 沅뚰븳(?꾨줈?앺듃 ?뺤콉?濡?authenticated留?
 grant execute on function public.cms_fn_upsert_repair_line_v1(
   uuid, text, text, text, cms_e_material_code, integer, numeric, boolean, uuid, numeric, date, text, uuid
 ) to authenticated;
 
 -- ------------------------------------------------------------
--- 2-2) Repair view (enriched) - pv.code 제거 / measured_weight_g alias 제공
---   - 기존에 깨진 뷰 이름을 확정 못했으니, 분석/UI용 표준 뷰를 하나 제공
---   - 너는 앞으로 Repair 목록은 이 뷰를 쓰면 됨
--- ------------------------------------------------------------
-create or replace view public.cms_v_repair_line_enriched_v1 as
+-- 2-2) Repair view (enriched) - pv.code ?쒓굅 / measured_weight_g alias ?쒓났
+--   - 湲곗〈??源⑥쭊 酉??대쫫???뺤젙 紐삵뻽?쇰땲, 遺꾩꽍/UI???쒖? 酉곕? ?섎굹 ?쒓났
+--   - ?덈뒗 ?욎쑝濡?Repair 紐⑸줉? ??酉곕? ?곕㈃ ??-- ------------------------------------------------------------
+drop view if exists public.cms_v_repair_line_enriched_v1;
+create view public.cms_v_repair_line_enriched_v1 as
 select
   r.repair_line_id,
   r.customer_party_id,
@@ -137,7 +135,7 @@ select
   r.material_code,
   r.color,
   r.qty,
-  r.weight_received_g as measured_weight_g, -- ✅ alias로 제공
+  r.weight_received_g as measured_weight_g, -- ??alias濡??쒓났
   r.is_plated,
   r.plating_variant_id,
   concat_ws('-', rtrim(pv.plating_type::text), nullif(pv.color_code,''), nullif(pv.thickness_code,'')) as plating_code,

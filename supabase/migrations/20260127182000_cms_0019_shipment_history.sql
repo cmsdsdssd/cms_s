@@ -1,6 +1,6 @@
 set search_path = public, pg_temp;
-
-create or replace view public.v_cms_shipment_history_by_model
+drop view if exists public.v_cms_shipment_history_by_model;
+create view public.v_cms_shipment_history_by_model
 with (security_invoker = true)
 as
 select

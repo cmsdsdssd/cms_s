@@ -108,7 +108,8 @@ drop type if exists public.cms_e_part_kind cascade;
 -- 8) Recreate Views
 
 -- ENRICHED VIEW (Updated)
-create or replace view public.cms_v_inventory_move_lines_enriched_v1
+drop view if exists public.cms_v_inventory_move_lines_enriched_v1;
+create view public.cms_v_inventory_move_lines_enriched_v1
 with (security_invoker = true)
 as
 select
@@ -154,7 +155,8 @@ left join public.cms_party p on p.party_id = h.party_id
 left join public.cms_master_item m on m.master_id = l.master_id;
 
 -- VIEW 1: Master List
-create or replace view public.cms_v_part_master_with_position_v1 as
+drop view if exists public.cms_v_part_master_with_position_v1;
+create view public.cms_v_part_master_with_position_v1 as
 with ledger as (
   select
     l.master_id,
@@ -207,7 +209,8 @@ left join avg_cost a on a.master_id=m.master_id
 where m.master_kind in ('PART', 'STONE');
 
 -- VIEW 2: Move Lines
-create or replace view public.cms_v_part_move_lines_v1 as
+drop view if exists public.cms_v_part_move_lines_v1;
+create view public.cms_v_part_move_lines_v1 as
 select
   h.move_id,
   h.move_type,
@@ -246,13 +249,15 @@ where h.status='POSTED'
   );
 
 -- VIEW 3: Unlinked
-create or replace view public.cms_v_part_unlinked_worklist_v1 as
+drop view if exists public.cms_v_part_unlinked_worklist_v1;
+create view public.cms_v_part_unlinked_worklist_v1 as
 select *
 from public.cms_v_part_move_lines_v1
 where item_ref_type='UNLINKED';
 
 -- VIEW 4: Daily Usage
-create or replace view public.cms_v_part_usage_daily_v1 as
+drop view if exists public.cms_v_part_usage_daily_v1;
+create view public.cms_v_part_usage_daily_v1 as
 select
   date_trunc('day', h.occurred_at) as day,
   coalesce(case when m.master_kind='STONE' then 'STONE' else 'PART' end, 'PART') as part_kind,

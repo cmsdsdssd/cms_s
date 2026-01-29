@@ -11,15 +11,15 @@ create table if not exists public.cms_stone_catalog (
   is_active boolean not null default true,
   created_at timestamptz not null default now()
 );
-
-create or replace view public.v_cms_stone_catalog
+drop view if exists public.v_cms_stone_catalog;
+create view public.v_cms_stone_catalog
 with (security_invoker = true)
 as
 select stone_id, stone_name
 from public.cms_stone_catalog
 where is_active = true;
-
-create or replace view public.v_cms_plating_color
+drop view if exists public.v_cms_plating_color;
+create view public.v_cms_plating_color
 with (security_invoker = true)
 as
 select distinct color_code
@@ -27,8 +27,8 @@ from public.cms_plating_variant
 where is_active = true
   and color_code is not null
 order by color_code;
-
-create or replace view public.v_cms_ar_client_summary
+drop view if exists public.v_cms_ar_client_summary;
+create view public.v_cms_ar_client_summary
 with (security_invoker = true)
 as
 select
@@ -45,7 +45,8 @@ where p.party_type = 'customer'
   and p.is_active = true
 group by p.party_id, p.name;
 
-create or replace view public.v_cms_master_item_lookup
+drop view if exists public.v_cms_master_item_lookup;
+create view public.v_cms_master_item_lookup
 with (security_invoker = true)
 as
 with ticks as (
