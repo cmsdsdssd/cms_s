@@ -133,10 +133,13 @@ const createEmptyRow = (index: number): GridRow => ({
 
 const normalizeText = (value: string) => value.trim();
 const toNumber = (value: string) => {
-  const parsed = Number(value);
+  const v = value.trim();
+  if (v === "") return null;        // 핵심
+  const parsed = Number(v);
   if (Number.isNaN(parsed)) return null;
   return parsed;
 };
+
 
 const resolveSignedImageUrl = async (path: string | null) => {
   if (!path) return null;
@@ -364,7 +367,7 @@ export default function OrdersPage() {
 
         await callRpc(setStatusFn, {
           p_order_line_id: row.order_line_id,
-          p_status: "ORDER_CANCELLED",
+          p_status: "CANCELLED",
           p_actor_person_id: process.env.NEXT_PUBLIC_CMS_ACTOR_ID ?? null
         });
         toast.success("주문이 취소되었습니다.");
@@ -586,6 +589,27 @@ export default function OrdersPage() {
     }
     return errors;
   };
+  async function callOrderUpsertV3(payload: any) {
+    const res = await fetch("/api/order-upsert", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+
+    const json = await res.json().catch(() => ({} as any));
+
+    if (!res.ok) {
+      const msg =
+        json?.error ||
+        json?.message ||
+        "저장 실패 (order-upsert)";
+      const detail = json?.details || json?.hint || json?.code || "";
+      throw new Error(detail ? `${msg} (${detail})` : msg);
+    }
+
+    // RPC가 scalar(uuid/text)면 json.data가 바로 그 값일 가능성이 큼
+    return json?.data;
+  }
 
   const rowSnapshot = (row: GridRow) =>
     JSON.stringify({
@@ -636,7 +660,7 @@ export default function OrdersPage() {
 
     saveInFlight.current.add(row.id);
     try {
-      const savedId = await callRpc<string>(upsertFn, {
+      const savedId = await callOrderUpsertV3({
         p_customer_party_id: row.client_id,
         p_master_id: row.master_item_id, // STRICT
         p_qty: toNumber(row.qty) ?? 1,
@@ -655,8 +679,9 @@ export default function OrdersPage() {
         p_sub1_stone_qty: toNumber(row.sub1_qty),
         p_sub2_stone_name: normalizeText(row.sub2_stone) || null,
         p_sub2_stone_qty: toNumber(row.sub2_qty),
-        p_actor_person_id: process.env.NEXT_PUBLIC_CMS_ACTOR_ID || null
+        p_actor_person_id: process.env.NEXT_PUBLIC_CMS_ACTOR_ID || null,
       });
+
       saveCache.current.set(row.id, snapshot);
       if (savedId) {
         updateRow(row.id, { order_line_id: String(savedId) });
