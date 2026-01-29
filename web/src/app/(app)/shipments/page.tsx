@@ -14,6 +14,7 @@ import { useRpcMutation } from "@/hooks/use-rpc-mutation";
 import { CONTRACTS, isFnConfigured } from "@/lib/contracts";
 import { readView } from "@/lib/supabase/read";
 import { cn } from "@/lib/utils";
+import { toast } from "sonner";
 
 type ShipReadyRow = {
   shipment_id?: string;
