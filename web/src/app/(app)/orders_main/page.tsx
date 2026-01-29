@@ -306,16 +306,16 @@ export default function OrdersMainPage() {
                     onChange={(event) => updateFilter(filter.id, { value: event.target.value })}
                   />
                 ) : null}
-              {filter.type === "date" ? (
-                <Select value={filter.value} onChange={(event) => updateFilter(filter.id, { value: event.target.value })}>
-                  <option value="">날짜 선택</option>
-                  {dateOptions.map((date) => (
-                    <option key={date} value={date}>
-                      {date}
-                    </option>
-                  ))}
-                </Select>
-              ) : null}
+                {filter.type === "date" ? (
+                  <Select value={filter.value} onChange={(event) => updateFilter(filter.id, { value: event.target.value })}>
+                    <option value="">날짜 선택</option>
+                    {dateOptions.map((date) => (
+                      <option key={date} value={date}>
+                        {date}
+                      </option>
+                    ))}
+                  </Select>
+                ) : null}
                 <Button variant="secondary" onClick={() => removeFilter(filter.id)}>
                   제거
                 </Button>
@@ -332,20 +332,20 @@ export default function OrdersMainPage() {
             </div>
           </CardHeader>
           <CardBody className="space-y-2">
-          {applyFilters.map((order, idx) => (
-            <div
-              key={order.order_line_id}
-              className={cn(
-                "rounded-[14px] border border-[var(--panel-border)] px-4 py-3 bg-white shadow-sm",
-                "transition hover:shadow-md"
-              )}
-            >
-              <div className="grid grid-cols-1 gap-2 text-xs lg:grid-cols-[0.35fr_1.3fr_1.3fr_1fr_1fr_0.7fr_0.9fr_0.7fr_0.9fr_0.7fr_0.9fr_0.7fr_0.6fr_0.9fr_1fr]">
-                <div className="text-[var(--muted)]">{idx + 1} |</div>
-                <div className="font-semibold text-[var(--foreground)]">{order.customer_name ?? "-"}</div>
-                <div className="font-semibold text-[var(--foreground)]">{order.model_name ?? "-"}</div>
-                <div className="font-semibold text-[var(--foreground)]">{order.suffix ?? "-"}</div>
-                <div className="font-semibold text-[var(--foreground)]">{order.color ?? "-"}</div>
+            {applyFilters.map((order, idx) => (
+              <div
+                key={order.order_line_id}
+                className={cn(
+                  "rounded-[14px] border border-[var(--panel-border)] px-4 py-3 bg-white shadow-sm",
+                  "transition hover:shadow-md"
+                )}
+              >
+                <div className="grid grid-cols-1 gap-2 text-xs lg:grid-cols-[0.35fr_1.3fr_1.3fr_1fr_1fr_0.7fr_0.9fr_0.7fr_0.9fr_0.7fr_0.9fr_0.7fr_0.6fr_0.9fr_1fr_0.6fr]">
+                  <div className="text-[var(--muted)]">{idx + 1} |</div>
+                  <div className="font-semibold text-[var(--foreground)]">{order.customer_name ?? "-"}</div>
+                  <div className="font-semibold text-[var(--foreground)]">{order.model_name ?? "-"}</div>
+                  <div className="font-semibold text-[var(--foreground)]">{order.suffix ?? "-"}</div>
+                  <div className="font-semibold text-[var(--foreground)]">{order.color ?? "-"}</div>
                   <div className="font-semibold text-[var(--foreground)]">{order.qty ?? 0}</div>
                   <div className="text-[var(--muted)]">{order.center_stone_name ?? "-"}</div>
                   <div className="text-[var(--muted)]">{order.center_stone_qty ?? "-"}</div>
@@ -356,6 +356,13 @@ export default function OrdersMainPage() {
                   <div className="text-[var(--muted)]">{order.is_plated ? "Y" : "N"}</div>
                   <div className="text-[var(--muted)]">{order.plating_color_code ?? "-"}</div>
                   <div className="text-[var(--muted)]">{order.memo ?? "-"}</div>
+                  <div className="flex justify-end">
+                    <Link href={`/orders?edit_order_line_id=${order.order_line_id}`}>
+                      <Button size="sm" variant="secondary">
+                        수정
+                      </Button>
+                    </Link>
+                  </div>
                 </div>
               </div>
             ))}
