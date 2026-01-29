@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { JetBrains_Mono, Manrope } from "next/font/google";
+import { Toaster } from "sonner";
 import Providers from "./providers";
 import "./globals.css";
 
@@ -27,6 +28,7 @@ export default function RootLayout({
     <html lang="ko">
       <body className={`${manrope.variable} ${jetbrainsMono.variable}`}>
         <Providers>{children}</Providers>
+        <Toaster richColors />
       </body>
     </html>
   );

@@ -52,12 +52,12 @@ begin
       jsonb_build_object('part_id', v_part_wire, 'qty', 2.5, 'unit', 'G', 'unit_cost_krw', 80000)
     ),
     p_occurred_at := now(),
-    p_location_code := 'MAIN',
-    p_vendor_party_id := null,
-    p_memo := 'seed receipt',
-    p_source := 'TEST',
-    p_idempotency_key := null,
-    p_actor_person_id := null,
+    p_location_code := 'MAIN'::text,
+    p_vendor_party_id := null::uuid,
+    p_memo := 'seed receipt'::text,
+    p_source := 'TEST'::text,
+    p_idempotency_key := null::text,
+    p_actor_person_id := null::uuid,
     p_correlation_id := gen_random_uuid()
   );
 
@@ -75,14 +75,14 @@ begin
       jsonb_build_object('part_id', v_part_ball, 'qty', 3, 'unit', 'EA')  -- no unit_cost_krw
     ),
     p_occurred_at := now(),
-    p_location_code := 'MAIN',
-    p_use_kind := '제작',
-    p_ref_doc_type := null,
-    p_ref_doc_id := null,
-    p_memo := 'seed usage',
-    p_source := 'TEST',
-    p_idempotency_key := null,
-    p_actor_person_id := null,
+    p_location_code := 'MAIN'::text,
+    p_use_kind := '제작'::text,
+    p_ref_doc_type := null::text,
+    p_ref_doc_id := null::uuid,
+    p_memo := 'seed usage'::text,
+    p_source := 'TEST'::text,
+    p_idempotency_key := null::text,
+    p_actor_person_id := null::uuid,
     p_correlation_id := gen_random_uuid()
   );
 
@@ -109,14 +109,14 @@ begin
       jsonb_build_object('part_name', '미등록부속_테스트', 'qty', 1, 'unit', 'EA')
     ),
     p_occurred_at := now(),
-    p_location_code := 'MAIN',
-    p_use_kind := '포장',
-    p_ref_doc_type := null,
-    p_ref_doc_id := null,
-    p_memo := 'unlinked usage',
-    p_source := 'TEST',
-    p_idempotency_key := null,
-    p_actor_person_id := null,
+    p_location_code := 'MAIN'::text,
+    p_use_kind := '포장'::text,
+    p_ref_doc_type := null::text,
+    p_ref_doc_id := null::uuid,
+    p_memo := 'unlinked usage'::text,
+    p_source := 'TEST'::text,
+    p_idempotency_key := null::text,
+    p_actor_person_id := null::uuid,
     p_correlation_id := gen_random_uuid()
   );
 
