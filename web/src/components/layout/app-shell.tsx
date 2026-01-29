@@ -1,4 +1,4 @@
-import { Sidebar } from "@/components/layout/sidebar";
+﻿import Sidebar from "@/components/layout/sidebar";
 import { MarketTicker } from "@/components/ui/market-ticker";
 
 export function AppShell({ children }: { children: React.ReactNode }) {
@@ -16,3 +16,4 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     </div>
   );
 }
+
