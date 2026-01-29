@@ -2,6 +2,9 @@ import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
 function getSupabaseAdmin(): SupabaseClient<unknown> | null {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY ?? "";
@@ -17,7 +20,7 @@ function normalizeImagePath(path: string, bucket: string) {
   return path;
 }
 
-async function buildImageUrl(supabase: SupabaseClient<unknown>, path: string | null) {
+function buildImageUrl(supabase: SupabaseClient<unknown>, path: string | null) {
   if (!path) return null;
   if (path.startsWith("http://") || path.startsWith("https://")) return path;
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
@@ -25,13 +28,10 @@ async function buildImageUrl(supabase: SupabaseClient<unknown>, path: string | n
   if (!url) return null;
   const normalized = normalizeImagePath(path, bucket);
 
-  const { data, error } = await supabase.storage.from(bucket).createSignedUrl(normalized, 60 * 60);
-  if (!error && data?.signedUrl) {
-    return data.signedUrl;
-  }
-
-  return `${url}/storage/v1/object/public/${bucket}/${normalized}`;
+  const { data } = supabase.storage.from(bucket).getPublicUrl(normalized);
+  return data?.publicUrl ?? `${url}/storage/v1/object/public/${bucket}/${normalized}`;
 }
+
 
 export async function GET(request: Request) {
   const supabase = getSupabaseAdmin();
@@ -53,12 +53,10 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: error.message ?? "데이터 조회 실패" }, { status: 500 });
   }
 
-  const mapped = await Promise.all(
-    (data ?? []).map(async (row: Record<string, unknown>) => ({
-      ...row,
-      image_url: await buildImageUrl(supabase, row.image_path ? String(row.image_path) : null),
-    }))
-  );
+  const mapped = (data ?? []).map((row: Record<string, unknown>) => ({
+    ...row,
+    image_url: buildImageUrl(supabase, row.image_path ? String(row.image_path) : null),
+  }));
 
-  return NextResponse.json({ data: mapped });
+  return NextResponse.json({ data: mapped }, { headers: { "Cache-Control": "no-store" } });
 }

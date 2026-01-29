@@ -287,14 +287,15 @@ function materialCodeFromLabel(label: string) {
 }
 
 export default function CatalogPage() {
-  const [catalogItemsState, setCatalogItemsState] = useState<CatalogItem[]>(catalogItems);
+  const [catalogItemsState, setCatalogItemsState] = useState<CatalogItem[]>([]);
+  const [isCatalogLoading, setIsCatalogLoading] = useState(false);
   const [view, setView] = useState<"list" | "gallery">("gallery");
   const [page, setPage] = useState(1);
   const [sortBy, setSortBy] = useState<"model" | "modified">("model");
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc");
   const [registerOpen, setRegisterOpen] = useState(false);
   const [isEditMode, setIsEditMode] = useState(false);
-  const [selectedItemId, setSelectedItemId] = useState<string | null>(catalogItems[0]?.id ?? null);
+  const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
   const [masterId, setMasterId] = useState("");
   const [modelName, setModelName] = useState("");
   const [vendorId, setVendorId] = useState("");
@@ -383,11 +384,19 @@ export default function CatalogPage() {
   }, [catalogItemsState, sortBy, sortOrder]);
 
   const activePageSize = view === "gallery" ? 12 : 5;
-  const totalPages = Math.ceil(sortedCatalogItems.length / activePageSize);
+  const totalPages = Math.max(1, Math.ceil(sortedCatalogItems.length / activePageSize));
+  const totalCount = sortedCatalogItems.length;
+  const rangeStart = totalCount === 0 ? 0 : (page - 1) * activePageSize + 1;
+  const rangeEnd = totalCount === 0 ? 0 : Math.min(page * activePageSize, totalCount);
   const pageItems = useMemo(() => {
     const start = (page - 1) * activePageSize;
     return sortedCatalogItems.slice(start, start + activePageSize);
   }, [sortedCatalogItems, page, activePageSize]);
+
+
+  useEffect(() => {
+    if (page > totalPages) setPage(totalPages);
+  }, [page, totalPages]);
 
   const selectedItem = useMemo(
     () => catalogItemsState.find((item) => item.id === selectedItemId) ?? null,
@@ -435,54 +444,64 @@ export default function CatalogPage() {
   }, []);
 
   const fetchCatalogItems = useCallback(async () => {
-    try {
-      const response = await fetch("/api/master-items");
-      const result = (await response.json()) as { data?: Record<string, unknown>[]; error?: string };
-      if (!response.ok || !result.data) {
-        throw new Error(result.error ?? "데이터 조회 실패");
-      }
-      const mapped = result.data.map((row: Record<string, unknown>) => {
-        const modelName = String(row.model_name ?? "-");
-        const masterId = String(row.master_id ?? modelName);
-        const createdAt = String(row.created_at ?? "");
-        const materialCode = String(row.material_code_default ?? "-");
-        const weight = row.weight_default_g ? `${row.weight_default_g} g` : "-";
-        const laborTotal = row.labor_total_cost ?? row.labor_total_sell;
-        const cost = typeof laborTotal === "number" ? `₩${new Intl.NumberFormat("ko-KR").format(laborTotal)}` : "-";
-        const active = "판매 중";
-
-        return {
-          id: masterId,
-          model: modelName,
-          name: String(row.name ?? modelName),
-          date: createdAt ? createdAt.slice(0, 10) : "-",
-          status: active,
-          tone: "active" as const,
-          weight,
-          material: materialCode,
-          stone: "없음",
-          vendor: String(row.vendor_party_id ?? "-") as string,
-          color: "-",
-          cost,
-          grades: ["-", "-", "-"],
-          imageUrl: row.image_url ? String(row.image_url) : null,
-        } as CatalogItem;
-      });
-      const rowsById: Record<string, Record<string, unknown>> = {};
-      result.data.forEach((row) => {
-        const id = String(row.master_id ?? row.model_name ?? "");
-        if (id) rowsById[id] = row;
-      });
-      setCatalogItemsState(mapped);
-      setMasterRowsById(rowsById);
-      if (mapped.length > 0 && !selectedItemId) {
-        setSelectedItemId(mapped[0].id);
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "데이터 조회 실패";
-      toast.error("처리 실패", { description: message });
+  setIsCatalogLoading(true);
+  try {
+    const response = await fetch("/api/master-items", { cache: "no-store" });
+    const result = (await response.json()) as { data?: Record<string, unknown>[]; error?: string };
+    if (!response.ok || !result.data) {
+      throw new Error(result.error ?? "데이터 조회 실패");
     }
-  }, [selectedItemId]);
+
+    const mapped = result.data.map((row: Record<string, unknown>) => {
+      const modelName = String(row.model_name ?? "-");
+      const masterId = String(row.master_id ?? modelName);
+      const createdAt = String(row.created_at ?? "");
+      const materialCodeValue = String(row.material_code_default ?? "-");
+      const weight = row.weight_default_g ? `${row.weight_default_g} g` : "-";
+      const laborTotal = row.labor_total_cost ?? row.labor_total_sell;
+      const cost =
+        typeof laborTotal === "number" ? `₩${new Intl.NumberFormat("ko-KR").format(laborTotal)}` : "-";
+      const active = "판매 중";
+
+      return {
+        id: masterId,
+        model: modelName,
+        name: String(row.name ?? modelName),
+        date: createdAt ? createdAt.slice(0, 10) : "-",
+        status: active,
+        tone: "active" as const,
+        weight,
+        material: materialCodeValue,
+        stone: "없음",
+        vendor: String(row.vendor_party_id ?? "-") as string,
+        color: "-",
+        cost,
+        grades: ["-", "-", "-"],
+        imageUrl: row.image_url ? String(row.image_url) : null,
+      } as CatalogItem;
+    });
+
+    const rowsById: Record<string, Record<string, unknown>> = {};
+    result.data.forEach((row) => {
+      const id = String(row.master_id ?? row.model_name ?? "");
+      if (id) rowsById[id] = row;
+    });
+
+    setCatalogItemsState(mapped);
+    setMasterRowsById(rowsById);
+
+    setSelectedItemId((prev) => {
+      if (mapped.length === 0) return null;
+      if (prev && mapped.some((it) => it.id === prev)) return prev;
+      return mapped[0].id;
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "데이터 조회 실패";
+    toast.error("처리 실패", { description: message });
+  } finally {
+    setIsCatalogLoading(false);
+  }
+}, []);
 
   useEffect(() => {
     fetchCatalogItems();
@@ -628,6 +647,7 @@ export default function CatalogPage() {
 
   const resetForm = () => {
     setMasterId(crypto.randomUUID());
+    setCategoryTouched(false);
     setModelName("");
     setVendorId("");
     setCategoryCode("");
@@ -670,7 +690,13 @@ export default function CatalogPage() {
     setIsEditMode(true);
     setMasterId(selectedItem.id);
     setModelName(selectedItem.model);
-    setVendorId(vendorOptions.find((option) => option.label === selectedItem.vendor)?.value ?? "");
+    const vendorCandidate = String(row?.vendor_party_id ?? selectedItem.vendor ?? "");
+    setVendorId(
+      isUuid(vendorCandidate)
+        ? vendorCandidate
+        : vendorOptions.find((option) => option.label === vendorCandidate)?.value ?? ""
+    );
+    setCategoryTouched(true);
     setCategoryCode(detail?.categoryCode ?? "");
     setMaterialCode(detail?.materialCode ?? materialCodeFromLabel(selectedItem.material));
     setWeightDefault(row?.weight_default_g ? String(row.weight_default_g) : "");
@@ -701,68 +727,76 @@ export default function CatalogPage() {
     setRegisterOpen(true);
   };
 
-  const handleSave = () => {
-    if (!canSave) {
-      toast.error("처리 실패", { description: "잠시 후 다시 시도해 주세요" });
-      return;
-    }
-    if (!modelName) {
-      toast.error("처리 실패", { description: "모델명이 필요합니다." });
-      return;
-    }
+  const handleSave = async () => {
+  if (!canSave) {
+    toast.error("처리 실패", { description: "잠시 후 다시 시도해 주세요" });
+    return;
+  }
+  if (!modelName) {
+    toast.error("처리 실패", { description: "모델명이 필요합니다." });
+    return;
+  }
 
-    const payload = {
-      master_id: masterId || null,
-      model_name: modelName,
-      category_code: categoryCode || null,
-      material_code_default: materialCode || null,
-      weight_default_g: weightDefault ? Number(weightDefault) : null,
-      deduction_weight_default_g: deductionWeight ? Number(deductionWeight) : 0,
-      center_qty_default: centerQty,
-      sub1_qty_default: sub1Qty,
-      sub2_qty_default: sub2Qty,
-      labor_base_sell: laborBaseSell,
-      labor_center_sell: laborCenterSell,
-      labor_sub1_sell: laborSub1Sell,
-      labor_sub2_sell: laborSub2Sell,
-      labor_base_cost: laborBaseCost,
-      labor_center_cost: laborCenterCost,
-      labor_sub1_cost: laborSub1Cost,
-      labor_sub2_cost: laborSub2Cost,
-      plating_price_sell_default: platingSell,
-      plating_price_cost_default: platingCost,
-      labor_profile_mode: laborProfileMode,
-      labor_band_code: laborBandCode || null,
-      vendor_party_id: isUuid(vendorId) ? vendorId : null,
-      note,
-      image_path: imagePath || null,
-    } as const;
+  const payload = {
+    master_id: masterId || null,
+    model_name: modelName,
+    category_code: categoryCode || null,
+    material_code_default: materialCode || null,
+    weight_default_g: weightDefault ? Number(weightDefault) : null,
+    deduction_weight_default_g: deductionWeight ? Number(deductionWeight) : 0,
+    center_qty_default: centerQty,
+    sub1_qty_default: sub1Qty,
+    sub2_qty_default: sub2Qty,
+    labor_base_sell: laborBaseSell,
+    labor_center_sell: laborCenterSell,
+    labor_sub1_sell: laborSub1Sell,
+    labor_sub2_sell: laborSub2Sell,
+    labor_base_cost: laborBaseCost,
+    labor_center_cost: laborCenterCost,
+    labor_sub1_cost: laborSub1Cost,
+    labor_sub2_cost: laborSub2Cost,
+    plating_price_sell_default: platingSell,
+    plating_price_cost_default: platingCost,
+    labor_profile_mode: laborProfileMode,
+    labor_band_code: laborBandCode || null,
+    vendor_party_id: isUuid(vendorId) ? vendorId : null,
+    note,
+    image_path: imagePath || null,
+  } as const;
 
-    setIsSaving(true);
-    fetch("/api/master-item", {
+  setIsSaving(true);
+  try {
+    const response = await fetch("/api/master-item", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
-    })
-      .then(async (response) => {
-        const result = (await response.json()) as { error?: string };
-        if (!response.ok) {
-          throw new Error(result.error ?? "저장에 실패했습니다.");
-        }
-        toast.success("저장 완료");
-        await fetchCatalogItems();
-        setSelectedItemId(masterId);
-        setRegisterOpen(false);
-      })
-      .catch((error) => {
-        const message = error instanceof Error ? error.message : "저장에 실패했습니다.";
-        toast.error("처리 실패", { description: message });
-      })
-      .finally(() => {
-        setIsSaving(false);
-      });
+    });
 
-  };
+    const result = (await response.json()) as { error?: string; master_id?: string };
+    if (!response.ok) throw new Error(result.error ?? "저장에 실패했습니다.");
+
+    const savedId = result.master_id ?? masterId;
+
+    toast.success("저장 완료");
+
+    // ✅ 저장 성공 시 즉시 닫기
+    setRegisterOpen(false);
+    setIsEditMode(false);
+
+    if (savedId) {
+      setMasterId(savedId);
+      setSelectedItemId(savedId);
+    }
+
+    // ✅ 목록 갱신은 기다리지 않음(지연돼도 저장 흐름 안 막음)
+    void fetchCatalogItems();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "저장에 실패했습니다.";
+    toast.error("처리 실패", { description: message });
+  } finally {
+    setIsSaving(false);
+  }
+};
 
   return (
     <>
@@ -830,7 +864,15 @@ export default function CatalogPage() {
             left={
               <div className="flex flex-col gap-3 h-full" id="catalog.listPanel">
                 <div className="flex-1">
-                  {view === "list" ? (
+                  {isCatalogLoading && catalogItemsState.length === 0 ? (
+                    <div className="flex h-[60vh] items-center justify-center text-sm text-[var(--muted)]">
+                      불러오는 중...
+                    </div>
+                  ) : pageItems.length === 0 ? (
+                    <div className="flex h-[60vh] items-center justify-center text-sm text-[var(--muted)]">
+                      데이터가 없습니다.
+                    </div>
+                  ) : view === "list" ? (
                     <div className="space-y-3">
                       {pageItems.map((item) => (
                         <Card
@@ -984,7 +1026,7 @@ export default function CatalogPage() {
                 </div>
                 <div className="mt-auto flex items-center justify-between rounded-[12px] border border-[var(--panel-border)] bg-white px-4 py-3">
                   <p className="text-xs text-[var(--muted)]">
-                    {(page - 1) * activePageSize + 1} - {Math.min(page * activePageSize, catalogItemsState.length)} / {catalogItemsState.length}
+                    {rangeStart} - {rangeEnd} / {totalCount}
                   </p>
                   <div className="flex gap-2">
                     <Button variant="secondary" size="sm" disabled={page === 1} onClick={() => setPage((p) => p - 1)}>
@@ -1165,8 +1207,13 @@ export default function CatalogPage() {
       </div>
       <Modal
         open={registerOpen}
-        onClose={() => setRegisterOpen(false)}
-        title="새 상품 등록"
+        onClose={() => {
+          setRegisterOpen(false);
+          setIsSaving(false);
+          setUploadError(null);
+          setUploadingImage(false);
+        }}
+        title={isEditMode ? "마스터 수정" : "새 상품 등록"}
         className="max-w-6xl max-h-[86vh] overflow-hidden"
       >
         <div className="grid gap-6 lg:grid-cols-[320px,1fr]">
