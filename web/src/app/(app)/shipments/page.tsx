@@ -122,7 +122,7 @@ export default function ShipmentsPage() {
   const inputRef = useRef<HTMLInputElement | null>(null);
   const popoverRef = useRef<HTMLDivElement | null>(null);
 
-  const actorId = process.env.NEXT_PUBLIC_CMS_ACTOR_ID ?? "";
+  const actorId = (process.env.NEXT_PUBLIC_CMS_ACTOR_ID || "").trim();
   const idempotencyKey = useMemo(
     () => (typeof crypto !== "undefined" ? crypto.randomUUID() : String(Date.now())),
     []
@@ -263,14 +263,14 @@ export default function ShipmentsPage() {
         p_order_line_id: selectedOrderLineId,
         p_weight_g: weightValue,
         p_total_labor: laborValue,
-        p_actor_person_id: actorId,
+        p_actor_person_id: actorId || null,
         p_idempotency_key: idempotencyKey,
       });
       const shipmentId = saved?.shipment_id;
       if (!shipmentId) return;
       await confirmMutation.mutateAsync({
         p_shipment_id: shipmentId,
-        p_actor_person_id: actorId,
+        p_actor_person_id: actorId || null,
         p_note: "confirm from order lookup",
       });
       readyQuery.refetch();
