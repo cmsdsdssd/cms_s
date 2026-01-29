@@ -4,7 +4,8 @@ set search_path = public, pg_temp;
 -- ---------------------------------------------------------------------
 -- 1) Sessions list
 -- ---------------------------------------------------------------------
-create or replace view public.cms_v_inventory_count_sessions_v1
+drop view if exists public.cms_v_inventory_count_sessions_v1;
+create view public.cms_v_inventory_count_sessions_v1
 with (security_invoker = true)
 as
 select
@@ -41,7 +42,8 @@ group by
 -- ---------------------------------------------------------------------
 -- 2) Lines enriched
 -- ---------------------------------------------------------------------
-create or replace view public.cms_v_inventory_count_lines_enriched_v1
+drop view if exists public.cms_v_inventory_count_lines_enriched_v1 cascade;
+create view public.cms_v_inventory_count_lines_enriched_v1
 with (security_invoker = true)
 as
 select
@@ -80,7 +82,8 @@ left join public.cms_master_item m
 -- ---------------------------------------------------------------------
 -- 3) Variance (top deltas first)
 -- ---------------------------------------------------------------------
-create or replace view public.cms_v_inventory_stocktake_variance_v1
+drop view if exists public.cms_v_inventory_stocktake_variance_v1;
+create view public.cms_v_inventory_stocktake_variance_v1
 with (security_invoker = true)
 as
 select

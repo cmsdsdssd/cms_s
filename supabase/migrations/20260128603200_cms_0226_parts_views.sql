@@ -1,7 +1,8 @@
 set search_path = public, pg_temp;
 
 -- 1) part master + on_hand + avg_cost
-create or replace view public.cms_v_part_master_with_position_v1 as
+drop view if exists public.cms_v_part_master_with_position_v1;
+create view public.cms_v_part_master_with_position_v1 as
 with ledger as (
   select
     l.part_id,
@@ -47,7 +48,8 @@ left join ledger g on g.part_id=p.part_id
 left join avg_cost a on a.part_id=p.part_id;
 
 -- 2) parts ledger (lines)
-create or replace view public.cms_v_part_move_lines_v1 as
+drop view if exists public.cms_v_part_move_lines_v1 cascade;
+create view public.cms_v_part_move_lines_v1 as
 select
   h.move_id,
   h.move_type,
@@ -83,13 +85,15 @@ where h.status='POSTED'
   and (l.item_ref_type='PART' or (l.item_ref_type='UNLINKED' and (h.meta->>'module')='PARTS'));
 
 -- 3) unlinked worklist
-create or replace view public.cms_v_part_unlinked_worklist_v1 as
+drop view if exists public.cms_v_part_unlinked_worklist_v1;
+create view public.cms_v_part_unlinked_worklist_v1 as
 select *
 from public.cms_v_part_move_lines_v1
 where item_ref_type='UNLINKED';
 
 -- 4) daily usage stats (analysis)
-create or replace view public.cms_v_part_usage_daily_v1 as
+drop view if exists public.cms_v_part_usage_daily_v1;
+create view public.cms_v_part_usage_daily_v1 as
 select
   date_trunc('day', h.occurred_at) as day,
   coalesce(p.part_kind, 'PART'::public.cms_e_part_kind) as part_kind,
