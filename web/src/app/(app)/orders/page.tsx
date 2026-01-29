@@ -228,21 +228,25 @@ export default function OrdersPage() {
     const loadOrder = async () => {
       setInitLoading(true);
       try {
-        const { data: order, error } = await schemaClient
+        const { data: orderRaw, error } = await schemaClient
           .from("cms_order_line")
           .select("*")
           .eq("order_line_id", editId)
           .single();
 
+        const order = orderRaw as any;
+
         if (error) throw error;
         if (!order) throw new Error("Order not found");
 
         // Fetch client info
-        const { data: client } = await schemaClient
+        const { data: clientRaw } = await schemaClient
           .from(CONTRACTS.views.arClientSummary)
           .select("*")
-          .eq("client_id", order.customer_party_id)
+          .eq("client_id", (order as any).customer_party_id)
           .single();
+
+        const client = clientRaw as unknown as ClientSummary;
 
         if (client) {
           setHeaderClient(client);
@@ -286,7 +290,7 @@ export default function OrdersPage() {
           id: `loaded-${editId}`,
           order_line_id: order.order_line_id,
           client_input: client?.client_name ?? "Unknown",
-          client_id: order.customer_party_id,
+          client_id: (order as any).customer_party_id,
           client_name: client?.client_name ?? null,
           model_input: order.model_name_raw ?? order.model_name ?? "",
           model_name: order.model_name,

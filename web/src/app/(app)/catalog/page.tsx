@@ -444,64 +444,64 @@ export default function CatalogPage() {
   }, []);
 
   const fetchCatalogItems = useCallback(async () => {
-  setIsCatalogLoading(true);
-  try {
-    const response = await fetch("/api/master-items", { cache: "no-store" });
-    const result = (await response.json()) as { data?: Record<string, unknown>[]; error?: string };
-    if (!response.ok || !result.data) {
-      throw new Error(result.error ?? "데이터 조회 실패");
+    setIsCatalogLoading(true);
+    try {
+      const response = await fetch("/api/master-items", { cache: "no-store" });
+      const result = (await response.json()) as { data?: Record<string, unknown>[]; error?: string };
+      if (!response.ok || !result.data) {
+        throw new Error(result.error ?? "데이터 조회 실패");
+      }
+
+      const mapped = result.data.map((row: Record<string, unknown>) => {
+        const modelName = String(row.model_name ?? "-");
+        const masterId = String(row.master_id ?? modelName);
+        const createdAt = String(row.created_at ?? "");
+        const materialCodeValue = String(row.material_code_default ?? "-");
+        const weight = row.weight_default_g ? `${row.weight_default_g} g` : "-";
+        const laborTotal = row.labor_total_cost ?? row.labor_total_sell;
+        const cost =
+          typeof laborTotal === "number" ? `₩${new Intl.NumberFormat("ko-KR").format(laborTotal)}` : "-";
+        const active = "판매 중";
+
+        return {
+          id: masterId,
+          model: modelName,
+          name: String(row.name ?? modelName),
+          date: createdAt ? createdAt.slice(0, 10) : "-",
+          status: active,
+          tone: "active" as const,
+          weight,
+          material: materialCodeValue,
+          stone: "없음",
+          vendor: String(row.vendor_party_id ?? "-") as string,
+          color: "-",
+          cost,
+          grades: ["-", "-", "-"],
+          imageUrl: row.image_url ? String(row.image_url) : null,
+        } as CatalogItem;
+      });
+
+      const rowsById: Record<string, Record<string, unknown>> = {};
+      result.data.forEach((row) => {
+        const id = String(row.master_id ?? row.model_name ?? "");
+        if (id) rowsById[id] = row;
+      });
+
+      setCatalogItemsState(mapped);
+      setMasterRowsById(rowsById);
+
+      setSelectedItemId((prev) => {
+        if (mapped.length === 0) return null;
+        if (prev && mapped.some((it) => it.id === prev)) return prev;
+        return mapped[0].id;
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "데이터 조회 실패";
+      toast.error("처리 실패", { description: message });
+    } finally {
+      setIsCatalogLoading(false);
     }
-
-    const mapped = result.data.map((row: Record<string, unknown>) => {
-      const modelName = String(row.model_name ?? "-");
-      const masterId = String(row.master_id ?? modelName);
-      const createdAt = String(row.created_at ?? "");
-      const materialCodeValue = String(row.material_code_default ?? "-");
-      const weight = row.weight_default_g ? `${row.weight_default_g} g` : "-";
-      const laborTotal = row.labor_total_cost ?? row.labor_total_sell;
-      const cost =
-        typeof laborTotal === "number" ? `₩${new Intl.NumberFormat("ko-KR").format(laborTotal)}` : "-";
-      const active = "판매 중";
-
-      return {
-        id: masterId,
-        model: modelName,
-        name: String(row.name ?? modelName),
-        date: createdAt ? createdAt.slice(0, 10) : "-",
-        status: active,
-        tone: "active" as const,
-        weight,
-        material: materialCodeValue,
-        stone: "없음",
-        vendor: String(row.vendor_party_id ?? "-") as string,
-        color: "-",
-        cost,
-        grades: ["-", "-", "-"],
-        imageUrl: row.image_url ? String(row.image_url) : null,
-      } as CatalogItem;
-    });
-
-    const rowsById: Record<string, Record<string, unknown>> = {};
-    result.data.forEach((row) => {
-      const id = String(row.master_id ?? row.model_name ?? "");
-      if (id) rowsById[id] = row;
-    });
-
-    setCatalogItemsState(mapped);
-    setMasterRowsById(rowsById);
-
-    setSelectedItemId((prev) => {
-      if (mapped.length === 0) return null;
-      if (prev && mapped.some((it) => it.id === prev)) return prev;
-      return mapped[0].id;
-    });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "데이터 조회 실패";
-    toast.error("처리 실패", { description: message });
-  } finally {
-    setIsCatalogLoading(false);
-  }
-}, []);
+  }, []);
 
   useEffect(() => {
     fetchCatalogItems();
@@ -728,75 +728,75 @@ export default function CatalogPage() {
   };
 
   const handleSave = async () => {
-  if (!canSave) {
-    toast.error("처리 실패", { description: "잠시 후 다시 시도해 주세요" });
-    return;
-  }
-  if (!modelName) {
-    toast.error("처리 실패", { description: "모델명이 필요합니다." });
-    return;
-  }
-
-  const payload = {
-    master_id: masterId || null,
-    model_name: modelName,
-    category_code: categoryCode || null,
-    material_code_default: materialCode || null,
-    weight_default_g: weightDefault ? Number(weightDefault) : null,
-    deduction_weight_default_g: deductionWeight ? Number(deductionWeight) : 0,
-    center_qty_default: centerQty,
-    sub1_qty_default: sub1Qty,
-    sub2_qty_default: sub2Qty,
-    labor_base_sell: laborBaseSell,
-    labor_center_sell: laborCenterSell,
-    labor_sub1_sell: laborSub1Sell,
-    labor_sub2_sell: laborSub2Sell,
-    labor_base_cost: laborBaseCost,
-    labor_center_cost: laborCenterCost,
-    labor_sub1_cost: laborSub1Cost,
-    labor_sub2_cost: laborSub2Cost,
-    plating_price_sell_default: platingSell,
-    plating_price_cost_default: platingCost,
-    labor_profile_mode: laborProfileMode,
-    labor_band_code: laborBandCode || null,
-    vendor_party_id: isUuid(vendorId) ? vendorId : null,
-    note,
-    image_path: imagePath || null,
-  } as const;
-
-  setIsSaving(true);
-  try {
-    const response = await fetch("/api/master-item", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-
-    const result = (await response.json()) as { error?: string; master_id?: string };
-    if (!response.ok) throw new Error(result.error ?? "저장에 실패했습니다.");
-
-    const savedId = result.master_id ?? masterId;
-
-    toast.success("저장 완료");
-
-    // ✅ 저장 성공 시 즉시 닫기
-    setRegisterOpen(false);
-    setIsEditMode(false);
-
-    if (savedId) {
-      setMasterId(savedId);
-      setSelectedItemId(savedId);
+    if (!canSave) {
+      toast.error("처리 실패", { description: "잠시 후 다시 시도해 주세요" });
+      return;
+    }
+    if (!modelName) {
+      toast.error("처리 실패", { description: "모델명이 필요합니다." });
+      return;
     }
 
-    // ✅ 목록 갱신은 기다리지 않음(지연돼도 저장 흐름 안 막음)
-    void fetchCatalogItems();
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "저장에 실패했습니다.";
-    toast.error("처리 실패", { description: message });
-  } finally {
-    setIsSaving(false);
-  }
-};
+    const payload = {
+      master_id: masterId || null,
+      model_name: modelName,
+      category_code: categoryCode || null,
+      material_code_default: materialCode || null,
+      weight_default_g: weightDefault ? Number(weightDefault) : null,
+      deduction_weight_default_g: deductionWeight ? Number(deductionWeight) : 0,
+      center_qty_default: centerQty,
+      sub1_qty_default: sub1Qty,
+      sub2_qty_default: sub2Qty,
+      labor_base_sell: laborBaseSell,
+      labor_center_sell: laborCenterSell,
+      labor_sub1_sell: laborSub1Sell,
+      labor_sub2_sell: laborSub2Sell,
+      labor_base_cost: laborBaseCost,
+      labor_center_cost: laborCenterCost,
+      labor_sub1_cost: laborSub1Cost,
+      labor_sub2_cost: laborSub2Cost,
+      plating_price_sell_default: platingSell,
+      plating_price_cost_default: platingCost,
+      labor_profile_mode: laborProfileMode,
+      labor_band_code: laborBandCode || null,
+      vendor_party_id: isUuid(vendorId) ? vendorId : null,
+      note,
+      image_path: imagePath || null,
+    } as const;
+
+    setIsSaving(true);
+    try {
+      const response = await fetch("/api/master-item", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      const result = (await response.json()) as { error?: string; master_id?: string };
+      if (!response.ok) throw new Error(result.error ?? "저장에 실패했습니다.");
+
+      const savedId = result.master_id ?? masterId;
+
+      toast.success("저장 완료");
+
+      // ✅ 저장 성공 시 즉시 닫기
+      setRegisterOpen(false);
+      setIsEditMode(false);
+
+      if (savedId) {
+        setMasterId(savedId);
+        setSelectedItemId(savedId);
+      }
+
+      // ✅ 목록 갱신은 기다리지 않음(지연돼도 저장 흐름 안 막음)
+      void fetchCatalogItems();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "저장에 실패했습니다.";
+      toast.error("처리 실패", { description: message });
+    } finally {
+      setIsSaving(false);
+    }
+  };
 
   return (
     <>
@@ -1278,263 +1278,250 @@ export default function CatalogPage() {
               handleSave();
             }}
           >
-            <div className="flex-1 space-y-4 overflow-y-auto pr-2">
-              <div className="rounded-[18px] border border-[var(--panel-border)] bg-white p-4">
-                <p className="mb-3 text-sm font-semibold text-[var(--foreground)]">비고</p>
-                <Textarea
-                  placeholder="상품에 대한 상세 정보를 입력하세요."
-                  value={note}
-                  onChange={(event) => setNote(event.target.value)}
-                  className="min-h-[80px]"
-                />
-              </div>
-              <div className="grid gap-4 lg:grid-cols-2">
-                <div className="rounded-[18px] border border-[var(--panel-border)] bg-white p-4">
-                  <div className="mb-4 flex items-center justify-between">
-                    <p className="text-sm font-semibold text-[var(--foreground)]">기본 정보</p>
-                    <span className="text-xs text-[var(--muted)]">필수 항목 포함</span>
-                  </div>
-                  <div className="grid gap-4 md:grid-cols-2">
-                    <Field label="모델명">
-                      <Input
-                        placeholder="모델명*"
-                        value={modelName}
-                        onChange={(event) => setModelName(event.target.value)}
-                        onBlur={() => {
-                          const derived = deriveCategoryCodeFromModelName(modelName);
-                          // 사용자가 이미 카테고리를 손으로 바꿨으면 자동 덮어쓰기 금지
-                          if (!categoryTouched && derived) {
-                            setCategoryCode(derived);
-                          }
-                        }}
-                      />
-                    </Field>
-                    <Field label="공급처">
-                      <Select value={vendorId} onChange={(event) => setVendorId(event.target.value)}>
-                        <option value="">공급처 선택</option>
-                        {vendorOptions.map((vendor) => (
-                          <option key={vendor.value} value={vendor.value}>
-                            {vendor.label}
-                          </option>
-                        ))}
-                      </Select>
-                    </Field>
-                    <Field label="기본 재질">
-                      <Select value={materialCode} onChange={(event) => setMaterialCode(event.target.value)}>
-                        <option value="">기본 재질 선택</option>
-                        {materialOptions.map((material) => (
-                          <option key={material.value} value={material.value}>
-                            {material.label}
-                          </option>
-                        ))}
-                      </Select>
-                    </Field>
-                    <Field label="카테고리">
-                      <Select
-                        value={categoryCode}
-                        onChange={(event) => {
-                          setCategoryTouched(true);
-                          setCategoryCode(event.target.value);
-                        }}
-                      >
-                        <option value="">카테고리 선택*</option>
-                        {categoryOptions.map((category) => (
-                          <option key={category.value} value={category.value}>
-                            {category.label}
-                          </option>
-                        ))}
-                      </Select>
-                    </Field>
-                    <Field label="기본 중량 (g)">
-                      <Input
-                        type="number"
-                        step="0.01"
-                        min={0}
-                        placeholder="중량"
-                        value={weightDefault}
-                        onChange={(event) => setWeightDefault(event.target.value)}
-                      />
-                    </Field>
-                    <Field label="차감 중량 (g)">
-                      <Input
-                        type="number"
-                        step="0.01"
-                        min={0}
-                        placeholder="차감 중량"
-                        value={deductionWeight}
-                        onChange={(event) => setDeductionWeight(event.target.value)}
-                      />
-                    </Field>
-                  </div>
-                </div>
-                <div className="rounded-[18px] border border-[var(--panel-border)] bg-white p-4">
-                  <p className="mb-4 text-sm font-semibold text-[var(--foreground)]">스톤 기본값</p>
-                  <div className="grid gap-4 md:grid-cols-3">
-                    <Field label="센터 스톤 수">
-                      <Input
-                        type="number"
-                        min={0}
-                        placeholder="센터"
-                        value={centerQty}
-                        onChange={(event) => setCenterQty(toNumber(event.target.value))}
-                      />
-                    </Field>
-                    <Field label="서브1 스톤 수">
-                      <Input
-                        type="number"
-                        min={0}
-                        placeholder="서브1"
-                        value={sub1Qty}
-                        onChange={(event) => setSub1Qty(toNumber(event.target.value))}
-                      />
-                    </Field>
-                    <Field label="서브2 스톤 수">
-                      <Input
-                        type="number"
-                        min={0}
-                        placeholder="서브2"
-                        value={sub2Qty}
-                        onChange={(event) => setSub2Qty(toNumber(event.target.value))}
-                      />
-                    </Field>
-                  </div>
-                  <div className="mt-4 rounded-[14px] border border-[var(--panel-border)] bg-[#f8fafc] p-3">
-                    <p className="mb-3 text-xs font-semibold text-[var(--muted)]">도금 기본값</p>
-                    <div className="grid gap-3 md:grid-cols-2">
-                      <Field label="도금 판매 기본값">
+            <div className="flex-1 overflow-y-auto pr-2">
+              <div className="grid gap-6 lg:grid-cols-2 h-full">
+                {/* Left Column: Input Fields (Basic + Remark) */}
+                <div className="flex flex-col gap-4 h-full">
+                  {/* Basic Info */}
+                  <div className="rounded-[18px] border border-[var(--panel-border)] bg-white p-4">
+                    <div className="mb-4 flex items-center justify-between">
+                      <p className="text-sm font-semibold text-[var(--foreground)]">기본 정보</p>
+                      <span className="text-xs text-[var(--muted)]">필수 항목 포함</span>
+                    </div>
+                    <div className="grid gap-4 md:grid-cols-2">
+                      <Field label="모델명">
                         <Input
-                          type="number"
-                          min={0}
-                          placeholder="판매"
-                          value={platingSell}
-                          onChange={(event) => setPlatingSell(toNumber(event.target.value))}
+                          placeholder="모델명*"
+                          value={modelName}
+                          onChange={(event) => setModelName(event.target.value)}
+                          onBlur={() => {
+                            const derived = deriveCategoryCodeFromModelName(modelName);
+                            // 사용자가 이미 카테고리를 손으로 바꿨으면 자동 덮어쓰기 금지
+                            if (!categoryTouched && derived) {
+                              setCategoryCode(derived);
+                            }
+                          }}
                         />
                       </Field>
-                      <Field label="도금 원가 기본값">
+                      <Field label="공급처">
+                        <Select value={vendorId} onChange={(event) => setVendorId(event.target.value)}>
+                          <option value="">공급처 선택</option>
+                          {vendorOptions.map((vendor) => (
+                            <option key={vendor.value} value={vendor.value}>
+                              {vendor.label}
+                            </option>
+                          ))}
+                        </Select>
+                      </Field>
+                      <Field label="기본 재질">
+                        <Select value={materialCode} onChange={(event) => setMaterialCode(event.target.value)}>
+                          <option value="">기본 재질 선택</option>
+                          {materialOptions.map((material) => (
+                            <option key={material.value} value={material.value}>
+                              {material.label}
+                            </option>
+                          ))}
+                        </Select>
+                      </Field>
+                      <Field label="카테고리">
+                        <Select
+                          value={categoryCode}
+                          onChange={(event) => {
+                            setCategoryTouched(true);
+                            setCategoryCode(event.target.value);
+                          }}
+                        >
+                          <option value="">카테고리 선택*</option>
+                          {categoryOptions.map((category) => (
+                            <option key={category.value} value={category.value}>
+                              {category.label}
+                            </option>
+                          ))}
+                        </Select>
+                      </Field>
+                      <Field label="기본 중량 (g)">
                         <Input
                           type="number"
+                          step="0.01"
                           min={0}
-                          placeholder="원가"
-                          value={platingCost}
-                          onChange={(event) => setPlatingCost(toNumber(event.target.value))}
+                          placeholder="중량"
+                          value={weightDefault}
+                          onChange={(event) => setWeightDefault(event.target.value)}
+                        />
+                      </Field>
+                      <Field label="차감 중량 (g)">
+                        <Input
+                          type="number"
+                          step="0.01"
+                          min={0}
+                          placeholder="차감 중량"
+                          value={deductionWeight}
+                          onChange={(event) => setDeductionWeight(event.target.value)}
                         />
                       </Field>
                     </div>
                   </div>
-                </div>
-                <div className="rounded-[18px] border border-[var(--panel-border)] bg-white p-4">
-                  <p className="mb-4 text-sm font-semibold text-[var(--foreground)]">공임 (판매)</p>
-                  <div className="grid gap-4 md:grid-cols-3">
-                    <Field label="기본 공임">
-                      <Input
-                        type="number"
-                        min={0}
-                        placeholder="기본"
-                        value={laborBaseSell}
-                        onChange={(event) => setLaborBaseSell(toNumber(event.target.value))}
-                      />
-                    </Field>
-                    <Field label="센터 공임">
-                      <Input
-                        type="number"
-                        min={0}
-                        placeholder="센터"
-                        value={laborCenterSell}
-                        onChange={(event) => setLaborCenterSell(toNumber(event.target.value))}
-                      />
-                    </Field>
-                    <Field label="서브1 공임">
-                      <Input
-                        type="number"
-                        min={0}
-                        placeholder="서브1"
-                        value={laborSub1Sell}
-                        onChange={(event) => setLaborSub1Sell(toNumber(event.target.value))}
-                      />
-                    </Field>
-                    <Field label="서브2 공임">
-                      <Input
-                        type="number"
-                        min={0}
-                        placeholder="서브2"
-                        value={laborSub2Sell}
-                        onChange={(event) => setLaborSub2Sell(toNumber(event.target.value))}
-                      />
-                    </Field>
-                    <Field label="합계 공임">
-                      <Input type="number" min={0} placeholder="합계" value={totalLaborSell} readOnly />
-                    </Field>
-                  </div>
-                </div>
-                <div className="rounded-[18px] border border-[var(--panel-border)] bg-white p-4">
-                  <p className="mb-4 text-sm font-semibold text-[var(--foreground)]">공임 (원가)</p>
-                  <div className="grid gap-4 md:grid-cols-3">
-                    <Field label="기본 공임">
-                      <Input
-                        type="number"
-                        min={0}
-                        placeholder="기본"
-                        value={laborBaseCost}
-                        onChange={(event) => setLaborBaseCost(toNumber(event.target.value))}
-                      />
-                    </Field>
-                    <Field label="센터 공임">
-                      <Input
-                        type="number"
-                        min={0}
-                        placeholder="센터"
-                        value={laborCenterCost}
-                        onChange={(event) => setLaborCenterCost(toNumber(event.target.value))}
-                      />
-                    </Field>
-                    <Field label="서브1 공임">
-                      <Input
-                        type="number"
-                        min={0}
-                        placeholder="서브1"
-                        value={laborSub1Cost}
-                        onChange={(event) => setLaborSub1Cost(toNumber(event.target.value))}
-                      />
-                    </Field>
-                    <Field label="서브2 공임">
-                      <Input
-                        type="number"
-                        min={0}
-                        placeholder="서브2"
-                        value={laborSub2Cost}
-                        onChange={(event) => setLaborSub2Cost(toNumber(event.target.value))}
-                      />
-                    </Field>
-                    <Field label="합계 공임">
-                      <Input type="number" min={0} placeholder="합계" value={totalLaborCost} readOnly />
-                    </Field>
+
+                  {/* Remark - Expanded to fill space */}
+                  <div className="flex-1 rounded-[18px] border border-[var(--panel-border)] bg-white p-4 flex flex-col">
+                    <p className="mb-3 text-sm font-semibold text-[var(--foreground)]">비고</p>
+                    <Textarea
+                      placeholder="상품에 대한 상세 정보를 입력하세요."
+                      value={note}
+                      onChange={(event) => setNote(event.target.value)}
+                      className="flex-1 resize-none h-full min-h-[120px]"
+                    />
                   </div>
                 </div>
 
-                <div className="rounded-[18px] border border-[var(--panel-border)] bg-white p-4 lg:col-span-2">
-                  <p className="mb-4 text-sm font-semibold text-[var(--foreground)]">프로파일 및 메모</p>
-                  <div className="grid gap-4 md:grid-cols-2">
-                    <Field label="공임 프로파일">
-                      <Select value={laborProfileMode} onChange={(event) => setLaborProfileMode(event.target.value)}>
-                        {laborProfileOptions.map((option) => (
-                          <option key={option.value} value={option.value}>
-                            {option.label}
-                          </option>
-                        ))}
-                      </Select>
-                    </Field>
-                    <Field label="공임 밴드 코드">
-                      <Input placeholder="B1 ~ B6" value={laborBandCode} onChange={(event) => setLaborBandCode(event.target.value)} />
-                    </Field>
-                    {isEditMode ? (
-                      <Field label="수정일">
-                        <Input type="date" value={modifiedDate} readOnly />
+                {/* Right Column: Unified Pricing Table + Profile */}
+                <div className="space-y-4">
+                  <div className="rounded-[18px] border border-[var(--panel-border)] bg-white p-4">
+                    <div className="mb-4 flex items-center justify-between">
+                      <p className="text-sm font-semibold text-[var(--foreground)]">공임 및 구성</p>
+                      <div className="flex gap-2">
+                        <span className="text-[10px] bg-blue-50 text-blue-700 px-2 py-0.5 rounded">좌:판매</span>
+                        <span className="text-[10px] bg-gray-100 text-gray-600 px-2 py-0.5 rounded">우:원가</span>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-[0.8fr_1fr_0.6fr_1fr] gap-x-2 gap-y-3 items-center text-xs">
+                      {/* Header */}
+                      <div className="text-center font-semibold text-[var(--muted)]">항목</div>
+                      <div className="text-center font-semibold text-[var(--muted)]">판매 (Sell)</div>
+                      <div className="text-center font-semibold text-[var(--muted)]">수량 (Qty)</div>
+                      <div className="text-center font-semibold text-[var(--muted)]">원가 (Cost)</div>
+
+                      {/* Base Labor */}
+                      <div className="text-center font-medium text-[var(--foreground)]">기본</div>
+                      <Input
+                        type="number" min={0}
+                        value={laborBaseSell}
+                        onChange={(e) => setLaborBaseSell(toNumber(e.target.value))}
+                      />
+                      <div className="text-center text-[var(--muted)]">-</div>
+                      <Input
+                        type="number" min={0}
+                        value={laborBaseCost}
+                        onChange={(e) => setLaborBaseCost(toNumber(e.target.value))}
+                      />
+
+                      {/* Center Labor */}
+                      <div className="text-center font-medium text-[var(--foreground)]">센터</div>
+                      <Input
+                        type="number" min={0}
+                        value={laborCenterSell}
+                        onChange={(e) => setLaborCenterSell(toNumber(e.target.value))}
+                      />
+                      <Input
+                        type="number" min={0}
+                        placeholder="Qty"
+                        className="text-center bg-[#f8fafc]"
+                        value={centerQty}
+                        onChange={(e) => setCenterQty(toNumber(e.target.value))}
+                      />
+                      <Input
+                        type="number" min={0}
+                        value={laborCenterCost}
+                        onChange={(e) => setLaborCenterCost(toNumber(e.target.value))}
+                      />
+
+                      {/* Sub1 Labor */}
+                      <div className="text-center font-medium text-[var(--foreground)]">서브1</div>
+                      <Input
+                        type="number" min={0}
+                        value={laborSub1Sell}
+                        onChange={(e) => setLaborSub1Sell(toNumber(e.target.value))}
+                      />
+                      <Input
+                        type="number" min={0}
+                        placeholder="Qty"
+                        className="text-center bg-[#f8fafc]"
+                        value={sub1Qty}
+                        onChange={(e) => setSub1Qty(toNumber(e.target.value))}
+                      />
+                      <Input
+                        type="number" min={0}
+                        value={laborSub1Cost}
+                        onChange={(e) => setLaborSub1Cost(toNumber(e.target.value))}
+                      />
+
+                      {/* Sub2 Labor */}
+                      <div className="text-center font-medium text-[var(--foreground)]">서브2</div>
+                      <Input
+                        type="number" min={0}
+                        value={laborSub2Sell}
+                        onChange={(e) => setLaborSub2Sell(toNumber(e.target.value))}
+                      />
+                      <Input
+                        type="number" min={0}
+                        placeholder="Qty"
+                        className="text-center bg-[#f8fafc]"
+                        value={sub2Qty}
+                        onChange={(e) => setSub2Qty(toNumber(e.target.value))}
+                      />
+                      <Input
+                        type="number" min={0}
+                        value={laborSub2Cost}
+                        onChange={(e) => setLaborSub2Cost(toNumber(e.target.value))}
+                      />
+
+                      <div className="col-span-4 h-px bg-dashed border-t border-[var(--panel-border)] my-2" />
+
+                      {/* PLATING */}
+                      <div className="text-center font-medium text-[var(--muted)]">도금</div>
+                      <Input
+                        type="number" min={0}
+                        value={platingSell}
+                        onChange={(e) => setPlatingSell(toNumber(e.target.value))}
+                      />
+                      <div className="text-center text-[var(--muted)]">-</div>
+                      <Input
+                        type="number" min={0}
+                        value={platingCost}
+                        onChange={(e) => setPlatingCost(toNumber(e.target.value))}
+                      />
+
+                      <div className="col-span-4 h-px bg-dashed border-t border-[var(--panel-border)] my-2" />
+
+                      {/* Total Labor */}
+                      <div className="text-center font-bold text-[var(--foreground)]">합계공임</div>
+                      <Input
+                        type="number" min={0} readOnly
+                        className="text-right font-bold bg-blue-50 text-blue-700 border-blue-100"
+                        value={totalLaborSell}
+                      />
+                      <div className="text-center text-[var(--muted)]">-</div>
+                      <Input
+                        type="number" min={0} readOnly
+                        className="text-right font-bold bg-gray-50 text-gray-700 border-gray-200"
+                        value={totalLaborCost}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Profile & Settings - Moved Here, Condensed */}
+                  <div className="rounded-[18px] border border-[var(--panel-border)] bg-neutral-50 p-4">
+                    <div className="mb-3 flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <p className="text-sm font-semibold text-[var(--foreground)]">프로파일 및 설정</p>
+                        <span className="text-xs text-[var(--muted)]">({isEditMode ? "수정" : "생성"}: {isEditMode ? modifiedDate : releaseDate})</span>
+                      </div>
+                    </div>
+                    <div className="grid gap-3 grid-cols-2">
+                      <Field label="공임 프로파일">
+                        <Select value={laborProfileMode} onChange={(event) => setLaborProfileMode(event.target.value)}>
+                          {laborProfileOptions.map((option) => (
+                            <option key={option.value} value={option.value}>
+                              {option.label}
+                            </option>
+                          ))}
+                        </Select>
                       </Field>
-                    ) : (
-                      <Field label="생성일">
-                        <Input type="date" value={releaseDate} readOnly />
+                      <Field label="공임 밴드 코드">
+                        <Input placeholder="B1 ~ B6" value={laborBandCode} onChange={(event) => setLaborBandCode(event.target.value)} />
                       </Field>
-                    )}
+                    </div>
                   </div>
                 </div>
               </div>

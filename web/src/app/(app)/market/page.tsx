@@ -114,6 +114,7 @@ export default function MarketPage() {
         queryKey: ["market", "latest"],
         queryFn: async () => {
             const client = getSchemaClient();
+            if (!client) throw new Error("Supabase client not initialized");
             const { data, error } = await client
                 .from(CONTRACTS.views.marketLatestGoldSilverOps)
                 .select("*")
@@ -127,6 +128,7 @@ export default function MarketPage() {
         queryKey: ["market", "series", roleFilter, dayFilter],
         queryFn: async () => {
             const client = getSchemaClient();
+            if (!client) throw new Error("Supabase client not initialized");
             const cutoff = new Date();
             cutoff.setDate(cutoff.getDate() - dayFilter);
 
@@ -154,6 +156,7 @@ export default function MarketPage() {
         queryKey: ["market", "ohlc", dayFilter],
         queryFn: async () => {
             const client = getSchemaClient();
+            if (!client) throw new Error("Supabase client not initialized");
             const cutoff = new Date();
             cutoff.setDate(cutoff.getDate() - dayFilter);
 
