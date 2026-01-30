@@ -20,7 +20,6 @@ type CsMeta = {
 type SilverMeta = {
     silver_kr_correction_factor?: number;
     krx_correction_factor?: number;
-    cs_correction_factor?: number;
 };
 
 const toNum = (v: unknown): number | null => {
@@ -34,9 +33,9 @@ const pickSilverFactorFromMeta = (meta: SilverMeta | null): number | null => {
     return (
         toNum((meta as any).silver_kr_correction_factor) ??
         toNum((meta as any).krx_correction_factor) ??
-        toNum((meta as any).cs_correction_factor) ??
         null
     );
+
 };
 
 export async function GET() {
