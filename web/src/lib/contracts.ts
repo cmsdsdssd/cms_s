@@ -63,13 +63,16 @@ export const CONTRACTS = {
       process.env.NEXT_PUBLIC_CMS_FN_RECORD_RETURN_V2 ??
       process.env.NEXT_PUBLIC_CMS_FN_RECORD_RETURN ??
       "",
-
     enumValues: process.env.NEXT_PUBLIC_CMS_FN_ENUM_VALUES ?? "cms_fn_enum_values_v1",
     marketTickUpsertByRole:
       process.env.NEXT_PUBLIC_CMS_FN_MARKET_TICK_UPSERT_BY_ROLE ??
       "cms_fn_upsert_market_tick_by_role_v1",
 
+    // ✅ Settings(시세 파이프라인 설정) 저장용 RPC
+    marketTickConfigUpsert: "cms_fn_upsert_market_tick_config_v1",
+
     quickInventoryMove: "cms_fn_quick_inventory_move_v2",
+
     inventoryTransfer: "cms_fn_transfer_inventory_v1",
     inventoryMoveHeaderUpsert: "cms_fn_upsert_inventory_move_header_v1",
     inventoryMoveLineUpsert: "cms_fn_upsert_inventory_move_line_v1",

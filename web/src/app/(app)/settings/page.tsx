@@ -54,7 +54,18 @@ export default function SettingsPage() {
     setSilverKrFactor(String(cfgQuery.data.silver_kr_correction_factor ?? 1.2));
   }, [cfgQuery.data]);
 
-  const upsertCfg = useRpcMutation(CONTRACTS.functions.marketTickConfigUpsert);
+  type UpsertMarketTickConfigResponse = {
+    ok?: boolean;
+    config_key?: string;
+    fx_markup?: number;
+    cs_correction_factor?: number;
+    silver_kr_correction_factor?: number;
+  };
+
+  const upsertCfg = useRpcMutation<UpsertMarketTickConfigResponse>({
+    fn: CONTRACTS.functions.marketTickConfigUpsert,
+    successMessage: "저장 완료",
+  });
 
   const onSave = async () => {
     const fx = Number(fxMarkup);
@@ -80,18 +91,16 @@ export default function SettingsPage() {
     }
 
     try {
-      const res = await upsertCfg.mutateAsync({
+      await upsertCfg.mutateAsync({
         p_fx_markup: fx,
         p_cs_correction_factor: cs,
         p_silver_kr_correction_factor: kr,
       });
-
-      if (res?.ok) toast.success("저장 완료");
-      else toast.success("저장 완료");
       cfgQuery.refetch();
-    } catch (e: any) {
-      toast.error(e?.message ?? "저장 실패");
+    } catch {
+      // useRpcMutation.onError에서 토스트 처리됨
     }
+
   };
 
   return (
