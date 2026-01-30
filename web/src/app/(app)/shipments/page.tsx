@@ -422,7 +422,10 @@ export default function ShipmentsPage() {
 
   // 2) Final confirm
   const handleFinalConfirm = async () => {
-    if (!currentShipmentId || !actorId) return;
+    if (costMode === "RECEIPT" && !costReceiptId) {
+      toast.error("RECEIPT 모드에서는 영수증을 선택해야 합니다.");
+      return;
+    }
 
     const costLines = Object.entries(costInputs)
       .map(([lineId, cost]) => ({
@@ -624,6 +627,63 @@ export default function ShipmentsPage() {
                 </div>
                 <p className="text-xs text-gray-500 mt-1">※ 미입력 시 마스터 임시원가 사용</p>
               </div>
+            </div>
+          )}
+          {(costMode === "MANUAL" || costMode === "RECEIPT") && (
+            <div className="space-y-2">
+              <label className="block text-sm font-semibold text-[var(--foreground)]">cost_lines (라인별 단가)</label>
+
+              <div className="rounded-[12px] border border-[var(--panel-border)] bg-white overflow-hidden">
+                <table className="w-full text-xs text-left">
+                  <thead className="bg-[#f8f9fc]">
+                    <tr>
+                      <th className="px-3 py-2">MODEL</th>
+                      <th className="px-3 py-2">QTY</th>
+                      <th className="px-3 py-2">UNIT COST (KRW)</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-[var(--panel-border)]">
+                    {(currentLinesQuery.data ?? [])
+                      .filter((l) => Boolean(l.shipment_line_id))
+                      .map((l) => {
+                        const lineId = String(l.shipment_line_id);
+                        return (
+                          <tr key={lineId}>
+                            <td className="px-3 py-2 font-semibold">{l.model_name ?? "-"}</td>
+                            <td className="px-3 py-2">{l.qty ?? 0}</td>
+                            <td className="px-3 py-2">
+                              <Input
+                                placeholder="예: 12000"
+                                value={costInputs[lineId] ?? ""}
+                                onChange={(e) =>
+                                  setCostInputs((prev) => ({ ...prev, [lineId]: e.target.value }))
+                                }
+                              />
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    {currentLinesQuery.isLoading ? (
+                      <tr>
+                        <td colSpan={3} className="px-3 py-3 text-center text-[var(--muted)]">
+                          라인 로딩 중...
+                        </td>
+                      </tr>
+                    ) : null}
+                    {!currentLinesQuery.isLoading && (currentLinesQuery.data ?? []).length === 0 ? (
+                      <tr>
+                        <td colSpan={3} className="px-3 py-3 text-center text-[var(--muted)]">
+                          출고 라인이 없습니다.
+                        </td>
+                      </tr>
+                    ) : null}
+                  </tbody>
+                </table>
+              </div>
+
+              <p className="text-xs text-[var(--muted)]">
+                RECEIPT 모드: 입력한 라인만 ACTUAL + purchase_receipt_id 연결, 빈칸은 master 임시원가 fallback(=PROVISIONAL)로 남습니다.
+              </p>
             </div>
           )}
 

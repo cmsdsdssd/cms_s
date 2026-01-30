@@ -33,6 +33,10 @@ export const CONTRACTS = {
     partUsageDaily: "cms_v_part_usage_daily_v1",
     bomRecipeWorklist: "cms_v_bom_recipe_worklist_v1",
     bomRecipeLinesEnriched: "cms_v_bom_recipe_lines_enriched_v1",
+
+    // ✅ 원가 작업대 / 영수증 인박스
+    purchaseCostWorklist: "cms_v_purchase_cost_worklist_v1",
+    receiptInboxOpen: "cms_v_receipt_inbox_open_v1",
   },
   functions: {
     partyUpsert: process.env.NEXT_PUBLIC_CMS_FN_PARTY_UPSERT ?? "",

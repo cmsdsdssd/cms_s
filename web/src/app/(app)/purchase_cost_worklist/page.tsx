@@ -128,18 +128,20 @@ export default function PurchaseCostWorklistPage() {
             toast.error("영수증을 선택해주세요.");
             return;
         }
-        if (actionType === "MANUAL" && (!manualCost || isNaN(Number(manualCost)))) {
-            toast.error("원가를 입력해주세요.");
+
+        if ((actionType === "MANUAL" || actionType === "RECEIPT") && (!manualCost || isNaN(Number(manualCost)))) {
+            toast.error("원가(단가)를 입력해주세요.");
             return;
         }
-
-        const costLines = [];
-        if (actionType === "MANUAL" || (actionType === "RECEIPT" && manualCost)) {
-            costLines.push({
-                shipment_line_id: selectedRow.shipment_line_id,
-                unit_cost_krw: Number(manualCost),
-            });
-        }
+        const costLines =
+            actionType === "MANUAL" || actionType === "RECEIPT"
+                ? [
+                    {
+                        shipment_line_id: selectedRow.shipment_line_id,
+                        unit_cost_krw: Number(manualCost),
+                    },
+                ]
+                : [];
 
         try {
             await applyMutation.mutateAsync({
@@ -220,10 +222,19 @@ export default function PurchaseCostWorklistPage() {
 
             <Modal open={modalOpen} onOpenChange={setModalOpen} title="원가 확정">
                 <div className="space-y-4">
-                    {actionType === "MANUAL" && (
+                    {(actionType === "MANUAL" || actionType === "RECEIPT") && (
                         <div className="space-y-2">
-                            <label className="text-sm font-semibold">원가(단가) 입력</label>
-                            <Input placeholder="예: 12000" value={manualCost} onChange={(e) => setManualCost(e.target.value)} />
+                            <label className="text-sm font-semibold">
+                                {actionType === "RECEIPT" ? "영수증 기준 원가(단가) 입력" : "원가(단가) 입력"}
+                            </label>
+                            <Input
+                                placeholder="예: 12000"
+                                value={manualCost}
+                                onChange={(e) => setManualCost(e.target.value)}
+                            />
+                            <p className="text-xs text-[var(--muted)]">
+                                RECEIPT 모드에서 단가를 입력해야 출고라인(purchase_receipt_id)과 영수증이 실제로 연결됩니다.
+                            </p>
                         </div>
                     )}
 

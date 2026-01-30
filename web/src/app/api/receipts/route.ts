@@ -12,7 +12,7 @@ function getSupabaseAdmin() {
 
 export async function GET(request: Request) {
     const { searchParams } = new URL(request.url);
-    const status = searchParams.get("status"); // UPLOADED | LINKED | ARCHIVED
+    const status = searchParams.get("status"); // "UPLOADED" | "LINKED" | "ARCHIVED" | "UPLOADED,LINKED"
     const limit = parseInt(searchParams.get("limit") ?? "50", 10);
     const vendor_party_id = searchParams.get("vendor_party_id");
 
@@ -29,7 +29,16 @@ export async function GET(request: Request) {
             .limit(limit);
 
         if (status) {
-            query = query.eq("status", status);
+            const statuses = status
+                .split(",")
+                .map((s) => s.trim())
+                .filter(Boolean);
+
+            if (statuses.length === 1) {
+                query = query.eq("status", statuses[0]);
+            } else {
+                query = query.in("status", statuses);
+            }
         }
         if (vendor_party_id) {
             query = query.eq("vendor_party_id", vendor_party_id);
