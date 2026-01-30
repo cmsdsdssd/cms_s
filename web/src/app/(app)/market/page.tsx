@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useForm } from "react-hook-form";
 import { toast } from "sonner";
@@ -26,6 +26,13 @@ type LatestGoldSilver = {
     silver_observed_at?: string;
     silver_source?: string;
     as_of?: string;
+};
+
+type CsConfig = {
+    config_key: string;
+    fx_markup: number;
+    cs_correction_factor: number;
+    updated_at: string;
 };
 
 type SeriesTick = {
@@ -109,6 +116,11 @@ export default function MarketPage() {
         },
     });
 
+    // CS(중국 은시세) 계산계수 설정 (웹에서 조정)
+    const [csFxMarkup, setCsFxMarkup] = useState<string>("1.030000");
+    const [csCorrectionFactor, setCsCorrectionFactor] = useState<string>("1.000000");
+    const [csConfigSaving, setCsConfigSaving] = useState(false);
+
     // ===================== QUERIES =====================
     const { data: latestData, isLoading: latestLoading } = useQuery({
         queryKey: ["market", "latest"],
@@ -123,6 +135,62 @@ export default function MarketPage() {
             return data as LatestGoldSilver | null;
         },
     });
+
+    const { data: csConfigData, isLoading: csConfigLoading } = useQuery({
+        queryKey: ["market", "csConfig"],
+        queryFn: async () => {
+            const client = getSchemaClient();
+            if (!client) throw new Error("Supabase client not initialized");
+            const { data, error } = await client
+                .from("cms_market_tick_config")
+                .select("config_key, fx_markup, cs_correction_factor, updated_at")
+                .eq("config_key", "DEFAULT")
+                .maybeSingle();
+            if (error) throw error;
+            return data as CsConfig | null;
+        },
+    });
+
+    useEffect(() => {
+        if (!csConfigData) return;
+        setCsFxMarkup(String(csConfigData.fx_markup));
+        setCsCorrectionFactor(String(csConfigData.cs_correction_factor));
+    }, [csConfigData]);
+
+    const saveCsConfig = async () => {
+        const fx = Number(csFxMarkup);
+        const corr = Number(csCorrectionFactor);
+        if (!Number.isFinite(fx) || fx <= 0) {
+            toast.error("CS 설정 저장 실패", { description: "fx_markup 값이 올바르지 않습니다." });
+            return;
+        }
+        if (!Number.isFinite(corr) || corr <= 0) {
+            toast.error("CS 설정 저장 실패", { description: "보정계수 값이 올바르지 않습니다." });
+            return;
+        }
+
+        try {
+            setCsConfigSaving(true);
+            const client = getSchemaClient();
+            if (!client) throw new Error("Supabase client not initialized");
+            const { error } = await client
+                .from("cms_market_tick_config")
+                .upsert({
+                    config_key: "DEFAULT",
+                    fx_markup: fx,
+                    cs_correction_factor: corr,
+                });
+            if (error) throw error;
+
+            toast.success("CS 설정 저장 완료", { description: "n8n이 다음 실행부터 새로운 값으로 계산합니다." });
+            queryClient.invalidateQueries({ queryKey: ["market", "csConfig"] });
+        } catch (e) {
+            const msg = e instanceof Error ? e.message : "저장 실패";
+            toast.error("CS 설정 저장 실패", { description: msg });
+        } finally {
+            setCsConfigSaving(false);
+        }
+    };
 
     const { data: seriesData = [] } = useQuery({
         queryKey: ["market", "series", roleFilter, dayFilter],
@@ -304,6 +372,59 @@ export default function MarketPage() {
                                     </div>
                                 ) : (
                                     <p className="text-sm text-[var(--muted)]">데이터 없음</p>
+                                )}
+                            </CardBody>
+                        </Card>
+
+                        {/* CS(중국 은시세) 설정: fx_markup / 보정계수 */}
+                        <Card>
+                            <CardHeader>
+                                <ActionBar title="CS 설정" subtitle="중국 은시세 계산계수" />
+                            </CardHeader>
+                            <CardBody>
+                                {csConfigLoading ? (
+                                    <p className="text-sm text-[var(--muted)]">로딩 중...</p>
+                                ) : (
+                                    <div className="space-y-3">
+                                        <div className="space-y-1">
+                                            <label className="text-xs font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">
+                                                fx_markup
+                                            </label>
+                                            <Input
+                                                type="number"
+                                                step="0.000001"
+                                                value={csFxMarkup}
+                                                onChange={(e) => setCsFxMarkup(e.target.value)}
+                                            />
+                                            <p className="text-xs text-[var(--muted)]">원 환율에 곱하는 마크업(예: 1.03)</p>
+                                        </div>
+
+                                        <div className="space-y-1">
+                                            <label className="text-xs font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">
+                                                보정계수
+                                            </label>
+                                            <Input
+                                                type="number"
+                                                step="0.000001"
+                                                value={csCorrectionFactor}
+                                                onChange={(e) => setCsCorrectionFactor(e.target.value)}
+                                            />
+                                            <p className="text-xs text-[var(--muted)]">최종 CS에 추가로 곱하는 계수(예: 1.00)</p>
+                                        </div>
+
+                                        <div className="text-xs text-[var(--muted)]">
+                                            마지막 변경: {csConfigData?.updated_at ? formatDateTimeKst(csConfigData.updated_at) : "-"}
+                                        </div>
+
+                                        <Button
+                                            type="button"
+                                            className="w-full"
+                                            onClick={saveCsConfig}
+                                            disabled={csConfigSaving}
+                                        >
+                                            {csConfigSaving ? "저장 중..." : "CS 설정 저장"}
+                                        </Button>
+                                    </div>
                                 )}
                             </CardBody>
                         </Card>

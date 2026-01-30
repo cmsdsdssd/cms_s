@@ -31,6 +31,8 @@ export const CONTRACTS = {
     partMoveLines: "cms_v_part_move_lines_v1",
     partUnlinkedWorklist: "cms_v_part_unlinked_worklist_v1",
     partUsageDaily: "cms_v_part_usage_daily_v1",
+    bomRecipeWorklist: "cms_v_bom_recipe_worklist_v1",
+    bomRecipeLinesEnriched: "cms_v_bom_recipe_lines_enriched_v1",
   },
   functions: {
     partyUpsert: process.env.NEXT_PUBLIC_CMS_FN_PARTY_UPSERT ?? "",
@@ -46,16 +48,22 @@ export const CONTRACTS = {
 
     shipmentAddAdHoc: process.env.NEXT_PUBLIC_CMS_FN_SHIPMENT_ADD_ADHOC ?? "",
     shipmentUpdateLine: process.env.NEXT_PUBLIC_CMS_FN_SHIPMENT_UPDATE_LINE ?? "",
-    shipmentUpsertFromOrder: process.env.NEXT_PUBLIC_RPC_SHIPMENT_UPSERT_FROM_ORDER || "cms_fn_upsert_shipment_from_order_line_v2",
-    shipmentConfirm: process.env.NEXT_PUBLIC_RPC_SHIPMENT_CONFIRM || "cms_fn_confirm_shipment_v3_cost_v1",
-    applyPurchaseCost: process.env.NEXT_PUBLIC_RPC_APPLY_PURCHASE_COST || "cms_fn_apply_purchase_cost_to_shipment_v1",
+    shipmentUpsertFromOrder:
+      process.env.NEXT_PUBLIC_RPC_SHIPMENT_UPSERT_FROM_ORDER ||
+      "cms_fn_upsert_shipment_from_order_line_v2",
+    shipmentConfirm:
+      process.env.NEXT_PUBLIC_RPC_SHIPMENT_CONFIRM || "cms_fn_confirm_shipment_v3_cost_v1",
+    applyPurchaseCost:
+      process.env.NEXT_PUBLIC_RPC_APPLY_PURCHASE_COST || "cms_fn_apply_purchase_cost_to_shipment_v1",
     recordPayment: process.env.NEXT_PUBLIC_CMS_FN_RECORD_PAYMENT ?? "",
     recordReturn:
       process.env.NEXT_PUBLIC_CMS_FN_RECORD_RETURN_V2 ??
       process.env.NEXT_PUBLIC_CMS_FN_RECORD_RETURN ??
       "",
     enumValues: process.env.NEXT_PUBLIC_CMS_FN_ENUM_VALUES ?? "cms_fn_enum_values_v1",
-    marketTickUpsertByRole: process.env.NEXT_PUBLIC_CMS_FN_MARKET_TICK_UPSERT_BY_ROLE ?? "cms_fn_upsert_market_tick_by_role_v1",
+    marketTickUpsertByRole:
+      process.env.NEXT_PUBLIC_CMS_FN_MARKET_TICK_UPSERT_BY_ROLE ??
+      "cms_fn_upsert_market_tick_by_role_v1",
     quickInventoryMove: "cms_fn_quick_inventory_move_v2",
     inventoryTransfer: "cms_fn_transfer_inventory_v1",
     inventoryMoveHeaderUpsert: "cms_fn_upsert_inventory_move_header_v1",
@@ -73,6 +81,9 @@ export const CONTRACTS = {
     partAliasAdd: "cms_fn_add_part_alias_v1",
     partReceiptRecord: "cms_fn_record_part_receipt_v1",
     partUsageRecord: "cms_fn_record_part_usage_v1",
+    bomRecipeUpsert: "cms_fn_upsert_bom_recipe_v1",
+    bomRecipeLineAdd: "cms_fn_add_bom_recipe_line_v1",
+    bomRecipeLineVoid: "cms_fn_void_bom_recipe_line_v1",
   },
 };
 

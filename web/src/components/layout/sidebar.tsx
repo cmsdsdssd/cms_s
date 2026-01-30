@@ -24,6 +24,7 @@ const navItems = [
   { href: "/ar", label: "미수", icon: CreditCard },
   { href: "/market", label: "시세", icon: TrendingUp },
   { href: "/inventory", label: "재고", icon: Package },
+  { href: "/bom", label: "조합(BOM)", icon: Settings },
   { href: "/purchase_cost_worklist", label: "원가마감", icon: ClipboardList },
   { href: "/repairs", label: "수리", icon: Wrench },
 ];
@@ -62,28 +63,18 @@ export default function Sidebar() {
               key={item.href}
               href={item.href}
               className={[
-                "group flex items-center gap-3 rounded-[var(--radius)] px-3 py-2.5 text-sm font-medium transition",
+                "flex items-center gap-3 rounded-[12px] px-3 py-2 text-sm font-medium transition-colors",
                 active
-                  ? "bg-[var(--primary)] text-[var(--primary-foreground)]"
-                  : "text-muted-foreground hover:bg-muted hover:text-foreground",
+                  ? "bg-[#eef2f6] text-[var(--foreground)]"
+                  : "text-[var(--muted)] hover:bg-[#f6f7f9] hover:text-[var(--foreground)]",
               ].join(" ")}
             >
               <Icon className="h-4 w-4" />
-              <span>{item.label}</span>
+              {item.label}
             </Link>
           );
         })}
       </nav>
-
-      <div className="p-2" id="sidebar.footer">
-        <Link
-          href="/settings"
-          className="group flex items-center gap-3 rounded-[var(--radius)] px-3 py-2.5 text-sm font-medium text-muted-foreground transition hover:bg-muted hover:text-foreground"
-        >
-          <Settings className="h-4 w-4" />
-          <span>설정</span>
-        </Link>
-      </div>
     </aside>
   );
 }

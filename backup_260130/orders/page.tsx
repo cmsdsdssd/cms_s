@@ -31,6 +31,8 @@ type MasterLookup = {
   vendor_name?: string | null;
   material_code_default?: string | null;
   category_code?: string | null;
+  symbol?: string | null;
+  color?: string | null;
   weight_default_g?: number | null;
   deduction_weight_default_g?: number | null;
   center_qty_default?: number | null;
@@ -62,7 +64,6 @@ type GridRow = {
   model_name: string | null;
   suffix: string;
   color: string;
-  size: string;
   qty: string;
   center_stone: string;
   center_qty: string;
@@ -102,56 +103,7 @@ const createRowId = () => {
   }
   return `row-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 };
-// 1. 메인 색상 옵션
-const MAIN_COLOR_OPTIONS = [
-  { value: "P", label: "P (핑크)" },
-  { value: "G", label: "G (골드)" },
-  { value: "W", label: "W (화이트)" },
-  { value: "Z", label: "Z (기타)" },
-];
 
-// 2. 도금 색상 옵션 (단색 + 콤비 조합 제안)
-// 순서는 P, G, W, B 순으로 단색을 먼저 보여주고, 그 뒤에 조합을 보여줍니다.
-const PLATING_OPTIONS = [
-  { type: "단색", value: "P", label: "P (핑크)" },
-  { type: "단색", value: "G", label: "G (골드)" },
-  { type: "단색", value: "W", label: "W (화이트)" },
-  { type: "단색", value: "B", label: "B (블랙)" },
-  // 콤비 조합 (많이 쓰이는 순서 고려 혹은 색상 코드 알파벳 순)
-  { type: "콤비", value: "P+W", label: "P+W (핑크/화이트)" },
-  { type: "콤비", value: "G+W", label: "G+W (골드/화이트)" },
-  { type: "콤비", value: "P+G", label: "P+G (핑크/골드)" },
-  { type: "콤비", value: "P+B", label: "P+B (핑크/블랙)" },
-  { type: "콤비", value: "G+B", label: "G+B (골드/블랙)" },
-  { type: "콤비", value: "W+B", label: "W+B (화이트/블랙)" },
-  { type: "콤비", value: "P+W+G", label: "P+W+G (핑크/화이트/골드)" },
-  { type: "콤비", value: "P+W+B", label: "P+W+B (핑크/화이트/블랙)" },
-  { type: "콤비", value: "G+W+B", label: "G+W+B (골드/화이트/블랙)" },
-  { type: "콤비", value: "P+W+B+G", label: "P+W+B+G (핑크/화이트/블랙/골드)" },
-];
-
-// 카테고리 영문 -> 한글 변환 맵
-const CATEGORY_MAP: Record<string, string> = {
-  NECKLACE: "목걸이",
-  EARRING: "귀걸이",
-  RING: "반지",
-  BRACELET: "팔찌",
-  ANKLET: "발찌",
-  PENDANT: "펜던트",
-  PIERCING: "피어싱",
-  CHAIN: "체인",
-  BANGLE: "뱅글",
-  COUPLING: "커플링",
-  SET: "세트",
-  ETC: "기타",
-};
-
-// 변환 헬퍼 함수 (대소문자 무관하게 처리)
-const getCategoryName = (code: string | null | undefined) => {
-  if (!code) return "-";
-  const upper = code.trim().toUpperCase();
-  return CATEGORY_MAP[upper] ?? code; // 매핑에 없으면 원래 영어 코드 그대로 표시
-};
 const createEmptyRow = (index: number): GridRow => ({
   id: `row-${index}-${createRowId()}`,
   order_line_id: null,
@@ -162,8 +114,7 @@ const createEmptyRow = (index: number): GridRow => ({
   model_name: null,
   suffix: "",
   color: "",
-  size: "",
-  qty: "1",
+  qty: "",
   center_stone: "",
   center_qty: "",
   sub1_stone: "",
@@ -185,12 +136,11 @@ const createEmptyRow = (index: number): GridRow => ({
 const normalizeText = (value: string) => value.trim();
 const toNumber = (value: string) => {
   const v = value.trim();
-  if (v === "") return null;        // 핵심
+  if (v === "") return null; // 핵심
   const parsed = Number(v);
   if (Number.isNaN(parsed)) return null;
   return parsed;
 };
-
 
 const resolveSignedImageUrl = async (path: string | null) => {
   if (!path) return null;
@@ -347,7 +297,6 @@ export default function OrdersPage() {
           model_name: order.model_name,
           suffix: order.suffix,
           color: order.color,
-          size: String(order.size ?? ""),
           qty: String(order.qty),
           center_stone: order.center_stone_name ?? "",
           center_qty: String(order.center_stone_qty ?? ""),
@@ -370,28 +319,31 @@ export default function OrdersPage() {
         setRows([loadedRow]);
 
         // Populate Cache to prevent immediate auto-save triggers on load
-        saveCache.current.set(loadedRow.id, JSON.stringify({
-          client_id: loadedRow.client_id,
-          model_input: normalizeText(loadedRow.model_input),
-          suffix: normalizeText(loadedRow.suffix),
-          color: normalizeText(loadedRow.color),
-          size: normalizeText(loadedRow.size),
-          qty: toNumber(loadedRow.qty),
-          center_stone: normalizeText(loadedRow.center_stone),
-          center_qty: toNumber(loadedRow.center_qty),
-          sub1_stone: normalizeText(loadedRow.sub1_stone),
-          sub1_qty: toNumber(loadedRow.sub1_qty),
-          sub2_stone: normalizeText(loadedRow.sub2_stone),
-          sub2_qty: toNumber(loadedRow.sub2_qty),
-          is_plated: loadedRow.is_plated,
-          plating_color: normalizeText(loadedRow.plating_color),
-          memo: normalizeText(loadedRow.memo),
-        }));
+        saveCache.current.set(
+          loadedRow.id,
+          JSON.stringify({
+            client_id: loadedRow.client_id,
+            model_input: normalizeText(loadedRow.model_input),
+            suffix: normalizeText(loadedRow.suffix),
+            color: normalizeText(loadedRow.color),
+            qty: toNumber(loadedRow.qty),
+            center_stone: normalizeText(loadedRow.center_stone),
+            center_qty: toNumber(loadedRow.center_qty),
+            sub1_stone: normalizeText(loadedRow.sub1_stone),
+            sub1_qty: toNumber(loadedRow.sub1_qty),
+            sub2_stone: normalizeText(loadedRow.sub2_stone),
+            sub2_qty: toNumber(loadedRow.sub2_qty),
+            is_plated: loadedRow.is_plated,
+            plating_color: normalizeText(loadedRow.plating_color),
+            memo: normalizeText(loadedRow.memo),
+          })
+        );
 
         toast.success("주문을 불러왔습니다.");
-
       } catch (err) {
-        toast.error("주문 로드 실패", { description: err instanceof Error ? err.message : String(err) });
+        toast.error("주문 로드 실패", {
+          description: err instanceof Error ? err.message : String(err),
+        });
       } finally {
         setInitLoading(false);
       }
@@ -425,7 +377,7 @@ export default function OrdersPage() {
         await callRpc(setStatusFn, {
           p_order_line_id: row.order_line_id,
           p_status: "CANCELLED",
-          p_actor_person_id: process.env.NEXT_PUBLIC_CMS_ACTOR_ID ?? null
+          p_actor_person_id: process.env.NEXT_PUBLIC_CMS_ACTOR_ID ?? null,
         });
         toast.success("주문이 취소되었습니다.");
       } catch (e) {
@@ -491,9 +443,7 @@ export default function OrdersPage() {
       return;
     }
     const matches = (data ?? []) as ClientSummary[];
-    const exact = matches.find(
-      (item) => (item.client_name ?? "").toLowerCase() === input.toLowerCase()
-    );
+    const exact = matches.find((item) => (item.client_name ?? "").toLowerCase() === input.toLowerCase());
     const resolved = exact ?? (matches.length === 1 ? matches[0] : null);
     if (!resolved?.client_id) {
       setRowError(rowId, { client: "거래처를 찾을 수 없습니다." });
@@ -518,6 +468,8 @@ export default function OrdersPage() {
       updateRow(rowId, {
         model_name: null,
         master_item_id: null,
+        suffix: "",
+        color: "",
         photo_url: null,
         material_price: null,
         labor_basic: null,
@@ -544,6 +496,8 @@ export default function OrdersPage() {
         updateRow(rowId, {
           model_name: cached.model_name ?? input,
           master_item_id: cached.master_item_id ?? null,
+          suffix: String(cached.category_code ?? ""),
+          color: String(cached.color ?? "NONE"),
           photo_url: cached.photo_url ?? null,
           material_price: cached.material_price ?? null,
           labor_basic: cached.labor_basic ?? null,
@@ -568,15 +522,15 @@ export default function OrdersPage() {
       return;
     }
     const matches = (data ?? []) as MasterLookup[];
-    const exact = matches.find(
-      (item) => (item.model_name ?? "").toLowerCase() === input.toLowerCase()
-    );
+    const exact = matches.find((item) => (item.model_name ?? "").toLowerCase() === input.toLowerCase());
     const resolved = exact ?? (matches.length === 1 ? matches[0] : null);
     if (!resolved?.master_item_id) {
       setRowError(rowId, { model: "모델을 찾을 수 없습니다." });
       updateRow(rowId, {
         model_name: null,
         master_item_id: null,
+        suffix: "",
+        color: "",
         photo_url: null,
         material_price: null,
         labor_basic: null,
@@ -596,9 +550,8 @@ export default function OrdersPage() {
     updateRow(rowId, {
       model_name: resolvedWithUrl.model_name ?? input,
       master_item_id: resolvedWithUrl.master_item_id ?? null,
-      // [추가됨] 마스터의 카테고리 코드를 suffix에 강제 주입
-      suffix: resolvedWithUrl.category_code ?? "",
-
+      suffix: String(resolvedWithUrl.category_code ?? ""),
+      color: String(resolvedWithUrl.color ?? "NONE"),
       photo_url: resolvedWithUrl.photo_url ?? null,
       material_price: resolvedWithUrl.material_price ?? null,
       labor_basic: resolvedWithUrl.labor_basic ?? null,
@@ -620,11 +573,13 @@ export default function OrdersPage() {
     if (!normalizeText(row.model_input)) {
       errors.model = "모델명을 입력해 주세요.";
     }
-    if (!normalizeText(row.suffix)) {
-      errors.category = "분류를 입력해 주세요.";
-    }
-    if (!normalizeText(row.color)) {
-      errors.color = "색상을 입력해 주세요.";
+    if (!row.master_item_id) {
+      if (!normalizeText(row.suffix)) {
+        errors.category = "분류를 입력해 주세요.";
+      }
+      if (!normalizeText(row.color)) {
+        errors.color = "색상을 입력해 주세요.";
+      }
     }
     if (!qty || qty <= 0) {
       errors.qty = "수량은 1 이상입니다.";
@@ -649,6 +604,7 @@ export default function OrdersPage() {
     }
     return errors;
   };
+
   async function callOrderUpsertV3(payload: any) {
     const res = await fetch("/api/order-upsert", {
       method: "POST",
@@ -659,10 +615,7 @@ export default function OrdersPage() {
     const json = await res.json().catch(() => ({} as any));
 
     if (!res.ok) {
-      const msg =
-        json?.error ||
-        json?.message ||
-        "저장 실패 (order-upsert)";
+      const msg = json?.error || json?.message || "저장 실패 (order-upsert)";
       const detail = json?.details || json?.hint || json?.code || "";
       throw new Error(detail ? `${msg} (${detail})` : msg);
     }
@@ -677,7 +630,6 @@ export default function OrdersPage() {
       model_input: normalizeText(row.model_input),
       suffix: normalizeText(row.suffix),
       color: normalizeText(row.color),
-      size: normalizeText(row.size),
       qty: toNumber(row.qty),
       center_stone: normalizeText(row.center_stone),
       center_qty: toNumber(row.center_qty),
@@ -725,12 +677,10 @@ export default function OrdersPage() {
         p_customer_party_id: row.client_id,
         p_master_id: row.master_item_id, // STRICT
 
-        // ✅ NOT NULL 컬럼 보장용: 화면 입력값을 RPC로 전달
-        p_suffix: normalizeText(row.suffix) || null,
-        p_color: normalizeText(row.color) || null,
+        // suffix/color는 DB 함수에서 master 기준으로 자동 세팅됨(함수 시그니처에 없음)
 
         p_qty: toNumber(row.qty) ?? 1,
-        p_size: normalizeText(row.size) || null,
+        p_size: null,
         p_is_plated: row.is_plated,
         p_plating_variant_id: null,
         p_plating_color_code: normalizeText(row.plating_color) || null,
@@ -818,7 +768,15 @@ export default function OrdersPage() {
           <Card className="shadow-sm">
             <CardHeader className="flex flex-row items-center justify-between py-4 border-b border-[var(--panel-border)]">
               <div className="flex items-center gap-2">
-                <svg className="text-[var(--primary)]" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <svg
+                  className="text-[var(--primary)]"
+                  width="16"
+                  height="16"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                >
                   <path d="M3 3h18v18H3zM12 8v8M8 12h8" />
                 </svg>
                 <span className="font-bold text-sm">기본 정보</span>
@@ -832,9 +790,7 @@ export default function OrdersPage() {
                 </label>
                 <div className="flex items-center gap-2">
                   <span className="text-sm font-semibold">
-                    {headerMode === "model"
-                      ? headerModelName || "-"
-                      : headerClient?.client_name ?? "-"}
+                    {headerMode === "model" ? headerModelName || "-" : headerClient?.client_name ?? "-"}
                   </span>
                   {headerMode === "client" && headerClient?.client_id ? (
                     <Badge className="whitespace-nowrap bg-blue-50 text-blue-600 border-blue-100 rounded-[4px] px-2">
@@ -853,9 +809,7 @@ export default function OrdersPage() {
                 </div>
                 {headerMode === "client" ? (
                   headerClient?.balance_krw !== undefined ? (
-                    <p className="text-xs text-[var(--muted)]">
-                      미수금 {headerClient.balance_krw?.toLocaleString() ?? 0}원
-                    </p>
+                    <p className="text-xs text-[var(--muted)]">미수금 {headerClient.balance_krw?.toLocaleString() ?? 0}원</p>
                   ) : (
                     <p className="text-xs text-[var(--muted)]">거래처를 입력하면 미수 정보가 표시됩니다.</p>
                   )
@@ -877,7 +831,9 @@ export default function OrdersPage() {
                       : "-"}
                 </div>
                 <div className="text-xs text-[var(--muted)]">
-                  {headerMode === "client" && headerClient?.open_invoices_count !== null && headerClient?.open_invoices_count !== undefined
+                  {headerMode === "client" &&
+                    headerClient?.open_invoices_count !== null &&
+                    headerClient?.open_invoices_count !== undefined
                     ? `미수 건수 ${headerClient.open_invoices_count}`
                     : ""}
                 </div>
@@ -913,9 +869,7 @@ export default function OrdersPage() {
           <CardBody className="grid grid-cols-2 md:grid-cols-5 gap-2 text-[11px]">
             <div>
               <p className="text-[var(--muted)]">소재가격</p>
-              <p className="text-sm font-semibold">
-                {activeMaster?.material_price ? `${activeMaster.material_price.toLocaleString()}원` : "-"}
-              </p>
+              <p className="text-sm font-semibold">{activeMaster?.material_price ? `${activeMaster.material_price.toLocaleString()}원` : "-"}</p>
             </div>
             <div>
               <p className="text-[var(--muted)]">기본공임</p>
@@ -954,9 +908,7 @@ export default function OrdersPage() {
             </div>
             <div>
               <p className="text-[var(--muted)]">카테고리</p>
-              <p className="text-sm font-semibold">
-                {getCategoryName(activeMaster?.category_code)}
-              </p>
+              <p className="text-sm font-semibold">{activeMaster?.category_code ?? "-"}</p>
             </div>
             <div>
               <p className="text-[var(--muted)]">기본중량</p>
@@ -1019,8 +971,7 @@ export default function OrdersPage() {
                     <span className="text-red-500">*</span> 모델번호
                   </th>
                   <th className="px-3 py-2 border-r border-[var(--panel-border)] w-24">분류</th>
-                  <th className="px-3 py-2 border-r border-[var(--panel-border)] w-24">색상</th>
-                  <th className="px-3 py-2 border-r border-[var(--panel-border)] w-20">사이즈</th>
+                  <th className="px-3 py-2 border-r border-[var(--panel-border)] w-20">색상</th>
                   <th className="px-3 py-2 border-r border-[var(--panel-border)] w-16 text-center">수량</th>
                   <th className="px-3 py-2 border-r border-[var(--panel-border)] min-w-[90px] whitespace-nowrap">중심석</th>
                   <th className="px-3 py-2 border-r border-[var(--panel-border)] w-16 text-center whitespace-nowrap">중심개수</th>
@@ -1029,8 +980,8 @@ export default function OrdersPage() {
                   <th className="px-3 py-2 border-r border-[var(--panel-border)] min-w-[90px] whitespace-nowrap">보조2석</th>
                   <th className="px-3 py-2 border-r border-[var(--panel-border)] w-16 text-center whitespace-nowrap">보조2개수</th>
                   <th className="px-3 py-2 border-r border-[var(--panel-border)] w-16 text-center">도금</th>
-                  <th className="px-3 py-2 border-r border-[var(--panel-border)] min-w-[40px]">도금색상</th>
-                  <th className="px-3 py-2 min-w-[300px]">비고</th>
+                  <th className="px-3 py-2 border-r border-[var(--panel-border)] min-w-[120px]">도금색상</th>
+                  <th className="px-3 py-2 min-w-[160px]">비고</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-[var(--panel-border)]">
@@ -1083,34 +1034,26 @@ export default function OrdersPage() {
                           onBlur={(event) => resolveMaster(row.id, event.currentTarget.value)}
                         />
                       </td>
-                      <td className="px-2 py-1 border-r border-[var(--panel-border)] bg-gray-50">
-                        <div className="w-full px-1.5 py-1 text-xs text-gray-600 select-none cursor-not-allowed">
-                          {/* row.suffix에 'NECKLACE'가 들어있어도 화면엔 '목걸이'로 나옵니다 */}
-                          {getCategoryName(row.suffix)}
-                        </div>
-                      </td>
                       <td className="px-2 py-1 border-r border-[var(--panel-border)]">
-                        <select
+                        <input
                           className={cn(
-                            "w-full bg-transparent border-none focus:ring-0 text-xs py-1", // py-0에서 py-1로 살짝 키움
-                            errors.color ? "bg-red-50" : ""
+                            "w-full bg-transparent border-none focus:ring-0 focus:bg-blue-50 rounded px-1.5 py-1 text-xs",
+                            errors.category ? "bg-red-50" : ""
                           )}
-                          value={row.color}
-                          onChange={(event) => updateRow(row.id, { color: event.target.value })}
-                        >
-                          <option value="">선택</option>
-                          {MAIN_COLOR_OPTIONS.map((opt) => (
-                            <option key={opt.value} value={opt.value}>
-                              {opt.label}
-                            </option>
-                          ))}
-                        </select>
+                          disabled={Boolean(row.master_item_id)}
+                          value={row.suffix}
+                          onChange={(event) => updateRow(row.id, { suffix: event.target.value })}
+                        />
                       </td>
                       <td className="px-2 py-1 border-r border-[var(--panel-border)]">
                         <input
-                          className="w-full bg-transparent border-none focus:ring-0 focus:bg-blue-50 rounded px-1.5 py-1 text-xs"
-                          value={row.size}
-                          onChange={(event) => updateRow(row.id, { size: event.target.value })}
+                          className={cn(
+                            "w-full bg-transparent border-none focus:ring-0 focus:bg-blue-50 rounded px-1.5 py-1 text-xs",
+                            errors.color ? "bg-red-50" : ""
+                          )}
+                          disabled={Boolean(row.master_item_id)}
+                          value={row.color}
+                          onChange={(event) => updateRow(row.id, { color: event.target.value })}
                         />
                       </td>
                       <td className="px-2 py-1 border-r border-[var(--panel-border)]">
@@ -1126,10 +1069,7 @@ export default function OrdersPage() {
                       </td>
                       <td className="px-2 py-1 border-r border-[var(--panel-border)]">
                         <select
-                          className={cn(
-                            "w-full bg-transparent border-none focus:ring-0 text-xs py-0",
-                            errors.stones ? "bg-red-50" : ""
-                          )}
+                          className={cn("w-full bg-transparent border-none focus:ring-0 text-xs py-0", errors.stones ? "bg-red-50" : "")}
                           value={row.center_stone}
                           onChange={(event) => updateRow(row.id, { center_stone: event.target.value })}
                         >
@@ -1154,10 +1094,7 @@ export default function OrdersPage() {
                       </td>
                       <td className="px-2 py-1 border-r border-[var(--panel-border)]">
                         <select
-                          className={cn(
-                            "w-full bg-transparent border-none focus:ring-0 text-xs py-0",
-                            errors.stones ? "bg-red-50" : ""
-                          )}
+                          className={cn("w-full bg-transparent border-none focus:ring-0 text-xs py-0", errors.stones ? "bg-red-50" : "")}
                           value={row.sub1_stone}
                           onChange={(event) => updateRow(row.id, { sub1_stone: event.target.value })}
                         >
@@ -1182,10 +1119,7 @@ export default function OrdersPage() {
                       </td>
                       <td className="px-2 py-1 border-r border-[var(--panel-border)]">
                         <select
-                          className={cn(
-                            "w-full bg-transparent border-none focus:ring-0 text-xs py-0",
-                            errors.stones ? "bg-red-50" : ""
-                          )}
+                          className={cn("w-full bg-transparent border-none focus:ring-0 text-xs py-0", errors.stones ? "bg-red-50" : "")}
                           value={row.sub2_stone}
                           onChange={(event) => updateRow(row.id, { sub2_stone: event.target.value })}
                         >
@@ -1223,33 +1157,17 @@ export default function OrdersPage() {
                       </td>
                       <td className="px-2 py-1 border-r border-[var(--panel-border)]">
                         <select
-                          className={cn(
-                            "w-full bg-transparent border-none focus:ring-0 text-xs py-1",
-                            errors.plating ? "bg-red-50" : ""
-                          )}
+                          className={cn("w-full bg-transparent border-none focus:ring-0 text-xs py-0", errors.plating ? "bg-red-50" : "")}
                           value={row.plating_color}
                           onChange={(event) => updateRow(row.id, { plating_color: event.target.value })}
                           disabled={!row.is_plated}
                         >
                           <option value="">선택</option>
-
-                          {/* 단색 그룹 */}
-                          <optgroup label="단색">
-                            {PLATING_OPTIONS.filter(o => o.type === "단색").map((opt) => (
-                              <option key={opt.value} value={opt.value}>
-                                {opt.label}
-                              </option>
-                            ))}
-                          </optgroup>
-
-                          {/* 콤비 그룹 */}
-                          <optgroup label="콤비">
-                            {PLATING_OPTIONS.filter(o => o.type === "콤비").map((opt) => (
-                              <option key={opt.value} value={opt.value}>
-                                {opt.label}
-                              </option>
-                            ))}
-                          </optgroup>
+                          {platingColors.map((color) => (
+                            <option key={color} value={color}>
+                              {color}
+                            </option>
+                          ))}
                         </select>
                       </td>
                       <td className="px-2 py-1">
@@ -1268,11 +1186,7 @@ export default function OrdersPage() {
           <div className="px-4 py-3 border-t border-[var(--panel-border)] flex items-center justify-between text-xs text-[var(--muted)]">
             <span>라인 {rows.length}개</span>
             <div className="flex items-center gap-2">
-              <Button
-                variant="secondary"
-                onClick={() => setPageIndex((prev) => Math.max(1, prev - 1))}
-                disabled={pageIndex === 1}
-              >
+              <Button variant="secondary" onClick={() => setPageIndex((prev) => Math.max(1, prev - 1))} disabled={pageIndex === 1}>
                 이전
               </Button>
               <span className="text-xs">
@@ -1283,10 +1197,7 @@ export default function OrdersPage() {
                 onClick={() => {
                   const pageCount = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
                   if (pageIndex >= pageCount) {
-                    setRows((prev) => [
-                      ...prev,
-                      ...Array.from({ length: PAGE_SIZE }, (_, idx) => createEmptyRow(prev.length + idx)),
-                    ]);
+                    setRows((prev) => [...prev, ...Array.from({ length: PAGE_SIZE }, (_, idx) => createEmptyRow(prev.length + idx))]);
                   }
                   setPageIndex((prev) => prev + 1);
                 }}
