@@ -1214,8 +1214,9 @@ export default function CatalogPage() {
           setUploadingImage(false);
         }}
         title={isEditMode ? "마스터 수정" : "새 상품 등록"}
-        className="max-w-6xl max-h-[86vh] overflow-hidden"
+        className="max-w-6xl"
       >
+
         <div className="grid gap-6 lg:grid-cols-[320px,1fr]">
           <div className="space-y-4">
             <div className="rounded-[18px] border border-dashed border-[var(--panel-border)] bg-[#f8fafc] p-4">
@@ -1272,13 +1273,13 @@ export default function CatalogPage() {
             </div>
           </div>
           <form
-            className="flex max-h-[68vh] flex-col"
+            className="flex flex-col"
             onSubmit={(event) => {
               event.preventDefault();
               handleSave();
             }}
           >
-            <div className="flex-1 overflow-y-auto pr-2">
+            <div className="pr-2">
               <div className="grid gap-6 lg:grid-cols-2 h-full">
                 {/* Left Column: Input Fields (Basic + Remark) */}
                 <div className="flex flex-col gap-4 h-full">

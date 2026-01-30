@@ -32,7 +32,10 @@ export default function Sidebar() {
   const pathname = usePathname();
 
   return (
-    <aside className="flex h-full w-[260px] flex-col border-r bg-background" id="sidebar.root">
+    <aside
+      className="flex min-h-screen w-[260px] shrink-0 flex-col border-r bg-background"
+      id="sidebar.root"
+    >
       <div className="mb-8 flex items-center gap-3 px-3 pt-6" id="sidebar.brand">
         <div className="flex h-10 w-10 items-center justify-center rounded-[var(--radius)] bg-[var(--primary)] text-[var(--primary-foreground)]">
           J

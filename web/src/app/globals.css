@@ -3,12 +3,12 @@
 :root {
   --background: #f8f9fc;
   --foreground: #0f172a;
-  
+
   /* Retool-like crisp panels */
   --panel: #ffffff;
   --panel-border: #e2e8f0;
   --panel-hover: #fcfdfe;
-  
+
   /* Sophisticated Grays */
   --muted: #64748b;
   --muted-weak: #94a3b8;
@@ -24,7 +24,7 @@
   --success: #10b981;
   --danger: #ef4444;
   --warning: #f59e0b;
-  
+
   /* Interaction */
   --input-bg: #ffffff;
   --input-border: #cbd5e1;
@@ -32,7 +32,8 @@
 
   /* UI Tokens */
   --chip: #f1f5f9;
-  --radius: 8px; /* Tighter radius for SaaS feel */
+  --radius: 8px;
+  /* Tighter radius for SaaS feel */
   --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
   --shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px -1px rgba(0, 0, 0, 0.1);
   --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -4px rgba(0, 0, 0, 0.1);
@@ -51,27 +52,37 @@
   --shadow-card: var(--shadow);
 }
 
+html,
 body {
+  overflow-x: hidden;
+}
+
+body {
+  margin: 0;
   background-color: var(--background);
   color: var(--foreground);
   font-family: var(--font-manrope), system-ui, sans-serif;
   min-height: 100vh;
-  letter-spacing: -0.01em; /* Modern typography tightening */
+  letter-spacing: -0.01em;
   -webkit-font-smoothing: antialiased;
 }
+
 
 /* Scrollbar refinement */
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;
 }
+
 ::-webkit-scrollbar-track {
   background: transparent;
 }
+
 ::-webkit-scrollbar-thumb {
   background: var(--muted-weak);
   border-radius: 4px;
 }
+
 ::-webkit-scrollbar-thumb:hover {
   background: var(--muted);
 }
