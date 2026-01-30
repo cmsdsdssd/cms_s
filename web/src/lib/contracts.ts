@@ -40,30 +40,35 @@ export const CONTRACTS = {
     orderUpsertV2: process.env.NEXT_PUBLIC_CMS_FN_ORDER_UPSERT_V2 ?? "",
     orderUpsertV3: "cms_fn_upsert_order_line_v3",
     orderSetStatus: process.env.NEXT_PUBLIC_CMS_FN_ORDER_SET_STATUS ?? "",
-    shipmentCreateFromOrders:
-      process.env.NEXT_PUBLIC_CMS_FN_CREATE_SHIPMENTS_FROM_ORDERS ?? "",
+    shipmentCreateFromOrders: process.env.NEXT_PUBLIC_CMS_FN_CREATE_SHIPMENTS_FROM_ORDERS ?? "",
 
     shipmentCreateHeader: process.env.NEXT_PUBLIC_CMS_FN_SHIPMENT_CREATE_HEADER ?? "",
     shipmentAddFromOrder: process.env.NEXT_PUBLIC_CMS_FN_SHIPMENT_ADD_FROM_ORDER ?? "",
 
     shipmentAddAdHoc: process.env.NEXT_PUBLIC_CMS_FN_SHIPMENT_ADD_ADHOC ?? "",
     shipmentUpdateLine: process.env.NEXT_PUBLIC_CMS_FN_SHIPMENT_UPDATE_LINE ?? "",
+
+    // ✅ FIX: 실제 존재하는 RPC로 교체
     shipmentUpsertFromOrder:
       process.env.NEXT_PUBLIC_RPC_SHIPMENT_UPSERT_FROM_ORDER ||
-      "cms_fn_upsert_shipment_from_order_line_v2",
+      "cms_fn_shipment_upsert_from_order_line",
+
     shipmentConfirm:
       process.env.NEXT_PUBLIC_RPC_SHIPMENT_CONFIRM || "cms_fn_confirm_shipment_v3_cost_v1",
     applyPurchaseCost:
       process.env.NEXT_PUBLIC_RPC_APPLY_PURCHASE_COST || "cms_fn_apply_purchase_cost_to_shipment_v1",
+
     recordPayment: process.env.NEXT_PUBLIC_CMS_FN_RECORD_PAYMENT ?? "",
     recordReturn:
       process.env.NEXT_PUBLIC_CMS_FN_RECORD_RETURN_V2 ??
       process.env.NEXT_PUBLIC_CMS_FN_RECORD_RETURN ??
       "",
+
     enumValues: process.env.NEXT_PUBLIC_CMS_FN_ENUM_VALUES ?? "cms_fn_enum_values_v1",
     marketTickUpsertByRole:
       process.env.NEXT_PUBLIC_CMS_FN_MARKET_TICK_UPSERT_BY_ROLE ??
       "cms_fn_upsert_market_tick_by_role_v1",
+
     quickInventoryMove: "cms_fn_quick_inventory_move_v2",
     inventoryTransfer: "cms_fn_transfer_inventory_v1",
     inventoryMoveHeaderUpsert: "cms_fn_upsert_inventory_move_header_v1",

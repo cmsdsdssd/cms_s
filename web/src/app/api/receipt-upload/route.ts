@@ -13,8 +13,8 @@ function getSupabaseAdmin() {
 }
 
 function getBucketName() {
-    // Requirements: default to 'ocr_docs', override with environment variable if present
-    return process.env.SUPABASE_RECEIPT_BUCKET || "ocr_docs";
+    // Requirements: default to 'receipt_inbox', override with environment variable if present
+    return process.env.SUPABASE_RECEIPT_BUCKET || "receipt_inbox";
 }
 
 function sha256(buf: Buffer) {
@@ -24,49 +24,55 @@ function sha256(buf: Buffer) {
 export async function POST(request: Request) {
     const supabase = getSupabaseAdmin();
     if (!supabase) {
-        return NextResponse.json({ error: "Supabase 환경 변수가 설정되지 않았습니다." }, { status: 500 });
+        return NextResponse.json({ error: "Supabase config missing" }, { status: 500 });
     }
 
     try {
-        const formData = await request.formData();
-        // Requirements: file0 priority, fallback to file
-        const file = (formData.get("file0") as File) || (formData.get("file") as File);
+        const form = await request.formData();
+        const file = (form.get("file0") ?? form.get("file")) as File | null;
 
-        if (!file || !(file instanceof File)) {
-            return NextResponse.json({ error: "file0 or file is required." }, { status: 400 });
+        if (!file) {
+            return NextResponse.json({ error: "file missing" }, { status: 400 });
         }
         if (!ALLOWED_TYPES.includes(file.type)) {
-            return NextResponse.json({ error: "지원하지 않는 파일 형식입니다." }, { status: 400 });
+            return NextResponse.json({ error: "unsupported file type" }, { status: 400 });
         }
         if (file.size > MAX_SIZE_BYTES) {
-            return NextResponse.json({ error: "파일 용량이 너무 큽니다(20MB 이하)." }, { status: 400 });
+            return NextResponse.json({ error: "file too large" }, { status: 400 });
         }
-
-        const arrayBuffer = await file.arrayBuffer();
-        const buf = Buffer.from(arrayBuffer);
-        const hash = sha256(buf);
-
-        const ext = (file.name.split(".").pop() ?? "").toLowerCase().replace(/[^a-z0-9]/g, "");
-        const safeExt = ext || (file.type === "application/pdf" ? "pdf" : "jpg");
 
         const bucket = getBucketName();
-        // Requirements: receipt_inbox/YYYY/MM/DD/<uuid>.<ext>
-        const now = new Date();
-        const yyyy = now.getFullYear();
-        const mm = String(now.getMonth() + 1).padStart(2, '0');
-        const dd = String(now.getDate()).padStart(2, '0');
-        const filePath = `receipt_inbox/${yyyy}/${mm}/${dd}/${crypto.randomUUID()}.${safeExt}`;
+        const arrayBuf = await file.arrayBuffer();
+        const buf = Buffer.from(arrayBuf);
+        const hash = sha256(buf);
 
-        // 1. Upload to Storage
-        const { error: upErr } = await supabase.storage.from(bucket).upload(filePath, buf, {
-            contentType: file.type,
-            upsert: true,
-        });
-        if (upErr) {
-            return NextResponse.json({ error: upErr.message ?? "upload failed" }, { status: 500 });
+        const ext =
+            file.type === "application/pdf"
+                ? "pdf"
+                : file.type === "image/jpeg"
+                    ? "jpg"
+                    : file.type === "image/png"
+                        ? "png"
+                        : "webp";
+
+        const filePath = `${new Date().toISOString().slice(0, 10).replaceAll("-", "")}/${hash}.${ext}`;
+
+        const { error: uploadErr } = await supabase.storage
+            .from(bucket)
+            .upload(filePath, buf, {
+                contentType: file.type,
+                upsert: false,
+            });
+
+        if (uploadErr) {
+            if (String(uploadErr.message || "").includes("already exists")) {
+                // ok - already uploaded
+            } else {
+                return NextResponse.json({ error: uploadErr.message ?? "upload failed" }, { status: 500 });
+            }
         }
 
-        // 2. DB Register using RPC
+        // record in DB via RPC
         const { data: receipt_id, error: rpcErr } = await supabase.rpc("cms_fn_upsert_receipt_inbox_v1", {
             p_file_bucket: bucket,
             p_file_path: filePath,
@@ -89,11 +95,11 @@ export async function POST(request: Request) {
         return NextResponse.json({
             ok: true,
             receipt_id,
-            file_bucket: bucket,
-            file_path: filePath,
+            bucket,
+            path: filePath,
             sha256: hash,
         });
     } catch (e: any) {
-        return NextResponse.json({ error: e.message ?? "unknown error" }, { status: 500 });
+        return NextResponse.json({ error: e?.message ?? "unknown error" }, { status: 500 });
     }
 }

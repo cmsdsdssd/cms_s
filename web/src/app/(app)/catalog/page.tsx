@@ -60,158 +60,6 @@ type CatalogDetail = {
   modifiedDate: string;
 };
 
-const catalogItems: CatalogItem[] = [
-  {
-    id: "4949R",
-    model: "4949R",
-    name: "다이아 밴드",
-    date: "2025-12-16",
-    status: "판매 중",
-    tone: "active",
-    weight: "3.45 g",
-    material: "14K 로즈골드",
-    stone: "다이아 0.2ct",
-    vendor: "글로벌 젬스",
-    color: "로즈(P)",
-    cost: "₩185,000",
-    grades: ["₩450", "₩420", "₩390", "₩350"],
-  },
-  {
-    id: "5980R",
-    model: "5980R",
-    name: "클래식 웨딩",
-    date: "2025-12-15",
-    status: "이미지 대기",
-    tone: "warning",
-    weight: "5.10 g",
-    material: "18K 화이트골드",
-    stone: "없음",
-    vendor: "로컬 아티산",
-    color: "화이트(W)",
-    cost: "₩210,000",
-    grades: ["₩550", "₩520", "₩490", "₩450"],
-  },
-  {
-    id: "4184B",
-    model: "4184B",
-    name: "빈티지 펜던트",
-    date: "2025-12-14",
-    status: "신규",
-    tone: "neutral",
-    weight: "2.15 g",
-    material: "14K 옐로골드",
-    stone: "사파이어",
-    vendor: "글로벌 젬스",
-    color: "옐로(Y)",
-    cost: "₩140,000",
-    grades: ["₩320", "₩300", "₩280", "₩250"],
-  },
-  {
-    id: "6220W",
-    model: "6220W",
-    name: "모던 링",
-    date: "2025-12-12",
-    status: "판매 중",
-    tone: "active",
-    weight: "3.80 g",
-    material: "18K 화이트골드",
-    stone: "다이아 0.1ct",
-    vendor: "아뜰리에 K",
-    color: "화이트(W)",
-    cost: "₩210,000",
-    grades: ["₩520", "₩500", "₩470", "₩430"],
-  },
-  {
-    id: "7012G",
-    model: "7012G",
-    name: "클래식 체인",
-    date: "2025-12-10",
-    status: "판매 중",
-    tone: "active",
-    weight: "4.05 g",
-    material: "14K 옐로골드",
-    stone: "없음",
-    vendor: "실버라인",
-    color: "옐로(Y)",
-    cost: "₩160,000",
-    grades: ["₩330", "₩310", "₩290", "₩260"],
-  },
-  {
-    id: "8831P",
-    model: "8831P",
-    name: "피어싱 라인",
-    date: "2025-12-08",
-    status: "이미지 대기",
-    tone: "warning",
-    weight: "1.40 g",
-    material: "14K 로즈골드",
-    stone: "없음",
-    vendor: "로즈 아뜰리에",
-    color: "로즈(P)",
-    cost: "₩120,000",
-    grades: ["₩280", "₩260", "₩240", "₩220"],
-  },
-  {
-    id: "9902N",
-    model: "9902N",
-    name: "네크리스 라인",
-    date: "2025-12-07",
-    status: "판매 중",
-    tone: "active",
-    weight: "6.20 g",
-    material: "18K 옐로골드",
-    stone: "루비",
-    vendor: "글로벌 젬스",
-    color: "옐로(Y)",
-    cost: "₩260,000",
-    grades: ["₩650", "₩620", "₩580", "₩540"],
-  },
-  {
-    id: "3091B",
-    model: "3091B",
-    name: "브레이슬릿",
-    date: "2025-12-05",
-    status: "신규",
-    tone: "neutral",
-    weight: "5.75 g",
-    material: "14K 옐로골드",
-    stone: "없음",
-    vendor: "로컬 아티산",
-    color: "옐로(Y)",
-    cost: "₩190,000",
-    grades: ["₩420", "₩400", "₩380", "₩360"],
-  },
-  {
-    id: "5511W",
-    model: "5511W",
-    name: "베이직 링",
-    date: "2025-12-03",
-    status: "판매 중",
-    tone: "active",
-    weight: "2.95 g",
-    material: "18K 화이트골드",
-    stone: "없음",
-    vendor: "럭스 스튜디오",
-    color: "화이트(W)",
-    cost: "₩150,000",
-    grades: ["₩360", "₩340", "₩320", "₩300"],
-  },
-  {
-    id: "7208G",
-    model: "7208G",
-    name: "팬던트 라이트",
-    date: "2025-12-01",
-    status: "이미지 대기",
-    tone: "warning",
-    weight: "2.05 g",
-    material: "14K 옐로골드",
-    stone: "진주",
-    vendor: "글로벌 젬스",
-    color: "옐로(Y)",
-    cost: "₩135,000",
-    grades: ["₩310", "₩295", "₩275", "₩250"],
-  },
-];
 
 // pageSize is dynamic based on view
 
@@ -357,7 +205,23 @@ export default function CatalogPage() {
       setIsSaving(false);
     }
   }, [registerOpen]);
+  // ✅ [추가] 배경 더블클릭 시 닫기 로직
+  // Modal 컴포넌트가 배경 이벤트를 지원하지 않으므로, 문서 전체에서 감지합니다.
+  useEffect(() => {
+    if (!registerOpen) return;
 
+    const handleBackdropDoubleClick = () => {
+      setRegisterOpen(false);
+      setIsSaving(false);
+      setUploadError(null);
+      setUploadingImage(false);
+    };
+
+    // 내부 div에서 e.stopPropagation()을 했기 때문에,
+    // document까지 이벤트가 올라왔다면 '배경'을 더블클릭했다는 뜻입니다.
+    document.addEventListener("dblclick", handleBackdropDoubleClick);
+    return () => document.removeEventListener("dblclick", handleBackdropDoubleClick);
+  }, [registerOpen]);
   const canSave = true;
 
   const today = new Date().toISOString().slice(0, 10);
@@ -367,22 +231,53 @@ export default function CatalogPage() {
     laborBaseCost + laborCenterCost * centerQty + laborSub1Cost * sub1Qty + laborSub2Cost * sub2Qty;
 
 
+  // 1. 필터 상태 추가 (검색어, 재질, 카테고리)
+  const [filterQuery, setFilterQuery] = useState("");
+  const [filterMaterial, setFilterMaterial] = useState("");
+  const [filterCategory, setFilterCategory] = useState("");
+
+  // 2. 필터링 및 정렬 로직 구현 (기존 sortedCatalogItems 교체)
   const sortedCatalogItems = useMemo(() => {
-    const sorted = [...catalogItemsState].sort((a, b) => {
+    let filtered = [...catalogItemsState];
+
+    // (1) 재질 필터
+    if (filterMaterial) {
+      filtered = filtered.filter((item) => item.material === filterMaterial);
+    }
+
+    // (2) 카테고리 필터 (CatalogItem에는 없으므로 원본 데이터 masterRowsById 참조)
+    if (filterCategory) {
+      filtered = filtered.filter((item) => {
+        const row = masterRowsById[item.id];
+        return String(row?.category_code ?? "") === filterCategory;
+      });
+    }
+
+    // (3) 검색어 필터 (모델명 또는 이름)
+    if (filterQuery) {
+      const q = filterQuery.toLowerCase();
+      filtered = filtered.filter(
+        (item) =>
+          item.model.toLowerCase().includes(q) ||
+          item.name.toLowerCase().includes(q)
+      );
+    }
+
+    // (4) 정렬 (기존 로직 유지)
+    filtered.sort((a, b) => {
       if (sortBy === "model") {
         return sortOrder === "asc"
           ? a.model.localeCompare(b.model)
           : b.model.localeCompare(a.model);
       } else {
-        // Sort by modified date (using date field as proxy for modified)
         return sortOrder === "asc"
           ? a.date.localeCompare(b.date)
           : b.date.localeCompare(a.date);
       }
     });
-    return sorted;
-  }, [catalogItemsState, sortBy, sortOrder]);
 
+    return filtered;
+  }, [catalogItemsState, sortBy, sortOrder, masterRowsById, filterMaterial, filterCategory, filterQuery]);
   const activePageSize = view === "gallery" ? 12 : 5;
   const totalPages = Math.max(1, Math.ceil(sortedCatalogItems.length / activePageSize));
   const totalCount = sortedCatalogItems.length;
@@ -873,20 +768,37 @@ export default function CatalogPage() {
                       데이터가 없습니다.
                     </div>
                   ) : view === "list" ? (
+                    /* [리스트 뷰] */
                     <div className="space-y-3">
                       {pageItems.map((item) => (
                         <Card
                           key={item.id}
                           className={cn(
                             "cursor-pointer p-3 transition",
-                            getMaterialBgColor(String(masterRowsById[item.id]?.material_code_default ?? "00")),
-                            item.id === selectedItemId ? "ring-2 ring-[var(--primary)]" : "hover:opacity-90"
+                            getMaterialBgColor(
+                              String(
+                                masterRowsById[item.id]?.material_code_default ??
+                                "00"
+                              )
+                            ),
+                            item.id === selectedItemId
+                              ? "ring-2 ring-[var(--primary)]"
+                              : "hover:opacity-90"
                           )}
                           onClick={() => setSelectedItemId(item.id)}
-                          onDoubleClick={() => item.imageUrl && setPreviewImage(item.imageUrl)}
+                          onDoubleClick={handleOpenEdit} // ✅ 카드 전체 더블클릭 -> 수정창 열기
                         >
                           <div className="flex gap-4">
-                            <div className="relative h-28 w-28 shrink-0 overflow-hidden rounded-[14px] bg-gradient-to-br from-[#e7edf5] to-[#f7faff]">
+                            {/* 이미지 영역 */}
+                            <div
+                              className="relative h-28 w-28 shrink-0 overflow-hidden rounded-[14px] bg-gradient-to-br from-[#e7edf5] to-[#f7faff]"
+                              onDoubleClick={(e) => {
+                                // ✅ 이미지 더블클릭 시: 상위(카드)로 전파 막고(=수정창 안열림), 이미지 프리뷰 실행
+                                e.stopPropagation();
+                                if (item.imageUrl)
+                                  setPreviewImage(item.imageUrl);
+                              }}
+                            >
                               <div className="absolute right-2 top-2 h-6 w-6 rounded-full border border-white/80 bg-white/80" />
                               <div className="absolute inset-0 flex items-center justify-center text-xs text-[var(--muted)]">
                                 이미지
@@ -906,11 +818,17 @@ export default function CatalogPage() {
                             <div className="flex-1 space-y-1.5">
                               <div className="flex items-center justify-between">
                                 <div className="flex items-center gap-2">
-                                  <p className="text-lg font-semibold text-[var(--foreground)]">{item.model}</p>
+                                  <p className="text-lg font-semibold text-[var(--foreground)]">
+                                    {item.model}
+                                  </p>
                                 </div>
-                                <div className="text-xs text-[var(--muted)]">{item.date}</div>
+                                <div className="text-xs text-[var(--muted)]">
+                                  {item.date}
+                                </div>
                               </div>
-                              <p className="text-sm text-[var(--muted)]">{item.name}</p>
+                              <p className="text-sm text-[var(--muted)]">
+                                {item.name}
+                              </p>
                               <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
                                 {[
                                   { label: "중량", value: item.weight },
@@ -925,7 +843,9 @@ export default function CatalogPage() {
                                     <p className="text-[9px] font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">
                                       {meta.label}
                                     </p>
-                                    <p className="text-xs font-semibold text-[var(--foreground)]">{meta.value}</p>
+                                    <p className="text-xs font-semibold text-[var(--foreground)]">
+                                      {meta.value}
+                                    </p>
                                   </div>
                                 ))}
                               </div>
@@ -935,11 +855,21 @@ export default function CatalogPage() {
                                 <div className="text-[var(--muted)]">등급1</div>
                                 <div className="text-[var(--muted)]">등급2</div>
                                 <div className="text-[var(--muted)]">등급3</div>
-                                <div className="font-semibold text-[var(--foreground)]">{item.color}</div>
-                                <div className="font-semibold text-[var(--foreground)]">{item.cost}</div>
-                                <div className="font-semibold text-[var(--foreground)]">{item.grades[0]}</div>
-                                <div className="font-semibold text-[var(--foreground)]">{item.grades[1]}</div>
-                                <div className="font-semibold text-[var(--foreground)]">{item.grades[2]}</div>
+                                <div className="font-semibold text-[var(--foreground)]">
+                                  {item.color}
+                                </div>
+                                <div className="font-semibold text-[var(--foreground)]">
+                                  {item.cost}
+                                </div>
+                                <div className="font-semibold text-[var(--foreground)]">
+                                  {item.grades[0]}
+                                </div>
+                                <div className="font-semibold text-[var(--foreground)]">
+                                  {item.grades[1]}
+                                </div>
+                                <div className="font-semibold text-[var(--foreground)]">
+                                  {item.grades[2]}
+                                </div>
                               </div>
                             </div>
                           </div>
@@ -947,19 +877,35 @@ export default function CatalogPage() {
                       ))}
                     </div>
                   ) : (
+                    /* [갤러리 뷰] */
                     <div className="grid gap-4 grid-cols-2 lg:grid-cols-4 auto-rows-fr">
                       {pageItems.map((item) => (
                         <Card
                           key={item.id}
                           className={cn(
                             "cursor-pointer overflow-hidden transition h-full flex flex-col",
-                            getMaterialBgColor(String(masterRowsById[item.id]?.material_code_default ?? "00")),
-                            item.id === selectedItemId ? "ring-2 ring-[var(--primary)]" : "hover:opacity-90"
+                            getMaterialBgColor(
+                              String(
+                                masterRowsById[item.id]?.material_code_default ??
+                                "00"
+                              )
+                            ),
+                            item.id === selectedItemId
+                              ? "ring-2 ring-[var(--primary)]"
+                              : "hover:opacity-90"
                           )}
                           onClick={() => setSelectedItemId(item.id)}
-                          onDoubleClick={() => item.imageUrl && setPreviewImage(item.imageUrl)}
+                          onDoubleClick={handleOpenEdit} // ✅ 카드 전체 더블클릭 -> 수정창 열기
                         >
-                          <div className="relative aspect-square bg-gradient-to-br from-[#e7edf5] to-[#f7faff]">
+                          {/* 이미지 영역 */}
+                          <div
+                            className="relative aspect-square bg-gradient-to-br from-[#e7edf5] to-[#f7faff]"
+                            onDoubleClick={(e) => {
+                              // ✅ 이미지 더블클릭 시: 상위(카드)로 전파 막고, 이미지 프리뷰 실행
+                              e.stopPropagation();
+                              if (item.imageUrl) setPreviewImage(item.imageUrl);
+                            }}
+                          >
                             <div className="absolute inset-0 flex items-center justify-center text-xs text-[var(--muted)]">
                               이미지
                             </div>
@@ -976,44 +922,92 @@ export default function CatalogPage() {
                             ) : null}
                           </div>
                           <div className="space-y-2 p-4 flex-1">
-                            <p className="text-sm font-semibold text-black truncate">{item.model}</p>
+                            <p className="text-sm font-semibold text-black truncate">
+                              {item.model}
+                            </p>
                             <div className="grid grid-cols-10 gap-2 text-xs">
                               <div className="col-span-4">
-                                <p className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)] mb-0.5">예상 총 금액</p>
+                                <p className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)] mb-0.5">
+                                  예상 총 금액
+                                </p>
                                 <p className="font-semibold text-[var(--foreground)]">
                                   {(() => {
                                     const row = masterRowsById[item.id];
                                     if (!row) return "-";
-                                    const weight = parseFloat(item.weight) || 0;
-                                    const deduction = parseFloat(String(row.deduction_weight_default_g ?? 0)) || 0;
-                                    const materialCode = String(row.material_code_default ?? "00");
-                                    const matPrice = calculateMaterialPrice(materialCode, weight, deduction);
-                                    const laborSell = (row.labor_total_sell as number | undefined) ?? (row.labor_base_sell as number | undefined) ?? 0;
-                                    return Math.round(matPrice + laborSell).toLocaleString("ko-KR") + " 원";
+                                    const weight =
+                                      parseFloat(item.weight) || 0;
+                                    const deduction =
+                                      parseFloat(
+                                        String(
+                                          row.deduction_weight_default_g ?? 0
+                                        )
+                                      ) || 0;
+                                    const materialCode = String(
+                                      row.material_code_default ?? "00"
+                                    );
+                                    const matPrice = calculateMaterialPrice(
+                                      materialCode,
+                                      weight,
+                                      deduction
+                                    );
+                                    const laborSell =
+                                      (row.labor_total_sell as
+                                        | number
+                                        | undefined) ??
+                                      (row.labor_base_sell as
+                                        | number
+                                        | undefined) ??
+                                      0;
+                                    return (
+                                      Math.round(
+                                        matPrice + laborSell
+                                      ).toLocaleString("ko-KR") + " 원"
+                                    );
                                   })()}
                                 </p>
                               </div>
                               <div className="col-span-3">
-                                <p className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)] mb-0.5">예상 중량</p>
+                                <p className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)] mb-0.5">
+                                  예상 중량
+                                </p>
                                 <p className="font-semibold text-[var(--foreground)]">
                                   {(() => {
                                     const row = masterRowsById[item.id];
-                                    const weight = parseFloat(item.weight) || 0;
-                                    const deduction = parseFloat(String(row?.deduction_weight_default_g ?? 0)) || 0;
+                                    const weight =
+                                      parseFloat(item.weight) || 0;
+                                    const deduction =
+                                      parseFloat(
+                                        String(
+                                          row?.deduction_weight_default_g ?? 0
+                                        )
+                                      ) || 0;
                                     if (deduction > 0) {
-                                      return `${weight.toFixed(2)}g (-${deduction.toFixed(2)})`;
+                                      return `${weight.toFixed(
+                                        2
+                                      )}g (-${deduction.toFixed(2)})`;
                                     }
                                     return `${weight.toFixed(2)}g`;
                                   })()}
                                 </p>
                               </div>
                               <div className="col-span-3">
-                                <p className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)] mb-0.5">판매 합계공임</p>
+                                <p className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)] mb-0.5">
+                                  판매 합계공임
+                                </p>
                                 <p className="font-semibold text-[var(--foreground)]">
                                   {(() => {
                                     const row = masterRowsById[item.id];
-                                    const laborSell = (row?.labor_total_sell as number | undefined) ?? (row?.labor_base_sell as number | undefined) ?? 0;
-                                    return laborSell.toLocaleString("ko-KR") + " 원";
+                                    const laborSell =
+                                      (row?.labor_total_sell as
+                                        | number
+                                        | undefined) ??
+                                      (row?.labor_base_sell as
+                                        | number
+                                        | undefined) ??
+                                      0;
+                                    return (
+                                      laborSell.toLocaleString("ko-KR") + " 원"
+                                    );
                                   })()}
                                 </p>
                               </div>
@@ -1029,7 +1023,12 @@ export default function CatalogPage() {
                     {rangeStart} - {rangeEnd} / {totalCount}
                   </p>
                   <div className="flex gap-2">
-                    <Button variant="secondary" size="sm" disabled={page === 1} onClick={() => setPage((p) => p - 1)}>
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      disabled={page === 1}
+                      onClick={() => setPage((p) => p - 1)}
+                    >
                       이전
                     </Button>
                     <Button
@@ -1046,160 +1045,317 @@ export default function CatalogPage() {
             }
             right={
               <div className="space-y-3" id="catalog.detailPanel">
+                {/* 1. 상단 필터 영역 (연동 완료) */}
                 <div className="grid grid-cols-12 gap-2">
-                  <Select className="col-span-12 md:col-span-2">
-                    <option>재질 전체</option>
+                  <Select
+                    className="col-span-12 md:col-span-2"
+                    value={filterMaterial}
+                    onChange={(e) => {
+                      setFilterMaterial(e.target.value);
+                      setPage(1); // 필터 변경 시 1페이지로 이동
+                    }}
+                  >
+                    <option value="">재질 전체</option>
                     {materialOptions.map((material) => (
                       <option key={material.value} value={material.value}>
                         {material.label}
                       </option>
                     ))}
                   </Select>
-                  <Select className="col-span-12 md:col-span-2">
-                    <option>전체 카테고리</option>
+
+                  <Select
+                    className="col-span-12 md:col-span-2"
+                    value={filterCategory}
+                    onChange={(e) => {
+                      setFilterCategory(e.target.value);
+                      setPage(1);
+                    }}
+                  >
+                    <option value="">전체 카테고리</option>
                     {categoryOptions.map((category) => (
                       <option key={category.value} value={category.value}>
                         {category.label}
                       </option>
                     ))}
                   </Select>
-                  <Input placeholder="모델명, 태그 검색" className="col-span-12 md:col-span-8" />
+
+                  <Input
+                    placeholder="모델명, 태그 검색"
+                    className="col-span-12 md:col-span-8"
+                    value={filterQuery}
+                    onChange={(e) => {
+                      setFilterQuery(e.target.value);
+                      setPage(1);
+                    }}
+                  />
                 </div>
-                <div className="flex gap-4">
-                  {selectedItem?.imageUrl && (
-                    <div className="h-[300px] w-[300px] shrink-0 overflow-hidden rounded-[12px] border border-[var(--panel-border)] bg-white cursor-pointer"
-                      onDoubleClick={() => setPreviewImage(selectedItem.imageUrl ?? null)}>
-                      <img
-                        src={selectedItem.imageUrl}
-                        alt={selectedItem.model}
-                        className="h-full w-full object-cover"
-                      />
+
+                {/* 2. 메인 컨텐츠 영역 */}
+                <div className="flex gap-4 items-stretch">
+                  {/* [왼쪽 기둥] 상세 정보 패널 */}
+                  <div className="flex-1 flex flex-col gap-3 min-w-0">
+
+                    {/* A. 이미지 및 가격 통계 행 */}
+                    <div className="flex gap-4 h-[300px]">
+                      {selectedItem?.imageUrl && (
+                        <div
+                          className="h-[300px] w-[300px] shrink-0 overflow-hidden rounded-[12px] border border-[var(--panel-border)] bg-white cursor-pointer"
+                          onDoubleClick={() =>
+                            setPreviewImage(selectedItem.imageUrl ?? null)
+                          }
+                        >
+                          <img
+                            src={selectedItem.imageUrl}
+                            alt={selectedItem.model}
+                            className="h-full w-full object-cover"
+                          />
+                        </div>
+                      )}
+
+                      {/* 가격 통계 박스들 */}
+                      <div className="flex flex-col gap-2 flex-1 min-w-[200px]">
+                        <div className="flex flex-col items-center justify-center text-center rounded-[12px] border border-[var(--panel-border)] bg-white px-3 py-2">
+                          <p className="text-xs text-[var(--muted)]">
+                            예상 총 금액 (판매)
+                          </p>
+                          <p className="text-sm font-semibold text-[var(--foreground)]">
+                            {Math.round(totalEstimatedSell).toLocaleString("ko-KR")} 원
+                          </p>
+                        </div>
+                        <div className="flex flex-col items-center justify-center text-center rounded-[12px] border border-[var(--panel-border)] bg-white px-3 py-2">
+                          <p className="text-xs text-[var(--muted)]">
+                            예상 총 금액 (원가)
+                          </p>
+                          <p className="text-sm font-semibold text-[var(--foreground)]">
+                            {Math.round(totalEstimatedCost).toLocaleString("ko-KR")} 원
+                          </p>
+                        </div>
+                        <div className="flex flex-col items-center justify-center text-center rounded-[12px] border border-[var(--panel-border)] bg-white px-3 py-2">
+                          <p className="text-xs text-[var(--muted)]">판매 합계공임</p>
+                          <p className="text-sm font-semibold text-[var(--foreground)]">
+                            {totalLaborSell.toLocaleString("ko-KR")} 원
+                          </p>
+                        </div>
+                        <div className="flex flex-col items-center justify-center text-center rounded-[12px] border border-[var(--panel-border)] bg-white px-3 py-2">
+                          <p className="text-xs text-[var(--muted)]">원가 합계공임</p>
+                          <p className="text-sm font-semibold text-[var(--foreground)]">
+                            {totalLaborCost.toLocaleString("ko-KR")} 원
+                          </p>
+                        </div>
+                      </div>
                     </div>
-                  )}
-                  <div className="flex flex-col gap-2 w-[300px] shrink-0">
-                    <div className="rounded-[12px] border border-[var(--panel-border)] bg-white px-3 py-2">
-                      <p className="text-xs text-[var(--muted)]">예상 총 금액 (판매)</p>
-                      <p className="text-sm font-semibold text-[var(--foreground)]">
-                        {Math.round(totalEstimatedSell).toLocaleString("ko-KR")} 원
-                      </p>
-                    </div>
-                    <div className="rounded-[12px] border border-[var(--panel-border)] bg-white px-3 py-2">
-                      <p className="text-xs text-[var(--muted)]">예상 총 금액 (원가)</p>
-                      <p className="text-sm font-semibold text-[var(--foreground)]">
-                        {Math.round(totalEstimatedCost).toLocaleString("ko-KR")} 원
-                      </p>
-                    </div>
-                    <div className="rounded-[12px] border border-[var(--panel-border)] bg-white px-3 py-2">
-                      <p className="text-xs text-[var(--muted)]">판매 합계공임</p>
-                      <p className="text-sm font-semibold text-[var(--foreground)]">
-                        {totalLaborSell.toLocaleString("ko-KR")} 원
-                      </p>
-                    </div>
-                    <div className="rounded-[12px] border border-[var(--panel-border)] bg-white px-3 py-2">
-                      <p className="text-xs text-[var(--muted)]">원가 합계공임</p>
-                      <p className="text-sm font-semibold text-[var(--foreground)]">
-                        {totalLaborCost.toLocaleString("ko-KR")} 원
-                      </p>
-                    </div>
+
+                    {/* B. 상세 정보 카드 */}
+                    <Card id="catalog.detail.merged">
+                      <CardHeader>
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-3">
+                            <span className="text-lg font-bold text-[var(--foreground)]">
+                              상세 정보
+                            </span>
+                            <Button
+                              variant="secondary"
+                              size="sm"
+                              onClick={handleOpenEdit}
+                              disabled={!selectedItem}
+                            >
+                              마스터 수정
+                            </Button>
+                          </div>
+                        </div>
+                      </CardHeader>
+                      <CardBody className="space-y-3">
+                        <div className="grid grid-cols-2 gap-2">
+                          <Input
+                            placeholder="모델명"
+                            value={selectedItem?.model ?? ""}
+                            readOnly
+                          />
+                          <Input
+                            placeholder="공급처"
+                            value={selectedItem?.vendor ?? ""}
+                            readOnly
+                          />
+                          <Select value={selectedDetail?.materialCode ?? ""} disabled>
+                            <option value="">기본 재질</option>
+                            {materialOptions.map((material) => (
+                              <option key={material.value} value={material.value}>
+                                {material.label}
+                              </option>
+                            ))}
+                          </Select>
+                          <Select value={selectedDetail?.categoryCode ?? ""} disabled>
+                            <option value="">카테고리</option>
+                            {categoryOptions.map((category) => (
+                              <option key={category.value} value={category.value}>
+                                {category.label}
+                              </option>
+                            ))}
+                          </Select>
+                          <Input
+                            placeholder="기본 중량 (g)"
+                            value={selectedDetail?.weight ?? ""}
+                            readOnly
+                          />
+                          <Input
+                            placeholder="차감 중량 (g)"
+                            value={selectedDetail?.deductionWeight ?? ""}
+                            readOnly
+                          />
+                        </div>
+                        <div>
+                          <div className="mb-2 grid grid-cols-10 gap-2 text-xs font-semibold text-[var(--muted)]">
+                            <div className="col-span-2 text-center">항목</div>
+                            <div className="col-span-3 text-center">공임 (판매)</div>
+                            <div className="col-span-2 text-center">수량</div>
+                            <div className="col-span-3 text-center">공임 (원가)</div>
+                          </div>
+                          <div className="space-y-2">
+                            {/* 합계공임 */}
+                            <div className="grid grid-cols-10 gap-2">
+                              <div className="col-span-2 flex items-center justify-center rounded-[8px] border border-[var(--panel-border)] bg-[#f7f9fc] px-2 py-2">
+                                <span className="text-xs font-semibold text-[var(--foreground)]">
+                                  합계공임
+                                </span>
+                              </div>
+                              <Input
+                                className="col-span-3 text-center"
+                                placeholder="합계 (판매)"
+                                value={selectedDetail?.laborTotalSell ?? ""}
+                                readOnly
+                              />
+                              <div className="col-span-2" />
+                              <Input
+                                className="col-span-3 text-center"
+                                placeholder="합계 (원가)"
+                                value={selectedDetail?.laborTotalCost ?? ""}
+                                readOnly
+                              />
+                            </div>
+                            {/* 기본공임 */}
+                            <div className="grid grid-cols-10 gap-2">
+                              <div className="col-span-2 flex items-center justify-center rounded-[8px] border border-[var(--panel-border)] bg-[#f7f9fc] px-2 py-2">
+                                <span className="text-xs font-semibold text-[var(--foreground)]">
+                                  기본공임
+                                </span>
+                              </div>
+                              <Input
+                                className="col-span-3 text-center"
+                                placeholder="기본 (판매)"
+                                value={selectedDetail?.laborBaseSell ?? ""}
+                                readOnly
+                              />
+                              <div className="col-span-2" />
+                              <Input
+                                className="col-span-3 text-center"
+                                placeholder="기본 (원가)"
+                                value={selectedDetail?.laborBaseCost ?? ""}
+                                readOnly
+                              />
+                            </div>
+                            {/* 중심공임 */}
+                            <div className="grid grid-cols-10 gap-2">
+                              <div className="col-span-2 flex items-center justify-center rounded-[8px] border border-[var(--panel-border)] bg-[#f7f9fc] px-2 py-2">
+                                <span className="text-xs font-semibold text-[var(--foreground)]">
+                                  중심공임
+                                </span>
+                              </div>
+                              <Input
+                                className="col-span-3 text-center"
+                                placeholder="센터 (판매)"
+                                value={selectedDetail?.laborCenterSell ?? ""}
+                                readOnly
+                              />
+                              <Input
+                                className="col-span-2 text-center"
+                                placeholder="중심석"
+                                value={selectedDetail?.centerQty ?? ""}
+                                readOnly
+                              />
+                              <Input
+                                className="col-span-3 text-center"
+                                placeholder="센터 (원가)"
+                                value={selectedDetail?.laborCenterCost ?? ""}
+                                readOnly
+                              />
+                            </div>
+                            {/* 보조1공임 */}
+                            <div className="grid grid-cols-10 gap-2">
+                              <div className="col-span-2 flex items-center justify-center rounded-[8px] border border-[var(--panel-border)] bg-[#f7f9fc] px-2 py-2">
+                                <span className="text-xs font-semibold text-[var(--foreground)]">
+                                  보조1공임
+                                </span>
+                              </div>
+                              <Input
+                                className="col-span-3 text-center"
+                                placeholder="서브1 (판매)"
+                                value={selectedDetail?.laborSub1Sell ?? ""}
+                                readOnly
+                              />
+                              <Input
+                                className="col-span-2 text-center"
+                                placeholder="보조1석"
+                                value={selectedDetail?.sub1Qty ?? ""}
+                                readOnly
+                              />
+                              <Input
+                                className="col-span-3 text-center"
+                                placeholder="서브1 (원가)"
+                                value={selectedDetail?.laborSub1Cost ?? ""}
+                                readOnly
+                              />
+                            </div>
+                            {/* 보조2공임 */}
+                            <div className="grid grid-cols-10 gap-2">
+                              <div className="col-span-2 flex items-center justify-center rounded-[8px] border border-[var(--panel-border)] bg-[#f7f9fc] px-2 py-2">
+                                <span className="text-xs font-semibold text-[var(--foreground)]">
+                                  보조2공임
+                                </span>
+                              </div>
+                              <Input
+                                className="col-span-3 text-center"
+                                placeholder="서브2 (판매)"
+                                value={selectedDetail?.laborSub2Sell ?? ""}
+                                readOnly
+                              />
+                              <Input
+                                className="col-span-2 text-center"
+                                placeholder="보조2석"
+                                value={selectedDetail?.sub2Qty ?? ""}
+                                readOnly
+                              />
+                              <Input
+                                className="col-span-3 text-center"
+                                placeholder="서브2 (원가)"
+                                value={selectedDetail?.laborSub2Cost ?? ""}
+                                readOnly
+                              />
+                            </div>
+                          </div>
+                        </div>
+                      </CardBody>
+                    </Card>
+
+                    {/* C. 추가 메모 카드 */}
+                    <Card id="catalog.detail.raw">
+                      <CardHeader>
+                        <ActionBar title="추가 메모" />
+                      </CardHeader>
+                      <CardBody className="py-3">
+                        <Textarea
+                          placeholder="내부 메모"
+                          value={selectedDetail?.note ?? ""}
+                          readOnly
+                        />
+                      </CardBody>
+                    </Card>
                   </div>
-                  <div className="flex-1 h-[300px] rounded-[12px] border border-dashed border-[var(--panel-border)] bg-[#f8fafc] flex items-center justify-center">
-                    <p className="text-xs text-[var(--muted)]">예약 공간</p>
+
+                  {/* [오른쪽 기둥] 예약 공간 */}
+                  <div className="w-[700px] shrink-0 rounded-[12px] border border-dashed border-[var(--panel-border)] bg-[#f8fafc] flex items-center justify-center">
+                    <p className="text-xs text-[var(--muted)]">예약 공간 (450px)</p>
                   </div>
                 </div>
-                <Card id="catalog.detail.merged">
-                  <CardHeader>
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-3">
-                        <span className="text-lg font-bold text-[var(--foreground)]">상세 정보</span>
-                        <Button variant="secondary" size="sm" onClick={handleOpenEdit} disabled={!selectedItem}>
-                          마스터 수정
-                        </Button>
-                      </div>
-                    </div>
-                  </CardHeader>
-                  <CardBody className="space-y-3">
-                    <div className="grid grid-cols-2 gap-2">
-                      <Input placeholder="모델명" value={selectedItem?.model ?? ""} readOnly />
-                      <Input placeholder="공급처" value={selectedItem?.vendor ?? ""} readOnly />
-                      <Select value={selectedDetail?.materialCode ?? ""} disabled>
-                        <option value="">기본 재질</option>
-                        {materialOptions.map((material) => (
-                          <option key={material.value} value={material.value}>
-                            {material.label}
-                          </option>
-                        ))}
-                      </Select>
-                      <Select value={selectedDetail?.categoryCode ?? ""} disabled>
-                        <option value="">카테고리</option>
-                        {categoryOptions.map((category) => (
-                          <option key={category.value} value={category.value}>
-                            {category.label}
-                          </option>
-                        ))}
-                      </Select>
-                      <Input placeholder="기본 중량 (g)" value={selectedDetail?.weight ?? ""} readOnly />
-                      <Input placeholder="차감 중량 (g)" value={selectedDetail?.deductionWeight ?? ""} readOnly />
-                    </div>
-                    <div>
-                      <div className="mb-2 grid grid-cols-10 gap-2 text-xs font-semibold text-[var(--muted)]">
-                        <div className="col-span-3 text-center">항목</div>
-                        <div className="col-span-3 text-center">공임 (판매)</div>
-                        <div className="col-span-1 text-center">수량</div>
-                        <div className="col-span-3 text-center">공임 (원가)</div>
-                      </div>
-                      <div className="space-y-2">
-                        <div className="grid grid-cols-10 gap-2">
-                          <div className="col-span-3 flex items-center justify-center rounded-[8px] border border-[var(--panel-border)] bg-[#f7f9fc] px-2 py-2">
-                            <span className="text-xs font-semibold text-[var(--foreground)]">합계공임</span>
-                          </div>
-                          <Input className="col-span-3 text-center" placeholder="합계 (판매)" value={selectedDetail?.laborTotalSell ?? ""} readOnly />
-                          <div className="col-span-1" />
-                          <Input className="col-span-3 text-center" placeholder="합계 (원가)" value={selectedDetail?.laborTotalCost ?? ""} readOnly />
-                        </div>
-                        <div className="grid grid-cols-10 gap-2">
-                          <div className="col-span-3 flex items-center justify-center rounded-[8px] border border-[var(--panel-border)] bg-[#f7f9fc] px-2 py-2">
-                            <span className="text-xs font-semibold text-[var(--foreground)]">기본공임</span>
-                          </div>
-                          <Input className="col-span-3 text-center" placeholder="기본 (판매)" value={selectedDetail?.laborBaseSell ?? ""} readOnly />
-                          <div className="col-span-1" />
-                          <Input className="col-span-3 text-center" placeholder="기본 (원가)" value={selectedDetail?.laborBaseCost ?? ""} readOnly />
-                        </div>
-                        <div className="grid grid-cols-10 gap-2">
-                          <div className="col-span-3 flex items-center justify-center rounded-[8px] border border-[var(--panel-border)] bg-[#f7f9fc] px-2 py-2">
-                            <span className="text-xs font-semibold text-[var(--foreground)]">중심공임</span>
-                          </div>
-                          <Input className="col-span-3 text-center" placeholder="센터 (판매)" value={selectedDetail?.laborCenterSell ?? ""} readOnly />
-                          <Input className="col-span-1 text-center" placeholder="중심석" value={selectedDetail?.centerQty ?? ""} readOnly />
-                          <Input className="col-span-3 text-center" placeholder="센터 (원가)" value={selectedDetail?.laborCenterCost ?? ""} readOnly />
-                        </div>
-                        <div className="grid grid-cols-10 gap-2">
-                          <div className="col-span-3 flex items-center justify-center rounded-[8px] border border-[var(--panel-border)] bg-[#f7f9fc] px-2 py-2">
-                            <span className="text-xs font-semibold text-[var(--foreground)]">보조1공임</span>
-                          </div>
-                          <Input className="col-span-3 text-center" placeholder="서브1 (판매)" value={selectedDetail?.laborSub1Sell ?? ""} readOnly />
-                          <Input className="col-span-1 text-center" placeholder="보조1석" value={selectedDetail?.sub1Qty ?? ""} readOnly />
-                          <Input className="col-span-3 text-center" placeholder="서브1 (원가)" value={selectedDetail?.laborSub1Cost ?? ""} readOnly />
-                        </div>
-                        <div className="grid grid-cols-10 gap-2">
-                          <div className="col-span-3 flex items-center justify-center rounded-[8px] border border-[var(--panel-border)] bg-[#f7f9fc] px-2 py-2">
-                            <span className="text-xs font-semibold text-[var(--foreground)]">보조2공임</span>
-                          </div>
-                          <Input className="col-span-3 text-center" placeholder="서브2 (판매)" value={selectedDetail?.laborSub2Sell ?? ""} readOnly />
-                          <Input className="col-span-1 text-center" placeholder="보조2석" value={selectedDetail?.sub2Qty ?? ""} readOnly />
-                          <Input className="col-span-3 text-center" placeholder="서브2 (원가)" value={selectedDetail?.laborSub2Cost ?? ""} readOnly />
-                        </div>
-                      </div>
-                    </div>
-                  </CardBody>
-                </Card>
-                <Card id="catalog.detail.raw">
-                  <CardHeader>
-                    <ActionBar title="추가 메모" />
-                  </CardHeader>
-                  <CardBody className="py-3">
-                    <Textarea placeholder="내부 메모" value={selectedDetail?.note ?? ""} readOnly />
-                  </CardBody>
-                </Card>
               </div>
             }
           />
@@ -1216,13 +1372,22 @@ export default function CatalogPage() {
         title={isEditMode ? "마스터 수정" : "새 상품 등록"}
         className="max-w-6xl"
       >
-
-        <div className="grid gap-6 lg:grid-cols-[320px,1fr]">
+        <div
+          className="grid gap-6 lg:grid-cols-[320px,1fr]"
+          // ✅ [유지] 내부 내용물을 더블클릭했을 때는 닫히지 않도록 이벤트 전파를 막습니다.
+          // 이 코드가 있어야 배경 더블클릭 감지(useEffect)가 정상 작동합니다.
+          onDoubleClick={(e) => e.stopPropagation()}
+        >
+          {/* 1. 좌측 이미지 업로드 영역 */}
           <div className="space-y-4">
             <div className="rounded-[18px] border border-dashed border-[var(--panel-border)] bg-[#f8fafc] p-4">
               <div className="mb-3 flex items-center justify-between text-sm font-semibold text-[var(--foreground)]">
                 <span>대표 이미지</span>
-                {uploadingImage ? <span className="text-xs text-[var(--muted)]">업로드 중...</span> : null}
+                {uploadingImage ? (
+                  <span className="text-xs text-[var(--muted)]">
+                    업로드 중...
+                  </span>
+                ) : null}
               </div>
               <label className="group relative flex h-56 w-56 mx-auto cursor-pointer flex-col items-center justify-center overflow-hidden rounded-[16px] border border-[var(--panel-border)] bg-white text-center">
                 <input
@@ -1246,15 +1411,21 @@ export default function CatalogPage() {
                   />
                 ) : (
                   <div className="space-y-2 px-6">
-                    <div className="text-sm font-semibold text-[var(--foreground)]">이미지 업로드</div>
+                    <div className="text-sm font-semibold text-[var(--foreground)]">
+                      이미지 업로드
+                    </div>
                     <div className="text-xs text-[var(--muted)]">
                       JPG, PNG 파일을 드래그하거나 클릭해서 추가하세요.
                     </div>
-                    <div className="text-[11px] text-[var(--muted-weak)]">권장 비율 1:1 · 최대 10MB</div>
+                    <div className="text-[11px] text-[var(--muted-weak)]">
+                      권장 비율 1:1 · 최대 10MB
+                    </div>
                   </div>
                 )}
               </label>
-              {uploadError ? <p className="mt-2 text-xs text-red-500">{uploadError}</p> : null}
+              {uploadError ? (
+                <p className="mt-2 text-xs text-red-500">{uploadError}</p>
+              ) : null}
               {imageUrl ? (
                 <div className="mt-3 flex justify-between gap-2">
                   <Button
@@ -1265,13 +1436,20 @@ export default function CatalogPage() {
                   >
                     변경
                   </Button>
-                  <Button variant="secondary" size="sm" type="button" onClick={handleImageRemove}>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    type="button"
+                    onClick={handleImageRemove}
+                  >
                     삭제
                   </Button>
                 </div>
               ) : null}
             </div>
           </div>
+
+          {/* 2. 우측 폼 영역 */}
           <form
             className="flex flex-col"
             onSubmit={(event) => {
@@ -1281,13 +1459,16 @@ export default function CatalogPage() {
           >
             <div className="pr-2">
               <div className="grid gap-6 lg:grid-cols-2 h-full">
-                {/* Left Column: Input Fields (Basic + Remark) */}
+                {/* 2-1. 좌측 열: 기본 정보 및 비고 */}
                 <div className="flex flex-col gap-4 h-full">
-                  {/* Basic Info */}
                   <div className="rounded-[18px] border border-[var(--panel-border)] bg-white p-4">
                     <div className="mb-4 flex items-center justify-between">
-                      <p className="text-sm font-semibold text-[var(--foreground)]">기본 정보</p>
-                      <span className="text-xs text-[var(--muted)]">필수 항목 포함</span>
+                      <p className="text-sm font-semibold text-[var(--foreground)]">
+                        기본 정보
+                      </p>
+                      <span className="text-xs text-[var(--muted)]">
+                        필수 항목 포함
+                      </span>
                     </div>
                     <div className="grid gap-4 md:grid-cols-2">
                       <Field label="모델명">
@@ -1296,8 +1477,8 @@ export default function CatalogPage() {
                           value={modelName}
                           onChange={(event) => setModelName(event.target.value)}
                           onBlur={() => {
-                            const derived = deriveCategoryCodeFromModelName(modelName);
-                            // 사용자가 이미 카테고리를 손으로 바꿨으면 자동 덮어쓰기 금지
+                            const derived =
+                              deriveCategoryCodeFromModelName(modelName);
                             if (!categoryTouched && derived) {
                               setCategoryCode(derived);
                             }
@@ -1305,7 +1486,10 @@ export default function CatalogPage() {
                         />
                       </Field>
                       <Field label="공급처">
-                        <Select value={vendorId} onChange={(event) => setVendorId(event.target.value)}>
+                        <Select
+                          value={vendorId}
+                          onChange={(event) => setVendorId(event.target.value)}
+                        >
                           <option value="">공급처 선택</option>
                           {vendorOptions.map((vendor) => (
                             <option key={vendor.value} value={vendor.value}>
@@ -1315,7 +1499,12 @@ export default function CatalogPage() {
                         </Select>
                       </Field>
                       <Field label="기본 재질">
-                        <Select value={materialCode} onChange={(event) => setMaterialCode(event.target.value)}>
+                        <Select
+                          value={materialCode}
+                          onChange={(event) =>
+                            setMaterialCode(event.target.value)
+                          }
+                        >
                           <option value="">기본 재질 선택</option>
                           {materialOptions.map((material) => (
                             <option key={material.value} value={material.value}>
@@ -1347,7 +1536,9 @@ export default function CatalogPage() {
                           min={0}
                           placeholder="중량"
                           value={weightDefault}
-                          onChange={(event) => setWeightDefault(event.target.value)}
+                          onChange={(event) =>
+                            setWeightDefault(event.target.value)
+                          }
                         />
                       </Field>
                       <Field label="차감 중량 (g)">
@@ -1357,15 +1548,18 @@ export default function CatalogPage() {
                           min={0}
                           placeholder="차감 중량"
                           value={deductionWeight}
-                          onChange={(event) => setDeductionWeight(event.target.value)}
+                          onChange={(event) =>
+                            setDeductionWeight(event.target.value)
+                          }
                         />
                       </Field>
                     </div>
                   </div>
 
-                  {/* Remark - Expanded to fill space */}
                   <div className="flex-1 rounded-[18px] border border-[var(--panel-border)] bg-white p-4 flex flex-col">
-                    <p className="mb-3 text-sm font-semibold text-[var(--foreground)]">비고</p>
+                    <p className="mb-3 text-sm font-semibold text-[var(--foreground)]">
+                      비고
+                    </p>
                     <Textarea
                       placeholder="상품에 대한 상세 정보를 입력하세요."
                       value={note}
@@ -1375,143 +1569,214 @@ export default function CatalogPage() {
                   </div>
                 </div>
 
-                {/* Right Column: Unified Pricing Table + Profile */}
+                {/* 2-2. 우측 열: 공임 및 프로파일 설정 */}
                 <div className="space-y-4">
                   <div className="rounded-[18px] border border-[var(--panel-border)] bg-white p-4">
                     <div className="mb-4 flex items-center justify-between">
-                      <p className="text-sm font-semibold text-[var(--foreground)]">공임 및 구성</p>
+                      <p className="text-sm font-semibold text-[var(--foreground)]">
+                        공임 및 구성
+                      </p>
                       <div className="flex gap-2">
-                        <span className="text-[10px] bg-blue-50 text-blue-700 px-2 py-0.5 rounded">좌:판매</span>
-                        <span className="text-[10px] bg-gray-100 text-gray-600 px-2 py-0.5 rounded">우:원가</span>
+                        <span className="text-[10px] bg-blue-50 text-blue-700 px-2 py-0.5 rounded">
+                          좌:판매
+                        </span>
+                        <span className="text-[10px] bg-gray-100 text-gray-600 px-2 py-0.5 rounded">
+                          우:원가
+                        </span>
                       </div>
                     </div>
 
                     <div className="grid grid-cols-[0.8fr_1fr_0.6fr_1fr] gap-x-2 gap-y-3 items-center text-xs">
-                      {/* Header */}
-                      <div className="text-center font-semibold text-[var(--muted)]">항목</div>
-                      <div className="text-center font-semibold text-[var(--muted)]">판매 (Sell)</div>
-                      <div className="text-center font-semibold text-[var(--muted)]">수량 (Qty)</div>
-                      <div className="text-center font-semibold text-[var(--muted)]">원가 (Cost)</div>
+                      <div className="text-center font-semibold text-[var(--muted)]">
+                        항목
+                      </div>
+                      <div className="text-center font-semibold text-[var(--muted)]">
+                        판매 (Sell)
+                      </div>
+                      <div className="text-center font-semibold text-[var(--muted)]">
+                        수량 (Qty)
+                      </div>
+                      <div className="text-center font-semibold text-[var(--muted)]">
+                        원가 (Cost)
+                      </div>
 
-                      {/* Base Labor */}
-                      <div className="text-center font-medium text-[var(--foreground)]">기본</div>
+                      {/* Base */}
+                      <div className="text-center font-medium text-[var(--foreground)]">
+                        기본
+                      </div>
                       <Input
-                        type="number" min={0}
+                        type="number"
+                        min={0}
                         value={laborBaseSell}
-                        onChange={(e) => setLaborBaseSell(toNumber(e.target.value))}
+                        onChange={(e) =>
+                          setLaborBaseSell(toNumber(e.target.value))
+                        }
                       />
                       <div className="text-center text-[var(--muted)]">-</div>
                       <Input
-                        type="number" min={0}
+                        type="number"
+                        min={0}
                         value={laborBaseCost}
-                        onChange={(e) => setLaborBaseCost(toNumber(e.target.value))}
+                        onChange={(e) =>
+                          setLaborBaseCost(toNumber(e.target.value))
+                        }
                       />
 
-                      {/* Center Labor */}
-                      <div className="text-center font-medium text-[var(--foreground)]">센터</div>
+                      {/* Center */}
+                      <div className="text-center font-medium text-[var(--foreground)]">
+                        센터
+                      </div>
                       <Input
-                        type="number" min={0}
+                        type="number"
+                        min={0}
                         value={laborCenterSell}
-                        onChange={(e) => setLaborCenterSell(toNumber(e.target.value))}
+                        onChange={(e) =>
+                          setLaborCenterSell(toNumber(e.target.value))
+                        }
                       />
                       <Input
-                        type="number" min={0}
+                        type="number"
+                        min={0}
                         placeholder="Qty"
                         className="text-center bg-[#f8fafc]"
                         value={centerQty}
                         onChange={(e) => setCenterQty(toNumber(e.target.value))}
                       />
                       <Input
-                        type="number" min={0}
+                        type="number"
+                        min={0}
                         value={laborCenterCost}
-                        onChange={(e) => setLaborCenterCost(toNumber(e.target.value))}
+                        onChange={(e) =>
+                          setLaborCenterCost(toNumber(e.target.value))
+                        }
                       />
 
-                      {/* Sub1 Labor */}
-                      <div className="text-center font-medium text-[var(--foreground)]">서브1</div>
+                      {/* Sub1 */}
+                      <div className="text-center font-medium text-[var(--foreground)]">
+                        서브1
+                      </div>
                       <Input
-                        type="number" min={0}
+                        type="number"
+                        min={0}
                         value={laborSub1Sell}
-                        onChange={(e) => setLaborSub1Sell(toNumber(e.target.value))}
+                        onChange={(e) =>
+                          setLaborSub1Sell(toNumber(e.target.value))
+                        }
                       />
                       <Input
-                        type="number" min={0}
+                        type="number"
+                        min={0}
                         placeholder="Qty"
                         className="text-center bg-[#f8fafc]"
                         value={sub1Qty}
                         onChange={(e) => setSub1Qty(toNumber(e.target.value))}
                       />
                       <Input
-                        type="number" min={0}
+                        type="number"
+                        min={0}
                         value={laborSub1Cost}
-                        onChange={(e) => setLaborSub1Cost(toNumber(e.target.value))}
+                        onChange={(e) =>
+                          setLaborSub1Cost(toNumber(e.target.value))
+                        }
                       />
 
-                      {/* Sub2 Labor */}
-                      <div className="text-center font-medium text-[var(--foreground)]">서브2</div>
+                      {/* Sub2 */}
+                      <div className="text-center font-medium text-[var(--foreground)]">
+                        서브2
+                      </div>
                       <Input
-                        type="number" min={0}
+                        type="number"
+                        min={0}
                         value={laborSub2Sell}
-                        onChange={(e) => setLaborSub2Sell(toNumber(e.target.value))}
+                        onChange={(e) =>
+                          setLaborSub2Sell(toNumber(e.target.value))
+                        }
                       />
                       <Input
-                        type="number" min={0}
+                        type="number"
+                        min={0}
                         placeholder="Qty"
                         className="text-center bg-[#f8fafc]"
                         value={sub2Qty}
                         onChange={(e) => setSub2Qty(toNumber(e.target.value))}
                       />
                       <Input
-                        type="number" min={0}
+                        type="number"
+                        min={0}
                         value={laborSub2Cost}
-                        onChange={(e) => setLaborSub2Cost(toNumber(e.target.value))}
+                        onChange={(e) =>
+                          setLaborSub2Cost(toNumber(e.target.value))
+                        }
                       />
 
                       <div className="col-span-4 h-px bg-dashed border-t border-[var(--panel-border)] my-2" />
 
-                      {/* PLATING */}
-                      <div className="text-center font-medium text-[var(--muted)]">도금</div>
+                      {/* Plating */}
+                      <div className="text-center font-medium text-[var(--muted)]">
+                        도금
+                      </div>
                       <Input
-                        type="number" min={0}
+                        type="number"
+                        min={0}
                         value={platingSell}
-                        onChange={(e) => setPlatingSell(toNumber(e.target.value))}
+                        onChange={(e) =>
+                          setPlatingSell(toNumber(e.target.value))
+                        }
                       />
                       <div className="text-center text-[var(--muted)]">-</div>
                       <Input
-                        type="number" min={0}
+                        type="number"
+                        min={0}
                         value={platingCost}
-                        onChange={(e) => setPlatingCost(toNumber(e.target.value))}
+                        onChange={(e) =>
+                          setPlatingCost(toNumber(e.target.value))
+                        }
                       />
 
                       <div className="col-span-4 h-px bg-dashed border-t border-[var(--panel-border)] my-2" />
 
-                      {/* Total Labor */}
-                      <div className="text-center font-bold text-[var(--foreground)]">합계공임</div>
+                      {/* Total */}
+                      <div className="text-center font-bold text-[var(--foreground)]">
+                        합계공임
+                      </div>
                       <Input
-                        type="number" min={0} readOnly
+                        type="number"
+                        min={0}
+                        readOnly
                         className="text-right font-bold bg-blue-50 text-blue-700 border-blue-100"
                         value={totalLaborSell}
                       />
                       <div className="text-center text-[var(--muted)]">-</div>
                       <Input
-                        type="number" min={0} readOnly
+                        type="number"
+                        min={0}
+                        readOnly
                         className="text-right font-bold bg-gray-50 text-gray-700 border-gray-200"
                         value={totalLaborCost}
                       />
                     </div>
                   </div>
 
-                  {/* Profile & Settings - Moved Here, Condensed */}
                   <div className="rounded-[18px] border border-[var(--panel-border)] bg-neutral-50 p-4">
                     <div className="mb-3 flex items-center justify-between">
                       <div className="flex items-center gap-2">
-                        <p className="text-sm font-semibold text-[var(--foreground)]">프로파일 및 설정</p>
-                        <span className="text-xs text-[var(--muted)]">({isEditMode ? "수정" : "생성"}: {isEditMode ? modifiedDate : releaseDate})</span>
+                        <p className="text-sm font-semibold text-[var(--foreground)]">
+                          프로파일 및 설정
+                        </p>
+                        <span className="text-xs text-[var(--muted)]">
+                          ({isEditMode ? "수정" : "생성"}:{" "}
+                          {isEditMode ? modifiedDate : releaseDate})
+                        </span>
                       </div>
                     </div>
                     <div className="grid gap-3 grid-cols-2">
                       <Field label="공임 프로파일">
-                        <Select value={laborProfileMode} onChange={(event) => setLaborProfileMode(event.target.value)}>
+                        <Select
+                          value={laborProfileMode}
+                          onChange={(event) =>
+                            setLaborProfileMode(event.target.value)
+                          }
+                        >
                           {laborProfileOptions.map((option) => (
                             <option key={option.value} value={option.value}>
                               {option.label}
@@ -1520,7 +1785,13 @@ export default function CatalogPage() {
                         </Select>
                       </Field>
                       <Field label="공임 밴드 코드">
-                        <Input placeholder="B1 ~ B6" value={laborBandCode} onChange={(event) => setLaborBandCode(event.target.value)} />
+                        <Input
+                          placeholder="B1 ~ B6"
+                          value={laborBandCode}
+                          onChange={(event) =>
+                            setLaborBandCode(event.target.value)
+                          }
+                        />
                       </Field>
                     </div>
                   </div>
@@ -1528,7 +1799,11 @@ export default function CatalogPage() {
               </div>
             </div>
             <div className="sticky bottom-0 flex items-center justify-end gap-2 border-t border-[var(--panel-border)] bg-white pt-4">
-              <Button variant="secondary" type="button" onClick={() => setRegisterOpen(false)}>
+              <Button
+                variant="secondary"
+                type="button"
+                onClick={() => setRegisterOpen(false)}
+              >
                 취소
               </Button>
               <Button type="submit" disabled={!canSave || isSaving}>
@@ -1538,7 +1813,6 @@ export default function CatalogPage() {
           </form>
         </div>
       </Modal>
-
       {/* Custom Lightbox Overlay */}
       {previewImage && (
         <div

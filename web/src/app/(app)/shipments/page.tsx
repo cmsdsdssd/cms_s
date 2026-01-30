@@ -16,15 +16,12 @@ import { CONTRACTS, isFnConfigured } from "@/lib/contracts";
 import { readView } from "@/lib/supabase/read";
 import { toast } from "sonner";
 
-// --- Types ---
 type ShipReadyRow = {
   shipment_id?: string;
-  shipment_header_id?: string;
   customer_name?: string;
   line_count?: number;
   status?: string;
   ship_date?: string;
-  created_at?: string;
 };
 
 type OrderLookupRow = {
@@ -119,13 +116,6 @@ type ReceiptRow = {
   file_size_bytes?: number;
 };
 
-type CurrentShipmentLine = {
-  shipment_line_id?: string;
-  shipment_id?: string;
-  model_name?: string | null;
-  qty?: number | null;
-};
-
 const debounceMs = 250;
 
 export default function ShipmentsPage() {
@@ -163,31 +153,31 @@ export default function ShipmentsPage() {
   // --- Queries ---
   const readyQuery = useQuery({
     queryKey: ["cms", "shipment_header"],
-    queryFn: () => readView<ShipReadyRow>("cms_v_shipment_ready_v1", 50),
+    queryFn: () => readView<ShipReadyRow>("cms_shipment_header", 50),
   });
 
   const lineSummaryQuery = useQuery({
-    queryKey: ["cms", "shipment_line_summary"],
-    queryFn: () => readView<ShipmentLineSummary>("cms_v_shipment_line_summary_v1", 200),
+    queryKey: ["cms", "shipment_line", "summary"],
+    queryFn: () =>
+      readView<ShipmentLineSummary>("cms_shipment_line", 200, {
+        orderBy: { column: "created_at", ascending: false },
+      }),
   });
 
-  const historyQuery = useQuery({
-    queryKey: ["cms", "shipment_history"],
-    queryFn: () => readView<ShipmentHistoryRow>("cms_v_shipment_history_v1", 200),
-  });
-
+  // Load lines for current shipment (for manual cost input)
   const currentLinesQuery = useQuery({
-    queryKey: ["cms", "shipment_lines_current", currentShipmentId],
-    queryFn: async () => {
-      if (!currentShipmentId) return [];
-      const rows = await readView<CurrentShipmentLine>("cms_v_shipment_lines_for_cost_v1", 200, {
-        shipment_id: currentShipmentId,
+    queryKey: ["cms", "shipment_line", currentShipmentId],
+    queryFn: () => {
+      if (!currentShipmentId) return [] as ShipmentLineSummary[];
+      return readView<ShipmentLineSummary>("cms_shipment_line", 50, {
+        filter: { column: "shipment_id", op: "eq", value: currentShipmentId },
+        orderBy: { column: "created_at", ascending: false },
       });
-      return rows ?? [];
     },
-    enabled: Boolean(confirmModalOpen && currentShipmentId),
+    enabled: Boolean(currentShipmentId),
   });
 
+  // Load receipts for selection
   const receiptsQuery = useQuery({
     queryKey: ["receipts", "uploaded"],
     queryFn: async () => {
@@ -207,45 +197,119 @@ export default function ShipmentsPage() {
     queryKey: ["order-lookup", debouncedQuery],
     queryFn: async () => {
       if (orderLookupCache[debouncedQuery]) return orderLookupCache[debouncedQuery];
-      const payload = { q: debouncedQuery, limit: 30 };
-      const res = await fetch("/api/order-lookup", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      const json = await res.json();
-      const data = (json.data ?? []) as OrderLookupRow[];
-      setOrderLookupCache((prev) => ({ ...prev, [debouncedQuery]: data }));
-      return data;
+      const params = new URLSearchParams();
+      if (debouncedQuery) params.set("q", debouncedQuery);
+      params.set("limit", "20");
+      const res = await fetch(`/api/order-lookup?${params.toString()}`);
+      const json = (await res.json()) as { data?: OrderLookupRow[]; error?: string };
+      if (!res.ok) throw new Error(json.error ?? "조회 실패");
+      const rows = json.data ?? [];
+      setOrderLookupCache((prev) => ({ ...prev, [debouncedQuery]: rows }));
+      return rows;
     },
-    enabled: debouncedQuery.length >= 2,
+    enabled: searchOpen,
   });
 
-  const handleSelectOrderLine = async (row: OrderLookupRow) => {
-    const id = row.order_line_id ?? null;
-    setSelectedOrderLineId(id);
-    setSearchOpen(false);
-    setSearchQuery(row.order_no ?? "");
-    setPrefill(null);
-    setMasterInfo(null);
-
-    if (!id) return;
-
-    // Prefill info
-    const res = await fetch("/api/shipment-prefill", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ order_line_id: id }),
+  const lookupRows = useMemo(() => {
+    const rows = lookupQuery.data ?? [];
+    return rows.filter((row) => {
+      const status = String(row.status ?? "").toUpperCase();
+      return status !== "CANCELLED" && status !== "VOID";
     });
-    const json = await res.json();
-    setPrefill(json.data ?? null);
+  }, [lookupQuery.data]);
 
-    // Master info (optional)
-    if (json.data?.model_no) {
-      const mres = await fetch(`/api/master-item?model_name=${encodeURIComponent(json.data.model_no)}`);
-      const mjson = await mres.json();
-      setMasterInfo(mjson.data ?? null);
+  const masterQuery = useQuery({
+    queryKey: ["cms", "master_summary", prefill?.model_no],
+    queryFn: async () => {
+      if (!prefill?.model_no) return null;
+      const res = await fetch(`/api/master-items?model=${encodeURIComponent(prefill.model_no)}`);
+      const json = (await res.json()) as { data?: MasterSummary[]; error?: string };
+      if (!res.ok) throw new Error(json.error ?? "마스터 조회 실패");
+      const rows = json.data ?? [];
+      const modelKey = (prefill.model_no ?? "").trim().toLowerCase();
+      const exact = rows.find((r) => (r.model_name ?? "").toLowerCase() === modelKey);
+      return exact ?? rows[0] ?? null;
+    },
+    enabled: Boolean(prefill?.model_no),
+  });
+
+  const historyByModelQuery = useQuery({
+    queryKey: ["cms", "shipment_history", "by_model", prefill?.model_no],
+    queryFn: () => {
+      if (!prefill?.model_no) return [] as ShipmentHistoryRow[];
+      return readView<ShipmentHistoryRow>("v_cms_shipment_history_by_model", 50, {
+        filter: { column: "model_name", op: "ilike", value: prefill.model_no },
+        orderBy: { column: "ship_date", ascending: false },
+      });
+    },
+    enabled: Boolean(prefill?.model_no),
+  });
+
+  const historyRecentQuery = useQuery({
+    queryKey: ["cms", "shipment_history", "recent"],
+    queryFn: () =>
+      readView<ShipmentHistoryRow>("v_cms_shipment_history_by_model", 50, {
+        orderBy: { column: "ship_date", ascending: false },
+      }),
+  });
+
+  const historyRows = useMemo(() => {
+    const modelKey = (prefill?.model_no ?? "").trim().toLowerCase();
+    const byModel = historyByModelQuery.data ?? [];
+    const recent = historyRecentQuery.data ?? [];
+    const seen = new Set<string>();
+    const merged: ShipmentHistoryRow[] = [];
+
+    for (const row of byModel) {
+      const key = row.shipment_line_id ?? "";
+      if (!key) continue;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      merged.push(row);
     }
+    for (const row of recent) {
+      const key = row.shipment_line_id ?? "";
+      if (!key) continue;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      merged.push(row);
+    }
+
+    merged.sort((a, b) => {
+      const matchA = modelKey ? (a.model_name ?? "").trim().toLowerCase() === modelKey : false;
+      const matchB = modelKey ? (b.model_name ?? "").trim().toLowerCase() === modelKey : false;
+      if (matchA !== matchB) return matchA ? -1 : 1;
+
+      const dateA = (a.ship_date ?? a.created_at ?? "").toString();
+      const dateB = (b.ship_date ?? b.created_at ?? "").toString();
+      if (dateA === dateB) return 0;
+      return dateA < dateB ? 1 : -1;
+    });
+
+    return merged.slice(0, 20);
+  }, [prefill?.model_no, historyByModelQuery.data, historyRecentQuery.data]);
+
+  useEffect(() => {
+    if (masterQuery.data) {
+      setMasterInfo(masterQuery.data as MasterSummary);
+    } else {
+      setMasterInfo(null);
+    }
+  }, [masterQuery.data]);
+
+  const handleSelectOrder = async (row: OrderLookupRow) => {
+    if (!row.order_line_id) return;
+    setSelectedOrderLineId(row.order_line_id);
+    setSearchOpen(false);
+    setWeightG("");
+    setTotalLabor("");
+
+    const res = await fetch(`/api/shipment-prefill?order_line_id=${row.order_line_id}`);
+    const json = (await res.json()) as { data?: ShipmentPrefill; error?: string };
+    if (!res.ok) {
+      throw new Error(json.error ?? "프리필 조회 실패");
+    }
+    setPrefill(json.data ?? null);
   };
 
   const upsertFn = CONTRACTS.functions.shipmentUpsertFromOrder;
@@ -268,7 +332,7 @@ export default function ShipmentsPage() {
     isFnConfigured(upsertFn) &&
     isFnConfigured(confirmFn);
 
-  // 1. Initial Confirm (Save -> Open Modal)
+  // 1) Save -> open confirm modal
   const handleInitialConfirm = async () => {
     if (!selectedOrderLineId) return;
     const weightValue = Number(weightG);
@@ -279,7 +343,6 @@ export default function ShipmentsPage() {
 
     setSaving(true);
     try {
-      // Upsert shipment first to ensure it exists
       const saved = await saveMutation.mutateAsync({
         p_order_line_id: selectedOrderLineId,
         p_weight_g: weightValue,
@@ -290,12 +353,14 @@ export default function ShipmentsPage() {
       const shipmentId = saved?.shipment_id;
       if (!shipmentId) return;
 
-      // Set state and open modal
       setCurrentShipmentId(shipmentId);
       setConfirmModalOpen(true);
       setCostMode("PROVISIONAL");
       setCostReceiptId(null);
       setCostInputs({});
+      setReceiptFile(null);
+      setReceiptUploading(false);
+      setReceiptFileInputKey((k) => k + 1);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       toast.error("출고 저장 실패", { description: message });
@@ -304,12 +369,10 @@ export default function ShipmentsPage() {
     }
   };
 
-  // Receipt Upload -> Receipt Inbox (Storage + DB)
   const handleUploadReceipt = async () => {
     if (!confirmModalOpen) return;
-    if (costMode !== "RECEIPT") {
-      setCostMode("RECEIPT");
-    }
+    if (costMode !== "RECEIPT") setCostMode("RECEIPT");
+
     if (!receiptFile) {
       toast.error("업로드할 영수증 파일을 선택해주세요.");
       return;
@@ -320,18 +383,13 @@ export default function ShipmentsPage() {
       const fd = new FormData();
       fd.append("file0", receiptFile);
 
-      const res = await fetch("/api/receipt-upload", {
-        method: "POST",
-        body: fd,
-      });
-      const json = await res.json();
+      const res = await fetch("/api/receipt-upload", { method: "POST", body: fd });
+      const json = (await res.json()) as { ok?: boolean; receipt_id?: string; error?: string };
 
-      if (!res.ok || !json?.ok) {
-        const msg = json?.error ? String(json.error) : `upload failed (${res.status})`;
-        throw new Error(msg);
+      if (!res.ok || !json?.ok || !json.receipt_id) {
+        throw new Error(json?.error ?? `upload failed (${res.status})`);
       }
 
-      // Refresh list and auto-select
       await receiptsQuery.refetch();
       setCostReceiptId(String(json.receipt_id));
 
@@ -346,15 +404,25 @@ export default function ShipmentsPage() {
     }
   };
 
-  // 2. Final Confirm (Call RPC)
+  const handlePreviewReceipt = async () => {
+    if (!costReceiptId) return;
+    const r = (receiptsQuery.data ?? []).find((x) => x.receipt_id === costReceiptId);
+    if (!r) return;
+
+    const res = await fetch(
+      `/api/receipt-file?bucket=${r.file_bucket}&path=${encodeURIComponent(r.file_path)}`
+    );
+    const json = (await res.json()) as { signedUrl?: string; error?: string };
+    if (json.signedUrl) {
+      window.open(json.signedUrl, "_blank");
+    } else {
+      toast.error("영수증 미리보기 실패", { description: json.error || "signedUrl missing" });
+    }
+  };
+
+  // 2) Final confirm
   const handleFinalConfirm = async () => {
     if (!currentShipmentId || !actorId) return;
-
-    // Validate inputs
-    if (costMode === "RECEIPT" && !costReceiptId) {
-      toast.error("영수증을 선택해주세요.");
-      return;
-    }
 
     const costLines = Object.entries(costInputs)
       .map(([lineId, cost]) => ({
@@ -374,11 +442,11 @@ export default function ShipmentsPage() {
         p_emit_inventory: true,
       });
 
-      // Cleanup
       setConfirmModalOpen(false);
       readyQuery.refetch();
       lineSummaryQuery.refetch();
-      historyQuery.refetch();
+      historyByModelQuery.refetch();
+      historyRecentQuery.refetch();
       setSelectedOrderLineId(null);
       setPrefill(null);
       setWeightG("");
@@ -404,221 +472,84 @@ export default function ShipmentsPage() {
     return () => document.removeEventListener("mousedown", handleClick);
   }, [searchOpen]);
 
-  const handlePreviewReceipt = async () => {
-    if (!costReceiptId) return;
-    const r = receiptsQuery.data?.find((x) => x.receipt_id === costReceiptId);
-    if (r) {
-      const res = await fetch(
-        `/api/receipt-file?bucket=${r.file_bucket}&path=${encodeURIComponent(r.file_path)}`
-      );
-      const json = await res.json();
-      if (json.signedUrl) {
-        window.open(json.signedUrl, "_blank");
-      } else {
-        toast.error("영수증 미리보기 실패", { description: json.error || "signedUrl missing" });
-      }
-    }
-  };
-
-  const selectedLookupRow = useMemo(() => {
-    return (lookupQuery.data ?? []).find((x) => x.order_line_id === selectedOrderLineId) ?? null;
-  }, [lookupQuery.data, selectedOrderLineId]);
-
-  const shipmentSummaryById = useMemo(() => {
-    const map = new Map<string, { total: number; count: number }>();
-    (lineSummaryQuery.data ?? []).forEach((row) => {
-      const id = row.shipment_id ?? "";
-      if (!id) return;
-      const prev = map.get(id) ?? { total: 0, count: 0 };
-      map.set(id, {
-        total: prev.total + (row.manual_labor_krw ?? 0),
-        count: prev.count + 1,
-      });
-    });
-    return map;
-  }, [lineSummaryQuery.data]);
-
-  const currentShipmentLines = useMemo(() => {
-    return (currentLinesQuery.data ?? []).filter((x) => x.shipment_line_id);
-  }, [currentLinesQuery.data]);
-
   return (
     <div className="space-y-4">
       <ActionBar title="출고" subtitle="주문을 선택하고 출고를 확정하세요." />
 
-      <FilterBar>
-        <div className="flex flex-1 gap-2">
-          <div className="relative flex-1">
-            <Input
-              ref={inputRef as any}
-              placeholder="주문 검색 (주문번호/고객/모델)..."
-              value={searchQuery}
-              onChange={(e) => {
-                setSearchQuery(e.target.value);
-                setSearchOpen(true);
-              }}
-              onFocus={() => setSearchOpen(true)}
-            />
-
-            {searchOpen ? (
-              <div
-                ref={popoverRef}
-                className="absolute z-50 mt-2 w-full rounded-[12px] border border-[var(--panel-border)] bg-white shadow-lg overflow-hidden"
-              >
-                <div className="max-h-72 overflow-y-auto">
-                  {(lookupQuery.data ?? []).map((row) => (
-                    <button
-                      type="button"
-                      key={row.order_line_id}
-                      className="w-full px-3 py-2 text-left hover:bg-[#f6f7f9] flex items-center justify-between"
-                      onClick={() => handleSelectOrderLine(row)}
-                    >
-                      <div className="space-y-1">
-                        <div className="text-sm font-semibold">
-                          {row.order_no ?? "—"}{" "}
-                          <span className="text-xs text-[var(--muted)]">
-                            {row.order_date ?? ""}
-                          </span>
-                        </div>
-                        <div className="text-xs text-[var(--muted)]">
-                          {row.client_name ?? "고객"} · {row.model_no ?? ""} · {row.color ?? ""}
-                        </div>
-                      </div>
-                      <Badge className="rounded-[4px]" variant="secondary">
-                        선택
-                      </Badge>
-                    </button>
-                  ))}
-                  {(lookupQuery.data ?? []).length === 0 ? (
-                    <div className="px-3 py-3 text-xs text-[var(--muted)]">검색 결과 없음</div>
-                  ) : null}
-                </div>
+      <FilterBar id="shipments.filterBar">
+        <div className="relative w-full">
+          <Input
+            ref={inputRef}
+            placeholder="출고검색 (주문번호/고객/모델)"
+            value={searchQuery}
+            onFocus={() => setSearchOpen(true)}
+            onChange={(event) => setSearchQuery(event.target.value)}
+          />
+          {searchOpen ? (
+            <div
+              ref={popoverRef}
+              className="absolute left-0 right-0 mt-2 rounded-[12px] border border-[var(--panel-border)] bg-white shadow-lg z-20"
+            >
+              <div className="max-h-[320px] overflow-auto">
+                <table className="w-full text-xs text-left">
+                  <thead className="sticky top-0 bg-[#f8f9fc]">
+                    <tr>
+                      <th className="px-3 py-2">CUSTOMER</th>
+                      <th className="px-3 py-2">MODEL</th>
+                      <th className="px-3 py-2">COLOR</th>
+                      <th className="px-3 py-2">ORDER NO</th>
+                      <th className="px-3 py-2">DATE</th>
+                      <th className="px-3 py-2">STATUS</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-[var(--panel-border)]">
+                    {lookupRows.map((row) => (
+                      <tr
+                        key={row.order_line_id}
+                        className="cursor-pointer hover:bg-blue-50/40"
+                        onClick={() => handleSelectOrder(row)}
+                      >
+                        <td className="px-3 py-2 font-semibold">{row.client_name ?? "-"}</td>
+                        <td className="px-3 py-2 font-semibold">{row.model_no ?? "-"}</td>
+                        <td className="px-3 py-2">{row.color ?? "-"}</td>
+                        <td className="px-3 py-2 text-[var(--muted)]">{row.order_no ?? "-"}</td>
+                        <td className="px-3 py-2 text-[var(--muted)]">{row.order_date ?? "-"}</td>
+                        <td className="px-3 py-2">
+                          <Badge tone={row.status === "READY" ? "active" : "neutral"}>
+                            {row.status ?? "READY"}
+                          </Badge>
+                        </td>
+                      </tr>
+                    ))}
+                    {lookupQuery.isLoading ? (
+                      <tr>
+                        <td colSpan={6} className="px-3 py-3 text-center text-[var(--muted)]">
+                          조회 중...
+                        </td>
+                      </tr>
+                    ) : null}
+                    {!lookupQuery.isLoading && lookupRows.length === 0 ? (
+                      <tr>
+                        <td colSpan={6} className="px-3 py-3 text-center text-[var(--muted)]">
+                          검색 결과 없음
+                        </td>
+                      </tr>
+                    ) : null}
+                  </tbody>
+                </table>
               </div>
-            ) : null}
-          </div>
-
-          <Button onClick={handleInitialConfirm} disabled={!canSave || saving}>
-            {saving ? "저장 중..." : "출고 저장"}
-          </Button>
+            </div>
+          ) : null}
         </div>
       </FilterBar>
-
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <Card>
-          <CardHeader title="선택 주문" subtitle="출고할 주문 상세" />
-          <CardBody className="space-y-3">
-            {prefill ? (
-              <>
-                <div className="flex items-center justify-between">
-                  <div className="text-sm font-semibold">{prefill.order_no ?? "—"}</div>
-                  <Badge variant="secondary" className="rounded-[4px]">
-                    {prefill.order_date ?? ""}
-                  </Badge>
-                </div>
-
-                <div className="text-xs text-[var(--muted)]">
-                  고객: <span className="font-semibold">{prefill.client_name ?? "—"}</span>
-                </div>
-
-                <div className="grid grid-cols-2 gap-2 text-xs">
-                  <div className="rounded-[12px] border border-[var(--panel-border)] bg-white p-3 space-y-1">
-                    <div className="text-[var(--muted)]">모델</div>
-                    <div className="font-semibold">{prefill.model_no ?? "—"}</div>
-                  </div>
-                  <div className="rounded-[12px] border border-[var(--panel-border)] bg-white p-3 space-y-1">
-                    <div className="text-[var(--muted)]">색상</div>
-                    <div className="font-semibold">{prefill.color ?? "—"}</div>
-                  </div>
-                  <div className="rounded-[12px] border border-[var(--panel-border)] bg-white p-3 space-y-1">
-                    <div className="text-[var(--muted)]">사이즈</div>
-                    <div className="font-semibold">{prefill.size ?? "—"}</div>
-                  </div>
-                  <div className="rounded-[12px] border border-[var(--panel-border)] bg-white p-3 space-y-1">
-                    <div className="text-[var(--muted)]">메모</div>
-                    <div className="font-semibold">{prefill.note ?? "—"}</div>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-2">
-                  <div className="space-y-1">
-                    <label className="text-xs font-semibold text-[var(--foreground)]">중량(g)</label>
-                    <Input
-                      className="h-10"
-                      placeholder="예: 3.25"
-                      value={weightG}
-                      onChange={(e) => setWeightG(e.target.value)}
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-xs font-semibold text-[var(--foreground)]">총 공임(원)</label>
-                    <Input
-                      className="h-10"
-                      placeholder="예: 50000"
-                      value={totalLabor}
-                      onChange={(e) => setTotalLabor(e.target.value)}
-                    />
-                  </div>
-                </div>
-
-                <div className="text-xs text-[var(--muted)]">
-                  * 출고 저장 후 모달에서 원가/영수증(선택)을 확정합니다.
-                </div>
-              </>
-            ) : (
-              <div className="text-sm text-[var(--muted)]">주문을 검색해서 선택하세요.</div>
-            )}
-          </CardBody>
-        </Card>
-
-        <Card>
-          <CardHeader title="출고 현황" subtitle="최근 출고/확정 기록" />
-          <CardBody className="space-y-2">
-            {(readyQuery.data ?? []).map((row) => {
-              const id = row.shipment_id ?? "";
-              const summary = shipmentSummaryById.get(id);
-              return (
-                <div
-                  key={id}
-                  className="flex items-center justify-between rounded-[12px] border border-[var(--panel-border)] bg-white p-3"
-                >
-                  <div className="space-y-1">
-                    <div className="text-sm font-semibold">{row.customer_name ?? "—"}</div>
-                    <div className="text-xs text-[var(--muted)]">
-                      {row.ship_date ?? ""} · 라인 {row.line_count ?? 0}
-                    </div>
-                  </div>
-                  <div className="text-right">
-                    <Badge variant="secondary" className="rounded-[4px]">
-                      {row.status ?? "—"}
-                    </Badge>
-                    <div className="text-xs text-[var(--muted)] mt-1">
-                      공임합: {summary?.total ?? 0} (라인 {summary?.count ?? 0})
-                    </div>
-                    <Link
-                      className="text-xs text-[var(--primary)] underline"
-                      href={`/shipments_main`}
-                    >
-                      목록
-                    </Link>
-                  </div>
-                </div>
-              );
-            })}
-            {(readyQuery.data ?? []).length === 0 ? (
-              <div className="text-sm text-[var(--muted)]">출고 준비 데이터가 없습니다.</div>
-            ) : null}
-          </CardBody>
-        </Card>
-      </div>
 
       <Modal open={confirmModalOpen} onOpenChange={setConfirmModalOpen} title="출고 확정">
         <div className="space-y-4">
           <div className="rounded-[12px] border border-[var(--panel-border)] bg-white p-3 space-y-2">
             <div className="text-sm font-semibold">확정 대상</div>
             <div className="text-xs text-[var(--muted)]">
-              주문: {prefill?.order_no ?? selectedLookupRow?.order_no ?? "—"} / 모델:{" "}
-              {prefill?.model_no ?? selectedLookupRow?.model_no ?? "—"} / 색상:{" "}
-              {prefill?.color ?? selectedLookupRow?.color ?? "—"}
+              주문: {prefill?.order_no ?? "—"} / 고객: {prefill?.client_name ?? "—"} / 모델:{" "}
+              {prefill?.model_no ?? "—"}
             </div>
             <div className="text-xs text-[var(--muted)]">
               중량(g): {weightG || "—"} / 총 공임(원): {totalLabor || "—"}
@@ -647,9 +578,6 @@ export default function ShipmentsPage() {
                 영수증
               </Button>
             </div>
-            <p className="text-xs text-[var(--muted)]">
-              * 영수증/수기 모드에서도 라인별 단가 입력을 생략하면 임시원가로 남길 수 있습니다.
-            </p>
           </div>
 
           {costMode === "RECEIPT" && (
@@ -694,53 +622,176 @@ export default function ShipmentsPage() {
                     보기
                   </Button>
                 </div>
-                <p className="mt-2 text-xs text-[var(--muted)]">
-                  선택된 영수증은 출고 확정 시 원가 근거로 <span className="font-semibold">cms_receipt_usage</span>에 연결되고,
-                  영수증 상태가 <span className="font-semibold">LINKED</span>로 변경됩니다.
-                </p>
+                <p className="text-xs text-gray-500 mt-1">※ 미입력 시 마스터 임시원가 사용</p>
               </div>
             </div>
           )}
 
-          {(costMode === "MANUAL" || costMode === "RECEIPT") && (
-            <div>
-              <label className="block text-sm font-semibold text-[var(--foreground)] mb-2">실제 원가 입력 (선택)</label>
-              <div className="space-y-2 max-h-40 overflow-auto border rounded p-2">
-                {(currentLinesQuery.data ?? []).length === 0 && (
-                  <span className="text-xs text-gray-500">라인 로딩 중...</span>
-                )}
-                {(currentLinesQuery.data ?? []).map((line) => (
-                  <div key={line.shipment_line_id} className="grid grid-cols-[1fr_80px] gap-2 items-center">
-                    <span className="text-xs">
-                      {line.model_name} (Qty: {line.qty ?? 1})
-                    </span>
-                    <Input
-                      className="h-8 text-right"
-                      placeholder="단가"
-                      value={costInputs[line.shipment_line_id!] || ""}
-                      onChange={(e) =>
-                        setCostInputs((prev) => ({ ...prev, [line.shipment_line_id!]: e.target.value }))
-                      }
-                    />
-                  </div>
-                ))}
-              </div>
-              <p className="text-xs text-[var(--muted)] mt-2">
-                * 단가 입력 시 해당 라인은 ACTUAL로 확정되며, 영수증을 선택한 경우 purchase_receipt_id가 함께 저장됩니다.
-              </p>
-            </div>
-          )}
-
-          <div className="flex justify-end gap-2 pt-2">
+          <div className="flex justify-end gap-2 pt-4">
             <Button variant="secondary" onClick={() => setConfirmModalOpen(false)}>
               취소
             </Button>
-            <Button onClick={handleFinalConfirm} disabled={!currentShipmentId || confirmMutation.isPending}>
+            <Button onClick={handleFinalConfirm} disabled={confirmMutation.isPending}>
               {confirmMutation.isPending ? "확정 중..." : "출고 확정"}
             </Button>
           </div>
         </div>
       </Modal>
+
+      <div className="grid grid-cols-1 md:grid-cols-[1fr_380px] gap-4">
+        <div className="space-y-3" id="shipments.formPanel">
+          <Card id="shipments.orderCard">
+            <CardHeader>
+              <ActionBar title="출고 입력" subtitle="주문 선택 → 중량/공임 입력 → 저장" />
+            </CardHeader>
+            <CardBody className="space-y-3">
+              <div className="grid grid-cols-2 gap-2">
+                <div className="space-y-1">
+                  <label className="text-xs font-semibold text-[var(--foreground)]">중량(g)</label>
+                  <Input
+                    className="h-10"
+                    placeholder="예: 3.25"
+                    value={weightG}
+                    onChange={(e) => setWeightG(e.target.value)}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs font-semibold text-[var(--foreground)]">총 공임(원)</label>
+                  <Input
+                    className="h-10"
+                    placeholder="예: 50000"
+                    value={totalLabor}
+                    onChange={(e) => setTotalLabor(e.target.value)}
+                  />
+                </div>
+              </div>
+
+              <div className="flex justify-end">
+                <Button onClick={handleInitialConfirm} disabled={!canSave || saving}>
+                  {saving ? "저장 중..." : "출고 저장"}
+                </Button>
+              </div>
+            </CardBody>
+          </Card>
+
+          <Card id="shipments.readyList">
+            <CardHeader>
+              <ActionBar title="출고 현황" subtitle="최근 출고 기록" />
+            </CardHeader>
+            <CardBody className="space-y-2 text-xs">
+              {(readyQuery.data ?? []).map((row) => (
+                <div
+                  key={row.shipment_id}
+                  className="flex items-center justify-between rounded-[12px] border border-[var(--panel-border)] bg-white p-3"
+                >
+                  <div className="space-y-1">
+                    <div className="text-sm font-semibold">{row.customer_name ?? "—"}</div>
+                    <div className="text-xs text-[var(--muted)]">
+                      {row.ship_date ?? ""} · 라인 {row.line_count ?? 0}
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <Badge tone="neutral" className="rounded-[4px]">
+                      {row.status ?? "—"}
+                    </Badge>
+                    <div className="mt-1">
+                      <Link className="text-xs text-[var(--primary)] underline" href={`/shipments_main`}>
+                        목록
+                      </Link>
+                    </div>
+                  </div>
+                </div>
+              ))}
+              {(readyQuery.data ?? []).length === 0 ? (
+                <div className="text-sm text-[var(--muted)]">출고 데이터가 없습니다.</div>
+              ) : null}
+            </CardBody>
+          </Card>
+        </div>
+
+        <div className="space-y-3" id="shipments.listPanel">
+          <Card id="shipments.masterCard">
+            <CardHeader>
+              <ActionBar title="마스터 정보" subtitle={prefill?.model_no ?? "모델 선택"} />
+            </CardHeader>
+            <CardBody className="grid gap-4 text-xs">
+              <div className="grid grid-cols-1 md:grid-cols-[220px_1fr] gap-4 items-start">
+                <div className="aspect-square rounded-[12px] border border-dashed border-[var(--panel-border)] flex items-center justify-center w-full max-w-[194px] overflow-hidden">
+                  {masterInfo?.image_url ? (
+                    <img
+                      src={masterInfo.image_url}
+                      alt={masterInfo.model_name ?? "master"}
+                      className="w-full h-full object-cover rounded-[10px]"
+                    />
+                  ) : (
+                    <span className="text-xs text-[var(--muted)]">이미지 없음</span>
+                  )}
+                </div>
+                <div className="grid grid-cols-1 gap-2 text-xs">
+                  <div>
+                    <label className="text-[var(--muted)]">MODEL</label>
+                    <div className="mt-1 text-sm">{masterInfo?.model_name ?? "-"}</div>
+                  </div>
+                  <div>
+                    <label className="text-[var(--muted)]">VENDOR</label>
+                    <div className="mt-1 text-sm">{masterInfo?.vendor_name ?? "-"}</div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="text-[var(--muted)]">WEIGHT DEFAULT</label>
+                      <div className="mt-1 text-sm">{masterInfo?.weight_default_g ?? "-"} g</div>
+                    </div>
+                    <div>
+                      <label className="text-[var(--muted)]">DEDUCTION</label>
+                      <div className="mt-1 text-sm">{masterInfo?.deduction_weight_default_g ?? "-"} g</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </CardBody>
+          </Card>
+
+          <Card id="shipments.history">
+            <CardHeader>
+              <ActionBar title="이전 출고 내역" subtitle="동일 모델 우선 → 날짜 최신순" />
+            </CardHeader>
+            <CardBody className="space-y-2 text-xs">
+              {(historyRows ?? []).map((row) => {
+                const modelKey = (prefill?.model_no ?? "").trim().toLowerCase();
+                const isMatch =
+                  modelKey && (row.model_name ?? "").trim().toLowerCase() === modelKey;
+
+                return (
+                  <div
+                    key={row.shipment_line_id}
+                    className="rounded-[12px] border border-[var(--panel-border)] px-3 py-2"
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="font-semibold">
+                        {row.model_name ?? "-"} {row.suffix ?? ""}
+                        {isMatch ? (
+                          <span className="ml-2 inline-flex items-center rounded-full bg-blue-50 px-2 py-0.5 text-[10px] text-blue-700">
+                            MATCH
+                          </span>
+                        ) : null}
+                      </span>
+                      <span className="text-[var(--muted)]">
+                        {row.ship_date ?? row.created_at ?? "-"}
+                      </span>
+                    </div>
+                    <div className="mt-1 text-[var(--muted)]">
+                      색상 {row.color ?? "-"} · 수량 {row.qty ?? 0} · 상태 {row.shipment_status ?? "-"}
+                    </div>
+                  </div>
+                );
+              })}
+              {(historyRows ?? []).length === 0 ? (
+                <p className="text-xs text-[var(--muted)]">이전 출고 내역 없음</p>
+              ) : null}
+            </CardBody>
+          </Card>
+        </div>
+      </div>
     </div>
   );
 }

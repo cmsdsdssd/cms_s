@@ -58,7 +58,7 @@ export default function PurchaseCostWorklistPage() {
 
     const { data: rows, isLoading, refetch } = useQuery({
         queryKey: ["worklist", "purchase_cost"],
-        queryFn: () => readView<WorklistRow>(CONTRACTS.views.purchaseCostWorklist, 100)
+        queryFn: () => readView<WorklistRow>(CONTRACTS.views.purchaseCostWorklist, 100),
     });
 
     const { data: receipts, refetch: refetchReceipts } = useQuery({
@@ -73,7 +73,7 @@ export default function PurchaseCostWorklistPage() {
 
     const applyMutation = useRpcMutation<{ ok: boolean }>({
         fn: CONTRACTS.functions.applyPurchaseCost,
-        successMessage: "원가 적용 완료"
+        successMessage: "원가 적용 완료",
     });
 
     const handleOpenAction = (row: WorklistRow, type: "PROVISIONAL" | "MANUAL" | "RECEIPT") => {
@@ -83,6 +83,7 @@ export default function PurchaseCostWorklistPage() {
         setReceiptId(null);
         setReceiptFile(null);
         setReceiptFileInputKey((k) => k + 1);
+        setReceiptUploading(false);
         setModalOpen(true);
     };
 
@@ -106,7 +107,6 @@ export default function PurchaseCostWorklistPage() {
                 throw new Error(msg);
             }
 
-            // refresh receipts list and auto-select
             await refetchReceipts();
             setReceiptId(String(json.receipt_id));
 
@@ -137,7 +137,7 @@ export default function PurchaseCostWorklistPage() {
         if (actionType === "MANUAL" || (actionType === "RECEIPT" && manualCost)) {
             costLines.push({
                 shipment_line_id: selectedRow.shipment_line_id,
-                unit_cost_krw: Number(manualCost)
+                unit_cost_krw: Number(manualCost),
             });
         }
 
@@ -148,7 +148,7 @@ export default function PurchaseCostWorklistPage() {
                 p_receipt_id: receiptId,
                 p_cost_lines: costLines,
                 p_actor_person_id: actorId,
-                p_note: "worklist apply from web"
+                p_note: "worklist apply from web",
             });
 
             setModalOpen(false);
@@ -161,9 +161,11 @@ export default function PurchaseCostWorklistPage() {
 
     const previewReceipt = async () => {
         if (!receiptId || !receipts) return;
-        const r = receipts.find(x => x.receipt_id === receiptId);
+        const r = receipts.find((x) => x.receipt_id === receiptId);
         if (r) {
-            const res = await fetch(`/api/receipt-file?bucket=${r.file_bucket}&path=${encodeURIComponent(r.file_path)}`);
+            const res = await fetch(
+                `/api/receipt-file?bucket=${r.file_bucket}&path=${encodeURIComponent(r.file_path)}`
+            );
             const json = await res.json();
             if (json.signedUrl) {
                 window.open(json.signedUrl, "_blank");
@@ -193,12 +195,12 @@ export default function PurchaseCostWorklistPage() {
                                         {row.customer_name} · {row.model_name} · Qty {row.qty}
                                     </div>
                                     <div className="text-xs text-[var(--muted)]">
-                                        출고일: {row.ship_date ? format(new Date(row.ship_date), "yyyy-MM-dd") : "-"} ·
-                                        상태: {row.purchase_cost_status ?? "-"} · 출처: {row.purchase_cost_source ?? "-"}
+                                        출고일: {row.ship_date ? format(new Date(row.ship_date), "yyyy-MM-dd") : "-"} · 상태:{" "}
+                                        {row.purchase_cost_status ?? "-"} · 출처: {row.purchase_cost_source ?? "-"}
                                     </div>
                                     <div className="text-xs text-[var(--muted)]">
-                                        판매금액: {row.total_amount_sell_krw?.toLocaleString()}원 ·
-                                        원가(단가): {row.purchase_unit_cost_krw?.toLocaleString() ?? "-"}원
+                                        판매금액: {row.total_amount_sell_krw?.toLocaleString()}원 · 원가(단가):{" "}
+                                        {row.purchase_unit_cost_krw?.toLocaleString() ?? "-"}원
                                     </div>
                                 </div>
                                 <div className="flex gap-2">
@@ -208,9 +210,7 @@ export default function PurchaseCostWorklistPage() {
                                     <Button variant="secondary" onClick={() => handleOpenAction(row, "MANUAL")}>
                                         수기
                                     </Button>
-                                    <Button onClick={() => handleOpenAction(row, "RECEIPT")}>
-                                        영수증
-                                    </Button>
+                                    <Button onClick={() => handleOpenAction(row, "RECEIPT")}>영수증</Button>
                                 </div>
                             </div>
                         ))
@@ -220,28 +220,10 @@ export default function PurchaseCostWorklistPage() {
 
             <Modal open={modalOpen} onOpenChange={setModalOpen} title="원가 확정">
                 <div className="space-y-4">
-                    {selectedRow ? (
-                        <div className="rounded-[12px] border border-[var(--panel-border)] bg-white p-3 space-y-2">
-                            <div className="text-sm font-semibold">{selectedRow.customer_name}</div>
-                            <div className="text-xs text-[var(--muted)]">
-                                {selectedRow.model_name} · Qty {selectedRow.qty}
-                            </div>
-                            <div className="flex gap-2">
-                                <Badge variant="secondary" className="rounded-[4px]">
-                                    {actionType}
-                                </Badge>
-                            </div>
-                        </div>
-                    ) : null}
-
                     {actionType === "MANUAL" && (
                         <div className="space-y-2">
                             <label className="text-sm font-semibold">원가(단가) 입력</label>
-                            <Input
-                                placeholder="예: 12000"
-                                value={manualCost}
-                                onChange={(e) => setManualCost(e.target.value)}
-                            />
+                            <Input placeholder="예: 12000" value={manualCost} onChange={(e) => setManualCost(e.target.value)} />
                         </div>
                     )}
 
@@ -263,9 +245,7 @@ export default function PurchaseCostWorklistPage() {
                                     >
                                         {receiptUploading ? "업로드 중..." : "업로드"}
                                     </Button>
-                                    <span className="text-xs text-[var(--muted)]">
-                                        PDF/JPG/PNG/WebP (최대 20MB)
-                                    </span>
+                                    <span className="text-xs text-[var(--muted)]">PDF/JPG/PNG/WebP (최대 20MB)</span>
                                 </div>
                             </div>
 
