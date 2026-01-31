@@ -1,363 +1,591 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { ActionBar } from "@/components/layout/action-bar";
-import { FilterBar } from "@/components/layout/filter-bar";
-import { Card, CardBody } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/field";
-import { Modal } from "@/components/ui/modal";
-import { SearchSelect } from "@/components/ui/search-select";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { useRpcMutation } from "@/hooks/use-rpc-mutation";
-import { CONTRACTS } from "@/lib/contracts";
 import { toast } from "sonner";
 
-type WorklistRow = {
-    shipment_id: string;
-    shipment_line_id: string;
-    customer_party_id?: string;
-    customer_name?: string;
-    ship_date?: string;
-    confirmed_at?: string;
-    model_name?: string;
-    qty?: number;
-    total_amount_sell_krw?: number;
-    purchase_unit_cost_krw?: number;
-    purchase_total_cost_krw?: number;
-    purchase_cost_status?: string;
-    purchase_cost_source?: string;
-    purchase_receipt_id?: string;
-    updated_at?: string;
+import { ActionBar } from "@/components/layout/action-bar";
+import { Card, CardBody, CardHeader } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Input, Select, Textarea } from "@/components/ui/field";
+import { Badge } from "@/components/ui/badge";
+import { Modal } from "@/components/ui/modal";
+import { useRpcMutation } from "@/hooks/use-rpc-mutation";
+
+type LinkedShipment = {
+  shipment_id: string;
+  ship_date: string | null;
+  shipment_status: string | null;
+  customer_party_id: string | null;
+  customer_name: string | null;
+  basis_cost_krw: number | null;
+  line_cnt: number | null;
 };
 
-type ReceiptRow = {
-    receipt_id: string;
-    received_at: string;
-    file_path: string;
-    file_bucket: string;
-    mime_type?: string;
-    status: string;
+type ReceiptWorklistRow = {
+  receipt_id: string;
+  received_at: string;
+  source?: string | null;
+  status: string;
+  vendor_party_id?: string | null;
+  vendor_name?: string | null;
+  issued_at?: string | null;
+
+  inbox_currency_code?: string | null;
+  inbox_total_amount_krw?: number | null;
+
+  file_bucket: string;
+  file_path: string;
+  file_sha256?: string | null;
+  file_size_bytes?: number | null;
+  mime_type?: string | null;
+  memo?: string | null;
+
+  pricing_currency_code?: string | null;
+  pricing_total_amount?: number | null;
+  weight_g?: number | null;
+  labor_basic?: number | null;
+  labor_other?: number | null;
+  pricing_total_amount_krw?: number | null;
+  fx_rate_krw_per_unit?: number | null;
+  fx_tick_id?: string | null;
+  applied_at?: string | null;
+
+  linked_shipment_cnt: number;
+  linked_basis_cost_krw: number;
+  linked_shipments: LinkedShipment[];
 };
+
+type UpsertSnapshotResult = {
+  ok: boolean;
+  receipt_id: string;
+  currency_code?: string;
+  total_amount?: number;
+  total_amount_krw?: number;
+};
+
+type ApplySnapshotResult = {
+  ok: boolean;
+  receipt_id: string;
+  total_amount_krw: number;
+  shipment_count: number;
+};
+
+function formatNumber(n: number | null | undefined) {
+  if (n === null || n === undefined || Number.isNaN(Number(n))) return "-";
+  return new Intl.NumberFormat("ko-KR").format(Number(n));
+}
+
+function formatYmd(iso: string | null | undefined) {
+  if (!iso) return "-";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "-";
+  return d.toLocaleDateString("ko-KR");
+}
+
+function shortPath(path: string) {
+  const name = (path ?? "").split("/").pop() ?? "";
+  return name || path;
+}
+
+function parseNumOrNull(v: string) {
+  const s = (v ?? "").trim();
+  if (!s) return null;
+  const n = Number(s.replaceAll(",", ""));
+  return Number.isFinite(n) ? n : null;
+}
+
+function calcAllocations(totalKrw: number | null, linked: LinkedShipment[]) {
+  if (!totalKrw || totalKrw <= 0) return [] as Array<LinkedShipment & { alloc_krw: number }>;
+  const basisTotal = linked.reduce((acc, s) => acc + (Number(s.basis_cost_krw) || 0), 0);
+  if (basisTotal <= 0) return linked.map((s) => ({ ...s, alloc_krw: 0 }));
+
+  // progressive remainder allocation to keep sum exact
+  let remainingKrw = totalKrw;
+  let remainingBasis = basisTotal;
+  const sorted = [...linked].sort((a, b) => (a.shipment_id > b.shipment_id ? 1 : -1));
+  const out: Array<LinkedShipment & { alloc_krw: number }> = [];
+
+  for (const s of sorted) {
+    const basis = Number(s.basis_cost_krw) || 0;
+    const alloc = remainingBasis > 0 ? Math.round((remainingKrw * basis) / remainingBasis) : remainingKrw;
+    remainingKrw -= alloc;
+    remainingBasis -= basis;
+    out.push({ ...s, alloc_krw: alloc });
+  }
+  return out;
+}
 
 export default function PurchaseCostWorklistPage() {
-    const [modalOpen, setModalOpen] = useState(false);
-    const [selectedRow, setSelectedRow] = useState<WorklistRow | null>(null);
-    const [actionType, setActionType] = useState<"PROVISIONAL" | "MANUAL" | "RECEIPT">("PROVISIONAL");
-    const [manualCost, setManualCost] = useState("");
-    const [receiptId, setReceiptId] = useState<string | null>(null);
+  // NOTE: route 이름은 유지하지만, 실제로는 "영수증 작업대"를 구현합니다.
+  const [filter, setFilter] = useState<"ALL" | "NEED_INPUT" | "NEED_APPLY" | "APPLIED">("NEED_APPLY");
+  const [selectedReceiptId, setSelectedReceiptId] = useState<string | null>(null);
 
-    const [receiptFile, setReceiptFile] = useState<File | null>(null);
-    const [receiptUploading, setReceiptUploading] = useState(false);
-    const [receiptFileInputKey, setReceiptFileInputKey] = useState(0);
+  const [currencyCode, setCurrencyCode] = useState<"KRW" | "CNY">("KRW");
+  const [totalAmount, setTotalAmount] = useState<string>("");
+  const [weightG, setWeightG] = useState<string>("");
+  const [laborBasic, setLaborBasic] = useState<string>("");
+  const [laborOther, setLaborOther] = useState<string>("");
+  const [note, setNote] = useState<string>("");
+  const [forceReapply, setForceReapply] = useState<boolean>(false);
 
-    const actorId = (process.env.NEXT_PUBLIC_CMS_ACTOR_ID || "").trim();
+  const [uploadOpen, setUploadOpen] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
 
-    const { data: rows, isLoading, refetch } = useQuery({
-        queryKey: ["cms", "purchase_cost_worklist"],
-        queryFn: async () => {
-            const res = await fetch("/api/purchase-cost-worklist");
-            const json = await res.json();
-            return (json.data ?? []) as WorklistRow[];
-        },
+  const worklist = useQuery<{ data: ReceiptWorklistRow[] }>(
+    {
+      queryKey: ["cms", "receipt_worklist"],
+      queryFn: async () => {
+        const res = await fetch("/api/purchase-cost-worklist?limit=250", { cache: "no-store" });
+        const json = await res.json();
+        if (!res.ok) throw new Error(json?.error ?? "작업대 조회 실패");
+        return json;
+      },
+      refetchInterval: 15_000,
+    }
+  );
+
+  const rows = worklist.data?.data ?? [];
+
+  const filteredRows = useMemo(() => {
+    if (filter === "ALL") return rows;
+    if (filter === "APPLIED") return rows.filter((r) => !!r.applied_at);
+    if (filter === "NEED_INPUT") {
+      return rows.filter((r) => !r.pricing_total_amount_krw && !r.pricing_total_amount);
+    }
+    // NEED_APPLY
+    return rows.filter((r) => !r.applied_at);
+  }, [rows, filter]);
+
+  const selected = useMemo(() => {
+    if (!selectedReceiptId) return null;
+    return rows.find((r) => r.receipt_id === selectedReceiptId) ?? null;
+  }, [rows, selectedReceiptId]);
+
+  // Auto-select first row
+  useEffect(() => {
+    if (!selectedReceiptId && filteredRows.length > 0) {
+      setSelectedReceiptId(filteredRows[0].receipt_id);
+    }
+  }, [filteredRows, selectedReceiptId]);
+
+  // When selection changes, hydrate form from snapshot
+  useEffect(() => {
+    if (!selected) return;
+    const c = (selected.pricing_currency_code ?? selected.inbox_currency_code ?? "KRW").toUpperCase();
+    setCurrencyCode((c === "CNY" ? "CNY" : "KRW") as "KRW" | "CNY");
+    setTotalAmount(selected.pricing_total_amount != null ? String(selected.pricing_total_amount) : "");
+    setWeightG(selected.weight_g != null ? String(selected.weight_g) : "");
+    setLaborBasic(selected.labor_basic != null ? String(selected.labor_basic) : "");
+    setLaborOther(selected.labor_other != null ? String(selected.labor_other) : "");
+    setNote("");
+    setForceReapply(false);
+  }, [selected?.receipt_id]);
+
+  const upsertSnapshot = useRpcMutation<UpsertSnapshotResult>({
+    fn: "cms_fn_upsert_receipt_pricing_snapshot_v1",
+    successMessage: "영수증 값 저장 완료",
+    onSuccess: () => worklist.refetch(),
+  });
+
+  const applySnapshot = useRpcMutation<ApplySnapshotResult>({
+    fn: "cms_fn_apply_receipt_pricing_snapshot_v1",
+    successMessage: "출고 원가 배분/적용 완료",
+    onSuccess: () => worklist.refetch(),
+  });
+
+  async function onSave() {
+    if (!selectedReceiptId) return;
+
+    const p_total_amount = parseNumOrNull(totalAmount);
+    if (p_total_amount == null) {
+      toast.error("총금액은 필수입니다");
+      return;
+    }
+
+    await upsertSnapshot.mutateAsync({
+      p_receipt_id: selectedReceiptId,
+      p_currency_code: currencyCode,
+      p_total_amount,
+      p_weight_g: parseNumOrNull(weightG),
+      p_labor_basic: parseNumOrNull(laborBasic),
+      p_labor_other: parseNumOrNull(laborOther),
+      p_note: note || null,
+    });
+  }
+
+  async function onApply() {
+    if (!selected) return;
+    if ((selected.linked_shipment_cnt ?? 0) <= 0) {
+      toast.error("이 영수증에 연결된 출고가 없습니다. 먼저 출고에서 영수증을 선택해 연결하세요.");
+      return;
+    }
+
+    // ✅ Apply 버튼 한 번에 끝내기: 저장(스냅샷) → 적용
+    const p_total_amount = parseNumOrNull(totalAmount);
+    if (p_total_amount == null) {
+      toast.error("총금액은 필수입니다");
+      return;
+    }
+
+    await upsertSnapshot.mutateAsync({
+      p_receipt_id: selected.receipt_id,
+      p_currency_code: currencyCode,
+      p_total_amount,
+      p_weight_g: parseNumOrNull(weightG),
+      p_labor_basic: parseNumOrNull(laborBasic),
+      p_labor_other: parseNumOrNull(laborOther),
+      p_note: note || null,
     });
 
-    const { data: receipts } = useQuery({
-        queryKey: ["receipts", "uploaded_or_linked"],
-        queryFn: async () => {
-            const res = await fetch("/api/receipts?status=UPLOADED,LINKED&limit=50");
-            const json = await res.json();
-            return (json.data ?? []) as ReceiptRow[];
-        },
-        enabled: modalOpen && actionType === "RECEIPT",
+    await applySnapshot.mutateAsync({
+      p_receipt_id: selected.receipt_id,
+      p_note: note || null,
+      p_force: forceReapply,
+    });
+  }
+
+  async function openReceiptPreview(receiptId: string) {
+    try {
+      const url = `/api/receipt-preview?receipt_id=${encodeURIComponent(receiptId)}`;
+      window.open(url, "_blank", "noopener,noreferrer");
+    } catch {
+      toast.error("미리보기를 열 수 없습니다");
+    }
+  }
+
+  async function uploadReceipt() {
+    const file = fileRef.current?.files?.[0];
+    if (!file) {
+      toast.error("파일을 선택해 주세요");
+      return;
+    }
+
+    const form = new FormData();
+    form.append("file", file);
+
+    const res = await fetch("/api/receipt-upload", {
+      method: "POST",
+      body: form,
     });
 
-    const applyMutation = useRpcMutation(CONTRACTS.functions.applyPurchaseCost);
+    const json = await res.json();
+    if (!res.ok) {
+      toast.error("업로드 실패", { description: json?.error ?? "" });
+      return;
+    }
 
-    const handleUploadReceipt = async () => {
-        if (!modalOpen) return;
-        if (actionType !== "RECEIPT") setActionType("RECEIPT");
+    const receiptId = json?.data?.receipt_id as string | undefined;
+    if (receiptId) {
+      toast.success("영수증 업로드 완료");
+      setUploadOpen(false);
+      // refresh and select
+      await worklist.refetch();
+      setSelectedReceiptId(receiptId);
+    }
+  }
 
-        if (!receiptFile) {
-            toast.error("업로드할 영수증 파일을 선택해주세요.");
-            return;
+  const allocations = useMemo((): Array<LinkedShipment & { alloc_krw: number }> => {
+    if (!selected) return [];
+    const totalKrw = selected.pricing_total_amount_krw ?? null;
+    return calcAllocations(totalKrw, selected.linked_shipments ?? []);
+  }, [selected]);
+
+  const busy = worklist.isLoading || upsertSnapshot.isPending || applySnapshot.isPending;
+
+  return (
+    <div className="space-y-6">
+      <ActionBar
+        title="영수증 작업대"
+        subtitle="영수증 총합(중량/공임/총금액)을 저장하고, 연결된 출고에 자동 배분하여 ACTUAL 원가로 반영합니다."
+        actions={
+          <>
+            <Button variant="secondary" onClick={() => worklist.refetch()} disabled={busy}>
+              새로고침
+            </Button>
+            <Button onClick={() => setUploadOpen(true)} disabled={busy}>
+              영수증 업로드
+            </Button>
+          </>
         }
+      />
 
-        setReceiptUploading(true);
-        try {
-            const fd = new FormData();
-            fd.append("file0", receiptFile);
-
-            const res = await fetch("/api/receipt-upload", { method: "POST", body: fd });
-            const json = await res.json();
-
-            if (!res.ok || !json?.ok || !json.receipt_id) {
-                throw new Error(json?.error ?? `upload failed (${res.status})`);
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-5">
+        {/* Left: receipt list */}
+        <Card className="lg:col-span-2">
+          <CardHeader
+            title="영수증 목록"
+            right={
+              <div className="flex items-center gap-2">
+                <Button
+                  size="sm"
+                  variant={filter === "NEED_APPLY" ? "primary" : "secondary"}
+                  onClick={() => setFilter("NEED_APPLY")}
+                >
+                  미적용
+                </Button>
+                <Button
+                  size="sm"
+                  variant={filter === "NEED_INPUT" ? "primary" : "secondary"}
+                  onClick={() => setFilter("NEED_INPUT")}
+                >
+                  미입력
+                </Button>
+                <Button
+                  size="sm"
+                  variant={filter === "APPLIED" ? "primary" : "secondary"}
+                  onClick={() => setFilter("APPLIED")}
+                >
+                  적용완료
+                </Button>
+                <Button
+                  size="sm"
+                  variant={filter === "ALL" ? "primary" : "secondary"}
+                  onClick={() => setFilter("ALL")}
+                >
+                  전체
+                </Button>
+              </div>
             }
+          />
+          <CardBody className="space-y-2">
+            {worklist.isLoading ? (
+              <p className="text-sm text-[var(--muted)]">불러오는 중…</p>
+            ) : filteredRows.length === 0 ? (
+              <p className="text-sm text-[var(--muted)]">표시할 영수증이 없습니다.</p>
+            ) : (
+              <div className="space-y-2">
+                {filteredRows.map((r) => {
+                  const isSelected = r.receipt_id === selectedReceiptId;
+                  const hasInput = !!(r.pricing_total_amount_krw ?? r.pricing_total_amount);
+                  const isApplied = !!r.applied_at;
+                  const hasLinks = (r.linked_shipment_cnt ?? 0) > 0;
 
-            setReceiptId(String(json.receipt_id));
-            toast.success("영수증 업로드 완료");
-
-            setReceiptFile(null);
-            setReceiptFileInputKey((k) => k + 1);
-        } catch (e: any) {
-            toast.error("영수증 업로드 실패", { description: e.message || String(e) });
-        } finally {
-            setReceiptUploading(false);
-        }
-    };
-
-    // Receipt Preview (inline)
-    const [receiptPreviewSrc, setReceiptPreviewSrc] = useState<string | null>(null);
-    const [receiptPreviewKind, setReceiptPreviewKind] = useState<"pdf" | "image" | null>(null);
-    const [receiptPreviewTitle, setReceiptPreviewTitle] = useState<string>("");
-
-    // Local preview (before upload)
-    useEffect(() => {
-        if (!modalOpen || actionType !== "RECEIPT") return;
-        if (!receiptFile) return;
-
-        const objUrl = URL.createObjectURL(receiptFile);
-        setReceiptPreviewSrc(objUrl);
-        setReceiptPreviewKind(receiptFile.type === "application/pdf" ? "pdf" : "image");
-        setReceiptPreviewTitle(receiptFile.name);
-
-        return () => URL.revokeObjectURL(objUrl);
-    }, [modalOpen, actionType, receiptFile]);
-
-    // Remote preview (after upload / selection)
-    useEffect(() => {
-        if (!modalOpen || actionType !== "RECEIPT") return;
-        if (receiptFile) return;
-
-        if (!receiptId) {
-            setReceiptPreviewSrc(null);
-            setReceiptPreviewKind(null);
-            setReceiptPreviewTitle("");
-            return;
-        }
-
-        const r = (receipts ?? []).find((x) => x.receipt_id === receiptId);
-        if (!r) return;
-
-        const mime = (r as any).mime_type as string | undefined;
-        setReceiptPreviewKind(mime?.includes("pdf") ? "pdf" : "image");
-        setReceiptPreviewTitle(r.file_path.split("/").pop() ?? "receipt");
-
-        const previewUrl = `/api/receipt-preview?bucket=${encodeURIComponent(r.file_bucket)}&path=${encodeURIComponent(
-            r.file_path
-        )}&mime=${encodeURIComponent(mime ?? "")}`;
-
-        setReceiptPreviewSrc(previewUrl);
-    }, [modalOpen, actionType, receiptFile, receiptId, receipts]);
-
-    const openReceiptInNewTab = () => {
-        if (!receiptPreviewSrc) return;
-        window.open(receiptPreviewSrc, "_blank", "noopener,noreferrer");
-    };
-
-    const handleSubmit = async () => {
-        if (!selectedRow) return;
-        if (!actorId) {
-            toast.error("NEXT_PUBLIC_CMS_ACTOR_ID 설정이 필요합니다.");
-            return;
-        }
-
-        const cost = Number(manualCost);
-        const hasCost = !Number.isNaN(cost) && cost >= 0;
-
-        const costLines =
-            actionType === "PROVISIONAL"
-                ? []
-                : hasCost
-                    ? [
-                        {
-                            shipment_line_id: selectedRow.shipment_line_id,
-                            unit_cost_krw: cost,
-                        },
-                    ]
-                    : [];
-
-        try {
-            await applyMutation.mutateAsync({
-                p_shipment_id: selectedRow.shipment_id,
-                p_mode: actionType,
-                p_receipt_id: actionType === "RECEIPT" ? receiptId : null,
-                p_cost_lines: costLines,
-                p_actor_person_id: actorId,
-                p_note: "worklist apply from web",
-            });
-
-            setModalOpen(false);
-            setSelectedRow(null);
-            refetch();
-        } catch (e: any) {
-            toast.error(e.message || "Apply failed");
-        }
-    };
-
-    return (
-        <div className="space-y-4">
-            <ActionBar title="원가 작업대" subtitle="임시/누락 원가를 영수증/수기로 확정하세요." />
-            <FilterBar />
-
-            <Card>
-                <CardBody className="space-y-2">
-                    {isLoading ? (
-                        <div className="text-sm text-[var(--muted)]">로딩 중...</div>
-                    ) : (rows ?? []).length === 0 ? (
-                        <div className="text-sm text-[var(--muted)]">작업대가 비어 있습니다.</div>
-                    ) : (
-                        (rows ?? []).map((row) => (
-                            <div
-                                key={`${row.shipment_id}-${row.shipment_line_id}`}
-                                className="flex items-center justify-between rounded-[12px] border border-[var(--panel-border)] bg-white p-3"
-                            >
-                                <div className="space-y-1">
-                                    <div className="text-sm font-semibold">
-                                        {row.customer_name} · {row.model_name} · Qty {row.qty}
-                                    </div>
-                                    <div className="text-xs text-[var(--muted)]">
-                                        상태: {row.purchase_cost_status ?? "-"} · 출처: {row.purchase_cost_source ?? "-"}
-                                    </div>
-                                </div>
-                                <div className="flex gap-2">
-                                    <Button
-                                        variant="secondary"
-                                        onClick={() => {
-                                            setSelectedRow(row);
-                                            setActionType("RECEIPT");
-                                            setManualCost("");
-                                            setReceiptId(null);
-                                            setReceiptFile(null);
-                                            setReceiptFileInputKey((k) => k + 1);
-                                            setModalOpen(true);
-                                        }}
-                                    >
-                                        영수증 확정
-                                    </Button>
-                                    <Button
-                                        onClick={() => {
-                                            setSelectedRow(row);
-                                            setActionType("MANUAL");
-                                            setManualCost("");
-                                            setReceiptId(null);
-                                            setReceiptFile(null);
-                                            setReceiptFileInputKey((k) => k + 1);
-                                            setModalOpen(true);
-                                        }}
-                                    >
-                                        수기 확정
-                                    </Button>
-                                </div>
-                            </div>
-                        ))
-                    )}
-                </CardBody>
-            </Card>
-
-            <Modal open={modalOpen} onOpenChange={setModalOpen} title="원가 확정">
-                <div className="space-y-4">
-                    {(actionType === "MANUAL" || actionType === "RECEIPT") && (
-                        <div className="space-y-2">
-                            <label className="text-sm font-semibold">
-                                {actionType === "RECEIPT" ? "영수증 기준 원가(단가) 입력" : "원가(단가) 입력"}
-                            </label>
-                            <Input
-                                placeholder="예: 12000"
-                                value={manualCost}
-                                onChange={(e) => setManualCost(e.target.value)}
-                            />
-                            <p className="text-xs text-[var(--muted)]">
-                                RECEIPT 모드에서 단가를 입력해야 출고라인(purchase_receipt_id)과 영수증이 실제로 연결됩니다.
-                            </p>
+                  return (
+                    <button
+                      key={r.receipt_id}
+                      type="button"
+                      onClick={() => setSelectedReceiptId(r.receipt_id)}
+                      className={`w-full rounded-[12px] border px-3 py-3 text-left transition-all ${
+                        isSelected
+                          ? "border-[var(--primary)] bg-blue-50/40"
+                          : "border-[var(--panel-border)] hover:bg-[var(--chip)]"
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="truncate text-sm font-semibold text-[var(--foreground)]">
+                            {shortPath(r.file_path)}
+                          </div>
+                          <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-[var(--muted)]">
+                            <span>{formatYmd(r.received_at)}</span>
+                            <span>·</span>
+                            <span className="truncate">{r.vendor_name ?? "거래처 미지정"}</span>
+                          </div>
                         </div>
-                    )}
-
-                    {actionType === "RECEIPT" && (
-                        <div className="space-y-3">
-                            <div className="space-y-2">
-                                <label className="text-sm font-semibold">영수증 업로드</label>
-                                <Input
-                                    key={receiptFileInputKey}
-                                    type="file"
-                                    accept="application/pdf,image/*"
-                                    onChange={(e) => setReceiptFile(e.target.files?.[0] ?? null)}
-                                />
-                                <div className="flex gap-2 items-center">
-                                    <Button
-                                        variant="secondary"
-                                        onClick={handleUploadReceipt}
-                                        disabled={receiptUploading || !receiptFile}
-                                    >
-                                        {receiptUploading ? "업로드 중..." : "업로드"}
-                                    </Button>
-                                    <span className="text-xs text-[var(--muted)]">PDF/JPG/PNG/WebP (최대 20MB)</span>
-                                </div>
-                            </div>
-
-                            <div className="space-y-2">
-                                <label className="text-sm font-semibold">영수증 선택</label>
-                                <div className="flex gap-2">
-                                    <div className="flex-1">
-                                        <SearchSelect
-                                            placeholder="영수증 검색..."
-                                            options={(receipts ?? []).map((r) => ({
-                                                label: `${r.received_at.slice(0, 10)} (${r.file_path.split("/").pop()})`,
-                                                value: r.receipt_id,
-                                            }))}
-                                            value={receiptId ?? undefined}
-                                            onChange={setReceiptId}
-                                        />
-                                    </div>
-                                    <Button variant="secondary" onClick={openReceiptInNewTab} disabled={!receiptPreviewSrc}>
-                                        새 창
-                                    </Button>
-                                </div>
-                            </div>
-
-                            <div className="space-y-2">
-                                <div className="text-sm font-semibold">영수증 미리보기</div>
-                                <div className="rounded-[12px] border border-[var(--panel-border)] bg-white overflow-hidden h-[60vh]">
-                                    {receiptPreviewSrc ? (
-                                        receiptPreviewKind === "pdf" ? (
-                                            <iframe
-                                                title={receiptPreviewTitle || "receipt"}
-                                                src={receiptPreviewSrc}
-                                                className="w-full h-full"
-                                            />
-                                        ) : (
-                                            <div className="w-full h-full overflow-auto">
-                                                <img
-                                                    src={receiptPreviewSrc}
-                                                    alt={receiptPreviewTitle || "receipt"}
-                                                    className="block w-full h-auto"
-                                                />
-                                            </div>
-                                        )
-                                    ) : (
-                                        <div className="w-full h-full flex items-center justify-center text-sm text-[var(--muted)]">
-                                            영수증을 업로드하거나 선택하면 여기에 표시됩니다.
-                                        </div>
-                                    )}
-                                </div>
-                                {receiptPreviewTitle ? (
-                                    <div className="text-xs text-[var(--muted)] truncate">{receiptPreviewTitle}</div>
-                                ) : null}
-                            </div>
+                        <div className="flex shrink-0 flex-col items-end gap-1">
+                          <div className="flex items-center gap-1">
+                            <Badge tone={hasLinks ? "primary" : "neutral"}>연결 {r.linked_shipment_cnt ?? 0}</Badge>
+                            <Badge tone={hasInput ? "active" : "warning"}>{hasInput ? "입력" : "미입력"}</Badge>
+                            <Badge tone={isApplied ? "active" : "warning"}>{isApplied ? "적용" : "미적용"}</Badge>
+                          </div>
+                          <div className="text-xs text-[var(--muted)]">
+                            {r.pricing_currency_code ?? "-"} {formatNumber(r.pricing_total_amount)}
+                          </div>
                         </div>
-                    )}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </CardBody>
+        </Card>
 
-                    <div className="flex justify-end gap-2 pt-2">
-                        <Button variant="secondary" onClick={() => setModalOpen(false)}>
-                            취소
-                        </Button>
-                        <Button onClick={handleSubmit} disabled={applyMutation.isPending}>
-                            {applyMutation.isPending ? "적용 중..." : "적용"}
-                        </Button>
-                    </div>
+        {/* Right: selected receipt editor */}
+        <Card className="lg:col-span-3">
+          <CardHeader
+            title={selected ? "영수증 입력/배분" : "영수증을 선택하세요"}
+            right={
+              selected ? (
+                <div className="flex items-center gap-2">
+                  <Button variant="secondary" onClick={() => openReceiptPreview(selected.receipt_id)}>
+                    미리보기
+                  </Button>
+                  <Button variant="secondary" onClick={() => setSelectedReceiptId(null)}>
+                    선택해제
+                  </Button>
                 </div>
-            </Modal>
+              ) : null
+            }
+          />
+          <CardBody className="space-y-5">
+            {!selected ? (
+              <div className="rounded-[12px] border border-[var(--panel-border)] bg-[var(--chip)] p-4 text-sm text-[var(--muted)]">
+                왼쪽에서 영수증을 선택하면, 총합(중량/공임/총금액)을 입력하고 연결된 출고에 자동 배분하여 원가를 반영할 수 있습니다.
+              </div>
+            ) : (
+              <>
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                  <div>
+                    <div className="mb-1 text-xs text-[var(--muted)]">통화</div>
+                    <Select value={currencyCode} onChange={(e) => setCurrencyCode(e.target.value as any)}>
+                      <option value="KRW">KRW</option>
+                      <option value="CNY">CNY</option>
+                    </Select>
+                    <div className="mt-1 text-xs text-[var(--muted)]">
+                      * 환율은 저장하지 않고, 적용 시점에 최신 시세(meta)를 참조해 KRW 환산합니다.
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="mb-1 text-xs text-[var(--muted)]">총금액 ({currencyCode})</div>
+                    <Input
+                      inputMode="decimal"
+                      placeholder="예: 123456"
+                      value={totalAmount}
+                      onChange={(e) => setTotalAmount(e.target.value)}
+                    />
+                    <div className="mt-1 text-xs text-[var(--muted)]">
+                      저장 후 KRW 환산: <b>{formatNumber(selected.pricing_total_amount_krw)}</b>
+                      {selected.fx_rate_krw_per_unit ? (
+                        <span className="ml-2">(fx≈{formatNumber(selected.fx_rate_krw_per_unit)} KRW/1)</span>
+                      ) : null}
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="mb-1 text-xs text-[var(--muted)]">중량(g)</div>
+                    <Input
+                      inputMode="decimal"
+                      placeholder="예: 12.34"
+                      value={weightG}
+                      onChange={(e) => setWeightG(e.target.value)}
+                    />
+                  </div>
+
+                  <div>
+                    <div className="mb-1 text-xs text-[var(--muted)]">기본공임</div>
+                    <Input
+                      inputMode="decimal"
+                      placeholder="예: 5000"
+                      value={laborBasic}
+                      onChange={(e) => setLaborBasic(e.target.value)}
+                    />
+                  </div>
+
+                  <div>
+                    <div className="mb-1 text-xs text-[var(--muted)]">기타공임</div>
+                    <Input
+                      inputMode="decimal"
+                      placeholder="예: 2000"
+                      value={laborOther}
+                      onChange={(e) => setLaborOther(e.target.value)}
+                    />
+                  </div>
+
+                  <div>
+                    <div className="mb-1 text-xs text-[var(--muted)]">메모(선택)</div>
+                    <Textarea
+                      placeholder="예: 공장 출고가 / 특이사항"
+                      value={note}
+                      onChange={(e) => setNote(e.target.value)}
+                    />
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button variant="secondary" onClick={onSave} disabled={busy || !selectedReceiptId}>
+                    저장
+                  </Button>
+                  <Button onClick={onApply} disabled={busy || !selectedReceiptId}>
+                    배분 적용
+                  </Button>
+                  <label className="ml-auto flex items-center gap-2 text-xs text-[var(--muted)]">
+                    <input
+                      type="checkbox"
+                      checked={forceReapply}
+                      onChange={(e) => setForceReapply(e.target.checked)}
+                    />
+                    재적용(덮어쓰기)
+                  </label>
+                </div>
+
+                <div className="rounded-[12px] border border-[var(--panel-border)] p-4">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <div className="text-sm font-semibold text-[var(--foreground)]">연결된 출고</div>
+                      <div className="mt-1 text-xs text-[var(--muted)]">
+                        기준: 출고확정 당시 내부원가 합(total_amount_cost_krw) 비례 배분
+                      </div>
+                    </div>
+                    <div className="text-xs text-[var(--muted)]">
+                      연결 {selected.linked_shipment_cnt ?? 0}건 · 기준합 {formatNumber(selected.linked_basis_cost_krw)} KRW
+                    </div>
+                  </div>
+
+                  <div className="mt-3 space-y-2">
+                    {selected.linked_shipments?.length ? (
+                      allocations.map((s) => (
+                        <div
+                          key={s.shipment_id}
+                          className="flex flex-wrap items-center justify-between gap-2 rounded-[10px] border border-[var(--panel-border)] bg-[var(--chip)] px-3 py-2"
+                        >
+                          <div className="min-w-0">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="text-sm font-semibold text-[var(--foreground)]">
+                                {s.customer_name ?? "(거래처 미상)"}
+                              </span>
+                              <Badge tone="neutral">{formatYmd(s.ship_date)}</Badge>
+                              <Badge tone="neutral">라인 {s.line_cnt ?? 0}</Badge>
+                              <Badge tone="neutral">기준 {formatNumber(s.basis_cost_krw)} KRW</Badge>
+                            </div>
+                            <div className="mt-1 text-xs text-[var(--muted)] break-all">shipment_id: {s.shipment_id}</div>
+                          </div>
+                          <div className="text-right">
+                            <div className="text-sm font-semibold text-[var(--foreground)]">배분 {formatNumber(s.alloc_krw)} KRW</div>
+                            <div className="text-xs text-[var(--muted)]">
+                              {selected.pricing_total_amount_krw ? "(저장된 KRW 환산 기준)" : "(총금액 저장 후 계산)"}
+                            </div>
+                          </div>
+                        </div>
+                      ))
+                    ) : (
+                      <div className="text-sm text-[var(--muted)]">연결된 출고가 없습니다.</div>
+                    )}
+                  </div>
+                </div>
+
+                {selected.applied_at ? (
+                  <div className="rounded-[12px] border border-emerald-100 bg-emerald-50 p-4 text-sm text-emerald-800">
+                    적용 완료: {formatYmd(selected.applied_at)}
+                  </div>
+                ) : null}
+              </>
+            )}
+          </CardBody>
+        </Card>
+      </div>
+
+      <Modal open={uploadOpen} onClose={() => setUploadOpen(false)} title="영수증 업로드">
+        <div className="space-y-4">
+          <div>
+            <div className="mb-1 text-xs text-[var(--muted)]">파일</div>
+            <Input ref={fileRef} type="file" accept="application/pdf,image/*" />
+            <div className="mt-1 text-xs text-[var(--muted)]">
+              PDF/이미지 파일을 업로드하면 영수증 inbox에 저장됩니다.
+            </div>
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button variant="secondary" onClick={() => setUploadOpen(false)}>
+              취소
+            </Button>
+            <Button onClick={uploadReceipt} disabled={busy}>
+              업로드
+            </Button>
+          </div>
         </div>
-    );
+      </Modal>
+    </div>
+  );
 }
