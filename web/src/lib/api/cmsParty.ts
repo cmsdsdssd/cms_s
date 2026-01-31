@@ -19,6 +19,14 @@ export type PartyRow = {
   last_activity_at?: string | null;
 };
 
+type ArPositionRow = {
+  party_id: string;
+  balance_krw?: number | null;
+  receivable_krw?: number | null;
+  credit_krw?: number | null;
+  last_activity_at?: string | null;
+};
+
 export type PartyAddress = {
   address_id: string;
   party_id: string;
@@ -112,7 +120,8 @@ export async function fetchParties(params: {
       .in("party_id", partyIds);
     if (arError) throw arError;
 
-    const arMap = new Map((arData ?? []).map((i) => [i.party_id, i]));
+    const arRows = (arData ?? []) as ArPositionRow[];
+    const arMap = new Map(arRows.map((i) => [i.party_id, i]));
     enrichedData = enrichedData.map((p) => ({
       ...p,
       ...arMap.get(p.party_id),
@@ -157,8 +166,11 @@ export async function fetchPartyDetail(partyId: string) {
 
   if (partyRes.error) throw partyRes.error;
 
+  const party = (partyRes.data ?? null) as PartyRow | null;
+  if (!party) throw new Error("Party not found");
+
   let arInfo = {};
-  if (partyRes.data.party_type === "customer") {
+  if (party.party_type === "customer") {
     const { data: arData } = await client
       .from(CONTRACTS.views.arPositionByParty)
       .select("balance_krw, receivable_krw, credit_krw, last_activity_at")
@@ -172,7 +184,7 @@ export async function fetchPartyDetail(partyId: string) {
   const prefixes = prefixRes.error ? [] : prefixRes.data ?? [];
 
   return {
-    ...partyRes.data,
+    ...party,
     ...arInfo,
     addresses,
     links,

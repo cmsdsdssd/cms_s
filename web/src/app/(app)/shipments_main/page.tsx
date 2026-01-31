@@ -105,18 +105,6 @@ export default function ShipmentsMainPage() {
     return map;
   }, [customersQuery.data]);
 
-  const totalsByShipment = useMemo(() => {
-    const map = new Map<string, { count: number; sum: number }>();
-    (shipmentLinesQuery.data ?? []).forEach((line) => {
-      if (!line.shipment_id) return;
-      const current = map.get(line.shipment_id) ?? { count: 0, sum: 0 };
-      current.count += 1;
-      current.sum += Number(line.total_amount_sell_krw ?? 0);
-      map.set(line.shipment_id, current);
-    });
-    return map;
-  }, [shipmentLinesQuery.data]);
-
   const lineInfoByShipment = useMemo(() => {
     const map = new Map<string, ShipmentLineRow>();
     (shipmentLinesQuery.data ?? []).forEach((line) => {

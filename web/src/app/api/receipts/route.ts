@@ -51,7 +51,8 @@ export async function GET(request: Request) {
         }
 
         return NextResponse.json({ data });
-    } catch (e: any) {
-        return NextResponse.json({ error: e.message }, { status: 500 });
+    } catch (error) {
+        const err = error as { message?: string } | null;
+        return NextResponse.json({ error: err?.message ?? "unknown error" }, { status: 500 });
     }
 }

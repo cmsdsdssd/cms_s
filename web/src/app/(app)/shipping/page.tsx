@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
-import { Input, Select } from "@/components/ui/field";
+import { Input } from "@/components/ui/field";
 import { cn } from "@/lib/utils";
 import { Card } from "@/components/ui/card";
 
@@ -26,10 +26,6 @@ export default function ShippingPage() {
     const [isLookupOpen, setIsLookupOpen] = useState(false);
     const [selectedItem, setSelectedItem] = useState<typeof MOCK_ITEMS[0] | null>(null);
     const [searchQuery, setSearchQuery] = useState("");
-
-    const handleSearchFocus = () => {
-        setIsLookupOpen(true);
-    };
 
     const handleItemSelect = (item: typeof MOCK_ITEMS[0]) => {
         setSelectedItem(item);

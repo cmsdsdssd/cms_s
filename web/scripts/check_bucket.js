@@ -1,15 +1,15 @@
 
-const { createClient } = require('@supabase/supabase-js');
-const path = require('path');
-const dotenv = require('dotenv');
-
-dotenv.config({ path: path.resolve(__dirname, '../.env.local') });
-
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-const supabase = createClient(supabaseUrl, supabaseKey);
-
 async function checkBucketAndFile() {
+    const { createClient } = await import('@supabase/supabase-js');
+    const path = await import('path');
+    const dotenv = await import('dotenv');
+
+    dotenv.config({ path: path.resolve(__dirname, '../.env.local') });
+
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+    const supabase = createClient(supabaseUrl, supabaseKey);
+
     const bucketName = 'master_images';
 
     console.log(`\n\n=== CHECKING BUCKET: ${bucketName} ===`);

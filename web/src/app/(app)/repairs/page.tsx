@@ -59,11 +59,12 @@ export default function RepairsPage() {
   const [selectedCustomer, setSelectedCustomer] = useState("");
   const [selectedPlating, setSelectedPlating] = useState("");
 
+  const repairUpsertFn = (CONTRACTS.functions as Record<string, string>).repairUpsert;
   const mutation = useRpcMutation<string>({
-    fn: CONTRACTS.functions.repairUpsert,
+    fn: repairUpsertFn,
     successMessage: "접수 저장 완료",
   });
-  const canSave = isFnConfigured(CONTRACTS.functions.repairUpsert);
+  const canSave = isFnConfigured(repairUpsertFn);
 
   return (
     <div className="space-y-6" id="repairs.root">

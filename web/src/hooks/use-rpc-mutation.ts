@@ -16,20 +16,21 @@ export function useRpcMutation<TResult>(options: RpcMutationOptions<TResult>) {
       options.onSuccess?.(data as TResult);
     },
     onError: (error) => {
-      const e = error as any;
+      const e = error as
+        | { message?: string; error_description?: string; details?: string; hint?: string }
+        | string
+        | null;
 
       const message =
-        (e?.message as string | undefined) ??
-        (e?.error_description as string | undefined) ??
-        (typeof e === "string" ? e : undefined) ??
+        (typeof e === "string" ? e : e?.message) ??
+        (typeof e === "string" ? undefined : e?.error_description) ??
         "잠시 후 다시 시도해 주세요";
 
-      const details = (e?.details as string | undefined) ?? "";
-      const hint = (e?.hint as string | undefined) ?? "";
+      const details = typeof e === "string" ? "" : e?.details ?? "";
+      const hint = typeof e === "string" ? "" : e?.hint ?? "";
 
       // ✅ Next dev overlay 방지: console.error 사용하지 말 것
       if (process.env.NODE_ENV !== "production") {
-        // eslint-disable-next-line no-console
         console.log("[RPC ERROR]", e);
       }
 

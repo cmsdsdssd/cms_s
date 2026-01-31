@@ -28,7 +28,10 @@ export async function readView<T>(viewName: string, limit = 50, options?: ReadVi
     if (op === "ilike") {
       query = query.ilike(column, String(value));
     } else {
-      query = query.eq(column, value as any);
+      const eqQuery = query as unknown as {
+        eq: (col: string, val: string | number | boolean | null) => typeof query;
+      };
+      query = eqQuery.eq(column, value);
     }
   }
 

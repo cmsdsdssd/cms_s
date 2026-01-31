@@ -24,6 +24,7 @@ export default function SettingsPage() {
   const cfgQuery = useQuery({
     queryKey: ["cms_market_tick_config", "DEFAULT"],
     queryFn: async (): Promise<MarketTickConfig> => {
+      if (!sb) throw new Error("Supabase env is missing");
       const { data, error } = await sb
         .from("cms_market_tick_config")
         .select("fx_markup, cs_correction_factor, silver_kr_correction_factor, updated_at")
@@ -41,16 +42,16 @@ export default function SettingsPage() {
         }
       );
     },
-    onSuccess: (data) => {
-      setFxMarkup(String(data.fx_markup ?? 1.03));
-      setCsFactor(String(data.cs_correction_factor ?? 1.2));
-      setSilverKrFactor(String(data.silver_kr_correction_factor ?? 1.2));
-    },
   });
 
-  const [fxMarkup, setFxMarkup] = useState("1.03");
-  const [csFactor, setCsFactor] = useState("1.2");
-  const [silverKrFactor, setSilverKrFactor] = useState("1.2");
+  const [fxMarkup, setFxMarkup] = useState<string | null>(null);
+  const [csFactor, setCsFactor] = useState<string | null>(null);
+  const [silverKrFactor, setSilverKrFactor] = useState<string | null>(null);
+
+  const displayFxMarkup = fxMarkup ?? String(cfgQuery.data?.fx_markup ?? 1.03);
+  const displayCsFactor = csFactor ?? String(cfgQuery.data?.cs_correction_factor ?? 1.2);
+  const displaySilverKrFactor =
+    silverKrFactor ?? String(cfgQuery.data?.silver_kr_correction_factor ?? 1.2);
 
   type UpsertMarketTickConfigResponse = {
     ok?: boolean;
@@ -66,9 +67,9 @@ export default function SettingsPage() {
   });
 
   const onSave = async () => {
-    const fx = Number(fxMarkup);
-    const cs = Number(csFactor);
-    const kr = Number(silverKrFactor);
+    const fx = Number(displayFxMarkup);
+    const cs = Number(displayCsFactor);
+    const kr = Number(displaySilverKrFactor);
 
     if (!Number.isFinite(fx) || !Number.isFinite(cs) || !Number.isFinite(kr)) {
       toast.error("숫자 형식이 올바르지 않아요.");
@@ -106,26 +107,28 @@ export default function SettingsPage() {
     <div className="grid grid-cols-1 gap-6 lg:grid-cols-2 items-start">
       {/* 왼쪽 컬럼: 시세 파이프라인 설정 */}
       <Card>
-        <CardHeader
-          title="시세 파이프라인 설정"
-          subtitle="FX 마크업 · 중국 CS 보정계수 · 한국 실버 보정계수"
-        />
+        <CardHeader>
+          <div>
+            <div className="text-sm font-semibold">시세 파이프라인 설정</div>
+            <div className="text-xs text-[var(--muted)]">FX 마크업 · 중국 CS 보정계수 · 한국 실버 보정계수</div>
+          </div>
+        </CardHeader>
         <CardBody className="space-y-4">
           {/* [변경됨] 카드가 반으로 줄어들었으므로 inputs를 세로로(grid-cols-1) 배치하여 가독성 확보 */}
           <div className="grid grid-cols-1 gap-4">
             <label className="space-y-1">
               <div className="text-sm text-[var(--muted)]">FX 마크업 (예: 1.03)</div>
-              <Input value={fxMarkup} onChange={(e) => setFxMarkup(e.target.value)} />
+              <Input value={displayFxMarkup} onChange={(e) => setFxMarkup(e.target.value)} />
             </label>
 
             <label className="space-y-1">
               <div className="text-sm text-[var(--muted)]">중국 CS 보정계수 (예: 1.2)</div>
-              <Input value={csFactor} onChange={(e) => setCsFactor(e.target.value)} />
+              <Input value={displayCsFactor} onChange={(e) => setCsFactor(e.target.value)} />
             </label>
 
             <label className="space-y-1">
               <div className="text-sm text-[var(--muted)]">한국 실버 보정계수 (예: 1.2)</div>
-              <Input value={silverKrFactor} onChange={(e) => setSilverKrFactor(e.target.value)} />
+              <Input value={displaySilverKrFactor} onChange={(e) => setSilverKrFactor(e.target.value)} />
             </label>
           </div>
 
@@ -156,7 +159,12 @@ export default function SettingsPage() {
 
       {/* 오른쪽 컬럼: 계정 (향후 추가) */}
       <Card>
-        <CardHeader title="계정" subtitle="사용자 정보 및 권한 관리" />
+        <CardHeader>
+          <div>
+            <div className="text-sm font-semibold">계정</div>
+            <div className="text-xs text-[var(--muted)]">사용자 정보 및 권한 관리</div>
+          </div>
+        </CardHeader>
         <CardBody>
           <div className="flex flex-col items-center justify-center py-12 text-[var(--muted)] space-y-2">
             <span className="text-2xl opacity-20">🏗️</span>

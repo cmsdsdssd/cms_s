@@ -6,7 +6,6 @@ import { SplitLayout } from "@/components/layout/split-layout";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input, Select, Textarea } from "@/components/ui/field";
-import { Badge } from "@/components/ui/badge";
 import { Modal } from "@/components/ui/modal";
 import { Grid2x2, List, X } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -755,8 +754,6 @@ export default function CatalogPage() {
         <div id="catalog.body">
           <SplitLayout
             className="gap-6 items-start"
-            leftClassName="md:col-span-4 xl:col-span-3"
-            rightClassName="md:col-span-8 xl:col-span-9"
             left={
               <div className="flex flex-col gap-3 h-full" id="catalog.listPanel">
                 <div className="flex-1">

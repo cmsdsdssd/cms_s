@@ -7,9 +7,9 @@ import { Card, CardBody, CardHeader } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input, Select } from "@/components/ui/field";
 import { Badge } from "@/components/ui/badge";
+import { Skeleton } from "@/components/ui/skeleton";
 import { useQuery } from "@tanstack/react-query";
 import { getSchemaClient } from "@/lib/supabase/client";
-import { CONTRACTS } from "@/lib/contracts";
 import { cn } from "@/lib/utils";
 
 type OrderRow = {
@@ -238,31 +238,55 @@ export default function OrdersMainPage() {
     return list;
   }, []);
 
+  const totalCount = ordersQuery.data?.length ?? 0;
+  const filteredCount = applyFilters.length;
+  const isLoading = ordersQuery.isLoading || customersQuery.isLoading || vendorsQuery.isLoading || vendorPrefixQuery.isLoading;
+
   return (
     <div className="space-y-6" id="orders_main.root">
-      <ActionBar
-        title="주문 관리"
-        subtitle="주문 조회 및 필터"
-        actions={
-          <div className="flex items-center gap-2">
-            <Link href="/orders">
-              <Button className="bg-[var(--primary)] text-white shadow-md">주문 입력</Button>
-            </Link>
-          </div>
-        }
-        id="orders_main.actionBar"
-      />
+      {/* Sticky Header */}
+      <div className="sticky top-0 z-10 -mx-4 px-4 py-4 bg-white/80 backdrop-blur-md border-b border-[var(--panel-border)] shadow-sm lg:-mx-8 lg:px-8 transition-all">
+        <ActionBar
+          title="주문 관리"
+          subtitle="주문 조회 및 필터"
+          actions={
+            <div className="flex items-center gap-2">
+              <Link href="/orders">
+                <Button className="bg-[var(--primary)] text-white shadow-md hover:shadow-lg transition-all">주문 입력</Button>
+              </Link>
+            </div>
+          }
+          id="orders_main.actionBar"
+        />
+      </div>
+
+      {/* Summary Cards */}
+      <div className="grid grid-cols-2 gap-4 md:grid-cols-4 px-1">
+        <Card className="p-4 flex flex-col gap-1 shadow-sm hover:shadow-md transition-all border-[var(--panel-border)]">
+          <span className="text-xs font-medium text-[var(--muted)]">전체 주문</span>
+          <span className="text-2xl font-bold text-[var(--foreground)]">{totalCount}</span>
+        </Card>
+        <Card className="p-4 flex flex-col gap-1 shadow-sm hover:shadow-md transition-all border-[var(--panel-border)]">
+          <span className="text-xs font-medium text-[var(--muted)]">필터 결과</span>
+          <span className="text-2xl font-bold text-[var(--primary)]">{filteredCount}</span>
+        </Card>
+      </div>
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-[1fr_4fr]">
-        <Card className="shadow-sm h-fit" id="orders_main.filters">
-          <CardHeader className="flex items-center justify-between">
+        {/* Filters Panel */}
+        <Card className="shadow-sm h-fit border-[var(--panel-border)]" id="orders_main.filters">
+          <CardHeader className="flex items-center justify-between pb-4 border-b border-[var(--panel-border)]">
             <div>
               <h3 className="text-sm font-semibold">필터</h3>
               <p className="text-xs text-[var(--muted)]">필터를 추가해 중첩 검색하세요</p>
             </div>
             <div className="flex items-center gap-2">
-              <Select onChange={(event) => addFilter(event.target.value as FilterType)}>
-                <option value="">+ 필터 추가</option>
+              <Select 
+                className="h-8 text-xs w-auto min-w-[100px]"
+                onChange={(event) => addFilter(event.target.value as FilterType)}
+                value=""
+              >
+                <option value="" disabled>+ 필터 추가</option>
                 <option value="customer">고객</option>
                 <option value="factory">공장</option>
                 <option value="model">모델명</option>
@@ -270,18 +294,29 @@ export default function OrdersMainPage() {
               </Select>
             </div>
           </CardHeader>
-          <CardBody className="grid gap-3">
+          <CardBody className="grid gap-3 pt-4">
             {filters.length === 0 ? (
-              <p className="text-xs text-[var(--muted)]">필터가 없습니다. 상단에서 추가하세요.</p>
+              <div className="text-center py-8 text-xs text-[var(--muted)] bg-[var(--panel)] rounded-lg border border-dashed border-[var(--panel-border)]">
+                필터가 없습니다. 상단에서 추가하세요.
+              </div>
             ) : null}
             {filters.map((filter) => (
               <div
                 key={filter.id}
-                className="flex flex-wrap items-center gap-2 rounded-[12px] border border-[var(--panel-border)] bg-[var(--panel)] px-3 py-2"
+                className="flex flex-col gap-2 rounded-xl border border-[var(--panel-border)] bg-[var(--panel)] p-3 shadow-sm transition-all hover:shadow-md"
               >
-                <Badge tone="neutral">{filter.type}</Badge>
+                <div className="flex items-center justify-between">
+                  <Badge tone="neutral" className="text-[10px] px-2 py-0.5 uppercase tracking-wider">{filter.type}</Badge>
+                  <button 
+                    onClick={() => removeFilter(filter.id)}
+                    className="text-[var(--muted)] hover:text-red-500 transition-colors"
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 6 6 18"/><path d="m6 6 18 18"/></svg>
+                  </button>
+                </div>
+                
                 {filter.type === "customer" ? (
-                  <Select value={filter.value} onChange={(event) => updateFilter(filter.id, { value: event.target.value })}>
+                  <Select className="h-9 text-sm bg-white" value={filter.value} onChange={(event) => updateFilter(filter.id, { value: event.target.value })}>
                     <option value="">고객 선택</option>
                     {customerOptions.map((option) => (
                       <option key={option.value} value={option.value}>
@@ -291,7 +326,7 @@ export default function OrdersMainPage() {
                   </Select>
                 ) : null}
                 {filter.type === "factory" ? (
-                  <Select value={filter.value} onChange={(event) => updateFilter(filter.id, { value: event.target.value })}>
+                  <Select className="h-9 text-sm bg-white" value={filter.value} onChange={(event) => updateFilter(filter.id, { value: event.target.value })}>
                     <option value="">공장 선택</option>
                     {vendorOptions.map((option) => (
                       <option key={option.value} value={option.value}>
@@ -302,13 +337,14 @@ export default function OrdersMainPage() {
                 ) : null}
                 {filter.type === "model" ? (
                   <Input
+                    className="h-9 text-sm bg-white"
                     placeholder="모델/색상"
                     value={filter.value}
                     onChange={(event) => updateFilter(filter.id, { value: event.target.value })}
                   />
                 ) : null}
                 {filter.type === "date" ? (
-                  <Select value={filter.value} onChange={(event) => updateFilter(filter.id, { value: event.target.value })}>
+                  <Select className="h-9 text-sm bg-white" value={filter.value} onChange={(event) => updateFilter(filter.id, { value: event.target.value })}>
                     <option value="">날짜 선택</option>
                     {dateOptions.map((date) => (
                       <option key={date} value={date}>
@@ -317,59 +353,122 @@ export default function OrdersMainPage() {
                     ))}
                   </Select>
                 ) : null}
-                <Button variant="secondary" onClick={() => removeFilter(filter.id)}>
-                  제거
-                </Button>
               </div>
             ))}
           </CardBody>
         </Card>
 
-        <Card className="shadow-sm" id="orders_main.list">
-          <CardHeader className="flex items-center justify-between">
+        {/* List Panel */}
+        <Card className="shadow-sm border-[var(--panel-border)] flex flex-col min-h-[500px]" id="orders_main.list">
+          <CardHeader className="flex items-center justify-between border-b border-[var(--panel-border)] pb-4">
             <div>
               <h3 className="text-sm font-semibold">주문 리스트</h3>
               <p className="text-xs text-[var(--muted)]">총 {applyFilters.length}건</p>
             </div>
           </CardHeader>
-          <CardBody className="space-y-2">
-            {applyFilters.map((order, idx) => (
-              <div
-                key={order.order_line_id}
-                className={cn(
-                  "rounded-[14px] border border-[var(--panel-border)] px-4 py-3 bg-white shadow-sm",
-                  "transition hover:shadow-md"
-                )}
-              >
-                <div className="grid grid-cols-1 gap-2 text-xs lg:grid-cols-[0.35fr_1.3fr_1.3fr_1fr_1fr_0.7fr_0.9fr_0.7fr_0.9fr_0.7fr_0.9fr_0.7fr_0.6fr_0.9fr_1fr_0.6fr]">
-                  <div className="text-[var(--muted)]">{idx + 1} |</div>
-                  <div className="font-semibold text-[var(--foreground)]">{order.customer_name ?? "-"}</div>
-                  <div className="font-semibold text-[var(--foreground)]">{order.model_name ?? "-"}</div>
-                  <div className="font-semibold text-[var(--foreground)]">{order.suffix ?? "-"}</div>
-                  <div className="font-semibold text-[var(--foreground)]">{order.color ?? "-"}</div>
-                  <div className="font-semibold text-[var(--foreground)]">{order.qty ?? 0}</div>
-                  <div className="text-[var(--muted)]">{order.center_stone_name ?? "-"}</div>
-                  <div className="text-[var(--muted)]">{order.center_stone_qty ?? "-"}</div>
-                  <div className="text-[var(--muted)]">{order.sub1_stone_name ?? "-"}</div>
-                  <div className="text-[var(--muted)]">{order.sub1_stone_qty ?? "-"}</div>
-                  <div className="text-[var(--muted)]">{order.sub2_stone_name ?? "-"}</div>
-                  <div className="text-[var(--muted)]">{order.sub2_stone_qty ?? "-"}</div>
-                  <div className="text-[var(--muted)]">{order.is_plated ? "Y" : "N"}</div>
-                  <div className="text-[var(--muted)]">{order.plating_color_code ?? "-"}</div>
-                  <div className="text-[var(--muted)]">{order.memo ?? "-"}</div>
-                  <div className="flex justify-end">
-                    <Link href={`/orders?edit_order_line_id=${order.order_line_id}`}>
-                      <Button size="sm" variant="secondary">
-                        수정
-                      </Button>
-                    </Link>
+          <CardBody className="space-y-2 pt-4 flex-1">
+            {isLoading ? (
+              <div className="space-y-3">
+                {Array.from({ length: 5 }).map((_, i) => (
+                  <div key={i} className="flex items-center gap-4 p-4 border border-[var(--panel-border)] rounded-[14px]">
+                    <Skeleton className="h-4 w-8" />
+                    <Skeleton className="h-4 w-24" />
+                    <Skeleton className="h-4 w-32" />
+                    <Skeleton className="h-4 w-16" />
+                    <Skeleton className="h-4 w-full" />
                   </div>
-                </div>
+                ))}
               </div>
-            ))}
-            {applyFilters.length === 0 ? (
-              <p className="text-xs text-[var(--muted)]">조건에 맞는 주문이 없습니다.</p>
-            ) : null}
+            ) : applyFilters.length === 0 ? (
+              <div className="flex flex-col items-center justify-center h-64 gap-2 text-[var(--muted)] border-2 border-dashed border-[var(--panel-border)] rounded-xl m-4">
+                <p className="text-sm font-medium">조건에 맞는 주문이 없습니다.</p>
+                <p className="text-xs">필터를 변경하거나 새로운 주문을 등록하세요.</p>
+              </div>
+            ) : (
+              applyFilters.map((order, idx) => (
+                <div
+                  key={order.order_line_id}
+                  className={cn(
+                    "group relative rounded-[14px] border border-[var(--panel-border)] px-4 py-3 bg-white shadow-sm",
+                    "transition-all duration-200 hover:shadow-md hover:-translate-y-0.5 hover:border-[var(--primary)]/20 cursor-default"
+                  )}
+                >
+                  <div className="grid grid-cols-1 gap-2 text-xs lg:grid-cols-[0.35fr_1.3fr_1.3fr_1fr_1fr_0.7fr_0.9fr_0.7fr_0.9fr_0.7fr_0.9fr_0.7fr_0.6fr_0.9fr_1fr_0.6fr] items-center">
+                    <div className="text-[var(--muted)]">{idx + 1} |</div>
+                    <div className="font-semibold text-[var(--foreground)] flex flex-col">
+                      <span>{order.customer_name ?? "-"}</span>
+                      <span className="text-[10px] text-[var(--muted)] font-normal lg:hidden">고객</span>
+                    </div>
+                    <div className="font-semibold text-[var(--foreground)] flex flex-col">
+                      <span>{order.model_name ?? "-"}</span>
+                      <span className="text-[10px] text-[var(--muted)] font-normal lg:hidden">모델</span>
+                    </div>
+                    <div className="font-semibold text-[var(--foreground)] flex flex-col">
+                      <span>{order.suffix ?? "-"}</span>
+                      <span className="text-[10px] text-[var(--muted)] font-normal lg:hidden">Suffix</span>
+                    </div>
+                    <div className="font-semibold text-[var(--foreground)] flex flex-col">
+                      <span>{order.color ?? "-"}</span>
+                      <span className="text-[10px] text-[var(--muted)] font-normal lg:hidden">색상</span>
+                    </div>
+                    <div className="font-semibold text-[var(--foreground)] flex flex-col">
+                      <span>{order.qty ?? 0}</span>
+                      <span className="text-[10px] text-[var(--muted)] font-normal lg:hidden">수량</span>
+                    </div>
+                    <div className="text-[var(--muted)] flex flex-col">
+                      <span>{order.center_stone_name ?? "-"}</span>
+                      <span className="text-[10px] text-[var(--muted)] font-normal lg:hidden">메인석</span>
+                    </div>
+                    <div className="text-[var(--muted)] flex flex-col">
+                      <span>{order.center_stone_qty ?? "-"}</span>
+                      <span className="text-[10px] text-[var(--muted)] font-normal lg:hidden">개수</span>
+                    </div>
+                    <div className="text-[var(--muted)] flex flex-col">
+                      <span>{order.sub1_stone_name ?? "-"}</span>
+                      <span className="text-[10px] text-[var(--muted)] font-normal lg:hidden">보조1</span>
+                    </div>
+                    <div className="text-[var(--muted)] flex flex-col">
+                      <span>{order.sub1_stone_qty ?? "-"}</span>
+                      <span className="text-[10px] text-[var(--muted)] font-normal lg:hidden">개수</span>
+                    </div>
+                    <div className="text-[var(--muted)] flex flex-col">
+                      <span>{order.sub2_stone_name ?? "-"}</span>
+                      <span className="text-[10px] text-[var(--muted)] font-normal lg:hidden">보조2</span>
+                    </div>
+                    <div className="text-[var(--muted)] flex flex-col">
+                      <span>{order.sub2_stone_qty ?? "-"}</span>
+                      <span className="text-[10px] text-[var(--muted)] font-normal lg:hidden">개수</span>
+                    </div>
+                    <div className="text-[var(--muted)] flex flex-col">
+                      <span>{order.is_plated ? "Y" : "N"}</span>
+                      <span className="text-[10px] text-[var(--muted)] font-normal lg:hidden">도금</span>
+                    </div>
+                    <div className="text-[var(--muted)] flex flex-col">
+                      <span>{order.plating_color_code ?? "-"}</span>
+                      <span className="text-[10px] text-[var(--muted)] font-normal lg:hidden">색상</span>
+                    </div>
+                    <div className="text-[var(--muted)] truncate flex flex-col">
+                      <span>{order.memo ?? "-"}</span>
+                      <span className="text-[10px] text-[var(--muted)] font-normal lg:hidden">메모</span>
+                    </div>
+                    <div className="flex justify-end">
+                      <Link href={`/orders?edit_order_line_id=${order.order_line_id}`}>
+                        <Button size="sm" variant="secondary" className="opacity-0 group-hover:opacity-100 transition-opacity">
+                          수정
+                        </Button>
+                      </Link>
+                    </div>
+                  </div>
+                  {/* Status Indicator - if status exists */}
+                  {order.status && (
+                    <div className={cn(
+                      "absolute right-0 top-0 h-full w-1 rounded-r-[14px]",
+                      order.status === "CONFIRMED" ? "bg-green-500/50" : "bg-orange-500/50"
+                    )} />
+                  )}
+                </div>
+              ))
+            )}
           </CardBody>
         </Card>
       </div>

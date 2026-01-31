@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Input, Select, Textarea } from "@/components/ui/field";
 import { Badge } from "@/components/ui/badge";
 import { Modal } from "@/components/ui/modal";
+import { Skeleton } from "@/components/ui/skeleton";
 import { useRpcMutation } from "@/hooks/use-rpc-mutation";
 
 type LinkedShipment = {
@@ -169,17 +170,18 @@ export default function PurchaseCostWorklistPage() {
         const res = await fetch("/api/purchase-cost-worklist?limit=250", { cache: "no-store" });
         const json = await res.json();
         if (!res.ok) throw new Error(json?.error ?? "작업대 조회 실패");
+        if (!selectedReceiptId) {
+          const first = pickFirstRow(json?.data ?? [], filter);
+          if (first?.receipt_id) {
+            queueMicrotask(() => {
+              setSelectedReceiptId(first.receipt_id);
+              applySelectedReceipt(first);
+            });
+          }
+        }
         return json;
       },
       refetchInterval: 15_000,
-      onSuccess: (data) => {
-        if (selectedReceiptId) return;
-        const first = pickFirstRow(data?.data ?? [], filter);
-        if (first?.receipt_id) {
-          setSelectedReceiptId(first.receipt_id);
-          applySelectedReceipt(first);
-        }
-      },
     }
   );
 
@@ -326,287 +328,410 @@ export default function PurchaseCostWorklistPage() {
   const busy = worklist.isLoading || upsertSnapshot.isPending || applySnapshot.isPending;
 
   return (
-    <div className="space-y-6">
-      <ActionBar
-        title="영수증 작업대"
-        subtitle="영수증 총합(중량/공임/총금액)을 저장하고, 연결된 출고에 자동 배분하여 ACTUAL 원가로 반영합니다."
-        actions={
-          <>
-            <Button variant="secondary" onClick={() => worklist.refetch()} disabled={busy}>
-              새로고침
-            </Button>
-            <Button onClick={() => setUploadOpen(true)} disabled={busy}>
-              영수증 업로드
-            </Button>
-          </>
-        }
-      />
+    <div className="mx-auto max-w-[1800px] space-y-8 px-4 pb-10 pt-4 md:px-6">
+      <div className="relative z-10 rounded-[18px] border border-[var(--panel-border)] bg-white/70 p-4 shadow-[0_10px_30px_rgba(15,23,42,0.06)] backdrop-blur">
+        <ActionBar
+          title="원가마감 작업대"
+          subtitle="영수증 총합(중량/공임/총금액)을 저장하고, 연결된 출고에 자동 배분하여 ACTUAL 원가로 반영합니다."
+          actions={
+            <div className="flex items-center gap-2">
+              <Button variant="secondary" onClick={() => worklist.refetch()} disabled={busy}>
+                새로고침
+              </Button>
+              <Button onClick={() => setUploadOpen(true)} disabled={busy}>
+                영수증 업로드
+              </Button>
+            </div>
+          }
+        />
+      </div>
 
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-5">
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-12 items-start">
         {/* Left: receipt list */}
-        <Card className="lg:col-span-2">
-          <CardHeader
-            title="영수증 목록"
-            right={
-              <div className="flex items-center gap-2">
-                <Button
-                  size="sm"
-                  variant={filter === "NEED_APPLY" ? "primary" : "secondary"}
-                  onClick={() => handleFilterChange("NEED_APPLY")}
-                >
-                  미적용
-                </Button>
-                <Button
-                  size="sm"
-                  variant={filter === "NEED_INPUT" ? "primary" : "secondary"}
-                  onClick={() => handleFilterChange("NEED_INPUT")}
-                >
-                  미입력
-                </Button>
-                <Button
-                  size="sm"
-                  variant={filter === "APPLIED" ? "primary" : "secondary"}
-                  onClick={() => handleFilterChange("APPLIED")}
-                >
-                  적용완료
-                </Button>
-                <Button
-                  size="sm"
-                  variant={filter === "ALL" ? "primary" : "secondary"}
-                  onClick={() => handleFilterChange("ALL")}
-                >
-                  전체
-                </Button>
+        <div className="lg:col-span-5 xl:col-span-4 flex flex-col gap-4">
+          <Card className="flex-1 overflow-hidden border-none shadow-sm ring-1 ring-black/5">
+            <CardHeader className="flex flex-wrap items-center justify-between gap-3 border-b border-gray-100 bg-white/50 px-4 py-3 backdrop-blur-sm">
+              <div className="text-sm font-semibold text-gray-900">영수증 목록</div>
+              <div className="flex items-center gap-1.5">
+                {(["NEED_APPLY", "NEED_INPUT", "APPLIED", "ALL"] as const).map((f) => (
+                  <Button
+                    key={f}
+                    size="sm"
+                    variant={filter === f ? "primary" : "ghost"}
+                    onClick={() => handleFilterChange(f)}
+                    className={`h-7 px-2.5 text-xs font-medium transition-all ${
+                      filter === f ? "shadow-sm" : "text-gray-500 hover:text-gray-900"
+                    }`}
+                  >
+                    {f === "NEED_APPLY" && "미적용"}
+                    {f === "NEED_INPUT" && "미입력"}
+                    {f === "APPLIED" && "적용완료"}
+                    {f === "ALL" && "전체"}
+                  </Button>
+                ))}
               </div>
-            }
-          />
-          <CardBody className="space-y-2">
-            {worklist.isLoading ? (
-              <p className="text-sm text-[var(--muted)]">불러오는 중…</p>
-            ) : filteredRows.length === 0 ? (
-              <p className="text-sm text-[var(--muted)]">표시할 영수증이 없습니다.</p>
-            ) : (
-              <div className="space-y-2">
-                {filteredRows.map((r) => {
-                  const isSelected = r.receipt_id === selectedReceiptId;
-                  const hasInput = !!(r.pricing_total_amount_krw ?? r.pricing_total_amount);
-                  const isApplied = !!r.applied_at;
-                  const hasLinks = (r.linked_shipment_cnt ?? 0) > 0;
-
-                  return (
-                    <button
-                      key={r.receipt_id}
-                      type="button"
-                      onClick={() => selectReceiptId(r.receipt_id)}
-                      className={`w-full rounded-[12px] border px-3 py-3 text-left transition-all ${
-                        isSelected
-                          ? "border-[var(--primary)] bg-blue-50/40"
-                          : "border-[var(--panel-border)] hover:bg-[var(--chip)]"
-                      }`}
-                    >
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="min-w-0">
-                          <div className="truncate text-sm font-semibold text-[var(--foreground)]">
-                            {shortPath(r.file_path)}
-                          </div>
-                          <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-[var(--muted)]">
-                            <span>{formatYmd(r.received_at)}</span>
-                            <span>·</span>
-                            <span className="truncate">{r.vendor_name ?? "거래처 미지정"}</span>
-                          </div>
-                        </div>
-                        <div className="flex shrink-0 flex-col items-end gap-1">
-                          <div className="flex items-center gap-1">
-                            <Badge tone={hasLinks ? "primary" : "neutral"}>연결 {r.linked_shipment_cnt ?? 0}</Badge>
-                            <Badge tone={hasInput ? "active" : "warning"}>{hasInput ? "입력" : "미입력"}</Badge>
-                            <Badge tone={isApplied ? "active" : "warning"}>{isApplied ? "적용" : "미적용"}</Badge>
-                          </div>
-                          <div className="text-xs text-[var(--muted)]">
-                            {r.pricing_currency_code ?? "-"} {formatNumber(r.pricing_total_amount)}
-                          </div>
-                        </div>
+            </CardHeader>
+            <CardBody className="max-h-[calc(100vh-240px)] overflow-y-auto p-2 scrollbar-thin scrollbar-thumb-gray-200">
+              {worklist.isLoading ? (
+                <div className="space-y-2 p-1">
+                  {Array.from({ length: 8 }).map((_, idx) => (
+                    <div key={`receipt-skeleton-${idx}`} className="rounded-lg border border-gray-100 bg-white p-3">
+                      <Skeleton className="h-4 w-2/3" />
+                      <div className="mt-3 flex items-center gap-2">
+                        <Skeleton className="h-4 w-12" />
+                        <Skeleton className="h-4 w-16" />
+                        <Skeleton className="h-4 w-14" />
                       </div>
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-          </CardBody>
-        </Card>
+                    </div>
+                  ))}
+                </div>
+              ) : filteredRows.length === 0 ? (
+                <div className="flex h-32 items-center justify-center rounded-lg border border-dashed border-gray-200 bg-gray-50/70 text-sm text-[var(--muted)]">
+                  처리할 항목이 없습니다.
+                </div>
+              ) : (
+                <div className="space-y-1.5">
+                  {filteredRows.map((r) => {
+                    const isSelected = r.receipt_id === selectedReceiptId;
+                    const hasInput = !!(r.pricing_total_amount_krw ?? r.pricing_total_amount);
+                    const isApplied = !!r.applied_at;
+                    const hasLinks = (r.linked_shipment_cnt ?? 0) > 0;
+
+                    return (
+                      <button
+                        key={r.receipt_id}
+                        type="button"
+                        onClick={() => selectReceiptId(r.receipt_id)}
+                        className={`group relative w-full rounded-lg border px-4 py-3.5 text-left transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--primary)] ${
+                          isSelected
+                            ? "border-[var(--primary)] bg-[var(--primary)]/5 shadow-sm ring-1 ring-[var(--primary)]"
+                            : "border-transparent bg-white hover:border-gray-200 hover:bg-gray-50 hover:shadow-sm"
+                        }`}
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0 flex-1">
+                            <div className={`truncate text-sm font-semibold transition-colors ${isSelected ? "text-[var(--primary)]" : "text-gray-900"}`}>
+                              {shortPath(r.file_path)}
+                            </div>
+                            <div className="mt-1.5 flex flex-wrap items-center gap-2 text-xs text-[var(--muted)]">
+                              <span className="tabular-nums">{formatYmd(r.received_at)}</span>
+                              <span className="text-gray-300">·</span>
+                              <span className="truncate font-medium text-gray-700">{r.vendor_name ?? "거래처 미지정"}</span>
+                            </div>
+                          </div>
+                          <div className="flex shrink-0 flex-col items-end gap-1.5">
+                            <div className="flex items-center gap-1.5">
+                              {hasLinks && <Badge tone="primary" className="h-5 px-1.5 text-[10px]">연결 {r.linked_shipment_cnt}</Badge>}
+                              <Badge tone={hasInput ? "active" : "warning"} className="h-5 px-1.5 text-[10px]">{hasInput ? "입력" : "미입력"}</Badge>
+                              <Badge tone={isApplied ? "active" : "warning"} className="h-5 px-1.5 text-[10px]">{isApplied ? "적용" : "미적용"}</Badge>
+                            </div>
+                            <div className="text-xs font-medium tabular-nums text-[var(--muted)]">
+                              {r.pricing_currency_code ?? "-"} {formatNumber(r.pricing_total_amount)}
+                            </div>
+                          </div>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </CardBody>
+          </Card>
+        </div>
 
         {/* Right: selected receipt editor */}
-        <Card className="lg:col-span-3">
-          <CardHeader
-            title={selected ? "영수증 입력/배분" : "영수증을 선택하세요"}
-            right={
-              selected ? (
+        <div className="lg:col-span-7 xl:col-span-8">
+          <Card className="min-h-[600px] border-none shadow-sm ring-1 ring-black/5">
+            <CardHeader className="flex items-center justify-between gap-3 border-b border-gray-100 bg-white/50 px-6 py-4 backdrop-blur-sm">
+              <div className="flex items-center gap-2">
+                <div className="text-base font-semibold text-gray-900">
+                  {selected ? "영수증 상세 및 배분" : "영수증을 선택하세요"}
+                </div>
+                {selected?.applied_at && (
+                  <Badge tone="active" className="ml-2">적용완료</Badge>
+                )}
+              </div>
+              {selected ? (
                 <div className="flex items-center gap-2">
-                  <Button variant="secondary" onClick={() => openReceiptPreview(selected.receipt_id)}>
+                  <Button size="sm" variant="secondary" onClick={() => openReceiptPreview(selected.receipt_id)}>
                     미리보기
                   </Button>
-                  <Button variant="secondary" onClick={() => selectReceiptId(null)}>
-                    선택해제
+                  <Button size="sm" variant="ghost" onClick={() => selectReceiptId(null)}>
+                    닫기
                   </Button>
                 </div>
-              ) : null
-            }
-          />
-          <CardBody className="space-y-5">
-            {!selected ? (
-              <div className="rounded-[12px] border border-[var(--panel-border)] bg-[var(--chip)] p-4 text-sm text-[var(--muted)]">
-                왼쪽에서 영수증을 선택하면, 총합(중량/공임/총금액)을 입력하고 연결된 출고에 자동 배분하여 원가를 반영할 수 있습니다.
-              </div>
-            ) : (
-              <>
-                <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-                  <div>
-                    <div className="mb-1 text-xs text-[var(--muted)]">통화</div>
-                    <Select value={currencyCode} onChange={(e) => setCurrencyCode(e.target.value as any)}>
-                      <option value="KRW">KRW</option>
-                      <option value="CNY">CNY</option>
-                    </Select>
-                    <div className="mt-1 text-xs text-[var(--muted)]">
-                      * 환율은 저장하지 않고, 적용 시점에 최신 시세(meta)를 참조해 KRW 환산합니다.
+              ) : null}
+            </CardHeader>
+            <CardBody className="p-6">
+              {worklist.isLoading ? (
+                <div className="space-y-5">
+                  <div className="rounded-xl border border-gray-100 bg-white p-4">
+                    <Skeleton className="h-4 w-1/3" />
+                    <div className="mt-3 grid grid-cols-2 gap-3">
+                      <Skeleton className="h-4" />
+                      <Skeleton className="h-4" />
+                      <Skeleton className="h-4" />
+                      <Skeleton className="h-4" />
                     </div>
                   </div>
-
-                  <div>
-                    <div className="mb-1 text-xs text-[var(--muted)]">총금액 ({currencyCode})</div>
-                    <Input
-                      inputMode="decimal"
-                      placeholder="예: 123456"
-                      value={totalAmount}
-                      onChange={(e) => setTotalAmount(e.target.value)}
-                    />
-                    <div className="mt-1 text-xs text-[var(--muted)]">
-                      저장 후 KRW 환산: <b>{formatNumber(selected.pricing_total_amount_krw)}</b>
-                      {selected.fx_rate_krw_per_unit ? (
-                        <span className="ml-2">(fx≈{formatNumber(selected.fx_rate_krw_per_unit)} KRW/1)</span>
-                      ) : null}
-                    </div>
-                  </div>
-
-                  <div>
-                    <div className="mb-1 text-xs text-[var(--muted)]">중량(g)</div>
-                    <Input
-                      inputMode="decimal"
-                      placeholder="예: 12.34"
-                      value={weightG}
-                      onChange={(e) => setWeightG(e.target.value)}
-                    />
-                  </div>
-
-                  <div>
-                    <div className="mb-1 text-xs text-[var(--muted)]">기본공임</div>
-                    <Input
-                      inputMode="decimal"
-                      placeholder="예: 5000"
-                      value={laborBasic}
-                      onChange={(e) => setLaborBasic(e.target.value)}
-                    />
-                  </div>
-
-                  <div>
-                    <div className="mb-1 text-xs text-[var(--muted)]">기타공임</div>
-                    <Input
-                      inputMode="decimal"
-                      placeholder="예: 2000"
-                      value={laborOther}
-                      onChange={(e) => setLaborOther(e.target.value)}
-                    />
-                  </div>
-
-                  <div>
-                    <div className="mb-1 text-xs text-[var(--muted)]">메모(선택)</div>
-                    <Textarea
-                      placeholder="예: 공장 출고가 / 특이사항"
-                      value={note}
-                      onChange={(e) => setNote(e.target.value)}
-                    />
+                  <div className="rounded-xl border border-gray-100 bg-white p-4">
+                    <Skeleton className="h-4 w-2/5" />
+                    <Skeleton className="mt-3 h-24 w-full" />
                   </div>
                 </div>
-
-                <div className="flex flex-wrap items-center gap-2">
-                  <Button variant="secondary" onClick={onSave} disabled={busy || !selectedReceiptId}>
-                    저장
-                  </Button>
-                  <Button onClick={onApply} disabled={busy || !selectedReceiptId}>
-                    배분 적용
-                  </Button>
-                  <label className="ml-auto flex items-center gap-2 text-xs text-[var(--muted)]">
-                    <input
-                      type="checkbox"
-                      checked={forceReapply}
-                      onChange={(e) => setForceReapply(e.target.checked)}
-                    />
-                    재적용(덮어쓰기)
-                  </label>
+              ) : !selected ? (
+                <div className="flex h-full flex-col items-center justify-center rounded-xl border border-dashed border-gray-200 bg-gray-50/60 py-20 text-center">
+                  <div className="mb-4 rounded-full bg-white p-4 shadow-sm">
+                    <svg className="h-8 w-8 text-gray-300" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+                    </svg>
+                  </div>
+                  <h3 className="text-sm font-medium text-gray-900">항목을 선택하세요</h3>
+                  <p className="mt-1 max-w-sm text-sm text-gray-500">
+                    왼쪽 목록에서 영수증을 선택하여 상세 정보를 입력하고<br />출고 원가 배분을 진행하세요.
+                  </p>
                 </div>
-
-                <div className="rounded-[12px] border border-[var(--panel-border)] p-4">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div>
-                      <div className="text-sm font-semibold text-[var(--foreground)]">연결된 출고</div>
-                      <div className="mt-1 text-xs text-[var(--muted)]">
-                        기준: 출고확정 당시 내부원가 합(total_amount_cost_krw) 비례 배분
+              ) : (
+                <div className="space-y-8">
+                  {/* Summary Section */}
+                  <div className="rounded-xl border border-gray-100 bg-white p-4 shadow-sm">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="truncate text-sm font-semibold text-gray-900">
+                          {shortPath(selected.file_path)}
+                        </div>
+                        <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-gray-500">
+                          <span className="tabular-nums">{formatYmd(selected.received_at)}</span>
+                          <span className="text-gray-300">·</span>
+                          <span className="truncate font-medium text-gray-700">{selected.vendor_name ?? "거래처 미지정"}</span>
+                        </div>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <Badge tone={selected.applied_at ? "active" : "warning"} className="h-5 px-1.5 text-[10px]">
+                          {selected.applied_at ? "적용" : "미적용"}
+                        </Badge>
+                        <Badge tone={selected.pricing_total_amount_krw ? "active" : "warning"} className="h-5 px-1.5 text-[10px]">
+                          {selected.pricing_total_amount_krw ? "입력" : "미입력"}
+                        </Badge>
+                        <Badge tone={selected.linked_shipment_cnt > 0 ? "primary" : "neutral"} className="h-5 px-1.5 text-[10px]">
+                          연결 {selected.linked_shipment_cnt ?? 0}
+                        </Badge>
                       </div>
                     </div>
-                    <div className="text-xs text-[var(--muted)]">
-                      연결 {selected.linked_shipment_cnt ?? 0}건 · 기준합 {formatNumber(selected.linked_basis_cost_krw)} KRW
+                    <div className="mt-4 grid grid-cols-1 gap-3 text-xs text-gray-500 sm:grid-cols-2 lg:grid-cols-3">
+                      <div className="rounded-lg border border-gray-100 bg-gray-50/70 px-3 py-2">
+                        <div className="text-[10px] font-semibold uppercase tracking-wider text-gray-400">통화</div>
+                        <div className="mt-1 text-sm font-semibold text-gray-900">
+                          {selected.pricing_currency_code ?? selected.inbox_currency_code ?? "-"}
+                        </div>
+                      </div>
+                      <div className="rounded-lg border border-gray-100 bg-gray-50/70 px-3 py-2">
+                        <div className="text-[10px] font-semibold uppercase tracking-wider text-gray-400">총금액</div>
+                        <div className="mt-1 text-sm font-semibold text-gray-900 tabular-nums">
+                          {formatNumber(selected.pricing_total_amount)}
+                        </div>
+                      </div>
+                      <div className="rounded-lg border border-gray-100 bg-gray-50/70 px-3 py-2">
+                        <div className="text-[10px] font-semibold uppercase tracking-wider text-gray-400">KRW 환산</div>
+                        <div className="mt-1 text-sm font-semibold text-gray-900 tabular-nums">
+                          {formatNumber(selected.pricing_total_amount_krw)}
+                        </div>
+                      </div>
                     </div>
                   </div>
 
-                  <div className="mt-3 space-y-2">
-                    {selected.linked_shipments?.length ? (
-                      allocations.map((s) => (
-                        <div
-                          key={s.shipment_id}
-                          className="flex flex-wrap items-center justify-between gap-2 rounded-[10px] border border-[var(--panel-border)] bg-[var(--chip)] px-3 py-2"
-                        >
-                          <div className="min-w-0">
-                            <div className="flex flex-wrap items-center gap-2">
-                              <span className="text-sm font-semibold text-[var(--foreground)]">
-                                {s.customer_name ?? "(거래처 미상)"}
-                              </span>
-                              <Badge tone="neutral">{formatYmd(s.ship_date)}</Badge>
-                              <Badge tone="neutral">라인 {s.line_cnt ?? 0}</Badge>
-                              <Badge tone="neutral">기준 {formatNumber(s.basis_cost_krw)} KRW</Badge>
-                            </div>
-                            <div className="mt-1 text-xs text-[var(--muted)] break-all">shipment_id: {s.shipment_id}</div>
-                          </div>
-                          <div className="text-right">
-                            <div className="text-sm font-semibold text-[var(--foreground)]">배분 {formatNumber(s.alloc_krw)} KRW</div>
-                            <div className="text-xs text-[var(--muted)]">
-                              {selected.pricing_total_amount_krw ? "(저장된 KRW 환산 기준)" : "(총금액 저장 후 계산)"}
-                            </div>
-                          </div>
-                        </div>
-                      ))
-                    ) : (
-                      <div className="text-sm text-[var(--muted)]">연결된 출고가 없습니다.</div>
-                    )}
-                  </div>
-                </div>
+                  {/* Input Section */}
+                  <div className="grid grid-cols-1 gap-x-6 gap-y-6 md:grid-cols-2 lg:grid-cols-3">
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-semibold uppercase tracking-wider text-gray-500">통화</label>
+                      <Select 
+                        value={currencyCode} 
+                        onChange={(e) => setCurrencyCode(e.target.value as "KRW" | "CNY")}
+                        className="bg-gray-50/50"
+                      >
+                        <option value="KRW">KRW (원화)</option>
+                        <option value="CNY">CNY (위안화)</option>
+                      </Select>
+                      <p className="text-[11px] text-gray-400">
+                        * 환율은 적용 시점의 최신 시세(meta)를 참조
+                      </p>
+                    </div>
 
-                {selected.applied_at ? (
-                  <div className="rounded-[12px] border border-emerald-100 bg-emerald-50 p-4 text-sm text-emerald-800">
-                    적용 완료: {formatYmd(selected.applied_at)}
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-semibold uppercase tracking-wider text-gray-500">총금액 ({currencyCode})</label>
+                      <Input
+                        inputMode="decimal"
+                        placeholder="0"
+                        value={totalAmount}
+                        onChange={(e) => setTotalAmount(e.target.value)}
+                        className="font-mono text-lg font-medium tabular-nums"
+                      />
+                      <p className="text-[11px] text-gray-400">
+                        KRW 환산: <span className="font-medium text-gray-700">{formatNumber(selected.pricing_total_amount_krw)}</span>
+                        {selected.fx_rate_krw_per_unit && (
+                          <span className="ml-1">(fx {formatNumber(selected.fx_rate_krw_per_unit)})</span>
+                        )}
+                      </p>
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-semibold uppercase tracking-wider text-gray-500">중량 (g)</label>
+                      <Input
+                        inputMode="decimal"
+                        placeholder="0.00"
+                        value={weightG}
+                        onChange={(e) => setWeightG(e.target.value)}
+                        className="font-mono tabular-nums"
+                      />
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-semibold uppercase tracking-wider text-gray-500">기본공임</label>
+                      <Input
+                        inputMode="decimal"
+                        placeholder="0"
+                        value={laborBasic}
+                        onChange={(e) => setLaborBasic(e.target.value)}
+                        className="font-mono tabular-nums"
+                      />
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-semibold uppercase tracking-wider text-gray-500">기타공임</label>
+                      <Input
+                        inputMode="decimal"
+                        placeholder="0"
+                        value={laborOther}
+                        onChange={(e) => setLaborOther(e.target.value)}
+                        className="font-mono tabular-nums"
+                      />
+                    </div>
+
+                    <div className="space-y-1.5 lg:col-span-3">
+                      <label className="text-xs font-semibold uppercase tracking-wider text-gray-500">메모</label>
+                      <Textarea
+                        placeholder="특이사항이나 비고를 입력하세요"
+                        value={note}
+                        onChange={(e) => setNote(e.target.value)}
+                        className="min-h-[80px] resize-none bg-gray-50/50"
+                      />
+                    </div>
                   </div>
-                ) : null}
-              </>
-            )}
-          </CardBody>
-        </Card>
+
+                  {/* Actions */}
+                  <div className="flex flex-wrap items-center justify-between gap-4 rounded-xl border border-gray-100 bg-gray-50/50 p-4">
+                    <label className="flex cursor-pointer items-center gap-2 text-sm text-gray-600 hover:text-gray-900">
+                      <input
+                        type="checkbox"
+                        checked={forceReapply}
+                        onChange={(e) => setForceReapply(e.target.checked)}
+                        className="h-4 w-4 rounded border-gray-300 text-[var(--primary)] focus:ring-[var(--primary)]"
+                      />
+                      <span>기존 데이터 덮어쓰기 (재적용)</span>
+                    </label>
+                    <div className="flex items-center gap-2">
+                      <Button variant="secondary" onClick={onSave} disabled={busy || !selectedReceiptId}>
+                        저장만 하기
+                      </Button>
+                      <Button onClick={onApply} disabled={busy || !selectedReceiptId} className="px-6 shadow-sm">
+                        저장 및 배분 적용
+                      </Button>
+                    </div>
+                  </div>
+
+                  {/* Allocations Section */}
+                  <div className="space-y-4">
+                    <div className="flex items-end justify-between border-b border-gray-100 pb-2">
+                      <div>
+                        <h4 className="text-sm font-bold text-gray-900">연결된 출고 내역</h4>
+                        <p className="mt-0.5 text-xs text-gray-500">
+                          출고확정 당시 내부원가 합계 비례 배분
+                        </p>
+                      </div>
+                      <div className="text-right text-xs">
+                        <span className="font-medium text-gray-900">{selected.linked_shipment_cnt ?? 0}건</span>
+                        <span className="mx-2 text-gray-300">|</span>
+                        <span className="text-gray-500">기준합 {formatNumber(selected.linked_basis_cost_krw)} KRW</span>
+                      </div>
+                    </div>
+
+                    <div className="space-y-2">
+                      {selected.linked_shipments?.length ? (
+                        allocations.map((s) => (
+                          <div
+                            key={s.shipment_id}
+                            className="group flex flex-wrap items-center justify-between gap-3 rounded-lg border border-gray-100 bg-white px-4 py-3 transition-all hover:border-gray-200 hover:shadow-sm"
+                          >
+                            <div className="min-w-0 flex-1">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span className="font-semibold text-gray-900">
+                                  {s.customer_name ?? "(거래처 미상)"}
+                                </span>
+                                <div className="flex items-center gap-1.5">
+                                  <Badge tone="neutral" className="bg-gray-100 text-gray-600">{formatYmd(s.ship_date)}</Badge>
+                                  <Badge tone="neutral" className="bg-gray-100 text-gray-600">라인 {s.line_cnt ?? 0}</Badge>
+                                </div>
+                              </div>
+                              <div className="mt-1 flex items-center gap-2 text-xs text-gray-500">
+                                <span className="font-mono text-[10px] text-gray-400">{s.shipment_id}</span>
+                                <span>·</span>
+                                <span>기준 {formatNumber(s.basis_cost_krw)} KRW</span>
+                              </div>
+                            </div>
+                            <div className="text-right">
+                              <div className="text-sm font-bold text-[var(--primary)] tabular-nums">
+                                {formatNumber(s.alloc_krw)} KRW
+                              </div>
+                              <div className="text-[10px] text-gray-400">
+                                배분금액
+                              </div>
+                            </div>
+                          </div>
+                        ))
+                      ) : (
+                        <div className="flex flex-col items-center justify-center rounded-lg border border-dashed border-gray-200 py-12 text-center">
+                          <p className="text-sm text-gray-500">연결된 출고가 없습니다.</p>
+                          <p className="mt-1 text-xs text-gray-400">출고 관리에서 영수증을 연결해주세요.</p>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {selected.applied_at && (
+                    <div className="flex items-center gap-3 rounded-lg border border-emerald-100 bg-emerald-50/50 p-4 text-sm text-emerald-800">
+                      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-emerald-600">
+                        <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                        </svg>
+                      </div>
+                      <div>
+                        <p className="font-semibold">원가 배분 적용 완료</p>
+                        <p className="text-xs opacity-80">적용일시: {formatYmd(selected.applied_at)}</p>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </CardBody>
+          </Card>
+        </div>
       </div>
 
       <Modal open={uploadOpen} onClose={() => setUploadOpen(false)} title="영수증 업로드">
-        <div className="space-y-4">
-          <div>
-            <div className="mb-1 text-xs text-[var(--muted)]">파일</div>
-            <Input ref={fileRef} type="file" accept="application/pdf,image/*" />
-            <div className="mt-1 text-xs text-[var(--muted)]">
-              PDF/이미지 파일을 업로드하면 영수증 inbox에 저장됩니다.
+        <div className="space-y-6">
+          <div className="rounded-lg border border-dashed border-gray-200 bg-gray-50/50 p-8 text-center transition-colors hover:bg-gray-50">
+            <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-blue-50 text-blue-500">
+              <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+              </svg>
             </div>
+            <label className="cursor-pointer">
+              <span className="text-sm font-semibold text-[var(--primary)] hover:underline">파일 선택</span>
+              <Input ref={fileRef} type="file" accept="application/pdf,image/*" className="hidden" />
+            </label>
+            <p className="mt-2 text-xs text-gray-500">
+              PDF 또는 이미지 파일 (최대 10MB)
+            </p>
           </div>
           <div className="flex justify-end gap-2">
             <Button variant="secondary" onClick={() => setUploadOpen(false)}>

@@ -79,11 +79,12 @@ export async function GET(request: Request) {
         }
 
         const filename = safeFilename(path.split("/").pop() ?? "receipt");
-        const contentType = guessContentType(mime, filename, (data as any).type);
+        const blob = data as Blob;
+        const contentType = guessContentType(mime, filename, blob.type);
 
         // NextResponse + Blob 직접 반환 시, 브라우저에서 이미지/PDF가 깨지는 케이스가 있어
         // Uint8Array로 변환해서 반환합니다.
-        const ab = await (data as any).arrayBuffer();
+        const ab = await blob.arrayBuffer();
         const body = new Uint8Array(ab);
 
         const headers = new Headers();
@@ -93,7 +94,8 @@ export async function GET(request: Request) {
         headers.set("X-Content-Type-Options", "nosniff");
 
         return new NextResponse(body, { headers, status: 200 });
-    } catch (e: any) {
-        return NextResponse.json({ error: e?.message ?? "unknown error" }, { status: 500 });
+    } catch (error) {
+        const err = error as { message?: string } | null;
+        return NextResponse.json({ error: err?.message ?? "unknown error" }, { status: 500 });
     }
 }

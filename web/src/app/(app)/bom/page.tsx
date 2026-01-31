@@ -72,8 +72,8 @@ async function fetchJson<T>(url: string) {
     const res = await fetch(url);
     const json = (await res.json()) as T;
     if (!res.ok) {
-        const anyJson: any = json as any;
-        throw new Error(anyJson?.error ?? "요청 실패");
+        const errorPayload = json as { error?: string };
+        throw new Error(errorPayload?.error ?? "요청 실패");
     }
     return json;
 }
@@ -245,7 +245,7 @@ export default function BomPage() {
             p_bom_id: null,
             p_actor_person_id: actorId,
             p_note2: "upsert from web",
-        } as any);
+        });
     };
 
     const handleAddLine = async () => {
@@ -267,7 +267,7 @@ export default function BomPage() {
             p_meta: {},
             p_actor_person_id: actorId,
             p_note2: "add line from web",
-        } as any);
+        });
     };
 
     const handleVoidLine = async (bomLineId: string) => {
@@ -277,7 +277,7 @@ export default function BomPage() {
             p_void_reason: "void from web",
             p_actor_person_id: actorId,
             p_note: "void from web",
-        } as any);
+        });
     };
 
     return (
@@ -364,7 +364,7 @@ export default function BomPage() {
                             <CardBody className="space-y-3">
                                 <div className="grid grid-cols-2 gap-2">
                                     <Select
-                                        label="구성품 타입"
+                                        aria-label="구성품 타입"
                                         value={componentType}
                                         onChange={(e) => {
                                             const v = (e.target.value as "PART" | "MASTER") ?? "PART";
@@ -377,7 +377,7 @@ export default function BomPage() {
                                         <option value="MASTER">MASTER (메달/완제품도 구성품으로)</option>
                                     </Select>
 
-                                    <Select label="단위" value={unit} onChange={(e) => setUnit(e.target.value as any)}>
+                                    <Select aria-label="단위" value={unit} onChange={(e) => setUnit(e.target.value as "EA" | "G" | "M")}>
                                         <option value="EA">EA</option>
                                         <option value="G">G</option>
                                         <option value="M">M</option>
@@ -399,8 +399,8 @@ export default function BomPage() {
                                 />
 
                                 <div className="grid grid-cols-2 gap-2">
-                                    <Input label="1개당 사용량" value={qtyPerUnit} onChange={(e) => setQtyPerUnit(e.target.value)} />
-                                    <Input label="메모(선택)" value={lineNote} onChange={(e) => setLineNote(e.target.value)} />
+                                    <Input aria-label="1개당 사용량" value={qtyPerUnit} onChange={(e) => setQtyPerUnit(e.target.value)} />
+                                    <Input aria-label="메모(선택)" value={lineNote} onChange={(e) => setLineNote(e.target.value)} />
                                 </div>
 
                                 <Button onClick={handleAddLine} disabled={!selectedRecipeId || !selectedComponentId || addLineMutation.isPending}>

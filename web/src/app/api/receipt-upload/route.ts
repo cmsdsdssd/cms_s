@@ -99,7 +99,8 @@ export async function POST(request: Request) {
             path: filePath,
             sha256: hash,
         });
-    } catch (e: any) {
-        return NextResponse.json({ error: e?.message ?? "unknown error" }, { status: 500 });
+    } catch (error) {
+        const err = error as { message?: string } | null;
+        return NextResponse.json({ error: err?.message ?? "unknown error" }, { status: 500 });
     }
 }

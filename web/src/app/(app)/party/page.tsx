@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import { useForm } from "react-hook-form";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -16,7 +16,7 @@ import { PartyList } from "@/components/party/PartyList";
 import { PartyDetail } from "@/components/party/PartyDetail";
 import type { PartyForm } from "@/components/party/types";
 
-export default function PartyPage() {
+function PartyPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const queryClient = useQueryClient();
@@ -63,18 +63,15 @@ export default function PartyPage() {
         page,
         pageSize: 50,
       }),
-    onSuccess: (data) => {
-      if (!selectedPartyId && data?.data?.length) {
-        setSelectedPartyId(data.data[0]?.party_id ?? null);
-      }
-    },
   });
+
+  const effectiveSelectedPartyId = selectedPartyId ?? listData?.data?.[0]?.party_id ?? null;
 
   // Detail Query
   const { data: detailData, isLoading: isDetailLoading } = useQuery({
-    queryKey: ["cms", "party", selectedPartyId],
-    queryFn: () => fetchPartyDetail(selectedPartyId!),
-    enabled: !!selectedPartyId && selectedPartyId !== "new",
+    queryKey: ["cms", "party", effectiveSelectedPartyId],
+    queryFn: () => fetchPartyDetail(effectiveSelectedPartyId!),
+    enabled: !!effectiveSelectedPartyId && effectiveSelectedPartyId !== "new",
   });
 
   const form = useForm<PartyForm>({
@@ -86,7 +83,7 @@ export default function PartyPage() {
 
   // Reset form when selection changes
   useEffect(() => {
-    if (selectedPartyId === "new") {
+    if (effectiveSelectedPartyId === "new") {
       form.reset({
         party_type: typeFilter, // Default to current filter
         name: "",
@@ -107,7 +104,7 @@ export default function PartyPage() {
         is_active: detailData.is_active,
       });
     }
-  }, [selectedPartyId, detailData, form, typeFilter]);
+  }, [effectiveSelectedPartyId, detailData, form, typeFilter]);
 
   const mutation = useRpcMutation<string>({
     fn: CONTRACTS.functions.partyUpsert,
@@ -136,7 +133,7 @@ export default function PartyPage() {
       p_region: values.region || null,
       p_address: values.address || null,
       p_memo: values.note || null,
-      p_party_id: selectedPartyId === "new" ? null : selectedPartyId,
+      p_party_id: effectiveSelectedPartyId === "new" ? null : effectiveSelectedPartyId,
       p_is_active: values.is_active,
     });
   };
@@ -194,7 +191,7 @@ export default function PartyPage() {
               parties={listData?.data ?? []}
               isLoading={isListLoading}
               error={listError as Error}
-              selectedPartyId={selectedPartyId}
+              selectedPartyId={effectiveSelectedPartyId}
               page={page}
               totalCount={listData?.count}
               onSelect={setSelectedPartyId}
@@ -203,8 +200,8 @@ export default function PartyPage() {
           }
           right={
             <PartyDetail
-              key={selectedPartyId || "none"}
-              selectedPartyId={selectedPartyId}
+              key={effectiveSelectedPartyId || "none"}
+              selectedPartyId={effectiveSelectedPartyId}
               detail={detailData}
               isLoading={isDetailLoading}
               activeTab={activeTab}
@@ -218,5 +215,13 @@ export default function PartyPage() {
         />
       </div>
     </div>
+  );
+}
+
+export default function PartyPage() {
+  return (
+    <Suspense fallback={null}>
+      <PartyPageContent />
+    </Suspense>
   );
 }

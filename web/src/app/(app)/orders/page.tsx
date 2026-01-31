@@ -1,13 +1,13 @@
 "use client";
 
-import { useMemo, useRef, useState, useEffect } from "react";
+import { Suspense, useMemo, useRef, useState, useEffect } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Input, Select, Textarea } from "@/components/ui/field";
+import { Input } from "@/components/ui/field";
 import { Badge } from "@/components/ui/badge";
 import { CONTRACTS } from "@/lib/contracts";
 import { getSchemaClient } from "@/lib/supabase/client";
@@ -50,6 +50,51 @@ type StoneRow = {
 
 type PlatingColorRow = {
   color_code?: string;
+};
+
+type OrderDetailRow = {
+  order_line_id?: string;
+  customer_party_id?: string | null;
+  matched_master_id?: string | null;
+  model_name?: string | null;
+  model_name_raw?: string | null;
+  suffix?: string | null;
+  color?: string | null;
+  size?: string | number | null;
+  qty?: number | null;
+  center_stone_name?: string | null;
+  center_stone_qty?: number | null;
+  sub1_stone_name?: string | null;
+  sub1_stone_qty?: number | null;
+  sub2_stone_name?: string | null;
+  sub2_stone_qty?: number | null;
+  is_plated?: boolean | null;
+  plating_color_code?: string | null;
+  memo?: string | null;
+};
+
+type OrderUpsertPayload = {
+  p_customer_party_id: string | null;
+  p_master_id: string | null;
+  p_suffix: string | null;
+  p_color: string | null;
+  p_qty: number | null;
+  p_size: string | null;
+  p_is_plated: boolean;
+  p_plating_variant_id: string | null;
+  p_plating_color_code: string | null;
+  p_requested_due_date: string | null;
+  p_priority_code: string | null;
+  p_source_channel: string | null;
+  p_memo: string | null;
+  p_order_line_id: string | null;
+  p_center_stone_name: string | null;
+  p_center_stone_qty: number | null | undefined;
+  p_sub1_stone_name: string | null;
+  p_sub1_stone_qty: number | null | undefined;
+  p_sub2_stone_name: string | null;
+  p_sub2_stone_qty: number | null | undefined;
+  p_actor_person_id: string | null;
 };
 
 type GridRow = {
@@ -211,7 +256,7 @@ const LoadingOverlay = () => (
   </div>
 );
 
-export default function OrdersPage() {
+function OrdersPageContent() {
   const schemaClient = useMemo(() => getSchemaClient(), []);
   const searchParams = useSearchParams();
   const editId = searchParams.get("edit_order_line_id");
@@ -266,12 +311,6 @@ export default function OrdersPage() {
       .filter(Boolean);
   }, [stoneQuery.data]);
 
-  const platingColors = useMemo(() => {
-    return (platingColorQuery.data ?? [])
-      .map((row) => row.color_code ?? "")
-      .filter(Boolean);
-  }, [platingColorQuery.data]);
-
   // Load existing order if editId is present
   useEffect(() => {
     if (!editId || !schemaClient) return;
@@ -285,19 +324,21 @@ export default function OrdersPage() {
           .eq("order_line_id", editId)
           .single();
 
-        const order = orderRaw as any;
+        const order = orderRaw as OrderDetailRow | null;
 
         if (error) throw error;
         if (!order) throw new Error("Order not found");
 
         // Fetch client info
-        const { data: clientRaw } = await schemaClient
-          .from(CONTRACTS.views.arClientSummary)
-          .select("*")
-          .eq("client_id", (order as any).customer_party_id)
-          .single();
-
-        const client = clientRaw as unknown as ClientSummary;
+        let client: ClientSummary | null = null;
+        if (order?.customer_party_id) {
+          const { data: clientRaw } = await schemaClient
+            .from(CONTRACTS.views.arClientSummary)
+            .select("*")
+            .eq("client_id", order.customer_party_id)
+            .single();
+          client = (clientRaw ?? null) as ClientSummary | null;
+        }
 
         if (client) {
           setHeaderClient(client);
@@ -323,7 +364,7 @@ export default function OrdersPage() {
             .ilike("model_name", order.model_name)
             .limit(1)
             .maybeSingle();
-          masterInfo = m as MasterLookup;
+          masterInfo = (m ?? null) as MasterLookup | null;
         }
 
         if (masterInfo) {
@@ -341,14 +382,14 @@ export default function OrdersPage() {
           id: `loaded-${editId}`,
           order_line_id: order.order_line_id,
           client_input: client?.client_name ?? "Unknown",
-          client_id: (order as any).customer_party_id,
+          client_id: order.customer_party_id ?? null,
           client_name: client?.client_name ?? null,
           model_input: order.model_name_raw ?? order.model_name ?? "",
-          model_name: order.model_name,
-          suffix: order.suffix,
-          color: order.color,
+          model_name: order.model_name ?? null,
+          suffix: order.suffix ?? "",
+          color: order.color ?? "",
           size: String(order.size ?? ""),
-          qty: String(order.qty),
+          qty: String(order.qty ?? ""),
           center_stone: order.center_stone_name ?? "",
           center_qty: String(order.center_stone_qty ?? ""),
           sub1_stone: order.sub1_stone_name ?? "",
@@ -649,14 +690,21 @@ export default function OrdersPage() {
     }
     return errors;
   };
-  async function callOrderUpsertV3(payload: any) {
+  async function callOrderUpsertV3(payload: OrderUpsertPayload) {
     const res = await fetch("/api/order-upsert", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
 
-    const json = await res.json().catch(() => ({} as any));
+    const json = (await res.json().catch(() => ({}))) as {
+      error?: string;
+      message?: string;
+      details?: string;
+      hint?: string;
+      code?: string;
+      data?: unknown;
+    };
 
     if (!res.ok) {
       const msg =
@@ -789,7 +837,7 @@ export default function OrdersPage() {
           </div>
           <div className="flex items-center gap-3">
             <Link href="/orders_main">
-              <Button variant="outline" className="h-10 px-4 rounded-full border-border/60 hover:bg-muted/50 hover:text-foreground transition-all">
+              <Button variant="secondary" className="h-10 px-4 rounded-full border-border/60 hover:bg-muted/50 hover:text-foreground transition-all">
                 <span className="mr-2 text-xs">✕</span> 닫기
               </Button>
             </Link>
@@ -1308,7 +1356,7 @@ export default function OrdersPage() {
             <span className="font-medium">라인 {rows.length}개</span>
             <div className="flex items-center gap-2">
               <Button
-                variant="outline"
+                variant="secondary"
                 size="sm"
                 className="h-8 px-3 text-xs border-border/60 hover:bg-muted/50"
                 onClick={() => setPageIndex((prev) => Math.max(1, prev - 1))}
@@ -1320,7 +1368,7 @@ export default function OrdersPage() {
                 {pageIndex} / {Math.max(1, Math.ceil(rows.length / PAGE_SIZE))}
               </span>
               <Button
-                variant="outline"
+                variant="secondary"
                 size="sm"
                 className="h-8 px-3 text-xs border-border/60 hover:bg-muted/50"
                 onClick={() => {
@@ -1341,5 +1389,13 @@ export default function OrdersPage() {
         </Card>
       </div>
     </>
+  );
+}
+
+export default function OrdersPage() {
+  return (
+    <Suspense fallback={null}>
+      <OrdersPageContent />
+    </Suspense>
   );
 }

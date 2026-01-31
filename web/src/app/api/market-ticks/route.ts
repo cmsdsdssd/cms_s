@@ -11,16 +11,7 @@ type MarketTickConfigRow = {
 };
 
 type RoleRow = { role_code: "GOLD" | "SILVER"; symbol: string };
-type LatestBySymbolRow = { symbol: string; price_krw_per_g: number | null; meta: any | null };
-
-type CsMeta = {
-    cs_no_corr_krw_per_g?: number;
-    cs_correction_factor?: number;
-};
-type SilverMeta = {
-    silver_kr_correction_factor?: number;
-    krx_correction_factor?: number;
-};
+type LatestBySymbolRow = { symbol: string; price_krw_per_g: number | null; meta: Record<string, unknown> | null };
 
 const toNum = (v: unknown): number | null => {
     if (v === null || v === undefined) return null;
@@ -28,14 +19,9 @@ const toNum = (v: unknown): number | null => {
     return Number.isFinite(n) ? n : null;
 };
 
-const pickSilverFactorFromMeta = (meta: SilverMeta | null): number | null => {
+const readMetaNumber = (meta: Record<string, unknown> | null, key: string): number | null => {
     if (!meta) return null;
-    return (
-        toNum((meta as any).silver_kr_correction_factor) ??
-        toNum((meta as any).krx_correction_factor) ??
-        null
-    );
-
+    return toNum(meta[key]);
 };
 
 export async function GET() {
@@ -109,9 +95,12 @@ export async function GET() {
         const goldPrice = toNum((goldRow as LatestBySymbolRow | null)?.price_krw_per_g) ?? 0;
 
         // SILVER는 “원래 은시세(보정 전)”를 복원할 수 있으면 복원(메타에 factor가 있으면 나눠서 복원)
-        const silverPriceMaybe = toNum((silverRow as LatestBySymbolRow | null)?.price_krw_per_g);
-        const silverMeta = ((silverRow as any)?.meta ?? null) as SilverMeta | null;
-        const silverFactorInMeta = pickSilverFactorFromMeta(silverMeta);
+        const silverRowData = silverRow as LatestBySymbolRow | null;
+        const silverPriceMaybe = toNum(silverRowData?.price_krw_per_g);
+        const silverMeta = silverRowData?.meta ?? null;
+        const silverFactorInMeta =
+            readMetaNumber(silverMeta, "silver_kr_correction_factor") ??
+            readMetaNumber(silverMeta, "krx_correction_factor");
 
         const silverBasePrice =
             silverPriceMaybe === null
@@ -132,14 +121,15 @@ export async function GET() {
             .eq("symbol", "SILVER_CN_KRW_PER_G")
             .maybeSingle();
 
-        const csPriceRaw = toNum((csRow as any)?.price_krw_per_g);
-        const csMeta = ((csRow as any)?.meta ?? null) as CsMeta | null;
+        const csRowData = csRow as LatestBySymbolRow | null;
+        const csPriceRaw = toNum(csRowData?.price_krw_per_g);
+        const csMeta = csRowData?.meta ?? null;
 
         const csNoCorr =
-            toNum((csMeta as any)?.silver_cn_krw_per_g_no_corr) ?? // ✅ NEW: 너가 요구한 키
-            toNum((csMeta as any)?.cs_no_corr_krw_per_g) ??        // ✅ 기존 키(호환)
+            readMetaNumber(csMeta, "silver_cn_krw_per_g_no_corr") ?? // ✅ NEW: 너가 요구한 키
+            readMetaNumber(csMeta, "cs_no_corr_krw_per_g") ??        // ✅ 기존 키(호환)
             (() => {
-                const f = toNum((csMeta as any)?.cs_correction_factor);
+                const f = readMetaNumber(csMeta, "cs_correction_factor");
                 return csPriceRaw !== null && f && f > 0 ? csPriceRaw / f : null;
             })();
 

@@ -16,7 +16,10 @@ function normalizeImagePath(path: string, bucket: string) {
   return path;
 }
 
-async function buildSignedUrl(supabase: ReturnType<typeof createClient>, path: string | null) {
+async function buildSignedUrl(
+  supabase: { storage: ReturnType<typeof createClient>["storage"] },
+  path: string | null
+) {
   if (!path) return null;
   if (path.startsWith("http://") || path.startsWith("https://")) return path;
   const bucket = process.env.SUPABASE_BUCKET ?? "master_images";

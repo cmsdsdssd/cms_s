@@ -22,12 +22,13 @@ export async function POST(request: Request) {
     const { data, error } = await supabase.rpc("cms_fn_upsert_order_line_v3", payload);
 
     if (error) {
+        const err = error as { message: string; details?: string; hint?: string; code?: string };
         return NextResponse.json(
             {
-                error: error.message,
-                details: (error as any).details,
-                hint: (error as any).hint,
-                code: (error as any).code,
+                error: err.message,
+                details: err.details,
+                hint: err.hint,
+                code: err.code,
             },
             { status: 400 }
         );

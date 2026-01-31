@@ -5,9 +5,11 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useForm } from "react-hook-form";
 import { toast } from "sonner";
 import { ActionBar } from "@/components/layout/action-bar";
-import { Card, CardBody, CardHeader } from "@/components/ui/card";
+import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Input, Select, Textarea } from "@/components/ui/field";
+import { Badge } from "@/components/ui/badge";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Input, Select } from "@/components/ui/field";
 import { useRpcMutation } from "@/hooks/use-rpc-mutation";
 import { CONTRACTS } from "@/lib/contracts";
 import { getSchemaClient } from "@/lib/supabase/client";
@@ -30,17 +32,22 @@ type PositionRow = {
 };
 
 type MoveRow = {
-    move_id: string;
-    move_no: number;
-    move_type: string;
-    status: string;
-    occurred_at: string;
+    move_line_id?: string;
+    move_id?: string;
+    move_no?: number | string;
+    move_type?: string;
+    status?: string;
+    occurred_at?: string;
     party_id?: string;
     party_name?: string;
-    line_count: number;
-    total_in_qty: number;
-    total_out_qty: number;
+    line_count?: number;
+    total_in_qty?: number;
+    total_out_qty?: number;
     memo?: string;
+    master_model_name?: string | null;
+    item_name?: string | null;
+    direction?: string | null;
+    qty?: number | null;
 };
 
 type SessionRow = {
@@ -56,6 +63,11 @@ type SessionRow = {
     generated_move_status?: string;
     created_at: string;
     location_code?: string | null;
+};
+
+type FinalizeResult = {
+    generated_move_id?: string | null;
+    nonzero_delta_lines?: number | null;
 };
 
 type CountLineRow = {
@@ -150,17 +162,6 @@ const formatKst = (value?: string | null) => {
         minute: "2-digit",
         hour12: false,
     }).format(d);
-};
-
-const getKstNow = () => {
-    const now = new Date();
-    const kstDate = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Seoul" }));
-    const year = kstDate.getFullYear();
-    const month = String(kstDate.getMonth() + 1).padStart(2, "0");
-    const day = String(kstDate.getDate()).padStart(2, "0");
-    const hours = String(kstDate.getHours()).padStart(2, "0");
-    const minutes = String(kstDate.getMinutes()).padStart(2, "0");
-    return `${year}-${month}-${day}T${hours}:${minutes}`;
 };
 
 // Helper to convert relative image path to full URL
@@ -273,7 +274,7 @@ export default function InventoryPage() {
                 .order("occurred_at", { ascending: false })
                 .limit(50);
             if (error) throw error;
-            return (data as any[]) ?? [];
+            return (data as MoveRow[]) ?? [];
         },
     });
 
@@ -448,7 +449,7 @@ export default function InventoryPage() {
         },
     });
 
-    const finalizeMutation = useRpcMutation<any>({
+    const finalizeMutation = useRpcMutation<FinalizeResult>({
         fn: CONTRACTS.functions.inventoryCountSessionFinalize,
         successMessage: "실사 확정 완료",
         onSuccess: (result) => {
@@ -542,213 +543,205 @@ export default function InventoryPage() {
     };
 
     // ===================== RENDER =====================
-    return (
-        <div className="space-y-6">
-            <ActionBar title="재고관리" subtitle="재고 현황, 입출고, 실사" />
+    const tabs = [
+        { id: "position", label: "현재재고 (Position)" },
+        { id: "moves", label: "입출고 (Moves)" },
+        { id: "stocktake", label: "실사 (Stocktake)" },
+    ] as const;
 
-            {/* Tabs */}
-            <div className="flex gap-2 border-b border-[var(--panel-border)]">
-                <button
-                    onClick={() => setActiveTab("position")}
-                    className={cn(
-                        "px-4 py-2 text-sm font-medium border-b-2 transition-colors",
-                        activeTab === "position"
-                            ? "border-[var(--primary)] text-[var(--primary)]"
-                            : "border-transparent text-[var(--muted)] hover:text-[var(--foreground)]"
-                    )}
-                >
-                    현재재고 (Position)
-                </button>
-                <button
-                    onClick={() => setActiveTab("moves")}
-                    className={cn(
-                        "px-4 py-2 text-sm font-medium border-b-2 transition-colors",
-                        activeTab === "moves"
-                            ? "border-[var(--primary)] text-[var(--primary)]"
-                            : "border-transparent text-[var(--muted)] hover:text-[var(--foreground)]"
-                    )}
-                >
-                    입출고 (Moves)
-                </button>
-                <button
-                    onClick={() => setActiveTab("stocktake")}
-                    className={cn(
-                        "px-4 py-2 text-sm font-medium border-b-2 transition-colors",
-                        activeTab === "stocktake"
-                            ? "border-[var(--primary)] text-[var(--primary)]"
-                            : "border-transparent text-[var(--muted)] hover:text-[var(--foreground)]"
-                    )}
-                >
-                    실사 (Stocktake)
-                </button>
+    return (
+        <div className="h-[calc(100vh-4rem)] flex flex-col space-y-4 p-2">
+            <div className="flex items-center justify-between px-1">
+                <ActionBar title="재고관리" subtitle="재고 현황, 입출고, 실사" />
             </div>
 
-            {/* Position Tab */}
-            {activeTab === "position" && (
-                <div className="space-y-4">
-                    <Card>
-                        <CardHeader>
-                            <div className="flex items-center justify-between gap-2">
-                                <div className="flex items-center gap-2">
-                                    <ActionBar title="현재 재고" />
-                                    <div className="flex overflow-hidden rounded border border-[var(--panel-border)]">
-                                        <button
-                                            type="button"
-                                            onClick={() => setPositionMode("total")}
-                                            className={cn(
-                                                "px-3 py-1 text-xs",
-                                                positionMode === "total"
-                                                    ? "bg-[var(--panel-hover)] font-semibold"
-                                                    : "text-[var(--muted)]"
-                                            )}
-                                        >
-                                            전체
-                                        </button>
-                                        <button
-                                            type="button"
-                                            onClick={() => setPositionMode("byLocation")}
-                                            className={cn(
-                                                "px-3 py-1 text-xs",
-                                                positionMode === "byLocation"
-                                                    ? "bg-[var(--panel-hover)] font-semibold"
-                                                    : "text-[var(--muted)]"
-                                            )}
-                                        >
-                                            위치별
-                                        </button>
-                                    </div>
+            {/* Tabs */}
+            <div className="flex items-center gap-6 border-b border-border/40 px-1">
+                {tabs.map((tab) => (
+                    <button
+                        key={tab.id}
+                        onClick={() => setActiveTab(tab.id)}
+                        className={cn(
+                            "pb-3 text-sm font-medium transition-all relative",
+                            activeTab === tab.id
+                                ? "text-primary after:absolute after:bottom-[-1px] after:left-0 after:right-0 after:h-0.5 after:bg-primary"
+                                : "text-muted-foreground hover:text-foreground"
+                        )}
+                    >
+                        {tab.label}
+                    </button>
+                ))}
+            </div>
 
-                                    {positionMode === "byLocation" && (
-                                        <Select
-                                            value={selectedLocation}
-                                            onChange={(e) => setSelectedLocation(e.target.value)}
-                                        >
-                                            <option value="">(전체 위치)</option>
-                                            <option value="__NULL__">미지정</option>
-                                            {LOCATION_OPTIONS.map((o) => (
-                                                <option key={o.value} value={o.value}>
-                                                    {o.label}
-                                                </option>
-                                            ))}
-                                        </Select>
-                                    )}
+            <div className="flex-1 min-h-0 overflow-hidden">
+                {/* Position Tab */}
+                {activeTab === "position" && (
+                    <Card className="h-full flex flex-col border-border/40 shadow-sm">
+                        <div className="p-4 border-b border-border/40 flex items-center justify-between gap-4 bg-muted/5">
+                            <div className="flex items-center gap-3">
+                                <div className="text-sm font-semibold text-foreground">현재 재고</div>
+                                <div className="h-5 w-px bg-border/40" aria-hidden="true" />
+                                <div className="flex bg-muted/50 p-1 rounded-lg border border-border/50">
+                                    <button
+                                        type="button"
+                                        onClick={() => setPositionMode("total")}
+                                        className={cn(
+                                            "px-3 py-1 text-xs font-medium rounded-md transition-all",
+                                            positionMode === "total"
+                                                ? "bg-background text-foreground shadow-sm"
+                                                : "text-muted-foreground hover:text-foreground"
+                                        )}
+                                    >
+                                        전체
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => setPositionMode("byLocation")}
+                                        className={cn(
+                                            "px-3 py-1 text-xs font-medium rounded-md transition-all",
+                                            positionMode === "byLocation"
+                                                ? "bg-background text-foreground shadow-sm"
+                                                : "text-muted-foreground hover:text-foreground"
+                                        )}
+                                    >
+                                        위치별
+                                    </button>
                                 </div>
 
-                                <Input
-                                    placeholder="모델 검색..."
-                                    value={searchTerm}
-                                    onChange={(e) => setSearchTerm(e.target.value)}
-                                    className="w-64"
-                                />
+                                {positionMode === "byLocation" && (
+                                    <Select
+                                        value={selectedLocation}
+                                        onChange={(e) => setSelectedLocation(e.target.value)}
+                                        className="h-8 text-xs w-40"
+                                    >
+                                        <option value="">(전체 위치)</option>
+                                        <option value="__NULL__">미지정</option>
+                                        {LOCATION_OPTIONS.map((o) => (
+                                            <option key={o.value} value={o.value}>
+                                                {o.label}
+                                            </option>
+                                        ))}
+                                    </Select>
+                                )}
                             </div>
-                        </CardHeader>
 
-                        <CardBody>
+                            <Input
+                                placeholder="모델 검색..."
+                                value={searchTerm}
+                                onChange={(e) => setSearchTerm(e.target.value)}
+                                className="w-64 h-8 text-xs"
+                            />
+                        </div>
+
+                        <div className="flex-1 overflow-auto">
                             {positionLoading ? (
-                                <p className="text-sm text-[var(--muted)]">로딩 중...</p>
-                            ) : filteredPosition.length === 0 ? (
-                                <p className="text-sm text-[var(--muted)]">데이터 없음</p>
-                            ) : (
-                                <div className="overflow-auto">
-                                    <table className="w-full text-sm">
-                                        <thead className="border-b border-[var(--panel-border)] text-xs text-[var(--muted)]">
-                                            <tr>
-                                                {positionMode === "byLocation" && (
-                                                    <th className="text-left pb-2">위치</th>
-                                                )}
-                                                <th className="text-left pb-2">모델명</th>
-                                                <th className="text-right pb-2">재고</th>
-                                                <th className="text-left pb-2">최종이동</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody className="divide-y divide-[var(--panel-border)]">
-                                            {filteredPosition.map((row, idx) => (
-                                                <tr key={`${row.master_id}-${row.location_code ?? "NA"}-${idx}`} className="hover:bg-[var(--panel-hover)]">
-                                                    {positionMode === "byLocation" && (
-                                                        <td className="py-2 text-xs text-[var(--muted)]">
-                                                            {row.location_code || "미지정"}
-                                                        </td>
-                                                    )}
-                                                    <td className="py-2 font-medium">{row.model_name}</td>
-                                                    <td className="py-2 text-right font-mono">
-                                                        <span
-                                                            className={cn(
-                                                                "px-2 py-1 rounded text-xs font-semibold",
-                                                                row.on_hand_qty < 0
-                                                                    ? "bg-red-100 text-red-700"
-                                                                    : row.on_hand_qty === 0
-                                                                        ? "bg-gray-100 text-gray-600"
-                                                                        : "bg-green-100 text-green-700"
-                                                            )}
-                                                        >
-                                                            {row.on_hand_qty}
-                                                        </span>
-                                                    </td>
-                                                    <td className="py-2 text-xs text-[var(--muted)]">{formatKst(row.last_move_at)}</td>
-                                                </tr>
-                                            ))}
-                                        </tbody>
-                                    </table>
+                                <div className="p-4 space-y-2">
+                                    {[...Array(5)].map((_, i) => (
+                                        <Skeleton key={i} className="h-10 w-full" />
+                                    ))}
                                 </div>
-                            )}
-                        </CardBody>
-                    </Card>
-                </div>
-            )}
-
-            {/* Moves Tab */}
-            {activeTab === "moves" && (
-                <div className="grid grid-cols-10 gap-4">
-                    {/* Left Panel: 50% = 5 cols - Moves History */}
-                    <Card className="col-span-5">
-                        <CardHeader>
-                            <ActionBar title="입출고 이력" />
-                        </CardHeader>
-                        <CardBody>
-                            {movesData.length === 0 ? (
-                                <p className="text-sm text-[var(--muted)]">데이터 없음</p>
+                            ) : filteredPosition.length === 0 ? (
+                                <div className="h-full flex flex-col items-center justify-center text-muted-foreground">
+                                    <p className="text-sm">조건에 맞는 재고가 없습니다</p>
+                                    <p className="text-xs text-muted-foreground/70">검색어나 필터를 조정해보세요</p>
+                                </div>
                             ) : (
-                                <div className="overflow-auto max-h-96">
+                                <table className="w-full text-sm text-left">
+                                    <thead className="sticky top-0 bg-background z-10 text-xs font-medium text-muted-foreground uppercase tracking-wider border-b border-border/40">
+                                        <tr>
+                                            {positionMode === "byLocation" && (
+                                                <th className="px-4 py-3 font-medium">위치</th>
+                                            )}
+                                            <th className="px-4 py-3 font-medium">모델명</th>
+                                            <th className="px-4 py-3 font-medium text-right">재고</th>
+                                            <th className="px-4 py-3 font-medium text-right">최종이동</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-border/40">
+                                        {filteredPosition.map((row, idx) => (
+                                            <tr key={`${row.master_id}-${row.location_code ?? "NA"}-${idx}`} className="group hover:bg-muted/30 transition-colors">
+                                                {positionMode === "byLocation" && (
+                                                    <td className="px-4 py-3 text-xs text-muted-foreground group-hover:text-foreground">
+                                                        {row.location_code || <span className="opacity-50">미지정</span>}
+                                                    </td>
+                                                )}
+                                                <td className="px-4 py-3 font-medium text-foreground">{row.model_name}</td>
+                                                <td className="px-4 py-3 text-right">
+                                                    <Badge
+                                                        tone={
+                                                            row.on_hand_qty < 0
+                                                                ? "danger"
+                                                                : row.on_hand_qty === 0
+                                                                    ? "neutral"
+                                                                    : "active"
+                                                        }
+                                                        className="font-mono text-xs border-0"
+                                                    >
+                                                        {row.on_hand_qty.toLocaleString()}
+                                                    </Badge>
+                                                </td>
+                                                <td className="px-4 py-3 text-xs text-muted-foreground text-right font-mono">
+                                                    {formatKst(row.last_move_at)}
+                                                </td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            )}
+                        </div>
+                    </Card>
+                )}
+
+                {/* Moves Tab */}
+                {activeTab === "moves" && (
+                    <div className="h-full grid grid-cols-10 gap-4">
+                        {/* Left Panel: History */}
+                        <Card className="col-span-5 flex flex-col border-border/40 shadow-sm overflow-hidden">
+                            <div className="p-3 border-b border-border/40 bg-muted/5">
+                                <h3 className="text-sm font-semibold text-foreground">입출고 이력</h3>
+                            </div>
+                            <div className="flex-1 overflow-auto">
+                                {movesData.length === 0 ? (
+                                    <div className="h-full flex items-center justify-center text-muted-foreground text-sm">데이터 없음</div>
+                                ) : (
                                     <table className="w-full text-sm">
-                                        <thead className="border-b border-[var(--panel-border)] text-xs text-[var(--muted)]">
+                                        <thead className="sticky top-0 bg-background z-10 text-xs font-medium text-muted-foreground uppercase tracking-wider border-b border-border/40">
                                             <tr>
-                                                <th className="text-left pb-2">시각</th>
-                                                <th className="text-center pb-2">번호</th>
-                                                <th className="text-left pb-2">모델명</th>
-                                                <th className="text-center pb-2">타입</th>
-                                                <th className="text-right pb-2">수량</th>
+                                                <th className="px-3 py-2 text-left">시각</th>
+                                                <th className="px-3 py-2 text-center">번호</th>
+                                                <th className="px-3 py-2 text-left">모델명</th>
+                                                <th className="px-3 py-2 text-center">타입</th>
+                                                <th className="px-3 py-2 text-right">수량</th>
                                             </tr>
                                         </thead>
-                                        <tbody className="divide-y divide-[var(--panel-border)]">
-                                            {movesData.map((move: any) => (
-                                                <tr key={move.move_line_id || move.move_id} className="hover:bg-[var(--panel-hover)]">
-                                                    <td className="py-2 text-xs text-[var(--muted)] whitespace-nowrap">
-                                                        {formatKst(move.occurred_at).split(" ")[0]}
-                                                        <br />
-                                                        {formatKst(move.occurred_at).split(" ")[1]}
+                                        <tbody className="divide-y divide-border/40">
+                                            {movesData.map((move) => (
+                                                <tr key={move.move_line_id || move.move_id} className="hover:bg-muted/30 transition-colors">
+                                                    <td className="px-3 py-2 text-xs text-muted-foreground whitespace-nowrap">
+                                                        <div className="font-mono">{formatKst(move.occurred_at).split(" ")[0]}</div>
+                                                        <div className="text-[10px] opacity-70">{formatKst(move.occurred_at).split(" ")[1]}</div>
                                                     </td>
-                                                    <td className="py-2 text-center text-xs text-[var(--muted)] font-mono">{move.move_no}</td>
-                                                    <td className="py-2 font-medium">{move.master_model_name || move.item_name}</td>
-                                                    <td className="py-2 text-center">
-                                                        <span
-                                                            className={cn(
-                                                                "text-[10px] px-1.5 py-0.5 rounded font-semibold border",
+                                                    <td className="px-3 py-2 text-center text-xs font-mono text-muted-foreground">
+                                                        {move.move_no}
+                                                    </td>
+                                                    <td className="px-3 py-2 font-medium text-foreground truncate max-w-[120px]" title={move.master_model_name || move.item_name || ""}>
+                                                        {move.master_model_name || move.item_name}
+                                                    </td>
+                                                    <td className="px-3 py-2 text-center">
+                                                        <Badge
+                                                            tone={
                                                                 move.move_type === "RECEIPT"
-                                                                    ? "bg-blue-50 text-blue-700 border-blue-200"
+                                                                    ? "primary"
                                                                     : move.move_type === "ISSUE"
-                                                                        ? "bg-orange-50 text-orange-700 border-orange-200"
-                                                                        : "bg-purple-50 text-purple-700 border-purple-200"
-                                                            )}
+                                                                        ? "warning"
+                                                                        : "neutral"
+                                                            }
+                                                            className="text-[10px] px-1.5 py-0 h-5 border-0"
                                                         >
                                                             {move.move_type}
-                                                        </span>
+                                                        </Badge>
                                                     </td>
-                                                    <td
-                                                        className={cn(
-                                                            "py-2 text-right font-mono",
-                                                            move.direction === "IN" ? "text-blue-600" : "text-orange-600"
-                                                        )}
-                                                    >
+                                                    <td className={cn("px-3 py-2 text-right font-mono font-medium", move.direction === "IN" ? "text-blue-600" : "text-orange-600")}>
                                                         {move.direction === "IN" ? "+" : "-"}
                                                         {move.qty}
                                                     </td>
@@ -756,123 +749,122 @@ export default function InventoryPage() {
                                             ))}
                                         </tbody>
                                     </table>
-                                </div>
-                            )}
-                        </CardBody>
-                    </Card>
+                                )}
+                            </div>
+                        </Card>
 
-                    {/* Middle Panel: 20% = 2 cols - Master Detail */}
-                    <Card className="col-span-2">
-                        <CardHeader>
-                            <ActionBar title="마스터 내용" />
-                        </CardHeader>
-                        <CardBody>
-                            {!selectedMaster ? (
-                                <p className="text-xs text-[var(--muted)] text-center py-8">마스터를 선택하세요</p>
-                            ) : (
-                                <div className="space-y-4">
-                                    {/* Image */}
-                                    <div className="aspect-square bg-gray-100 rounded overflow-hidden border border-[var(--panel-border)] relative group">
-                                        {(() => {
-                                            const imageUrl = getImageUrl(selectedMaster.photo_url || selectedMaster.image_path);
-                                            return imageUrl ? (
-                                                <img
-                                                    src={imageUrl}
-                                                    alt={selectedMaster.model_name}
-                                                    className="w-full h-full object-cover"
-                                                    onError={(e) => {
-                                                        e.currentTarget.style.display = "none";
-                                                    }}
-                                                />
-                                            ) : null;
-                                        })()}
-                                        <div className="absolute inset-x-0 bottom-0 bg-black/60 text-white text-xs p-1 text-center">
-                                            {selectedMaster.model_name}
+                        {/* Middle Panel: Master Detail */}
+                        <Card className="col-span-2 flex flex-col border-border/40 shadow-sm overflow-hidden">
+                            <div className="p-3 border-b border-border/40 bg-muted/5">
+                                <h3 className="text-sm font-semibold text-foreground">마스터 내용</h3>
+                            </div>
+                            <div className="flex-1 overflow-auto p-4">
+                                {!selectedMaster ? (
+                                    <div className="h-full flex flex-col items-center justify-center text-muted-foreground space-y-2">
+                                        <div className="w-12 h-12 rounded-full bg-muted flex items-center justify-center">
+                                            <span className="text-2xl">?</span>
+                                        </div>
+                                        <p className="text-xs">마스터를 선택하세요</p>
+                                    </div>
+                                ) : (
+                                    <div className="space-y-6">
+                                        <div className="aspect-square bg-muted/30 rounded-lg overflow-hidden border border-border/50 relative group shadow-sm">
+                                            {(() => {
+                                                const imageUrl = getImageUrl(selectedMaster.photo_url || selectedMaster.image_path);
+                                                return imageUrl ? (
+                                                    <img
+                                                        src={imageUrl}
+                                                        alt={selectedMaster.model_name}
+                                                        className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
+                                                        onError={(e) => { e.currentTarget.style.display = "none"; }}
+                                                    />
+                                                ) : (
+                                                    <div className="w-full h-full flex items-center justify-center text-muted-foreground text-xs">이미지 없음</div>
+                                                );
+                                            })()}
+                                            <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 to-transparent p-3 pt-8">
+                                                <p className="text-white font-medium text-sm truncate">{selectedMaster.model_name}</p>
+                                            </div>
+                                        </div>
+
+                                        <div className="space-y-4">
+                                            <div>
+                                                <h4 className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold mb-2 border-b border-border/40 pb-1">기본 정보</h4>
+                                                <div className="grid grid-cols-2 gap-2 text-xs">
+                                                    <div className="text-muted-foreground">재질</div>
+                                                    <div className="font-medium text-right">{selectedMaster.material_code_default || "-"}</div>
+                                                    <div className="text-muted-foreground">분류</div>
+                                                    <div className="font-medium text-right">{selectedMaster.category_code || "-"}</div>
+                                                </div>
+                                            </div>
+
+                                            <div>
+                                                <h4 className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold mb-2 border-b border-border/40 pb-1">중량 (g)</h4>
+                                                <div className="grid grid-cols-2 gap-2 text-xs">
+                                                    <div className="text-muted-foreground">기본</div>
+                                                    <div className="font-medium text-right font-mono">{selectedMaster.weight_default_g ?? "-"}</div>
+                                                    <div className="text-muted-foreground">차감</div>
+                                                    <div className="font-medium text-right font-mono">{selectedMaster.deduction_weight_default_g ?? "-"}</div>
+                                                </div>
+                                            </div>
+
+                                            <div>
+                                                <h4 className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold mb-2 border-b border-border/40 pb-1">스톤 (EA)</h4>
+                                                <div className="grid grid-cols-2 gap-2 text-xs">
+                                                    <div className="text-muted-foreground">Center</div>
+                                                    <div className="font-medium text-right font-mono">{selectedMaster.center_qty_default ?? "-"}</div>
+                                                    <div className="text-muted-foreground">Sub</div>
+                                                    <div className="font-medium text-right font-mono">{selectedMaster.sub1_qty_default ?? "-"} / {selectedMaster.sub2_qty_default ?? "-"}</div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+                        </Card>
+
+                        {/* Right Panel: Quick Input */}
+                        <Card className="col-span-3 flex flex-col border-border/40 shadow-sm overflow-hidden">
+                            <div className="p-3 border-b border-border/40 bg-muted/5">
+                                <h3 className="text-sm font-semibold text-foreground">빠른 입력</h3>
+                            </div>
+                            <div className="flex-1 overflow-auto p-4">
+                                <form onSubmit={quickMoveForm.handleSubmit(onSubmitQuickMove)} className="space-y-5">
+                                    <div className="grid grid-cols-2 gap-3">
+                                        <div className="space-y-1.5">
+                                            <label className="text-[10px] font-semibold uppercase text-muted-foreground">타입</label>
+                                            <Select {...quickMoveForm.register("move_type")} className="h-9 text-xs">
+                                                <option value="RECEIPT">입고</option>
+                                                <option value="ISSUE">출고</option>
+                                                <option value="ADJUST">조정</option>
+                                            </Select>
+                                        </div>
+                                        <div className="space-y-1.5">
+                                            <label className="text-[10px] font-semibold uppercase text-muted-foreground">위치</label>
+                                            <Select {...quickMoveForm.register("location_code")} className="h-9 text-xs">
+                                                <option value="">선택</option>
+                                                {LOCATION_OPTIONS.map((o) => (
+                                                    <option key={o.value} value={o.value}>{o.label}</option>
+                                                ))}
+                                            </Select>
                                         </div>
                                     </div>
 
-                                    {/* 2-Col Grid: Cost (Left) | Sell (Right) */}
-                                    <div className="grid grid-cols-2 gap-2 text-xs">
-                                        <div className="col-span-2 font-semibold border-b pb-1">기본 정보</div>
-                                        <div className="text-[var(--muted)]">재질: {selectedMaster.material_code_default}</div>
-                                        <div className="text-[var(--muted)]">분류: {selectedMaster.category_code}</div>
-
-                                        <div className="col-span-2 font-semibold border-b pb-1 mt-2">중량 (g)</div>
-                                        <div>기본: {selectedMaster.weight_default_g}</div>
-                                        <div>차감: {selectedMaster.deduction_weight_default_g}</div>
-
-                                        <div className="col-span-2 font-semibold border-b pb-1 mt-2">스톤 (EA)</div>
-                                        <div>Center: {selectedMaster.center_qty_default}</div>
-                                        <div>
-                                            Sub: {selectedMaster.sub1_qty_default} / {selectedMaster.sub2_qty_default}
-                                        </div>
-
-                                        <div className="col-span-2 font-semibold border-b pb-1 mt-2 flex justify-between">
-                                            <span>공임/도금</span>
-                                            <span className="flex gap-4">
-                                                <span className="text-gray-500">원가</span> <span>판매</span>
-                                            </span>
-                                        </div>
-
-                                        <div className="text-gray-500">{selectedMaster.labor_base_cost?.toLocaleString() || 0}</div>
-                                        <div>{selectedMaster.labor_base_sell?.toLocaleString() || 0}</div>
-
-                                        <div className="text-gray-500">{selectedMaster.labor_center_cost?.toLocaleString() || 0}</div>
-                                        <div>{selectedMaster.labor_center_sell?.toLocaleString() || 0}</div>
-
-                                        <div className="text-gray-500">{(selectedMaster.plating_price_cost_default || 0).toLocaleString()}</div>
-                                        <div>{(selectedMaster.plating_price_sell_default || 0).toLocaleString()}</div>
-                                    </div>
-                                </div>
-                            )}
-                        </CardBody>
-                    </Card>
-
-                    {/* Right Panel: 30% = 3 cols - Quick Input */}
-                    <Card className="col-span-3">
-                        <CardHeader>
-                            <ActionBar title="빠른 입력" />
-                        </CardHeader>
-                        <CardBody>
-                            <form onSubmit={quickMoveForm.handleSubmit(onSubmitQuickMove)} className="space-y-4">
-                                {/* Top Section: Basic Input */}
-                                <div className="grid grid-cols-2 gap-2">
-                                    <div className="space-y-1">
-                                        <label className="text-[10px] font-semibold uppercase text-[var(--muted)]">타입</label>
-                                        <Select {...quickMoveForm.register("move_type")}>
-                                            <option value="RECEIPT">입고</option>
-                                            <option value="ISSUE">출고</option>
-                                            <option value="ADJUST">조정</option>
-                                        </Select>
-                                    </div>
-
-                                    <div className="space-y-1">
-                                        <label className="text-[10px] font-semibold uppercase text-[var(--muted)]">위치</label>
-                                        <Select {...quickMoveForm.register("location_code")}>
-                                            <option value="">선택</option>
-                                            {LOCATION_OPTIONS.map((o) => (
-                                                <option key={o.value} value={o.value}>
-                                                    {o.label}
-                                                </option>
-                                            ))}
-                                        </Select>
-                                    </div>
-
-                                    <div className="space-y-1 col-span-2">
-                                        <label className="text-[10px] font-semibold uppercase text-[var(--muted)]">실사 세션 연결(선택)</label>
-                                        <Select {...quickMoveForm.register("session_id")}>
+                                    <div className="space-y-1.5">
+                                        <label className="text-[10px] font-semibold uppercase text-muted-foreground">실사 세션 연결(선택)</label>
+                                        <Select {...quickMoveForm.register("session_id")} className="h-9 text-xs">
                                             <option value="">(선택 안함)</option>
                                             {sessionsData.map((s) => (
                                                 <option key={s.session_id} value={s.session_id}>
-                                                    {s.location_code || s.session_code || `Session #${s.session_no}`}
+                                                    {s.location_code || s.session_code || `세션 #${s.session_no}`}
                                                 </option>
                                             ))}
                                         </Select>
                                     </div>
 
-                                    <div className="space-y-1 col-span-1">
-                                        <label className="text-[10px] font-semibold uppercase text-[var(--muted)]">모델명</label>
-                                        <div className="relative">
+                                    <div className="grid grid-cols-3 gap-3">
+                                        <div className="col-span-2 space-y-1.5 relative">
+                                            <label className="text-[10px] font-semibold uppercase text-muted-foreground">모델명</label>
                                             <Input
                                                 {...quickMoveForm.register("model_name")}
                                                 onFocus={() => setShowMasterSearch(true)}
@@ -881,143 +873,115 @@ export default function InventoryPage() {
                                                     setMasterSearchQuery(e.target.value);
                                                     setShowMasterSearch(true);
                                                 }}
-                                                placeholder="Model..."
+                                                placeholder="모델명 검색..."
+                                                className="h-9 text-xs"
+                                                autoComplete="off"
                                             />
                                             {showMasterSearch && masterSearchResults.length > 0 && (
-                                                <div className="absolute z-10 w-full bg-[var(--card)] border border-[var(--panel-border)] shadow-lg rounded-md mt-1 max-h-48 overflow-auto">
-                                                    {masterSearchResults.map((master: MasterItem, idx: number) => (
+                                                <div className="absolute z-20 w-full bg-[var(--card)] border border-[var(--panel-border)] shadow-md rounded-md mt-1 max-h-48 overflow-auto">
+                                                    {masterSearchResults.map((master, idx) => (
                                                         <button
                                                             key={`${master.master_id}-${idx}`}
                                                             type="button"
                                                             onClick={() => handleMasterSelect(master)}
-                                                            className="w-full text-left p-2 hover:bg-[var(--panel-hover)] text-xs border-b border-[var(--panel-border)]"
+                                                            className="w-full text-left p-2 hover:bg-muted text-xs border-b border-border/50 last:border-0"
                                                         >
-                                                            <div className="font-semibold">{master.model_name}</div>
-                                                            <div className="text-[10px] text-[var(--muted)]">{master.vendor_name}</div>
+                                                            <div className="font-medium">{master.model_name}</div>
+                                                            <div className="text-[10px] text-muted-foreground">{master.vendor_name}</div>
                                                         </button>
                                                     ))}
                                                 </div>
                                             )}
                                         </div>
+                                        <div className="space-y-1.5">
+                                            <label className="text-[10px] font-semibold uppercase text-muted-foreground">수량</label>
+                                            <Input type="number" {...quickMoveForm.register("qty", { valueAsNumber: true })} className="h-9 text-xs font-mono text-right" />
+                                        </div>
                                     </div>
 
-                                    <div className="space-y-1 col-span-1">
-                                        <label className="text-[10px] font-semibold uppercase text-[var(--muted)]">수량</label>
-                                        <Input type="number" {...quickMoveForm.register("qty", { valueAsNumber: true })} />
+                                    <div className="space-y-1.5">
+                                        <label className="text-[10px] font-semibold uppercase text-muted-foreground">메모</label>
+                                        <Input {...quickMoveForm.register("memo")} placeholder="메모..." className="h-9 text-xs" />
                                     </div>
+
+                                    <Button type="submit" variant="primary" className="w-full h-10 font-bold shadow-sm">
+                                        등 록
+                                    </Button>
+
+                                    <div className="pt-4 border-t border-dashed border-border/50">
+                                        <div className="flex justify-between items-center mb-3">
+                                            <div className="space-y-0.5">
+                                                <span className="text-[10px] font-semibold uppercase text-muted-foreground">상세 입력</span>
+                                                <div className="text-[10px] text-muted-foreground">중량은 복사되지 않음</div>
+                                            </div>
+                                            <Button
+                                                type="button"
+                                                size="sm"
+                                                variant="secondary"
+                                                onClick={handleCopyFromMaster}
+                                                disabled={!selectedMaster}
+                                                className="h-6 text-[10px] px-2"
+                                            >
+                                                마스터 복사
+                                            </Button>
+                                        </div>
+
+                                        <div className="bg-muted/30 rounded-lg p-3 border border-border/40 space-y-3">
+                                            <div className="grid grid-cols-2 gap-2">
+                                                <Input {...quickMoveForm.register("material_code")} placeholder="Material Code" className="h-7 text-xs bg-background" />
+                                                <Input {...quickMoveForm.register("category_code")} placeholder="Category Code" className="h-7 text-xs bg-background" />
+                                            </div>
+                                            <div className="grid grid-cols-2 gap-2">
+                                                <Input {...quickMoveForm.register("base_weight_g", { valueAsNumber: true })} placeholder="기본 중량 *" className="h-7 text-xs bg-yellow-50/50 border-yellow-200/50" />
+                                                <Input {...quickMoveForm.register("deduction_weight_g", { valueAsNumber: true })} placeholder="차감 중량 *" className="h-7 text-xs bg-yellow-50/50 border-yellow-200/50" />
+                                            </div>
+                                            <div className="grid grid-cols-2 gap-2">
+                                                <Input {...quickMoveForm.register("sub1_qty", { valueAsNumber: true })} placeholder="Sub 1" className="h-7 text-xs bg-background" />
+                                                <Input {...quickMoveForm.register("center_qty", { valueAsNumber: true })} placeholder="Center" className="h-7 text-xs bg-background" />
+                                            </div>
+                                            <div className="grid grid-cols-2 gap-2">
+                                                <Input {...quickMoveForm.register("plating_cost", { valueAsNumber: true })} placeholder="Cost" className="h-7 text-xs bg-background" />
+                                                <Input {...quickMoveForm.register("plating_sell", { valueAsNumber: true })} placeholder="Sell" className="h-7 text-xs bg-background" />
+                                            </div>
+                                            <div className="grid grid-cols-2 gap-2">
+                                                <Input {...quickMoveForm.register("labor_base_cost", { valueAsNumber: true })} placeholder="Base Cost" className="h-7 text-xs bg-background" />
+                                                <Input {...quickMoveForm.register("labor_base_sell", { valueAsNumber: true })} placeholder="Base Sell" className="h-7 text-xs bg-background" />
+                                            </div>
+                                        </div>
+                                    </div>
+                                </form>
+                            </div>
+                        </Card>
+                    </div>
+                )}
+
+                {/* Stocktake Tab */}
+                {activeTab === "stocktake" && (
+                    <div className="h-full grid grid-cols-1 lg:grid-cols-3 gap-4">
+                        {/* Session List */}
+                        <Card className="flex flex-col border-border/40 shadow-sm overflow-hidden">
+                            <div className="p-3 border-b border-border/40 bg-muted/5 space-y-3">
+                                <div className="flex items-center justify-between">
+                                    <h3 className="text-sm font-semibold text-foreground">실사 세션</h3>
                                 </div>
-
-                                <div className="space-y-1">
-                                    <label className="text-[10px] font-semibold uppercase text-[var(--muted)]">메모</label>
-                                    <Input {...quickMoveForm.register("memo")} placeholder="Memo..." />
-                                </div>
-
-                                <Button type="submit" variant="primary" className="w-full py-6 text-lg font-bold shadow-md">
-                                    등 록
-                                </Button>
-
-                                <hr className="border-dashed border-[var(--panel-border)] my-4" />
-
-                                {/* Bottom Section: Detailed Input (2 Cols: Cost | Sell) */}
-                                <div className="space-y-3 p-3 bg-gray-50 rounded border border-[var(--panel-border)]">
-                                    <div className="flex justify-between items-center">
-                                        <Button
-                                            type="button"
-                                            size="sm"
-                                            variant="secondary"
-                                            onClick={handleCopyFromMaster}
-                                            disabled={!selectedMaster}
-                                            className="text-xs bg-white"
-                                        >
-                                            ⬇ 마스터 복사
-                                        </Button>
-                                        <span className="text-[10px] text-[var(--muted)]">중량은 복사되지 않음</span>
-                                    </div>
-
-                                    <div className="grid grid-cols-2 gap-x-3 gap-y-2 text-xs">
-                                        <div className="text-center text-[var(--muted)] font-semibold border-b pb-1">원가 (Cost)</div>
-                                        <div className="text-center text-[var(--muted)] font-semibold border-b pb-1">판매 (Sell)</div>
-
-                                        <Input {...quickMoveForm.register("material_code")} placeholder="Material Code" />
-                                        <Input {...quickMoveForm.register("category_code")} placeholder="Category Code" />
-
-                                        <div className="col-span-2 text-center text-[var(--muted)] mt-1">- 중량 (g) -</div>
-                                        <Input
-                                            {...quickMoveForm.register("base_weight_g", { valueAsNumber: true })}
-                                            placeholder="기본 중량 *"
-                                            className="bg-yellow-50"
-                                        />
-                                        <Input
-                                            {...quickMoveForm.register("deduction_weight_g", { valueAsNumber: true })}
-                                            placeholder="차감 중량 *"
-                                            className="bg-yellow-50"
-                                        />
-
-                                        <div className="col-span-2 text-center text-[var(--muted)] mt-1">- 스톤 (Qty) -</div>
-                                        <Input {...quickMoveForm.register("sub1_qty", { valueAsNumber: true })} placeholder="Sub 1" />
-                                        <Input {...quickMoveForm.register("center_qty", { valueAsNumber: true })} placeholder="Center" />
-
-                                        <div className="col-span-2 text-center text-[var(--muted)] mt-1">- 도금 -</div>
-                                        <Input {...quickMoveForm.register("plating_cost", { valueAsNumber: true })} placeholder="Cost" />
-                                        <Input {...quickMoveForm.register("plating_sell", { valueAsNumber: true })} placeholder="Sell" />
-
-                                        <div className="col-span-2 text-center text-[var(--muted)] mt-1">- 공임 -</div>
-                                        <Input {...quickMoveForm.register("labor_base_cost", { valueAsNumber: true })} placeholder="Base Cost" />
-                                        <Input {...quickMoveForm.register("labor_base_sell", { valueAsNumber: true })} placeholder="Base Sell" />
-                                    </div>
-                                </div>
-                            </form>
-                        </CardBody>
-                    </Card>
-                </div>
-            )}
-
-            {/* Stocktake Tab */}
-            {activeTab === "stocktake" && (
-                <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-                    {/* Session List */}
-                    <Card>
-                        <CardHeader>
-                            <ActionBar title="실사 세션" />
-                        </CardHeader>
-                        <CardBody>
-                            <form onSubmit={sessionForm.handleSubmit(onCreateSession)} className="space-y-3 mb-4 pb-4 border-b">
-                                <div className="space-y-1">
-                                    <label className="text-xs font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">
-                                        위치
-                                    </label>
-                                    <Select {...sessionForm.register("location_code")}>
-                                        <option value="">선택</option>
-                                        {LOCATION_OPTIONS.map((o) => (
-                                            <option key={o.value} value={o.value}>
-                                                {o.label}
-                                            </option>
-                                        ))}
+                                <form onSubmit={sessionForm.handleSubmit(onCreateSession)} className="flex gap-2">
+                                    <Select {...sessionForm.register("location_code")} className="h-8 text-xs w-24 flex-shrink-0">
+                                        <option value="">위치</option>
+                                        {LOCATION_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
                                     </Select>
-                                </div>
-
-                                <div className="space-y-1">
-                                    <label className="text-xs font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">
-                                        세션명 (이름)
-                                    </label>
-                                    <Input {...sessionForm.register("session_code")} placeholder="예: 사무실 금고, 1층 매장" />
-                                </div>
-
-                                <Button type="submit" className="w-full" disabled={createSessionMutation.isPending}>
-                                    {createSessionMutation.isPending ? "생성 중..." : "새 세션 생성"}
-                                </Button>
-                            </form>
-
-                            <div className="mb-2">
+                                    <Input {...sessionForm.register("session_code")} placeholder="예: 사무실 금고, 1층 매장" className="h-8 text-xs flex-1" />
+                                    <Button type="submit" size="sm" disabled={createSessionMutation.isPending} className="h-8 px-3">
+                                        {createSessionMutation.isPending ? "생성 중..." : "추가"}
+                                    </Button>
+                                </form>
                                 <Input
                                     placeholder="세션 검색 (이름, 번호)"
                                     value={sessionSearchQuery}
                                     onChange={(e) => setSessionSearchQuery(e.target.value)}
-                                    className="text-xs"
+                                    className="h-8 text-xs"
                                 />
                             </div>
-
-                            <div className="space-y-2 max-h-64 overflow-auto">
+                            <div className="flex-1 overflow-auto p-2 space-y-1">
                                 {sessionsData
                                     .filter((s) => {
                                         const q = sessionSearchQuery.toLowerCase().trim();
@@ -1033,191 +997,189 @@ export default function InventoryPage() {
                                             key={session.session_id}
                                             onClick={() => setSelectedSessionId(session.session_id)}
                                             className={cn(
-                                                "w-full text-left p-3 rounded border transition-colors",
+                                                "w-full text-left p-3 rounded-lg border transition-all group",
                                                 selectedSessionId === session.session_id
-                                                    ? "border-[var(--primary)] bg-[var(--chip)]"
-                                                    : "border-[var(--panel-border)] hover:bg-[var(--panel-hover)]"
+                                                    ? "border-primary/50 bg-primary/5 shadow-sm"
+                                                    : "border-transparent hover:bg-muted/50"
                                             )}
                                         >
                                             <div className="flex items-center justify-between mb-1">
-                                                <span className="text-sm font-semibold">
-                                                    {session.session_code ? (
-                                                        <>
-                                                            {session.session_code}{" "}
-                                                            <span className="text-xs text-[var(--muted)] font-normal">#{session.session_no}</span>
-                                                        </>
-                                                    ) : (
-                                                        `#${session.session_no}`
-                                                    )}
+                                                <span className={cn("text-sm font-medium", selectedSessionId === session.session_id ? "text-primary" : "text-foreground")}>
+                                                    {session.session_code || `#${session.session_no}`}
                                                 </span>
-                                                <span
-                                                    className={cn(
-                                                        "text-xs px-2 py-0.5 rounded font-semibold",
+                                                <Badge
+                                                    tone={
                                                         session.status === "FINALIZED"
-                                                            ? "bg-green-100 text-green-700"
+                                                            ? "active"
                                                             : session.status === "VOID"
-                                                                ? "bg-red-100 text-red-700"
-                                                                : "bg-yellow-100 text-yellow-700"
-                                                    )}
+                                                                ? "danger"
+                                                                : "warning"
+                                                    }
+                                                    className="text-[10px] px-1.5 py-0 h-5 border-0"
                                                 >
                                                     {session.status}
-                                                </span>
+                                                </Badge>
                                             </div>
-                                            <p className="text-xs text-[var(--muted)]">{formatKst(session.snapshot_at)}</p>
-                                            <p className="text-xs text-[var(--muted)]">
-                                                라인: {session.line_count} | 델타: {session.delta_line_count}
-                                            </p>
+                                            <div className="flex items-center justify-between text-xs text-muted-foreground">
+                                                <span>{formatKst(session.snapshot_at)}</span>
+                                                <span className="font-mono">라인: {session.line_count}</span>
+                                            </div>
                                         </button>
                                     ))}
                             </div>
-                        </CardBody>
-                    </Card>
+                        </Card>
 
-                    {/* Session Detail */}
-                    <Card className="lg:col-span-2">
-                        <CardHeader>
-                            <div className="flex items-center justify-between">
-                                <ActionBar title={selectedSession ? `세션 #${selectedSession.session_no}` : "세션 선택"} />
+                        {/* Session Detail */}
+                        <Card className="lg:col-span-2 flex flex-col border-border/40 shadow-sm overflow-hidden">
+                            <div className="p-3 border-b border-border/40 bg-muted/5 flex items-center justify-between h-14">
+                                <div className="flex items-center gap-2">
+                                    <h3 className="text-sm font-semibold text-foreground">
+                                        {selectedSession ? (
+                                            <>
+                                                {selectedSession.session_code || `#${selectedSession.session_no}`}
+                                                <span className="ml-2 text-xs font-normal text-muted-foreground">
+                                                    {selectedSession.location_code}
+                                                </span>
+                                            </>
+                                        ) : "세션 선택"}
+                                    </h3>
+                                </div>
                                 {selectedSession && (
                                     <div className="flex gap-2">
                                         {!isFinalized && (
                                             <>
-                                                <Button onClick={onFinalize} disabled={finalizeMutation.isPending} size="sm">
+                                                <Button onClick={onFinalize} disabled={finalizeMutation.isPending} size="sm" className="h-8 text-xs">
                                                     {finalizeMutation.isPending ? "확정 중..." : "Finalize"}
                                                 </Button>
-                                                <Button
-                                                    onClick={onVoidSession}
-                                                    disabled={voidSessionMutation.isPending}
-                                                    variant="secondary"
-                                                    size="sm"
-                                                >
+                                                <Button onClick={onVoidSession} disabled={voidSessionMutation.isPending} variant="secondary" size="sm" className="h-8 text-xs">
                                                     취소
                                                 </Button>
                                             </>
                                         )}
                                         {selectedSession.generated_move_id && (
-                                            <span className="text-xs bg-green-100 text-green-700 px-2 py-1 rounded">
+                                            <Badge tone="active" className="text-[10px] px-2 py-0.5">
                                                 ADJUST Move #{selectedSession.generated_move_status}
-                                            </span>
+                                            </Badge>
                                         )}
                                     </div>
                                 )}
                             </div>
-                        </CardHeader>
-                        <CardBody>
-                            {!selectedSessionId ? (
-                                <p className="text-sm text-[var(--muted)]">왼쪽에서 세션을 선택하세요</p>
-                            ) : (
-                                <div className="space-y-4">
-                                    {/* Add Line Form */}
-                                    {!isFinalized && (
-                                        <form
-                                            onSubmit={countLineForm.handleSubmit(onAddLine)}
-                                            className="flex gap-2 pb-4 border-b border-[var(--panel-border)]"
-                                        >
-                                            <div className="flex-1 relative">
-                                                <Input
-                                                    {...countLineForm.register("item_name", { required: true })}
-                                                    placeholder="품목명 (마스터 검색) *"
-                                                    disabled={isFinalized}
-                                                    autoComplete="off"
-                                                    onFocus={() => setShowMasterSearch(true)}
-                                                    onChange={(e) => {
-                                                        countLineForm.setValue("item_name", e.target.value);
-                                                        setMasterSearchQuery(e.target.value);
-                                                        setShowMasterSearch(true);
-                                                    }}
-                                                />
-                                                {showMasterSearch && masterSearchResults.length > 0 && activeTab === "stocktake" && (
-                                                    <div className="absolute z-50 w-full bg-[var(--card)] border border-[var(--panel-border)] shadow-lg rounded-md mt-1 max-h-48 overflow-auto left-0">
-                                                        {masterSearchResults.map((master: MasterItem, idx: number) => (
-                                                            <button
-                                                                key={`${master.master_id}-${idx}-st`}
-                                                                type="button"
-                                                                onClick={() => {
-                                                                    countLineForm.setValue("item_name", master.model_name);
-                                                                    countLineForm.setValue("master_id", master.master_id);
-                                                                    setShowMasterSearch(false);
-                                                                }}
-                                                                className="w-full text-left p-2 hover:bg-[var(--panel-hover)] text-xs border-b border-[var(--panel-border)]"
-                                                            >
-                                                                <div className="font-semibold">{master.model_name}</div>
-                                                                <div className="text-[10px] text-[var(--muted)]">{master.vendor_name}</div>
-                                                            </button>
-                                                        ))}
-                                                    </div>
-                                                )}
-                                            </div>
-                                            <Input
-                                                type="number"
-                                                {...countLineForm.register("counted_qty", { required: true, valueAsNumber: true })}
-                                                placeholder="수량 *"
-                                                className="w-24"
-                                                disabled={isFinalized}
-                                            />
-                                            <Button type="submit" disabled={addLineMutation.isPending || isFinalized}>
-                                                {addLineMutation.isPending ? "추가 중..." : "추가"}
-                                            </Button>
-                                        </form>
-                                    )}
 
-                                    {/* Lines Table */}
-                                    {sessionLinesData.length === 0 ? (
-                                        <p className="text-sm text-[var(--muted)]">라인이 없습니다</p>
-                                    ) : (
-                                        <div className="overflow-auto">
-                                            <table className="w-full text-sm">
-                                                <thead className="border-b border-[var(--panel-border)] text-xs text-[var(--muted)]">
-                                                    <tr>
-                                                        <th className="text-left pb-2">#</th>
-                                                        <th className="text-left pb-2">품목명</th>
-                                                        <th className="text-right pb-2">실사</th>
-                                                        <th className="text-right pb-2">시스템</th>
-                                                        <th className="text-right pb-2">델타</th>
-                                                    </tr>
-                                                </thead>
-                                                <tbody className="divide-y divide-[var(--panel-border)]">
-                                                    {sessionLinesData
-                                                        .filter((l) => !l.is_void)
-                                                        .map((line) => (
-                                                            <tr key={line.count_line_id} className="hover:bg-[var(--panel-hover)]">
-                                                                <td className="py-2 text-xs font-mono">{line.line_no}</td>
-                                                                <td className="py-2">{line.item_name}</td>
-                                                                <td className="py-2 text-right font-mono">{line.counted_qty}</td>
-                                                                <td className="py-2 text-right font-mono text-[var(--muted)]">
-                                                                    {line.system_qty_asof ?? "-"}
-                                                                </td>
-                                                                <td className="py-2 text-right font-mono">
-                                                                    {line.delta_qty !== null && line.delta_qty !== undefined ? (
-                                                                        <span
-                                                                            className={cn(
-                                                                                "px-2 py-0.5 rounded text-xs font-semibold",
-                                                                                line.delta_qty > 0
-                                                                                    ? "bg-blue-100 text-blue-700"
-                                                                                    : line.delta_qty < 0
-                                                                                        ? "bg-red-100 text-red-700"
-                                                                                        : "bg-gray-100 text-gray-600"
-                                                                            )}
-                                                                        >
-                                                                            {line.delta_qty > 0 ? "+" : ""}
-                                                                            {line.delta_qty}
-                                                                        </span>
-                                                                    ) : (
-                                                                        "-"
-                                                                    )}
-                                                                </td>
-                                                            </tr>
-                                                        ))}
-                                                </tbody>
-                                            </table>
+                            <div className="flex-1 overflow-hidden flex flex-col">
+                                {!selectedSessionId ? (
+                                    <div className="h-full flex items-center justify-center text-muted-foreground text-sm">
+                                        왼쪽에서 세션을 선택하세요
+                                    </div>
+                                ) : (
+                                    <>
+                                        {!isFinalized && (
+                                            <div className="p-3 border-b border-border/40 bg-background">
+                                                <form onSubmit={countLineForm.handleSubmit(onAddLine)} className="flex gap-2">
+                                                    <div className="flex-1 relative">
+                                                        <Input
+                                                            {...countLineForm.register("item_name", { required: true })}
+                                                            placeholder="품목명 (마스터 검색) *"
+                                                            disabled={isFinalized}
+                                                            autoComplete="off"
+                                                            className="h-9 text-xs"
+                                                            onFocus={() => setShowMasterSearch(true)}
+                                                            onChange={(e) => {
+                                                                countLineForm.setValue("item_name", e.target.value);
+                                                                setMasterSearchQuery(e.target.value);
+                                                                setShowMasterSearch(true);
+                                                            }}
+                                                        />
+                                                        {showMasterSearch && masterSearchResults.length > 0 && activeTab === "stocktake" && (
+                                                            <div className="absolute z-50 w-full bg-[var(--card)] border border-[var(--panel-border)] shadow-lg rounded-md mt-1 max-h-48 overflow-auto">
+                                                                {masterSearchResults.map((master, idx) => (
+                                                                    <button
+                                                                        key={`${master.master_id}-${idx}-st`}
+                                                                        type="button"
+                                                                        onClick={() => {
+                                                                            countLineForm.setValue("item_name", master.model_name);
+                                                                            countLineForm.setValue("master_id", master.master_id);
+                                                                            setShowMasterSearch(false);
+                                                                        }}
+                                                                        className="w-full text-left p-2 hover:bg-muted text-xs border-b border-border/50 last:border-0"
+                                                                    >
+                                                                        <div className="font-medium">{master.model_name}</div>
+                                                                        <div className="text-[10px] text-muted-foreground">{master.vendor_name}</div>
+                                                                    </button>
+                                                                ))}
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                    <Input
+                                                        type="number"
+                                                        {...countLineForm.register("counted_qty", { required: true, valueAsNumber: true })}
+                                                        placeholder="수량 *"
+                                                        className="w-20 h-9 text-xs font-mono text-right"
+                                                        disabled={isFinalized}
+                                                    />
+                                                    <Button type="submit" disabled={addLineMutation.isPending || isFinalized} className="h-9 px-4">
+                                                        {addLineMutation.isPending ? "추가 중..." : "추가"}
+                                                    </Button>
+                                                </form>
+                                            </div>
+                                        )}
+
+                                        <div className="flex-1 overflow-auto">
+                                            {sessionLinesData.length === 0 ? (
+                                                <div className="h-full flex items-center justify-center text-muted-foreground text-sm">라인이 없습니다</div>
+                                            ) : (
+                                                <table className="w-full text-sm">
+                                                    <thead className="sticky top-0 bg-background z-10 text-xs font-medium text-muted-foreground uppercase tracking-wider border-b border-border/40">
+                                                        <tr>
+                                                            <th className="px-4 py-2 text-left w-12">#</th>
+                                                            <th className="px-4 py-2 text-left">품목명</th>
+                                                            <th className="px-4 py-2 text-right">실사</th>
+                                                            <th className="px-4 py-2 text-right text-muted-foreground">시스템</th>
+                                                            <th className="px-4 py-2 text-right">델타</th>
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody className="divide-y divide-border/40">
+                                                        {sessionLinesData
+                                                            .filter((l) => !l.is_void)
+                                                            .map((line) => (
+                                                                <tr key={line.count_line_id} className="hover:bg-muted/30 transition-colors">
+                                                                    <td className="px-4 py-2 text-xs font-mono text-muted-foreground">{line.line_no}</td>
+                                                                    <td className="px-4 py-2 font-medium">{line.item_name}</td>
+                                                                    <td className="px-4 py-2 text-right font-mono font-bold">{line.counted_qty}</td>
+                                                                    <td className="px-4 py-2 text-right font-mono text-muted-foreground text-xs">
+                                                                        {line.system_qty_asof ?? "-"}
+                                                                    </td>
+                                                                    <td className="px-4 py-2 text-right font-mono">
+                                                                        {line.delta_qty !== null && line.delta_qty !== undefined ? (
+                                                                            <Badge
+                                                                                tone={
+                                                                                    line.delta_qty > 0
+                                                                                        ? "primary"
+                                                                                        : line.delta_qty < 0
+                                                                                            ? "danger"
+                                                                                            : "neutral"
+                                                                                }
+                                                                                className="text-[10px] px-1.5 py-0 h-5 border-0 font-mono"
+                                                                            >
+                                                                                {line.delta_qty > 0 ? "+" : ""}
+                                                                                {line.delta_qty}
+                                                                            </Badge>
+                                                                        ) : (
+                                                                            "-"
+                                                                        )}
+                                                                    </td>
+                                                                </tr>
+                                                            ))}
+                                                    </tbody>
+                                                </table>
+                                            )}
                                         </div>
-                                    )}
-                                </div>
-                            )}
-                        </CardBody>
-                    </Card>
-                </div>
-            )}
+                                    </>
+                                )}
+                            </div>
+                        </Card>
+                    </div>
+                )}
+            </div>
         </div>
     );
 }

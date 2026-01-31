@@ -166,6 +166,7 @@ export default function PartsPage() {
         queryKey: ["cms", "parts", "list", kindFilter, unitFilter, reorderFilter, activeOnly],
         queryFn: async () => {
             const client = getSchemaClient();
+            if (!client) throw new Error("No client");
             let query = client.from(CONTRACTS.views.partMasterWithPosition).select("*");
 
             if (activeOnly) {
@@ -184,6 +185,7 @@ export default function PartsPage() {
         queryFn: async () => {
             if (!selectedPartId) return [];
             const client = getSchemaClient();
+            if (!client) throw new Error("No client");
             const { data, error } = await client
                 .from(CONTRACTS.views.partMoveLines)
                 .select("*")
@@ -199,6 +201,7 @@ export default function PartsPage() {
         queryKey: ["cms", "parts", "unlinked"],
         queryFn: async () => {
             const client = getSchemaClient();
+            if (!client) throw new Error("No client");
             const { data, error } = await client
                 .from(CONTRACTS.views.partUnlinkedWorklist)
                 .select("*")
@@ -213,6 +216,7 @@ export default function PartsPage() {
         queryKey: ["cms", "parts", "analytics"],
         queryFn: async () => {
             const client = getSchemaClient();
+            if (!client) throw new Error("No client");
             const { data, error } = await client
                 .from(CONTRACTS.views.partUsageDaily)
                 .select("*")
@@ -481,18 +485,18 @@ export default function PartsPage() {
                                     onChange={(e) => setSearchQuery(e.target.value)}
                                     className="w-48"
                                 />
-                                <Select value={kindFilter} onChange={(e) => setKindFilter(e.target.value as any)}>
+                                <Select value={kindFilter} onChange={(e) => setKindFilter(e.target.value as "ALL" | "PART" | "STONE")}>
                                     <option value="ALL">종류: 전체</option>
                                     <option value="PART">부자재</option>
                                     <option value="STONE">스톤</option>
                                 </Select>
-                                <Select value={unitFilter} onChange={(e) => setUnitFilter(e.target.value as any)}>
+                                <Select value={unitFilter} onChange={(e) => setUnitFilter(e.target.value as "ALL" | "EA" | "G" | "M")}>
                                     <option value="ALL">단위: 전체</option>
                                     <option value="EA">EA</option>
                                     <option value="G">G</option>
                                     <option value="M">M</option>
                                 </Select>
-                                <Select value={reorderFilter} onChange={(e) => setReorderFilter(e.target.value as any)}>
+                                <Select value={reorderFilter} onChange={(e) => setReorderFilter(e.target.value as "ALL" | "below_min" | "normal")}>
                                     <option value="ALL">재주문: 전체</option>
                                     <option value="below_min">하한 미달</option>
                                     <option value="normal">정상</option>
@@ -584,7 +588,7 @@ export default function PartsPage() {
                                     <>
                                         <Button
                                             size="sm"
-                                            variant="outline"
+                                            variant="secondary"
                                             onClick={() => {
                                                 receiptForm.reset({
                                                     occurred_at: getKstNow(),
@@ -606,7 +610,7 @@ export default function PartsPage() {
                                         </Button>
                                         <Button
                                             size="sm"
-                                            variant="outline"
+                                        variant="secondary"
                                             onClick={() => {
                                                 usageForm.reset({
                                                     occurred_at: getKstNow(),

@@ -4,8 +4,8 @@ import { cn } from "@/lib/utils";
 
 type ListCardProps = {
   title: string;
-  subtitle?: string;
-  meta?: string;
+  subtitle?: React.ReactNode;
+  meta?: React.ReactNode;
   badge?: { label: string; tone?: "neutral" | "active" | "warning" | "danger" };
   right?: React.ReactNode;
   selected?: boolean;

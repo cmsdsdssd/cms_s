@@ -181,6 +181,7 @@ export default function ShipmentsPage() {
       return (json.data ?? []) as OrderLookupRow[];
     },
   });
+  const orderLookupErrorMessage = (orderLookupQuery.error as { message?: string } | null)?.message ?? "조회 실패";
 
   const prefillQuery = useQuery({
     queryKey: ["shipment-prefill", selectedOrderLineId],
@@ -280,12 +281,12 @@ export default function ShipmentsPage() {
     },
   });
 
-  const shipmentLineUpdateMutation = useRpcMutation<any>({
+  const shipmentLineUpdateMutation = useRpcMutation<unknown>({
     fn: CONTRACTS.functions.shipmentUpdateLine,
   });
 
   // ✅ 영수증 “연결” upsert
-  const receiptUsageUpsertMutation = useRpcMutation<any>({
+  const receiptUsageUpsertMutation = useRpcMutation<unknown>({
     fn: FN_RECEIPT_USAGE_UPSERT,
     successMessage: "영수증 연결 완료",
   });
@@ -347,6 +348,7 @@ export default function ShipmentsPage() {
       return (json.data ?? []) as ReceiptRow[];
     },
   });
+  const receiptsErrorMessage = (receiptsQuery.error as { message?: string } | null)?.message ?? "영수증 조회 실패";
 
   // 로컬 프리뷰(업로드 전)
   useEffect(() => {
@@ -410,11 +412,12 @@ export default function ShipmentsPage() {
           setReceiptPreviewSrc(objUrl);
           setReceiptPreviewError(null);
         }
-      } catch (e: any) {
+      } catch (error) {
+        const err = error as { message?: string } | null;
         if (!revoked) {
           setReceiptPreviewSrc(null);
           setReceiptPreviewKind(null);
-          setReceiptPreviewError(e?.message ?? "이미지/PDF 로드 실패(프리뷰 API 응답을 확인하세요).");
+          setReceiptPreviewError(err?.message ?? "이미지/PDF 로드 실패(프리뷰 API 응답을 확인하세요).");
         }
       }
     })();
@@ -458,8 +461,9 @@ export default function ShipmentsPage() {
 
       await receiptsQuery.refetch();
       toast.success("영수증 업로드 완료");
-    } catch (e: any) {
-      toast.error("영수증 업로드 실패", { description: e?.message ?? String(e) });
+    } catch (error) {
+      const err = error as { message?: string } | null;
+      toast.error("영수증 업로드 실패", { description: err?.message ?? String(error) });
     } finally {
       setReceiptUploading(false);
     }
@@ -472,7 +476,7 @@ export default function ShipmentsPage() {
   };
 
   // --- RPC: 출고 확정 ---
-  const confirmMutation = useRpcMutation<any>({
+  const confirmMutation = useRpcMutation<unknown>({
     fn: CONTRACTS.functions.shipmentConfirm,
     successMessage: "출고 확정 완료",
     onSuccess: () => {
@@ -704,7 +708,7 @@ export default function ShipmentsPage() {
                     <div className="max-h-64 overflow-y-auto">
                       {orderLookupQuery.isError ? (
                         <div className="px-3 py-3 text-sm text-red-600">
-                          {(orderLookupQuery.error as any)?.message ?? "조회 실패"}
+                          {orderLookupErrorMessage}
                         </div>
                       ) : null}
 
@@ -967,7 +971,7 @@ export default function ShipmentsPage() {
                     </Button>
                   </div>
                   {receiptsQuery.isError ? (
-                    <div className="text-xs text-red-600">{(receiptsQuery.error as any)?.message ?? "영수증 조회 실패"}</div>
+                    <div className="text-xs text-red-600">{receiptsErrorMessage}</div>
                   ) : null}
                   <div className="text-xs text-[var(--muted)]">※ 출고 단계에서는 영수증 금액/환율/배분을 입력하지 않습니다. 연결만 저장됩니다.</div>
                 </div>

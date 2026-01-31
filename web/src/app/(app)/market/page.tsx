@@ -41,7 +41,7 @@ type SeriesTick = {
     price_krw_per_g: number;
     observed_at: string;
     source: string;
-    meta?: any;
+    meta?: Record<string, unknown> | null;
     created_at: string;
 };
 
@@ -60,6 +60,12 @@ type TickForm = {
     price_krw_per_g: number;
     source: string;
     note: string;
+};
+
+type MarketTickConfigUpsert = {
+    config_key: string;
+    fx_markup: number;
+    cs_correction_factor: number;
 };
 
 // ===================== HELPERS =====================
@@ -173,13 +179,15 @@ export default function MarketPage() {
             setCsConfigSaving(true);
             const client = getSchemaClient();
             if (!client) throw new Error("Supabase client not initialized");
-            const { error } = await client
-                .from("cms_market_tick_config")
-                .upsert({
-                    config_key: "DEFAULT",
-                    fx_markup: fx,
-                    cs_correction_factor: corr,
-                });
+            const { error } = await (
+                client.from("cms_market_tick_config") as unknown as {
+                    upsert: (values: MarketTickConfigUpsert) => Promise<{ error: { message?: string } | null }>;
+                }
+            ).upsert({
+                config_key: "DEFAULT",
+                fx_markup: fx,
+                cs_correction_factor: corr,
+            });
             if (error) throw error;
 
             toast.success("CS 설정 저장 완료", { description: "n8n이 다음 실행부터 새로운 값으로 계산합니다." });
