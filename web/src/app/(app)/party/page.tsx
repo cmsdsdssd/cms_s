@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useForm } from "react-hook-form";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -20,7 +20,10 @@ export default function PartyPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const queryClient = useQueryClient();
-  const [typeFilter, setTypeFilter] = useState("customer");
+  const typeFilter = useMemo(() => {
+    const type = searchParams.get("type");
+    return type === "customer" || type === "vendor" ? type : "customer";
+  }, [searchParams]);
   const [activeOnly, setActiveOnly] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
@@ -29,21 +32,15 @@ export default function PartyPage() {
   const [selectedPartyId, setSelectedPartyId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<"basic" | "address" | "contact" | "prefix">("basic");
 
-  useEffect(() => {
-    const type = searchParams.get("type");
-    if (type === "customer" || type === "vendor") {
-      setTypeFilter(type);
-    }
-  }, [searchParams]);
-
-  useEffect(() => {
-    const currentType = searchParams.get("type");
-    if (currentType !== typeFilter) {
-      const params = new URLSearchParams(searchParams.toString());
-      params.set("type", typeFilter);
-      router.replace(`/party?${params.toString()}`);
-    }
-  }, [router, typeFilter, searchParams]);
+  const handleTypeChange = (nextType: string) => {
+    if (nextType !== "customer" && nextType !== "vendor") return;
+    const params = new URLSearchParams(searchParams.toString());
+    params.set("type", nextType);
+    router.replace(`/party?${params.toString()}`);
+    setPage(1);
+    setSelectedPartyId(null);
+    setActiveTab("basic");
+  };
 
   // Debounce search
   useEffect(() => {
@@ -53,13 +50,6 @@ export default function PartyPage() {
     }, 400);
     return () => clearTimeout(timer);
   }, [searchQuery]);
-
-  // Reset page on filter change
-  useEffect(() => {
-    setPage(1);
-    setSelectedPartyId(null);
-    setActiveTab("basic");
-  }, [typeFilter, activeOnly, regionFilter]);
 
   // List Query
   const { data: listData, isLoading: isListLoading, error: listError } = useQuery({
@@ -73,6 +63,11 @@ export default function PartyPage() {
         page,
         pageSize: 50,
       }),
+    onSuccess: (data) => {
+      if (!selectedPartyId && data?.data?.length) {
+        setSelectedPartyId(data.data[0]?.party_id ?? null);
+      }
+    },
   });
 
   // Detail Query
@@ -113,12 +108,6 @@ export default function PartyPage() {
       });
     }
   }, [selectedPartyId, detailData, form, typeFilter]);
-
-  useEffect(() => {
-    if (!selectedPartyId && listData?.data.length) {
-      setSelectedPartyId(listData.data[0]?.party_id ?? null);
-    }
-  }, [listData, selectedPartyId]);
 
   const mutation = useRpcMutation<string>({
     fn: CONTRACTS.functions.partyUpsert,
@@ -163,7 +152,7 @@ export default function PartyPage() {
       <FilterBar id="party.filterBar">
         <Select
           value={typeFilter}
-          onChange={(e) => setTypeFilter(e.target.value)}
+          onChange={(e) => handleTypeChange(e.target.value)}
         >
           <option value="customer">고객</option>
           <option value="vendor">공장</option>
@@ -171,11 +160,21 @@ export default function PartyPage() {
         <Input
           placeholder="지역"
           value={regionFilter}
-          onChange={(e) => setRegionFilter(e.target.value)}
+          onChange={(e) => {
+            setRegionFilter(e.target.value);
+            setPage(1);
+            setSelectedPartyId(null);
+            setActiveTab("basic");
+          }}
         />
         <Select
           value={activeOnly ? "active" : "all"}
-          onChange={(e) => setActiveOnly(e.target.value === "active")}
+          onChange={(e) => {
+            setActiveOnly(e.target.value === "active");
+            setPage(1);
+            setSelectedPartyId(null);
+            setActiveTab("basic");
+          }}
         >
           <option value="active">활성만</option>
           <option value="all">전체</option>

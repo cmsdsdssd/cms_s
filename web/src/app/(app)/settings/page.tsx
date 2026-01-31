@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 
@@ -41,18 +41,16 @@ export default function SettingsPage() {
         }
       );
     },
+    onSuccess: (data) => {
+      setFxMarkup(String(data.fx_markup ?? 1.03));
+      setCsFactor(String(data.cs_correction_factor ?? 1.2));
+      setSilverKrFactor(String(data.silver_kr_correction_factor ?? 1.2));
+    },
   });
 
   const [fxMarkup, setFxMarkup] = useState("1.03");
   const [csFactor, setCsFactor] = useState("1.2");
   const [silverKrFactor, setSilverKrFactor] = useState("1.2");
-
-  useEffect(() => {
-    if (!cfgQuery.data) return;
-    setFxMarkup(String(cfgQuery.data.fx_markup ?? 1.03));
-    setCsFactor(String(cfgQuery.data.cs_correction_factor ?? 1.2));
-    setSilverKrFactor(String(cfgQuery.data.silver_kr_correction_factor ?? 1.2));
-  }, [cfgQuery.data]);
 
   type UpsertMarketTickConfigResponse = {
     ok?: boolean;

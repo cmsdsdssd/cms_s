@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { ActionBar } from "@/components/layout/action-bar";
@@ -140,6 +140,34 @@ export default function ArPage() {
   const [returnOverrideAmount, setReturnOverrideAmount] = useState("");
   const [returnReason, setReturnReason] = useState("");
 
+  const resetReturnForm = () => {
+    setReturnShipmentLineId("");
+    setReturnQty("1");
+    setReturnOverrideAmount("");
+    setReturnReason("");
+  };
+
+  const setReturnPartyIdWithReset = (nextPartyId: string) => {
+    setReturnPartyId(nextPartyId);
+    if (nextPartyId) {
+      resetReturnForm();
+    }
+  };
+
+  const applySelectedPartyId = (nextPartyId: string | null) => {
+    setSelectedPartyId(nextPartyId);
+    if (!nextPartyId) {
+      setReturnPartyIdWithReset("");
+      return;
+    }
+    if (!paymentPartyId) {
+      setPaymentPartyId(nextPartyId);
+    }
+    if (nextPartyId !== returnPartyId) {
+      setReturnPartyIdWithReset(nextPartyId);
+    }
+  };
+
   const positionsQuery = useQuery({
     queryKey: ["cms", "ar_position"],
     queryFn: async () => {
@@ -152,28 +180,14 @@ export default function ArPage() {
       if (error) throw error;
       return (data ?? []) as ArPositionRow[];
     },
+    onSuccess: (data) => {
+      if (!selectedPartyId && (data?.length ?? 0) > 0) {
+        applySelectedPartyId(data[0]?.party_id ?? null);
+      }
+    },
   });
 
-  const positions = positionsQuery.data ?? [];
-
-  useEffect(() => {
-    if (!selectedPartyId && positions.length > 0) {
-      setSelectedPartyId(positions[0]?.party_id ?? null);
-    }
-  }, [positions, selectedPartyId]);
-
-  useEffect(() => {
-    if (!selectedPartyId) {
-      setReturnPartyId("");
-      return;
-    }
-    if (selectedPartyId && !paymentPartyId) {
-      setPaymentPartyId(selectedPartyId);
-    }
-    if (selectedPartyId && selectedPartyId !== returnPartyId) {
-      setReturnPartyId(selectedPartyId);
-    }
-  }, [selectedPartyId, paymentPartyId, returnPartyId]);
+  const positions = useMemo(() => positionsQuery.data ?? [], [positionsQuery.data]);
 
   const filteredParties = useMemo(() => {
     const filtered = positions.filter((row) => {
@@ -251,7 +265,7 @@ export default function ArPage() {
     enabled: Boolean(returnPartyId),
   });
 
-  const shipmentLines = shipmentLinesQuery.data ?? [];
+  const shipmentLines = useMemo(() => shipmentLinesQuery.data ?? [], [shipmentLinesQuery.data]);
   const scopedShipmentLines = useMemo(() => {
     if (!returnPartyId) return [] as ShipmentLineRow[];
     return shipmentLines.filter(
@@ -330,9 +344,17 @@ export default function ArPage() {
       });
   }, [scopedShipmentLines, remainingQtyByLine]);
 
+  const effectiveReturnShipmentLineId = useMemo(() => {
+    if (!returnShipmentLineId) return "";
+    const exists = scopedShipmentLines.some(
+      (line) => line.shipment_line_id === returnShipmentLineId
+    );
+    return exists ? returnShipmentLineId : "";
+  }, [returnShipmentLineId, scopedShipmentLines]);
+
   const selectedLine = useMemo(() => {
-    return scopedShipmentLines.find((line) => line.shipment_line_id === returnShipmentLineId) ?? null;
-  }, [scopedShipmentLines, returnShipmentLineId]);
+    return scopedShipmentLines.find((line) => line.shipment_line_id === effectiveReturnShipmentLineId) ?? null;
+  }, [scopedShipmentLines, effectiveReturnShipmentLineId]);
 
   const returnedBefore = selectedLine?.shipment_line_id
     ? returnedQtyByLine.get(selectedLine.shipment_line_id) ?? 0
@@ -403,29 +425,11 @@ export default function ArPage() {
   const canSubmitReturn =
     canSaveReturn &&
     Boolean(returnPartyId) &&
-    Boolean(returnShipmentLineId) &&
+    Boolean(effectiveReturnShipmentLineId) &&
     Boolean(returnOccurredAt) &&
     isReturnQtyValid &&
     parsedReturnQty <= remainingQty &&
     !returnMutation.isPending;
-
-  useEffect(() => {
-    if (!returnPartyId) return;
-    setReturnShipmentLineId("");
-    setReturnQty("1");
-    setReturnOverrideAmount("");
-    setReturnReason("");
-  }, [returnPartyId]);
-
-  useEffect(() => {
-    if (!returnShipmentLineId) return;
-    const exists = scopedShipmentLines.some(
-      (line) => line.shipment_line_id === returnShipmentLineId
-    );
-    if (!exists) {
-      setReturnShipmentLineId("");
-    }
-  }, [returnShipmentLineId, scopedShipmentLines]);
 
   return (
     <div className="space-y-6" id="ar.root">
@@ -493,7 +497,7 @@ export default function ArPage() {
                     <button
                       key={party.party_id}
                       type="button"
-                      onClick={() => setSelectedPartyId(party.party_id ?? null)}
+                          onClick={() => applySelectedPartyId(party.party_id ?? null)}
                       className="w-full text-left"
                     >
                       <ListCard
@@ -766,7 +770,7 @@ export default function ArPage() {
                         event.preventDefault();
                         if (!canSubmitReturn) return;
                         returnMutation.mutate({
-                          p_shipment_line_id: returnShipmentLineId,
+                          p_shipment_line_id: effectiveReturnShipmentLineId,
                           p_return_qty: parsedReturnQty,
                           p_occurred_at: new Date(returnOccurredAt).toISOString(),
                           p_override_amount_krw:
@@ -789,7 +793,7 @@ export default function ArPage() {
                         label="출고 라인*"
                         placeholder="검색"
                         options={shipmentLineOptions}
-                        value={returnShipmentLineId}
+                        value={effectiveReturnShipmentLineId}
                         onChange={(value) => setReturnShipmentLineId(value)}
                       />
                       <div className="grid gap-3 sm:grid-cols-3">

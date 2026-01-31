@@ -4,7 +4,7 @@ export function Card({ className, ...props }: React.HTMLAttributes<HTMLDivElemen
   return (
     <div
       className={cn(
-        "overflow-hidden rounded-[var(--radius)] border border-[var(--panel-border)] bg-[var(--panel)] shadow-[var(--shadow-card)] transition-all",
+        "overflow-hidden rounded-[var(--radius-lg)] border border-black/5 bg-[var(--panel)] shadow-[var(--shadow-subtle)] transition-all hover:shadow-[var(--shadow-sm)]",
         className
       )}
       {...props}
@@ -14,7 +14,7 @@ export function Card({ className, ...props }: React.HTMLAttributes<HTMLDivElemen
 
 export function CardHeader({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
   return (
-    <div className={cn("border-b border-[var(--panel-border)] px-6 py-4", className)} {...props} />
+    <div className={cn("border-b border-black/5 px-6 py-4", className)} {...props} />
   );
 }
 

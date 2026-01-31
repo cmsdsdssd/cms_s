@@ -60,6 +60,18 @@ export function PartyDetail({
   isSaving,
   onSubmit,
 }: PartyDetailProps) {
+  const watchedPartyType = form.watch("party_type");
+  const isVendor =
+    detail?.party_type === "vendor" ||
+    (selectedPartyId === "new" && watchedPartyType === "vendor");
+
+  useEffect(() => {
+    if (!selectedPartyId) return;
+    if (!isVendor && activeTab === "prefix") {
+      onTabChange("basic");
+    }
+  }, [activeTab, isVendor, onTabChange, selectedPartyId]);
+
   if (!selectedPartyId) {
     return (
       <Card>
@@ -69,17 +81,6 @@ export function PartyDetail({
       </Card>
     );
   }
-
-  const watchedPartyType = form.watch("party_type");
-  const isVendor =
-    detail?.party_type === "vendor" ||
-    (selectedPartyId === "new" && watchedPartyType === "vendor");
-
-  useEffect(() => {
-    if (!isVendor && activeTab === "prefix") {
-      onTabChange("basic");
-    }
-  }, [activeTab, isVendor, onTabChange]);
 
   const tabs: { key: PartyTabKey; label: string }[] = [
     { key: "basic", label: "기본 정보" },

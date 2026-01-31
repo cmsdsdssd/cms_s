@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useId, useMemo, useState } from "react";
 import Link from "next/link";
 import { ActionBar } from "@/components/layout/action-bar";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
@@ -63,8 +63,9 @@ const createFilter = (type: FilterType): FilterRow => ({
 export default function OrdersMainPage() {
   const schemaClient = getSchemaClient();
   const todayKey = new Date().toISOString().slice(0, 10);
-  const [filters, setFilters] = useState<FilterRow[]>([{
-    id: `date-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+  const initialFilterId = useId();
+  const [filters, setFilters] = useState<FilterRow[]>(() => [{
+    id: `date-${initialFilterId}`,
     type: "date",
     value: todayKey,
   }]);

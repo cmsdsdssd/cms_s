@@ -200,7 +200,7 @@ export default function MarketPage() {
             const cutoff = new Date();
             cutoff.setDate(cutoff.getDate() - dayFilter);
 
-            let query = client
+            const query = client
                 .from(CONTRACTS.views.marketSeries)
                 .select("*")
                 .gte("observed_at", cutoff.toISOString())

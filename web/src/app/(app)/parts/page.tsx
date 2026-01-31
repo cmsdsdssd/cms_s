@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useForm } from "react-hook-form";
+import { useForm, useWatch } from "react-hook-form";
 import { toast } from "sonner";
 import { ActionBar } from "@/components/layout/action-bar";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
@@ -242,6 +242,8 @@ export default function PartsPage() {
         },
     });
 
+    const watchedReceiptLines = useWatch({ control: receiptForm.control, name: "lines" }) ?? [];
+
     const usageForm = useForm<UsageForm>({
         defaultValues: {
             occurred_at: getKstNow(),
@@ -249,6 +251,8 @@ export default function PartsPage() {
             lines: [{ part_name: "", qty: 0, unit: "EA" }],
         },
     });
+
+    const watchedUsageLines = useWatch({ control: usageForm.control, name: "lines" }) ?? [];
 
     const aliasForm = useForm<AliasForm>({
         defaultValues: {
@@ -980,7 +984,7 @@ export default function PartsPage() {
                                             + 행 추가
                                         </Button>
                                     </div>
-                                    {receiptForm.watch("lines").map((_, idx) => (
+                                    {watchedReceiptLines.map((_, idx) => (
                                         <div key={idx} className="grid grid-cols-5 gap-2 mb-2">
                                             <Input
                                                 {...receiptForm.register(`lines.${idx}.part_name` as const)}
@@ -1070,7 +1074,7 @@ export default function PartsPage() {
                                             + 행 추가
                                         </Button>
                                     </div>
-                                    {usageForm.watch("lines").map((_, idx) => (
+                                    {watchedUsageLines.map((_, idx) => (
                                         <div key={idx} className="grid grid-cols-5 gap-2 mb-2">
                                             <Input
                                                 {...usageForm.register(`lines.${idx}.part_name` as const)}

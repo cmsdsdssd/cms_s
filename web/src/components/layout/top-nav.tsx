@@ -53,13 +53,13 @@ export function TopNav() {
         <div className="flex items-center gap-4 min-w-0" id="topnav.root">
             {/* Brand */}
             <div className="flex items-center gap-3 shrink-0">
-                <Link href="/dashboard" className="flex items-center gap-3">
-                    <div className="flex h-9 w-9 items-center justify-center rounded-[14px] border border-[var(--panel-border)] bg-white shadow-[var(--shadow-sm)]">
-                        <span className="text-sm font-extrabold tracking-tight">J</span>
+                <Link href="/dashboard" className="flex items-center gap-3 group">
+                    <div className="flex h-9 w-9 items-center justify-center rounded-[var(--radius-md)] border border-[color:var(--hairline)] bg-gradient-to-br from-white to-gray-50 shadow-[var(--shadow-sm)] transition-transform duration-200 group-hover:scale-105">
+                        <span className="text-sm font-extrabold tracking-tight text-[var(--primary)]">J</span>
                     </div>
                     <div className="leading-tight">
-                        <div className="text-sm font-semibold">Jewel Ops</div>
-                        <div className="text-xs text-[var(--muted)]">{currentLabel || "Phase 1"}</div>
+                        <div className="text-sm font-bold tracking-tight text-[var(--foreground)]">Jewel Ops</div>
+                        <div className="text-[11px] font-medium text-[var(--muted)]">{currentLabel || "Phase 1"}</div>
                     </div>
                 </Link>
             </div>
@@ -75,13 +75,13 @@ export function TopNav() {
                                 key={item.href}
                                 href={item.href}
                                 className={cn(
-                                    "flex items-center gap-2 rounded-full px-3 py-2 text-sm font-semibold transition",
+                                    "relative flex items-center gap-2 rounded-full px-3.5 py-1.5 text-sm font-medium transition-all duration-200 ease-[var(--ease-out)] hover:-translate-y-0.5 hover:shadow-[var(--shadow-sm)]",
                                     active
-                                        ? "bg-[var(--chip)] text-[var(--foreground)]"
-                                        : "text-[var(--muted)] hover:bg-white hover:shadow-[var(--shadow-sm)] hover:text-[var(--foreground)]"
+                                        ? "bg-[var(--foreground)] text-white shadow-[var(--shadow-sm)] ring-1 ring-[color:var(--hairline)]"
+                                        : "text-[var(--muted-strong)] hover:bg-[var(--panel-hover)] hover:text-[var(--foreground)]"
                                 )}
                             >
-                                <Icon className="h-4 w-4" />
+                                <Icon className={cn("h-4 w-4", active ? "text-white" : "text-[var(--muted)]")} />
                                 <span className="whitespace-nowrap">{item.label}</span>
                             </Link>
                         );
@@ -93,7 +93,7 @@ export function TopNav() {
             <button
                 type="button"
                 onClick={() => setOpen(true)}
-                className="lg:hidden inline-flex items-center gap-2 rounded-[12px] border border-[var(--panel-border)] bg-white px-3 py-2 text-sm font-semibold shadow-[var(--shadow-sm)]"
+                className="lg:hidden inline-flex items-center gap-2 rounded-full border border-[color:var(--hairline)] bg-white px-3 py-2 text-sm font-medium shadow-[var(--shadow-sm)] transition-all duration-200 ease-[var(--ease-out)] hover:-translate-y-0.5 hover:shadow-[var(--shadow)] active:translate-y-0 active:scale-95"
                 aria-label="메뉴 열기"
             >
                 <Menu className="h-4 w-4" />
@@ -101,7 +101,7 @@ export function TopNav() {
             </button>
 
             <Modal open={open} onClose={() => setOpen(false)} title="메뉴" className="max-w-md">
-                <div className="space-y-2">
+                <div className="space-y-1 p-1">
                     {navItems.map((item) => {
                         const Icon = item.icon;
                         const active = isActive(pathname, item.href);
@@ -111,11 +111,13 @@ export function TopNav() {
                                 href={item.href}
                                 onClick={() => setOpen(false)}
                                 className={cn(
-                                    "flex items-center gap-3 rounded-[14px] border border-[var(--panel-border)] bg-white px-4 py-3 text-sm font-semibold",
-                                    active ? "ring-2 ring-[var(--primary)]" : "hover:bg-[var(--panel-hover)]"
+                                    "flex items-center gap-3 rounded-[var(--radius-md)] px-4 py-3 text-sm font-medium transition-all duration-200 ease-[var(--ease-out)]",
+                                    active
+                                        ? "bg-[var(--chip)] text-[var(--foreground)] shadow-[var(--shadow-subtle)]"
+                                        : "text-[var(--muted-strong)] hover:bg-[var(--panel-hover)] hover:text-[var(--foreground)]"
                                 )}
                             >
-                                <Icon className="h-4 w-4" />
+                                <Icon className={cn("h-4 w-4", active ? "text-[var(--primary)]" : "text-[var(--muted)]")} />
                                 {item.label}
                             </Link>
                         );

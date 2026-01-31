@@ -598,185 +598,250 @@ export default function ShipmentsPage() {
     (master?.labor_side1 ?? 0) +
     (master?.labor_side2 ?? 0);
 
-  return (
-    <div className="space-y-6">
-      <ActionBar
-        title="출고"
-        subtitle="출고대기 주문을 선택 → 출고 저장 → 원가 모드 선택(임시/수기) 후 출고 확정 (영수증은 연결만)"
-        actions={
-          <div className="flex items-center gap-2">
-            <Button variant="secondary" onClick={() => setLookupOpen(true)}>
-              출고입력
-            </Button>
-            <Link href="/purchase_cost_worklist">
-              <Button variant="secondary">원가 작업대</Button>
-            </Link>
-          </div>
-        }
-      />
+  // --- UI Helpers ---
+  const steps = [
+    { id: 1, label: "주문 선택", active: !selectedOrderLineId },
+    { id: 2, label: "정보 입력", active: !!selectedOrderLineId && !currentShipmentId },
+    { id: 3, label: "출고 저장", active: !!selectedOrderLineId && !currentShipmentId },
+    { id: 4, label: "확정 & 원가", active: !!currentShipmentId || confirmModalOpen },
+  ];
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <Card>
-          <CardHeader className="flex items-center justify-between">
-            <div className="space-y-1">
-              <div className="text-base font-semibold text-[var(--foreground)]">출고 입력</div>
-              <div className="text-sm text-[var(--muted)]">검색창을 클릭하면 목록이 표시됩니다.</div>
-            </div>
+  return (
+    <div className="mx-auto max-w-7xl space-y-6 pb-16">
+      <div className="space-y-4">
+        <ActionBar
+          title="출고"
+          subtitle="출고대기 주문을 선택 → 출고 저장 → 원가 모드 선택(임시/수기) 후 출고 확정 (영수증은 연결만)"
+          actions={
             <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => setOnlyReadyToShip((v) => !v)}
+              <Button variant="secondary" onClick={() => setLookupOpen(true)}>
+                출고입력
+              </Button>
+              <Link href="/purchase_cost_worklist">
+                <Button variant="secondary">원가 작업대</Button>
+              </Link>
+            </div>
+          }
+        />
+
+        <div className="flex flex-wrap items-center gap-2 text-xs text-[var(--muted)]">
+          {steps.map((step, i) => (
+            <div key={step.id} className="flex items-center gap-2">
+              <div
                 className={cn(
-                  "text-xs px-2 py-1 rounded-[10px] border border-[var(--panel-border)]",
-                  onlyReadyToShip ? "bg-[#eef2f6]" : "bg-white"
+                  "flex items-center gap-2 rounded-full border px-3 py-1.5 transition-colors",
+                  step.active
+                    ? "bg-[var(--foreground)] text-[var(--background)] border-[var(--foreground)] font-medium"
+                    : "bg-white border-[var(--panel-border)] text-[var(--muted)]"
                 )}
               >
-                {onlyReadyToShip ? "출고대기만" : "전체"}
-              </button>
-            </div>
-          </CardHeader>
-
-          <CardBody className="space-y-4">
-            <div className="space-y-2">
-              <label className="text-sm font-semibold text-[var(--foreground)]">모델/고객/주문 검색</label>
-
-              <Input
-                ref={lookupInputRef}
-                placeholder="예: 모델명 / 고객명 / 주문번호"
-                value={searchQuery}
-                onChange={(e) => {
-                  setSearchQuery(e.target.value);
-                  if (!lookupOpen) setLookupOpen(true);
-                }}
-                onFocus={() => setLookupOpen(true)}
-              />
-
-              {lookupOpen ? (
-                <div className="rounded-[12px] border border-[var(--panel-border)] bg-white overflow-hidden">
-                  <div className="flex items-center justify-between px-3 py-2 border-b border-[var(--panel-border)]">
-                    <div className="text-xs text-[var(--muted)]">
-                      {orderLookupQuery.isLoading ? "불러오는 중..." : `결과 ${filteredLookupRows.length}건`}
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <Button
-                        variant="secondary"
-                        onClick={() => orderLookupQuery.refetch()}
-                        disabled={orderLookupQuery.isFetching}
-                      >
-                        새로고침
-                      </Button>
-                      <Button variant="secondary" onClick={() => setLookupOpen(false)}>
-                        닫기
-                      </Button>
-                    </div>
-                  </div>
-
-                  <div className="max-h-64 overflow-y-auto">
-                    {orderLookupQuery.isError ? (
-                      <div className="px-3 py-3 text-sm text-red-600">
-                        {(orderLookupQuery.error as any)?.message ?? "조회 실패"}
-                      </div>
-                    ) : null}
-
-                    {!orderLookupQuery.isLoading && filteredLookupRows.length === 0 ? (
-                      <div className="px-3 py-3 text-sm text-[var(--muted)]">표시할 항목이 없습니다.</div>
-                    ) : null}
-
-                    {filteredLookupRows.map((row) => {
-                      const id = row.order_line_id ?? "";
-                      const labelLeft = `${row.client_name ?? "-"} · ${row.model_no ?? "-"}${row.color ? ` · ${row.color}` : ""
-                        }`;
-                      const labelRight = row.order_date ? row.order_date : "";
-
-                      return (
-                        <button
-                          key={id}
-                          type="button"
-                          onClick={() => handleSelectOrder(row)}
-                          className={cn(
-                            "w-full px-3 py-2 text-left hover:bg-[#f6f7f9] border-b border-[var(--panel-border)] last:border-b-0",
-                            selectedOrderLineId === id ? "bg-[#eef2f6]" : "bg-white"
-                          )}
-                        >
-                          <div className="flex items-center justify-between gap-3">
-                            <div className="min-w-0">
-                              <div className="text-sm font-semibold truncate">{labelLeft}</div>
-                              <div className="text-xs text-[var(--muted)] truncate">
-                                주문: {row.order_no ?? "-"} · 상태: {row.status ?? "-"}
-                                {row.plating_status ? ` · 도금: ${row.plating_color ?? "-"}` : ""}
-                              </div>
-                            </div>
-                            <div className="shrink-0 text-xs text-[var(--muted)]">{labelRight}</div>
-                          </div>
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              ) : (
-                <div className="text-xs text-[var(--muted)]">검색창을 클릭하면 목록이 열립니다.</div>
-              )}
-            </div>
-
-            <div className="rounded-[12px] border border-[var(--panel-border)] bg-white p-3 space-y-2">
-              <div className="flex items-center justify-between">
-                <div className="text-sm font-semibold">선택된 주문</div>
-                <Badge tone={selectedOrderStatus === "READY_TO_SHIP" ? "active" : "neutral"}>
-                  {selectedOrderStatus ?? "미선택"}
-                </Badge>
+                <span className="text-[10px] opacity-70">{step.id}</span>
+                <span>{step.label}</span>
               </div>
-
-              {prefillQuery.isLoading ? (
-                <div className="text-sm text-[var(--muted)]">상세 불러오는 중...</div>
-              ) : prefill ? (
-                <div className="space-y-2">
-                  <div className="text-sm">
-                    <span className="font-semibold">{prefill.client_name ?? "-"}</span>{" "}
-                    <span className="text-[var(--muted)]">/</span>{" "}
-                    <span className="font-semibold">{prefill.model_no ?? "-"}</span>
-                    {prefill.color ? <span className="text-[var(--muted)]"> · {prefill.color}</span> : null}
-                  </div>
-                  <div className="text-xs text-[var(--muted)]">
-                    주문번호: {prefill.order_no ?? "-"} · 주문일: {prefill.order_date ?? "-"}
-                  </div>
-                  {prefill.note ? <div className="text-xs text-[var(--muted)]">메모: {prefill.note}</div> : null}
-                </div>
-              ) : (
-                <div className="text-sm text-[var(--muted)]">아직 선택되지 않았습니다.</div>
-              )}
+              {i < steps.length - 1 && <div className="h-px w-4 bg-[var(--panel-border)]" />}
             </div>
+          ))}
+        </div>
+      </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-              <div className="space-y-2">
-                <label className="text-sm font-semibold text-[var(--foreground)]">중량(g)</label>
-                <Input placeholder="예: 12.3" value={weightG} onChange={(e) => setWeightG(e.target.value)} />
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+        <div className="lg:col-span-8 space-y-6">
+          <Card className="transition-all hover:-translate-y-0.5 hover:shadow-[var(--shadow-sm)]">
+            <CardHeader className="flex items-center justify-between border-b border-[var(--panel-border)] bg-[#fcfcfd]">
+              <div className="space-y-1">
+                <div className="text-base font-semibold text-[var(--foreground)]">출고 입력</div>
+                <div className="text-sm text-[var(--muted)]">검색창을 클릭하면 목록이 표시됩니다.</div>
               </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setOnlyReadyToShip((v) => !v)}
+                  className={cn(
+                    "text-xs px-2 py-1 rounded-[10px] border border-[var(--panel-border)] transition-colors",
+                    onlyReadyToShip ? "bg-[#eef2f6]" : "bg-white"
+                  )}
+                >
+                  {onlyReadyToShip ? "출고대기만" : "전체"}
+                </button>
+              </div>
+            </CardHeader>
 
+            <CardBody className="space-y-5">
               <div className="space-y-2">
-                <label className="text-sm font-semibold text-[var(--foreground)]">차감중량(g)</label>
+                <label className="text-sm font-semibold text-[var(--foreground)]">모델/고객/주문 검색</label>
+
                 <Input
-                  placeholder="예: 0.5 (빈칸이면 마스터 공제값)"
-                  value={deductionWeightG}
-                  onChange={(e) => setDeductionWeightG(e.target.value)}
+                  ref={lookupInputRef}
+                  placeholder="예: 모델명 / 고객명 / 주문번호"
+                  value={searchQuery}
+                  onChange={(e) => {
+                    setSearchQuery(e.target.value);
+                    if (!lookupOpen) setLookupOpen(true);
+                  }}
+                  onFocus={() => setLookupOpen(true)}
                 />
+
+                {lookupOpen ? (
+                  <div className="rounded-[12px] border border-[var(--panel-border)] bg-white overflow-hidden shadow-sm">
+                    <div className="flex items-center justify-between px-3 py-2 border-b border-[var(--panel-border)]">
+                      <div className="text-xs text-[var(--muted)]">
+                        {orderLookupQuery.isLoading ? "불러오는 중..." : `결과 ${filteredLookupRows.length}건`}
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Button
+                          variant="secondary"
+                          onClick={() => orderLookupQuery.refetch()}
+                          disabled={orderLookupQuery.isFetching}
+                        >
+                          새로고침
+                        </Button>
+                        <Button variant="secondary" onClick={() => setLookupOpen(false)}>
+                          닫기
+                        </Button>
+                      </div>
+                    </div>
+
+                    <div className="max-h-64 overflow-y-auto">
+                      {orderLookupQuery.isError ? (
+                        <div className="px-3 py-3 text-sm text-red-600">
+                          {(orderLookupQuery.error as any)?.message ?? "조회 실패"}
+                        </div>
+                      ) : null}
+
+                      {!orderLookupQuery.isLoading && filteredLookupRows.length === 0 ? (
+                        <div className="px-3 py-3 text-sm text-[var(--muted)]">표시할 항목이 없습니다.</div>
+                      ) : null}
+
+                      {filteredLookupRows.map((row) => {
+                        const id = row.order_line_id ?? "";
+                        const labelLeft = `${row.client_name ?? "-"} · ${row.model_no ?? "-"}${row.color ? ` · ${row.color}` : ""}`;
+                        const labelRight = row.order_date ? row.order_date : "";
+
+                        return (
+                          <button
+                            key={id}
+                            type="button"
+                            onClick={() => handleSelectOrder(row)}
+                            className={cn(
+                              "w-full px-3 py-2 text-left transition-colors hover:bg-[#f6f7f9] border-b border-[var(--panel-border)] last:border-b-0",
+                              selectedOrderLineId === id ? "bg-[#eef2f6]" : "bg-white"
+                            )}
+                          >
+                            <div className="flex items-center justify-between gap-3">
+                              <div className="min-w-0">
+                                <div className="text-sm font-semibold truncate">{labelLeft}</div>
+                                <div className="text-xs text-[var(--muted)] truncate">
+                                  주문: {row.order_no ?? "-"} · 상태: {row.status ?? "-"}
+                                  {row.plating_status ? ` · 도금: ${row.plating_color ?? "-"}` : ""}
+                                </div>
+                              </div>
+                              <div className="shrink-0 text-xs text-[var(--muted)] tabular-nums">{labelRight}</div>
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="text-xs text-[var(--muted)]">검색창을 클릭하면 목록이 열립니다.</div>
+                )}
               </div>
 
-              <div className="space-y-2">
-                <label className="text-sm font-semibold text-[var(--foreground)]">총 공임(원)</label>
-                <Input placeholder="예: 35000" value={totalLabor} onChange={(e) => setTotalLabor(e.target.value)} />
-              </div>
-            </div>
+              <div className="rounded-[12px] border border-[var(--panel-border)] bg-white p-3 space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="text-sm font-semibold">선택된 주문</div>
+                  <Badge tone={selectedOrderStatus === "READY_TO_SHIP" ? "active" : "neutral"}>
+                    {selectedOrderStatus ?? "미선택"}
+                  </Badge>
+                </div>
 
-            <div className="rounded-[12px] border border-[var(--panel-border)] bg-white p-3 space-y-2">
-              <div className="flex items-center justify-between">
-                <div className="text-sm font-semibold">마스터 정보</div>
-                {master ? <Badge tone="active">등록됨</Badge> : <Badge tone="neutral">미등록</Badge>}
+                {prefillQuery.isLoading ? (
+                  <div className="text-sm text-[var(--muted)]">상세 불러오는 중...</div>
+                ) : prefill ? (
+                  <div className="space-y-2">
+                    <div className="text-sm">
+                      <span className="font-semibold">{prefill.client_name ?? "-"}</span>{" "}
+                      <span className="text-[var(--muted)]">/</span>{" "}
+                      <span className="font-semibold">{prefill.model_no ?? "-"}</span>
+                      {prefill.color ? <span className="text-[var(--muted)]"> · {prefill.color}</span> : null}
+                    </div>
+                    <div className="text-xs text-[var(--muted)] tabular-nums">
+                      주문번호: {prefill.order_no ?? "-"} · 주문일: {prefill.order_date ?? "-"}
+                    </div>
+                    {prefill.note ? <div className="text-xs text-[var(--muted)]">메모: {prefill.note}</div> : null}
+                  </div>
+                ) : (
+                  <div className="text-sm text-[var(--muted)]">아직 선택되지 않았습니다.</div>
+                )}
               </div>
 
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                <div className="space-y-2">
+                  <label className="text-sm font-semibold text-[var(--foreground)]">중량(g)</label>
+                  <Input
+                    placeholder="예: 12.3"
+                    value={weightG}
+                    onChange={(e) => setWeightG(e.target.value)}
+                    className="tabular-nums"
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-sm font-semibold text-[var(--foreground)]">차감중량(g)</label>
+                  <Input
+                    placeholder="예: 0.5 (빈칸이면 마스터 공제값)"
+                    value={deductionWeightG}
+                    onChange={(e) => setDeductionWeightG(e.target.value)}
+                    className="tabular-nums"
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-sm font-semibold text-[var(--foreground)]">총 공임(원)</label>
+                  <Input
+                    placeholder="예: 35000"
+                    value={totalLabor}
+                    onChange={(e) => setTotalLabor(e.target.value)}
+                    className="tabular-nums"
+                  />
+                </div>
+              </div>
+
+              <div className="flex justify-end gap-2 pt-2 border-t border-[var(--panel-border)]">
+                <Button
+                  variant="secondary"
+                  onClick={() => {
+                    setSelectedOrderLineId(null);
+                    setSelectedOrderStatus(null);
+                    setPrefill(null);
+                    setSearchQuery("");
+                    setDebouncedQuery("");
+                    setWeightG("");
+                    setDeductionWeightG("");
+                    setTotalLabor("");
+                  }}
+                >
+                  초기화
+                </Button>
+                <Button variant="primary" onClick={handleSaveShipment} disabled={shipmentUpsertMutation.isPending}>
+                  {shipmentUpsertMutation.isPending ? "저장 중..." : "출고 저장"}
+                </Button>
+              </div>
+            </CardBody>
+          </Card>
+        </div>
+
+        <div className="lg:col-span-4 space-y-6">
+          <Card className="transition-all hover:-translate-y-0.5 hover:shadow-[var(--shadow-sm)]">
+            <CardHeader className="flex items-center justify-between border-b border-[var(--panel-border)] bg-[#fcfcfd]">
+              <div className="text-sm font-semibold text-[var(--foreground)]">마스터 정보</div>
+              {master ? <Badge tone="active">등록됨</Badge> : <Badge tone="neutral">미등록</Badge>}
+            </CardHeader>
+            <CardBody className="space-y-3 text-xs text-[var(--muted)]">
               {masterLookupQuery.isLoading ? (
                 <div className="text-sm text-[var(--muted)]">마스터 불러오는 중...</div>
               ) : master ? (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-xs text-[var(--muted)]">
+                <div className="grid grid-cols-1 gap-2">
                   <div>
                     <span className="font-semibold text-[var(--foreground)]">벤더</span>: {master.vendor_name ?? "-"}
                   </div>
@@ -786,7 +851,7 @@ export default function ShipmentsPage() {
                   <div>
                     <span className="font-semibold text-[var(--foreground)]">기본 소재</span>: {master.material_code_default ?? "-"}
                   </div>
-                  <div>
+                  <div className="tabular-nums">
                     <span className="font-semibold text-[var(--foreground)]">기본 중량</span>: {master.weight_default_g ?? "-"}g / 공제 {master.deduction_weight_default_g ?? "-"}g
                   </div>
                   <div>
@@ -795,58 +860,36 @@ export default function ShipmentsPage() {
                   <div>
                     <span className="font-semibold text-[var(--foreground)]">소재가(참고)</span>: {master.material_price ?? "-"}원
                   </div>
-                  <div className="md:col-span-2">
+                  <div className="tabular-nums">
                     <span className="font-semibold text-[var(--foreground)]">공임(기본/센터/사이드1/사이드2)</span>: {master.labor_basic ?? 0} / {master.labor_center ?? 0} / {master.labor_side1 ?? 0} / {master.labor_side2 ?? 0} (합 {masterLaborTotal})
                   </div>
                 </div>
               ) : (
                 <div className="text-sm text-[var(--muted)]">마스터가 없으면 기본값은 주문 입력값/수기 입력으로 처리됩니다.</div>
               )}
-            </div>
+            </CardBody>
+          </Card>
 
-            <div className="flex justify-end gap-2">
-              <Button
-                variant="secondary"
-                onClick={() => {
-                  setSelectedOrderLineId(null);
-                  setSelectedOrderStatus(null);
-                  setPrefill(null);
-                  setSearchQuery("");
-                  setDebouncedQuery("");
-                  setWeightG("");
-                  setDeductionWeightG("");
-                  setTotalLabor("");
-                }}
-              >
-                초기화
-              </Button>
-              <Button variant="primary" onClick={handleSaveShipment} disabled={shipmentUpsertMutation.isPending}>
-                {shipmentUpsertMutation.isPending ? "저장 중..." : "출고 저장"}
-              </Button>
-            </div>
-          </CardBody>
-        </Card>
-
-        <Card>
-          <CardHeader className="flex items-center justify-between">
-            <div className="space-y-1">
+          <Card className="transition-all hover:-translate-y-0.5 hover:shadow-[var(--shadow-sm)]">
+            <CardHeader className="flex items-center justify-between border-b border-[var(--panel-border)] bg-[#fcfcfd]">
               <div className="text-base font-semibold text-[var(--foreground)]">사용 흐름</div>
-              <div className="text-sm text-[var(--muted)]">출고 저장 후, 원가 모드를 선택해 출고를 확정합니다. 영수증은 연결만 합니다.</div>
-            </div>
-          </CardHeader>
-          <CardBody className="space-y-2 text-sm text-[var(--muted)]">
-            <div>1) 출고입력 → 2) 주문 선택 → 3) 중량/차감/공임 입력 → 4) 출고 저장</div>
-            <div>5) 원가 모드 선택(PROVISIONAL / MANUAL) → 6) (선택) 영수증 연결 → 7) 출고 확정</div>
-          </CardBody>
-        </Card>
+            </CardHeader>
+            <CardBody className="space-y-2 text-sm text-[var(--muted)]">
+              <div>1) 출고입력 → 2) 주문 선택 → 3) 중량/차감/공임 입력 → 4) 출고 저장</div>
+              <div>5) 원가 모드 선택(PROVISIONAL / MANUAL) → 6) (선택) 영수증 연결 → 7) 출고 확정</div>
+            </CardBody>
+          </Card>
+        </div>
       </div>
 
       <Modal open={confirmModalOpen} onClose={() => setConfirmModalOpen(false)} title="출고 확정" className="max-w-6xl">
         <div className="space-y-4">
           <div className="rounded-[12px] border border-[var(--panel-border)] bg-white p-3 space-y-1">
             <div className="text-sm font-semibold">확정 대상</div>
-            <div className="text-xs text-[var(--muted)]">주문: {prefill?.order_no ?? "-"} / 고객: {prefill?.client_name ?? "-"} / 모델: {prefill?.model_no ?? "-"}</div>
             <div className="text-xs text-[var(--muted)]">
+              주문: {prefill?.order_no ?? "-"} / 고객: {prefill?.client_name ?? "-"} / 모델: {prefill?.model_no ?? "-"}
+            </div>
+            <div className="text-xs text-[var(--muted)] tabular-nums">
               중량(g): {weightG || "-"} / 차감(g): {deductionWeightG || String(master?.deduction_weight_default_g ?? "-")} / 순중량(g): {resolvedNetWeightG === null ? "-" : resolvedNetWeightG.toFixed(3)} / 총 공임(원): {totalLabor || "-"}
             </div>
 
@@ -857,13 +900,13 @@ export default function ShipmentsPage() {
               </div>
               <div className="space-y-1">
                 <div className="text-xs font-semibold text-[var(--muted)]">순중량(g)</div>
-                <div className="text-xs text-[var(--muted)] rounded-[10px] border border-[var(--panel-border)] bg-white px-3 py-2">
+                <div className="text-xs text-[var(--muted)] rounded-[10px] border border-[var(--panel-border)] bg-white px-3 py-2 tabular-nums">
                   {resolvedNetWeightG === null ? "-" : resolvedNetWeightG.toFixed(3)}
                 </div>
               </div>
               <div className="space-y-1">
                 <div className="text-xs font-semibold text-[var(--muted)]">참고(마스터 공제)</div>
-                <div className="text-xs text-[var(--muted)] rounded-[10px] border border-[var(--panel-border)] bg-white px-3 py-2">
+                <div className="text-xs text-[var(--muted)] rounded-[10px] border border-[var(--panel-border)] bg-white px-3 py-2 tabular-nums">
                   {master?.deduction_weight_default_g ?? "-"}g
                 </div>
               </div>
@@ -873,8 +916,15 @@ export default function ShipmentsPage() {
           <div className="space-y-2">
             <div className="text-sm font-semibold">원가 모드</div>
             <div className="flex flex-wrap gap-2">
-              <Button variant={costMode === "PROVISIONAL" ? "primary" : "secondary"} onClick={() => setCostMode("PROVISIONAL")}>임시원가</Button>
-              <Button variant={costMode === "MANUAL" ? "primary" : "secondary"} onClick={() => setCostMode("MANUAL")}>수기입력</Button>
+              <Button
+                variant={costMode === "PROVISIONAL" ? "primary" : "secondary"}
+                onClick={() => setCostMode("PROVISIONAL")}
+              >
+                임시원가
+              </Button>
+              <Button variant={costMode === "MANUAL" ? "primary" : "secondary"} onClick={() => setCostMode("MANUAL")}>
+                수기입력
+              </Button>
             </div>
           </div>
 
@@ -959,14 +1009,15 @@ export default function ShipmentsPage() {
                         .map((l) => {
                           const lineId = String(l.shipment_line_id);
                           return (
-                            <tr key={lineId}>
+                            <tr key={lineId} className="transition-colors hover:bg-[#f8f9fc]">
                               <td className="px-3 py-2 font-semibold">{l.model_name ?? "-"}</td>
-                              <td className="px-3 py-2">{l.qty ?? 0}</td>
+                              <td className="px-3 py-2 tabular-nums">{l.qty ?? 0}</td>
                               <td className="px-3 py-2">
                                 <Input
                                   placeholder="예: 12000"
                                   value={costInputs[lineId] ?? ""}
                                   onChange={(e) => setCostInputs((prev) => ({ ...prev, [lineId]: e.target.value }))}
+                                  className="tabular-nums"
                                 />
                               </td>
                             </tr>
@@ -1003,7 +1054,7 @@ export default function ShipmentsPage() {
             </div>
           </div>
 
-          <div className="flex justify-end gap-2 pt-2">
+          <div className="flex justify-end gap-2 pt-2 border-t border-[var(--panel-border)]">
             <Button variant="secondary" onClick={() => setConfirmModalOpen(false)}>취소</Button>
             <Button variant="primary" onClick={handleFinalConfirm} disabled={confirmMutation.isPending}>
               {confirmMutation.isPending ? "확정 중..." : "출고 확정"}

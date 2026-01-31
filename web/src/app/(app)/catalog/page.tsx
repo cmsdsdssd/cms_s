@@ -298,7 +298,7 @@ export default function CatalogPage() {
   );
 
   // Calculate material price based on material code
-  const calculateMaterialPrice = (material: string, weight: number, deduction: number) => {
+  const calculateMaterialPrice = useCallback((material: string, weight: number, deduction: number) => {
     const netWeight = weight - deduction;
     if (material === "925") {
       return silverModifiedPrice * netWeight;
@@ -312,7 +312,7 @@ export default function CatalogPage() {
       return 0;
     }
     return 0;
-  };
+  }, [goldPrice, silverModifiedPrice]);
 
 
   const fetchVendors = useCallback(async () => {
@@ -480,7 +480,7 @@ export default function CatalogPage() {
     const weight = parseFloat(selectedDetail.weight ?? "0") || 0;
     const deduction = parseFloat(selectedDetail.deductionWeight ?? "0") || 0;
     return calculateMaterialPrice(selectedDetail.materialCode ?? "00", weight, deduction);
-  }, [selectedItem, selectedDetail, goldPrice, silverModifiedPrice]);
+  }, [selectedItem, selectedDetail, calculateMaterialPrice]);
 
   const totalEstimatedCost = materialPrice + totalLaborCost;
   const totalEstimatedSell = materialPrice + totalLaborSell;

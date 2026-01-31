@@ -112,7 +112,7 @@ export function PartyList({
         <Card>
           <CardBody>
             <p className="text-sm text-[var(--muted)]">
-              등록된 거래처가 없습니다. '거래처 추가'를 눌러 등록하세요.
+              등록된 거래처가 없습니다. &apos;거래처 추가&apos;를 눌러 등록하세요.
             </p>
           </CardBody>
         </Card>

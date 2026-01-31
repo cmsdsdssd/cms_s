@@ -33,10 +33,25 @@
   /* UI Tokens */
   --chip: #f1f5f9;
   --radius: 8px;
-  /* Tighter radius for SaaS feel */
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-pill: 999px;
+  
+  /* Animation */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --duration-fast: 150ms;
+  --duration-normal: 250ms;
+  --duration-slow: 400ms;
+
+  /* Shadows */
   --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
   --shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px -1px rgba(0, 0, 0, 0.1);
   --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -4px rgba(0, 0, 0, 0.1);
+  --shadow-subtle: 0 1px 2px 0 rgba(0, 0, 0, 0.03);
+  --shadow-glass: 0 4px 30px rgba(0, 0, 0, 0.03);
+  --hairline: rgba(15, 23, 42, 0.06);
 }
 
 @theme inline {
@@ -60,6 +75,13 @@ body {
 body {
   margin: 0;
   background-color: var(--background);
+  background-image:
+    radial-gradient(at 0% 0%, rgba(37, 99, 235, 0.035) 0px, transparent 55%),
+    radial-gradient(at 100% 0%, rgba(245, 158, 11, 0.03) 0px, transparent 55%),
+    repeating-linear-gradient(0deg, rgba(15, 23, 42, 0.015) 0px, rgba(15, 23, 42, 0.015) 1px, transparent 1px, transparent 2px),
+    repeating-linear-gradient(90deg, rgba(15, 23, 42, 0.012) 0px, rgba(15, 23, 42, 0.012) 1px, transparent 1px, transparent 2px);
+  background-size: auto, auto, 2px 2px, 2px 2px;
+  background-attachment: fixed;
   color: var(--foreground);
   font-family: var(--font-manrope), system-ui, sans-serif;
   min-height: 100vh;
@@ -67,11 +89,30 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+::selection {
+  background: rgba(37, 99, 235, 0.15);
+  color: var(--primary-strong);
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--muted-weak) transparent;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
 
 /* Scrollbar refinement */
 ::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  width: 6px;
+  height: 6px;
 }
 
 ::-webkit-scrollbar-track {

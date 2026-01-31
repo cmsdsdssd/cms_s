@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 
@@ -116,6 +116,25 @@ function calcAllocations(totalKrw: number | null, linked: LinkedShipment[]) {
   return out;
 }
 
+function filterRowsByStatus(
+  rows: ReceiptWorklistRow[],
+  filter: "ALL" | "NEED_INPUT" | "NEED_APPLY" | "APPLIED"
+) {
+  if (filter === "ALL") return rows;
+  if (filter === "APPLIED") return rows.filter((r) => !!r.applied_at);
+  if (filter === "NEED_INPUT") {
+    return rows.filter((r) => !r.pricing_total_amount_krw && !r.pricing_total_amount);
+  }
+  return rows.filter((r) => !r.applied_at);
+}
+
+function pickFirstRow(
+  rows: ReceiptWorklistRow[],
+  filter: "ALL" | "NEED_INPUT" | "NEED_APPLY" | "APPLIED"
+) {
+  return filterRowsByStatus(rows, filter)[0] ?? null;
+}
+
 export default function PurchaseCostWorklistPage() {
   // NOTE: route 이름은 유지하지만, 실제로는 "영수증 작업대"를 구현합니다.
   const [filter, setFilter] = useState<"ALL" | "NEED_INPUT" | "NEED_APPLY" | "APPLIED">("NEED_APPLY");
@@ -132,6 +151,17 @@ export default function PurchaseCostWorklistPage() {
   const [uploadOpen, setUploadOpen] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
+  function applySelectedReceipt(receipt: ReceiptWorklistRow) {
+    const c = (receipt.pricing_currency_code ?? receipt.inbox_currency_code ?? "KRW").toUpperCase();
+    setCurrencyCode((c === "CNY" ? "CNY" : "KRW") as "KRW" | "CNY");
+    setTotalAmount(receipt.pricing_total_amount != null ? String(receipt.pricing_total_amount) : "");
+    setWeightG(receipt.weight_g != null ? String(receipt.weight_g) : "");
+    setLaborBasic(receipt.labor_basic != null ? String(receipt.labor_basic) : "");
+    setLaborOther(receipt.labor_other != null ? String(receipt.labor_other) : "");
+    setNote("");
+    setForceReapply(false);
+  }
+
   const worklist = useQuery<{ data: ReceiptWorklistRow[] }>(
     {
       queryKey: ["cms", "receipt_worklist"],
@@ -142,45 +172,46 @@ export default function PurchaseCostWorklistPage() {
         return json;
       },
       refetchInterval: 15_000,
+      onSuccess: (data) => {
+        if (selectedReceiptId) return;
+        const first = pickFirstRow(data?.data ?? [], filter);
+        if (first?.receipt_id) {
+          setSelectedReceiptId(first.receipt_id);
+          applySelectedReceipt(first);
+        }
+      },
     }
   );
 
-  const rows = worklist.data?.data ?? [];
+  const rows = useMemo(() => worklist.data?.data ?? [], [worklist.data]);
+
+  const selectReceiptId = (receiptId: string | null, sourceRows: ReceiptWorklistRow[] = rows) => {
+    setSelectedReceiptId(receiptId);
+    if (!receiptId) return;
+    const target = sourceRows.find((r) => r.receipt_id === receiptId) ?? null;
+    if (target) {
+      applySelectedReceipt(target);
+    }
+  };
+
+  const handleFilterChange = (nextFilter: "ALL" | "NEED_INPUT" | "NEED_APPLY" | "APPLIED") => {
+    setFilter(nextFilter);
+    if (!selectedReceiptId) {
+      const first = pickFirstRow(rows, nextFilter);
+      if (first?.receipt_id) {
+        selectReceiptId(first.receipt_id, rows);
+      }
+    }
+  };
 
   const filteredRows = useMemo(() => {
-    if (filter === "ALL") return rows;
-    if (filter === "APPLIED") return rows.filter((r) => !!r.applied_at);
-    if (filter === "NEED_INPUT") {
-      return rows.filter((r) => !r.pricing_total_amount_krw && !r.pricing_total_amount);
-    }
-    // NEED_APPLY
-    return rows.filter((r) => !r.applied_at);
+    return filterRowsByStatus(rows, filter);
   }, [rows, filter]);
 
   const selected = useMemo(() => {
     if (!selectedReceiptId) return null;
     return rows.find((r) => r.receipt_id === selectedReceiptId) ?? null;
   }, [rows, selectedReceiptId]);
-
-  // Auto-select first row
-  useEffect(() => {
-    if (!selectedReceiptId && filteredRows.length > 0) {
-      setSelectedReceiptId(filteredRows[0].receipt_id);
-    }
-  }, [filteredRows, selectedReceiptId]);
-
-  // When selection changes, hydrate form from snapshot
-  useEffect(() => {
-    if (!selected) return;
-    const c = (selected.pricing_currency_code ?? selected.inbox_currency_code ?? "KRW").toUpperCase();
-    setCurrencyCode((c === "CNY" ? "CNY" : "KRW") as "KRW" | "CNY");
-    setTotalAmount(selected.pricing_total_amount != null ? String(selected.pricing_total_amount) : "");
-    setWeightG(selected.weight_g != null ? String(selected.weight_g) : "");
-    setLaborBasic(selected.labor_basic != null ? String(selected.labor_basic) : "");
-    setLaborOther(selected.labor_other != null ? String(selected.labor_other) : "");
-    setNote("");
-    setForceReapply(false);
-  }, [selected?.receipt_id]);
 
   const upsertSnapshot = useRpcMutation<UpsertSnapshotResult>({
     fn: "cms_fn_upsert_receipt_pricing_snapshot_v1",
@@ -280,8 +311,9 @@ export default function PurchaseCostWorklistPage() {
       toast.success("영수증 업로드 완료");
       setUploadOpen(false);
       // refresh and select
-      await worklist.refetch();
-      setSelectedReceiptId(receiptId);
+      const refreshed = await worklist.refetch();
+      const nextRows = refreshed.data?.data ?? [];
+      selectReceiptId(receiptId, nextRows);
     }
   }
 
@@ -320,28 +352,28 @@ export default function PurchaseCostWorklistPage() {
                 <Button
                   size="sm"
                   variant={filter === "NEED_APPLY" ? "primary" : "secondary"}
-                  onClick={() => setFilter("NEED_APPLY")}
+                  onClick={() => handleFilterChange("NEED_APPLY")}
                 >
                   미적용
                 </Button>
                 <Button
                   size="sm"
                   variant={filter === "NEED_INPUT" ? "primary" : "secondary"}
-                  onClick={() => setFilter("NEED_INPUT")}
+                  onClick={() => handleFilterChange("NEED_INPUT")}
                 >
                   미입력
                 </Button>
                 <Button
                   size="sm"
                   variant={filter === "APPLIED" ? "primary" : "secondary"}
-                  onClick={() => setFilter("APPLIED")}
+                  onClick={() => handleFilterChange("APPLIED")}
                 >
                   적용완료
                 </Button>
                 <Button
                   size="sm"
                   variant={filter === "ALL" ? "primary" : "secondary"}
-                  onClick={() => setFilter("ALL")}
+                  onClick={() => handleFilterChange("ALL")}
                 >
                   전체
                 </Button>
@@ -365,7 +397,7 @@ export default function PurchaseCostWorklistPage() {
                     <button
                       key={r.receipt_id}
                       type="button"
-                      onClick={() => setSelectedReceiptId(r.receipt_id)}
+                      onClick={() => selectReceiptId(r.receipt_id)}
                       className={`w-full rounded-[12px] border px-3 py-3 text-left transition-all ${
                         isSelected
                           ? "border-[var(--primary)] bg-blue-50/40"
@@ -412,7 +444,7 @@ export default function PurchaseCostWorklistPage() {
                   <Button variant="secondary" onClick={() => openReceiptPreview(selected.receipt_id)}>
                     미리보기
                   </Button>
-                  <Button variant="secondary" onClick={() => setSelectedReceiptId(null)}>
+                  <Button variant="secondary" onClick={() => selectReceiptId(null)}>
                     선택해제
                   </Button>
                 </div>
