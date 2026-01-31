@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ActionBar } from "@/components/layout/action-bar";
-import { FilterBar } from "@/components/layout/filter-bar";
 import { SplitLayout } from "@/components/layout/split-layout";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -755,7 +754,9 @@ export default function CatalogPage() {
         />
         <div id="catalog.body">
           <SplitLayout
-            className="gap-4 items-stretch"
+            className="gap-6 items-start"
+            leftClassName="md:col-span-4 xl:col-span-3"
+            rightClassName="md:col-span-8 xl:col-span-9"
             left={
               <div className="flex flex-col gap-3 h-full" id="catalog.listPanel">
                 <div className="flex-1">
@@ -829,7 +830,7 @@ export default function CatalogPage() {
                               <p className="text-sm text-[var(--muted)]">
                                 {item.name}
                               </p>
-                              <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
+                              <div className="grid gap-2 [grid-template-columns:repeat(auto-fit,minmax(140px,1fr))]">
                                 {[
                                   { label: "중량", value: item.weight },
                                   { label: "재질", value: item.material },
@@ -925,8 +926,8 @@ export default function CatalogPage() {
                             <p className="text-sm font-semibold text-black truncate">
                               {item.model}
                             </p>
-                            <div className="grid grid-cols-10 gap-2 text-xs">
-                              <div className="col-span-4">
+                            <div className="grid gap-2 text-xs [grid-template-columns:repeat(auto-fit,minmax(160px,1fr))]">
+                              <div className="">
                                 <p className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)] mb-0.5">
                                   예상 총 금액
                                 </p>
@@ -966,7 +967,7 @@ export default function CatalogPage() {
                                   })()}
                                 </p>
                               </div>
-                              <div className="col-span-3">
+                              <div className="">
                                 <p className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)] mb-0.5">
                                   예상 중량
                                 </p>
@@ -990,7 +991,7 @@ export default function CatalogPage() {
                                   })()}
                                 </p>
                               </div>
-                              <div className="col-span-3">
+                              <div className="">
                                 <p className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)] mb-0.5">
                                   판매 합계공임
                                 </p>
@@ -1091,15 +1092,23 @@ export default function CatalogPage() {
                 </div>
 
                 {/* 2. 메인 컨텐츠 영역 */}
-                <div className="flex gap-4 items-stretch">
+                <div
+                  className={cn(
+                    // ✅ 고정폭(예: 700px) 때문에 좌측이 과도하게 눌려 '세로로 이상하게 쌓이는' 문제를 방지
+                    // - 우측(예약) 폭은 420~520px 사이에서만 커지도록 제한
+                    // - 2xl(대형 화면)에서만 2열(상세+예약)로 붙이고, 그 이하에서는 자연스럽게 세로 스택(=깨짐 방지)
+                    "grid grid-cols-1 gap-4 items-start",
+                    "2xl:[grid-template-columns:minmax(600px,1fr)_minmax(380px,480px)]"
+                  )}
+                >
                   {/* [왼쪽 기둥] 상세 정보 패널 */}
-                  <div className="flex-1 flex flex-col gap-3 min-w-0">
+                  <div className="min-w-0 flex flex-col gap-3">
 
                     {/* A. 이미지 및 가격 통계 행 */}
-                    <div className="flex gap-4 h-[300px]">
+                    <div className="flex flex-col gap-4 xl:flex-row xl:items-stretch">
                       {selectedItem?.imageUrl && (
                         <div
-                          className="h-[300px] w-[300px] shrink-0 overflow-hidden rounded-[12px] border border-[var(--panel-border)] bg-white cursor-pointer"
+                          className="h-[300px] w-full xl:w-[300px] shrink-0 overflow-hidden rounded-[12px] border border-[var(--panel-border)] bg-white cursor-pointer"
                           onDoubleClick={() =>
                             setPreviewImage(selectedItem.imageUrl ?? null)
                           }
@@ -1113,7 +1122,7 @@ export default function CatalogPage() {
                       )}
 
                       {/* 가격 통계 박스들 */}
-                      <div className="flex flex-col gap-2 flex-1 min-w-[200px]">
+                      <div className="grid grid-cols-2 gap-2 flex-1 min-w-0 xl:grid-cols-1">
                         <div className="flex flex-col items-center justify-center text-center rounded-[12px] border border-[var(--panel-border)] bg-white px-3 py-2">
                           <p className="text-xs text-[var(--muted)]">
                             예상 총 금액 (판매)
@@ -1352,9 +1361,11 @@ export default function CatalogPage() {
                   </div>
 
                   {/* [오른쪽 기둥] 예약 공간 */}
-                  <div className="w-[700px] shrink-0 rounded-[12px] border border-dashed border-[var(--panel-border)] bg-[#f8fafc] flex items-center justify-center">
-                    <p className="text-xs text-[var(--muted)]">예약 공간 (450px)</p>
-                  </div>
+                  <aside className="min-w-0 rounded-[14px] border border-dashed border-[var(--panel-border)] bg-[#f8fafc] p-4 sticky top-24 self-start">
+                    <div className="flex h-[min(62vh,680px)] items-center justify-center">
+                      <p className="text-xs text-[var(--muted)]">예약 공간</p>
+                    </div>
+                  </aside>
                 </div>
               </div>
             }

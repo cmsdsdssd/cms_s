@@ -8,14 +8,26 @@ type ActionBarProps = Omit<React.HTMLAttributes<HTMLDivElement>, "title"> & {
 
 export function ActionBar({ title, subtitle, actions, className, ...props }: ActionBarProps) {
   return (
-    <div className={cn("flex items-center justify-between", className)} {...props}>
-      <div>
+    <div
+      className={cn(
+        // ✅ 좁은 화면/다른 DPI에서도 깨지지 않도록 반응형으로 정렬
+        "flex flex-col items-start gap-3 md:flex-row md:items-center md:justify-between",
+        className
+      )}
+      {...props}
+    >
+      <div className="min-w-0">
         <div className="flex items-center gap-3">
           <h1 className="text-xl font-bold tracking-tight text-[var(--foreground)]">{title}</h1>
         </div>
         {subtitle ? <p className="text-sm text-[var(--muted)]">{subtitle}</p> : null}
       </div>
-      {actions ? <div className="flex items-center gap-2">{actions}</div> : null}
+
+      {actions ? (
+        <div className="flex w-full flex-wrap items-center justify-start gap-2 md:w-auto md:justify-end">
+          {actions}
+        </div>
+      ) : null}
     </div>
   );
 }
