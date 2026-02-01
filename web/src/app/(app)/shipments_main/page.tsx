@@ -2,7 +2,12 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
-import { ActionBar } from "@/components/layout/action-bar";
+import {
+  UnifiedToolbar,
+  ToolbarSelect,
+  ToolbarInput,
+  ToolbarButton,
+} from "@/components/layout/unified-toolbar";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input, Select } from "@/components/ui/field";
@@ -182,54 +187,127 @@ export default function ShipmentsMainPage() {
   const isLoading = shipmentsQuery.isLoading || shipmentLinesQuery.isLoading || customersQuery.isLoading;
 
   return (
-    <div className="space-y-6" id="shipments_main.root">
-      {/* Header Panel */}
-      <div className="sticky top-0 z-10 -mx-4 px-4 py-4 bg-[var(--background)]/80 backdrop-blur-md border-b border-[var(--panel-border)] shadow-sm lg:-mx-8 lg:px-8 transition-all">
-        <ActionBar
-          title="출고 내역"
-          subtitle="출고 조회 및 필터"
-          actions={
-            <div className="flex items-center gap-2">
-              <Link href="/shipments">
-                <Button className="bg-[var(--primary)] text-white shadow-md hover:shadow-lg transition-all">출고 입력</Button>
-              </Link>
-            </div>
-          }
-          id="shipments_main.actionBar"
+    <div className="space-y-3" id="shipments_main.root">
+      {/* Unified Toolbar - Compact Header */}
+      <UnifiedToolbar
+        title="출고관리"
+        actions={
+          <Link href="/shipments">
+            <ToolbarButton variant="primary">
+              + 출고 입력
+            </ToolbarButton>
+          </Link>
+        }
+      >
+        {/* Quick Filters */}
+        <ToolbarSelect
+          value={filters.find(f => f.type === "customer")?.value || ""}
+          onChange={(value) => {
+            const existing = filters.find(f => f.type === "customer");
+            if (existing) {
+              updateFilter(existing.id, { value });
+            } else if (value) {
+              addFilter("customer");
+              setTimeout(() => {
+                const newFilter = filters.find(f => f.type === "customer");
+                if (newFilter) updateFilter(newFilter.id, { value });
+              }, 0);
+            }
+          }}
+          className="w-28"
+        >
+          <option value="">(고객)</option>
+          {customerOptions.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))}
+        </ToolbarSelect>
+
+        <ToolbarSelect
+          value={filters.find(f => f.type === "status")?.value || ""}
+          onChange={(value) => {
+            const existing = filters.find(f => f.type === "status");
+            if (existing) {
+              updateFilter(existing.id, { value });
+            } else if (value) {
+              addFilter("status");
+              setTimeout(() => {
+                const newFilter = filters.find(f => f.type === "status");
+                if (newFilter) updateFilter(newFilter.id, { value });
+              }, 0);
+            }
+          }}
+          className="w-28"
+        >
+          <option value="">(상태)</option>
+          <option value="DRAFT">DRAFT</option>
+          <option value="CONFIRMED">CONFIRMED</option>
+        </ToolbarSelect>
+
+        <div className="w-px h-5 bg-[var(--hairline)] mx-1" />
+
+        <ToolbarInput
+          value={filters.find(f => f.type === "memo")?.value || ""}
+          onChange={(value) => {
+            const existing = filters.find(f => f.type === "memo");
+            if (existing) {
+              updateFilter(existing.id, { value });
+            } else if (value) {
+              addFilter("memo");
+              setTimeout(() => {
+                const newFilter = filters.find(f => f.type === "memo");
+                if (newFilter) updateFilter(newFilter.id, { value });
+              }, 0);
+            }
+          }}
+          placeholder="메모 검색"
+          className="w-32 md:w-40"
         />
-      </div>
+
+        {/* Filter Count Badge */}
+        {filters.length > 0 && (
+          <Badge tone="primary" className="text-xs px-2 py-0.5">
+            {filters.length}
+          </Badge>
+        )}
+      </UnifiedToolbar>
 
       {/* Summary Cards */}
-      <div className="grid grid-cols-2 gap-4 md:grid-cols-4 px-1">
-        <Card className="p-4 flex flex-col gap-1 shadow-sm hover:shadow-md transition-all border-[var(--panel-border)]">
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-4 px-4">
+        <Card className="p-3 flex flex-col gap-1 shadow-sm border-[var(--panel-border)]">
           <span className="text-xs font-medium text-[var(--muted)]">전체 출고</span>
-          <span className="text-2xl font-bold text-[var(--foreground)]">{totalCount}</span>
+          <span className="text-xl font-bold text-[var(--foreground)]">{totalCount}</span>
         </Card>
-        <Card className="p-4 flex flex-col gap-1 shadow-sm hover:shadow-md transition-all border-[var(--panel-border)]">
+        <Card className="p-3 flex flex-col gap-1 shadow-sm border-[var(--panel-border)]">
           <span className="text-xs font-medium text-[var(--muted)]">필터 결과</span>
-          <span className="text-2xl font-bold text-[var(--primary)]">{filteredCount}</span>
+          <span className="text-xl font-bold text-[var(--primary)]">{filteredCount}</span>
         </Card>
-        <Card className="p-4 flex flex-col gap-1 shadow-sm hover:shadow-md transition-all border-[var(--panel-border)]">
+        <Card className="p-3 flex flex-col gap-1 shadow-sm border-[var(--panel-border)]">
           <span className="text-xs font-medium text-[var(--muted)]">확정됨</span>
-          <span className="text-2xl font-bold text-green-600">{confirmedCount}</span>
+          <span className="text-xl font-bold text-green-600">{confirmedCount}</span>
         </Card>
-        <Card className="p-4 flex flex-col gap-1 shadow-sm hover:shadow-md transition-all border-[var(--panel-border)]">
+        <Card className="p-3 flex flex-col gap-1 shadow-sm border-[var(--panel-border)]">
           <span className="text-xs font-medium text-[var(--muted)]">작성 중</span>
-          <span className="text-2xl font-bold text-orange-500">{draftCount}</span>
+          <span className="text-xl font-bold text-orange-500">{draftCount}</span>
         </Card>
       </div>
 
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-[1fr_4fr]">
-        {/* Filters Panel */}
+      <div className="grid grid-cols-1 gap-3 lg:grid-cols-[280px_1fr] px-4">
+        {/* Filters Panel - Compact */}
         <Card className="shadow-sm h-fit border-[var(--panel-border)]" id="shipments_main.filters">
-          <CardHeader className="flex items-center justify-between pb-4 border-b border-[var(--panel-border)]">
-            <div>
-              <h3 className="text-sm font-semibold">필터</h3>
-              <p className="text-xs text-[var(--muted)]">조건 검색</p>
-            </div>
+          <CardHeader className="flex items-center justify-between py-2 px-3 border-b border-[var(--panel-border)]">
             <div className="flex items-center gap-2">
+              <h3 className="text-sm font-semibold">활성 필터</h3>
+              {filters.length > 0 && (
+                <Badge tone="neutral" className="text-xs px-1.5 py-0">
+                  {filters.length}
+                </Badge>
+              )}
+            </div>
+            <div className="flex items-center gap-1">
               <Select 
-                className="h-8 text-xs w-auto min-w-[100px]" 
+                className="h-7 text-xs w-24" 
                 onChange={(event) => addFilter(event.target.value as FilterType)}
                 value=""
               >

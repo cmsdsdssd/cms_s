@@ -2,12 +2,18 @@
 
 import { useId, useMemo, useState } from "react";
 import Link from "next/link";
-import { ActionBar } from "@/components/layout/action-bar";
+import {
+  UnifiedToolbar,
+  ToolbarSelect,
+  ToolbarInput,
+  ToolbarButton,
+} from "@/components/layout/unified-toolbar";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input, Select } from "@/components/ui/field";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
+import { ActionBar } from "@/components/layout/action-bar";
 import { useQuery } from "@tanstack/react-query";
 import { getSchemaClient } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
@@ -243,61 +249,169 @@ export default function OrdersMainPage() {
   const isLoading = ordersQuery.isLoading || customersQuery.isLoading || vendorsQuery.isLoading || vendorPrefixQuery.isLoading;
 
   return (
-    <div className="space-y-6" id="orders_main.root">
-      {/* Sticky Header */}
-      <div className="sticky top-0 z-10 -mx-4 px-4 py-4 bg-[var(--background)]/80 backdrop-blur-md border-b border-[var(--panel-border)] shadow-sm lg:-mx-8 lg:px-8 transition-all">
-        <ActionBar
-          title="주문 관리"
-          subtitle="주문 조회 및 필터"
-          actions={
-            <div className="flex items-center gap-2">
-              <Link href="/orders">
-                <Button className="bg-[var(--primary)] text-white shadow-md hover:shadow-lg transition-all">주문 입력</Button>
-              </Link>
-            </div>
-          }
-          id="orders_main.actionBar"
+    <div className="space-y-3" id="orders_main.root">
+      {/* Unified Toolbar - Compact Header */}
+      <UnifiedToolbar
+        title="주문관리"
+        actions={
+          <Link href="/orders">
+            <ToolbarButton variant="primary">
+              + 주문 입력
+            </ToolbarButton>
+          </Link>
+        }
+      >
+        {/* Quick Filters */}
+        <ToolbarSelect
+          value={filters.find(f => f.type === "customer")?.value || ""}
+          onChange={(value) => {
+            const existing = filters.find(f => f.type === "customer");
+            if (existing) {
+              updateFilter(existing.id, { value });
+            } else if (value) {
+              addFilter("customer");
+              setTimeout(() => {
+                const newFilter = filters.find(f => f.type === "customer");
+                if (newFilter) updateFilter(newFilter.id, { value });
+              }, 0);
+            }
+          }}
+          className="w-28"
+        >
+          <option value="">(고객)</option>
+          {customerOptions.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))}
+        </ToolbarSelect>
+
+        <ToolbarSelect
+          value={filters.find(f => f.type === "factory")?.value || ""}
+          onChange={(value) => {
+            const existing = filters.find(f => f.type === "factory");
+            if (existing) {
+              updateFilter(existing.id, { value });
+            } else if (value) {
+              addFilter("factory");
+              setTimeout(() => {
+                const newFilter = filters.find(f => f.type === "factory");
+                if (newFilter) updateFilter(newFilter.id, { value });
+              }, 0);
+            }
+          }}
+          className="w-28"
+        >
+          <option value="">(공장)</option>
+          {vendorOptions.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))}
+        </ToolbarSelect>
+
+        <ToolbarSelect
+          value={filters.find(f => f.type === "date")?.value || ""}
+          onChange={(value) => {
+            const existing = filters.find(f => f.type === "date");
+            if (existing) {
+              updateFilter(existing.id, { value });
+            } else if (value) {
+              addFilter("date");
+              setTimeout(() => {
+                const newFilter = filters.find(f => f.type === "date");
+                if (newFilter) updateFilter(newFilter.id, { value });
+              }, 0);
+            }
+          }}
+          className="w-28"
+        >
+          <option value="">(날짜)</option>
+          {dateOptions.map((date) => (
+            <option key={date} value={date}>
+              {date}
+            </option>
+          ))}
+        </ToolbarSelect>
+
+        <div className="w-px h-5 bg-[var(--hairline)] mx-1" />
+
+        <ToolbarInput
+          value={filters.find(f => f.type === "model")?.value || ""}
+          onChange={(value) => {
+            const existing = filters.find(f => f.type === "model");
+            if (existing) {
+              updateFilter(existing.id, { value });
+            } else if (value) {
+              addFilter("model");
+              setTimeout(() => {
+                const newFilter = filters.find(f => f.type === "model");
+                if (newFilter) updateFilter(newFilter.id, { value });
+              }, 0);
+            }
+          }}
+          placeholder="모델 검색"
+          className="w-32 md:w-40"
         />
-      </div>
+
+        {/* Filter Count Badge */}
+        {filters.length > 0 && (
+          <Badge tone="primary" className="text-xs px-2 py-0.5">
+            {filters.length}
+          </Badge>
+        )}
+      </UnifiedToolbar>
 
       {/* Summary Cards */}
-      <div className="grid grid-cols-2 gap-4 md:grid-cols-4 px-1">
-        <Card className="p-4 flex flex-col gap-1 shadow-sm hover:shadow-md transition-all border-[var(--panel-border)]">
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-4 px-4">
+        <Card className="p-3 flex flex-col gap-1 shadow-sm border-[var(--panel-border)]">
           <span className="text-xs font-medium text-[var(--muted)]">전체 주문</span>
-          <span className="text-2xl font-bold text-[var(--foreground)]">{totalCount}</span>
+          <span className="text-xl font-bold text-[var(--foreground)]">{totalCount}</span>
         </Card>
-        <Card className="p-4 flex flex-col gap-1 shadow-sm hover:shadow-md transition-all border-[var(--panel-border)]">
+        <Card className="p-3 flex flex-col gap-1 shadow-sm border-[var(--panel-border)]">
           <span className="text-xs font-medium text-[var(--muted)]">필터 결과</span>
-          <span className="text-2xl font-bold text-[var(--primary)]">{filteredCount}</span>
+          <span className="text-xl font-bold text-[var(--primary)]">{filteredCount}</span>
         </Card>
       </div>
 
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-[1fr_4fr]">
-        {/* Filters Panel */}
+      <div className="grid grid-cols-1 gap-3 lg:grid-cols-[280px_1fr] px-4">
+        {/* Filters Panel - Compact */}
         <Card className="shadow-sm h-fit border-[var(--panel-border)]" id="orders_main.filters">
-          <CardHeader className="flex items-center justify-between pb-4 border-b border-[var(--panel-border)]">
-            <div>
-              <h3 className="text-sm font-semibold">필터</h3>
-              <p className="text-xs text-[var(--muted)]">필터를 추가해 중첩 검색하세요</p>
-            </div>
+          <CardHeader className="flex items-center justify-between py-2 px-3 border-b border-[var(--panel-border)]">
             <div className="flex items-center gap-2">
+              <h3 className="text-sm font-semibold">활성 필터</h3>
+              {filters.length > 0 && (
+                <Badge tone="neutral" className="text-xs px-1.5 py-0">
+                  {filters.length}
+                </Badge>
+              )}
+            </div>
+            <div className="flex items-center gap-1">
               <Select 
-                className="h-8 text-xs w-auto min-w-[100px]"
+                className="h-7 text-xs w-24"
                 onChange={(event) => addFilter(event.target.value as FilterType)}
                 value=""
               >
-                <option value="" disabled>+ 필터 추가</option>
+                <option value="" disabled>+ 추가</option>
                 <option value="customer">고객</option>
                 <option value="factory">공장</option>
                 <option value="model">모델명</option>
                 <option value="date">날짜</option>
               </Select>
+              {filters.length > 0 && (
+                <button 
+                  onClick={() => setFilters([])}
+                  className="text-xs text-[var(--muted)] hover:text-red-500 px-2 py-1 rounded hover:bg-[var(--panel-hover)] transition-colors"
+                >
+                  모두 지우기
+                </button>
+              )}
             </div>
           </CardHeader>
-          <CardBody className="grid gap-3 pt-4">
+          <CardBody className="grid gap-2 p-3">
             {filters.length === 0 ? (
-              <div className="text-center py-8 text-xs text-[var(--muted)] bg-[var(--panel)] rounded-lg border border-dashed border-[var(--panel-border)]">
-                필터가 없습니다. 상단에서 추가하세요.
+              <div className="text-center py-4 text-xs text-[var(--muted)] bg-[var(--panel)] rounded-md border border-dashed border-[var(--panel-border)]">
+                필터가 없습니다
               </div>
             ) : null}
             {filters.map((filter) => (
@@ -360,13 +474,13 @@ export default function OrdersMainPage() {
 
         {/* List Panel */}
         <Card className="shadow-sm border-[var(--panel-border)] flex flex-col min-h-[500px]" id="orders_main.list">
-          <CardHeader className="flex items-center justify-between border-b border-[var(--panel-border)] pb-4">
-            <div>
+          <CardHeader className="flex items-center justify-between border-b border-[var(--panel-border)] py-2 px-3">
+            <div className="flex items-center gap-2">
               <h3 className="text-sm font-semibold">주문 리스트</h3>
-              <p className="text-xs text-[var(--muted)]">총 {applyFilters.length}건</p>
+              <span className="text-xs text-[var(--muted)]">{applyFilters.length}건</span>
             </div>
           </CardHeader>
-          <CardBody className="space-y-2 pt-4 flex-1">
+          <CardBody className="space-y-1 p-3 flex-1">
             {isLoading ? (
               <div className="space-y-3">
                 {Array.from({ length: 5 }).map((_, i) => (
