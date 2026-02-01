@@ -19,6 +19,7 @@ import {
 
 import { cn } from "@/lib/utils";
 import { Modal } from "@/components/ui/modal";
+import { MarketTicker } from "@/components/ui/market-ticker";
 
 const navItems = [
     { href: "/dashboard", label: "대시보드", icon: Gauge },
@@ -50,7 +51,7 @@ export function TopNav() {
     }, [pathname]);
 
     return (
-        <div className="flex items-center gap-4 min-w-0" id="topnav.root">
+        <div className="flex min-w-0 items-center gap-4" id="topnav.root">
             {/* Brand */}
             <div className="flex items-center gap-3 shrink-0">
                 <Link href="/dashboard" className="flex items-center gap-3 group">
@@ -64,30 +65,36 @@ export function TopNav() {
                 </Link>
             </div>
 
-            {/* Desktop nav (✅ 공간이 부족하면 가로 스크롤로 안전하게) */}
-            <nav className="hidden lg:flex flex-1 min-w-0 items-center justify-end" id="topnav.desktop">
-                <div className="flex min-w-max items-center gap-1 overflow-x-auto whitespace-nowrap pr-1">
-                    {navItems.map((item) => {
-                        const Icon = item.icon;
-                        const active = isActive(pathname, item.href);
-                        return (
-                            <Link
-                                key={item.href}
-                                href={item.href}
-                                className={cn(
-                                    "relative flex items-center gap-2 rounded-full px-3.5 py-1.5 text-sm font-medium transition-all duration-200 ease-[var(--ease-out)] hover:-translate-y-0.5 hover:shadow-[var(--shadow-sm)]",
-                                    active
-                                        ? "bg-[var(--foreground)] text-white shadow-[var(--shadow-sm)] ring-1 ring-[color:var(--hairline)]"
-                                        : "text-[var(--muted-strong)] hover:bg-[var(--panel-hover)] hover:text-[var(--foreground)]"
-                                )}
-                            >
-                                <Icon className={cn("h-4 w-4", active ? "text-white" : "text-[var(--muted)]")} />
-                                <span className="whitespace-nowrap">{item.label}</span>
-                            </Link>
-                        );
-                    })}
+            <div className="flex min-w-0 flex-1 items-center gap-4" id="topnav.content">
+                <div className="min-w-0 max-w-[52vw] sm:max-w-[60vw] lg:max-w-none" id="topnav.ticker">
+                    <MarketTicker variant="compact" />
                 </div>
-            </nav>
+
+                {/* Desktop nav (✅ 공간이 부족하면 가로 스크롤로 안전하게) */}
+                <nav className="hidden lg:flex flex-1 min-w-0 items-center justify-end" id="topnav.desktop">
+                    <div className="flex min-w-max items-center gap-1 overflow-x-auto whitespace-nowrap pr-1">
+                        {navItems.map((item) => {
+                            const Icon = item.icon;
+                            const active = isActive(pathname, item.href);
+                            return (
+                                <Link
+                                    key={item.href}
+                                    href={item.href}
+                                    className={cn(
+                                        "relative flex items-center gap-2 rounded-full px-3.5 py-1.5 text-sm font-medium transition-all duration-200 ease-[var(--ease-out)] hover:-translate-y-0.5 hover:shadow-[var(--shadow-sm)]",
+                                        active
+                                            ? "bg-[var(--foreground)] text-white shadow-[var(--shadow-sm)] ring-1 ring-[color:var(--hairline)]"
+                                            : "text-[var(--muted-strong)] hover:bg-[var(--panel-hover)] hover:text-[var(--foreground)]"
+                                    )}
+                                >
+                                    <Icon className={cn("h-4 w-4", active ? "text-white" : "text-[var(--muted)]")} />
+                                    <span className="whitespace-nowrap">{item.label}</span>
+                                </Link>
+                            );
+                        })}
+                    </div>
+                </nav>
+            </div>
 
             {/* Mobile menu */}
             <button
@@ -101,27 +108,38 @@ export function TopNav() {
             </button>
 
             <Modal open={open} onClose={() => setOpen(false)} title="메뉴" className="max-w-md">
-                <div className="space-y-1 p-1">
-                    {navItems.map((item) => {
-                        const Icon = item.icon;
-                        const active = isActive(pathname, item.href);
-                        return (
-                            <Link
-                                key={item.href}
-                                href={item.href}
-                                onClick={() => setOpen(false)}
-                                className={cn(
-                                    "flex items-center gap-3 rounded-[var(--radius-md)] px-4 py-3 text-sm font-medium transition-all duration-200 ease-[var(--ease-out)]",
-                                    active
-                                        ? "bg-[var(--chip)] text-[var(--foreground)] shadow-[var(--shadow-subtle)]"
-                                        : "text-[var(--muted-strong)] hover:bg-[var(--panel-hover)] hover:text-[var(--foreground)]"
-                                )}
-                            >
-                                <Icon className={cn("h-4 w-4", active ? "text-[var(--primary)]" : "text-[var(--muted)]")} />
-                                {item.label}
-                            </Link>
-                        );
-                    })}
+                <div className="space-y-3 p-1">
+                    <div className="rounded-[var(--radius-md)] border border-[color:var(--hairline)] bg-[color:var(--panel)]/80 px-3 py-2 shadow-[var(--shadow-subtle)]">
+                        <div className="mb-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-[var(--muted-strong)]">
+                            시세
+                        </div>
+                        <div className="min-w-0">
+                            <MarketTicker variant="compact" />
+                        </div>
+                    </div>
+
+                    <div className="space-y-1">
+                        {navItems.map((item) => {
+                            const Icon = item.icon;
+                            const active = isActive(pathname, item.href);
+                            return (
+                                <Link
+                                    key={item.href}
+                                    href={item.href}
+                                    onClick={() => setOpen(false)}
+                                    className={cn(
+                                        "flex items-center gap-3 rounded-[var(--radius-md)] px-4 py-3 text-sm font-medium transition-all duration-200 ease-[var(--ease-out)]",
+                                        active
+                                            ? "bg-[var(--chip)] text-[var(--foreground)] shadow-[var(--shadow-subtle)]"
+                                            : "text-[var(--muted-strong)] hover:bg-[var(--panel-hover)] hover:text-[var(--foreground)]"
+                                    )}
+                                >
+                                    <Icon className={cn("h-4 w-4", active ? "text-[var(--primary)]" : "text-[var(--muted)]")} />
+                                    {item.label}
+                                </Link>
+                            );
+                        })}
+                    </div>
                 </div>
             </Modal>
         </div>

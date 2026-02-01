@@ -1,7 +1,6 @@
 import type { ReactNode } from "react";
 
 import { TopNav } from "@/components/layout/top-nav";
-import { MarketTicker } from "@/components/ui/market-ticker";
 
 export function AppShell({ children }: { children: ReactNode }) {
   return (
@@ -15,13 +14,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         </div>
       </header>
 
-      <main className="mx-auto w-full max-w-[1920px] px-4 sm:px-6 lg:px-10 py-7 lg:py-8">
-        {/* 시세 티커 (기능 유지, 위치만 정리) */}
-        <div className="mb-6 flex items-center justify-center">
-          <MarketTicker />
-        </div>
-        {children}
-      </main>
+      <main className="mx-auto w-full max-w-[1920px] px-4 sm:px-6 lg:px-10 py-7 lg:py-8">{children}</main>
     </div>
   );
 }

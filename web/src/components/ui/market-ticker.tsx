@@ -1,18 +1,29 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
-export function MarketTicker() {
+type MarketTickerVariant = "full" | "compact";
+
+type MarketTickerProps = {
+    variant?: MarketTickerVariant;
+};
+
+export function MarketTicker({ variant = "full" }: MarketTickerProps) {
     const [kg, setKg] = useState<number | null>(null);
     const [ks, setKs] = useState<number | null>(null);
     const [ksOriginal, setKsOriginal] = useState<number | null>(null);
     const [cs, setCs] = useState<number | null>(null);
     const [csOriginal, setCsOriginal] = useState<number | null>(null);
+    const [isOffline, setIsOffline] = useState(false);
 
     useEffect(() => {
         const fetchPrices = async () => {
             try {
                 const response = await fetch("/api/market-ticks");
+                if (!response.ok) {
+                    setIsOffline(true);
+                    return;
+                }
                 const result = (await response.json()) as {
                     data?: {
                         // legacy
@@ -34,9 +45,13 @@ export function MarketTicker() {
                     setKsOriginal(result.data.ksOriginal ?? result.data.silverOriginal ?? null);
                     setCs(result.data.cs ?? null);
                     setCsOriginal(result.data.csOriginal ?? null);
+                    setIsOffline(false);
+                } else {
+                    setIsOffline(true);
                 }
             } catch (error) {
                 console.error("Failed to fetch market ticks:", error);
+                setIsOffline(true);
             }
         };
 
@@ -51,49 +66,158 @@ export function MarketTicker() {
         return new Intl.NumberFormat("ko-KR").format(Math.round(price));
     };
 
+    const isCompact = variant === "compact";
+
+    const labels = useMemo(() => {
+        const kgValue = `${formatPrice(kg)} /g`;
+        const ksValue = `${formatPrice(ks)} /g`;
+        const csValue = `${formatPrice(cs)} /g`;
+        const ksOriginalValue = formatPrice(ksOriginal);
+        const csOriginalValue = formatPrice(csOriginal);
+
+        return {
+            kg: {
+                title: `KG ${kgValue}`,
+                ariaLabel: `KG ${kgValue}`,
+            },
+            ks: {
+                title: `KS ${ksValue} · 원본 ${ksOriginalValue} /g`,
+                ariaLabel: `KS ${ksValue}, 원본 ${ksOriginalValue} /g`,
+                original: ksOriginalValue,
+            },
+            cs: {
+                title: `CS ${csValue} · 보정전 ${csOriginalValue} /g`,
+                ariaLabel: `CS ${csValue}, 보정전 ${csOriginalValue} /g`,
+                original: csOriginalValue,
+            },
+        };
+    }, [kg, ks, ksOriginal, cs, csOriginal]);
+
+    const offlineBadge = isOffline ? (
+        <span className="inline-flex items-center gap-1 rounded-full border border-[color:var(--hairline)] bg-[color:var(--panel)]/80 px-2 py-0.5 text-[10px] font-medium text-[var(--muted-weak)] shadow-[var(--shadow-subtle)]">
+            <span className="h-1.5 w-1.5 rounded-full bg-[color:var(--danger)] opacity-70" aria-hidden />
+            offline
+        </span>
+    ) : null;
+
     return (
-        <div className="flex flex-wrap items-start justify-center gap-8 text-base font-bold">
+        <div
+            className={
+                isCompact
+                    ? "flex min-w-0 items-center gap-3 whitespace-nowrap rounded-full border border-[color:var(--hairline)] bg-[color:var(--panel)]/80 px-3 py-1.5 shadow-[var(--shadow-subtle)]"
+                    : "flex flex-wrap items-start justify-center gap-8 text-base font-bold"
+            }
+            data-variant={variant}
+        >
             {/* KG */}
-            <div className="flex flex-col gap-1">
-                <div className="flex items-center gap-2">
-                    <span className="font-bold" style={{ color: "#D4AF37" }}>
+            <div
+                className={
+                    isCompact
+                        ? "flex min-w-0 items-baseline gap-2 text-[clamp(0.68rem,0.8vw,0.85rem)] font-semibold text-[var(--primary)]"
+                        : "flex flex-col gap-1"
+                }
+                aria-label={labels.kg.ariaLabel}
+            >
+                <div
+                    className={
+                        isCompact
+                            ? "flex min-w-0 items-baseline gap-1.5"
+                            : "flex items-center gap-2 text-[var(--primary)]"
+                    }
+                >
+                    <span className={isCompact ? "text-[clamp(0.6rem,0.7vw,0.75rem)] font-semibold tracking-[0.08em]" : "font-bold"}>
                         KG:
                     </span>
-                    <span className="font-mono text-lg font-extrabold" style={{ color: "#D4AF37" }}>
+                    <span
+                        className={
+                            isCompact
+                                ? "min-w-0 max-w-[7.5rem] truncate tabular-nums"
+                                : "font-mono text-lg font-extrabold tabular-nums"
+                        }
+                        title={labels.kg.title}
+                    >
                         {formatPrice(kg)} /g
                     </span>
                 </div>
             </div>
 
             {/* KS */}
-            <div className="flex flex-col gap-1">
-                <div className="flex items-center gap-2">
-                    <span className="font-bold" style={{ color: "#C0C0C0" }}>
+            <div
+                className={
+                    isCompact
+                        ? "flex min-w-0 items-baseline gap-2 text-[clamp(0.68rem,0.8vw,0.85rem)] font-semibold text-[var(--muted-strong)]"
+                        : "flex flex-col gap-1"
+                }
+                aria-label={labels.ks.ariaLabel}
+            >
+                <div
+                    className={
+                        isCompact
+                            ? "flex min-w-0 items-baseline gap-1.5"
+                            : "flex items-center gap-2 text-[var(--muted-strong)]"
+                    }
+                >
+                    <span className={isCompact ? "text-[clamp(0.6rem,0.7vw,0.75rem)] font-semibold tracking-[0.08em]" : "font-bold"}>
                         KS:
                     </span>
-                    <span className="font-mono text-lg font-extrabold" style={{ color: "#C0C0C0" }}>
+                    <span
+                        className={
+                            isCompact
+                                ? "min-w-0 max-w-[7.5rem] truncate tabular-nums"
+                                : "font-mono text-lg font-extrabold tabular-nums"
+                        }
+                        title={labels.ks.title}
+                    >
                         {formatPrice(ks)} /g
                     </span>
                 </div>
-                <div className="text-xs font-normal" style={{ color: "#9CA3AF" }}>
-                    (원래 은시세: {formatPrice(ksOriginal)} /g)
-                </div>
+                {!isCompact ? (
+                    <div className="text-xs font-normal text-[var(--muted)]">
+                        (원래 은시세: {labels.ks.original} /g)
+                    </div>
+                ) : null}
             </div>
 
             {/* CS */}
-            <div className="flex flex-col gap-1">
-                <div className="flex items-center gap-2">
-                    <span className="font-bold" style={{ color: "#6B7280" }}>
+            <div
+                className={
+                    isCompact
+                        ? "hidden min-w-0 items-baseline gap-2 text-[clamp(0.68rem,0.8vw,0.85rem)] font-semibold text-[var(--muted-weak)] lg:flex"
+                        : "flex flex-col gap-1"
+                }
+                aria-label={labels.cs.ariaLabel}
+            >
+                <div
+                    className={
+                        isCompact
+                            ? "flex min-w-0 items-baseline gap-1.5"
+                            : "flex items-center gap-2 text-[var(--muted-weak)]"
+                    }
+                >
+                    <span className={isCompact ? "text-[clamp(0.6rem,0.7vw,0.75rem)] font-semibold tracking-[0.08em]" : "font-bold"}>
                         CS:
                     </span>
-                    <span className="font-mono text-lg font-extrabold" style={{ color: "#6B7280" }}>
+                    <span
+                        className={
+                            isCompact
+                                ? "min-w-0 max-w-[7.5rem] truncate tabular-nums"
+                                : "font-mono text-lg font-extrabold tabular-nums"
+                        }
+                        title={labels.cs.title}
+                    >
                         {formatPrice(cs)} /g
                     </span>
                 </div>
-                <div className="text-xs font-normal" style={{ color: "#9CA3AF" }}>
-                    (보정전: {formatPrice(csOriginal)} /g)
-                </div>
+                {!isCompact ? (
+                    <div className="text-xs font-normal text-[var(--muted)]">
+                        (보정전: {labels.cs.original} /g)
+                    </div>
+                ) : null}
             </div>
+
+            {isCompact ? (offlineBadge ? <div className="ml-auto shrink-0">{offlineBadge}</div> : null) : offlineBadge ? (
+                <div className="flex w-full justify-center">{offlineBadge}</div>
+            ) : null}
         </div>
     );
 }

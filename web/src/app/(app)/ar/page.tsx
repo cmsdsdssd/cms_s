@@ -88,11 +88,40 @@ const formatKrw = (value?: number | null) => {
   return `₩${new Intl.NumberFormat("ko-KR").format(Math.round(value))}`;
 };
 
-const formatSignedKrw = (value?: number | null) => {
-  if (value === null || value === undefined) return "-";
-  const sign = value > 0 ? "+" : value < 0 ? "-" : "";
-  const abs = Math.abs(Math.round(value));
-  return `${sign}₩${new Intl.NumberFormat("ko-KR").format(abs)}`;
+type AmountPillProps = {
+  amount?: number | null;
+  ariaLabel?: string;
+  className?: string;
+};
+
+const AmountPill = ({ amount, ariaLabel, className }: AmountPillProps) => {
+  if (amount === null || amount === undefined) {
+    return <span className={cn("text-[var(--muted)]", className)}>-</span>;
+  }
+  const numeric = Number(amount);
+  const sign = numeric > 0 ? "+" : numeric < 0 ? "-" : "";
+  const abs = Math.abs(Math.round(numeric));
+  const tone =
+    numeric > 0
+      ? "text-[var(--primary)]"
+      : numeric < 0
+        ? "text-[var(--danger)]"
+        : "text-[var(--muted)]";
+  const label =
+    ariaLabel ??
+    (numeric > 0
+      ? "증가"
+      : numeric < 0
+        ? "감소"
+        : "변동 없음");
+  return (
+    <span
+      className={cn("inline-flex items-center gap-1 tabular-nums font-semibold", tone, className)}
+      aria-label={label}
+    >
+      {`${sign}₩${new Intl.NumberFormat("ko-KR").format(abs)}`}
+    </span>
+  );
 };
 
 const formatDateTimeKst = (value?: string | null) => {
@@ -473,7 +502,7 @@ export default function ArPage() {
                     </div>
                     <div className="space-y-1">
                       <p className="text-xs font-medium text-[var(--muted)]">총 잔액</p>
-                      <p className={cn("text-lg font-bold tracking-tight", summary.balance > 0 ? "text-[var(--warning)]" : summary.balance < 0 ? "text-[var(--success)]" : "text-[var(--foreground)]")}>{formatSignedKrw(summary.balance)}</p>
+                      <AmountPill amount={summary.balance} className="text-lg font-bold tracking-tight" />
                     </div>
                   </div>
                 </CardBody>
@@ -506,7 +535,12 @@ export default function ArPage() {
                       >
                         <ListCard
                           title={party.name ?? "-"}
-                          subtitle={<span className="tabular-nums font-medium">잔액 {formatSignedKrw(balance)}</span>}
+                          subtitle={
+                            <span className="flex items-center gap-2">
+                              <span className="text-xs text-[var(--muted)]">잔액</span>
+                              <AmountPill amount={balance} className="text-sm" />
+                            </span>
+                          }
                           meta={<span className="tabular-nums text-xs opacity-80">미수 {formatKrw(party.receivable_krw)} · 크레딧 {formatKrw(party.credit_krw)}</span>}
                           badge={badge}
                           selected={party.party_id === effectiveSelectedPartyId}
@@ -540,9 +574,7 @@ export default function ArPage() {
                     <div className="grid gap-4 text-sm sm:grid-cols-4 tabular-nums">
                       <div className="space-y-1">
                         <p className="text-xs font-medium text-[var(--muted)]">잔액</p>
-                        <p className={cn("text-lg font-bold tracking-tight", selectedParty.balance_krw && selectedParty.balance_krw > 0 ? "text-[var(--warning)]" : selectedParty.balance_krw && selectedParty.balance_krw < 0 ? "text-[var(--success)]" : "text-[var(--foreground)]")}>
-                          {formatSignedKrw(selectedParty.balance_krw)}
-                        </p>
+                        <AmountPill amount={selectedParty.balance_krw} className="text-lg font-bold tracking-tight" />
                       </div>
                       <div className="space-y-1">
                         <p className="text-xs font-medium text-[var(--muted)]">미수</p>
@@ -601,11 +633,13 @@ export default function ArPage() {
                       <table className="w-full text-left text-xs">
                         <thead className="text-[var(--muted)] bg-[var(--chip)] sticky top-0 z-10 shadow-sm">
                           <tr>
+                            <th className="px-4 py-3 font-medium whitespace-nowrap">날짜</th>
                             <th className="px-4 py-3 font-medium whitespace-nowrap">구분</th>
                             <th className="px-4 py-3 font-medium whitespace-nowrap">모델명</th>
-                            <th className="px-4 py-3 font-medium text-right whitespace-nowrap">소재가격</th>
-                            <th className="px-4 py-3 font-medium text-right whitespace-nowrap">총공임</th>
-                            <th className="px-4 py-3 font-medium text-right whitespace-nowrap">총가격</th>
+                            <th className="px-4 py-3 font-medium text-right whitespace-nowrap">소재비</th>
+                            <th className="px-4 py-3 font-medium text-right whitespace-nowrap">공임</th>
+                            <th className="px-4 py-3 font-medium text-right whitespace-nowrap">합계</th>
+                            <th className="px-4 py-3 font-medium text-right whitespace-nowrap">증감</th>
                             <th className="px-4 py-3 font-medium whitespace-nowrap">메모</th>
                           </tr>
                         </thead>
@@ -613,11 +647,13 @@ export default function ArPage() {
                           {ledgerQuery.isLoading ? (
                             Array.from({ length: 10 }).map((_, i) => (
                               <tr key={i}>
+                                <td className="px-4 py-3"><Skeleton className="h-4 w-20" /></td>
                                 <td className="px-4 py-3"><Skeleton className="h-4 w-12" /></td>
                                 <td className="px-4 py-3"><Skeleton className="h-4 w-24" /></td>
                                 <td className="px-4 py-3"><Skeleton className="h-4 w-16 ml-auto" /></td>
                                 <td className="px-4 py-3"><Skeleton className="h-4 w-16 ml-auto" /></td>
-                                <td className="px-4 py-3"><Skeleton className="h-4 w-20 ml-auto" /></td>
+                                <td className="px-4 py-3"><Skeleton className="h-4 w-16 ml-auto" /></td>
+                                <td className="px-4 py-3"><Skeleton className="h-4 w-16 ml-auto" /></td>
                                 <td className="px-4 py-3"><Skeleton className="h-4 w-32" /></td>
                               </tr>
                             ))
@@ -627,29 +663,58 @@ export default function ArPage() {
                               ? shipmentLineById.get(row.shipment_line_id)
                               : undefined;
                             const modelName = shipmentLine?.model_name ?? "-";
+                            const optionParts = [shipmentLine?.suffix, shipmentLine?.color, shipmentLine?.size].filter(Boolean);
                             const materialAmount = shipmentLine?.material_amount_sell_krw ?? null;
                             const laborAmount = shipmentLine?.labor_total_sell_krw ?? null;
-                            const totalAmount = shipmentLine?.total_amount_sell_krw ?? row.amount_krw ?? null;
+                            const totalAmount = shipmentLine?.total_amount_sell_krw ?? null;
                             return (
                               <tr key={row.ar_ledger_id} className="group transition-colors hover:bg-[var(--panel-hover)]">
-                                <td className="px-4 py-3 font-medium text-[var(--foreground)]">{isShipment ? "출고" : row.entry_type ?? "-"}</td>
-                                <td className="px-4 py-3 text-[var(--muted)] group-hover:text-[var(--foreground)]">{isShipment ? modelName : "-"}</td>
+                                <td className="px-4 py-3 text-[var(--muted)] tabular-nums">
+                                  {formatDateTimeKst(row.occurred_at)}
+                                </td>
+                                <td className="px-4 py-3">
+                                  <span className="inline-flex items-center rounded-full border border-[var(--panel-border)] bg-[var(--chip)] px-2 py-0.5 text-[11px] font-semibold text-[var(--foreground)]">
+                                    {isShipment ? "출고" : row.entry_type ?? "-"}
+                                  </span>
+                                </td>
+                                <td className="px-4 py-3">
+                                  <div className="space-y-1">
+                                    <p className="text-sm font-semibold text-[var(--foreground)]">
+                                      {isShipment ? modelName : "-"}
+                                    </p>
+                                    <p className="text-[11px] text-[var(--muted)]">
+                                      {isShipment && optionParts.length > 0 ? optionParts.join(" / ") : "-"}
+                                    </p>
+                                  </div>
+                                </td>
                                 <td className="px-4 py-3 text-right tabular-nums text-[var(--muted)]">
                                   {isShipment ? formatKrw(materialAmount) : "-"}
                                 </td>
                                 <td className="px-4 py-3 text-right tabular-nums text-[var(--muted)]">
                                   {isShipment ? formatKrw(laborAmount) : "-"}
                                 </td>
-                                <td className="px-4 py-3 text-right tabular-nums font-medium text-[var(--foreground)]">
-                                  {formatSignedKrw(totalAmount)}
+                                <td className="px-4 py-3 text-right tabular-nums font-semibold text-[var(--foreground)]">
+                                  {isShipment ? formatKrw(totalAmount) : "-"}
                                 </td>
-                                <td className="px-4 py-3 text-[var(--muted)] max-w-[200px] truncate" title={row.memo ?? ""}>{row.memo ?? "-"}</td>
+                                <td className="px-4 py-3 text-right">
+                                  <AmountPill amount={row.amount_krw} />
+                                </td>
+                                <td className="px-4 py-3 text-[var(--muted)] max-w-[220px] truncate" title={row.memo ?? ""}>
+                                  {row.memo ?? "-"}
+                                </td>
                               </tr>
                             );
                           })}
-                          {!ledgerQuery.isLoading && (ledgerQuery.data ?? []).length === 0 ? (
+                          {!ledgerQuery.isLoading && ledgerQuery.isError && (ledgerQuery.data ?? []).length === 0 ? (
                             <tr>
-                              <td className="px-4 py-12 text-center text-[var(--muted)]" colSpan={6}>
+                              <td className="px-4 py-12 text-center text-[var(--danger)]" colSpan={8}>
+                                원장 데이터를 불러오지 못했습니다.
+                              </td>
+                            </tr>
+                          ) : null}
+                          {!ledgerQuery.isLoading && !ledgerQuery.isError && (ledgerQuery.data ?? []).length === 0 ? (
+                            <tr>
+                              <td className="px-4 py-12 text-center text-[var(--muted)]" colSpan={8}>
                                 원장 내역이 없습니다.
                               </td>
                             </tr>
