@@ -107,6 +107,7 @@ export function SidebarNav({ mobileOpen, onMobileClose }: SidebarNavProps) {
             "hidden lg:flex h-8 w-8 text-[var(--muted)] hover:text-[var(--foreground)]",
             isCollapsed && "hidden"
           )}
+          title="사이드바 접기"
         >
           <ChevronLeft className="h-4 w-4" />
         </Button>
@@ -132,13 +133,13 @@ export function SidebarNav({ mobileOpen, onMobileClose }: SidebarNavProps) {
             "mt-2 flex w-full items-center gap-3 rounded-[var(--radius-md)] px-3 py-2 text-sm font-medium text-[var(--muted-strong)] hover:bg-[var(--panel-hover)] hover:text-[var(--foreground)] transition-colors",
             isCollapsed ? "justify-center" : "hidden lg:flex"
           )}
-          title={isCollapsed ? "Expand Sidebar" : "Collapse Sidebar"}
+          title={isCollapsed ? "사이드바 펼치기" : "사이드바 접기"}
         >
           {isCollapsed ? <ChevronRight className="h-4 w-4" /> : null}
           {!isCollapsed && (
              <span className="flex items-center gap-2">
                <ChevronLeft className="h-4 w-4" />
-               <span>Collapse</span>
+               <span>접기</span>
              </span>
           )}
         </button>
@@ -164,12 +165,12 @@ export function SidebarNav({ mobileOpen, onMobileClose }: SidebarNavProps) {
         )}
       >
         <div className="flex h-full flex-col">
-           <div className="flex items-center justify-between border-b border-[var(--hairline)] px-4 h-14">
-              <span className="font-bold">Menu</span>
-              <button onClick={onMobileClose} className="p-1">
-                <X className="h-5 w-5" />
-              </button>
-           </div>
+            <div className="flex items-center justify-between border-b border-[var(--hairline)] px-4 h-14">
+               <span className="font-bold">메뉴</span>
+               <button onClick={onMobileClose} className="p-1" title="닫기">
+                 <X className="h-5 w-5" />
+               </button>
+            </div>
            <div className="flex-1 overflow-y-auto p-4">
               {navItems.map((group) => (
                 <div key={group.label} className="mb-6">

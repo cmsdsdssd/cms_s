@@ -47,7 +47,7 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
         items.push({
           label: item.label,
           href: item.href,
-          group: "Settings",
+          group: "설정",
           icon: item.icon,
         });
       }

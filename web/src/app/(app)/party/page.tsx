@@ -4,11 +4,13 @@ import { Suspense, useEffect, useMemo, useState } from "react";
 import { useForm } from "react-hook-form";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRouter, useSearchParams } from "next/navigation";
-import { ActionBar } from "@/components/layout/action-bar";
-import { FilterBar } from "@/components/layout/filter-bar";
+import {
+  UnifiedToolbar,
+  ToolbarSelect,
+  ToolbarInput,
+  ToolbarButton,
+} from "@/components/layout/unified-toolbar";
 import { SplitLayout } from "@/components/layout/split-layout";
-import { Button } from "@/components/ui/button";
-import { Input, Select } from "@/components/ui/field";
 import { useRpcMutation } from "@/hooks/use-rpc-mutation";
 import { CONTRACTS, isFnConfigured } from "@/lib/contracts";
 import { fetchParties, fetchPartyDetail } from "@/lib/api/cmsParty";
@@ -46,7 +48,7 @@ function PartyPageContent() {
   useEffect(() => {
     const timer = setTimeout(() => {
       setDebouncedSearch(searchQuery);
-      setPage(1); // Reset page on search change
+      setPage(1);
     }, 400);
     return () => clearTimeout(timer);
   }, [searchQuery]);
@@ -85,7 +87,7 @@ function PartyPageContent() {
   useEffect(() => {
     if (effectiveSelectedPartyId === "new") {
       form.reset({
-        party_type: typeFilter, // Default to current filter
+        party_type: typeFilter,
         name: "",
         phone: "",
         region: "",
@@ -139,53 +141,61 @@ function PartyPageContent() {
   };
 
   return (
-    <div className="space-y-6" id="party.root">
-      <ActionBar
-        title="거래처"
-        subtitle="거래처 명부"
-        actions={<Button onClick={handleCreate}>+ 거래처 추가</Button>}
-        id="party.actionBar"
-      />
-      <FilterBar id="party.filterBar">
-        <Select
+    <div className="space-y-3" id="party.root">
+      {/* Unified Toolbar - Compact Header */}
+      <UnifiedToolbar
+        title="거래처관리"
+        actions={<ToolbarButton onClick={handleCreate}>+ 거래처 추가</ToolbarButton>}
+      >
+        <ToolbarSelect
           value={typeFilter}
-          onChange={(e) => handleTypeChange(e.target.value)}
+          onChange={handleTypeChange}
+          className="w-24"
         >
           <option value="customer">고객</option>
           <option value="vendor">공장</option>
-        </Select>
-        <Input
-          placeholder="지역"
+        </ToolbarSelect>
+
+        <ToolbarInput
           value={regionFilter}
-          onChange={(e) => {
-            setRegionFilter(e.target.value);
+          onChange={(value) => {
+            setRegionFilter(value);
             setPage(1);
             setSelectedPartyId(null);
             setActiveTab("basic");
           }}
+          placeholder="지역"
+          className="w-20"
         />
-        <Select
+
+        <ToolbarSelect
           value={activeOnly ? "active" : "all"}
-          onChange={(e) => {
-            setActiveOnly(e.target.value === "active");
+          onChange={(value) => {
+            setActiveOnly(value === "active");
             setPage(1);
             setSelectedPartyId(null);
             setActiveTab("basic");
           }}
+          className="w-24"
         >
           <option value="active">활성만</option>
           <option value="all">전체</option>
-        </Select>
-        <Input
-          placeholder="이름 검색"
-          value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
-        />
-      </FilterBar>
+        </ToolbarSelect>
 
-      <div id="party.body">
+        <div className="w-px h-6 bg-[var(--hairline)] mx-1" />
+
+        <ToolbarInput
+          value={searchQuery}
+          onChange={setSearchQuery}
+          placeholder="이름 검색"
+          className="w-32 md:w-40"
+        />
+      </UnifiedToolbar>
+
+      {/* Content Area */}
+      <div className="px-4" id="party.body">
         <SplitLayout
-          className="pt-2"
+          className="pt-1"
           left={
             <PartyList
               parties={listData?.data ?? []}

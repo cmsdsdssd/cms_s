@@ -104,6 +104,21 @@ const normalizeId = (value: unknown) => {
   return text;
 };
 
+// Helper function to convert relative photo path to full Supabase Storage URL
+const getMasterPhotoUrl = (photoUrl: string | null | undefined): string => {
+  if (!photoUrl) return "";
+  // If it's already a full URL, return it
+  if (photoUrl.startsWith("http://") || photoUrl.startsWith("https://")) {
+    return photoUrl;
+  }
+  // Convert relative path to full Supabase Storage URL
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  if (!supabaseUrl) return "";
+  // Remove leading slash if present
+  const cleanPath = photoUrl.startsWith("/") ? photoUrl.slice(1) : photoUrl;
+  return `${supabaseUrl}/storage/v1/object/public/${cleanPath}`;
+};
+
 export default function ShipmentsPage() {
   const actorId = (process.env.NEXT_PUBLIC_CMS_ACTOR_ID || "").trim();
   const idempotencyKey = useMemo(
@@ -200,7 +215,11 @@ export default function ShipmentsPage() {
   });
 
   useEffect(() => {
-    if (prefillQuery.data) setPrefill(prefillQuery.data);
+    if (prefillQuery.data) {
+      console.log("[Prefill Data] Loaded:", prefillQuery.data);
+      console.log("[Prefill Data] photo_url:", prefillQuery.data.photo_url);
+      setPrefill(prefillQuery.data);
+    }
   }, [prefillQuery.data]);
 
   // ✅ 선택된 주문의 model_no로 마스터 정보 조회
@@ -626,7 +645,7 @@ export default function ShipmentsPage() {
     <div className="min-h-screen bg-[var(--background)] pb-20">
       {/* Sticky Header */}
       <div className="sticky top-0 z-20 bg-[var(--background)]/80 backdrop-blur-md border-b border-[var(--panel-border)] shadow-sm transition-all">
-        <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-4">
+        <div className="px-4 sm:px-6 lg:px-8 py-4">
           <ActionBar
             title="출고 관리"
             subtitle="주문 기반 출고 및 원가 확정"
@@ -665,7 +684,7 @@ export default function ShipmentsPage() {
         </div>
       </div>
 
-      <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-6 space-y-6">
+      <div className="px-4 sm:px-6 lg:px-8 py-6 space-y-6">
         {/* Tabs */}
         <div className="flex items-center gap-1 border-b border-[var(--panel-border)]">
           <button
@@ -803,9 +822,39 @@ export default function ShipmentsPage() {
                             변경
                           </Button>
                         </div>
-                        <div>
-                          <div className="text-sm font-semibold text-[var(--primary)]">{prefill?.client_name}</div>
-                          <div className="text-sm text-[var(--primary)]">{prefill?.model_no}</div>
+                        <div className="flex items-start gap-4">
+                          {/* Master Photo Thumbnail - Using prefill data */}
+                          <div className="relative h-28 w-28 shrink-0 overflow-hidden rounded-xl bg-gradient-to-br from-[var(--panel)] to-[var(--background)] border-2 border-[var(--primary)]/40 shadow-sm">
+                            <img
+                              src={getMasterPhotoUrl(prefill?.photo_url)}
+                              alt={prefill?.model_no ?? "모델 이미지"}
+                              className="h-full w-full object-cover"
+                              loading="eager"
+                              onLoad={() => console.log("[Master Photo] Loaded successfully:", getMasterPhotoUrl(prefill?.photo_url))}
+                              onError={(e) => {
+                                console.error("[Master Photo] Failed to load:", prefill?.photo_url, "Full URL:", getMasterPhotoUrl(prefill?.photo_url));
+                                const target = e.target as HTMLImageElement;
+                                target.style.display = "none";
+                              }}
+                              style={{ display: prefill?.photo_url ? "block" : "none" }}
+                            />
+                            <div 
+                              className="flex h-full w-full items-center justify-center text-[var(--muted)]"
+                              style={{ display: prefill?.photo_url ? "none" : "flex" }}
+                            >
+                              <Package className="w-10 h-10 opacity-40" />
+                            </div>
+                          </div>
+                          <div className="pt-1">
+                            <div className="text-sm font-semibold text-[var(--primary)]">{prefill?.client_name}</div>
+                            <div className="text-sm text-[var(--primary)]">{prefill?.model_no}</div>
+                            {/* Debug info */}
+                            {process.env.NODE_ENV === "development" && (
+                              <div className="text-[10px] text-[var(--muted)] mt-1">
+                                photo_url: {prefill?.photo_url ? "있음" : "없음"}
+                              </div>
+                            )}
+                          </div>
                         </div>
                         <div className="text-xs text-[var(--primary)] pt-2 border-t border-[var(--primary)]/30">
                           주문번호: {prefill?.order_no}
@@ -1051,10 +1100,34 @@ export default function ShipmentsPage() {
           {/* Summary Section */}
           <div className="bg-[var(--primary)]/5 border border-[var(--primary)]/20 rounded-xl p-4 space-y-3">
             <div className="flex items-center justify-between">
-              <div className="space-y-1">
-                <div className="text-sm font-bold text-[var(--primary)]">확정 대상 주문</div>
-                <div className="text-xs text-[var(--primary)]">
-                  {prefill?.order_no ?? "-"} / {prefill?.client_name ?? "-"} / {prefill?.model_no ?? "-"}
+              <div className="flex items-start gap-4">
+                {/* Master Photo in Confirm Modal - Using prefill data */}
+                <div className="relative h-24 w-24 shrink-0 overflow-hidden rounded-xl bg-gradient-to-br from-[var(--panel)] to-[var(--background)] border-2 border-[var(--primary)]/40 shadow-sm">
+                  <img
+                    src={getMasterPhotoUrl(prefill?.photo_url)}
+                    alt={prefill?.model_no ?? "모델 이미지"}
+                    className="h-full w-full object-cover"
+                    loading="eager"
+                    onLoad={() => console.log("[Master Photo Modal] Loaded:", getMasterPhotoUrl(prefill?.photo_url))}
+                    onError={(e) => {
+                      console.error("[Master Photo Modal] Failed:", prefill?.photo_url, "Full URL:", getMasterPhotoUrl(prefill?.photo_url));
+                      const target = e.target as HTMLImageElement;
+                      target.style.display = "none";
+                    }}
+                    style={{ display: prefill?.photo_url ? "block" : "none" }}
+                  />
+                  <div 
+                    className="flex h-full w-full items-center justify-center text-[var(--muted)]"
+                    style={{ display: prefill?.photo_url ? "none" : "flex" }}
+                  >
+                    <Package className="w-8 h-8 opacity-40" />
+                  </div>
+                </div>
+                <div className="space-y-1 pt-1">
+                  <div className="text-sm font-bold text-[var(--primary)]">확정 대상 주문</div>
+                  <div className="text-xs text-[var(--primary)]">
+                    {prefill?.order_no ?? "-"} / {prefill?.client_name ?? "-"} / {prefill?.model_no ?? "-"}
+                  </div>
                 </div>
               </div>
               <Badge tone="active">작성 중</Badge>

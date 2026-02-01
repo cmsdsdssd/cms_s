@@ -139,7 +139,7 @@ function CatalogGalleryCardComponent({
   } as CSSProperties;
 
   return (
-    <Card
+    <div
       ref={cardRef}
       className={cn(
         "group relative cursor-pointer overflow-hidden h-full flex flex-col min-w-0",
@@ -158,6 +158,7 @@ function CatalogGalleryCardComponent({
       onPointerMove={handlePointerMove}
       onPointerLeave={handlePointerLeave}
     >
+      <Card className="h-full flex flex-col overflow-hidden border-0 shadow-none bg-transparent">
       <div
         className="pointer-events-none absolute inset-0 opacity-0 transition-opacity duration-200"
         style={{
@@ -259,7 +260,8 @@ function CatalogGalleryCardComponent({
           </div>
         </div>
       </div>
-    </Card>
+      </Card>
+    </div>
   );
 }
 

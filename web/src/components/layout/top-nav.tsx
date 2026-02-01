@@ -23,6 +23,7 @@ import { MarketTicker } from "@/components/ui/market-ticker";
 
 const navItems = [
     { href: "/dashboard", label: "대시보드", icon: Gauge },
+    { href: "/workbench", label: "통합작업대", icon: Boxes },
     { href: "/catalog", label: "카탈로그", icon: Boxes },
     { href: "/orders_main", label: "주문", icon: ClipboardList },
     { href: "/party", label: "거래처", icon: Store },
@@ -38,6 +39,7 @@ const navItems = [
 function isActive(pathname: string, href: string) {
     if (href === "/orders_main") return pathname.startsWith("/orders");
     if (href === "/shipments_main") return pathname.startsWith("/shipments");
+    if (href === "/workbench") return pathname.startsWith("/workbench");
     return pathname === href;
 }
 

@@ -1,5 +1,4 @@
 import type { ElementType } from "react";
-import type { ElementType } from "react";
 import {
   Boxes,
   ClipboardList,
@@ -22,50 +21,45 @@ export type NavItem = {
 
 export const navItems: NavItem[] = [
   {
-    label: "Operations",
+    label: "통합 작업대",
     items: [
-      { label: "Orders", href: "/orders", icon: ClipboardList },
-      { label: "Orders Worklist", href: "/orders_main", icon: ClipboardList },
-      { label: "Shipments", href: "/shipments", icon: PackageCheck },
-      { label: "AR", href: "/ar", icon: CreditCard },
+      { label: "거래처별 작업", href: "/workbench", icon: Store },
     ],
   },
   {
-    label: "Cost & Receipts",
+    label: "업무 흐름",
     items: [
-      { label: "Cost Worklist", href: "/purchase_cost_worklist", icon: Calculator },
+      { label: "① 주문 관리", href: "/orders_main", icon: ClipboardList },
+      { label: "② 출고 관리", href: "/shipments_main", icon: PackageCheck },
+      { label: "③ 미수금", href: "/ar", icon: CreditCard },
     ],
   },
   {
-    label: "Masters",
+    label: "현황 및 조회",
     items: [
-      { label: "Catalog", href: "/catalog", icon: Boxes },
-      { label: "Party", href: "/party", icon: Store },
-      { label: "BOM", href: "/bom", icon: Settings },
+      { label: "재고 관리", href: "/inventory", icon: Package },
+      { label: "원가 마감", href: "/purchase_cost_worklist", icon: Calculator },
     ],
   },
   {
-    label: "Stock",
+    label: "기준 정보",
     items: [
-      { label: "Inventory", href: "/inventory", icon: Package },
+      { label: "거래처 관리", href: "/party", icon: Store },
+      { label: "제품 카탈로그", href: "/catalog", icon: Boxes },
+      { label: "시세 관리", href: "/market", icon: TrendingUp },
+      { label: "자재 명세서", href: "/bom", icon: Settings },
     ],
   },
   {
-    label: "Market",
+    label: "기타",
     items: [
-      { label: "Market", href: "/market", icon: TrendingUp },
-    ],
-  },
-  {
-    label: "Other",
-    items: [
-      { label: "Repairs", href: "/repairs", icon: Wrench },
+      { label: "수리 관리", href: "/repairs", icon: Wrench },
     ],
   },
 ];
 
 export const bottomNavItems: NavItem[] = [
-  { label: "Settings", href: "/settings", icon: Settings },
+  { label: "설정", href: "/settings", icon: Settings },
 ];
 
 export type NavMatch = {

@@ -43,7 +43,7 @@ export function GlobalTopBar({ onMobileMenuOpen }: GlobalTopBarProps) {
       { label: navMatch.groupLabel },
       { label: navMatch.item.label, href: navMatch.item.href },
     ]
-    : [{ label: "Home", href: "/" }];
+    : [{ label: "홈", href: "/" }];
 
   return (
     <header className="sticky top-0 z-40 flex h-14 w-full items-center gap-4 border-b border-[var(--hairline)] bg-[var(--background)]/80 px-4 backdrop-blur-md lg:px-6">
@@ -85,7 +85,7 @@ export function GlobalTopBar({ onMobileMenuOpen }: GlobalTopBarProps) {
           <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-[var(--muted)]" />
           <Input
             type="search"
-            placeholder="Search (Ctrl+K)"
+            placeholder="검색 (Ctrl+K)"
             className="h-9 w-full bg-[var(--input-bg)] pl-9 pr-4 text-sm shadow-none focus-visible:ring-1 cursor-pointer"
             readOnly
             onClick={() => setIsCommandPaletteOpen(true)}
@@ -116,17 +116,17 @@ export function GlobalTopBar({ onMobileMenuOpen }: GlobalTopBarProps) {
           {/* Quick Actions */}
           <div className="hidden sm:flex items-center gap-1 border-r border-[var(--hairline)] pr-4 mr-1">
             <Link href="/orders">
-              <Button variant="ghost" size="icon" className="h-8 w-8 text-[var(--muted-strong)]" title="Orders">
+              <Button variant="ghost" size="icon" className="h-8 w-8 text-[var(--muted-strong)]" title="주문 입력">
                 <ClipboardList className="h-4 w-4" />
               </Button>
             </Link>
             <Link href="/shipments">
-              <Button variant="ghost" size="icon" className="h-8 w-8 text-[var(--muted-strong)]" title="Shipments">
+              <Button variant="ghost" size="icon" className="h-8 w-8 text-[var(--muted-strong)]" title="출고 관리">
                 <PackageCheck className="h-4 w-4" />
               </Button>
             </Link>
             <Link href="/ar">
-              <Button variant="ghost" size="icon" className="h-8 w-8 text-[var(--muted-strong)]" title="AR">
+              <Button variant="ghost" size="icon" className="h-8 w-8 text-[var(--muted-strong)]" title="미수금">
                 <CreditCard className="h-4 w-4" />
               </Button>
             </Link>

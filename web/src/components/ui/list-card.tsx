@@ -24,7 +24,7 @@ export function ListCard({
   return (
     <Card
       className={cn(
-        "flex w-full items-center justify-between border-b border-[var(--panel-border)] bg-[var(--panel)] px-5 py-4 transition first:rounded-t-[var(--radius)] last:rounded-b-[var(--radius)] last:border-b-0 hover:bg-[var(--panel-hover)]",
+        "flex w-full items-center justify-between border-b border-[var(--panel-border)] bg-[var(--panel)] px-4 py-3 transition first:rounded-t-[var(--radius)] last:rounded-b-[var(--radius)] last:border-b-0 hover:bg-[var(--panel-hover)]",
         selected && "bg-[var(--chip)] shadow-inner",
         className
       )}
