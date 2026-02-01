@@ -1,0 +1,136 @@
+"use client";
+
+import { usePathname } from "next/navigation";
+import Link from "next/link";
+import { useState, useEffect } from "react";
+import { 
+  Search, 
+  Menu, 
+  ClipboardList, 
+  PackageCheck, 
+  CreditCard,
+  User
+} from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/field";
+import { cn } from "@/lib/utils";
+import { findNavMatch } from "@/components/layout/nav-items";
+import { CommandPalette } from "@/components/layout/command-palette";
+
+interface GlobalTopBarProps {
+  onMobileMenuOpen: () => void;
+}
+
+export function GlobalTopBar({ onMobileMenuOpen }: GlobalTopBarProps) {
+  const pathname = usePathname();
+  const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === "k") {
+        e.preventDefault();
+        setIsCommandPaletteOpen((open) => !open);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, []);
+
+  const navMatch = findNavMatch(pathname);
+  const breadcrumbs = navMatch
+    ? [
+        { label: navMatch.groupLabel },
+        { label: navMatch.item.label, href: navMatch.item.href },
+      ]
+    : [{ label: "Home", href: "/" }];
+
+  return (
+    <header className="sticky top-0 z-40 flex h-14 w-full items-center gap-4 border-b border-[var(--hairline)] bg-[var(--background)]/80 px-4 backdrop-blur-md lg:px-6">
+      {/* Mobile Menu Button */}
+      <button
+        onClick={onMobileMenuOpen}
+        className="lg:hidden -ml-2 p-2 text-[var(--muted-strong)] hover:text-[var(--foreground)]"
+      >
+        <Menu className="h-5 w-5" />
+      </button>
+
+      {/* Breadcrumbs */}
+      <nav className="hidden md:flex items-center text-sm font-medium text-[var(--muted)]">
+        {breadcrumbs.map((crumb, index) => (
+          <div key={`${crumb.label}-${index}`} className="flex items-center">
+            {index > 0 && <span className="mx-2 text-[var(--muted-weak)]">/</span>}
+            {crumb.href ? (
+              <Link
+                href={crumb.href}
+                className={cn(
+                  "transition-colors hover:text-[var(--foreground)]",
+                  index === breadcrumbs.length - 1 ? "text-[var(--foreground)] font-semibold" : ""
+                )}
+              >
+                {crumb.label}
+              </Link>
+            ) : (
+              <span className={index === breadcrumbs.length - 1 ? "text-[var(--foreground)] font-semibold" : ""}>
+                {crumb.label}
+              </span>
+            )}
+          </div>
+        ))}
+      </nav>
+
+      {/* Center Search */}
+      <div className="flex-1 flex justify-center max-w-md mx-auto">
+        <div className="relative w-full max-w-sm hidden sm:block">
+          <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-[var(--muted)]" />
+          <Input
+            type="search"
+            placeholder="Search (Ctrl+K)"
+            className="h-9 w-full bg-[var(--input-bg)] pl-9 pr-4 text-sm shadow-none focus-visible:ring-1 cursor-pointer"
+            readOnly
+            onClick={() => setIsCommandPaletteOpen(true)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                setIsCommandPaletteOpen(true);
+              }
+            }}
+          />
+        </div>
+      </div>
+
+      <CommandPalette 
+        open={isCommandPaletteOpen} 
+        onClose={() => setIsCommandPaletteOpen(false)} 
+      />
+
+      {/* Right Actions */}
+      <div className="flex items-center gap-2 sm:gap-4 ml-auto">
+        {/* Quick Actions */}
+        <div className="hidden sm:flex items-center gap-1 border-r border-[var(--hairline)] pr-4 mr-1">
+          <Link href="/orders">
+            <Button variant="ghost" size="icon" className="h-8 w-8 text-[var(--muted-strong)]" title="Orders">
+              <ClipboardList className="h-4 w-4" />
+            </Button>
+          </Link>
+          <Link href="/shipments">
+            <Button variant="ghost" size="icon" className="h-8 w-8 text-[var(--muted-strong)]" title="Shipments">
+              <PackageCheck className="h-4 w-4" />
+            </Button>
+          </Link>
+          <Link href="/ar">
+            <Button variant="ghost" size="icon" className="h-8 w-8 text-[var(--muted-strong)]" title="AR">
+              <CreditCard className="h-4 w-4" />
+            </Button>
+          </Link>
+        </div>
+
+        {/* User Placeholder */}
+        <div className="flex items-center gap-2">
+          <div className="h-8 w-8 rounded-full bg-[var(--chip)] flex items-center justify-center border border-[var(--hairline)] text-[var(--muted-strong)]">
+            <User className="h-4 w-4" />
+          </div>
+        </div>
+      </div>
+    </header>
+  );
+}

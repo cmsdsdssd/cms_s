@@ -1,13 +1,12 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, useRef, useEffect } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { ActionBar } from "@/components/layout/action-bar";
 import { FilterBar } from "@/components/layout/filter-bar";
 import { SplitLayout } from "@/components/layout/split-layout";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
-import { ListCard } from "@/components/ui/list-card";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Input, Select, Textarea } from "@/components/ui/field";
@@ -157,8 +156,9 @@ export default function ArPage() {
   const schemaClient = getSchemaClient();
   const [searchQuery, setSearchQuery] = useState("");
   const [balanceFilter, setBalanceFilter] = useState("all");
-  const [activeTab, setActiveTab] = useState<"ledger" | "payment" | "return">("ledger");
+  const [activeTab, setActiveTab] = useState<"payment" | "return">("payment");
   const [selectedPartyId, setSelectedPartyId] = useState<string | null>(null);
+  const [selectedLedgerId, setSelectedLedgerId] = useState<string | null>(null);
   const [paymentPartyId, setPaymentPartyId] = useState("");
   const [paidAt, setPaidAt] = useState(toKstInputValue);
   const [paymentMemo, setPaymentMemo] = useState("");
@@ -169,6 +169,19 @@ export default function ArPage() {
   const [returnOccurredAt, setReturnOccurredAt] = useState(toKstInputValue);
   const [returnOverrideAmount, setReturnOverrideAmount] = useState("");
   const [returnReason, setReturnReason] = useState("");
+
+  const [isSelectorOpen, setIsSelectorOpen] = useState(false);
+  const selectorRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (selectorRef.current && !selectorRef.current.contains(event.target as Node)) {
+        setIsSelectorOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
 
   const resetReturnForm = () => {
     setReturnShipmentLineId("");
@@ -457,550 +470,598 @@ export default function ArPage() {
   return (
     <div className="space-y-6" id="ar.root">
       <ActionBar
-        title="미수"
-        subtitle="미수/결제/반품"
-        actions={
-          <div className="flex items-center gap-2">
-            <Button variant="secondary" onClick={() => setActiveTab("payment")}>
-              수금 등록
-            </Button>
-            <Button onClick={() => setActiveTab("return")}>반품 등록</Button>
-          </div>
-        }
+        title="미수 관리"
+        subtitle="미수 현황 조회 및 수금/반품 처리"
         id="ar.actionBar"
       />
-      <FilterBar id="ar.filterBar">
-        <Input
-          placeholder="거래처 검색"
-          value={searchQuery}
-          onChange={(event) => setSearchQuery(event.target.value)}
-        />
-        <Select value={balanceFilter} onChange={(event) => setBalanceFilter(event.target.value)}>
-          <option value="all">잔액 전체</option>
-          <option value="receivable">미수만</option>
-          <option value="credit">크레딧만</option>
-          <option value="nonzero">0원 제외</option>
-        </Select>
-      </FilterBar>
-      <div id="ar.body">
-        <SplitLayout
-          left={
-            <div className="space-y-4 h-full flex flex-col" id="ar.listPanel">
-              <Card id="ar.summary" className="shrink-0 shadow-sm">
-                <CardHeader>
-                  <ActionBar title="전체 요약" />
-                </CardHeader>
-                <CardBody>
-                  <div className="grid gap-4 text-sm sm:grid-cols-3 tabular-nums">
-                    <div className="space-y-1">
-                      <p className="text-xs font-medium text-[var(--muted)]">총 미수</p>
-                      <p className="text-lg font-bold tracking-tight text-[var(--foreground)]">{formatKrw(summary.receivable)}</p>
-                    </div>
-                    <div className="space-y-1">
-                      <p className="text-xs font-medium text-[var(--muted)]">총 크레딧</p>
-                      <p className="text-lg font-bold tracking-tight text-[var(--foreground)]">{formatKrw(summary.credit)}</p>
-                    </div>
-                    <div className="space-y-1">
-                      <p className="text-xs font-medium text-[var(--muted)]">총 잔액</p>
-                      <AmountPill amount={summary.balance} className="text-lg font-bold tracking-tight" />
-                    </div>
-                  </div>
-                </CardBody>
-              </Card>
-              <div className="space-y-2 flex-1 overflow-y-auto min-h-0 pr-1">
-                {positionsQuery.isLoading ? (
-                  Array.from({ length: 5 }).map((_, i) => (
-                    <div key={i} className="flex items-center space-x-4 p-4 border rounded-lg bg-[var(--panel)]">
-                      <div className="space-y-2 w-full">
-                        <Skeleton className="h-4 w-[40%]" />
-                        <Skeleton className="h-3 w-[70%]" />
-                      </div>
+
+      <div className="relative z-20" ref={selectorRef}>
+        <div
+          className="flex items-center gap-4 p-4 bg-[var(--panel)] border border-[var(--panel-border)] rounded-xl shadow-sm cursor-pointer hover:border-[var(--primary)] transition-colors"
+          onClick={() => setIsSelectorOpen(!isSelectorOpen)}
+        >
+          <div className="flex-1">
+            <p className="text-xs font-medium text-[var(--muted)] uppercase tracking-wider">거래처</p>
+            <div className="flex items-center justify-between">
+              <h2 className="text-lg font-bold text-[var(--foreground)]">
+                {selectedParty ? selectedParty.name : "거래처를 선택하세요"}
+              </h2>
+              <span
+                className={cn(
+                  "text-sm font-semibold text-[var(--muted)] transition-transform",
+                  isSelectorOpen && "rotate-180"
+                )}
+                aria-hidden="true"
+              >
+                v
+              </span>
+            </div>
+          </div>
+          {selectedParty && (
+            <div className="hidden sm:block text-right">
+              <p className="text-xs font-medium text-[var(--muted)]">현재 잔액</p>
+              <AmountPill amount={selectedParty.balance_krw} className="text-lg" />
+            </div>
+          )}
+        </div>
+
+        {isSelectorOpen && (
+          <div className="absolute top-full left-0 right-0 mt-2 bg-[var(--panel)] border border-[var(--panel-border)] rounded-xl shadow-xl overflow-hidden flex flex-col max-h-[600px]">
+            <div className="border-b border-[var(--panel-border)] bg-[var(--chip)]">
+              <FilterBar>
+                <Input
+                  placeholder="거래처 검색..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  autoFocus
+                  onClick={(e) => e.stopPropagation()}
+                />
+                <Select
+                  value={balanceFilter}
+                  onChange={(e) => setBalanceFilter(e.target.value)}
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <option value="all">전체 잔액</option>
+                  <option value="receivable">미수만</option>
+                  <option value="credit">크레딧만</option>
+                  <option value="nonzero">0원 제외</option>
+                </Select>
+              </FilterBar>
+            </div>
+            <div className="overflow-y-auto flex-1 p-2 space-y-1">
+              {positionsQuery.isLoading
+                ? Array.from({ length: 6 }).map((_, index) => (
+                    <div key={index} className="p-3 rounded-lg border border-dashed border-[var(--panel-border)]">
+                      <Skeleton className="h-4 w-40" />
+                      <Skeleton className="mt-2 h-3 w-24" />
                     </div>
                   ))
-                ) : filteredParties.length > 0 ? (
-                  filteredParties.map((party) => {
-                    const balance = Number(party.balance_krw ?? 0);
-                    const badge =
-                      balance > 0
-                        ? { label: "미수", tone: "warning" as const }
-                        : balance < 0
-                          ? { label: "크레딧", tone: "active" as const }
-                          : { label: "정산", tone: "neutral" as const };
-                    return (
-                      <button
-                        key={party.party_id}
-                        type="button"
-                        onClick={() => applySelectedPartyId(party.party_id ?? null)}
-                        className="w-full text-left group focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)] rounded-lg transition-all"
-                      >
-                        <ListCard
-                          title={party.name ?? "-"}
-                          subtitle={
-                            <span className="flex items-center gap-2">
-                              <span className="text-xs text-[var(--muted)]">잔액</span>
-                              <AmountPill amount={balance} className="text-sm" />
-                            </span>
-                          }
-                          meta={<span className="tabular-nums text-xs opacity-80">미수 {formatKrw(party.receivable_krw)} · 크레딧 {formatKrw(party.credit_krw)}</span>}
-                          badge={badge}
-                          selected={party.party_id === effectiveSelectedPartyId}
-                          right={
-                            <span className="text-xs text-[var(--muted)] tabular-nums">
-                              {formatDateTimeKst(party.last_activity_at)}
-                            </span>
-                          }
-                        />
-                      </button>
-                    );
-                  })
-                ) : (
-                  <Card className="border-dashed shadow-none bg-transparent">
-                    <CardBody className="py-12 text-center">
-                      <p className="text-sm text-[var(--muted)]">데이터가 없습니다.</p>
-                    </CardBody>
-                  </Card>
-                )}
-              </div>
+                : filteredParties.map((party) => (
+                    <button
+                      key={party.party_id}
+                      className={cn(
+                        "w-full text-left p-3 rounded-lg hover:bg-[var(--panel-hover)] transition-colors flex items-center justify-between group",
+                        party.party_id === effectiveSelectedPartyId && "bg-[var(--panel-hover)]"
+                      )}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        applySelectedPartyId(party.party_id ?? null);
+                        setIsSelectorOpen(false);
+                      }}
+                    >
+                      <div>
+                        <p className="font-medium">{party.name}</p>
+                        <p className="text-xs text-[var(--muted)]">
+                          최근 활동: {formatDateTimeKst(party.last_activity_at)}
+                        </p>
+                      </div>
+                      <div className="text-right">
+                        <AmountPill amount={party.balance_krw} />
+                      </div>
+                    </button>
+                  ))}
+              {!positionsQuery.isLoading && filteredParties.length === 0 && (
+                <div className="p-8 text-center text-[var(--muted)]">검색 결과가 없습니다.</div>
+              )}
             </div>
-          }
-          right={
-            <div className="space-y-6 h-full flex flex-col" id="ar.detailPanel">
-              <Card id="ar.detail.summary" className="shrink-0 shadow-sm">
+          </div>
+        )}
+      </div>
+
+      {positionsQuery.isError ? (
+        <Card className="border-[var(--danger)]/40 bg-[var(--chip)]">
+          <CardBody>
+            <p className="text-sm text-[var(--danger)]">거래처 정보를 불러오지 못했습니다.</p>
+          </CardBody>
+        </Card>
+      ) : null}
+
+      <SplitLayout
+        left={
+          <Card className="h-full shadow-sm">
+            <CardHeader>
+              <ActionBar title="전체 요약" />
+            </CardHeader>
+            <CardBody>
+              {positionsQuery.isLoading ? (
+                <div className="space-y-3">
+                  <Skeleton className="h-4 w-32" />
+                  <Skeleton className="h-4 w-28" />
+                  <Skeleton className="h-8 w-36" />
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  <div className="flex justify-between items-center">
+                    <span className="text-sm text-[var(--muted)]">총 미수</span>
+                    <span className="font-bold">{formatKrw(summary.receivable)}</span>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-sm text-[var(--muted)]">총 크레딧</span>
+                    <span className="font-bold">{formatKrw(summary.credit)}</span>
+                  </div>
+                  <div className="pt-4 border-t flex justify-between items-center">
+                    <span className="text-sm font-medium">총 잔액</span>
+                    <AmountPill amount={summary.balance} className="text-xl" />
+                  </div>
+                </div>
+              )}
+            </CardBody>
+          </Card>
+        }
+        right={
+          <Card className="h-full shadow-sm">
+            <CardHeader>
+              <ActionBar title={selectedParty ? "거래처 요약" : "선택 없음"} />
+            </CardHeader>
+            <CardBody>
+              {positionsQuery.isLoading ? (
+                <div className="grid grid-cols-2 gap-4">
+                  <Skeleton className="h-10 w-full" />
+                  <Skeleton className="h-10 w-full" />
+                  <Skeleton className="h-10 w-full" />
+                  <Skeleton className="h-10 w-full" />
+                </div>
+              ) : selectedParty ? (
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                  <div>
+                    <p className="text-xs text-[var(--muted)]">미수</p>
+                    <p className="text-lg font-bold">{formatKrw(selectedParty.receivable_krw)}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-[var(--muted)]">크레딧</p>
+                    <p className="text-lg font-bold">{formatKrw(selectedParty.credit_krw)}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-[var(--muted)]">잔액</p>
+                    <AmountPill amount={selectedParty.balance_krw} className="text-lg" />
+                  </div>
+                  <div>
+                    <p className="text-xs text-[var(--muted)]">최근 활동</p>
+                    <p className="text-sm font-medium">{formatDateTimeKst(selectedParty.last_activity_at)}</p>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex items-center justify-center h-full text-[var(--muted)]">
+                  거래처를 선택하여 상세 정보를 확인하세요.
+                </div>
+              )}
+            </CardBody>
+          </Card>
+        }
+      />
+
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+        <div className="lg:col-span-8 space-y-4">
+          <Card className="min-h-[600px] flex flex-col shadow-sm">
+            <CardHeader className="shrink-0">
+              <ActionBar title="원장" />
+            </CardHeader>
+            <CardBody className="flex-1 min-h-0 p-0 overflow-hidden">
+              <div className="h-full overflow-auto relative">
+                <table className="w-full text-left text-xs">
+                  <thead className="text-[var(--muted)] bg-[var(--chip)] sticky top-0 z-10 shadow-sm">
+                    <tr>
+                      <th className="px-4 py-3 font-medium whitespace-nowrap">날짜</th>
+                      <th className="px-4 py-3 font-medium whitespace-nowrap">구분</th>
+                      <th className="px-4 py-3 font-medium whitespace-nowrap">모델명</th>
+                      <th className="px-4 py-3 font-medium text-right whitespace-nowrap">소재비</th>
+                      <th className="px-4 py-3 font-medium text-right whitespace-nowrap">공임</th>
+                      <th className="px-4 py-3 font-medium text-right whitespace-nowrap">합계</th>
+                      <th className="px-4 py-3 font-medium text-right whitespace-nowrap">증감</th>
+                      <th className="px-4 py-3 font-medium whitespace-nowrap">메모</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-[var(--panel-border)]">
+                    {ledgerQuery.isLoading ? (
+                      Array.from({ length: 10 }).map((_, i) => (
+                        <tr key={i}>
+                          <td className="px-4 py-3"><Skeleton className="h-4 w-20" /></td>
+                          <td className="px-4 py-3"><Skeleton className="h-4 w-12" /></td>
+                          <td className="px-4 py-3"><Skeleton className="h-4 w-24" /></td>
+                          <td className="px-4 py-3"><Skeleton className="h-4 w-16 ml-auto" /></td>
+                          <td className="px-4 py-3"><Skeleton className="h-4 w-16 ml-auto" /></td>
+                          <td className="px-4 py-3"><Skeleton className="h-4 w-16 ml-auto" /></td>
+                          <td className="px-4 py-3"><Skeleton className="h-4 w-16 ml-auto" /></td>
+                          <td className="px-4 py-3"><Skeleton className="h-4 w-32" /></td>
+                        </tr>
+                      ))
+                    ) : (ledgerQuery.data ?? []).map((row) => {
+                      const isShipment = (row.entry_type ?? "").toUpperCase() === "SHIPMENT";
+                      const shipmentLine = row.shipment_line_id
+                        ? shipmentLineById.get(row.shipment_line_id)
+                        : undefined;
+                      const modelName = shipmentLine?.model_name ?? "-";
+                      const optionParts = [shipmentLine?.suffix, shipmentLine?.color, shipmentLine?.size].filter(Boolean);
+                      const materialAmount = shipmentLine?.material_amount_sell_krw ?? null;
+                      const laborAmount = shipmentLine?.labor_total_sell_krw ?? null;
+                      const totalAmount = shipmentLine?.total_amount_sell_krw ?? null;
+                      return (
+                        <tr
+                          key={row.ar_ledger_id}
+                          onClick={() => {
+                            if (row.ar_ledger_id) setSelectedLedgerId(row.ar_ledger_id);
+                          }}
+                          className={cn(
+                            "group cursor-pointer transition-colors hover:bg-[var(--panel-hover)]",
+                            row.ar_ledger_id && selectedLedgerId === row.ar_ledger_id
+                              ? "bg-[var(--chip)] ring-1 ring-[var(--panel-border)]"
+                              : null
+                          )}
+                        >
+                          <td className="px-4 py-3 text-[var(--muted)] tabular-nums">
+                            {formatDateTimeKst(row.occurred_at)}
+                          </td>
+                          <td className="px-4 py-3">
+                            <span className="inline-flex items-center rounded-full border border-[var(--panel-border)] bg-[var(--chip)] px-2 py-0.5 text-[11px] font-semibold text-[var(--foreground)]">
+                              {isShipment ? "출고" : row.entry_type ?? "-"}
+                            </span>
+                          </td>
+                          <td className="px-4 py-3">
+                            <div className="space-y-1">
+                              <p className="text-sm font-semibold text-[var(--foreground)]">
+                                {isShipment ? modelName : "-"}
+                              </p>
+                              <p className="text-[11px] text-[var(--muted)]">
+                                {isShipment && optionParts.length > 0 ? optionParts.join(" / ") : "-"}
+                              </p>
+                            </div>
+                          </td>
+                          <td className="px-4 py-3 text-right tabular-nums text-[var(--muted)]">
+                            {isShipment ? formatKrw(materialAmount) : "-"}
+                          </td>
+                          <td className="px-4 py-3 text-right tabular-nums text-[var(--muted)]">
+                            {isShipment ? formatKrw(laborAmount) : "-"}
+                          </td>
+                          <td className="px-4 py-3 text-right tabular-nums font-semibold text-[var(--foreground)]">
+                            {isShipment ? formatKrw(totalAmount) : "-"}
+                          </td>
+                          <td className="px-4 py-3 text-right">
+                            <AmountPill amount={row.amount_krw} />
+                          </td>
+                          <td className="px-4 py-3 text-[var(--muted)] max-w-[220px] truncate" title={row.memo ?? ""}>
+                            {row.memo ?? "-"}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                    {!ledgerQuery.isLoading && ledgerQuery.isError && (ledgerQuery.data ?? []).length === 0 ? (
+                      <tr>
+                        <td className="px-4 py-12 text-center text-[var(--danger)]" colSpan={8}>
+                          원장 데이터를 불러오지 못했습니다.
+                        </td>
+                      </tr>
+                    ) : null}
+                    {!ledgerQuery.isLoading && !ledgerQuery.isError && (ledgerQuery.data ?? []).length === 0 ? (
+                      <tr>
+                        <td className="px-4 py-12 text-center text-[var(--muted)]" colSpan={8}>
+                          원장 내역이 없습니다.
+                        </td>
+                      </tr>
+                    ) : null}
+                  </tbody>
+                </table>
+              </div>
+            </CardBody>
+          </Card>
+        </div>
+
+        <div className="lg:col-span-4 space-y-4">
+          <div className="flex items-center gap-1 p-1 bg-[var(--chip)] rounded-lg w-full border">
+            {([
+              { key: "payment", label: "수금 등록" },
+              { key: "return", label: "반품 등록" },
+            ] as const).map((tab) => (
+              <button
+                key={tab.key}
+                type="button"
+                onClick={() => setActiveTab(tab.key)}
+                className={cn(
+                  "flex-1 rounded-md px-4 py-2 text-sm font-medium transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]",
+                  activeTab === tab.key
+                    ? "bg-[var(--panel)] text-[var(--foreground)] shadow-sm"
+                    : "text-[var(--muted)] hover:text-[var(--foreground)] hover:bg-[var(--panel-hover)]"
+                )}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
+
+          <div className="relative">
+            <div
+              className={cn(
+                "transition-all duration-200 ease-out",
+                activeTab === "payment"
+                  ? "opacity-100 translate-y-0"
+                  : "opacity-0 translate-y-2 pointer-events-none h-0 overflow-hidden"
+              )}
+              aria-hidden={activeTab !== "payment"}
+            >
+              <Card className="shadow-sm">
                 <CardHeader>
-                  <ActionBar title={selectedParty?.name ?? "고객 선택"} />
+                  <ActionBar title="수금 정보 입력" />
                 </CardHeader>
                 <CardBody>
-                  {selectedParty ? (
-                    <div className="grid gap-4 text-sm sm:grid-cols-4 tabular-nums">
-                      <div className="space-y-1">
-                        <p className="text-xs font-medium text-[var(--muted)]">잔액</p>
-                        <AmountPill amount={selectedParty.balance_krw} className="text-lg font-bold tracking-tight" />
-                      </div>
-                      <div className="space-y-1">
-                        <p className="text-xs font-medium text-[var(--muted)]">미수</p>
-                        <p className="text-lg font-bold tracking-tight text-[var(--foreground)]">
-                          {formatKrw(selectedParty.receivable_krw)}
-                        </p>
-                      </div>
-                      <div className="space-y-1">
-                        <p className="text-xs font-medium text-[var(--muted)]">크레딧</p>
-                        <p className="text-lg font-bold tracking-tight text-[var(--foreground)]">
-                          {formatKrw(selectedParty.credit_krw)}
-                        </p>
-                      </div>
-                      <div className="space-y-1">
-                        <p className="text-xs font-medium text-[var(--muted)]">최근 활동</p>
-                        <p className="text-sm font-medium pt-1">
-                          {formatDateTimeKst(selectedParty.last_activity_at)}
-                        </p>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="flex items-center justify-center py-8 text-[var(--muted)] bg-[var(--chip)] rounded-lg border border-dashed">
-                      <p className="text-sm">좌측에서 고객을 선택해 주세요.</p>
-                    </div>
-                  )}
-                </CardBody>
-              </Card>
-              <div className="flex items-center gap-1 p-1 bg-[var(--chip)] rounded-lg w-fit border">
-                {([
-                  { key: "ledger", label: "원장" },
-                  { key: "payment", label: "수금" },
-                  { key: "return", label: "반품" },
-                ] as const).map((tab) => (
-                  <button
-                    key={tab.key}
-                    type="button"
-                    onClick={() => setActiveTab(tab.key)}
-                    className={cn(
-                      "rounded-md px-4 py-1.5 text-sm font-medium transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]",
-                      activeTab === tab.key
-                        ? "bg-[var(--panel)] text-[var(--foreground)] shadow-sm"
-                        : "text-[var(--muted)] hover:text-[var(--foreground)] hover:bg-[var(--panel-hover)]"
-                    )}
+                  <form
+                    className="grid gap-6"
+                    onSubmit={(event) => {
+                      event.preventDefault();
+                      if (!canSubmitPayment) return;
+                      paymentMutation.mutate({
+                        p_party_id: effectivePaymentPartyId,
+                        p_paid_at: new Date(paidAt).toISOString(),
+                        p_tenders: tenderPayload,
+                        p_memo: paymentMemo || null,
+                      });
+                    }}
                   >
-                    {tab.label}
-                  </button>
-                ))}
-              </div>
-              {activeTab === "ledger" ? (
-                <Card id="ar.detail.ledgerTable" className="flex-1 flex flex-col min-h-0 shadow-sm">
-                  <CardHeader className="shrink-0">
-                    <ActionBar title="원장" />
-                  </CardHeader>
-                  <CardBody className="flex-1 min-h-0 p-0 overflow-hidden">
-                    <div className="h-full overflow-auto relative">
-                      <table className="w-full text-left text-xs">
-                        <thead className="text-[var(--muted)] bg-[var(--chip)] sticky top-0 z-10 shadow-sm">
-                          <tr>
-                            <th className="px-4 py-3 font-medium whitespace-nowrap">날짜</th>
-                            <th className="px-4 py-3 font-medium whitespace-nowrap">구분</th>
-                            <th className="px-4 py-3 font-medium whitespace-nowrap">모델명</th>
-                            <th className="px-4 py-3 font-medium text-right whitespace-nowrap">소재비</th>
-                            <th className="px-4 py-3 font-medium text-right whitespace-nowrap">공임</th>
-                            <th className="px-4 py-3 font-medium text-right whitespace-nowrap">합계</th>
-                            <th className="px-4 py-3 font-medium text-right whitespace-nowrap">증감</th>
-                            <th className="px-4 py-3 font-medium whitespace-nowrap">메모</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-[var(--panel-border)]">
-                          {ledgerQuery.isLoading ? (
-                            Array.from({ length: 10 }).map((_, i) => (
-                              <tr key={i}>
-                                <td className="px-4 py-3"><Skeleton className="h-4 w-20" /></td>
-                                <td className="px-4 py-3"><Skeleton className="h-4 w-12" /></td>
-                                <td className="px-4 py-3"><Skeleton className="h-4 w-24" /></td>
-                                <td className="px-4 py-3"><Skeleton className="h-4 w-16 ml-auto" /></td>
-                                <td className="px-4 py-3"><Skeleton className="h-4 w-16 ml-auto" /></td>
-                                <td className="px-4 py-3"><Skeleton className="h-4 w-16 ml-auto" /></td>
-                                <td className="px-4 py-3"><Skeleton className="h-4 w-16 ml-auto" /></td>
-                                <td className="px-4 py-3"><Skeleton className="h-4 w-32" /></td>
-                              </tr>
-                            ))
-                          ) : (ledgerQuery.data ?? []).map((row) => {
-                            const isShipment = (row.entry_type ?? "").toUpperCase() === "SHIPMENT";
-                            const shipmentLine = row.shipment_line_id
-                              ? shipmentLineById.get(row.shipment_line_id)
-                              : undefined;
-                            const modelName = shipmentLine?.model_name ?? "-";
-                            const optionParts = [shipmentLine?.suffix, shipmentLine?.color, shipmentLine?.size].filter(Boolean);
-                            const materialAmount = shipmentLine?.material_amount_sell_krw ?? null;
-                            const laborAmount = shipmentLine?.labor_total_sell_krw ?? null;
-                            const totalAmount = shipmentLine?.total_amount_sell_krw ?? null;
-                            return (
-                              <tr key={row.ar_ledger_id} className="group transition-colors hover:bg-[var(--panel-hover)]">
-                                <td className="px-4 py-3 text-[var(--muted)] tabular-nums">
-                                  {formatDateTimeKst(row.occurred_at)}
-                                </td>
-                                <td className="px-4 py-3">
-                                  <span className="inline-flex items-center rounded-full border border-[var(--panel-border)] bg-[var(--chip)] px-2 py-0.5 text-[11px] font-semibold text-[var(--foreground)]">
-                                    {isShipment ? "출고" : row.entry_type ?? "-"}
-                                  </span>
-                                </td>
-                                <td className="px-4 py-3">
-                                  <div className="space-y-1">
-                                    <p className="text-sm font-semibold text-[var(--foreground)]">
-                                      {isShipment ? modelName : "-"}
-                                    </p>
-                                    <p className="text-[11px] text-[var(--muted)]">
-                                      {isShipment && optionParts.length > 0 ? optionParts.join(" / ") : "-"}
-                                    </p>
-                                  </div>
-                                </td>
-                                <td className="px-4 py-3 text-right tabular-nums text-[var(--muted)]">
-                                  {isShipment ? formatKrw(materialAmount) : "-"}
-                                </td>
-                                <td className="px-4 py-3 text-right tabular-nums text-[var(--muted)]">
-                                  {isShipment ? formatKrw(laborAmount) : "-"}
-                                </td>
-                                <td className="px-4 py-3 text-right tabular-nums font-semibold text-[var(--foreground)]">
-                                  {isShipment ? formatKrw(totalAmount) : "-"}
-                                </td>
-                                <td className="px-4 py-3 text-right">
-                                  <AmountPill amount={row.amount_krw} />
-                                </td>
-                                <td className="px-4 py-3 text-[var(--muted)] max-w-[220px] truncate" title={row.memo ?? ""}>
-                                  {row.memo ?? "-"}
-                                </td>
-                              </tr>
-                            );
-                          })}
-                          {!ledgerQuery.isLoading && ledgerQuery.isError && (ledgerQuery.data ?? []).length === 0 ? (
-                            <tr>
-                              <td className="px-4 py-12 text-center text-[var(--danger)]" colSpan={8}>
-                                원장 데이터를 불러오지 못했습니다.
-                              </td>
-                            </tr>
-                          ) : null}
-                          {!ledgerQuery.isLoading && !ledgerQuery.isError && (ledgerQuery.data ?? []).length === 0 ? (
-                            <tr>
-                              <td className="px-4 py-12 text-center text-[var(--muted)]" colSpan={8}>
-                                원장 내역이 없습니다.
-                              </td>
-                            </tr>
-                          ) : null}
-                        </tbody>
-                      </table>
+                  <div className="space-y-2">
+                    <p className="text-xs font-semibold uppercase tracking-wider text-[var(--muted)]">
+                      수금일시*
+                    </p>
+                    <Input
+                      type="datetime-local"
+                      value={paidAt}
+                      onChange={(event) => setPaidAt(event.target.value)}
+                    />
+                  </div>
+
+                  <div className="space-y-3 border rounded-lg p-4 bg-[var(--chip)]">
+                    <div className="flex items-center justify-between mb-2">
+                      <p className="text-xs font-semibold uppercase tracking-wider text-[var(--muted)]">결제 수단</p>
                     </div>
-                  </CardBody>
-                </Card>
-              ) : null}
-              {activeTab === "payment" ? (
-                <Card id="ar.detail.payment" className="shadow-sm">
-                  <CardHeader>
-                    <ActionBar title="수금 등록" />
-                  </CardHeader>
-                  <CardBody>
-                    <form
-                      className="grid gap-6"
-                      onSubmit={(event) => {
-                        event.preventDefault();
-                        if (!canSubmitPayment) return;
-                        paymentMutation.mutate({
-                          p_party_id: effectivePaymentPartyId,
-                          p_paid_at: new Date(paidAt).toISOString(),
-                          p_tenders: tenderPayload,
-                          p_memo: paymentMemo || null,
-                        });
-                      }}
-                    >
-                      <div className="grid gap-4 sm:grid-cols-2">
-                        <div className="space-y-2">
-                          <p className="text-xs font-semibold uppercase tracking-wider text-[var(--muted)]">
-                            거래처*
-                          </p>
-                          <Input
-                            placeholder="좌측에서 거래처를 선택하세요"
-                            value={selectedParty?.name ?? ""}
-                            disabled
-                            className="bg-[var(--chip)]"
-                          />
-                        </div>
-                        <div className="space-y-2">
-                          <p className="text-xs font-semibold uppercase tracking-wider text-[var(--muted)]">
-                            수금일시*
-                          </p>
-                          <Input
-                            type="datetime-local"
-                            value={paidAt}
-                            onChange={(event) => setPaidAt(event.target.value)}
-                          />
-                        </div>
-                      </div>
-                      
-                      <div className="space-y-3 border rounded-lg p-4 bg-[var(--chip)]">
-                        <div className="flex items-center justify-between mb-2">
-                          <p className="text-xs font-semibold uppercase tracking-wider text-[var(--muted)]">결제 수단</p>
-                        </div>
-                        {tenders.map((line) => (
-                          <div key={line.id} className="grid gap-3 sm:grid-cols-[120px_1fr_1fr_auto]">
-                            <Select
-                              value={line.method}
-                              onChange={(event) =>
-                                setTenders((prev) =>
-                                  prev.map((item) =>
-                                    item.id === line.id ? { ...item, method: event.target.value } : item
-                                  )
+                    {tenders.map((line) => (
+                      <div key={line.id} className="grid gap-3">
+                        <div className="grid grid-cols-2 gap-2">
+                          <Select
+                            value={line.method}
+                            onChange={(event) =>
+                              setTenders((prev) =>
+                                prev.map((item) =>
+                                  item.id === line.id ? { ...item, method: event.target.value } : item
                                 )
-                              }
-                            >
-                              {paymentMethods.map((method) => (
-                                <option key={method} value={method}>
-                                  {method}
-                                </option>
-                              ))}
-                            </Select>
-                            <Input
-                              type="number"
-                              min={0}
-                              placeholder="금액"
-                              value={line.amount}
-                              onChange={(event) =>
-                                setTenders((prev) =>
-                                  prev.map((item) =>
-                                    item.id === line.id ? { ...item, amount: event.target.value } : item
-                                  )
-                                )
-                              }
-                              className="tabular-nums text-right"
-                            />
-                            <Input
-                              placeholder="메모"
-                              value={line.meta}
-                              onChange={(event) =>
-                                setTenders((prev) =>
-                                  prev.map((item) =>
-                                    item.id === line.id ? { ...item, meta: event.target.value } : item
-                                  )
-                                )
-                              }
-                            />
-                            <div className="flex items-center gap-1">
-                              <Button
-                                type="button"
-                                variant="secondary"
-                                onClick={() => setTenders((prev) => prev.filter((item) => item.id !== line.id))}
-                                disabled={tenders.length === 1}
-                                className="px-2"
-                              >
-                                삭제
-                              </Button>
-                              <Button type="button" variant="secondary" onClick={() => setTenders((prev) => [...prev, createTenderLine()])} className="px-2">
-                                추가
-                              </Button>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-
-                      <div className="space-y-2">
-                         <p className="text-xs font-semibold uppercase tracking-wider text-[var(--muted)]">
-                            메모
-                          </p>
-                        <Textarea
-                          placeholder="메모를 입력하세요"
-                          value={paymentMemo}
-                          onChange={(event) => setPaymentMemo(event.target.value)}
-                          className="min-h-[80px]"
-                        />
-                      </div>
-
-                      <div className="flex items-center justify-between pt-4 border-t">
-                        <div className="space-y-1">
-                          <p className="text-xs text-[var(--muted)]">총 결제 금액</p>
-                          <p className="text-lg font-bold tabular-nums">{formatKrw(totalTenderAmount)}</p>
-                        </div>
-                        <div className="flex items-center gap-3">
-                          {!canSavePayment ? (
-                            <p className="text-xs text-[var(--muted)]">
-                              cms 계약의 결제 등록 RPC명이 필요합니다.
-                            </p>
-                          ) : null}
-                          <Button type="submit" disabled={!canSubmitPayment} size="lg">
-                            저장하기
-                          </Button>
-                        </div>
-                      </div>
-                    </form>
-                  </CardBody>
-                </Card>
-              ) : null}
-              {activeTab === "return" ? (
-                <Card id="ar.detail.return" className="shadow-sm">
-                  <CardHeader>
-                    <ActionBar title="반품 등록" />
-                  </CardHeader>
-                  <CardBody>
-                    <form
-                      className="grid gap-6"
-                      onSubmit={(event) => {
-                        event.preventDefault();
-                        if (!canSubmitReturn) return;
-                        returnMutation.mutate({
-                          p_shipment_line_id: effectiveReturnShipmentLineId,
-                          p_return_qty: parsedReturnQty,
-                          p_occurred_at: new Date(returnOccurredAt).toISOString(),
-                          p_override_amount_krw:
-                            returnOverrideAmount !== "" ? Number(returnOverrideAmount) : null,
-                          p_reason: returnReason || null,
-                        });
-                      }}
-                    >
-                      <div className="grid gap-4 sm:grid-cols-2">
-                        <div className="space-y-2">
-                          <p className="text-xs font-semibold uppercase tracking-wider text-[var(--muted)]">
-                            거래처*
-                          </p>
-                          <Input
-                            placeholder="좌측에서 거래처를 선택하세요"
-                            value={selectedParty?.name ?? ""}
-                            disabled
-                            className="bg-[var(--chip)]"
-                          />
-                        </div>
-                        <SearchSelect
-                          label="출고 라인*"
-                          placeholder="검색"
-                          options={shipmentLineOptions}
-                          value={effectiveReturnShipmentLineId}
-                          onChange={(value) => setReturnShipmentLineId(value)}
-                        />
-                      </div>
-
-                      <div className="grid gap-3 sm:grid-cols-3 p-4 bg-[var(--chip)] rounded-lg border">
-                        <div className="space-y-1">
-                          <p className="text-xs font-medium text-[var(--muted)]">출고 수량</p>
-                          <p className="text-lg font-bold tabular-nums">{selectedLine?.qty ?? "-"}</p>
-                        </div>
-                        <div className="space-y-1">
-                          <p className="text-xs font-medium text-[var(--muted)]">누적 반품</p>
-                          <p className="text-lg font-bold tabular-nums">{selectedLine ? returnedBefore : "-"}</p>
-                        </div>
-                        <div className="space-y-1">
-                          <p className="text-xs font-medium text-[var(--muted)]">잔여 수량</p>
-                          <p className={cn("text-lg font-bold tabular-nums", selectedLine && remainingQty === 0 ? "text-[var(--muted)]" : "text-[var(--primary)]")}>{selectedLine ? remainingQty : "-"}</p>
-                        </div>
-                      </div>
-
-                      <div className="grid gap-4 sm:grid-cols-3">
-                        <div className="space-y-2">
-                          <p className="text-xs font-semibold uppercase tracking-wider text-[var(--muted)]">
-                            반품 수량*
-                          </p>
-                          <Input
-                            type="number"
-                            min={1}
-                            placeholder="반품 수량"
-                            value={returnQty}
-                            onChange={(event) => setReturnQty(event.target.value)}
-                            className="tabular-nums"
-                          />
-                        </div>
-                        <div className="space-y-2">
-                          <p className="text-xs font-semibold uppercase tracking-wider text-[var(--muted)]">
-                            반품 일시*
-                          </p>
-                          <Input
-                            type="datetime-local"
-                            value={returnOccurredAt}
-                            onChange={(event) => setReturnOccurredAt(event.target.value)}
-                          />
-                        </div>
-                        <div className="space-y-2">
-                          <p className="text-xs font-semibold uppercase tracking-wider text-[var(--muted)]">
-                            금액 (옵션)
-                          </p>
+                              )
+                            }
+                          >
+                            {paymentMethods.map((method) => (
+                              <option key={method} value={method}>
+                                {method}
+                              </option>
+                            ))}
+                          </Select>
                           <Input
                             type="number"
                             min={0}
-                            placeholder="금액(옵션)"
-                            value={returnOverrideAmount}
-                            onChange={(event) => setReturnOverrideAmount(event.target.value)}
+                            placeholder="금액"
+                            value={line.amount}
+                            onChange={(event) =>
+                              setTenders((prev) =>
+                                prev.map((item) =>
+                                  item.id === line.id ? { ...item, amount: event.target.value } : item
+                                )
+                              )
+                            }
                             className="tabular-nums text-right"
                           />
                         </div>
-                      </div>
-
-                      <div className="grid gap-2 text-sm p-4 bg-[var(--chip)] rounded-lg border border-dashed">
-                        <div className="flex items-center justify-between text-[var(--muted)]">
-                          <span>자동 계산 금액</span>
-                          <span className="tabular-nums">{formatKrw(autoReturnAmount)}</span>
+                        <div className="flex gap-2">
+                          <Input
+                            placeholder="메모"
+                            value={line.meta}
+                            onChange={(event) =>
+                              setTenders((prev) =>
+                                prev.map((item) =>
+                                  item.id === line.id ? { ...item, meta: event.target.value } : item
+                                )
+                              )
+                            }
+                            className="flex-1"
+                          />
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        onClick={() => setTenders((prev) => prev.filter((item) => item.id !== line.id))}
+                        disabled={tenders.length === 1}
+                        className="px-3"
+                      >
+                        삭제
+                      </Button>
                         </div>
-                        <div className="flex items-center justify-between text-[var(--foreground)] pt-2 border-t border-dashed border-[var(--panel-border)]">
-                          <span className="font-medium">최종 반품 금액</span>
-                          <span className="font-bold text-lg tabular-nums">{formatKrw(finalReturnAmount)}</span>
-                        </div>
                       </div>
+                    ))}
+                    <Button type="button" variant="secondary" onClick={() => setTenders((prev) => [...prev, createTenderLine()])} className="w-full">
+                      결제 수단 추가
+                    </Button>
+                  </div>
 
-                      <div className="space-y-2">
-                        <p className="text-xs font-semibold uppercase tracking-wider text-[var(--muted)]">
-                            사유
-                          </p>
-                        <Textarea
-                          placeholder="반품 사유를 입력하세요"
-                          value={returnReason}
-                          onChange={(event) => setReturnReason(event.target.value)}
-                          className="min-h-[80px]"
-                        />
-                      </div>
+                  <div className="space-y-2">
+                    <p className="text-xs font-semibold uppercase tracking-wider text-[var(--muted)]">
+                      메모
+                    </p>
+                    <Textarea
+                      placeholder="메모를 입력하세요"
+                      value={paymentMemo}
+                      onChange={(event) => setPaymentMemo(event.target.value)}
+                      className="min-h-[80px]"
+                    />
+                  </div>
 
-                      <div className="flex items-center justify-end gap-3 pt-4 border-t">
-                        {!canSaveReturn ? (
-                          <p className="text-xs text-[var(--muted)]">
-                            cms 계약의 반품 등록 RPC명이 필요합니다.
-                          </p>
-                        ) : null}
-                        <Button type="submit" disabled={!canSubmitReturn} size="lg">
-                          반품 등록하기
-                        </Button>
-                      </div>
-                    </form>
-                  </CardBody>
-                </Card>
-              ) : null}
+                  <div className="flex items-center justify-between pt-4 border-t">
+                    <div className="space-y-1">
+                      <p className="text-xs text-[var(--muted)]">총 결제 금액</p>
+                      <p className="text-lg font-bold tabular-nums">{formatKrw(totalTenderAmount)}</p>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      {!canSavePayment ? (
+                        <p className="text-xs text-[var(--muted)]">
+                          cms 계약의 결제 등록 RPC명이 필요합니다.
+                        </p>
+                      ) : null}
+                      <Button type="submit" disabled={!canSubmitPayment} size="lg">
+                        저장하기
+                      </Button>
+                    </div>
+                  </div>
+                </form>
+                </CardBody>
+              </Card>
             </div>
-          }
-        />
+            <div
+              className={cn(
+                "transition-all duration-200 ease-out",
+                activeTab === "return"
+                  ? "opacity-100 translate-y-0"
+                  : "opacity-0 translate-y-2 pointer-events-none h-0 overflow-hidden"
+              )}
+              aria-hidden={activeTab !== "return"}
+            >
+              <Card className="shadow-sm">
+                <CardHeader>
+                  <ActionBar title="반품 정보 입력" />
+                </CardHeader>
+                <CardBody>
+                  <form
+                    className="grid gap-6"
+                    onSubmit={(event) => {
+                      event.preventDefault();
+                      if (!canSubmitReturn) return;
+                      returnMutation.mutate({
+                        p_shipment_line_id: effectiveReturnShipmentLineId,
+                        p_return_qty: parsedReturnQty,
+                        p_occurred_at: new Date(returnOccurredAt).toISOString(),
+                        p_override_amount_krw:
+                          returnOverrideAmount !== "" ? Number(returnOverrideAmount) : null,
+                        p_reason: returnReason || null,
+                      });
+                    }}
+                  >
+                    {!canSaveReturn ? (
+                      <p className="text-xs text-[var(--muted)]">
+                        cms 계약의 반품 등록 RPC명이 필요합니다.
+                      </p>
+                    ) : null}
+                    {shipmentLinesQuery.isError || returnLinesQuery.isError ? (
+                      <p className="text-xs text-[var(--danger)]">
+                        출고 라인 정보를 불러오지 못했습니다.
+                      </p>
+                    ) : null}
+                  <SearchSelect
+                    label="출고 라인*"
+                    placeholder="검색"
+                    options={shipmentLineOptions}
+                    value={effectiveReturnShipmentLineId}
+                    onChange={(value) => setReturnShipmentLineId(value)}
+                  />
+
+                  <div className="grid gap-3 sm:grid-cols-3 p-4 bg-[var(--chip)] rounded-lg border">
+                    <div className="space-y-1">
+                      <p className="text-xs font-medium text-[var(--muted)]">출고</p>
+                      <p className="text-lg font-bold tabular-nums">{selectedLine?.qty ?? "-"}</p>
+                    </div>
+                    <div className="space-y-1">
+                      <p className="text-xs font-medium text-[var(--muted)]">반품</p>
+                      <p className="text-lg font-bold tabular-nums">{selectedLine ? returnedBefore : "-"}</p>
+                    </div>
+                    <div className="space-y-1">
+                      <p className="text-xs font-medium text-[var(--muted)]">잔여</p>
+                      <p className={cn("text-lg font-bold tabular-nums", selectedLine && remainingQty === 0 ? "text-[var(--muted)]" : "text-[var(--primary)]")}>{selectedLine ? remainingQty : "-"}</p>
+                    </div>
+                  </div>
+
+                  <div className="grid gap-4 sm:grid-cols-3">
+                    <div className="space-y-2">
+                      <p className="text-xs font-semibold uppercase tracking-wider text-[var(--muted)]">
+                        반품 수량*
+                      </p>
+                      <Input
+                        type="number"
+                        min={1}
+                        placeholder="수량"
+                        value={returnQty}
+                        onChange={(event) => setReturnQty(event.target.value)}
+                        className="tabular-nums"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <p className="text-xs font-semibold uppercase tracking-wider text-[var(--muted)]">
+                        금액 (옵션)
+                      </p>
+                      <Input
+                        type="number"
+                        min={0}
+                        placeholder="금액"
+                        value={returnOverrideAmount}
+                        onChange={(event) => setReturnOverrideAmount(event.target.value)}
+                        className="tabular-nums text-right"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <p className="text-xs font-semibold uppercase tracking-wider text-[var(--muted)]">
+                      반품 일시*
+                    </p>
+                    <Input
+                      type="datetime-local"
+                      value={returnOccurredAt}
+                      onChange={(event) => setReturnOccurredAt(event.target.value)}
+                    />
+                  </div>
+
+                  <div className="grid gap-2 text-sm p-4 bg-[var(--chip)] rounded-lg border border-dashed">
+                    <div className="flex items-center justify-between text-[var(--muted)]">
+                      <span>자동 계산 금액</span>
+                      <span className="tabular-nums">{formatKrw(autoReturnAmount)}</span>
+                    </div>
+                    <div className="flex items-center justify-between text-[var(--foreground)] pt-2 border-t border-dashed border-[var(--panel-border)]">
+                      <span className="font-medium">최종 반품 금액</span>
+                      <span className="font-bold text-lg tabular-nums">{formatKrw(finalReturnAmount)}</span>
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <p className="text-xs font-semibold uppercase tracking-wider text-[var(--muted)]">
+                      사유
+                    </p>
+                    <Textarea
+                      placeholder="반품 사유를 입력하세요"
+                      value={returnReason}
+                      onChange={(event) => setReturnReason(event.target.value)}
+                      className="min-h-[80px]"
+                    />
+                  </div>
+
+                  <div className="flex items-center justify-end gap-3 pt-4 border-t">
+                    <Button type="submit" disabled={!canSubmitReturn} size="lg">
+                      반품 등록하기
+                    </Button>
+                  </div>
+                  </form>
+                </CardBody>
+              </Card>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   );

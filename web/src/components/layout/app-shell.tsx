@@ -1,20 +1,28 @@
-import type { ReactNode } from "react";
+"use client";
 
-import { TopNav } from "@/components/layout/top-nav";
+import { useState } from "react";
+import { SidebarNav } from "@/components/layout/sidebar-nav";
+import { GlobalTopBar } from "@/components/layout/global-top-bar";
 
-export function AppShell({ children }: { children: ReactNode }) {
+export function AppShell({ children }: { children: React.ReactNode }) {
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+
   return (
-    <div className="min-h-screen bg-[var(--background)] overflow-x-hidden" data-app-shell="v4">
-      {/* 상단 주 네비게이션 (레거시 좌측 사이드바 제거) */}
-      <header className="sticky top-0 z-40 border-b border-[color:var(--hairline)] bg-[color:var(--background)/0.72] backdrop-blur-md backdrop-saturate-150 supports-[backdrop-filter]:bg-[color:var(--background)/0.6] shadow-[var(--shadow-glass)] transition-[background,box-shadow] duration-200">
-        <div className="mx-auto w-full max-w-[1920px] px-4 sm:px-6 lg:px-10">
-          <div className="py-3">
-            <TopNav />
-          </div>
-        </div>
-      </header>
+    <div className="flex min-h-screen bg-[var(--background)]" data-app-shell="v5">
+      {/* Sidebar Navigation */}
+      <SidebarNav 
+        mobileOpen={mobileMenuOpen} 
+        onMobileClose={() => setMobileMenuOpen(false)} 
+      />
 
-      <main className="mx-auto w-full max-w-[1920px] px-4 sm:px-6 lg:px-10 py-7 lg:py-8">{children}</main>
+      {/* Main Content Area */}
+      <div className="flex flex-1 flex-col min-w-0 transition-[margin] duration-300 ease-in-out">
+        <GlobalTopBar onMobileMenuOpen={() => setMobileMenuOpen(true)} />
+        
+        <main className="flex-1 w-full max-w-[1920px] mx-auto px-4 sm:px-6 lg:px-8 py-6">
+          {children}
+        </main>
+      </div>
     </div>
   );
 }

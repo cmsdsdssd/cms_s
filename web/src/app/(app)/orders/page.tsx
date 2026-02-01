@@ -819,574 +819,496 @@ function OrdersPageContent() {
   return (
     <>
       {initLoading && <LoadingOverlay />}
-      <div className="flex flex-col gap-8 font-[family-name:var(--font-manrope)] text-foreground pb-32 max-w-[1800px] mx-auto px-6 pt-6">
-        {/* Header Section */}
-        <div className="flex items-end justify-between border-b border-border/40 pb-6">
-          <div className="space-y-2">
-            <nav className="flex items-center gap-2 text-xs font-medium text-muted-foreground/60">
-              <span>Home</span>
-              <span className="text-muted-foreground/30">/</span>
-              <span>Sales</span>
-              <span className="text-muted-foreground/30">/</span>
-              <span className="text-foreground">Order Registration</span>
-            </nav>
-            <div className="space-y-1">
-              <h1 className="text-3xl font-bold tracking-tight text-foreground">주문 등록 (Order Registration)</h1>
-              <p className="text-sm text-muted-foreground">주문 1건을 빠르게 등록하거나 편집합니다.</p>
-            </div>
+      
+      {/* Sticky Status Bar */}
+      <div className="sticky top-0 z-40 w-full bg-background/80 backdrop-blur-md border-b border-border/40 px-6 py-3 flex items-center justify-between transition-all duration-200">
+        <div className="flex items-center gap-4">
+          <div className="flex flex-col">
+            <h1 className="text-lg font-bold tracking-tight text-foreground">
+              {editId ? "주문 수정" : "주문 등록"}
+            </h1>
+            <p className="text-xs text-muted-foreground">
+              {editId ? `Order #${editId}` : "New Order Entry"}
+            </p>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="h-8 w-px bg-border/50 mx-2" />
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+             <span className={cn("w-2 h-2 rounded-full", saveInFlight.current.size > 0 ? "bg-yellow-500 animate-pulse" : "bg-emerald-500")} />
+             {saveInFlight.current.size > 0 ? "Saving..." : "Ready"}
+          </div>
+        </div>
+        <div className="flex items-center gap-3">
             <Link href="/orders_main">
-              <Button variant="secondary" className="h-10 px-4 rounded-full border-border/60 hover:bg-muted/50 hover:text-foreground transition-all">
-                <span className="mr-2 text-xs">✕</span> 닫기
+              <Button variant="ghost" size="sm" className="h-8 text-muted-foreground hover:text-foreground">
+                닫기
               </Button>
             </Link>
+        </div>
+      </div>
+
+      <div className="max-w-[1800px] mx-auto px-6 py-8 grid grid-cols-1 lg:grid-cols-[1fr_400px] gap-8 pb-32">
+        
+        {/* Left Column: Form Sections */}
+        <div className="space-y-6 min-w-0">
+          {rows.slice((pageIndex - 1) * PAGE_SIZE, pageIndex * PAGE_SIZE).map((row, idx) => {
+             const errors = rowErrors[row.id] ?? {};
+             const realIdx = (pageIndex - 1) * PAGE_SIZE + idx + 1;
+             
+             return (
+               <Card key={row.id} className="border border-border/50 shadow-sm hover:shadow-md transition-all duration-300 overflow-hidden group"
+                     onBlur={(event) => {
+                        const next = event.relatedTarget as Node | null;
+                        if (next && event.currentTarget.contains(next)) return;
+                        const current = rows.find((item) => item.id === row.id);
+                        if (current) void saveRow(current);
+                     }}>
+                 <CardHeader className="flex flex-row items-center justify-between py-3 px-5 border-b border-border/40 bg-muted/5">
+                    <div className="flex items-center gap-3">
+                      <Badge variant="outline" className="bg-background font-mono">#{realIdx}</Badge>
+                      {row.order_line_id && <Badge variant="secondary" className="text-[10px]">Saved</Badge>}
+                    </div>
+                    <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-red-500 hover:bg-red-50" onClick={() => handleDeleteRow(row.id)}>
+                      <span className="sr-only">Delete</span>
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+                    </Button>
+                 </CardHeader>
+                 
+                 <CardBody className="p-5 space-y-8">
+                    {/* Section 1: Customer */}
+                    <div className="space-y-3">
+                      <div>
+                        <div className="flex items-center gap-2 pb-1 border-b border-border/30">
+                          <span className="text-xs font-bold text-foreground">Customer</span>
+                        </div>
+                        <p className="text-[11px] text-muted-foreground">거래처 이름을 입력하면 자동으로 매칭됩니다.</p>
+                      </div>
+                      <div className="space-y-2">
+                        <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-1">
+                          거래처 <span className="text-red-500">*</span>
+                        </label>
+                        <input
+                          className={cn(
+                            "w-full bg-muted/10 border border-border/60 focus:border-primary/50 focus:ring-2 focus:ring-primary/10 rounded-md px-3 py-2 text-sm transition-all placeholder:text-muted-foreground/30",
+                            errors.client ? "bg-red-50 border-red-200 ring-red-200" : ""
+                          )}
+                          value={row.client_input}
+                          onChange={(e) => updateRow(row.id, { client_input: e.target.value })}
+                          onBlur={(e) => resolveClient(row.id, e.currentTarget.value)}
+                          placeholder="거래처 검색..."
+                        />
+                        {errors.client && <p className="text-[10px] text-red-500 font-medium">{errors.client}</p>}
+                      </div>
+                    </div>
+
+                    {/* Section 2: Model */}
+                    <div className="space-y-3">
+                      <div>
+                        <div className="flex items-center gap-2 pb-1 border-b border-border/30">
+                          <span className="text-xs font-bold text-foreground">Model</span>
+                        </div>
+                        <p className="text-[11px] text-muted-foreground">모델명을 입력하면 마스터 정보와 연결됩니다.</p>
+                      </div>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div className="space-y-2">
+                          <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-1">
+                            모델번호 <span className="text-red-500">*</span>
+                          </label>
+                          <input
+                            className={cn(
+                              "w-full bg-muted/10 border border-border/60 focus:border-primary/50 focus:ring-2 focus:ring-primary/10 rounded-md px-3 py-2 text-sm font-medium transition-all placeholder:text-muted-foreground/30",
+                              errors.model ? "bg-red-50 border-red-200 ring-red-200" : ""
+                            )}
+                            value={row.model_input}
+                            onChange={(e) => updateRow(row.id, { model_input: e.target.value })}
+                            onBlur={(e) => resolveMaster(row.id, e.currentTarget.value)}
+                            placeholder="모델명 검색..."
+                          />
+                          {errors.model && <p className="text-[10px] text-red-500 font-medium">{errors.model}</p>}
+                        </div>
+                        <div className="space-y-2">
+                          <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">분류</label>
+                          <div className="w-full px-3 py-2 text-sm bg-muted/20 border border-border/40 rounded-md text-muted-foreground select-none">
+                            {getCategoryName(row.suffix) || "-"}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Section 3: Options */}
+                    <div className="space-y-3">
+                      <div>
+                        <div className="flex items-center gap-2 pb-1 border-b border-border/30">
+                          <span className="text-xs font-bold text-foreground">Options</span>
+                        </div>
+                        <p className="text-[11px] text-muted-foreground">색상/도금/사이즈/수량을 지정합니다.</p>
+                      </div>
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                        <div className="space-y-1.5">
+                          <label className="text-[10px] font-medium text-muted-foreground">색상</label>
+                          <select
+                            className={cn("w-full bg-background border border-border/60 rounded-md px-2 py-2 text-sm focus:border-primary/50 focus:ring-2 focus:ring-primary/10 transition-colors", errors.color && "border-red-200")}
+                            value={row.color}
+                            onChange={(e) => updateRow(row.id, { color: e.target.value })}
+                          >
+                            <option value="">선택</option>
+                            {MAIN_COLOR_OPTIONS.map((opt) => (
+                              <option key={opt.value} value={opt.value}>
+                                {opt.label}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <div className="space-y-1.5">
+                          <label className="text-[10px] font-medium text-muted-foreground">사이즈</label>
+                          <input
+                            className="w-full bg-background border border-border/60 rounded-md px-3 py-2 text-sm focus:border-primary/50 focus:ring-2 focus:ring-primary/10 transition-colors"
+                            value={row.size}
+                            onChange={(e) => updateRow(row.id, { size: e.target.value })}
+                          />
+                        </div>
+                        <div className="space-y-1.5">
+                          <label className="text-[10px] font-medium text-muted-foreground">수량</label>
+                          <input
+                            type="number"
+                            className={cn("w-full bg-background border border-border/60 rounded-md px-3 py-2 text-sm text-center tabular-nums focus:border-primary/50 focus:ring-2 focus:ring-primary/10 transition-colors", errors.qty && "border-red-200")}
+                            value={row.qty}
+                            onChange={(e) => updateRow(row.id, { qty: e.target.value })}
+                          />
+                        </div>
+                        <div className="space-y-1.5">
+                          <div className="flex items-center justify-between">
+                            <label className="text-[10px] font-medium text-muted-foreground">도금</label>
+                            <input
+                              type="checkbox"
+                              checked={row.is_plated}
+                              onChange={(e) =>
+                                updateRow(row.id, {
+                                  is_plated: e.target.checked,
+                                  plating_color: e.target.checked ? row.plating_color : "",
+                                })
+                              }
+                              className="w-3 h-3 rounded border-border text-primary focus:ring-primary/20"
+                            />
+                          </div>
+                          <select
+                            className={cn(
+                              "w-full bg-background border border-border/60 rounded-md px-2 py-2 text-sm focus:border-primary/50 focus:ring-2 focus:ring-primary/10 transition-colors",
+                              !row.is_plated && "opacity-50 cursor-not-allowed",
+                              errors.plating && "border-red-200"
+                            )}
+                            value={row.plating_color}
+                            onChange={(e) => updateRow(row.id, { plating_color: e.target.value })}
+                            disabled={!row.is_plated}
+                          >
+                            <option value="">선택</option>
+                            <optgroup label="단색">
+                              {PLATING_OPTIONS.filter((opt) => opt.type === "단색").map((opt) => (
+                                <option key={opt.value} value={opt.value}>
+                                  {opt.label}
+                                </option>
+                              ))}
+                            </optgroup>
+                            <optgroup label="콤비">
+                              {PLATING_OPTIONS.filter((opt) => opt.type === "콤비").map((opt) => (
+                                <option key={opt.value} value={opt.value}>
+                                  {opt.label}
+                                </option>
+                              ))}
+                            </optgroup>
+                          </select>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Section 4: Stones */}
+                    <div className="space-y-3">
+                      <div>
+                        <div className="flex items-center gap-2 pb-1 border-b border-border/30">
+                          <span className="text-xs font-bold text-foreground">Stones</span>
+                          {errors.stones && <span className="text-[10px] text-red-500 font-medium">{errors.stones}</span>}
+                        </div>
+                        <p className="text-[11px] text-muted-foreground">센터/보조 스톤과 개수를 입력합니다.</p>
+                      </div>
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        <div className="p-3 rounded-lg bg-muted/5 border border-border/30 space-y-2">
+                          <span className="text-[10px] font-bold text-muted-foreground uppercase">중심석</span>
+                          <div className="grid grid-cols-[1fr_60px] gap-2">
+                            <select
+                              className="w-full bg-background border border-border/60 rounded-md text-xs py-1.5 px-2 focus:border-primary/50 focus:ring-2 focus:ring-primary/10 transition-colors"
+                              value={row.center_stone}
+                              onChange={(e) => updateRow(row.id, { center_stone: e.target.value })}
+                            >
+                              <option value="">선택</option>
+                              {stoneOptions.map((stone) => (
+                                <option key={stone} value={stone}>
+                                  {stone}
+                                </option>
+                              ))}
+                            </select>
+                            <input
+                              type="number"
+                              className="w-full bg-background border border-border/60 rounded-md text-xs py-1.5 px-2 text-center tabular-nums focus:border-primary/50 focus:ring-2 focus:ring-primary/10 transition-colors"
+                              value={row.center_qty}
+                              onChange={(e) => updateRow(row.id, { center_qty: e.target.value })}
+                              placeholder="0"
+                            />
+                          </div>
+                        </div>
+                        <div className="p-3 rounded-lg bg-muted/5 border border-border/30 space-y-2">
+                          <span className="text-[10px] font-bold text-muted-foreground uppercase">보조1석</span>
+                          <div className="grid grid-cols-[1fr_60px] gap-2">
+                            <select
+                              className="w-full bg-background border border-border/60 rounded-md text-xs py-1.5 px-2 focus:border-primary/50 focus:ring-2 focus:ring-primary/10 transition-colors"
+                              value={row.sub1_stone}
+                              onChange={(e) => updateRow(row.id, { sub1_stone: e.target.value })}
+                            >
+                              <option value="">선택</option>
+                              {stoneOptions.map((stone) => (
+                                <option key={stone} value={stone}>
+                                  {stone}
+                                </option>
+                              ))}
+                            </select>
+                            <input
+                              type="number"
+                              className="w-full bg-background border border-border/60 rounded-md text-xs py-1.5 px-2 text-center tabular-nums focus:border-primary/50 focus:ring-2 focus:ring-primary/10 transition-colors"
+                              value={row.sub1_qty}
+                              onChange={(e) => updateRow(row.id, { sub1_qty: e.target.value })}
+                              placeholder="0"
+                            />
+                          </div>
+                        </div>
+                        <div className="p-3 rounded-lg bg-muted/5 border border-border/30 space-y-2">
+                          <span className="text-[10px] font-bold text-muted-foreground uppercase">보조2석</span>
+                          <div className="grid grid-cols-[1fr_60px] gap-2">
+                            <select
+                              className="w-full bg-background border border-border/60 rounded-md text-xs py-1.5 px-2 focus:border-primary/50 focus:ring-2 focus:ring-primary/10 transition-colors"
+                              value={row.sub2_stone}
+                              onChange={(e) => updateRow(row.id, { sub2_stone: e.target.value })}
+                            >
+                              <option value="">선택</option>
+                              {stoneOptions.map((stone) => (
+                                <option key={stone} value={stone}>
+                                  {stone}
+                                </option>
+                              ))}
+                            </select>
+                            <input
+                              type="number"
+                              className="w-full bg-background border border-border/60 rounded-md text-xs py-1.5 px-2 text-center tabular-nums focus:border-primary/50 focus:ring-2 focus:ring-primary/10 transition-colors"
+                              value={row.sub2_qty}
+                              onChange={(e) => updateRow(row.id, { sub2_qty: e.target.value })}
+                              placeholder="0"
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Section 5: Memo / Due / Priority */}
+                    <div className="space-y-3">
+                      <div>
+                        <div className="flex items-center gap-2 pb-1 border-b border-border/30">
+                          <span className="text-xs font-bold text-foreground">Memo / Due / Priority</span>
+                        </div>
+                        <p className="text-[11px] text-muted-foreground">메모와 납기일을 기록하고 우선순위를 확인합니다.</p>
+                      </div>
+                      <div className="grid grid-cols-1 md:grid-cols-[1.5fr_1fr_1fr] gap-4">
+                        <div className="space-y-1.5">
+                          <label className="text-[10px] font-medium text-muted-foreground">비고</label>
+                          <input
+                            className="w-full bg-muted/10 border border-border/60 rounded-md px-3 py-2 text-sm transition-all placeholder:text-muted-foreground/30 focus:bg-background focus:ring-2 focus:ring-primary/10"
+                            value={row.memo}
+                            onChange={(e) => updateRow(row.id, { memo: e.target.value })}
+                            placeholder="특이사항 입력..."
+                          />
+                        </div>
+                        <div className="space-y-1.5">
+                          <label className="text-[10px] font-medium text-muted-foreground">납기일</label>
+                          <Input
+                            type="date"
+                            className="h-9 text-sm bg-background border-border/60 focus:border-primary/50 focus:ring-primary/20"
+                            value={receiptDate}
+                            onChange={(event) => setReceiptDate(event.target.value)}
+                          />
+                        </div>
+                        <div className="space-y-1.5">
+                          <label className="text-[10px] font-medium text-muted-foreground">우선순위</label>
+                          <select
+                            className="w-full bg-muted/10 border border-border/60 rounded-md px-2 py-2 text-sm text-muted-foreground cursor-not-allowed"
+                            defaultValue="STANDARD"
+                            disabled
+                          >
+                            <option value="STANDARD">Standard</option>
+                          </select>
+                        </div>
+                      </div>
+                    </div>
+                 </CardBody>
+               </Card>
+             );
+          })}
+          
+          {/* Pagination */}
+          <div className="flex items-center justify-between pt-4">
+             <Button variant="outline" size="sm" onClick={() => setPageIndex(p => Math.max(1, p - 1))} disabled={pageIndex === 1}>이전</Button>
+             <span className="text-xs text-muted-foreground">{pageIndex} / {Math.max(1, Math.ceil(rows.length / PAGE_SIZE))}</span>
+             <Button variant="outline" size="sm" onClick={() => {
+                const pageCount = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
+                if (pageIndex >= pageCount) {
+                   setRows(prev => [...prev, ...Array.from({ length: PAGE_SIZE }, (_, i) => createEmptyRow(prev.length + i))]);
+                }
+                setPageIndex(p => p + 1);
+             }}>다음</Button>
           </div>
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-[320px_1fr] gap-8">
-          <Card className="h-full min-h-[300px] flex flex-col items-center justify-center border border-border/50 bg-muted/5 shadow-sm hover:shadow-md transition-all duration-300 rounded-xl overflow-hidden group relative">
-            {activeMaster?.photo_url ? (
-              <div className="relative w-full h-full bg-white">
-                {imageLoading ? (
-                  <div className="absolute inset-0 flex items-center justify-center text-xs font-medium text-muted-foreground animate-pulse">
-                    이미지 로딩 중...
-                  </div>
-                ) : null}
-                <img
-                  src={activeMaster.photo_url}
-                  alt={activeMaster.model_name ?? "model"}
-                  className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105"
-                  onLoad={() => setImageLoading(false)}
-                  onError={() => setImageLoading(false)}
-                />
-                <div className="absolute inset-0 ring-1 ring-inset ring-black/5 rounded-xl pointer-events-none" />
-              </div>
-            ) : (
-              <div className="flex flex-col items-center gap-4 text-muted-foreground/40 p-8 text-center">
-                <div className="w-16 h-16 rounded-full bg-muted/50 flex items-center justify-center">
-                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-                    <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
-                    <circle cx="8.5" cy="8.5" r="1.5" />
-                    <polyline points="21 15 16 10 5 21" />
-                  </svg>
-                </div>
-                <span className="text-sm font-medium">모델 이미지를 표시합니다</span>
-              </div>
-            )}
-          </Card>
-
-          <Card className="shadow-sm border border-border/50 rounded-xl overflow-hidden hover:shadow-md transition-all duration-300">
-            <CardHeader className="flex flex-row items-center justify-between py-4 px-6 border-b border-border/40 bg-muted/5">
-              <div className="flex items-center gap-2">
-                <div className="p-1.5 rounded-md bg-primary/10 text-primary">
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <path d="M3 3h18v18H3zM12 8v8M8 12h8" />
-                  </svg>
-                </div>
-                <span className="font-bold text-sm text-foreground">기본 정보</span>
-              </div>
-              <span className="text-[10px] font-medium text-red-600 bg-red-50 px-2.5 py-1 rounded-full border border-red-100">
-                거래처는 1개 고정
-              </span>
-            </CardHeader>
-            <CardBody className="grid grid-cols-1 md:grid-cols-2 gap-8 p-6">
-              <div className="space-y-2">
-                <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-                  {headerMode === "model" ? "모델명" : "거래처"}
-                </label>
-                <div className="flex items-center gap-3">
-                  <span className="text-lg font-bold text-foreground tracking-tight">
-                    {headerMode === "model"
-                      ? headerModelName || "-"
-                      : headerClient?.client_name ?? "-"}
-                  </span>
-                  {headerMode === "client" && headerClient?.client_id ? (
-                    <Badge className="whitespace-nowrap bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100 rounded-md px-2.5 py-0.5 shadow-sm">
-                      확정
-                    </Badge>
-                  ) : null}
-                  {headerMode === "model" && activeMaster?.master_item_id ? (
-                    <Badge className="whitespace-nowrap bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100 rounded-md px-2.5 py-0.5 shadow-sm">
-                      매칭
-                    </Badge>
-                  ) : headerMode === "model" ? (
-                    <Badge className="whitespace-nowrap bg-red-50 text-red-700 border-red-200 hover:bg-red-100 rounded-md px-2.5 py-0.5 shadow-sm">
-                      UNMATCHED
-                    </Badge>
-                  ) : null}
-                </div>
-                {headerMode === "client" ? (
-                  headerClient?.balance_krw !== undefined ? (
-                    <p className="text-sm text-muted-foreground font-medium">
-                      미수금 <span className="text-foreground font-bold tabular-nums">{headerClient.balance_krw?.toLocaleString() ?? 0}</span>원
-                    </p>
-                  ) : (
-                    <p className="text-xs text-muted-foreground">거래처를 입력하면 미수 정보가 표시됩니다.</p>
-                  )
+        {/* Right Column: Match / Preview */}
+        <div className="flex flex-col gap-6 lg:sticky lg:top-24 h-fit">
+          <Card className="border border-border/50 shadow-sm rounded-xl overflow-hidden">
+            <CardHeader className="py-4 px-5 bg-muted/5 border-b border-border/40 space-y-1">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold text-foreground">Customer Match</span>
+                {headerClient?.client_id ? (
+                  <Badge className="bg-blue-50 text-blue-700 border-blue-200">MATCHED</Badge>
                 ) : (
-                  <p className="text-xs text-muted-foreground">모델명을 입력하면 마스터 정보가 연결됩니다.</p>
+                  <Badge className="bg-red-50 text-red-700 border-red-200">UNMATCHED</Badge>
                 )}
               </div>
-              <div className="space-y-2">
-                <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-                  {headerMode === "model" ? "매칭 상태" : "마지막 거래일"}
-                </label>
-                <div className="text-base font-medium text-foreground">
-                  {headerMode === "model"
-                    ? activeMaster?.master_item_id
-                      ? "MATCHED"
-                      : "UNMATCHED"
-                    : headerClient?.last_tx_at
-                      ? headerClient.last_tx_at.slice(0, 10)
+              <p className="text-[11px] text-muted-foreground">거래처 입력 결과 요약입니다.</p>
+            </CardHeader>
+            <CardBody className="p-5 space-y-4">
+              <div className="flex items-center justify-between">
+                <div className="text-sm font-semibold text-foreground">{headerClient?.client_name || "-"}</div>
+                <span className="text-xs text-muted-foreground">{headerClient?.client_id ? "확정" : "미확정"}</span>
+              </div>
+              <div className="grid grid-cols-2 gap-4 text-xs">
+                <div className="space-y-1">
+                  <span className="text-muted-foreground">미수금</span>
+                  <div className="font-semibold text-foreground tabular-nums">
+                    {headerClient?.balance_krw !== undefined ? `${headerClient.balance_krw?.toLocaleString()}원` : "-"}
+                  </div>
+                </div>
+                <div className="space-y-1">
+                  <span className="text-muted-foreground">마지막 거래일</span>
+                  <div className="font-semibold text-foreground">
+                    {headerClient?.last_tx_at ? headerClient.last_tx_at.slice(0, 10) : "-"}
+                  </div>
+                </div>
+                <div className="space-y-1">
+                  <span className="text-muted-foreground">미수 건수</span>
+                  <div className="font-semibold text-foreground">
+                    {headerClient?.open_invoices_count ?? "-"}
+                  </div>
+                </div>
+                <div className="space-y-1">
+                  <span className="text-muted-foreground">리스크</span>
+                  <div className="font-semibold text-foreground">{headerClient?.risk_flag ?? "-"}</div>
+                </div>
+              </div>
+            </CardBody>
+          </Card>
+
+          <Card className="border border-border/50 shadow-sm rounded-xl overflow-hidden">
+            <CardHeader className="py-4 px-5 bg-muted/5 border-b border-border/40 space-y-1">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold text-foreground">Master Match</span>
+                {activeMaster?.master_item_id ? (
+                  <Badge className="bg-emerald-50 text-emerald-700 border-emerald-200">MATCHED</Badge>
+                ) : (
+                  <Badge className="bg-red-50 text-red-700 border-red-200">UNMATCHED</Badge>
+                )}
+              </div>
+              <p className="text-[11px] text-muted-foreground">모델 매칭과 마스터 정보를 확인합니다.</p>
+            </CardHeader>
+            <CardBody className="p-5 space-y-5">
+              <div className="aspect-[4/3] relative overflow-hidden rounded-lg border border-border/40 bg-muted/10">
+                {activeMaster?.photo_url ? (
+                  <>
+                    {imageLoading ? (
+                      <div className="absolute inset-0 flex items-center justify-center text-xs font-medium text-muted-foreground animate-pulse">
+                        이미지 로딩 중...
+                      </div>
+                    ) : null}
+                    <img
+                      src={activeMaster.photo_url}
+                      alt={activeMaster.model_name ?? "model"}
+                      className="w-full h-full object-cover transition-transform duration-700"
+                      onLoad={() => setImageLoading(false)}
+                      onError={() => setImageLoading(false)}
+                    />
+                  </>
+                ) : (
+                  <div className="flex flex-col items-center justify-center h-full text-muted-foreground/40">
+                    <div className="w-12 h-12 rounded-full bg-muted/50 flex items-center justify-center mb-2">
+                      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                        <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+                        <circle cx="8.5" cy="8.5" r="1.5" />
+                        <polyline points="21 15 16 10 5 21" />
+                      </svg>
+                    </div>
+                    <span className="text-xs">No Image</span>
+                  </div>
+                )}
+              </div>
+
+              <div className="space-y-1">
+                <span className="text-[10px] text-muted-foreground uppercase">모델명</span>
+                <div className="text-sm font-semibold text-foreground">
+                  {(activeMaster?.model_name ?? headerModelName) || "-"}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4 text-xs">
+                <div className="space-y-1">
+                  <span className="text-muted-foreground">공급처</span>
+                  <div className="font-semibold text-foreground">{activeMaster?.vendor_name ?? "-"}</div>
+                </div>
+                <div className="space-y-1">
+                  <span className="text-muted-foreground">카테고리</span>
+                  <div className="font-semibold text-foreground">{getCategoryName(activeMaster?.category_code)}</div>
+                </div>
+                <div className="space-y-1">
+                  <span className="text-muted-foreground">기본중량</span>
+                  <div className="font-semibold text-foreground tabular-nums">{activeMaster?.weight_default_g ?? "-"}</div>
+                </div>
+                <div className="space-y-1">
+                  <span className="text-muted-foreground">차감중량</span>
+                  <div className="font-semibold text-foreground tabular-nums">{activeMaster?.deduction_weight_default_g ?? "-"}</div>
+                </div>
+              </div>
+
+              <div className="pt-2 border-t border-border/40 grid grid-cols-2 gap-4 text-xs">
+                <div className="space-y-1">
+                  <span className="text-muted-foreground">소재가격</span>
+                  <div className="font-semibold text-foreground tabular-nums">
+                    {activeMaster?.material_price ? `${activeMaster.material_price.toLocaleString()}원` : "-"}
+                  </div>
+                </div>
+                <div className="space-y-1">
+                  <span className="text-muted-foreground">기본공임</span>
+                  <div className="font-semibold text-foreground tabular-nums">
+                    {activeMaster?.labor_basic?.toLocaleString() ?? "-"}
+                  </div>
+                </div>
+                <div className="space-y-1">
+                  <span className="text-muted-foreground">센터공임</span>
+                  <div className="font-semibold text-foreground tabular-nums">
+                    {activeMaster?.labor_center?.toLocaleString() ?? "-"}
+                  </div>
+                </div>
+                <div className="space-y-1">
+                  <span className="text-muted-foreground">보조공임</span>
+                  <div className="font-semibold text-foreground tabular-nums">
+                    {(activeMaster?.labor_side1 || 0) + (activeMaster?.labor_side2 || 0) > 0
+                      ? ((activeMaster?.labor_side1 || 0) + (activeMaster?.labor_side2 || 0)).toLocaleString()
                       : "-"}
+                  </div>
                 </div>
-                <div className="text-xs text-muted-foreground">
-                  {headerMode === "client" && headerClient?.open_invoices_count !== null && headerClient?.open_invoices_count !== undefined
-                    ? `미수 건수 ${headerClient.open_invoices_count}`
-                    : ""}
-                </div>
-              </div>
-              <div className="space-y-2">
-                <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">접수일</label>
-                <Input
-                  type="date"
-                  className="bg-background border-border/60 focus:border-primary/50 focus:ring-primary/20 h-9"
-                  value={receiptDate}
-                  onChange={(event) => setReceiptDate(event.target.value)}
-                />
-              </div>
-              <div className="space-y-2">
-                <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">리스크</label>
-                <div className="text-base font-medium text-foreground">{headerClient?.risk_flag ?? "-"}</div>
               </div>
             </CardBody>
           </Card>
         </div>
-
-        <Card className="shadow-sm border border-border/50 rounded-xl overflow-hidden hover:shadow-md transition-all duration-300">
-          <CardHeader className="flex items-center justify-between py-4 px-6 border-b border-border/40 bg-muted/5">
-            <div className="flex items-center gap-2">
-              <div className="p-1.5 rounded-md bg-muted text-muted-foreground">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <circle cx="12" cy="12" r="10" />
-                  <polyline points="12 6 12 12 16 14" />
-                </svg>
-              </div>
-              <span className="font-bold text-sm text-foreground">가격 패널</span>
-            </div>
-            <span className="text-xs font-medium text-muted-foreground bg-muted/50 px-2 py-1 rounded-md">모델 선택 시 자동 갱신</span>
-          </CardHeader>
-          <CardBody className="grid grid-cols-2 md:grid-cols-5 gap-6 p-6">
-            <div className="space-y-1">
-              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">소재가격</p>
-              <p className="text-lg font-bold text-foreground tabular-nums tracking-tight">
-                {activeMaster?.material_price ? `${activeMaster.material_price.toLocaleString()}원` : "-"}
-              </p>
-            </div>
-            <div className="space-y-1">
-              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">기본공임</p>
-              <p className="text-lg font-bold text-foreground tabular-nums tracking-tight">{activeMaster?.labor_basic?.toLocaleString() ?? "-"}</p>
-            </div>
-            <div className="space-y-1">
-              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">중심공임</p>
-              <p className="text-lg font-bold text-foreground tabular-nums tracking-tight">{activeMaster?.labor_center?.toLocaleString() ?? "-"}</p>
-            </div>
-            <div className="space-y-1">
-              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">보조1공임</p>
-              <p className="text-lg font-bold text-foreground tabular-nums tracking-tight">{activeMaster?.labor_side1?.toLocaleString() ?? "-"}</p>
-            </div>
-            <div className="space-y-1">
-              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">보조2공임</p>
-              <p className="text-lg font-bold text-foreground tabular-nums tracking-tight">{activeMaster?.labor_side2?.toLocaleString() ?? "-"}</p>
-            </div>
-          </CardBody>
-        </Card>
-
-        <Card className="shadow-sm border border-border/50 rounded-xl overflow-hidden hover:shadow-md transition-all duration-300">
-          <CardHeader className="flex items-center justify-between py-4 px-6 border-b border-border/40 bg-muted/5">
-            <div className="flex items-center gap-2">
-              <div className="p-1.5 rounded-md bg-muted text-muted-foreground">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-                  <polyline points="14 2 14 8 20 8" />
-                  <line x1="16" y1="13" x2="8" y2="13" />
-                  <line x1="16" y1="17" x2="8" y2="17" />
-                  <polyline points="10 9 9 9 8 9" />
-                </svg>
-              </div>
-              <span className="font-bold text-sm text-foreground">모델 기본정보</span>
-            </div>
-            <span className="text-xs font-medium text-muted-foreground bg-muted/50 px-2 py-1 rounded-md">마스터 기준</span>
-          </CardHeader>
-          <CardBody className="grid grid-cols-2 md:grid-cols-4 gap-x-6 gap-y-6 p-6">
-            <div className="space-y-1">
-              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">공급처</p>
-              <p className="text-sm font-semibold text-foreground">{activeMaster?.vendor_name ?? "-"}</p>
-            </div>
-            <div className="space-y-1">
-              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">기본재질</p>
-              <p className="text-sm font-semibold text-foreground">{activeMaster?.material_code_default ?? "-"}</p>
-            </div>
-            <div className="space-y-1">
-              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">카테고리</p>
-              <p className="text-sm font-semibold text-foreground">
-                {getCategoryName(activeMaster?.category_code)}
-              </p>
-            </div>
-            <div className="space-y-1">
-              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">기본중량</p>
-              <p className="text-sm font-semibold text-foreground tabular-nums">{activeMaster?.weight_default_g ?? "-"}</p>
-            </div>
-            <div className="space-y-1">
-              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">차감중량</p>
-              <p className="text-sm font-semibold text-foreground tabular-nums">{activeMaster?.deduction_weight_default_g ?? "-"}</p>
-            </div>
-            <div className="space-y-1">
-              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">기본공임</p>
-              <p className="text-sm font-semibold text-foreground tabular-nums">{activeMaster?.labor_basic?.toLocaleString() ?? "-"}</p>
-            </div>
-            <div className="space-y-1">
-              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">센터공임</p>
-              <p className="text-sm font-semibold text-foreground tabular-nums">{activeMaster?.labor_center?.toLocaleString() ?? "-"}</p>
-            </div>
-            <div className="space-y-1">
-              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">보조1공임</p>
-              <p className="text-sm font-semibold text-foreground tabular-nums">{activeMaster?.labor_side1?.toLocaleString() ?? "-"}</p>
-            </div>
-            <div className="space-y-1">
-              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">보조2공임</p>
-              <p className="text-sm font-semibold text-foreground tabular-nums">{activeMaster?.labor_side2?.toLocaleString() ?? "-"}</p>
-            </div>
-            <div className="space-y-1">
-              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">센터스톤수</p>
-              <p className="text-sm font-semibold text-foreground tabular-nums">{activeMaster?.center_qty_default ?? "-"}</p>
-            </div>
-            <div className="space-y-1">
-              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">보조1스톤수</p>
-              <p className="text-sm font-semibold text-foreground tabular-nums">{activeMaster?.sub1_qty_default ?? "-"}</p>
-            </div>
-            <div className="space-y-1">
-              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">보조2스톤수</p>
-              <p className="text-sm font-semibold text-foreground tabular-nums">{activeMaster?.sub2_qty_default ?? "-"}</p>
-            </div>
-          </CardBody>
-        </Card>
-
-        <Card className="shadow-sm border border-border/50 rounded-xl overflow-hidden hover:shadow-md transition-all duration-300 min-h-[500px] flex flex-col">
-          <div className="flex items-center justify-between px-6 py-4 border-b border-border/40 bg-muted/5">
-            <div className="flex items-center gap-3">
-              <div className="p-1.5 rounded-md bg-muted text-muted-foreground">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2" />
-                  <rect x="9" y="3" width="6" height="4" rx="2" />
-                  <path d="M9 14h6" />
-                  <path d="M9 18h6" />
-                  <path d="M9 10h6" />
-                </svg>
-              </div>
-              <span className="font-bold text-sm text-foreground">Order Items</span>
-            </div>
-            <div className="flex items-center gap-2 text-muted-foreground">
-              <span className="text-xs bg-muted/50 px-2 py-1 rounded-md">자동 저장은 blur 시 수행됩니다.</span>
-            </div>
-          </div>
-          <div className="flex-1 overflow-auto bg-background">
-            <table className="w-full text-xs text-left border-collapse">
-              <thead className="bg-muted/30 text-muted-foreground font-medium border-b border-border/40 sticky top-0 z-10 backdrop-blur-sm">
-                <tr>
-                  <th className="px-3 py-3 border-r border-border/40 w-10 text-center font-medium">No</th>
-                  <th className="px-3 py-3 border-r border-border/40 w-10 text-center font-medium">취소</th>
-                  <th className="px-3 py-3 border-r border-border/40 min-w-[140px] font-medium">
-                    <span className="text-red-500 mr-1">*</span>거래처
-                  </th>
-                  <th className="px-3 py-3 border-r border-border/40 min-w-[140px] font-medium">
-                    <span className="text-red-500 mr-1">*</span>모델번호
-                  </th>
-                  <th className="px-3 py-3 border-r border-border/40 w-24 font-medium">분류</th>
-                  <th className="px-3 py-3 border-r border-border/40 w-24 font-medium">색상</th>
-                  <th className="px-3 py-3 border-r border-border/40 w-20 font-medium">사이즈</th>
-                  <th className="px-3 py-3 border-r border-border/40 w-16 text-center font-medium">수량</th>
-                  <th className="px-3 py-3 border-r border-border/40 min-w-[90px] whitespace-nowrap font-medium">중심석</th>
-                  <th className="px-3 py-3 border-r border-border/40 w-16 text-center whitespace-nowrap font-medium">중심개수</th>
-                  <th className="px-3 py-3 border-r border-border/40 min-w-[90px] whitespace-nowrap font-medium">보조1석</th>
-                  <th className="px-3 py-3 border-r border-border/40 w-16 text-center whitespace-nowrap font-medium">보조1개수</th>
-                  <th className="px-3 py-3 border-r border-border/40 min-w-[90px] whitespace-nowrap font-medium">보조2석</th>
-                  <th className="px-3 py-3 border-r border-border/40 w-16 text-center whitespace-nowrap font-medium">보조2개수</th>
-                  <th className="px-3 py-3 border-r border-border/40 w-16 text-center font-medium">도금</th>
-                  <th className="px-3 py-3 border-r border-border/40 min-w-[40px] font-medium">도금색상</th>
-                  <th className="px-3 py-3 min-w-[300px] font-medium">비고</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-border/40">
-                {rows.slice((pageIndex - 1) * PAGE_SIZE, pageIndex * PAGE_SIZE).map((row, idx) => {
-                  const errors = rowErrors[row.id] ?? {};
-                  return (
-                    <tr
-                      key={row.id}
-                      className="hover:bg-muted/30 transition-colors group"
-                      onBlur={(event) => {
-                        const next = event.relatedTarget as Node | null;
-                        if (next && event.currentTarget.contains(next)) return;
-                        const current = rows.find((item) => item.id === row.id);
-                        if (current) {
-                          void saveRow(current);
-                        }
-                      }}
-                    >
-                      <td className="px-3 py-2 text-center text-muted-foreground border-r border-border/40 bg-muted/5 group-hover:bg-muted/20 transition-colors">
-                        {(pageIndex - 1) * PAGE_SIZE + idx + 1}
-                      </td>
-                      <td className="px-3 py-2 text-center border-r border-border/40">
-                        <button
-                          className="text-muted-foreground hover:text-red-500 transition-colors p-1 rounded-md hover:bg-red-50"
-                          type="button"
-                          onClick={() => handleDeleteRow(row.id)}
-                        >
-                          ✕
-                        </button>
-                      </td>
-                      <td className="px-2 py-1 border-r border-border/40">
-                        <input
-                          className={cn(
-                            "w-full bg-transparent border-none focus:ring-0 focus:bg-primary/5 rounded px-2 py-1.5 text-xs transition-colors placeholder:text-muted-foreground/30",
-                            errors.client ? "bg-red-50 ring-1 ring-inset ring-red-200" : ""
-                          )}
-                          value={row.client_input}
-                          onChange={(event) => updateRow(row.id, { client_input: event.target.value })}
-                          onBlur={(event) => resolveClient(row.id, event.currentTarget.value)}
-                          placeholder="거래처 입력"
-                        />
-                      </td>
-                      <td className="px-2 py-1 border-r border-border/40">
-                        <input
-                          className={cn(
-                            "w-full bg-transparent border-none focus:ring-0 focus:bg-primary/5 rounded px-2 py-1.5 text-xs font-semibold transition-colors placeholder:text-muted-foreground/30",
-                            errors.model ? "bg-red-50 ring-1 ring-inset ring-red-200" : ""
-                          )}
-                          value={row.model_input}
-                          onChange={(event) => updateRow(row.id, { model_input: event.target.value })}
-                          onBlur={(event) => resolveMaster(row.id, event.currentTarget.value)}
-                          placeholder="모델명 입력"
-                        />
-                      </td>
-                      <td className="px-2 py-1 border-r border-border/40 bg-muted/5">
-                        <div className="w-full px-2 py-1.5 text-xs text-muted-foreground select-none cursor-not-allowed">
-                          {getCategoryName(row.suffix)}
-                        </div>
-                      </td>
-                      <td className="px-2 py-1 border-r border-border/40">
-                        <select
-                          className={cn(
-                            "w-full bg-transparent border-none focus:ring-0 text-xs py-1.5 cursor-pointer hover:bg-muted/50 rounded transition-colors",
-                            errors.color ? "bg-red-50 ring-1 ring-inset ring-red-200" : ""
-                          )}
-                          value={row.color}
-                          onChange={(event) => updateRow(row.id, { color: event.target.value })}
-                        >
-                          <option value="">선택</option>
-                          {MAIN_COLOR_OPTIONS.map((opt) => (
-                            <option key={opt.value} value={opt.value}>
-                              {opt.label}
-                            </option>
-                          ))}
-                        </select>
-                      </td>
-                      <td className="px-2 py-1 border-r border-border/40">
-                        <input
-                          className="w-full bg-transparent border-none focus:ring-0 focus:bg-primary/5 rounded px-2 py-1.5 text-xs transition-colors"
-                          value={row.size}
-                          onChange={(event) => updateRow(row.id, { size: event.target.value })}
-                        />
-                      </td>
-                      <td className="px-2 py-1 border-r border-border/40">
-                        <input
-                          type="number"
-                          className={cn(
-                            "w-full bg-transparent border-none focus:ring-0 focus:bg-primary/5 rounded px-2 py-1.5 text-center font-mono text-xs tabular-nums transition-colors",
-                            errors.qty ? "bg-red-50 ring-1 ring-inset ring-red-200" : ""
-                          )}
-                          value={row.qty}
-                          onChange={(event) => updateRow(row.id, { qty: event.target.value })}
-                        />
-                      </td>
-                      <td className="px-2 py-1 border-r border-border/40">
-                        <select
-                          className={cn(
-                            "w-full bg-transparent border-none focus:ring-0 text-xs py-1.5 cursor-pointer hover:bg-muted/50 rounded transition-colors",
-                            errors.stones ? "bg-red-50 ring-1 ring-inset ring-red-200" : ""
-                          )}
-                          value={row.center_stone}
-                          onChange={(event) => updateRow(row.id, { center_stone: event.target.value })}
-                        >
-                          <option value="">선택</option>
-                          {stoneOptions.map((stone) => (
-                            <option key={stone} value={stone}>
-                              {stone}
-                            </option>
-                          ))}
-                        </select>
-                      </td>
-                      <td className="px-2 py-1 border-r border-border/40">
-                        <input
-                          type="number"
-                          className={cn(
-                            "w-full bg-transparent border-none focus:ring-0 focus:bg-primary/5 rounded px-2 py-1.5 text-center text-xs tabular-nums transition-colors",
-                            errors.stones ? "bg-red-50 ring-1 ring-inset ring-red-200" : ""
-                          )}
-                          value={row.center_qty}
-                          onChange={(event) => updateRow(row.id, { center_qty: event.target.value })}
-                        />
-                      </td>
-                      <td className="px-2 py-1 border-r border-border/40">
-                        <select
-                          className={cn(
-                            "w-full bg-transparent border-none focus:ring-0 text-xs py-1.5 cursor-pointer hover:bg-muted/50 rounded transition-colors",
-                            errors.stones ? "bg-red-50 ring-1 ring-inset ring-red-200" : ""
-                          )}
-                          value={row.sub1_stone}
-                          onChange={(event) => updateRow(row.id, { sub1_stone: event.target.value })}
-                        >
-                          <option value="">선택</option>
-                          {stoneOptions.map((stone) => (
-                            <option key={stone} value={stone}>
-                              {stone}
-                            </option>
-                          ))}
-                        </select>
-                      </td>
-                      <td className="px-2 py-1 border-r border-border/40">
-                        <input
-                          type="number"
-                          className={cn(
-                            "w-full bg-transparent border-none focus:ring-0 focus:bg-primary/5 rounded px-2 py-1.5 text-center text-xs tabular-nums transition-colors",
-                            errors.stones ? "bg-red-50 ring-1 ring-inset ring-red-200" : ""
-                          )}
-                          value={row.sub1_qty}
-                          onChange={(event) => updateRow(row.id, { sub1_qty: event.target.value })}
-                        />
-                      </td>
-                      <td className="px-2 py-1 border-r border-border/40">
-                        <select
-                          className={cn(
-                            "w-full bg-transparent border-none focus:ring-0 text-xs py-1.5 cursor-pointer hover:bg-muted/50 rounded transition-colors",
-                            errors.stones ? "bg-red-50 ring-1 ring-inset ring-red-200" : ""
-                          )}
-                          value={row.sub2_stone}
-                          onChange={(event) => updateRow(row.id, { sub2_stone: event.target.value })}
-                        >
-                          <option value="">선택</option>
-                          {stoneOptions.map((stone) => (
-                            <option key={stone} value={stone}>
-                              {stone}
-                            </option>
-                          ))}
-                        </select>
-                      </td>
-                      <td className="px-2 py-1 border-r border-border/40">
-                        <input
-                          type="number"
-                          className={cn(
-                            "w-full bg-transparent border-none focus:ring-0 focus:bg-primary/5 rounded px-2 py-1.5 text-center text-xs tabular-nums transition-colors",
-                            errors.stones ? "bg-red-50 ring-1 ring-inset ring-red-200" : ""
-                          )}
-                          value={row.sub2_qty}
-                          onChange={(event) => updateRow(row.id, { sub2_qty: event.target.value })}
-                        />
-                      </td>
-                      <td className="px-2 py-1 border-r border-border/40 text-center">
-                        <input
-                          type="checkbox"
-                          checked={row.is_plated}
-                          onChange={(event) =>
-                            updateRow(row.id, {
-                              is_plated: event.target.checked,
-                              plating_color: event.target.checked ? row.plating_color : "",
-                            })
-                          }
-                          className="rounded border-border text-primary focus:ring-primary/20 w-4 h-4"
-                        />
-                      </td>
-                      <td className="px-2 py-1 border-r border-border/40">
-                        <select
-                          className={cn(
-                            "w-full bg-transparent border-none focus:ring-0 text-xs py-1.5 cursor-pointer hover:bg-muted/50 rounded transition-colors",
-                            errors.plating ? "bg-red-50 ring-1 ring-inset ring-red-200" : ""
-                          )}
-                          value={row.plating_color}
-                          onChange={(event) => updateRow(row.id, { plating_color: event.target.value })}
-                          disabled={!row.is_plated}
-                        >
-                          <option value="">선택</option>
-
-                          {/* 단색 그룹 */}
-                          <optgroup label="단색">
-                            {PLATING_OPTIONS.filter(o => o.type === "단색").map((opt) => (
-                              <option key={opt.value} value={opt.value}>
-                                {opt.label}
-                              </option>
-                            ))}
-                          </optgroup>
-
-                          {/* 콤비 그룹 */}
-                          <optgroup label="콤비">
-                            {PLATING_OPTIONS.filter(o => o.type === "콤비").map((opt) => (
-                              <option key={opt.value} value={opt.value}>
-                                {opt.label}
-                              </option>
-                            ))}
-                          </optgroup>
-                        </select>
-                      </td>
-                      <td className="px-2 py-1">
-                        <input
-                          className="w-full bg-transparent border-none focus:ring-0 focus:bg-primary/5 rounded px-2 py-1.5 text-xs transition-colors"
-                          value={row.memo}
-                          onChange={(event) => updateRow(row.id, { memo: event.target.value })}
-                          placeholder="비고 입력"
-                        />
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-          <div className="px-6 py-4 border-t border-border/40 flex items-center justify-between text-xs text-muted-foreground bg-muted/5">
-            <span className="font-medium">라인 {rows.length}개</span>
-            <div className="flex items-center gap-2">
-              <Button
-                variant="secondary"
-                size="sm"
-                className="h-8 px-3 text-xs border-border/60 hover:bg-muted/50"
-                onClick={() => setPageIndex((prev) => Math.max(1, prev - 1))}
-                disabled={pageIndex === 1}
-              >
-                이전
-              </Button>
-              <span className="text-xs font-medium px-2">
-                {pageIndex} / {Math.max(1, Math.ceil(rows.length / PAGE_SIZE))}
-              </span>
-              <Button
-                variant="secondary"
-                size="sm"
-                className="h-8 px-3 text-xs border-border/60 hover:bg-muted/50"
-                onClick={() => {
-                  const pageCount = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
-                  if (pageIndex >= pageCount) {
-                    setRows((prev) => [
-                      ...prev,
-                      ...Array.from({ length: PAGE_SIZE }, (_, idx) => createEmptyRow(prev.length + idx)),
-                    ]);
-                  }
-                  setPageIndex((prev) => prev + 1);
-                }}
-              >
-                다음
-              </Button>
-            </div>
-          </div>
-        </Card>
       </div>
     </>
   );
