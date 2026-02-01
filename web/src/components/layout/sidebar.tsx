@@ -43,7 +43,7 @@ export default function Sidebar() {
         </div>
         <div className="leading-tight">
           <div className="text-sm font-semibold">Jewel Ops</div>
-          <div className="text-xs text-muted-foreground">Phase 1</div>
+          <div className="text-xs text-[var(--muted)]">Phase 1</div>
         </div>
       </div>
 
@@ -65,8 +65,8 @@ export default function Sidebar() {
               className={[
                 "flex items-center gap-3 rounded-[12px] px-3 py-2 text-sm font-medium transition-colors",
                 active
-                  ? "bg-[#eef2f6] text-[var(--foreground)]"
-                  : "text-[var(--muted)] hover:bg-[#f6f7f9] hover:text-[var(--foreground)]",
+                  ? "bg-[var(--panel)] text-[var(--foreground)]"
+                  : "text-[var(--muted)] hover:bg-[var(--panel-hover)] hover:text-[var(--foreground)]",
               ].join(" ")}
             >
               <Icon className="h-4 w-4" />

@@ -148,7 +148,7 @@ function CatalogGalleryCardComponent({
         "[box-shadow:0_14px_32px_rgba(15,23,42,var(--shadow-alpha))]",
         materialBgClass,
         isSelected
-          ? "ring-2 ring-[var(--primary)] ring-offset-2 ring-offset-white/90"
+          ? "ring-2 ring-[var(--primary)] ring-offset-2 ring-offset-[var(--background)]/90"
           : "hover:opacity-90"
       )}
       style={baseStyle}
@@ -178,7 +178,7 @@ function CatalogGalleryCardComponent({
         className="pointer-events-none absolute right-3 top-3 flex items-center gap-2 opacity-0 transition-opacity duration-200"
         style={{ opacity: "var(--hovered)" }}
       >
-        <div className="flex h-8 w-8 items-center justify-center rounded-full border border-white/60 bg-white/70 text-[var(--muted)] shadow-sm">
+        <div className="flex h-8 w-8 items-center justify-center rounded-full border border-[var(--panel)]/60 bg-[var(--panel)]/70 text-[var(--muted)] shadow-sm">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
             <path
               d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6Z"
@@ -188,7 +188,7 @@ function CatalogGalleryCardComponent({
             <circle cx="12" cy="12" r="3" stroke="currentColor" strokeWidth="1.6" />
           </svg>
         </div>
-        <div className="flex h-8 w-8 items-center justify-center rounded-full border border-white/60 bg-white/70 text-[var(--muted)] shadow-sm">
+        <div className="flex h-8 w-8 items-center justify-center rounded-full border border-[var(--panel)]/60 bg-[var(--panel)]/70 text-[var(--muted)] shadow-sm">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
             <path
               d="M4 20l4.5-1 10-10a2.1 2.1 0 0 0-3-3l-10 10L4 20Z"
@@ -219,7 +219,7 @@ function CatalogGalleryCardComponent({
         </div>
       ) : null}
       <div
-        className="relative aspect-square bg-gradient-to-br from-[#e7edf5] to-[#f7faff]"
+        className="relative aspect-square bg-gradient-to-br from-[var(--panel)] to-[var(--background)]"
         onDoubleClick={handleImageDoubleClick}
       >
         <div className="absolute inset-0 flex items-center justify-center text-xs text-[var(--muted)]">
@@ -238,7 +238,7 @@ function CatalogGalleryCardComponent({
         ) : null}
       </div>
       <div className="space-y-1 p-[clamp(0.55rem,0.45rem+0.45vw,0.8rem)] flex-1 min-w-0">
-        <p className="text-[clamp(0.8rem,0.76rem+0.26vw,0.9rem)] font-semibold text-black truncate leading-tight">
+        <p className="text-[clamp(0.8rem,0.76rem+0.26vw,0.9rem)] font-semibold text-[var(--foreground)] truncate leading-tight">
           {model}
         </p>
         <div className="grid gap-1 text-[clamp(0.66rem,0.62rem+0.22vw,0.76rem)] [grid-template-columns:repeat(auto-fit,minmax(140px,1fr))] min-w-0">

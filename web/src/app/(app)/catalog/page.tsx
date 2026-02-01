@@ -108,11 +108,11 @@ function Field({ label, children }: FieldProps) {
 
 
 function getMaterialBgColor(materialCode: string): string {
-  if (materialCode === "925") return "bg-gradient-to-br from-[#d8dfe7] to-[#e8ecf0]"; // Silver
-  if (materialCode === "14" || materialCode === "18") return "bg-gradient-to-br from-[#f9e8e5] to-[#fdf5f3]"; // Rose Gold (light)
-  if (materialCode === "24") return "bg-gradient-to-br from-[#fef3d9] to-[#fffcf3]"; // Gold (light)
-  if (materialCode === "00") return "bg-white"; // White
-  return "bg-white"; // Default
+  if (materialCode === "925") return "bg-gradient-to-br from-[var(--panel)] to-[var(--panel-hover)]";
+  if (materialCode === "14" || materialCode === "18") return "bg-gradient-to-br from-[var(--danger-soft)] to-[var(--panel)]";
+  if (materialCode === "24") return "bg-gradient-to-br from-[var(--warning-soft)] to-[var(--panel)]";
+  if (materialCode === "00") return "bg-[var(--panel)]";
+  return "bg-[var(--panel)]";
 }
 
 function toNumber(value: string) {
@@ -720,7 +720,7 @@ export default function CatalogPage() {
               <Button variant="secondary" size="sm" onClick={handleOpenNew}>
                 새 상품 등록
               </Button>
-              <div className="flex items-center rounded-[12px] border border-[var(--panel-border)] bg-white p-1">
+              <div className="flex items-center rounded-[12px] border border-[var(--panel-border)] bg-[var(--panel)] p-1">
                 <button
                   type="button"
                   onClick={() => {
@@ -757,7 +757,7 @@ export default function CatalogPage() {
             className="gap-6 items-start"
             left={
               <div className="flex flex-col gap-3 h-full" id="catalog.listPanel">
-                <div className="sticky top-3 z-10 flex items-center justify-between rounded-[12px] border border-[var(--panel-border)] bg-white/95 px-4 py-3 shadow-sm ring-1 ring-[var(--panel-border)]/60 backdrop-blur">
+                <div className="sticky top-3 z-10 flex items-center justify-between rounded-[12px] border border-[var(--panel-border)] bg-[var(--panel)]/95 px-4 py-3 shadow-sm ring-1 ring-[var(--panel-border)]/60 backdrop-blur">
                   <p className="text-xs text-[var(--muted)]">
                     {rangeStart} - {rangeEnd} / {totalCount}
                   </p>
@@ -813,7 +813,7 @@ export default function CatalogPage() {
                           <div className="flex gap-4">
                             {/* 이미지 영역 */}
                             <div
-                              className="relative h-28 w-28 shrink-0 overflow-hidden rounded-[14px] bg-gradient-to-br from-[#e7edf5] to-[#f7faff]"
+                              className="relative h-28 w-28 shrink-0 overflow-hidden rounded-[14px] bg-gradient-to-br from-[var(--panel)] to-[var(--background)]"
                               onDoubleClick={(e) => {
                                 // ✅ 이미지 더블클릭 시: 상위(카드)로 전파 막고(=수정창 안열림), 이미지 프리뷰 실행
                                 e.stopPropagation();
@@ -821,7 +821,7 @@ export default function CatalogPage() {
                                   setPreviewImage(item.imageUrl);
                               }}
                             >
-                              <div className="absolute right-2 top-2 h-6 w-6 rounded-full border border-white/80 bg-white/80" />
+                              <div className="absolute right-2 top-2 h-6 w-6 rounded-full border border-[var(--panel)]/80 bg-[var(--panel)]/80" />
                               <div className="absolute inset-0 flex items-center justify-center text-xs text-[var(--muted)]">
                                 이미지
                               </div>
@@ -860,7 +860,7 @@ export default function CatalogPage() {
                                 ].map((meta) => (
                                   <div
                                     key={meta.label}
-                                    className="rounded-[8px] border border-[var(--panel-border)] bg-[#f7f9fc] px-2 py-1"
+                                    className="rounded-[8px] border border-[var(--panel-border)] bg-[var(--panel)] px-2 py-1"
                                   >
                                     <p className="text-[9px] font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">
                                       {meta.label}
@@ -978,7 +978,7 @@ export default function CatalogPage() {
                     <div className="flex flex-col gap-4 xl:flex-row xl:items-stretch">
                       {selectedItem?.imageUrl && (
                         <div
-                          className="h-[300px] w-full xl:w-[300px] shrink-0 overflow-hidden rounded-[12px] border border-[var(--panel-border)] bg-white cursor-pointer"
+                          className="h-[300px] w-full xl:w-[300px] shrink-0 overflow-hidden rounded-[12px] border border-[var(--panel-border)] bg-[var(--panel)] cursor-pointer"
                           onDoubleClick={() =>
                             setPreviewImage(selectedItem.imageUrl ?? null)
                           }
@@ -993,7 +993,7 @@ export default function CatalogPage() {
 
                       {/* 가격 통계 박스들 */}
                       <div className="grid grid-cols-2 gap-2 flex-1 min-w-0 xl:grid-cols-1">
-                        <div className="flex flex-col items-center justify-center text-center rounded-[12px] border border-[var(--panel-border)] bg-white px-3 py-2">
+                        <div className="flex flex-col items-center justify-center text-center rounded-[12px] border border-[var(--panel-border)] bg-[var(--panel)] px-3 py-2">
                           <p className="text-xs text-[var(--muted)]">
                             예상 총 금액 (판매)
                           </p>
@@ -1001,7 +1001,7 @@ export default function CatalogPage() {
                             {Math.round(totalEstimatedSell).toLocaleString("ko-KR")} 원
                           </p>
                         </div>
-                        <div className="flex flex-col items-center justify-center text-center rounded-[12px] border border-[var(--panel-border)] bg-white px-3 py-2">
+                        <div className="flex flex-col items-center justify-center text-center rounded-[12px] border border-[var(--panel-border)] bg-[var(--panel)] px-3 py-2">
                           <p className="text-xs text-[var(--muted)]">
                             예상 총 금액 (원가)
                           </p>
@@ -1009,13 +1009,13 @@ export default function CatalogPage() {
                             {Math.round(totalEstimatedCost).toLocaleString("ko-KR")} 원
                           </p>
                         </div>
-                        <div className="flex flex-col items-center justify-center text-center rounded-[12px] border border-[var(--panel-border)] bg-white px-3 py-2">
+                        <div className="flex flex-col items-center justify-center text-center rounded-[12px] border border-[var(--panel-border)] bg-[var(--panel)] px-3 py-2">
                           <p className="text-xs text-[var(--muted)]">판매 합계공임</p>
                           <p className="text-sm font-semibold text-[var(--foreground)]">
                             {totalLaborSell.toLocaleString("ko-KR")} 원
                           </p>
                         </div>
-                        <div className="flex flex-col items-center justify-center text-center rounded-[12px] border border-[var(--panel-border)] bg-white px-3 py-2">
+                        <div className="flex flex-col items-center justify-center text-center rounded-[12px] border border-[var(--panel-border)] bg-[var(--panel)] px-3 py-2">
                           <p className="text-xs text-[var(--muted)]">원가 합계공임</p>
                           <p className="text-sm font-semibold text-[var(--foreground)]">
                             {totalLaborCost.toLocaleString("ko-KR")} 원
@@ -1108,7 +1108,7 @@ export default function CatalogPage() {
                           <div className="space-y-2">
                             {/* 합계공임 */}
                             <div className="grid grid-cols-10 gap-2">
-                              <div className="col-span-2 flex items-center justify-center rounded-[8px] border border-[var(--panel-border)] bg-[#f7f9fc] px-2 py-2">
+                              <div className="col-span-2 flex items-center justify-center rounded-[8px] border border-[var(--panel-border)] bg-[var(--panel)] px-2 py-2">
                                 <span className="text-xs font-semibold text-[var(--foreground)]">
                                   합계공임
                                 </span>
@@ -1129,7 +1129,7 @@ export default function CatalogPage() {
                             </div>
                             {/* 기본공임 */}
                             <div className="grid grid-cols-10 gap-2">
-                              <div className="col-span-2 flex items-center justify-center rounded-[8px] border border-[var(--panel-border)] bg-[#f7f9fc] px-2 py-2">
+                              <div className="col-span-2 flex items-center justify-center rounded-[8px] border border-[var(--panel-border)] bg-[var(--panel)] px-2 py-2">
                                 <span className="text-xs font-semibold text-[var(--foreground)]">
                                   기본공임
                                 </span>
@@ -1150,7 +1150,7 @@ export default function CatalogPage() {
                             </div>
                             {/* 중심공임 */}
                             <div className="grid grid-cols-10 gap-2">
-                              <div className="col-span-2 flex items-center justify-center rounded-[8px] border border-[var(--panel-border)] bg-[#f7f9fc] px-2 py-2">
+                              <div className="col-span-2 flex items-center justify-center rounded-[8px] border border-[var(--panel-border)] bg-[var(--panel)] px-2 py-2">
                                 <span className="text-xs font-semibold text-[var(--foreground)]">
                                   중심공임
                                 </span>
@@ -1176,7 +1176,7 @@ export default function CatalogPage() {
                             </div>
                             {/* 보조1공임 */}
                             <div className="grid grid-cols-10 gap-2">
-                              <div className="col-span-2 flex items-center justify-center rounded-[8px] border border-[var(--panel-border)] bg-[#f7f9fc] px-2 py-2">
+                              <div className="col-span-2 flex items-center justify-center rounded-[8px] border border-[var(--panel-border)] bg-[var(--panel)] px-2 py-2">
                                 <span className="text-xs font-semibold text-[var(--foreground)]">
                                   보조1공임
                                 </span>
@@ -1202,7 +1202,7 @@ export default function CatalogPage() {
                             </div>
                             {/* 보조2공임 */}
                             <div className="grid grid-cols-10 gap-2">
-                              <div className="col-span-2 flex items-center justify-center rounded-[8px] border border-[var(--panel-border)] bg-[#f7f9fc] px-2 py-2">
+                              <div className="col-span-2 flex items-center justify-center rounded-[8px] border border-[var(--panel-border)] bg-[var(--panel)] px-2 py-2">
                                 <span className="text-xs font-semibold text-[var(--foreground)]">
                                   보조2공임
                                 </span>
@@ -1247,7 +1247,7 @@ export default function CatalogPage() {
                   </div>
 
                   {/* [오른쪽 기둥] 예약 공간 */}
-                  <aside className="min-w-0 rounded-[14px] border border-dashed border-[var(--panel-border)] bg-[#f8fafc] p-4 sticky top-24 self-start">
+                  <aside className="min-w-0 rounded-[14px] border border-dashed border-[var(--panel-border)] bg-[var(--panel)] p-4 sticky top-24 self-start">
                     <div className="flex h-[min(62vh,680px)] items-center justify-center">
                       <p className="text-xs text-[var(--muted)]">예약 공간</p>
                     </div>
@@ -1280,7 +1280,7 @@ export default function CatalogPage() {
         >
           {/* 1. 좌측 이미지 업로드 영역 */}
           <div className="space-y-4">
-            <div className="rounded-[18px] border border-dashed border-[var(--panel-border)] bg-[#f8fafc] p-4">
+            <div className="rounded-[18px] border border-dashed border-[var(--panel-border)] bg-[var(--panel)] p-4">
               <div className="mb-3 flex items-center justify-between text-sm font-semibold text-[var(--foreground)]">
                 <span>대표 이미지</span>
                 {uploadingImage ? (
@@ -1289,7 +1289,7 @@ export default function CatalogPage() {
                   </span>
                 ) : null}
               </div>
-              <label className="group relative flex h-56 w-56 mx-auto cursor-pointer flex-col items-center justify-center overflow-hidden rounded-[16px] border border-[var(--panel-border)] bg-white text-center">
+              <label className="group relative flex h-56 w-56 mx-auto cursor-pointer flex-col items-center justify-center overflow-hidden rounded-[16px] border border-[var(--panel-border)] bg-[var(--panel)] text-center">
                 <input
                   type="file"
                   accept="image/*"
@@ -1361,7 +1361,7 @@ export default function CatalogPage() {
               <div className="grid gap-6 lg:grid-cols-2 h-full">
                 {/* 2-1. 좌측 열: 기본 정보 및 비고 */}
                 <div className="flex flex-col gap-4 h-full">
-                  <div className="rounded-[18px] border border-[var(--panel-border)] bg-white p-4">
+                  <div className="rounded-[18px] border border-[var(--panel-border)] bg-[var(--panel)] p-4">
                     <div className="mb-4 flex items-center justify-between">
                       <p className="text-sm font-semibold text-[var(--foreground)]">
                         기본 정보
@@ -1456,7 +1456,7 @@ export default function CatalogPage() {
                     </div>
                   </div>
 
-                  <div className="flex-1 rounded-[18px] border border-[var(--panel-border)] bg-white p-4 flex flex-col">
+                  <div className="flex-1 rounded-[18px] border border-[var(--panel-border)] bg-[var(--panel)] p-4 flex flex-col">
                     <p className="mb-3 text-sm font-semibold text-[var(--foreground)]">
                       비고
                     </p>
@@ -1471,16 +1471,16 @@ export default function CatalogPage() {
 
                 {/* 2-2. 우측 열: 공임 및 프로파일 설정 */}
                 <div className="space-y-4">
-                  <div className="rounded-[18px] border border-[var(--panel-border)] bg-white p-4">
+                  <div className="rounded-[18px] border border-[var(--panel-border)] bg-[var(--panel)] p-4">
                     <div className="mb-4 flex items-center justify-between">
                       <p className="text-sm font-semibold text-[var(--foreground)]">
                         공임 및 구성
                       </p>
                       <div className="flex gap-2">
-                        <span className="text-[10px] bg-blue-50 text-blue-700 px-2 py-0.5 rounded">
+                        <span className="text-[10px] bg-[var(--primary)]/10 text-[var(--primary)] px-2 py-0.5 rounded">
                           좌:판매
                         </span>
-                        <span className="text-[10px] bg-gray-100 text-gray-600 px-2 py-0.5 rounded">
+                        <span className="text-[10px] bg-[var(--muted)]/10 text-[var(--muted)] px-2 py-0.5 rounded">
                           우:원가
                         </span>
                       </div>
@@ -1538,7 +1538,7 @@ export default function CatalogPage() {
                         type="number"
                         min={0}
                         placeholder="Qty"
-                        className="text-center bg-[#f8fafc]"
+                        className="text-center bg-[var(--input-bg)]"
                         value={centerQty}
                         onChange={(e) => setCenterQty(toNumber(e.target.value))}
                       />
@@ -1567,7 +1567,7 @@ export default function CatalogPage() {
                         type="number"
                         min={0}
                         placeholder="Qty"
-                        className="text-center bg-[#f8fafc]"
+                        className="text-center bg-[var(--input-bg)]"
                         value={sub1Qty}
                         onChange={(e) => setSub1Qty(toNumber(e.target.value))}
                       />
@@ -1596,7 +1596,7 @@ export default function CatalogPage() {
                         type="number"
                         min={0}
                         placeholder="Qty"
-                        className="text-center bg-[#f8fafc]"
+                        className="text-center bg-[var(--input-bg)]"
                         value={sub2Qty}
                         onChange={(e) => setSub2Qty(toNumber(e.target.value))}
                       />
@@ -1643,7 +1643,7 @@ export default function CatalogPage() {
                         type="number"
                         min={0}
                         readOnly
-                        className="text-right font-bold bg-blue-50 text-blue-700 border-blue-100"
+                        className="text-right font-bold bg-[var(--input-bg)] text-[var(--primary)] border-[var(--panel-border)]"
                         value={totalLaborSell}
                       />
                       <div className="text-center text-[var(--muted)]">-</div>
@@ -1651,13 +1651,13 @@ export default function CatalogPage() {
                         type="number"
                         min={0}
                         readOnly
-                        className="text-right font-bold bg-gray-50 text-gray-700 border-gray-200"
+                        className="text-right font-bold bg-[var(--input-bg)] text-[var(--foreground)] border-[var(--panel-border)]"
                         value={totalLaborCost}
                       />
                     </div>
                   </div>
 
-                  <div className="rounded-[18px] border border-[var(--panel-border)] bg-neutral-50 p-4">
+                  <div className="rounded-[18px] border border-[var(--panel-border)] bg-[var(--panel)] p-4">
                     <div className="mb-3 flex items-center justify-between">
                       <div className="flex items-center gap-2">
                         <p className="text-sm font-semibold text-[var(--foreground)]">
@@ -1698,7 +1698,7 @@ export default function CatalogPage() {
                 </div>
               </div>
             </div>
-            <div className="sticky bottom-0 flex items-center justify-end gap-2 border-t border-[var(--panel-border)] bg-white pt-4">
+            <div className="sticky bottom-0 flex items-center justify-end gap-2 border-t border-[var(--panel-border)] bg-[var(--panel)] pt-4">
               <Button
                 variant="secondary"
                 type="button"
@@ -1724,7 +1724,7 @@ export default function CatalogPage() {
               e.stopPropagation();
               setPreviewImage(null);
             }}
-            className="absolute right-6 top-6 z-[101] flex h-12 w-12 items-center justify-center rounded-full bg-white/10 text-white hover:bg-white/20 transition-colors"
+            className="absolute right-6 top-6 z-[101] flex h-12 w-12 items-center justify-center rounded-full bg-[var(--panel)]/20 text-white hover:bg-[var(--panel)]/30 transition-colors"
           >
             <X size={32} />
           </button>

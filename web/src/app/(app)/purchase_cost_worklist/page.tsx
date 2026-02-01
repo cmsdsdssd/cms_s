@@ -329,7 +329,7 @@ export default function PurchaseCostWorklistPage() {
 
   return (
     <div className="mx-auto max-w-[1800px] space-y-8 px-4 pb-10 pt-4 md:px-6">
-      <div className="relative z-10 rounded-[18px] border border-[var(--panel-border)] bg-white/70 p-4 shadow-[0_10px_30px_rgba(15,23,42,0.06)] backdrop-blur">
+      <div className="relative z-10 rounded-[18px] border border-[var(--panel-border)] bg-[var(--panel)]/70 p-4 shadow-[0_10px_30px_rgba(15,23,42,0.06)] backdrop-blur">
         <ActionBar
           title="원가마감 작업대"
           subtitle="영수증 총합(중량/공임/총금액)을 저장하고, 연결된 출고에 자동 배분하여 ACTUAL 원가로 반영합니다."
@@ -350,8 +350,8 @@ export default function PurchaseCostWorklistPage() {
         {/* Left: receipt list */}
         <div className="lg:col-span-5 xl:col-span-4 flex flex-col gap-4">
           <Card className="flex-1 overflow-hidden border-none shadow-sm ring-1 ring-black/5">
-            <CardHeader className="flex flex-wrap items-center justify-between gap-3 border-b border-gray-100 bg-white/50 px-4 py-3 backdrop-blur-sm">
-              <div className="text-sm font-semibold text-gray-900">영수증 목록</div>
+            <CardHeader className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--panel-border)] bg-[var(--panel)]/50 px-4 py-3 backdrop-blur-sm">
+              <div className="text-sm font-semibold text-[var(--foreground)]">영수증 목록</div>
               <div className="flex items-center gap-1.5">
                 {(["NEED_APPLY", "NEED_INPUT", "APPLIED", "ALL"] as const).map((f) => (
                   <Button
@@ -360,7 +360,7 @@ export default function PurchaseCostWorklistPage() {
                     variant={filter === f ? "primary" : "ghost"}
                     onClick={() => handleFilterChange(f)}
                     className={`h-7 px-2.5 text-xs font-medium transition-all ${
-                      filter === f ? "shadow-sm" : "text-gray-500 hover:text-gray-900"
+                      filter === f ? "shadow-sm" : "text-[var(--muted)] hover:text-[var(--foreground)]"
                     }`}
                   >
                     {f === "NEED_APPLY" && "미적용"}
@@ -371,11 +371,11 @@ export default function PurchaseCostWorklistPage() {
                 ))}
               </div>
             </CardHeader>
-            <CardBody className="max-h-[calc(100vh-240px)] overflow-y-auto p-2 scrollbar-thin scrollbar-thumb-gray-200">
+            <CardBody className="max-h-[calc(100vh-240px)] overflow-y-auto p-2 scrollbar-thin scrollbar-thumb-[var(--border)]">
               {worklist.isLoading ? (
                 <div className="space-y-2 p-1">
                   {Array.from({ length: 8 }).map((_, idx) => (
-                    <div key={`receipt-skeleton-${idx}`} className="rounded-lg border border-gray-100 bg-white p-3">
+                    <div key={`receipt-skeleton-${idx}`} className="rounded-lg border border-[var(--panel-border)] bg-[var(--panel)] p-3">
                       <Skeleton className="h-4 w-2/3" />
                       <div className="mt-3 flex items-center gap-2">
                         <Skeleton className="h-4 w-12" />
@@ -386,7 +386,7 @@ export default function PurchaseCostWorklistPage() {
                   ))}
                 </div>
               ) : filteredRows.length === 0 ? (
-                <div className="flex h-32 items-center justify-center rounded-lg border border-dashed border-gray-200 bg-gray-50/70 text-sm text-[var(--muted)]">
+                <div className="flex h-32 items-center justify-center rounded-lg border border-dashed border-[var(--panel-border)] bg-[var(--surface)]/70 text-sm text-[var(--muted)]">
                   처리할 항목이 없습니다.
                 </div>
               ) : (
@@ -405,18 +405,18 @@ export default function PurchaseCostWorklistPage() {
                         className={`group relative w-full rounded-lg border px-4 py-3.5 text-left transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--primary)] ${
                           isSelected
                             ? "border-[var(--primary)] bg-[var(--primary)]/5 shadow-sm ring-1 ring-[var(--primary)]"
-                            : "border-transparent bg-white hover:border-gray-200 hover:bg-gray-50 hover:shadow-sm"
+                            : "border-transparent bg-[var(--panel)] hover:border-[var(--panel-border)] hover:bg-[var(--panel-hover)] hover:shadow-sm"
                         }`}
                       >
                         <div className="flex items-start justify-between gap-3">
                           <div className="min-w-0 flex-1">
-                            <div className={`truncate text-sm font-semibold transition-colors ${isSelected ? "text-[var(--primary)]" : "text-gray-900"}`}>
+                            <div className={`truncate text-sm font-semibold transition-colors ${isSelected ? "text-[var(--primary)]" : "text-[var(--foreground)]"}`}>
                               {shortPath(r.file_path)}
                             </div>
                             <div className="mt-1.5 flex flex-wrap items-center gap-2 text-xs text-[var(--muted)]">
                               <span className="tabular-nums">{formatYmd(r.received_at)}</span>
-                              <span className="text-gray-300">·</span>
-                              <span className="truncate font-medium text-gray-700">{r.vendor_name ?? "거래처 미지정"}</span>
+                              <span className="text-[var(--muted-weak)]">·</span>
+                              <span className="truncate font-medium text-[var(--muted-foreground)]">{r.vendor_name ?? "거래처 미지정"}</span>
                             </div>
                           </div>
                           <div className="flex shrink-0 flex-col items-end gap-1.5">
@@ -442,9 +442,9 @@ export default function PurchaseCostWorklistPage() {
         {/* Right: selected receipt editor */}
         <div className="lg:col-span-7 xl:col-span-8">
           <Card className="min-h-[600px] border-none shadow-sm ring-1 ring-black/5">
-            <CardHeader className="flex items-center justify-between gap-3 border-b border-gray-100 bg-white/50 px-6 py-4 backdrop-blur-sm">
+            <CardHeader className="flex items-center justify-between gap-3 border-b border-[var(--panel-border)] bg-[var(--panel)]/50 px-6 py-4 backdrop-blur-sm">
               <div className="flex items-center gap-2">
-                <div className="text-base font-semibold text-gray-900">
+                <div className="text-base font-semibold text-[var(--foreground)]">
                   {selected ? "영수증 상세 및 배분" : "영수증을 선택하세요"}
                 </div>
                 {selected?.applied_at && (
@@ -465,7 +465,7 @@ export default function PurchaseCostWorklistPage() {
             <CardBody className="p-6">
               {worklist.isLoading ? (
                 <div className="space-y-5">
-                  <div className="rounded-xl border border-gray-100 bg-white p-4">
+                  <div className="rounded-xl border border-[var(--panel-border)] bg-[var(--panel)] p-4">
                     <Skeleton className="h-4 w-1/3" />
                     <div className="mt-3 grid grid-cols-2 gap-3">
                       <Skeleton className="h-4" />
@@ -474,36 +474,36 @@ export default function PurchaseCostWorklistPage() {
                       <Skeleton className="h-4" />
                     </div>
                   </div>
-                  <div className="rounded-xl border border-gray-100 bg-white p-4">
+                  <div className="rounded-xl border border-[var(--panel-border)] bg-[var(--panel)] p-4">
                     <Skeleton className="h-4 w-2/5" />
                     <Skeleton className="mt-3 h-24 w-full" />
                   </div>
                 </div>
               ) : !selected ? (
-                <div className="flex h-full flex-col items-center justify-center rounded-xl border border-dashed border-gray-200 bg-gray-50/60 py-20 text-center">
-                  <div className="mb-4 rounded-full bg-white p-4 shadow-sm">
-                    <svg className="h-8 w-8 text-gray-300" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <div className="flex h-full flex-col items-center justify-center rounded-xl border border-dashed border-[var(--panel-border)] bg-[var(--surface)]/60 py-20 text-center">
+                  <div className="mb-4 rounded-full bg-[var(--panel)] p-4 shadow-sm">
+                    <svg className="h-8 w-8 text-[var(--muted-weak)]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
                     </svg>
                   </div>
-                  <h3 className="text-sm font-medium text-gray-900">항목을 선택하세요</h3>
-                  <p className="mt-1 max-w-sm text-sm text-gray-500">
+                  <h3 className="text-sm font-medium text-[var(--foreground)]">항목을 선택하세요</h3>
+                  <p className="mt-1 max-w-sm text-sm text-[var(--muted)]">
                     왼쪽 목록에서 영수증을 선택하여 상세 정보를 입력하고<br />출고 원가 배분을 진행하세요.
                   </p>
                 </div>
               ) : (
                 <div className="space-y-8">
                   {/* Summary Section */}
-                  <div className="rounded-xl border border-gray-100 bg-white p-4 shadow-sm">
+                  <div className="rounded-xl border border-[var(--panel-border)] bg-[var(--panel)] p-4 shadow-sm">
                     <div className="flex flex-wrap items-start justify-between gap-3">
                       <div className="min-w-0">
-                        <div className="truncate text-sm font-semibold text-gray-900">
+                        <div className="truncate text-sm font-semibold text-[var(--foreground)]">
                           {shortPath(selected.file_path)}
                         </div>
-                        <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-gray-500">
+                        <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-[var(--muted)]">
                           <span className="tabular-nums">{formatYmd(selected.received_at)}</span>
-                          <span className="text-gray-300">·</span>
-                          <span className="truncate font-medium text-gray-700">{selected.vendor_name ?? "거래처 미지정"}</span>
+                          <span className="text-[var(--muted-weak)]">·</span>
+                          <span className="truncate font-medium text-[var(--muted-foreground)]">{selected.vendor_name ?? "거래처 미지정"}</span>
                         </div>
                       </div>
                       <div className="flex flex-wrap items-center gap-1.5">
@@ -518,22 +518,22 @@ export default function PurchaseCostWorklistPage() {
                         </Badge>
                       </div>
                     </div>
-                    <div className="mt-4 grid grid-cols-1 gap-3 text-xs text-gray-500 sm:grid-cols-2 lg:grid-cols-3">
-                      <div className="rounded-lg border border-gray-100 bg-gray-50/70 px-3 py-2">
-                        <div className="text-[10px] font-semibold uppercase tracking-wider text-gray-400">통화</div>
-                        <div className="mt-1 text-sm font-semibold text-gray-900">
+                    <div className="mt-4 grid grid-cols-1 gap-3 text-xs text-[var(--muted)] sm:grid-cols-2 lg:grid-cols-3">
+                      <div className="rounded-lg border border-[var(--panel-border)] bg-[var(--surface)]/70 px-3 py-2">
+                        <div className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-weak)]">통화</div>
+                        <div className="mt-1 text-sm font-semibold text-[var(--foreground)]">
                           {selected.pricing_currency_code ?? selected.inbox_currency_code ?? "-"}
                         </div>
                       </div>
-                      <div className="rounded-lg border border-gray-100 bg-gray-50/70 px-3 py-2">
-                        <div className="text-[10px] font-semibold uppercase tracking-wider text-gray-400">총금액</div>
-                        <div className="mt-1 text-sm font-semibold text-gray-900 tabular-nums">
+                      <div className="rounded-lg border border-[var(--panel-border)] bg-[var(--surface)]/70 px-3 py-2">
+                        <div className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-weak)]">총금액</div>
+                        <div className="mt-1 text-sm font-semibold text-[var(--foreground)] tabular-nums">
                           {formatNumber(selected.pricing_total_amount)}
                         </div>
                       </div>
-                      <div className="rounded-lg border border-gray-100 bg-gray-50/70 px-3 py-2">
-                        <div className="text-[10px] font-semibold uppercase tracking-wider text-gray-400">KRW 환산</div>
-                        <div className="mt-1 text-sm font-semibold text-gray-900 tabular-nums">
+                      <div className="rounded-lg border border-[var(--panel-border)] bg-[var(--surface)]/70 px-3 py-2">
+                        <div className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-weak)]">KRW 환산</div>
+                        <div className="mt-1 text-sm font-semibold text-[var(--foreground)] tabular-nums">
                           {formatNumber(selected.pricing_total_amount_krw)}
                         </div>
                       </div>
@@ -543,22 +543,22 @@ export default function PurchaseCostWorklistPage() {
                   {/* Input Section */}
                   <div className="grid grid-cols-1 gap-x-6 gap-y-6 md:grid-cols-2 lg:grid-cols-3">
                     <div className="space-y-1.5">
-                      <label className="text-xs font-semibold uppercase tracking-wider text-gray-500">통화</label>
+                      <label className="text-xs font-semibold uppercase tracking-wider text-[var(--muted)]">통화</label>
                       <Select 
                         value={currencyCode} 
                         onChange={(e) => setCurrencyCode(e.target.value as "KRW" | "CNY")}
-                        className="bg-gray-50/50"
+                        className="bg-[var(--input-bg)]"
                       >
                         <option value="KRW">KRW (원화)</option>
                         <option value="CNY">CNY (위안화)</option>
                       </Select>
-                      <p className="text-[11px] text-gray-400">
+                      <p className="text-[11px] text-[var(--muted-weak)]">
                         * 환율은 적용 시점의 최신 시세(meta)를 참조
                       </p>
                     </div>
 
                     <div className="space-y-1.5">
-                      <label className="text-xs font-semibold uppercase tracking-wider text-gray-500">총금액 ({currencyCode})</label>
+                      <label className="text-xs font-semibold uppercase tracking-wider text-[var(--muted)]">총금액 ({currencyCode})</label>
                       <Input
                         inputMode="decimal"
                         placeholder="0"
@@ -566,8 +566,8 @@ export default function PurchaseCostWorklistPage() {
                         onChange={(e) => setTotalAmount(e.target.value)}
                         className="font-mono text-lg font-medium tabular-nums"
                       />
-                      <p className="text-[11px] text-gray-400">
-                        KRW 환산: <span className="font-medium text-gray-700">{formatNumber(selected.pricing_total_amount_krw)}</span>
+                      <p className="text-[11px] text-[var(--muted-weak)]">
+                        KRW 환산: <span className="font-medium text-[var(--muted-foreground)]">{formatNumber(selected.pricing_total_amount_krw)}</span>
                         {selected.fx_rate_krw_per_unit && (
                           <span className="ml-1">(fx {formatNumber(selected.fx_rate_krw_per_unit)})</span>
                         )}
@@ -575,7 +575,7 @@ export default function PurchaseCostWorklistPage() {
                     </div>
 
                     <div className="space-y-1.5">
-                      <label className="text-xs font-semibold uppercase tracking-wider text-gray-500">중량 (g)</label>
+                      <label className="text-xs font-semibold uppercase tracking-wider text-[var(--muted)]">중량 (g)</label>
                       <Input
                         inputMode="decimal"
                         placeholder="0.00"
@@ -586,7 +586,7 @@ export default function PurchaseCostWorklistPage() {
                     </div>
 
                     <div className="space-y-1.5">
-                      <label className="text-xs font-semibold uppercase tracking-wider text-gray-500">기본공임</label>
+                      <label className="text-xs font-semibold uppercase tracking-wider text-[var(--muted)]">기본공임</label>
                       <Input
                         inputMode="decimal"
                         placeholder="0"
@@ -597,7 +597,7 @@ export default function PurchaseCostWorklistPage() {
                     </div>
 
                     <div className="space-y-1.5">
-                      <label className="text-xs font-semibold uppercase tracking-wider text-gray-500">기타공임</label>
+                      <label className="text-xs font-semibold uppercase tracking-wider text-[var(--muted)]">기타공임</label>
                       <Input
                         inputMode="decimal"
                         placeholder="0"
@@ -608,24 +608,24 @@ export default function PurchaseCostWorklistPage() {
                     </div>
 
                     <div className="space-y-1.5 lg:col-span-3">
-                      <label className="text-xs font-semibold uppercase tracking-wider text-gray-500">메모</label>
+                      <label className="text-xs font-semibold uppercase tracking-wider text-[var(--muted)]">메모</label>
                       <Textarea
                         placeholder="특이사항이나 비고를 입력하세요"
                         value={note}
                         onChange={(e) => setNote(e.target.value)}
-                        className="min-h-[80px] resize-none bg-gray-50/50"
+                        className="min-h-[80px] resize-none bg-[var(--input-bg)]"
                       />
                     </div>
                   </div>
 
                   {/* Actions */}
-                  <div className="flex flex-wrap items-center justify-between gap-4 rounded-xl border border-gray-100 bg-gray-50/50 p-4">
-                    <label className="flex cursor-pointer items-center gap-2 text-sm text-gray-600 hover:text-gray-900">
+                  <div className="flex flex-wrap items-center justify-between gap-4 rounded-xl border border-[var(--panel-border)] bg-[var(--surface)]/50 p-4">
+                    <label className="flex cursor-pointer items-center gap-2 text-sm text-[var(--muted)] hover:text-[var(--foreground)]">
                       <input
                         type="checkbox"
                         checked={forceReapply}
                         onChange={(e) => setForceReapply(e.target.checked)}
-                        className="h-4 w-4 rounded border-gray-300 text-[var(--primary)] focus:ring-[var(--primary)]"
+                        className="h-4 w-4 rounded border-[var(--panel-border)] text-[var(--primary)] focus:ring-[var(--primary)]"
                       />
                       <span>기존 데이터 덮어쓰기 (재적용)</span>
                     </label>
@@ -641,17 +641,17 @@ export default function PurchaseCostWorklistPage() {
 
                   {/* Allocations Section */}
                   <div className="space-y-4">
-                    <div className="flex items-end justify-between border-b border-gray-100 pb-2">
+                    <div className="flex items-end justify-between border-b border-[var(--panel-border)] pb-2">
                       <div>
-                        <h4 className="text-sm font-bold text-gray-900">연결된 출고 내역</h4>
-                        <p className="mt-0.5 text-xs text-gray-500">
+                        <h4 className="text-sm font-bold text-[var(--foreground)]">연결된 출고 내역</h4>
+                        <p className="mt-0.5 text-xs text-[var(--muted)]">
                           출고확정 당시 내부원가 합계 비례 배분
                         </p>
                       </div>
                       <div className="text-right text-xs">
-                        <span className="font-medium text-gray-900">{selected.linked_shipment_cnt ?? 0}건</span>
-                        <span className="mx-2 text-gray-300">|</span>
-                        <span className="text-gray-500">기준합 {formatNumber(selected.linked_basis_cost_krw)} KRW</span>
+                        <span className="font-medium text-[var(--foreground)]">{selected.linked_shipment_cnt ?? 0}건</span>
+                        <span className="mx-2 text-[var(--muted-weak)]">|</span>
+                        <span className="text-[var(--muted)]">기준합 {formatNumber(selected.linked_basis_cost_krw)} KRW</span>
                       </div>
                     </div>
 
@@ -660,20 +660,20 @@ export default function PurchaseCostWorklistPage() {
                         allocations.map((s) => (
                           <div
                             key={s.shipment_id}
-                            className="group flex flex-wrap items-center justify-between gap-3 rounded-lg border border-gray-100 bg-white px-4 py-3 transition-all hover:border-gray-200 hover:shadow-sm"
+                            className="group flex flex-wrap items-center justify-between gap-3 rounded-lg border border-[var(--panel-border)] bg-[var(--panel)] px-4 py-3 transition-all hover:border-[var(--panel-border)] hover:shadow-sm"
                           >
                             <div className="min-w-0 flex-1">
                               <div className="flex flex-wrap items-center gap-2">
-                                <span className="font-semibold text-gray-900">
+                                <span className="font-semibold text-[var(--foreground)]">
                                   {s.customer_name ?? "(거래처 미상)"}
                                 </span>
                                 <div className="flex items-center gap-1.5">
-                                  <Badge tone="neutral" className="bg-gray-100 text-gray-600">{formatYmd(s.ship_date)}</Badge>
-                                  <Badge tone="neutral" className="bg-gray-100 text-gray-600">라인 {s.line_cnt ?? 0}</Badge>
+                                  <Badge tone="neutral" className="bg-[var(--muted)]/10 text-[var(--muted)]">{formatYmd(s.ship_date)}</Badge>
+                                  <Badge tone="neutral" className="bg-[var(--muted)]/10 text-[var(--muted)]">라인 {s.line_cnt ?? 0}</Badge>
                                 </div>
                               </div>
-                              <div className="mt-1 flex items-center gap-2 text-xs text-gray-500">
-                                <span className="font-mono text-[10px] text-gray-400">{s.shipment_id}</span>
+                              <div className="mt-1 flex items-center gap-2 text-xs text-[var(--muted)]">
+                                <span className="font-mono text-[10px] text-[var(--muted-weak)]">{s.shipment_id}</span>
                                 <span>·</span>
                                 <span>기준 {formatNumber(s.basis_cost_krw)} KRW</span>
                               </div>
@@ -682,24 +682,24 @@ export default function PurchaseCostWorklistPage() {
                               <div className="text-sm font-bold text-[var(--primary)] tabular-nums">
                                 {formatNumber(s.alloc_krw)} KRW
                               </div>
-                              <div className="text-[10px] text-gray-400">
+                              <div className="text-[10px] text-[var(--muted-weak)]">
                                 배분금액
                               </div>
                             </div>
                           </div>
                         ))
                       ) : (
-                        <div className="flex flex-col items-center justify-center rounded-lg border border-dashed border-gray-200 py-12 text-center">
-                          <p className="text-sm text-gray-500">연결된 출고가 없습니다.</p>
-                          <p className="mt-1 text-xs text-gray-400">출고 관리에서 영수증을 연결해주세요.</p>
+                        <div className="flex flex-col items-center justify-center rounded-lg border border-dashed border-[var(--panel-border)] py-12 text-center">
+                          <p className="text-sm text-[var(--muted)]">연결된 출고가 없습니다.</p>
+                          <p className="mt-1 text-xs text-[var(--muted-weak)]">출고 관리에서 영수증을 연결해주세요.</p>
                         </div>
                       )}
                     </div>
                   </div>
 
                   {selected.applied_at && (
-                    <div className="flex items-center gap-3 rounded-lg border border-emerald-100 bg-emerald-50/50 p-4 text-sm text-emerald-800">
-                      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-emerald-600">
+                    <div className="flex items-center gap-3 rounded-lg border border-[var(--success)]/30 bg-[var(--success)]/10 p-4 text-sm text-[var(--success)]">
+                      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[var(--success)]/20 text-[var(--success)]">
                         <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
                         </svg>
@@ -719,8 +719,8 @@ export default function PurchaseCostWorklistPage() {
 
       <Modal open={uploadOpen} onClose={() => setUploadOpen(false)} title="영수증 업로드">
         <div className="space-y-6">
-          <div className="rounded-lg border border-dashed border-gray-200 bg-gray-50/50 p-8 text-center transition-colors hover:bg-gray-50">
-            <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-blue-50 text-blue-500">
+          <div className="rounded-lg border border-dashed border-[var(--panel-border)] bg-[var(--surface)]/50 p-8 text-center transition-colors hover:bg-[var(--panel-hover)]">
+            <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-[var(--primary)]/10 text-[var(--primary)]">
               <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
               </svg>
@@ -729,7 +729,7 @@ export default function PurchaseCostWorklistPage() {
               <span className="text-sm font-semibold text-[var(--primary)] hover:underline">파일 선택</span>
               <Input ref={fileRef} type="file" accept="application/pdf,image/*" className="hidden" />
             </label>
-            <p className="mt-2 text-xs text-gray-500">
+            <p className="mt-2 text-xs text-[var(--muted)]">
               PDF 또는 이미지 파일 (최대 10MB)
             </p>
           </div>

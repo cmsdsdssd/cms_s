@@ -643,7 +643,7 @@ export default function InventoryPage() {
                                                 "px-3 py-1 text-xs font-medium rounded-md transition-all",
                                                 positionMode === "total"
                                                     ? "bg-background text-foreground shadow-sm"
-                                                    : "text-muted-foreground hover:text-foreground"
+                                                    : "text-[var(--muted)] hover:text-[var(--foreground)]"
                                             )}
                                         >
                                             전체
@@ -655,7 +655,7 @@ export default function InventoryPage() {
                                                 "px-3 py-1 text-xs font-medium rounded-md transition-all",
                                                 positionMode === "byLocation"
                                                     ? "bg-background text-foreground shadow-sm"
-                                                    : "text-muted-foreground hover:text-foreground"
+                                                    : "text-[var(--muted)] hover:text-[var(--foreground)]"
                                             )}
                                         >
                                             위치별
@@ -693,7 +693,7 @@ export default function InventoryPage() {
                                         <Package className="h-4 w-4 text-[var(--muted)]" />
                                         <span className="text-sm font-semibold text-foreground">재고 리스트</span>
                                     </div>
-                                    <span className="text-xs text-muted-foreground tabular-nums">
+                                    <span className="text-xs text-[var(--muted)] tabular-nums">
                                         {filteredPosition.length.toLocaleString()}건
                                     </span>
                                 </CardHeader>
@@ -706,9 +706,9 @@ export default function InventoryPage() {
                                                 ))}
                                             </div>
                                         ) : filteredPosition.length === 0 ? (
-                                            <div className="h-full flex flex-col items-center justify-center text-muted-foreground">
+                                            <div className="h-full flex flex-col items-center justify-center text-[var(--muted)]">
                                                 <p className="text-sm">조건에 맞는 재고가 없습니다</p>
-                                                <p className="text-xs text-muted-foreground/70">검색어나 필터를 조정해보세요</p>
+                                                <p className="text-xs text-[var(--muted-weak)]">검색어나 필터를 조정해보세요</p>
                                             </div>
                                         ) : (
                                             <div className="space-y-0">
@@ -788,18 +788,18 @@ export default function InventoryPage() {
                                 </CardHeader>
                                 <CardBody className="space-y-4">
                                     {!selectedMasterId ? (
-                                        <div className="text-sm text-muted-foreground">좌측에서 모델을 선택하세요</div>
+                                        <div className="text-sm text-[var(--muted)]">좌측에서 모델을 선택하세요</div>
                                     ) : (
                                         <>
                                             <div className="flex items-start justify-between gap-4">
                                                 <div>
-                                                    <div className="text-xs text-muted-foreground">선택 모델</div>
+                                                    <div className="text-xs text-[var(--muted)]">선택 모델</div>
                                                     <div className="text-base font-semibold text-foreground">
                                                         {selectedMasterLabel || "-"}
                                                     </div>
                                                 </div>
                                                 <div className="text-right">
-                                                    <div className="text-xs text-muted-foreground">총 재고</div>
+                                                    <div className="text-xs text-[var(--muted)]">총 재고</div>
                                                     <div className="text-2xl font-bold tabular-nums">
                                                         {selectedPositionTotal !== null
                                                             ? selectedPositionTotal.toLocaleString()
@@ -809,19 +809,19 @@ export default function InventoryPage() {
                                             </div>
 
                                             <div className="space-y-2">
-                                                <div className="flex items-center justify-between text-xs font-semibold text-muted-foreground">
+                                                <div className="flex items-center justify-between text-xs font-semibold text-[var(--muted)]">
                                                     <span>로케이션</span>
                                                     {positionMode !== "byLocation" ? (
                                                         <span className="font-normal">위치별 보기에서 확인</span>
                                                     ) : null}
                                                 </div>
                                                 {positionMode !== "byLocation" ? null : selectedPositionRows.length === 0 ? (
-                                                    <div className="text-xs text-muted-foreground">해당 로케이션 데이터가 없습니다</div>
+                                                    <div className="text-xs text-[var(--muted)]">해당 로케이션 데이터가 없습니다</div>
                                                 ) : (
                                                     <div className="divide-y divide-border/40 rounded-[var(--radius)] border border-border/40">
                                                         {selectedPositionRows.map((row) => (
                                                             <div key={`${row.master_id}-${row.location_code ?? "NA"}`} className="flex items-center justify-between px-4 py-3 text-sm">
-                                                                <span className="text-muted-foreground">
+                                                                <span className="text-[var(--muted)]">
                                                                     {row.location_code || "미지정"}
                                                                 </span>
                                                                 <span className="tabular-nums font-semibold text-foreground">
@@ -846,13 +846,13 @@ export default function InventoryPage() {
                                 </CardHeader>
                                 <CardBody className="p-0">
                                     {!selectedMasterId ? (
-                                        <div className="p-6 text-sm text-muted-foreground">좌측에서 모델을 선택하세요</div>
+                                        <div className="p-6 text-sm text-[var(--muted)]">좌측에서 모델을 선택하세요</div>
                                     ) : filteredMoves.length === 0 ? (
-                                        <div className="p-6 text-sm text-muted-foreground">최근 이동 데이터가 없습니다</div>
+                                        <div className="p-6 text-sm text-[var(--muted)]">최근 이동 데이터가 없습니다</div>
                                     ) : (
                                         <div className="overflow-auto">
                                             <table className="w-full text-sm">
-                                                <thead className="sticky top-0 bg-background z-10 text-xs font-medium text-muted-foreground uppercase tracking-wider border-b border-border/40">
+                                                <thead className="sticky top-0 bg-background z-10 text-xs font-medium text-[var(--muted)] uppercase tracking-wider border-b border-border/40">
                                                     <tr>
                                                         <th className="px-4 py-3 text-left">시각</th>
                                                         <th className="px-4 py-3 text-center">번호</th>
@@ -867,13 +867,13 @@ export default function InventoryPage() {
                                                             key={move.move_line_id || move.move_id}
                                                             className="hover:bg-muted/30 transition-colors"
                                                         >
-                                                            <td className="px-4 py-3 text-xs text-muted-foreground whitespace-nowrap tabular-nums">
+                                                            <td className="px-4 py-3 text-xs text-[var(--muted)] whitespace-nowrap tabular-nums">
                                                                 <div>{formatKst(move.occurred_at).split(" ")[0]}</div>
                                                                 <div className="text-[10px] opacity-70">
                                                                     {formatKst(move.occurred_at).split(" ")[1]}
                                                                 </div>
                                                             </td>
-                                                            <td className="px-4 py-3 text-center text-xs text-muted-foreground tabular-nums">
+                                                            <td className="px-4 py-3 text-center text-xs text-[var(--muted)] tabular-nums">
                                                                 {move.move_no}
                                                             </td>
                                                             <td
@@ -992,7 +992,7 @@ export default function InventoryPage() {
                                                                 {session.status}
                                                             </Badge>
                                                         </div>
-                                                        <div className="flex items-center justify-between text-xs text-muted-foreground">
+                                                        <div className="flex items-center justify-between text-xs text-[var(--muted)]">
                                                             <span>{formatKst(session.snapshot_at)}</span>
                                                             <span className="tabular-nums">라인: {session.line_count}</span>
                                                         </div>
@@ -1008,7 +1008,7 @@ export default function InventoryPage() {
                                                         {selectedSession ? (
                                                             <>
                                                                 {selectedSession.session_code || `#${selectedSession.session_no}`}
-                                                                <span className="ml-2 text-xs font-normal text-muted-foreground">
+                                                                <span className="ml-2 text-xs font-normal text-[var(--muted)]">
                                                                     {selectedSession.location_code}
                                                                 </span>
                                                             </>
@@ -1051,7 +1051,7 @@ export default function InventoryPage() {
 
                                             <div className="flex-1 overflow-hidden flex flex-col">
                                                 {!selectedSessionId ? (
-                                                    <div className="h-full flex items-center justify-center text-muted-foreground text-sm">
+                                                    <div className="h-full flex items-center justify-center text-[var(--muted)] text-sm">
                                                         왼쪽에서 세션을 선택하세요
                                                     </div>
                                                 ) : (
@@ -1092,7 +1092,7 @@ export default function InventoryPage() {
                                                                                             className="w-full text-left p-2 hover:bg-muted text-xs border-b border-border/50 last:border-0"
                                                                                         >
                                                                                             <div className="font-medium">{master.model_name}</div>
-                                                                                            <div className="text-[10px] text-muted-foreground">
+                                                                                            <div className="text-[10px] text-[var(--muted)]">
                                                                                                 {master.vendor_name}
                                                                                             </div>
                                                                                         </button>
@@ -1123,17 +1123,17 @@ export default function InventoryPage() {
 
                                                         <div className="flex-1 overflow-auto">
                                                             {sessionLinesData.length === 0 ? (
-                                                                <div className="h-full flex items-center justify-center text-muted-foreground text-sm">
+                                                                <div className="h-full flex items-center justify-center text-[var(--muted)] text-sm">
                                                                     라인이 없습니다
                                                                 </div>
                                                             ) : (
                                                                 <table className="w-full text-sm">
-                                                                    <thead className="sticky top-0 bg-background z-10 text-xs font-medium text-muted-foreground uppercase tracking-wider border-b border-border/40">
+                                                                    <thead className="sticky top-0 bg-background z-10 text-xs font-medium text-[var(--muted)] uppercase tracking-wider border-b border-border/40">
                                                                         <tr>
                                                                             <th className="px-4 py-2 text-left w-12">#</th>
                                                                             <th className="px-4 py-2 text-left">품목명</th>
                                                                             <th className="px-4 py-2 text-right">실사</th>
-                                                                            <th className="px-4 py-2 text-right text-muted-foreground">시스템</th>
+                                                                            <th className="px-4 py-2 text-right text-[var(--muted)]">시스템</th>
                                                                             <th className="px-4 py-2 text-right">델타</th>
                                                                         </tr>
                                                                     </thead>
@@ -1145,14 +1145,14 @@ export default function InventoryPage() {
                                                                                     key={line.count_line_id}
                                                                                     className="hover:bg-muted/30 transition-colors"
                                                                                 >
-                                                                                    <td className="px-4 py-2 text-xs tabular-nums text-muted-foreground">
+                                                                                    <td className="px-4 py-2 text-xs tabular-nums text-[var(--muted)]">
                                                                                         {line.line_no}
                                                                                     </td>
                                                                                     <td className="px-4 py-2 font-medium">{line.item_name}</td>
                                                                                     <td className="px-4 py-2 text-right tabular-nums font-bold">
                                                                                         {line.counted_qty}
                                                                                     </td>
-                                                                                    <td className="px-4 py-2 text-right tabular-nums text-muted-foreground text-xs">
+                                                                                    <td className="px-4 py-2 text-right tabular-nums text-[var(--muted)] text-xs">
                                                                                         {line.system_qty_asof ?? "-"}
                                                                                     </td>
                                                                                     <td className="px-4 py-2 text-right tabular-nums">
@@ -1199,7 +1199,7 @@ export default function InventoryPage() {
                                     <form onSubmit={quickMoveForm.handleSubmit(onSubmitQuickMove)} className="space-y-5">
                                         <div className="grid grid-cols-2 gap-3">
                                             <div className="space-y-1.5">
-                                                <label className="text-[10px] font-semibold uppercase text-muted-foreground">타입</label>
+                                                <label className="text-[10px] font-semibold uppercase text-[var(--muted)]">타입</label>
                                                 <Select {...quickMoveForm.register("move_type")} className="h-9 text-xs">
                                                     <option value="RECEIPT">입고</option>
                                                     <option value="ISSUE">출고</option>
@@ -1207,7 +1207,7 @@ export default function InventoryPage() {
                                                 </Select>
                                             </div>
                                             <div className="space-y-1.5">
-                                                <label className="text-[10px] font-semibold uppercase text-muted-foreground">위치</label>
+                                                <label className="text-[10px] font-semibold uppercase text-[var(--muted)]">위치</label>
                                                 <Select {...quickMoveForm.register("location_code")} className="h-9 text-xs">
                                                     <option value="">선택</option>
                                                     {LOCATION_OPTIONS.map((o) => (
@@ -1220,7 +1220,7 @@ export default function InventoryPage() {
                                         </div>
 
                                         <div className="space-y-1.5">
-                                            <label className="text-[10px] font-semibold uppercase text-muted-foreground">실사 세션 연결(선택)</label>
+                                            <label className="text-[10px] font-semibold uppercase text-[var(--muted)]">실사 세션 연결(선택)</label>
                                             <Select {...quickMoveForm.register("session_id")} className="h-9 text-xs">
                                                 <option value="">(선택 안함)</option>
                                                 {sessionsData.map((s) => (
@@ -1233,7 +1233,7 @@ export default function InventoryPage() {
 
                                         <div className="grid grid-cols-3 gap-3">
                                             <div className="col-span-2 space-y-1.5 relative">
-                                                <label className="text-[10px] font-semibold uppercase text-muted-foreground">모델명</label>
+                                                <label className="text-[10px] font-semibold uppercase text-[var(--muted)]">모델명</label>
                                                 <Input
                                                     {...quickMoveForm.register("model_name")}
                                                     onFocus={() => setMasterSearchContext("quick")}
@@ -1256,14 +1256,14 @@ export default function InventoryPage() {
                                                                 className="w-full text-left p-2 hover:bg-muted text-xs border-b border-border/50 last:border-0"
                                                             >
                                                                 <div className="font-medium">{master.model_name}</div>
-                                                                <div className="text-[10px] text-muted-foreground">{master.vendor_name}</div>
+                                                                <div className="text-[10px] text-[var(--muted)]">{master.vendor_name}</div>
                                                             </button>
                                                         ))}
                                                     </div>
                                                 )}
                                             </div>
                                             <div className="space-y-1.5">
-                                                <label className="text-[10px] font-semibold uppercase text-muted-foreground">수량</label>
+                                                <label className="text-[10px] font-semibold uppercase text-[var(--muted)]">수량</label>
                                                 <Input
                                                     type="number"
                                                     {...quickMoveForm.register("qty", { valueAsNumber: true })}
@@ -1273,7 +1273,7 @@ export default function InventoryPage() {
                                         </div>
 
                                         <div className="space-y-1.5">
-                                            <label className="text-[10px] font-semibold uppercase text-muted-foreground">메모</label>
+                                            <label className="text-[10px] font-semibold uppercase text-[var(--muted)]">메모</label>
                                             <Input {...quickMoveForm.register("memo")} placeholder="메모..." className="h-9 text-xs" />
                                         </div>
 
@@ -1284,8 +1284,8 @@ export default function InventoryPage() {
                                         <div className="pt-4 border-t border-dashed border-border/50">
                                             <div className="flex justify-between items-center mb-3">
                                                 <div className="space-y-0.5">
-                                                    <span className="text-[10px] font-semibold uppercase text-muted-foreground">상세 입력</span>
-                                                    <div className="text-[10px] text-muted-foreground">중량은 복사되지 않음</div>
+                                                    <span className="text-[10px] font-semibold uppercase text-[var(--muted)]">상세 입력</span>
+                                                    <div className="text-[10px] text-[var(--muted)]">중량은 복사되지 않음</div>
                                                 </div>
                                                 <Button
                                                     type="button"

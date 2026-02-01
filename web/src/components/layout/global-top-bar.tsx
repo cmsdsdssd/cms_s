@@ -3,11 +3,11 @@
 import { usePathname } from "next/navigation";
 import Link from "next/link";
 import { useState, useEffect } from "react";
-import { 
-  Search, 
-  Menu, 
-  ClipboardList, 
-  PackageCheck, 
+import {
+  Search,
+  Menu,
+  ClipboardList,
+  PackageCheck,
   CreditCard,
   User
 } from "lucide-react";
@@ -16,6 +16,7 @@ import { Input } from "@/components/ui/field";
 import { cn } from "@/lib/utils";
 import { findNavMatch } from "@/components/layout/nav-items";
 import { CommandPalette } from "@/components/layout/command-palette";
+import { ThemeToggle } from "@/components/ui/theme-toggle";
 
 interface GlobalTopBarProps {
   onMobileMenuOpen: () => void;
@@ -39,9 +40,9 @@ export function GlobalTopBar({ onMobileMenuOpen }: GlobalTopBarProps) {
   const navMatch = findNavMatch(pathname);
   const breadcrumbs = navMatch
     ? [
-        { label: navMatch.groupLabel },
-        { label: navMatch.item.label, href: navMatch.item.href },
-      ]
+      { label: navMatch.groupLabel },
+      { label: navMatch.item.label, href: navMatch.item.href },
+    ]
     : [{ label: "Home", href: "/" }];
 
   return (
@@ -98,39 +99,47 @@ export function GlobalTopBar({ onMobileMenuOpen }: GlobalTopBarProps) {
         </div>
       </div>
 
-      <CommandPalette 
-        open={isCommandPaletteOpen} 
-        onClose={() => setIsCommandPaletteOpen(false)} 
+      <CommandPalette
+        open={isCommandPaletteOpen}
+        onClose={() => setIsCommandPaletteOpen(false)}
       />
 
       {/* Right Actions */}
       <div className="flex items-center gap-2 sm:gap-4 ml-auto">
-        {/* Quick Actions */}
-        <div className="hidden sm:flex items-center gap-1 border-r border-[var(--hairline)] pr-4 mr-1">
-          <Link href="/orders">
-            <Button variant="ghost" size="icon" className="h-8 w-8 text-[var(--muted-strong)]" title="Orders">
-              <ClipboardList className="h-4 w-4" />
-            </Button>
-          </Link>
-          <Link href="/shipments">
-            <Button variant="ghost" size="icon" className="h-8 w-8 text-[var(--muted-strong)]" title="Shipments">
-              <PackageCheck className="h-4 w-4" />
-            </Button>
-          </Link>
-          <Link href="/ar">
-            <Button variant="ghost" size="icon" className="h-8 w-8 text-[var(--muted-strong)]" title="AR">
-              <CreditCard className="h-4 w-4" />
-            </Button>
-          </Link>
-        </div>
+        {/* Quick Actions ... */}
+
+        {/* Theme Toggle */}
+        <ThemeToggle />
 
         {/* User Placeholder */}
         <div className="flex items-center gap-2">
-          <div className="h-8 w-8 rounded-full bg-[var(--chip)] flex items-center justify-center border border-[var(--hairline)] text-[var(--muted-strong)]">
-            <User className="h-4 w-4" />
+          {/* Quick Actions */}
+          <div className="hidden sm:flex items-center gap-1 border-r border-[var(--hairline)] pr-4 mr-1">
+            <Link href="/orders">
+              <Button variant="ghost" size="icon" className="h-8 w-8 text-[var(--muted-strong)]" title="Orders">
+                <ClipboardList className="h-4 w-4" />
+              </Button>
+            </Link>
+            <Link href="/shipments">
+              <Button variant="ghost" size="icon" className="h-8 w-8 text-[var(--muted-strong)]" title="Shipments">
+                <PackageCheck className="h-4 w-4" />
+              </Button>
+            </Link>
+            <Link href="/ar">
+              <Button variant="ghost" size="icon" className="h-8 w-8 text-[var(--muted-strong)]" title="AR">
+                <CreditCard className="h-4 w-4" />
+              </Button>
+            </Link>
+          </div>
+
+          {/* User Placeholder Icon */}
+          <div className="flex items-center gap-2">
+            <div className="h-8 w-8 rounded-full bg-[var(--chip)] flex items-center justify-center border border-[var(--hairline)] text-[var(--muted-strong)]">
+              <User className="h-4 w-4" />
+            </div>
           </div>
         </div>
-      </div>
+      </div> {/* <--- 이 닫는 태그가 빠져 있었습니다 (110번 줄 div 닫기) */}
     </header>
   );
 }

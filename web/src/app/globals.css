@@ -1,70 +1,190 @@
 @import "tailwindcss";
 
+/* =========================
+   1) Core Tokens (Light)
+   ========================= */
 :root {
-  --background: #f8f9fc;
-  --foreground: #0f172a;
+  /* Surfaces */
+  --background: #f6f7fb;
+  /* 조용한 라이트 배경 */
+  --foreground: #0b1220;
 
-  /* Retool-like crisp panels */
   --panel: #ffffff;
-  --panel-border: #e2e8f0;
-  --panel-hover: #fcfdfe;
+  /* 카드/패널 */
+  --panel-border: rgba(15, 23, 42, 0.10);
+  --hairline: rgba(15, 23, 42, 0.08);
+  --panel-hover: rgba(15, 23, 42, 0.03);
 
-  /* Sophisticated Grays */
-  --muted: #64748b;
-  --muted-weak: #94a3b8;
-  --muted-strong: #475569;
+  /* Text */
+  --muted: rgba(15, 23, 42, 0.62);
+  --muted-weak: rgba(15, 23, 42, 0.42);
+  --muted-strong: rgba(15, 23, 42, 0.78);
 
-  /* Brand Colors - Modern Blue */
-  --primary: #2563eb;
-  --primary-strong: #1d4ed8;
+  /* Brand */
+  --primary: #2b5cff;
+  --primary-strong: #1f45d8;
   --primary-foreground: #ffffff;
 
-  /* Accents */
-  --accent: #f59e0b;
-  --success: #10b981;
-  --danger: #ef4444;
+  /* Semantic */
+  --success: #16a34a;
   --warning: #f59e0b;
+  --danger: #dc2626;
+  --danger-strong: #b91c1c;
+
+  /* Soft backgrounds (for chips/alerts) */
+  --primary-soft: rgba(43, 92, 255, 0.10);
+  --success-soft: rgba(22, 163, 74, 0.10);
+  --warning-soft: rgba(245, 158, 11, 0.12);
+  --danger-soft: rgba(220, 38, 38, 0.10);
 
   /* Interaction */
   --input-bg: #ffffff;
-  --input-border: #cbd5e1;
-  --ring: rgba(37, 99, 235, 0.2);
+  --input-border: rgba(15, 23, 42, 0.16);
+  --ring: rgba(43, 92, 255, 0.24);
 
-  /* UI Tokens */
-  --chip: #f1f5f9;
-  --radius: 8px;
-  --radius-sm: 6px;
-  --radius-md: 8px;
-  --radius-lg: 12px;
-  --radius-xl: 16px;
+  /* UI */
+  --chip: rgba(15, 23, 42, 0.04);
+
+  --radius: 10px;
+  --radius-sm: 8px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 18px;
   --radius-pill: 999px;
-  
-  /* Animation */
+
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
   --duration-fast: 150ms;
   --duration-normal: 250ms;
   --duration-slow: 400ms;
 
-  /* Shadows */
-  --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
-  --shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px -1px rgba(0, 0, 0, 0.1);
-  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -4px rgba(0, 0, 0, 0.1);
-  --shadow-subtle: 0 1px 2px 0 rgba(0, 0, 0, 0.03);
-  --shadow-glass: 0 4px 30px rgba(0, 0, 0, 0.03);
-  --hairline: rgba(15, 23, 42, 0.06);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04);
+  --shadow: 0 6px 18px rgba(15, 23, 42, 0.08);
+  --shadow-lg: 0 18px 40px rgba(15, 23, 42, 0.12);
+  --shadow-subtle: 0 1px 2px rgba(15, 23, 42, 0.03);
+
+  /* Overlay for modal */
+  --overlay: rgba(2, 6, 23, 0.42);
+
+  /* Background glow (subtle) */
+  --bg-glow-a: rgba(43, 92, 255, 0.08);
+  --bg-glow-b: rgba(245, 158, 11, 0.06);
 }
 
+/* web/src/app/globals.css */
+
+/* ... 위에 :root(라이트 토큰)는 네가 쓰는 그대로 두고 ... */
+
+html.dark,
+html[data-theme="dark"] {
+  color-scheme: dark;
+
+  /* ✅ surfaces */
+  --background: #0b1220;
+  /* 완전 검정 X */
+  --foreground: rgba(226, 232, 240, 0.92);
+
+  --panel: rgba(15, 23, 42, 0.86);
+  /* 카드/표/모달 바탕 */
+  --panel-hover: rgba(226, 232, 240, 0.06);
+  --panel-border: rgba(148, 163, 184, 0.18);
+
+  /* ✅ text hierarchy */
+  --muted: rgba(226, 232, 240, 0.68);
+  /* 보조 텍스트 */
+  --muted-weak: rgba(226, 232, 240, 0.52);
+  /* placeholder/메타 */
+  --muted-strong: rgba(226, 232, 240, 0.82);
+
+  /* ✅ brand */
+  --primary: #5b8cff;
+  --primary-strong: #3f6fff;
+  --primary-foreground: #0b1220;
+
+  /* ✅ semantic */
+  --success: #22c55e;
+  --warning: #fbbf24;
+  --danger: #f87171;
+  --danger-strong: #ef4444;
+
+  /* ✅ soft backgrounds */
+  --primary-soft: rgba(91, 140, 255, 0.14);
+  --success-soft: rgba(34, 197, 94, 0.16);
+  --warning-soft: rgba(251, 191, 36, 0.18);
+  --danger-soft: rgba(248, 113, 113, 0.16);
+
+  /* ✅ inputs */
+  --input-bg: rgba(2, 6, 23, 0.42);
+  --input-border: rgba(226, 232, 240, 0.20);
+  --ring: rgba(91, 140, 255, 0.34);
+
+  /* ✅ misc */
+  --chip: rgba(226, 232, 240, 0.08);
+  --hairline: rgba(148, 163, 184, 0.14);
+  --overlay: rgba(2, 6, 23, 0.62);
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
+  --shadow: 0 10px 26px rgba(0, 0, 0, 0.38);
+  --shadow-lg: 0 22px 60px rgba(0, 0, 0, 0.46);
+  --shadow-subtle: 0 1px 2px rgba(0, 0, 0, 0.28);
+}
+
+/* ✅ body 텍스트 기본을 foreground로 고정 (컨테이너 회색 상속 사고 방지) */
+body {
+  color: var(--foreground);
+}
+
+
+/* =========================
+   3) Tailwind Semantic Tokens (shadcn-style)
+   -> 기존 페이지에 있는 bg-background, border-border, muted text tokens 등이
+      이제 “진짜로” 통일된 테마를 타게 됨.
+   ========================= */
 @theme inline {
+  /* base */
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --color-panel: var(--panel);
-  --color-panel-border: var(--panel-border);
-  --color-muted: var(--muted);
+
+  /* surfaces */
+  --color-card: var(--panel);
+  --color-card-foreground: var(--foreground);
+  --color-popover: var(--panel);
+  --color-popover-foreground: var(--foreground);
+
+  /* semantic */
   --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+
+  --color-muted: var(--chip);
+  --color-muted-foreground: var(--muted);
+
+  --color-border: var(--panel-border);
+  --color-input: var(--input-border);
+  --color-ring: var(--ring);
+
+  --color-destructive: var(--danger);
+  --color-destructive-foreground: #ffffff;
+
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+
+  /* fonts */
   --font-sans: var(--font-manrope);
   --font-mono: var(--font-jetbrains-mono);
+
+  /* radius / shadow */
   --radius-card: var(--radius);
   --shadow-card: var(--shadow);
+}
+
+/* =========================
+   4) Base styles
+   ========================= */
+html {
+  color-scheme: light;
+}
+
+html[data-theme="dark"] {
+  color-scheme: dark;
 }
 
 html,
@@ -74,24 +194,23 @@ body {
 
 body {
   margin: 0;
-  background-color: var(--background);
-  background-image:
-    radial-gradient(at 0% 0%, rgba(37, 99, 235, 0.035) 0px, transparent 55%),
-    radial-gradient(at 100% 0%, rgba(245, 158, 11, 0.03) 0px, transparent 55%),
-    repeating-linear-gradient(0deg, rgba(15, 23, 42, 0.015) 0px, rgba(15, 23, 42, 0.015) 1px, transparent 1px, transparent 2px),
-    repeating-linear-gradient(90deg, rgba(15, 23, 42, 0.012) 0px, rgba(15, 23, 42, 0.012) 1px, transparent 1px, transparent 2px);
-  background-size: auto, auto, 2px 2px, 2px 2px;
-  background-attachment: fixed;
+  min-height: 100vh;
   color: var(--foreground);
   font-family: var(--font-manrope), system-ui, sans-serif;
-  min-height: 100vh;
   letter-spacing: -0.01em;
   -webkit-font-smoothing: antialiased;
+
+  /* 조용한 배경: glow만 남기고 grid 제거 */
+  background-color: var(--background);
+  background-image:
+    radial-gradient(900px circle at 20% 0%, var(--bg-glow-a), transparent 55%),
+    radial-gradient(850px circle at 80% 0%, var(--bg-glow-b), transparent 55%);
+  background-attachment: fixed;
 }
 
 ::selection {
-  background: rgba(37, 99, 235, 0.15);
-  color: var(--primary-strong);
+  background: rgba(43, 92, 255, 0.18);
+  color: var(--foreground);
 }
 
 * {
@@ -108,8 +227,6 @@ body {
   }
 }
 
-
-/* Scrollbar refinement */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;

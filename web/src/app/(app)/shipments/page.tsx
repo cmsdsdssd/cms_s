@@ -625,7 +625,7 @@ export default function ShipmentsPage() {
   return (
     <div className="min-h-screen bg-[var(--background)] pb-20">
       {/* Sticky Header */}
-      <div className="sticky top-0 z-20 bg-white/80 backdrop-blur-md border-b border-[var(--panel-border)] shadow-sm transition-all">
+      <div className="sticky top-0 z-20 bg-[var(--background)]/80 backdrop-blur-md border-b border-[var(--panel-border)] shadow-sm transition-all">
         <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-4">
           <ActionBar
             title="출고 관리"
@@ -699,7 +699,7 @@ export default function ShipmentsPage() {
             {/* Left Panel: Worklist */}
             <div className="lg:col-span-4 space-y-4">
               <Card className="h-[calc(100vh-250px)] flex flex-col shadow-sm border-[var(--panel-border)]">
-                <CardHeader className="border-b border-[var(--panel-border)] bg-[#fcfcfd] p-4 space-y-3">
+                <CardHeader className="border-b border-[var(--panel-border)] bg-[var(--surface)] p-4 space-y-3">
                   <div className="flex items-center justify-between">
                     <h3 className="text-sm font-semibold flex items-center gap-2">
                       <Search className="w-4 h-4 text-[var(--muted)]" />
@@ -711,8 +711,8 @@ export default function ShipmentsPage() {
                       className={cn(
                         "text-xs px-2 py-1 rounded-full border transition-colors",
                         onlyReadyToShip
-                          ? "bg-blue-50 text-blue-700 border-blue-200"
-                          : "bg-white text-[var(--muted)] border-[var(--panel-border)]"
+                          ? "bg-[var(--primary)]/10 text-[var(--primary)] border-[var(--primary)]/30"
+                          : "bg-[var(--panel)] text-[var(--muted)] border-[var(--panel-border)]"
                       )}
                     >
                       {onlyReadyToShip ? "출고대기만" : "전체 주문"}
@@ -727,7 +727,7 @@ export default function ShipmentsPage() {
                       if (!lookupOpen) setLookupOpen(true);
                     }}
                     onFocus={() => setLookupOpen(true)}
-                    className="bg-white"
+                    className="bg-[var(--input-bg)]"
                   />
                 </CardHeader>
                 <CardBody className="flex-1 overflow-y-auto p-0">
@@ -739,7 +739,7 @@ export default function ShipmentsPage() {
                           불러오는 중...
                         </div>
                       ) : orderLookupQuery.isError ? (
-                        <div className="p-4 text-sm text-red-600 bg-red-50 m-2 rounded-lg flex items-center gap-2">
+                        <div className="p-4 text-sm text-[var(--danger)] bg-[var(--danger)]/10 m-2 rounded-lg flex items-center gap-2">
                           <AlertCircle className="w-4 h-4" />
                           {orderLookupErrorMessage}
                         </div>
@@ -757,8 +757,8 @@ export default function ShipmentsPage() {
                               type="button"
                               onClick={() => handleSelectOrder(row)}
                               className={cn(
-                                "w-full px-4 py-3 text-left transition-all hover:bg-[#f6f7f9] group",
-                                isSelected ? "bg-blue-50/50 border-l-4 border-l-[var(--primary)]" : "border-l-4 border-l-transparent"
+                                "w-full px-4 py-3 text-left transition-all hover:bg-[var(--panel-hover)] group",
+                                isSelected ? "bg-[var(--primary)]/5 border-l-4 border-l-[var(--primary)]" : "border-l-4 border-l-transparent"
                               )}
                             >
                               <div className="flex items-start justify-between gap-2">
@@ -777,7 +777,7 @@ export default function ShipmentsPage() {
                                     )}
                                   </div>
                                 </div>
-                                <div className="shrink-0 text-[10px] text-[var(--muted)] tabular-nums bg-white border border-[var(--panel-border)] px-1.5 py-0.5 rounded">
+                                <div className="shrink-0 text-[10px] text-[var(--muted)] tabular-nums bg-[var(--panel)] border border-[var(--panel-border)] px-1.5 py-0.5 rounded">
                                   {row.order_date}
                                 </div>
                               </div>
@@ -788,13 +788,13 @@ export default function ShipmentsPage() {
                     </div>
                   ) : selectedOrderLineId ? (
                     <div className="p-4">
-                      <div className="rounded-xl border border-blue-200 bg-blue-50 p-4 space-y-3">
+                      <div className="rounded-xl border border-[var(--primary)]/30 bg-[var(--primary)]/5 p-4 space-y-3">
                         <div className="flex items-center justify-between">
-                          <span className="text-xs font-bold text-blue-700 uppercase tracking-wider">선택된 주문</span>
+                          <span className="text-xs font-bold text-[var(--primary)] uppercase tracking-wider">선택된 주문</span>
                           <Button 
                             variant="ghost" 
                             size="sm" 
-                            className="h-6 px-2 text-blue-700 hover:bg-blue-100 hover:text-blue-800"
+                            className="h-6 px-2 text-[var(--primary)] hover:bg-[var(--primary)]/10 hover:text-[var(--primary)]"
                             onClick={() => {
                               setLookupOpen(true);
                               setTimeout(() => lookupInputRef.current?.focus(), 0);
@@ -804,10 +804,10 @@ export default function ShipmentsPage() {
                           </Button>
                         </div>
                         <div>
-                          <div className="text-sm font-semibold text-blue-900">{prefill?.client_name}</div>
-                          <div className="text-sm text-blue-800">{prefill?.model_no}</div>
+                          <div className="text-sm font-semibold text-[var(--primary)]">{prefill?.client_name}</div>
+                          <div className="text-sm text-[var(--primary)]">{prefill?.model_no}</div>
                         </div>
-                        <div className="text-xs text-blue-600 pt-2 border-t border-blue-200">
+                        <div className="text-xs text-[var(--primary)] pt-2 border-t border-[var(--primary)]/30">
                           주문번호: {prefill?.order_no}
                         </div>
                       </div>
@@ -843,13 +843,13 @@ export default function ShipmentsPage() {
                             "w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold border",
                             isCompleted
                               ? "bg-[var(--primary)] text-white border-[var(--primary)]"
-                              : isCurrent
-                                ? "bg-white text-[var(--primary)] border-[var(--primary)]"
-                                : "bg-white border-[var(--panel-border)]"
-                          )}
-                        >
-                          {step.id}
-                        </div>
+                                : isCurrent
+                                  ? "bg-[var(--panel)] text-[var(--primary)] border-[var(--primary)]"
+                                  : "bg-[var(--panel)] border-[var(--panel-border)]"
+                            )}
+                          >
+                            {step.id}
+                          </div>
                         <span className="text-xs font-medium whitespace-nowrap">{step.label}</span>
                       </div>
                       {i < steps.length - 1 && (
@@ -869,7 +869,7 @@ export default function ShipmentsPage() {
                 <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2 duration-300">
                   {/* Master Info Card */}
                   <Card className="border-[var(--panel-border)] shadow-sm overflow-hidden">
-                    <CardHeader className="bg-[#fcfcfd] border-b border-[var(--panel-border)] py-3">
+                    <CardHeader className="bg-[var(--surface)] border-b border-[var(--panel-border)] py-3">
                       <div className="flex items-center justify-between">
                         <h3 className="text-sm font-semibold flex items-center gap-2">
                           <FileText className="w-4 h-4 text-[var(--muted)]" />
@@ -885,8 +885,8 @@ export default function ShipmentsPage() {
                     <CardBody className="p-4">
                       {masterLookupQuery.isLoading ? (
                         <div className="space-y-2">
-                          <div className="h-4 w-1/3 bg-gray-100 rounded animate-pulse" />
-                          <div className="h-4 w-2/3 bg-gray-100 rounded animate-pulse" />
+                          <div className="h-4 w-1/3 bg-[var(--muted)]/10 rounded animate-pulse" />
+                          <div className="h-4 w-2/3 bg-[var(--muted)]/10 rounded animate-pulse" />
                         </div>
                       ) : master ? (
                         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-xs">
@@ -995,11 +995,11 @@ export default function ShipmentsPage() {
                           size="lg"
                           onClick={handleSaveShipment} 
                           disabled={shipmentUpsertMutation.isPending}
-                          className="px-8 shadow-lg shadow-blue-500/20"
+                          className="px-8 shadow-lg shadow-[var(--primary)]/20"
                         >
                           {shipmentUpsertMutation.isPending ? (
                             <div className="flex items-center gap-2">
-                              <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                              <div className="w-4 h-4 border-2 border-[var(--background)]/30 border-t-[var(--background)] rounded-full animate-spin" />
                               저장 중...
                             </div>
                           ) : (
@@ -1011,8 +1011,8 @@ export default function ShipmentsPage() {
                   </Card>
                 </div>
               ) : (
-                <div className="h-[400px] border-2 border-dashed border-[var(--panel-border)] rounded-xl flex flex-col items-center justify-center text-[var(--muted)] gap-4 bg-[var(--panel)]/50">
-                  <div className="w-16 h-16 rounded-full bg-white border border-[var(--panel-border)] flex items-center justify-center shadow-sm">
+                <div className="h-[400px] border-2 border-dashed border-[var(--panel-border)] rounded-xl flex flex-col items-center justify-center text-[var(--muted)] gap-4 bg-[var(--surface)]/50">
+                  <div className="w-16 h-16 rounded-full bg-[var(--panel)] border border-[var(--panel-border)] flex items-center justify-center shadow-sm">
                     <ArrowRight className="w-6 h-6 text-[var(--muted)]" />
                   </div>
                   <div className="text-center space-y-1">
@@ -1026,8 +1026,8 @@ export default function ShipmentsPage() {
         ) : (
           /* Confirmed Tab - Empty State */
           <div className="flex flex-col items-center justify-center py-20 space-y-6 text-center">
-            <div className="w-20 h-20 bg-green-50 rounded-full flex items-center justify-center">
-              <CheckCircle2 className="w-10 h-10 text-green-600" />
+            <div className="w-20 h-20 bg-[var(--success)]/10 rounded-full flex items-center justify-center">
+              <CheckCircle2 className="w-10 h-10 text-[var(--success)]" />
             </div>
             <div className="space-y-2 max-w-md">
               <h3 className="text-lg font-semibold">확정된 출고 내역</h3>
@@ -1049,42 +1049,42 @@ export default function ShipmentsPage() {
       <Modal open={confirmModalOpen} onClose={() => setConfirmModalOpen(false)} title="출고 확정" className="max-w-6xl">
         <div className="space-y-6">
           {/* Summary Section */}
-          <div className="bg-blue-50/50 border border-blue-100 rounded-xl p-4 space-y-3">
+          <div className="bg-[var(--primary)]/5 border border-[var(--primary)]/20 rounded-xl p-4 space-y-3">
             <div className="flex items-center justify-between">
               <div className="space-y-1">
-                <div className="text-sm font-bold text-blue-900">확정 대상 주문</div>
-                <div className="text-xs text-blue-700">
+                <div className="text-sm font-bold text-[var(--primary)]">확정 대상 주문</div>
+                <div className="text-xs text-[var(--primary)]">
                   {prefill?.order_no ?? "-"} / {prefill?.client_name ?? "-"} / {prefill?.model_no ?? "-"}
                 </div>
               </div>
               <Badge tone="active">작성 중</Badge>
             </div>
             
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 pt-3 border-t border-blue-200/50">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 pt-3 border-t border-[var(--primary)]/20">
               <div>
-                <span className="text-xs text-blue-600 block mb-1">중량</span>
+                <span className="text-xs text-[var(--primary)] block mb-1">중량</span>
                 <span className="text-sm font-semibold tabular-nums">{weightG || "-"}g</span>
               </div>
               <div>
-                <span className="text-xs text-blue-600 block mb-1">차감</span>
+                <span className="text-xs text-[var(--primary)] block mb-1">차감</span>
                 <div className="flex items-center gap-2">
                   <Input 
-                    className="h-7 text-xs w-20 bg-white tabular-nums" 
+                    className="h-7 text-xs w-20 bg-[var(--input-bg)] tabular-nums" 
                     placeholder="0.00" 
                     value={deductionWeightG} 
                     onChange={(e) => setDeductionWeightG(e.target.value)} 
                   />
-                  <span className="text-[10px] text-blue-500">(마스터: {master?.deduction_weight_default_g ?? "-"})</span>
+                  <span className="text-[10px] text-[var(--primary)]">(마스터: {master?.deduction_weight_default_g ?? "-"})</span>
                 </div>
               </div>
               <div>
-                <span className="text-xs text-blue-600 block mb-1">순중량</span>
+                <span className="text-xs text-[var(--primary)] block mb-1">순중량</span>
                 <span className="text-sm font-semibold tabular-nums">
                   {resolvedNetWeightG === null ? "-" : resolvedNetWeightG.toFixed(3)}g
                 </span>
               </div>
               <div>
-                <span className="text-xs text-blue-600 block mb-1">총 공임</span>
+                <span className="text-xs text-[var(--primary)] block mb-1">총 공임</span>
                 <span className="text-sm font-semibold tabular-nums">{totalLabor || "-"}원</span>
               </div>
             </div>
@@ -1102,8 +1102,8 @@ export default function ShipmentsPage() {
                 className={cn(
                   "flex flex-col items-center gap-2 p-4 rounded-xl border-2 transition-all",
                   costMode === "PROVISIONAL"
-                    ? "border-[var(--primary)] bg-blue-50/30 text-[var(--primary)]"
-                    : "border-[var(--panel-border)] hover:border-gray-300"
+                    ? "border-[var(--primary)] bg-[var(--primary)]/10 text-[var(--primary)]"
+                    : "border-[var(--panel-border)] hover:border-[var(--panel-border)]"
                 )}
               >
                 <span className="font-semibold">임시원가 (PROVISIONAL)</span>
@@ -1114,8 +1114,8 @@ export default function ShipmentsPage() {
                 className={cn(
                   "flex flex-col items-center gap-2 p-4 rounded-xl border-2 transition-all",
                   costMode === "MANUAL"
-                    ? "border-[var(--primary)] bg-blue-50/30 text-[var(--primary)]"
-                    : "border-[var(--panel-border)] hover:border-gray-300"
+                    ? "border-[var(--primary)] bg-[var(--primary)]/10 text-[var(--primary)]"
+                    : "border-[var(--panel-border)] hover:border-[var(--panel-border)]"
                 )}
               >
                 <span className="font-semibold">수기입력 (MANUAL)</span>
@@ -1158,7 +1158,7 @@ export default function ShipmentsPage() {
                       <span className="w-full border-t border-[var(--panel-border)]" />
                     </div>
                     <div className="relative flex justify-center text-xs uppercase">
-                      <span className="bg-white px-2 text-[var(--muted)]">OR</span>
+                      <span className="bg-[var(--panel)] px-2 text-[var(--muted)]">OR</span>
                     </div>
                   </div>
 
@@ -1271,7 +1271,7 @@ export default function ShipmentsPage() {
                     <img src={receiptPreviewSrc} alt="preview" className="max-w-full max-h-full object-contain" />
                   )
                 ) : (
-                  <div className="text-gray-500 text-sm flex flex-col items-center gap-2">
+      <div className="text-[var(--muted)] text-sm flex flex-col items-center gap-2">
                     <FileText className="w-8 h-8 opacity-20" />
                     <span>미리보기 없음</span>
                   </div>

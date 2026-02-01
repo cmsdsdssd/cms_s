@@ -406,7 +406,7 @@ export default function BomPage() {
                                 />
 
                                 {selectedProduct ? (
-                                    <div className="flex items-center justify-between rounded-[12px] border border-[var(--panel-border)] bg-white px-3 py-2">
+                                    <div className="flex items-center justify-between rounded-[12px] border border-[var(--panel-border)] bg-[var(--panel)] px-3 py-2">
                                         <div className="min-w-0">
                                             <div className="truncate text-sm font-semibold">{selectedProduct.model_name}</div>
                                             <div className="truncate text-xs text-[var(--muted)]">master_id: {selectedProduct.master_id}</div>
@@ -473,7 +473,7 @@ export default function BomPage() {
                                                     setComponentQuery("");
                                                 }
                                             }}
-                                            className="rounded border-gray-300 text-[var(--primary)] focus:ring-[var(--primary)]"
+                                            className="rounded border-[var(--panel-border)] text-[var(--primary)] focus:ring-[var(--primary)]"
                                         />
                                         Advanced: PART
                                     </label>
@@ -592,7 +592,7 @@ export default function BomPage() {
                                             return (
                                                 <div
                                                     key={line.bom_line_id}
-                                                    className="grid grid-cols-12 gap-3 items-center rounded-[12px] border border-[var(--panel-border)] bg-white px-3 py-2"
+                                                    className="grid grid-cols-12 gap-3 items-center rounded-[12px] border border-[var(--panel-border)] bg-[var(--panel)] px-3 py-2"
                                                 >
                                                     <div className="col-span-5 min-w-0">
                                                         <div className="flex items-center gap-2 mb-0.5">

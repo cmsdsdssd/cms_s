@@ -245,7 +245,7 @@ export default function OrdersMainPage() {
   return (
     <div className="space-y-6" id="orders_main.root">
       {/* Sticky Header */}
-      <div className="sticky top-0 z-10 -mx-4 px-4 py-4 bg-white/80 backdrop-blur-md border-b border-[var(--panel-border)] shadow-sm lg:-mx-8 lg:px-8 transition-all">
+      <div className="sticky top-0 z-10 -mx-4 px-4 py-4 bg-[var(--background)]/80 backdrop-blur-md border-b border-[var(--panel-border)] shadow-sm lg:-mx-8 lg:px-8 transition-all">
         <ActionBar
           title="주문 관리"
           subtitle="주문 조회 및 필터"
@@ -316,7 +316,7 @@ export default function OrdersMainPage() {
                 </div>
                 
                 {filter.type === "customer" ? (
-                  <Select className="h-9 text-sm bg-white" value={filter.value} onChange={(event) => updateFilter(filter.id, { value: event.target.value })}>
+                  <Select className="h-9 text-sm bg-[var(--input-bg)]" value={filter.value} onChange={(event) => updateFilter(filter.id, { value: event.target.value })}>
                     <option value="">고객 선택</option>
                     {customerOptions.map((option) => (
                       <option key={option.value} value={option.value}>
@@ -326,7 +326,7 @@ export default function OrdersMainPage() {
                   </Select>
                 ) : null}
                 {filter.type === "factory" ? (
-                  <Select className="h-9 text-sm bg-white" value={filter.value} onChange={(event) => updateFilter(filter.id, { value: event.target.value })}>
+                  <Select className="h-9 text-sm bg-[var(--input-bg)]" value={filter.value} onChange={(event) => updateFilter(filter.id, { value: event.target.value })}>
                     <option value="">공장 선택</option>
                     {vendorOptions.map((option) => (
                       <option key={option.value} value={option.value}>
@@ -337,14 +337,14 @@ export default function OrdersMainPage() {
                 ) : null}
                 {filter.type === "model" ? (
                   <Input
-                    className="h-9 text-sm bg-white"
+                    className="h-9 text-sm bg-[var(--input-bg)]"
                     placeholder="모델/색상"
                     value={filter.value}
                     onChange={(event) => updateFilter(filter.id, { value: event.target.value })}
                   />
                 ) : null}
                 {filter.type === "date" ? (
-                  <Select className="h-9 text-sm bg-white" value={filter.value} onChange={(event) => updateFilter(filter.id, { value: event.target.value })}>
+                  <Select className="h-9 text-sm bg-[var(--input-bg)]" value={filter.value} onChange={(event) => updateFilter(filter.id, { value: event.target.value })}>
                     <option value="">날짜 선택</option>
                     {dateOptions.map((date) => (
                       <option key={date} value={date}>
@@ -389,7 +389,7 @@ export default function OrdersMainPage() {
                 <div
                   key={order.order_line_id}
                   className={cn(
-                    "group relative rounded-[14px] border border-[var(--panel-border)] px-4 py-3 bg-white shadow-sm",
+                    "group relative rounded-[14px] border border-[var(--panel-border)] px-4 py-3 bg-[var(--panel)] shadow-sm",
                     "transition-all duration-200 hover:shadow-md hover:-translate-y-0.5 hover:border-[var(--primary)]/20 cursor-default"
                   )}
                 >
@@ -463,7 +463,7 @@ export default function OrdersMainPage() {
                   {order.status && (
                     <div className={cn(
                       "absolute right-0 top-0 h-full w-1 rounded-r-[14px]",
-                      order.status === "CONFIRMED" ? "bg-green-500/50" : "bg-orange-500/50"
+                      order.status === "CONFIRMED" ? "bg-[var(--success)]/50" : "bg-[var(--warning)]/50"
                     )} />
                   )}
                 </div>

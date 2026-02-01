@@ -251,7 +251,7 @@ const LoadingOverlay = () => (
   <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-sm transition-all duration-500">
     <div className="bg-card px-8 py-6 rounded-2xl shadow-2xl border border-border/50 flex flex-col items-center gap-4 animate-in fade-in zoom-in duration-300">
       <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin"></div>
-      <div className="text-sm font-medium text-muted-foreground">Loading Order...</div>
+      <div className="text-sm font-medium text-[var(--muted)]">Loading Order...</div>
     </div>
   </div>
 );
@@ -827,19 +827,19 @@ function OrdersPageContent() {
             <h1 className="text-lg font-bold tracking-tight text-foreground">
               {editId ? "주문 수정" : "주문 등록"}
             </h1>
-            <p className="text-xs text-muted-foreground">
+            <p className="text-xs text-[var(--muted)]">
               {editId ? `Order #${editId}` : "New Order Entry"}
             </p>
           </div>
           <div className="h-8 w-px bg-border/50 mx-2" />
-          <div className="flex items-center gap-2 text-xs text-muted-foreground">
-             <span className={cn("w-2 h-2 rounded-full", saveInFlight.current.size > 0 ? "bg-yellow-500 animate-pulse" : "bg-emerald-500")} />
+          <div className="flex items-center gap-2 text-xs text-[var(--muted)]">
+             <span className={cn("w-2 h-2 rounded-full", saveInFlight.current.size > 0 ? "bg-[var(--warning)] animate-pulse" : "bg-[var(--success)]")} />
              {saveInFlight.current.size > 0 ? "Saving..." : "Ready"}
           </div>
         </div>
         <div className="flex items-center gap-3">
             <Link href="/orders_main">
-              <Button variant="ghost" size="sm" className="h-8 text-muted-foreground hover:text-foreground">
+              <Button variant="ghost" size="sm" className="h-8 text-[var(--muted)] hover:text-[var(--foreground)]">
                 닫기
               </Button>
             </Link>
@@ -867,7 +867,7 @@ function OrdersPageContent() {
                       <Badge variant="outline" className="bg-background font-mono">#{realIdx}</Badge>
                       {row.order_line_id && <Badge variant="secondary" className="text-[10px]">Saved</Badge>}
                     </div>
-                    <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-red-500 hover:bg-red-50" onClick={() => handleDeleteRow(row.id)}>
+                     <Button variant="ghost" size="icon" className="h-8 w-8 text-[var(--muted)] hover:text-[var(--danger)] hover:bg-[var(--danger)]/10" onClick={() => handleDeleteRow(row.id)}>
                       <span className="sr-only">Delete</span>
                       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
                     </Button>
@@ -880,23 +880,23 @@ function OrdersPageContent() {
                         <div className="flex items-center gap-2 pb-1 border-b border-border/30">
                           <span className="text-xs font-bold text-foreground">Customer</span>
                         </div>
-                        <p className="text-[11px] text-muted-foreground">거래처 이름을 입력하면 자동으로 매칭됩니다.</p>
+                        <p className="text-[11px] text-[var(--muted)]">거래처 이름을 입력하면 자동으로 매칭됩니다.</p>
                       </div>
                       <div className="space-y-2">
-                        <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-1">
-                          거래처 <span className="text-red-500">*</span>
+                        <label className="text-xs font-semibold text-[var(--muted)] uppercase tracking-wider flex items-center gap-1">
+                          거래처 <span className="text-[var(--danger)]">*</span>
                         </label>
                         <input
                           className={cn(
-                            "w-full bg-muted/10 border border-border/60 focus:border-primary/50 focus:ring-2 focus:ring-primary/10 rounded-md px-3 py-2 text-sm transition-all placeholder:text-muted-foreground/30",
-                            errors.client ? "bg-red-50 border-red-200 ring-red-200" : ""
+                            "w-full bg-muted/10 border border-border/60 focus:border-primary/50 focus:ring-2 focus:ring-primary/10 rounded-md px-3 py-2 text-sm transition-all placeholder:text-[var(--muted-weak)]",
+                            errors.client ? "bg-[var(--danger)]/5 border-[var(--danger)]/30 ring-[var(--danger)]/30" : ""
                           )}
                           value={row.client_input}
                           onChange={(e) => updateRow(row.id, { client_input: e.target.value })}
                           onBlur={(e) => resolveClient(row.id, e.currentTarget.value)}
                           placeholder="거래처 검색..."
                         />
-                        {errors.client && <p className="text-[10px] text-red-500 font-medium">{errors.client}</p>}
+                        {errors.client && <p className="text-[10px] text-[var(--danger)] font-medium">{errors.client}</p>}
                       </div>
                     </div>
 
@@ -906,28 +906,28 @@ function OrdersPageContent() {
                         <div className="flex items-center gap-2 pb-1 border-b border-border/30">
                           <span className="text-xs font-bold text-foreground">Model</span>
                         </div>
-                        <p className="text-[11px] text-muted-foreground">모델명을 입력하면 마스터 정보와 연결됩니다.</p>
+                        <p className="text-[11px] text-[var(--muted)]">모델명을 입력하면 마스터 정보와 연결됩니다.</p>
                       </div>
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                         <div className="space-y-2">
-                          <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-1">
-                            모델번호 <span className="text-red-500">*</span>
+                          <label className="text-xs font-semibold text-[var(--muted)] uppercase tracking-wider flex items-center gap-1">
+                            모델번호 <span className="text-[var(--danger)]">*</span>
                           </label>
                           <input
                             className={cn(
-                              "w-full bg-muted/10 border border-border/60 focus:border-primary/50 focus:ring-2 focus:ring-primary/10 rounded-md px-3 py-2 text-sm font-medium transition-all placeholder:text-muted-foreground/30",
-                              errors.model ? "bg-red-50 border-red-200 ring-red-200" : ""
+                              "w-full bg-muted/10 border border-border/60 focus:border-primary/50 focus:ring-2 focus:ring-primary/10 rounded-md px-3 py-2 text-sm font-medium transition-all placeholder:text-[var(--muted-weak)]",
+                              errors.model ? "bg-[var(--danger)]/5 border-[var(--danger)]/30 ring-[var(--danger)]/30" : ""
                             )}
                             value={row.model_input}
                             onChange={(e) => updateRow(row.id, { model_input: e.target.value })}
                             onBlur={(e) => resolveMaster(row.id, e.currentTarget.value)}
                             placeholder="모델명 검색..."
                           />
-                          {errors.model && <p className="text-[10px] text-red-500 font-medium">{errors.model}</p>}
+                          {errors.model && <p className="text-[10px] text-[var(--danger)] font-medium">{errors.model}</p>}
                         </div>
                         <div className="space-y-2">
-                          <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">분류</label>
-                          <div className="w-full px-3 py-2 text-sm bg-muted/20 border border-border/40 rounded-md text-muted-foreground select-none">
+                          <label className="text-xs font-semibold text-[var(--muted)] uppercase tracking-wider">분류</label>
+                          <div className="w-full px-3 py-2 text-sm bg-muted/20 border border-border/40 rounded-md text-[var(--muted)] select-none">
                             {getCategoryName(row.suffix) || "-"}
                           </div>
                         </div>
@@ -940,13 +940,13 @@ function OrdersPageContent() {
                         <div className="flex items-center gap-2 pb-1 border-b border-border/30">
                           <span className="text-xs font-bold text-foreground">Options</span>
                         </div>
-                        <p className="text-[11px] text-muted-foreground">색상/도금/사이즈/수량을 지정합니다.</p>
+                        <p className="text-[11px] text-[var(--muted)]">색상/도금/사이즈/수량을 지정합니다.</p>
                       </div>
                       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                         <div className="space-y-1.5">
-                          <label className="text-[10px] font-medium text-muted-foreground">색상</label>
+                          <label className="text-[10px] font-medium text-[var(--muted)]">색상</label>
                           <select
-                            className={cn("w-full bg-background border border-border/60 rounded-md px-2 py-2 text-sm focus:border-primary/50 focus:ring-2 focus:ring-primary/10 transition-colors", errors.color && "border-red-200")}
+                            className={cn("w-full bg-background border border-border/60 rounded-md px-2 py-2 text-sm focus:border-primary/50 focus:ring-2 focus:ring-primary/10 transition-colors", errors.color && "border-[var(--danger)]/30")}
                             value={row.color}
                             onChange={(e) => updateRow(row.id, { color: e.target.value })}
                           >
@@ -959,7 +959,7 @@ function OrdersPageContent() {
                           </select>
                         </div>
                         <div className="space-y-1.5">
-                          <label className="text-[10px] font-medium text-muted-foreground">사이즈</label>
+                          <label className="text-[10px] font-medium text-[var(--muted)]">사이즈</label>
                           <input
                             className="w-full bg-background border border-border/60 rounded-md px-3 py-2 text-sm focus:border-primary/50 focus:ring-2 focus:ring-primary/10 transition-colors"
                             value={row.size}
@@ -967,17 +967,17 @@ function OrdersPageContent() {
                           />
                         </div>
                         <div className="space-y-1.5">
-                          <label className="text-[10px] font-medium text-muted-foreground">수량</label>
+                          <label className="text-[10px] font-medium text-[var(--muted)]">수량</label>
                           <input
                             type="number"
-                            className={cn("w-full bg-background border border-border/60 rounded-md px-3 py-2 text-sm text-center tabular-nums focus:border-primary/50 focus:ring-2 focus:ring-primary/10 transition-colors", errors.qty && "border-red-200")}
+                            className={cn("w-full bg-background border border-border/60 rounded-md px-3 py-2 text-sm text-center tabular-nums focus:border-primary/50 focus:ring-2 focus:ring-primary/10 transition-colors", errors.qty && "border-[var(--danger)]/30")}
                             value={row.qty}
                             onChange={(e) => updateRow(row.id, { qty: e.target.value })}
                           />
                         </div>
                         <div className="space-y-1.5">
                           <div className="flex items-center justify-between">
-                            <label className="text-[10px] font-medium text-muted-foreground">도금</label>
+                            <label className="text-[10px] font-medium text-[var(--muted)]">도금</label>
                             <input
                               type="checkbox"
                               checked={row.is_plated}
@@ -994,7 +994,7 @@ function OrdersPageContent() {
                             className={cn(
                               "w-full bg-background border border-border/60 rounded-md px-2 py-2 text-sm focus:border-primary/50 focus:ring-2 focus:ring-primary/10 transition-colors",
                               !row.is_plated && "opacity-50 cursor-not-allowed",
-                              errors.plating && "border-red-200"
+                              errors.plating && "border-[var(--danger)]/30"
                             )}
                             value={row.plating_color}
                             onChange={(e) => updateRow(row.id, { plating_color: e.target.value })}
@@ -1025,13 +1025,13 @@ function OrdersPageContent() {
                       <div>
                         <div className="flex items-center gap-2 pb-1 border-b border-border/30">
                           <span className="text-xs font-bold text-foreground">Stones</span>
-                          {errors.stones && <span className="text-[10px] text-red-500 font-medium">{errors.stones}</span>}
+                          {errors.stones && <span className="text-[10px] text-[var(--danger)] font-medium">{errors.stones}</span>}
                         </div>
-                        <p className="text-[11px] text-muted-foreground">센터/보조 스톤과 개수를 입력합니다.</p>
+                        <p className="text-[11px] text-[var(--muted)]">센터/보조 스톤과 개수를 입력합니다.</p>
                       </div>
                       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                         <div className="p-3 rounded-lg bg-muted/5 border border-border/30 space-y-2">
-                          <span className="text-[10px] font-bold text-muted-foreground uppercase">중심석</span>
+                          <span className="text-[10px] font-bold text-[var(--muted)] uppercase">중심석</span>
                           <div className="grid grid-cols-[1fr_60px] gap-2">
                             <select
                               className="w-full bg-background border border-border/60 rounded-md text-xs py-1.5 px-2 focus:border-primary/50 focus:ring-2 focus:ring-primary/10 transition-colors"
@@ -1055,7 +1055,7 @@ function OrdersPageContent() {
                           </div>
                         </div>
                         <div className="p-3 rounded-lg bg-muted/5 border border-border/30 space-y-2">
-                          <span className="text-[10px] font-bold text-muted-foreground uppercase">보조1석</span>
+                          <span className="text-[10px] font-bold text-[var(--muted)] uppercase">보조1석</span>
                           <div className="grid grid-cols-[1fr_60px] gap-2">
                             <select
                               className="w-full bg-background border border-border/60 rounded-md text-xs py-1.5 px-2 focus:border-primary/50 focus:ring-2 focus:ring-primary/10 transition-colors"
@@ -1079,7 +1079,7 @@ function OrdersPageContent() {
                           </div>
                         </div>
                         <div className="p-3 rounded-lg bg-muted/5 border border-border/30 space-y-2">
-                          <span className="text-[10px] font-bold text-muted-foreground uppercase">보조2석</span>
+                          <span className="text-[10px] font-bold text-[var(--muted)] uppercase">보조2석</span>
                           <div className="grid grid-cols-[1fr_60px] gap-2">
                             <select
                               className="w-full bg-background border border-border/60 rounded-md text-xs py-1.5 px-2 focus:border-primary/50 focus:ring-2 focus:ring-primary/10 transition-colors"
@@ -1111,20 +1111,20 @@ function OrdersPageContent() {
                         <div className="flex items-center gap-2 pb-1 border-b border-border/30">
                           <span className="text-xs font-bold text-foreground">Memo / Due / Priority</span>
                         </div>
-                        <p className="text-[11px] text-muted-foreground">메모와 납기일을 기록하고 우선순위를 확인합니다.</p>
+                        <p className="text-[11px] text-[var(--muted)]">메모와 납기일을 기록하고 우선순위를 확인합니다.</p>
                       </div>
                       <div className="grid grid-cols-1 md:grid-cols-[1.5fr_1fr_1fr] gap-4">
                         <div className="space-y-1.5">
-                          <label className="text-[10px] font-medium text-muted-foreground">비고</label>
+                          <label className="text-[10px] font-medium text-[var(--muted)]">비고</label>
                           <input
-                            className="w-full bg-muted/10 border border-border/60 rounded-md px-3 py-2 text-sm transition-all placeholder:text-muted-foreground/30 focus:bg-background focus:ring-2 focus:ring-primary/10"
+                            className="w-full bg-muted/10 border border-border/60 rounded-md px-3 py-2 text-sm transition-all placeholder:text-[var(--muted-weak)] focus:bg-background focus:ring-2 focus:ring-primary/10"
                             value={row.memo}
                             onChange={(e) => updateRow(row.id, { memo: e.target.value })}
                             placeholder="특이사항 입력..."
                           />
                         </div>
                         <div className="space-y-1.5">
-                          <label className="text-[10px] font-medium text-muted-foreground">납기일</label>
+                          <label className="text-[10px] font-medium text-[var(--muted)]">납기일</label>
                           <Input
                             type="date"
                             className="h-9 text-sm bg-background border-border/60 focus:border-primary/50 focus:ring-primary/20"
@@ -1133,9 +1133,9 @@ function OrdersPageContent() {
                           />
                         </div>
                         <div className="space-y-1.5">
-                          <label className="text-[10px] font-medium text-muted-foreground">우선순위</label>
+                          <label className="text-[10px] font-medium text-[var(--muted)]">우선순위</label>
                           <select
-                            className="w-full bg-muted/10 border border-border/60 rounded-md px-2 py-2 text-sm text-muted-foreground cursor-not-allowed"
+                            className="w-full bg-muted/10 border border-border/60 rounded-md px-2 py-2 text-sm text-[var(--muted)] cursor-not-allowed"
                             defaultValue="STANDARD"
                             disabled
                           >
@@ -1152,7 +1152,7 @@ function OrdersPageContent() {
           {/* Pagination */}
           <div className="flex items-center justify-between pt-4">
              <Button variant="outline" size="sm" onClick={() => setPageIndex(p => Math.max(1, p - 1))} disabled={pageIndex === 1}>이전</Button>
-             <span className="text-xs text-muted-foreground">{pageIndex} / {Math.max(1, Math.ceil(rows.length / PAGE_SIZE))}</span>
+             <span className="text-xs text-[var(--muted)]">{pageIndex} / {Math.max(1, Math.ceil(rows.length / PAGE_SIZE))}</span>
              <Button variant="outline" size="sm" onClick={() => {
                 const pageCount = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
                 if (pageIndex >= pageCount) {
@@ -1170,39 +1170,39 @@ function OrdersPageContent() {
               <div className="flex items-center justify-between">
                 <span className="text-xs font-bold text-foreground">Customer Match</span>
                 {headerClient?.client_id ? (
-                  <Badge className="bg-blue-50 text-blue-700 border-blue-200">MATCHED</Badge>
+                  <Badge className="bg-[var(--primary)]/10 text-[var(--primary)] border-[var(--primary)]/30">MATCHED</Badge>
                 ) : (
-                  <Badge className="bg-red-50 text-red-700 border-red-200">UNMATCHED</Badge>
+                  <Badge className="bg-[var(--danger)]/10 text-[var(--danger)] border-[var(--danger)]/30">UNMATCHED</Badge>
                 )}
               </div>
-              <p className="text-[11px] text-muted-foreground">거래처 입력 결과 요약입니다.</p>
+              <p className="text-[11px] text-[var(--muted)]">거래처 입력 결과 요약입니다.</p>
             </CardHeader>
             <CardBody className="p-5 space-y-4">
               <div className="flex items-center justify-between">
                 <div className="text-sm font-semibold text-foreground">{headerClient?.client_name || "-"}</div>
-                <span className="text-xs text-muted-foreground">{headerClient?.client_id ? "확정" : "미확정"}</span>
+                <span className="text-xs text-[var(--muted)]">{headerClient?.client_id ? "확정" : "미확정"}</span>
               </div>
               <div className="grid grid-cols-2 gap-4 text-xs">
                 <div className="space-y-1">
-                  <span className="text-muted-foreground">미수금</span>
+                  <span className="text-[var(--muted)]">미수금</span>
                   <div className="font-semibold text-foreground tabular-nums">
                     {headerClient?.balance_krw !== undefined ? `${headerClient.balance_krw?.toLocaleString()}원` : "-"}
                   </div>
                 </div>
                 <div className="space-y-1">
-                  <span className="text-muted-foreground">마지막 거래일</span>
+                  <span className="text-[var(--muted)]">마지막 거래일</span>
                   <div className="font-semibold text-foreground">
                     {headerClient?.last_tx_at ? headerClient.last_tx_at.slice(0, 10) : "-"}
                   </div>
                 </div>
                 <div className="space-y-1">
-                  <span className="text-muted-foreground">미수 건수</span>
+                  <span className="text-[var(--muted)]">미수 건수</span>
                   <div className="font-semibold text-foreground">
                     {headerClient?.open_invoices_count ?? "-"}
                   </div>
                 </div>
                 <div className="space-y-1">
-                  <span className="text-muted-foreground">리스크</span>
+                  <span className="text-[var(--muted)]">리스크</span>
                   <div className="font-semibold text-foreground">{headerClient?.risk_flag ?? "-"}</div>
                 </div>
               </div>
@@ -1216,17 +1216,17 @@ function OrdersPageContent() {
                 {activeMaster?.master_item_id ? (
                   <Badge className="bg-emerald-50 text-emerald-700 border-emerald-200">MATCHED</Badge>
                 ) : (
-                  <Badge className="bg-red-50 text-red-700 border-red-200">UNMATCHED</Badge>
+                  <Badge className="bg-[var(--danger)]/10 text-[var(--danger)] border-[var(--danger)]/30">UNMATCHED</Badge>
                 )}
               </div>
-              <p className="text-[11px] text-muted-foreground">모델 매칭과 마스터 정보를 확인합니다.</p>
+              <p className="text-[11px] text-[var(--muted)]">모델 매칭과 마스터 정보를 확인합니다.</p>
             </CardHeader>
             <CardBody className="p-5 space-y-5">
               <div className="aspect-[4/3] relative overflow-hidden rounded-lg border border-border/40 bg-muted/10">
                 {activeMaster?.photo_url ? (
                   <>
                     {imageLoading ? (
-                      <div className="absolute inset-0 flex items-center justify-center text-xs font-medium text-muted-foreground animate-pulse">
+                      <div className="absolute inset-0 flex items-center justify-center text-xs font-medium text-[var(--muted)] animate-pulse">
                         이미지 로딩 중...
                       </div>
                     ) : null}
@@ -1239,7 +1239,7 @@ function OrdersPageContent() {
                     />
                   </>
                 ) : (
-                  <div className="flex flex-col items-center justify-center h-full text-muted-foreground/40">
+                  <div className="flex flex-col items-center justify-center h-full text-[var(--muted-weak)]">
                     <div className="w-12 h-12 rounded-full bg-muted/50 flex items-center justify-center mb-2">
                       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
                         <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
@@ -1253,7 +1253,7 @@ function OrdersPageContent() {
               </div>
 
               <div className="space-y-1">
-                <span className="text-[10px] text-muted-foreground uppercase">모델명</span>
+                <span className="text-[10px] text-[var(--muted)] uppercase">모델명</span>
                 <div className="text-sm font-semibold text-foreground">
                   {(activeMaster?.model_name ?? headerModelName) || "-"}
                 </div>
@@ -1261,44 +1261,44 @@ function OrdersPageContent() {
 
               <div className="grid grid-cols-2 gap-4 text-xs">
                 <div className="space-y-1">
-                  <span className="text-muted-foreground">공급처</span>
+                  <span className="text-[var(--muted)]">공급처</span>
                   <div className="font-semibold text-foreground">{activeMaster?.vendor_name ?? "-"}</div>
                 </div>
                 <div className="space-y-1">
-                  <span className="text-muted-foreground">카테고리</span>
+                  <span className="text-[var(--muted)]">카테고리</span>
                   <div className="font-semibold text-foreground">{getCategoryName(activeMaster?.category_code)}</div>
                 </div>
                 <div className="space-y-1">
-                  <span className="text-muted-foreground">기본중량</span>
+                  <span className="text-[var(--muted)]">기본중량</span>
                   <div className="font-semibold text-foreground tabular-nums">{activeMaster?.weight_default_g ?? "-"}</div>
                 </div>
                 <div className="space-y-1">
-                  <span className="text-muted-foreground">차감중량</span>
+                  <span className="text-[var(--muted)]">차감중량</span>
                   <div className="font-semibold text-foreground tabular-nums">{activeMaster?.deduction_weight_default_g ?? "-"}</div>
                 </div>
               </div>
 
               <div className="pt-2 border-t border-border/40 grid grid-cols-2 gap-4 text-xs">
                 <div className="space-y-1">
-                  <span className="text-muted-foreground">소재가격</span>
+                  <span className="text-[var(--muted)]">소재가격</span>
                   <div className="font-semibold text-foreground tabular-nums">
                     {activeMaster?.material_price ? `${activeMaster.material_price.toLocaleString()}원` : "-"}
                   </div>
                 </div>
                 <div className="space-y-1">
-                  <span className="text-muted-foreground">기본공임</span>
+                  <span className="text-[var(--muted)]">기본공임</span>
                   <div className="font-semibold text-foreground tabular-nums">
                     {activeMaster?.labor_basic?.toLocaleString() ?? "-"}
                   </div>
                 </div>
                 <div className="space-y-1">
-                  <span className="text-muted-foreground">센터공임</span>
+                  <span className="text-[var(--muted)]">센터공임</span>
                   <div className="font-semibold text-foreground tabular-nums">
                     {activeMaster?.labor_center?.toLocaleString() ?? "-"}
                   </div>
                 </div>
                 <div className="space-y-1">
-                  <span className="text-muted-foreground">보조공임</span>
+                  <span className="text-[var(--muted)]">보조공임</span>
                   <div className="font-semibold text-foreground tabular-nums">
                     {(activeMaster?.labor_side1 || 0) + (activeMaster?.labor_side2 || 0) > 0
                       ? ((activeMaster?.labor_side1 || 0) + (activeMaster?.labor_side2 || 0)).toLocaleString()

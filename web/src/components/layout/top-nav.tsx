@@ -55,7 +55,7 @@ export function TopNav() {
             {/* Brand */}
             <div className="flex items-center gap-3 shrink-0">
                 <Link href="/dashboard" className="flex items-center gap-3 group">
-                    <div className="flex h-9 w-9 items-center justify-center rounded-[var(--radius-md)] border border-[color:var(--hairline)] bg-gradient-to-br from-white to-gray-50 shadow-[var(--shadow-sm)] transition-transform duration-200 group-hover:scale-105">
+                    <div className="flex h-9 w-9 items-center justify-center rounded-[var(--radius-md)] border border-[color:var(--hairline)] bg-gradient-to-br from-[var(--panel)] to-[var(--surface)] shadow-[var(--shadow-sm)] transition-transform duration-200 group-hover:scale-105">
                         <span className="text-sm font-extrabold tracking-tight text-[var(--primary)]">J</span>
                     </div>
                     <div className="leading-tight">
@@ -100,7 +100,7 @@ export function TopNav() {
             <button
                 type="button"
                 onClick={() => setOpen(true)}
-                className="lg:hidden inline-flex items-center gap-2 rounded-full border border-[color:var(--hairline)] bg-white px-3 py-2 text-sm font-medium shadow-[var(--shadow-sm)] transition-all duration-200 ease-[var(--ease-out)] hover:-translate-y-0.5 hover:shadow-[var(--shadow)] active:translate-y-0 active:scale-95"
+                className="lg:hidden inline-flex items-center gap-2 rounded-full border border-[color:var(--hairline)] bg-[var(--panel)] px-3 py-2 text-sm font-medium shadow-[var(--shadow-sm)] transition-all duration-200 ease-[var(--ease-out)] hover:-translate-y-0.5 hover:shadow-[var(--shadow)] active:translate-y-0 active:scale-95"
                 aria-label="메뉴 열기"
             >
                 <Menu className="h-4 w-4" />

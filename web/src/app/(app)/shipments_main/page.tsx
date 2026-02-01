@@ -184,7 +184,7 @@ export default function ShipmentsMainPage() {
   return (
     <div className="space-y-6" id="shipments_main.root">
       {/* Header Panel */}
-      <div className="sticky top-0 z-10 -mx-4 px-4 py-4 bg-white/80 backdrop-blur-md border-b border-[var(--panel-border)] shadow-sm lg:-mx-8 lg:px-8 transition-all">
+      <div className="sticky top-0 z-10 -mx-4 px-4 py-4 bg-[var(--background)]/80 backdrop-blur-md border-b border-[var(--panel-border)] shadow-sm lg:-mx-8 lg:px-8 transition-all">
         <ActionBar
           title="출고 내역"
           subtitle="출고 조회 및 필터"
@@ -263,7 +263,7 @@ export default function ShipmentsMainPage() {
                 </div>
                 
                 {filter.type === "customer" ? (
-                  <Select className="h-9 text-sm bg-white" value={filter.value} onChange={(event) => updateFilter(filter.id, { value: event.target.value })}>
+                  <Select className="h-9 text-sm bg-[var(--input-bg)]" value={filter.value} onChange={(event) => updateFilter(filter.id, { value: event.target.value })}>
                     <option value="">고객 선택</option>
                     {customerOptions.map((option) => (
                       <option key={option.value} value={option.value}>
@@ -273,7 +273,7 @@ export default function ShipmentsMainPage() {
                   </Select>
                 ) : null}
                 {filter.type === "status" ? (
-                  <Select className="h-9 text-sm bg-white" value={filter.value} onChange={(event) => updateFilter(filter.id, { value: event.target.value })}>
+                  <Select className="h-9 text-sm bg-[var(--input-bg)]" value={filter.value} onChange={(event) => updateFilter(filter.id, { value: event.target.value })}>
                     <option value="">상태 선택</option>
                     <option value="DRAFT">DRAFT</option>
                     <option value="CONFIRMED">CONFIRMED</option>
@@ -281,14 +281,14 @@ export default function ShipmentsMainPage() {
                 ) : null}
                 {filter.type === "memo" ? (
                   <Input
-                    className="h-9 text-sm bg-white"
+                    className="h-9 text-sm bg-[var(--input-bg)]"
                     placeholder="메모 검색"
                     value={filter.value}
                     onChange={(event) => updateFilter(filter.id, { value: event.target.value })}
                   />
                 ) : null}
                 {filter.type === "date" ? (
-                  <Select className="h-9 text-sm bg-white" value={filter.value} onChange={(event) => updateFilter(filter.id, { value: event.target.value })}>
+                  <Select className="h-9 text-sm bg-[var(--input-bg)]" value={filter.value} onChange={(event) => updateFilter(filter.id, { value: event.target.value })}>
                     <option value="">날짜 선택</option>
                     {dateOptions.map((date) => (
                       <option key={date} value={date}>
@@ -328,7 +328,7 @@ export default function ShipmentsMainPage() {
                   <div
                     key={shipment.shipment_id}
                     className={cn(
-                      "group relative rounded-[14px] border border-[var(--panel-border)] px-5 py-4 bg-white shadow-sm",
+                      "group relative rounded-[14px] border border-[var(--panel-border)] px-5 py-4 bg-[var(--panel)] shadow-sm",
                       "transition-all duration-200 hover:shadow-md hover:-translate-y-0.5 hover:border-[var(--primary)]/20 cursor-default"
                     )}
                   >
