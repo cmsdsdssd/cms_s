@@ -12,6 +12,7 @@ import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { compressImage } from "@/lib/image-utils";
 import { deriveCategoryCodeFromModelName } from "@/lib/model-name";
+import { CatalogGalleryGrid } from "@/components/catalog/CatalogGalleryGrid";
 /* eslint-disable @next/next/no-img-element */
 
 type CatalogItem = {
@@ -276,7 +277,7 @@ export default function CatalogPage() {
 
     return filtered;
   }, [catalogItemsState, sortBy, sortOrder, masterRowsById, filterMaterial, filterCategory, filterQuery]);
-  const activePageSize = view === "gallery" ? 12 : 5;
+  const activePageSize = view === "gallery" ? 4 : 5;
   const totalPages = Math.max(1, Math.ceil(sortedCatalogItems.length / activePageSize));
   const totalCount = sortedCatalogItems.length;
   const rangeStart = totalCount === 0 ? 0 : (page - 1) * activePageSize + 1;
@@ -756,6 +757,29 @@ export default function CatalogPage() {
             className="gap-6 items-start"
             left={
               <div className="flex flex-col gap-3 h-full" id="catalog.listPanel">
+                <div className="sticky top-3 z-10 flex items-center justify-between rounded-[12px] border border-[var(--panel-border)] bg-white/95 px-4 py-3 shadow-sm ring-1 ring-[var(--panel-border)]/60 backdrop-blur">
+                  <p className="text-xs text-[var(--muted)]">
+                    {rangeStart} - {rangeEnd} / {totalCount}
+                  </p>
+                  <div className="flex gap-2">
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      disabled={page === 1}
+                      onClick={() => setPage((p) => p - 1)}
+                    >
+                      이전
+                    </Button>
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      disabled={page === totalPages}
+                      onClick={() => setPage((p) => p + 1)}
+                    >
+                      다음
+                    </Button>
+                  </div>
+                </div>
                 <div className="flex-1">
                   {isCatalogLoading && catalogItemsState.length === 0 ? (
                     <div className="flex h-[60vh] items-center justify-center text-sm text-[var(--muted)]">
@@ -876,168 +900,17 @@ export default function CatalogPage() {
                     </div>
                   ) : (
                     /* [갤러리 뷰] */
-                    <div className="grid gap-4 grid-cols-2 lg:grid-cols-4 auto-rows-fr">
-                      {pageItems.map((item) => (
-                        <Card
-                          key={item.id}
-                          className={cn(
-                            "cursor-pointer overflow-hidden transition h-full flex flex-col",
-                            getMaterialBgColor(
-                              String(
-                                masterRowsById[item.id]?.material_code_default ??
-                                "00"
-                              )
-                            ),
-                            item.id === selectedItemId
-                              ? "ring-2 ring-[var(--primary)]"
-                              : "hover:opacity-90"
-                          )}
-                          onClick={() => setSelectedItemId(item.id)}
-                          onDoubleClick={handleOpenEdit} // ✅ 카드 전체 더블클릭 -> 수정창 열기
-                        >
-                          {/* 이미지 영역 */}
-                          <div
-                            className="relative aspect-square bg-gradient-to-br from-[#e7edf5] to-[#f7faff]"
-                            onDoubleClick={(e) => {
-                              // ✅ 이미지 더블클릭 시: 상위(카드)로 전파 막고, 이미지 프리뷰 실행
-                              e.stopPropagation();
-                              if (item.imageUrl) setPreviewImage(item.imageUrl);
-                            }}
-                          >
-                            <div className="absolute inset-0 flex items-center justify-center text-xs text-[var(--muted)]">
-                              이미지
-                            </div>
-                            {item.imageUrl ? (
-                              <img
-                                src={item.imageUrl}
-                                alt={`${item.model} 이미지`}
-                                className="absolute inset-0 h-full w-full object-cover"
-                                loading="lazy"
-                                onError={(event) => {
-                                  event.currentTarget.style.display = "none";
-                                }}
-                              />
-                            ) : null}
-                          </div>
-                          <div className="space-y-2 p-4 flex-1">
-                            <p className="text-sm font-semibold text-black truncate">
-                              {item.model}
-                            </p>
-                            <div className="grid gap-2 text-xs [grid-template-columns:repeat(auto-fit,minmax(160px,1fr))]">
-                              <div className="">
-                                <p className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)] mb-0.5">
-                                  예상 총 금액
-                                </p>
-                                <p className="font-semibold text-[var(--foreground)]">
-                                  {(() => {
-                                    const row = masterRowsById[item.id];
-                                    if (!row) return "-";
-                                    const weight =
-                                      parseFloat(item.weight) || 0;
-                                    const deduction =
-                                      parseFloat(
-                                        String(
-                                          row.deduction_weight_default_g ?? 0
-                                        )
-                                      ) || 0;
-                                    const materialCode = String(
-                                      row.material_code_default ?? "00"
-                                    );
-                                    const matPrice = calculateMaterialPrice(
-                                      materialCode,
-                                      weight,
-                                      deduction
-                                    );
-                                    const laborSell =
-                                      (row.labor_total_sell as
-                                        | number
-                                        | undefined) ??
-                                      (row.labor_base_sell as
-                                        | number
-                                        | undefined) ??
-                                      0;
-                                    return (
-                                      Math.round(
-                                        matPrice + laborSell
-                                      ).toLocaleString("ko-KR") + " 원"
-                                    );
-                                  })()}
-                                </p>
-                              </div>
-                              <div className="">
-                                <p className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)] mb-0.5">
-                                  예상 중량
-                                </p>
-                                <p className="font-semibold text-[var(--foreground)]">
-                                  {(() => {
-                                    const row = masterRowsById[item.id];
-                                    const weight =
-                                      parseFloat(item.weight) || 0;
-                                    const deduction =
-                                      parseFloat(
-                                        String(
-                                          row?.deduction_weight_default_g ?? 0
-                                        )
-                                      ) || 0;
-                                    if (deduction > 0) {
-                                      return `${weight.toFixed(
-                                        2
-                                      )}g (-${deduction.toFixed(2)})`;
-                                    }
-                                    return `${weight.toFixed(2)}g`;
-                                  })()}
-                                </p>
-                              </div>
-                              <div className="">
-                                <p className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)] mb-0.5">
-                                  판매 합계공임
-                                </p>
-                                <p className="font-semibold text-[var(--foreground)]">
-                                  {(() => {
-                                    const row = masterRowsById[item.id];
-                                    const laborSell =
-                                      (row?.labor_total_sell as
-                                        | number
-                                        | undefined) ??
-                                      (row?.labor_base_sell as
-                                        | number
-                                        | undefined) ??
-                                      0;
-                                    return (
-                                      laborSell.toLocaleString("ko-KR") + " 원"
-                                    );
-                                  })()}
-                                </p>
-                              </div>
-                            </div>
-                          </div>
-                        </Card>
-                      ))}
-                    </div>
+                    <CatalogGalleryGrid
+                      items={pageItems}
+                      selectedItemId={selectedItemId}
+                      masterRowsById={masterRowsById}
+                      calculateMaterialPrice={calculateMaterialPrice}
+                      getMaterialBgColor={getMaterialBgColor}
+                      setSelectedItemId={setSelectedItemId}
+                      handleOpenEdit={handleOpenEdit}
+                      setPreviewImage={setPreviewImage}
+                    />
                   )}
-                </div>
-                <div className="mt-auto flex items-center justify-between rounded-[12px] border border-[var(--panel-border)] bg-white px-4 py-3">
-                  <p className="text-xs text-[var(--muted)]">
-                    {rangeStart} - {rangeEnd} / {totalCount}
-                  </p>
-                  <div className="flex gap-2">
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      disabled={page === 1}
-                      onClick={() => setPage((p) => p - 1)}
-                    >
-                      이전
-                    </Button>
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      disabled={page === totalPages}
-                      onClick={() => setPage((p) => p + 1)}
-                    >
-                      다음
-                    </Button>
-                  </div>
                 </div>
               </div>
             }
@@ -1171,19 +1044,21 @@ export default function CatalogPage() {
                         </div>
                       </CardHeader>
                       <CardBody className="space-y-3">
-                        <div className="grid grid-cols-2 gap-2">
+                        <div className="grid grid-cols-6 gap-2">
                           <Input
+                            className="col-span-3"
                             placeholder="모델명"
                             value={selectedItem?.model ?? ""}
                             readOnly
                           />
                           <Input
+                            className="col-span-1"
                             placeholder="공급처"
                             value={selectedItem?.vendor ?? ""}
                             readOnly
                           />
                           <Select value={selectedDetail?.materialCode ?? ""} disabled>
-                            <option value="">기본 재질</option>
+                            <option value="">소재</option>
                             {materialOptions.map((material) => (
                               <option key={material.value} value={material.value}>
                                 {material.label}
@@ -1191,7 +1066,7 @@ export default function CatalogPage() {
                             ))}
                           </Select>
                           <Select value={selectedDetail?.categoryCode ?? ""} disabled>
-                            <option value="">카테고리</option>
+                            <option value="">카테고리 코드</option>
                             {categoryOptions.map((category) => (
                               <option key={category.value} value={category.value}>
                                 {category.label}
@@ -1199,11 +1074,25 @@ export default function CatalogPage() {
                             ))}
                           </Select>
                           <Input
-                            placeholder="기본 중량 (g)"
+                            className="col-span-2"
+                            placeholder="순중량 (g)"
+                            value={(() => {
+                              const weight = parseFloat(String(selectedDetail?.weight ?? ""));
+                              const deduction = parseFloat(String(selectedDetail?.deductionWeight ?? ""));
+                              if (!Number.isFinite(weight)) return "";
+                              const safeDeduction = Number.isFinite(deduction) ? deduction : 0;
+                              return `${(weight - safeDeduction).toFixed(2)} g`;
+                            })()}
+                            readOnly
+                          />
+                          <Input
+                            className="col-span-2"
+                            placeholder="총중량 (g)"
                             value={selectedDetail?.weight ?? ""}
                             readOnly
                           />
                           <Input
+                            className="col-span-2"
                             placeholder="차감 중량 (g)"
                             value={selectedDetail?.deductionWeight ?? ""}
                             readOnly
@@ -1343,7 +1232,7 @@ export default function CatalogPage() {
                     </Card>
 
                     {/* C. 추가 메모 카드 */}
-                    <Card id="catalog.detail.raw">
+                    <Card id="catalog.detail.raw" className="-mt-2">
                       <CardHeader>
                         <ActionBar title="추가 메모" />
                       </CardHeader>
@@ -1384,7 +1273,10 @@ export default function CatalogPage() {
           className="grid gap-6 lg:grid-cols-[320px,1fr]"
           // ✅ [유지] 내부 내용물을 더블클릭했을 때는 닫히지 않도록 이벤트 전파를 막습니다.
           // 이 코드가 있어야 배경 더블클릭 감지(useEffect)가 정상 작동합니다.
-          onDoubleClick={(e) => e.stopPropagation()}
+          onDoubleClickCapture={(e) => {
+            e.stopPropagation();
+            e.nativeEvent.stopImmediatePropagation?.();
+          }}
         >
           {/* 1. 좌측 이미지 업로드 영역 */}
           <div className="space-y-4">

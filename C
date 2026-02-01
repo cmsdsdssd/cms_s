@@ -1,0 +1,136 @@
+import { useCallback, useMemo } from "react";
+import { CatalogGalleryCard } from "@/components/catalog/CatalogGalleryCard";
+
+type CatalogGalleryItem = {
+  id: string;
+  model: string;
+  weight: string;
+  imageUrl?: string | null;
+};
+
+type CatalogGalleryGridProps = {
+  items: CatalogGalleryItem[];
+  selectedItemId: string | null;
+  masterRowsById: Record<string, Record<string, unknown>>;
+  calculateMaterialPrice: (material: string, weight: number, deduction: number) => number;
+  getMaterialBgColor: (materialCode: string) => string;
+  setSelectedItemId: (id: string) => void;
+  handleOpenEdit: () => void;
+  setPreviewImage: (imageUrl: string | null) => void;
+};
+
+export function CatalogGalleryGrid({
+  items,
+  selectedItemId,
+  masterRowsById,
+  calculateMaterialPrice,
+  getMaterialBgColor,
+  setSelectedItemId,
+  handleOpenEdit,
+  setPreviewImage,
+}: CatalogGalleryGridProps) {
+  const estimatedTotalPriceById = useMemo(() => {
+    const map: Record<string, string> = {};
+    items.forEach((item) => {
+      const row = masterRowsById[item.id];
+      if (!row) {
+        map[item.id] = "-";
+        return;
+      }
+      const weight = parseFloat(item.weight) || 0;
+      const deduction =
+        parseFloat(String(row.deduction_weight_default_g ?? 0)) || 0;
+      const materialCode = String(row.material_code_default ?? "00");
+      const matPrice = calculateMaterialPrice(
+        materialCode,
+        weight,
+        deduction
+      );
+      const laborSell =
+        (row.labor_total_sell as number | undefined) ??
+        (row.labor_base_sell as number | undefined) ??
+        0;
+      map[item.id] =
+        Math.round(matPrice + laborSell).toLocaleString("ko-KR") + " 원";
+    });
+    return map;
+  }, [items, masterRowsById, calculateMaterialPrice]);
+
+  const estimatedWeightById = useMemo(() => {
+    const map: Record<string, string> = {};
+    items.forEach((item) => {
+      const row = masterRowsById[item.id];
+      const weight = parseFloat(item.weight) || 0;
+      const deduction =
+        parseFloat(String(row?.deduction_weight_default_g ?? 0)) || 0;
+      if (deduction > 0) {
+        map[item.id] = `${weight.toFixed(2)}g (-${deduction.toFixed(2)})`;
+        return;
+      }
+      map[item.id] = `${weight.toFixed(2)}g`;
+    });
+    return map;
+  }, [items, masterRowsById]);
+
+  const laborSellById = useMemo(() => {
+    const map: Record<string, string> = {};
+    items.forEach((item) => {
+      const row = masterRowsById[item.id];
+      const laborSell =
+        (row?.labor_total_sell as number | undefined) ??
+        (row?.labor_base_sell as number | undefined) ??
+        0;
+      map[item.id] = laborSell.toLocaleString("ko-KR") + " 원";
+    });
+    return map;
+  }, [items, masterRowsById]);
+
+  const materialBgClassById = useMemo(() => {
+    const map: Record<string, string> = {};
+    items.forEach((item) => {
+      map[item.id] = getMaterialBgColor(
+        String(masterRowsById[item.id]?.material_code_default ?? "00")
+      );
+    });
+    return map;
+  }, [items, masterRowsById, getMaterialBgColor]);
+
+  const handleSelect = useCallback(
+    (id: string) => {
+      setSelectedItemId(id);
+    },
+    [setSelectedItemId]
+  );
+
+  const handlePreviewImage = useCallback(
+    (imageUrl: string) => {
+      setPreviewImage(imageUrl);
+    },
+    [setPreviewImage]
+  );
+
+  const handleOpenEditStable = useCallback(() => {
+    handleOpenEdit();
+  }, [handleOpenEdit]);
+
+  return (
+    <div className="grid gap-4 min-w-0 [grid-template-columns:repeat(auto-fill,minmax(clamp(180px,24vw,240px),1fr))] auto-rows-fr">
+      {items.map((item) => (
+        <CatalogGalleryCard
+          key={item.id}
+          id={item.id}
+          model={item.model}
+          imageUrl={item.imageUrl}
+          isSelected={item.id === selectedItemId}
+          materialBgClass={materialBgClassById[item.id]}
+          estimatedTotalPrice={estimatedTotalPriceById[item.id]}
+          estimatedWeight={estimatedWeightById[item.id]}
+          laborSell={laborSellById[item.id]}
+          onSelect={handleSelect}
+          onOpenEdit={handleOpenEditStable}
+          onPreviewImage={handlePreviewImage}
+        />
+      ))}
+    </div>
+  );
+}
