@@ -36,7 +36,13 @@ function buildImageUrl(supabase: SupabaseClient<unknown>, path: string | null) {
 export async function GET(request: Request) {
   const supabase = getSupabaseAdmin();
   if (!supabase) {
-    return NextResponse.json({ error: "Supabase 환경 변수가 설정되지 않았습니다." }, { status: 500 });
+    return NextResponse.json(
+      {
+        error: "Supabase server env missing: SUPABASE_SERVICE_ROLE_KEY or NEXT_PUBLIC_SUPABASE_URL",
+        hint: "Set SUPABASE_SERVICE_ROLE_KEY and NEXT_PUBLIC_SUPABASE_URL in server env (.env.local on dev).",
+      },
+      { status: 500 }
+    );
   }
 
   const { searchParams } = new URL(request.url);

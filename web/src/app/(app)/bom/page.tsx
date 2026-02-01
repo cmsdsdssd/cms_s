@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { ActionBar } from "@/components/layout/action-bar";
@@ -10,10 +10,10 @@ import { Button } from "@/components/ui/button";
 import { Input, Select, Textarea } from "@/components/ui/field";
 import { Badge } from "@/components/ui/badge";
 import { SearchSelect } from "@/components/ui/search-select";
+import { Modal } from "@/components/ui/modal";
 import { useRpcMutation } from "@/hooks/use-rpc-mutation";
 import { CONTRACTS, isFnConfigured } from "@/lib/contracts";
 import { getSchemaClient } from "@/lib/supabase/client";
-import { cn } from "@/lib/utils";
 
 type MasterSummary = {
     master_id: string;
@@ -72,8 +72,10 @@ async function fetchJson<T>(url: string) {
     const res = await fetch(url);
     const json = (await res.json()) as T;
     if (!res.ok) {
-        const errorPayload = json as { error?: string };
-        throw new Error(errorPayload?.error ?? "요청 실패");
+        const errorPayload = json as { error?: string; hint?: string };
+        const error = new Error(errorPayload?.error ?? "요청 실패");
+        (error as Error & { hint?: string }).hint = errorPayload?.hint;
+        throw error;
     }
     return json;
 }
@@ -89,13 +91,17 @@ export default function BomPage() {
 
     const [selectedRecipeId, setSelectedRecipeId] = useState<string | null>(null);
 
-    const [componentType, setComponentType] = useState<"PART" | "MASTER">("PART");
+    const [componentType, setComponentType] = useState<"PART" | "MASTER">("MASTER");
+    const [showAdvanced, setShowAdvanced] = useState(false);
     const [componentQuery, setComponentQuery] = useState("");
     const [selectedComponentId, setSelectedComponentId] = useState<string | null>(null);
 
     const [qtyPerUnit, setQtyPerUnit] = useState("1");
     const [unit, setUnit] = useState<"EA" | "G" | "M">("EA");
     const [lineNote, setLineNote] = useState("");
+
+    const [voidConfirmId, setVoidConfirmId] = useState<string | null>(null);
+    const toastShownRef = useRef(false);
 
     const schema = getSchemaClient();
 
@@ -195,6 +201,34 @@ export default function BomPage() {
         return (data as MasterSummary[]).map((m) => ({ label: m.model_name, value: m.master_id }));
     }, [componentSearchQuery.data, componentType]);
 
+    const selectedComponent = useMemo(() => {
+        if (!selectedComponentId) return null;
+        const data = componentSearchQuery.data ?? [];
+        if (componentType === "PART") {
+            return (data as PartSummary[]).find(p => p.part_id === selectedComponentId);
+        } else {
+            return (data as MasterSummary[]).find(m => m.master_id === selectedComponentId);
+        }
+    }, [componentSearchQuery.data, selectedComponentId, componentType]);
+
+    const envError = useMemo(() => {
+        const errors = [productSearchQuery.error, componentSearchQuery.error].filter(Boolean) as Error[];
+        const match = errors.find((error) => {
+            const message = error?.message ?? "";
+            const hint = (error as Error & { hint?: string })?.hint ?? "";
+            return (
+                message.includes("Supabase server env missing") ||
+                message.includes("SUPABASE_SERVICE_ROLE_KEY") ||
+                hint.includes("SUPABASE_SERVICE_ROLE_KEY")
+            );
+        });
+        if (!match) return null;
+        return {
+            message: match.message,
+            hint: (match as Error & { hint?: string }).hint,
+        };
+    }, [productSearchQuery.error, componentSearchQuery.error]);
+
     // --- mutations ---
     const upsertRecipeMutation = useRpcMutation<string>({
         fn: CONTRACTS.functions.bomRecipeUpsert,
@@ -232,9 +266,26 @@ export default function BomPage() {
         isFnConfigured(CONTRACTS.functions.bomRecipeLineAdd) &&
         isFnConfigured(CONTRACTS.functions.bomRecipeLineVoid);
 
+    const isActorMissing = !actorId;
+
+    const writeDisabledReason =
+        "쓰기 기능 비활성: NEXT_PUBLIC_CMS_ACTOR_ID 미설정 또는 CONTRACTS.functions RPC 미설정";
+
+    const notifyWriteDisabled = () => {
+        if (toastShownRef.current) return;
+        toast.error("쓰기 비활성: NEXT_PUBLIC_CMS_ACTOR_ID 또는 RPC 설정을 확인하세요.");
+        toastShownRef.current = true;
+    };
+
+    useEffect(() => {
+        if (!canWrite && !toastShownRef.current) {
+            notifyWriteDisabled();
+        }
+    }, [canWrite]);
+
     const handleCreateRecipe = async () => {
         if (!selectedProductId) return toast.error("제품(마스터)을 먼저 선택해 주세요.");
-        if (!canWrite) return toast.error("RPC 설정(NEXT_PUBLIC_CMS_ACTOR_ID 포함)을 확인해 주세요.");
+        if (!canWrite) return notifyWriteDisabled();
 
         await upsertRecipeMutation.mutateAsync({
             p_product_master_id: selectedProductId,
@@ -251,7 +302,7 @@ export default function BomPage() {
     const handleAddLine = async () => {
         if (!selectedRecipeId) return toast.error("레시피를 먼저 선택해 주세요.");
         if (!selectedComponentId) return toast.error("구성품을 먼저 선택해 주세요.");
-        if (!canWrite) return toast.error("RPC 설정(NEXT_PUBLIC_CMS_ACTOR_ID 포함)을 확인해 주세요.");
+        if (!canWrite) return notifyWriteDisabled();
 
         const qty = Number(qtyPerUnit);
         if (Number.isNaN(qty) || qty <= 0) return toast.error("수량(1개당 사용량)은 0보다 커야 합니다.");
@@ -270,19 +321,64 @@ export default function BomPage() {
         });
     };
 
-    const handleVoidLine = async (bomLineId: string) => {
-        if (!canWrite) return toast.error("RPC 설정(NEXT_PUBLIC_CMS_ACTOR_ID 포함)을 확인해 주세요.");
+    const handleVoidConfirm = async () => {
+        if (!voidConfirmId) return;
+        if (!canWrite) return notifyWriteDisabled();
+        
         await voidLineMutation.mutateAsync({
-            p_bom_line_id: bomLineId,
+            p_bom_line_id: voidConfirmId,
             p_void_reason: "void from web",
             p_actor_person_id: actorId,
             p_note: "void from web",
         });
+        setVoidConfirmId(null);
     };
+
+    const createRecipeDisabled = !selectedProductId || upsertRecipeMutation.isPending || !canWrite;
+    const addLineDisabled = !selectedRecipeId || !selectedComponentId || addLineMutation.isPending || !canWrite;
+    const voidActionDisabled = voidLineMutation.isPending || !canWrite;
 
     return (
         <div className="space-y-4">
-            <ActionBar title="조합(BOM)" subtitle="출고 확정 시 자동 차감(부속/메달 등) 기반 데이터 분석용" />
+            <ActionBar
+                title="조합(BOM)"
+                subtitle="출고 확정 시 자동 차감(부속/메달 등) 기반 데이터 분석용"
+                actions={
+                    <span
+                        className="inline-flex"
+                        title={
+                            !selectedProductId
+                                ? "제품(마스터)을 먼저 선택해 주세요."
+                                : !canWrite
+                                  ? writeDisabledReason
+                                  : undefined
+                        }
+                    >
+                        <Button onClick={handleCreateRecipe} disabled={createRecipeDisabled}>
+                            레시피 저장
+                        </Button>
+                    </span>
+                }
+            />
+
+            {isActorMissing ? (
+                <div className="rounded-[12px] border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-900">
+                    환경 경고: NEXT_PUBLIC_CMS_ACTOR_ID 미설정으로 생성/추가/VOID가 차단됩니다.
+                </div>
+            ) : null}
+
+            {envError ? (
+                <Card className="border-red-200 bg-red-50">
+                    <CardBody className="space-y-2 text-red-900">
+                        <div className="text-sm font-semibold">환경변수 설정 필요</div>
+                        <div className="text-sm">
+                            SUPABASE_SERVICE_ROLE_KEY 또는 NEXT_PUBLIC_SUPABASE_URL이 없어 검색이 동작하지 않습니다.
+                            서버 환경변수(.env.local) 설정 후 다시 시도하세요.
+                        </div>
+                        <div className="text-xs text-red-700">Missing: SUPABASE_SERVICE_ROLE_KEY, NEXT_PUBLIC_SUPABASE_URL</div>
+                    </CardBody>
+                </Card>
+            ) : null}
 
             <SplitLayout
                 left={
@@ -336,21 +432,6 @@ export default function BomPage() {
                                     value={selectedRecipeId ?? undefined}
                                     onChange={(v) => setSelectedRecipeId(v)}
                                 />
-
-                                <div className={cn("rounded-[12px] border border-[var(--panel-border)] bg-white p-3 space-y-2")}>
-                                    <div className="text-xs font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">
-                                        새 레시피 생성 (variant_key는 선택)
-                                    </div>
-                                    <Input
-                                        placeholder="variant_key (예: suffix / color / size). 비우면 DEFAULT"
-                                        value={recipeVariantKey}
-                                        onChange={(e) => setRecipeVariantKey(e.target.value)}
-                                    />
-                                    <Textarea placeholder="메모(선택)" value={recipeNote} onChange={(e) => setRecipeNote(e.target.value)} />
-                                    <Button onClick={handleCreateRecipe} disabled={!selectedProductId || upsertRecipeMutation.isPending}>
-                                        레시피 저장
-                                    </Button>
-                                </div>
                             </CardBody>
                         </Card>
                     </div>
@@ -359,23 +440,66 @@ export default function BomPage() {
                     <div className="space-y-4">
                         <Card>
                             <CardHeader>
-                                <CardTitle title="3) 구성품(부속/메달 등) 등록" subtitle="출고 확정 시 자동 OUT 기록에 사용됩니다." />
+                                <CardTitle
+                                    title="레시피 상세"
+                                    subtitle="제품을 선택한 뒤 variant_key/메모를 입력하고 상단에서 저장하세요."
+                                />
+                            </CardHeader>
+                            <CardBody className="space-y-3">
+                                <Input
+                                    placeholder="variant_key (예: suffix / color / size). 비우면 DEFAULT"
+                                    value={recipeVariantKey}
+                                    onChange={(e) => setRecipeVariantKey(e.target.value)}
+                                />
+                                <Textarea placeholder="메모(선택)" value={recipeNote} onChange={(e) => setRecipeNote(e.target.value)} />
+                                <div className="text-xs text-[var(--muted)]">
+                                    현재 선택된 제품 기준으로 레시피를 저장합니다.
+                                </div>
+                            </CardBody>
+                        </Card>
+                        <Card>
+                            <CardHeader>
+                                <div className="flex items-center justify-between">
+                                    <CardTitle title="3) 구성품(부속/메달 등) 등록" subtitle="출고 확정 시 자동 OUT 기록에 사용됩니다." />
+                                    <label className="flex items-center gap-2 text-xs text-[var(--muted)] cursor-pointer select-none hover:text-[var(--foreground)] transition-colors">
+                                        <input
+                                            type="checkbox"
+                                            checked={showAdvanced}
+                                            onChange={(e) => {
+                                                setShowAdvanced(e.target.checked);
+                                                if (!e.target.checked) {
+                                                    setComponentType("MASTER");
+                                                    setSelectedComponentId(null);
+                                                    setComponentQuery("");
+                                                }
+                                            }}
+                                            className="rounded border-gray-300 text-[var(--primary)] focus:ring-[var(--primary)]"
+                                        />
+                                        Advanced: PART
+                                    </label>
+                                </div>
                             </CardHeader>
                             <CardBody className="space-y-3">
                                 <div className="grid grid-cols-2 gap-2">
-                                    <Select
-                                        aria-label="구성품 타입"
-                                        value={componentType}
-                                        onChange={(e) => {
-                                            const v = (e.target.value as "PART" | "MASTER") ?? "PART";
-                                            setComponentType(v);
-                                            setSelectedComponentId(null);
-                                            setComponentQuery("");
-                                        }}
-                                    >
-                                        <option value="PART">PART (부속/스톤)</option>
-                                        <option value="MASTER">MASTER (메달/완제품도 구성품으로)</option>
-                                    </Select>
+                                    {showAdvanced ? (
+                                        <Select
+                                            aria-label="구성품 타입"
+                                            value={componentType}
+                                            onChange={(e) => {
+                                                const v = (e.target.value as "PART" | "MASTER") ?? "MASTER";
+                                                setComponentType(v);
+                                                setSelectedComponentId(null);
+                                                setComponentQuery("");
+                                            }}
+                                        >
+                                            <option value="MASTER">MASTER (메달/완제품)</option>
+                                            <option value="PART">PART (부속/스톤)</option>
+                                        </Select>
+                                    ) : (
+                                        <div className="flex items-center px-3 text-sm font-medium text-[var(--muted-strong)] bg-[var(--subtle-bg)] border border-[var(--panel-border)] rounded-[var(--radius)] h-10 select-none">
+                                            MASTER (메달/완제품)
+                                        </div>
+                                    )}
 
                                     <Select aria-label="단위" value={unit} onChange={(e) => setUnit(e.target.value as "EA" | "G" | "M")}>
                                         <option value="EA">EA</option>
@@ -398,14 +522,41 @@ export default function BomPage() {
                                     onChange={(v) => setSelectedComponentId(v)}
                                 />
 
+                                {selectedComponent && (
+                                    <div className="rounded-[12px] border border-[var(--panel-border)] bg-[var(--subtle-bg)] p-3 text-sm animate-in fade-in slide-in-from-top-1 duration-200">
+                                        <div className="flex items-center gap-2 mb-1.5">
+                                            <Badge tone="neutral">{componentType}</Badge>
+                                            {componentType === "MASTER" && (selectedComponent as MasterSummary).category_code && (
+                                                <Badge tone="primary">{(selectedComponent as MasterSummary).category_code}</Badge>
+                                            )}
+                                            {componentType === "PART" && (selectedComponent as PartSummary).part_kind && (
+                                                <Badge tone="warning">{(selectedComponent as PartSummary).part_kind}</Badge>
+                                            )}
+                                        </div>
+                                        <div className="font-semibold text-[var(--foreground)]">
+                                            {componentType === "MASTER" ? (selectedComponent as MasterSummary).model_name : (selectedComponent as PartSummary).part_name}
+                                        </div>
+                                        <div className="mt-1 grid grid-cols-2 gap-2 text-xs text-[var(--muted)]">
+                                            <div>
+                                                unit_default: {componentType === "PART" ? (selectedComponent as PartSummary).unit_default ?? "-" : "-"}
+                                            </div>
+                                            <div>
+                                                spec_text: {componentType === "PART" ? (selectedComponent as PartSummary).spec_text ?? "-" : "-"}
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
+
                                 <div className="grid grid-cols-2 gap-2">
                                     <Input aria-label="1개당 사용량" value={qtyPerUnit} onChange={(e) => setQtyPerUnit(e.target.value)} />
                                     <Input aria-label="메모(선택)" value={lineNote} onChange={(e) => setLineNote(e.target.value)} />
                                 </div>
 
-                                <Button onClick={handleAddLine} disabled={!selectedRecipeId || !selectedComponentId || addLineMutation.isPending}>
-                                    구성품 추가
-                                </Button>
+                                <span className="inline-flex" title={!canWrite ? writeDisabledReason : undefined}>
+                                    <Button onClick={handleAddLine} disabled={addLineDisabled}>
+                                        구성품 추가
+                                    </Button>
+                                </span>
 
                                 <div className="text-xs text-[var(--muted)]">
                                     출고 확정 시(Shipment Confirm) 해당 레시피가 있으면 구성품이 자동 OUT 기록됩니다. (정합성 강요 X, 누락 0 + 분석용)
@@ -426,6 +577,13 @@ export default function BomPage() {
                                     <p className="text-sm text-[var(--muted)]">등록된 구성품이 없습니다.</p>
                                 ) : (
                                     <div className="space-y-2">
+                                        <div className="grid grid-cols-12 gap-3 px-3 text-xs text-[var(--muted)]">
+                                            <div className="col-span-5">구성품</div>
+                                            <div className="col-span-2">qty_per_unit</div>
+                                            <div className="col-span-1">unit</div>
+                                            <div className="col-span-3">note</div>
+                                            <div className="col-span-1 text-right">VOID</div>
+                                        </div>
                                         {(linesQuery.data ?? []).map((line) => {
                                             const name =
                                                 line.component_ref_type === "PART"
@@ -434,21 +592,37 @@ export default function BomPage() {
                                             return (
                                                 <div
                                                     key={line.bom_line_id}
-                                                    className="flex items-center justify-between rounded-[12px] border border-[var(--panel-border)] bg-white px-3 py-2"
+                                                    className="grid grid-cols-12 gap-3 items-center rounded-[12px] border border-[var(--panel-border)] bg-white px-3 py-2"
                                                 >
-                                                    <div className="min-w-0">
-                                                        <div className="flex items-center gap-2">
-                                                            <Badge tone="neutral">{line.component_ref_type}</Badge>
+                                                    <div className="col-span-5 min-w-0">
+                                                        <div className="flex items-center gap-2 mb-0.5">
+                                                            <Badge tone={line.component_ref_type === "MASTER" ? "primary" : "neutral"}>
+                                                                {line.component_ref_type}
+                                                            </Badge>
                                                             <div className="truncate text-sm font-semibold">{name}</div>
                                                         </div>
                                                         <div className="truncate text-xs text-[var(--muted)]">
-                                                            line_no={line.line_no} · qty_per_unit={line.qty_per_unit} {line.unit}
+                                                            line_no={line.line_no}
                                                         </div>
                                                     </div>
-
-                                                    <Button variant="secondary" onClick={() => handleVoidLine(line.bom_line_id)} disabled={voidLineMutation.isPending}>
-                                                        제거(VOID)
-                                                    </Button>
+                                                    <div className="col-span-2 text-sm">{line.qty_per_unit}</div>
+                                                    <div className="col-span-1 text-sm">{line.unit}</div>
+                                                    <div className="col-span-3 text-xs text-[var(--muted)] truncate">
+                                                        {line.note ? line.note : "-"}
+                                                    </div>
+                                                    <div className="col-span-1 flex justify-end">
+                                                        <span className="inline-flex" title={!canWrite ? writeDisabledReason : undefined}>
+                                                            <Button
+                                                                variant="danger"
+                                                                size="sm"
+                                                                onClick={() => setVoidConfirmId(line.bom_line_id)}
+                                                                disabled={voidActionDisabled}
+                                                                className="shrink-0"
+                                                            >
+                                                                VOID
+                                                            </Button>
+                                                        </span>
+                                                    </div>
                                                 </div>
                                             );
                                         })}
@@ -456,9 +630,40 @@ export default function BomPage() {
                                 )}
                             </CardBody>
                         </Card>
+
+                        <Card>
+                            <CardHeader>
+                                <CardTitle title="구성품 재고 요약" subtitle="가능하면 재고 연동 요약을 표시합니다." />
+                            </CardHeader>
+                            <CardBody className="text-sm text-[var(--muted)]">
+                                구성품 재고 요약 영역(준비중)
+                            </CardBody>
+                        </Card>
                     </div>
                 }
             />
+
+            <Modal
+                open={!!voidConfirmId}
+                onClose={() => setVoidConfirmId(null)}
+                title="구성품 VOID"
+            >
+                <div className="space-y-6">
+                    <div className="text-sm text-[var(--foreground)]">
+                        <p>이 구성품 라인을 VOID 처리합니다. 되돌릴 수 없으며 감사/분석 로그로 유지됩니다.</p>
+                    </div>
+                    <div className="flex justify-end gap-2">
+                        <Button variant="secondary" onClick={() => setVoidConfirmId(null)}>취소</Button>
+                        <Button 
+                            variant="danger"
+                            onClick={handleVoidConfirm}
+                            disabled={voidActionDisabled}
+                        >
+                            VOID 처리
+                        </Button>
+                    </div>
+                </div>
+            </Modal>
         </div>
     );
 }
