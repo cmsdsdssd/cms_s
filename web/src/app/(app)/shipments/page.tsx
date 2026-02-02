@@ -123,8 +123,8 @@ const getMasterPhotoUrl = (photoUrl: string | null | undefined): string | null =
   // 🔥 FIX: 버킷 이름 명시 (실제 버킷명: master_images)
   const bucketName = process.env.NEXT_PUBLIC_SUPABASE_BUCKET || "master_images";
   // If path already includes bucket name, remove it first (like inventory page)
-  const finalPath = cleanPath.startsWith(`${bucketName}/`) 
-    ? cleanPath.slice(bucketName.length + 1) 
+  const finalPath = cleanPath.startsWith(`${bucketName}/`)
+    ? cleanPath.slice(bucketName.length + 1)
     : cleanPath;
   const fullUrl = `${supabaseUrl}/storage/v1/object/public/${bucketName}/${finalPath}`;
   console.log("[getMasterPhotoUrl] Input:", photoUrl, "-> Output:", fullUrl);
@@ -247,13 +247,48 @@ export default function ShipmentsPage() {
     },
   });
 
+  // ✅ (필수) 상태 배지 렌더러 - map에서 사용 중인데 기존 코드엔 없어서 런타임 에러 났을 가능성 큼
+  const getOrderStatusBadge = (status?: string | null) => {
+    const s = (status ?? "").trim();
+
+    const configs: Record<string, { tone: "neutral" | "active" | "warning" | "success" | "danger"; label: string }> = {
+      ORDER_PENDING: { tone: "warning", label: "주문대기" },
+      SENT_TO_VENDOR: { tone: "neutral", label: "공장발주" },
+      WAITING_INBOUND: { tone: "neutral", label: "입고대기" },
+      READY_TO_SHIP: { tone: "active", label: "출고대기" },
+      SHIPPED: { tone: "success", label: "출고완료" },
+      CLOSED: { tone: "neutral", label: "마감" },
+      CANCELLED: { tone: "danger", label: "취소" },
+    };
+
+    const cfg = configs[s] ?? { tone: "neutral" as const, label: s || "-" };
+    return (
+      <Badge tone={cfg.tone} className="text-[10px] px-1 py-0 h-4">
+        {cfg.label}
+      </Badge>
+    );
+  };
+
+  const PENDING_ORDER_STATUSES = new Set([
+    "ORDER_PENDING",
+    "SENT_TO_VENDOR",
+    "WAITING_INBOUND",
+    "READY_TO_SHIP",
+  ]);
+
+  const isWorklistStatus = (status?: string | null) => {
+    const s = (status ?? "").trim();
+    if (!s) return true; // status 비어있으면 일단 워크리스트에 노출
+    return PENDING_ORDER_STATUSES.has(s);
+  };
+
   const filteredLookupRows = useMemo(() => {
     const rows = orderLookupQuery.data ?? [];
     if (!onlyReadyToShip) return rows;
-    return rows.filter((r) => r.status === "READY_TO_SHIP");
+    return rows.filter((r) => isWorklistStatus(r.status));
   }, [orderLookupQuery.data, onlyReadyToShip]);
 
-  const handleSelectOrder = async (row: OrderLookupRow) => {
+  const handleSelectOrder = (row: OrderLookupRow) => {
     const id = row.order_line_id;
     if (!id) return;
 
@@ -357,37 +392,35 @@ export default function ShipmentsPage() {
       p_actor_person_id: actorId,
       p_idempotency_key: idempotencyKey,
     });
-    
+
     // ✅ 공임 직접 업데이트 (DB 함수가 저장하지 않는 문제 해결)
     const shipmentLineId = result?.shipment_line_id;
     if (shipmentLineId && laborValue > 0) {
       const supabase = getSchemaClient();
       if (supabase) {
-        // 1. 현재 소재비 조회
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const { data: lineData } = await (supabase as any)
-          .from('cms_shipment_line')
-          .select('material_amount_sell_krw')
-          .eq('shipment_line_id', shipmentLineId)
+          .from("cms_shipment_line")
+          .select("material_amount_sell_krw")
+          .eq("shipment_line_id", shipmentLineId)
           .single();
-        
+
         const materialCost = lineData?.material_amount_sell_krw || 0;
         const newTotal = materialCost + laborValue;
-        
-        // 2. 공임과 총액 업데이트
+
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         await (supabase as any)
-          .from('cms_shipment_line')
-          .update({ 
+          .from("cms_shipment_line")
+          .update({
             manual_labor_krw: laborValue,
             labor_total_sell_krw: laborValue,
             total_amount_sell_krw: newTotal,
             actual_labor_cost_krw: laborValue,
-            actual_cost_krw: newTotal
+            actual_cost_krw: newTotal,
           })
-          .eq('shipment_line_id', shipmentLineId);
-          
-        console.log('[Labor Update] shipment_line_id:', shipmentLineId, 'labor:', laborValue, 'total:', newTotal);
+          .eq("shipment_line_id", shipmentLineId);
+
+        console.log("[Labor Update] shipment_line_id:", shipmentLineId, "labor:", laborValue, "total:", newTotal);
       }
     }
   };
@@ -457,7 +490,7 @@ export default function ShipmentsPage() {
     const receipts = receiptsQuery.data ?? [];
     const r = receipts.find((x) => x.receipt_id === linkedReceiptId);
     let title = `receipt-${linkedReceiptId.slice(0, 8)}`;
-    
+
     if (r) {
       const dateKey = r.received_at.slice(0, 10);
       let index = 1;
@@ -465,7 +498,7 @@ export default function ShipmentsPage() {
         if (receipt.receipt_id === linkedReceiptId) break;
         if (receipt.received_at.slice(0, 10) === dateKey) index++;
       }
-      title = `영수증_${dateKey.replace(/-/g, '')}_${index}`;
+      title = `영수증_${dateKey.replace(/-/g, "")}_${index}`;
     }
     setReceiptPreviewTitle(title);
 
@@ -632,7 +665,6 @@ export default function ShipmentsPage() {
           .filter((x) => !Number.isNaN(x.unit_cost_krw) && x.unit_cost_krw >= 0)
         : [];
 
-    // ✅ A안: 출고에서는 영수증 금액/환율/배분을 확정하지 않고, 내부 원가로 출고 확정 + 영수증은 '연결만'
     await confirmMutation.mutateAsync({
       p_shipment_id: shipmentId,
       p_actor_person_id: actorId,
@@ -790,7 +822,7 @@ export default function ShipmentsPage() {
                           : "bg-[var(--panel)] text-[var(--muted)] border-[var(--panel-border)]"
                       )}
                     >
-                      {onlyReadyToShip ? "출고대기만" : "전체 주문"}
+                      {onlyReadyToShip ? "미출고만" : "전체 주문"}
                     </button>
                   </div>
                   <Input
@@ -833,12 +865,19 @@ export default function ShipmentsPage() {
                               onClick={() => handleSelectOrder(row)}
                               className={cn(
                                 "w-full px-4 py-3 text-left transition-all hover:bg-[var(--panel-hover)] group",
-                                isSelected ? "bg-[var(--primary)]/5 border-l-4 border-l-[var(--primary)]" : "border-l-4 border-l-transparent"
+                                isSelected
+                                  ? "bg-[var(--primary)]/5 border-l-4 border-l-[var(--primary)]"
+                                  : "border-l-4 border-l-transparent"
                               )}
                             >
                               <div className="flex items-start justify-between gap-2">
                                 <div className="min-w-0 space-y-1">
-                                  <div className={cn("text-sm font-medium truncate", isSelected ? "text-[var(--primary)]" : "text-[var(--foreground)]")}>
+                                  <div
+                                    className={cn(
+                                      "text-sm font-medium truncate",
+                                      isSelected ? "text-[var(--primary)]" : "text-[var(--foreground)]"
+                                    )}
+                                  >
                                     {row.client_name ?? "-"} · {row.model_no ?? "-"}
                                   </div>
                                   <div className="text-xs text-[var(--muted)] truncate flex items-center gap-1.5">
@@ -852,8 +891,11 @@ export default function ShipmentsPage() {
                                     )}
                                   </div>
                                 </div>
-                                <div className="shrink-0 text-[10px] text-[var(--muted)] tabular-nums bg-[var(--panel)] border border-[var(--panel-border)] px-1.5 py-0.5 rounded">
-                                  {row.order_date}
+                                <div className="shrink-0 flex flex-col items-end gap-1">
+                                  {getOrderStatusBadge(row.status)}
+                                  <div className="text-[10px] text-[var(--muted)] tabular-nums bg-[var(--panel)] border border-[var(--panel-border)] px-1.5 py-0.5 rounded">
+                                    {row.order_date}
+                                  </div>
                                 </div>
                               </div>
                             </button>
@@ -866,9 +908,9 @@ export default function ShipmentsPage() {
                       <div className="rounded-xl border border-[var(--primary)]/30 bg-[var(--primary)]/5 p-4 space-y-3">
                         <div className="flex items-center justify-between">
                           <span className="text-xs font-bold text-[var(--primary)] uppercase tracking-wider">선택된 주문</span>
-                          <Button 
-                            variant="ghost" 
-                            size="sm" 
+                          <Button
+                            variant="ghost"
+                            size="sm"
                             className="h-6 px-2 text-[var(--primary)] hover:bg-[var(--primary)]/10 hover:text-[var(--primary)]"
                             onClick={() => {
                               setLookupOpen(true);
@@ -881,16 +923,17 @@ export default function ShipmentsPage() {
                         <div className="flex items-start gap-4">
                           {/* Master Photo Thumbnail - Using prefill data */}
                           <div className="relative h-28 w-28 shrink-0 overflow-hidden rounded-xl bg-gradient-to-br from-[var(--panel)] to-[var(--background)] border-2 border-[var(--primary)]/40 shadow-sm">
-                            {getMasterPhotoUrl(prefill?.photo_url) ? ( // ✅ null 체크 추가
+                            {getMasterPhotoUrl(prefill?.photo_url) ? (
                               <img
                                 src={getMasterPhotoUrl(prefill?.photo_url) || undefined}
                                 alt={prefill?.model_no ?? "모델 이미지"}
                                 className="h-full w-full object-cover"
                                 loading="eager"
-                                onLoad={() => console.log("[Master Photo] Loaded successfully:", getMasterPhotoUrl(prefill?.photo_url))}
+                                onLoad={() =>
+                                  console.log("[Master Photo] Loaded successfully:", getMasterPhotoUrl(prefill?.photo_url))
+                                }
                                 onError={(e) => {
-                                  // ✅ 에러 로그 한 번만 출력
-                                  if (process.env.NODE_ENV === 'development') {
+                                  if (process.env.NODE_ENV === "development") {
                                     console.error("[Master Photo] Failed to load:", prefill?.photo_url);
                                   }
                                   const target = e.target as HTMLImageElement;
@@ -898,10 +941,10 @@ export default function ShipmentsPage() {
                                 }}
                               />
                             ) : null}
-                            <div 
+                            <div
                               className={cn(
                                 "flex h-full w-full items-center justify-center text-[var(--muted)]",
-                                getMasterPhotoUrl(prefill?.photo_url) ? "absolute inset-0 -z-10" : "" // ✅ 이미지 있을 때는 뒤로
+                                getMasterPhotoUrl(prefill?.photo_url) ? "absolute inset-0 -z-10" : ""
                               )}
                             >
                               <Package className="w-10 h-10 opacity-40" />
@@ -910,7 +953,6 @@ export default function ShipmentsPage() {
                           <div className="pt-1">
                             <div className="text-sm font-semibold text-[var(--primary)]">{prefill?.client_name}</div>
                             <div className="text-sm text-[var(--primary)]">{prefill?.model_no}</div>
-                            {/* Debug info */}
                             {process.env.NODE_ENV === "development" && (
                               <div className="text-[10px] text-[var(--muted)] mt-1">
                                 photo_url: {prefill?.photo_url ? "있음" : "없음"}
@@ -954,13 +996,13 @@ export default function ShipmentsPage() {
                             "w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold border",
                             isCompleted
                               ? "bg-[var(--primary)] text-white border-[var(--primary)]"
-                                : isCurrent
-                                  ? "bg-[var(--panel)] text-[var(--primary)] border-[var(--primary)]"
-                                  : "bg-[var(--panel)] border-[var(--panel-border)]"
-                            )}
-                          >
-                            {step.id}
-                          </div>
+                              : isCurrent
+                                ? "bg-[var(--panel)] text-[var(--primary)] border-[var(--primary)]"
+                                : "bg-[var(--panel)] border-[var(--panel-border)]"
+                          )}
+                        >
+                          {step.id}
+                        </div>
                         <span className="text-xs font-medium whitespace-nowrap">{step.label}</span>
                       </div>
                       {i < steps.length - 1 && (
@@ -975,6 +1017,10 @@ export default function ShipmentsPage() {
                   );
                 })}
               </div>
+
+              {/* 이하 JSX는 너가 준 그대로라서 생략 없이 이어져야 함 */}
+              {/* 너가 붙인 나머지 JSX/모달/확정 로직은 그대로 유지하면 됨 */}
+              {/* ======= 여기 아래부터는 네 원본 코드와 동일 ======= */}
 
               {selectedOrderLineId ? (
                 <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2 duration-300">
@@ -1101,10 +1147,10 @@ export default function ShipmentsPage() {
                         >
                           초기화
                         </Button>
-                        <Button 
-                          variant="primary" 
+                        <Button
+                          variant="primary"
                           size="lg"
-                          onClick={handleSaveShipment} 
+                          onClick={handleSaveShipment}
                           disabled={shipmentUpsertMutation.isPending}
                           className="px-8 shadow-lg shadow-[var(--primary)]/20"
                         >
@@ -1181,7 +1227,7 @@ export default function ShipmentsPage() {
                       }}
                     />
                   ) : null}
-                  <div 
+                  <div
                     className={cn(
                       "flex h-full w-full items-center justify-center text-[var(--muted)]",
                       getMasterPhotoUrl(prefill?.photo_url) ? "absolute inset-0 -z-10" : ""
@@ -1199,7 +1245,7 @@ export default function ShipmentsPage() {
               </div>
               <Badge tone="active">작성 중</Badge>
             </div>
-            
+
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4 pt-3 border-t border-[var(--primary)]/20">
               <div>
                 <span className="text-xs text-[var(--primary)] block mb-1">중량</span>
@@ -1208,11 +1254,11 @@ export default function ShipmentsPage() {
               <div>
                 <span className="text-xs text-[var(--primary)] block mb-1">차감</span>
                 <div className="flex items-center gap-2">
-                  <Input 
-                    className="h-7 text-xs w-20 bg-[var(--input-bg)] tabular-nums" 
-                    placeholder="0.00" 
-                    value={deductionWeightG} 
-                    onChange={(e) => setDeductionWeightG(e.target.value)} 
+                  <Input
+                    className="h-7 text-xs w-20 bg-[var(--input-bg)] tabular-nums"
+                    placeholder="0.00"
+                    value={deductionWeightG}
+                    onChange={(e) => setDeductionWeightG(e.target.value)}
                   />
                   <span className="text-[10px] text-[var(--primary)]">(마스터: {master?.deduction_weight_default_g ?? "-"})</span>
                 </div>
@@ -1275,17 +1321,17 @@ export default function ShipmentsPage() {
                   <div className="space-y-2">
                     <div className="text-xs font-medium text-[var(--muted)]">파일 업로드</div>
                     <div className="flex gap-2">
-                      <Input 
-                        key={receiptFileInputKey} 
-                        type="file" 
-                        accept="application/pdf,image/*" 
+                      <Input
+                        key={receiptFileInputKey}
+                        type="file"
+                        accept="application/pdf,image/*"
                         onChange={(e) => setReceiptFile(e.target.files?.[0] ?? null)}
                         className="text-xs"
                       />
-                      <Button 
-                        variant="secondary" 
+                      <Button
+                        variant="secondary"
                         size="sm"
-                        onClick={handleUploadReceipt} 
+                        onClick={handleUploadReceipt}
                         disabled={receiptUploading || !receiptFile}
                       >
                         {receiptUploading ? "업로드..." : "업로드"}
@@ -1311,7 +1357,7 @@ export default function ShipmentsPage() {
                           options={(() => {
                             const receipts = receiptsQuery.data ?? [];
                             const dateIndexMap = new Map<string, number>();
-                            const sortedReceipts = [...receipts].sort((a, b) => 
+                            const sortedReceipts = [...receipts].sort((a, b) =>
                               new Date(a.received_at).getTime() - new Date(b.received_at).getTime()
                             );
                             return sortedReceipts.map((r) => {
@@ -1333,10 +1379,10 @@ export default function ShipmentsPage() {
                           }}
                         />
                       </div>
-                      <Button 
-                        variant="secondary" 
+                      <Button
+                        variant="secondary"
                         size="sm"
-                        onClick={openReceiptInNewTab} 
+                        onClick={openReceiptInNewTab}
                         disabled={!receiptPreviewOpenUrl && !receiptPreviewSrc}
                       >
                         새 창
@@ -1354,7 +1400,7 @@ export default function ShipmentsPage() {
                   <div className="px-4 py-3 border-b border-[var(--panel-border)] bg-[#fcfcfd] flex items-center justify-between">
                     <div className="text-sm font-semibold">라인별 단가 입력</div>
                     {hasOtherLines && (
-                      <button 
+                      <button
                         onClick={() => setShowAllLines((v) => !v)}
                         className="text-xs text-blue-600 hover:underline"
                       >
@@ -1424,7 +1470,7 @@ export default function ShipmentsPage() {
                     <img src={receiptPreviewSrc} alt="preview" className="max-w-full max-h-full object-contain" />
                   )
                 ) : (
-      <div className="text-[var(--muted)] text-sm flex flex-col items-center gap-2">
+                  <div className="text-[var(--muted)] text-sm flex flex-col items-center gap-2">
                     <FileText className="w-8 h-8 opacity-20" />
                     <span>미리보기 없음</span>
                   </div>
@@ -1435,9 +1481,9 @@ export default function ShipmentsPage() {
 
           <div className="flex justify-end gap-3 pt-4 border-t border-[var(--panel-border)]">
             <Button variant="secondary" onClick={() => setConfirmModalOpen(false)}>취소</Button>
-            <Button 
-              variant="primary" 
-              onClick={handleFinalConfirm} 
+            <Button
+              variant="primary"
+              onClick={handleFinalConfirm}
               disabled={confirmMutation.isPending}
               className="px-6"
             >
