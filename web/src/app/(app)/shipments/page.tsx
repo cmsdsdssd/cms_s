@@ -75,6 +75,24 @@ type ShipmentLineRow = {
   shipment_id?: string;
   model_name?: string;
   qty?: number;
+  measured_weight_g?: number | null;
+};
+
+type ShipmentHeaderRow = {
+  is_store_pickup?: boolean | null;
+  pricing_locked_at?: string | null;
+  pricing_source?: string | null;
+};
+
+type ShipmentValuationRow = {
+  pricing_locked_at?: string | null;
+  pricing_source?: string | null;
+  gold_krw_per_g_snapshot?: number | null;
+  silver_krw_per_g_snapshot?: number | null;
+  silver_adjust_factor_snapshot?: number | null;
+  material_value_krw?: number | null;
+  labor_value_krw?: number | null;
+  total_value_krw?: number | null;
 };
 
 type ReceiptRow = {
@@ -103,6 +121,26 @@ const normalizeId = (value: unknown) => {
   const lowered = text.toLowerCase();
   if (lowered === "null" || lowered === "undefined") return null;
   return text;
+};
+
+const formatKrw = (value?: number | null) => {
+  if (value === null || value === undefined) return "-";
+  return `₩${new Intl.NumberFormat("ko-KR").format(Math.round(value))}`;
+};
+
+const formatDateTimeKst = (value?: string | null) => {
+  if (!value) return "-";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return "-";
+  return new Intl.DateTimeFormat("sv-SE", {
+    timeZone: "Asia/Seoul",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(parsed);
 };
 
 // Helper function to convert relative photo path to full Supabase Storage URL
@@ -162,6 +200,7 @@ export default function ShipmentsPage() {
   const [currentShipmentId, setCurrentShipmentId] = useState<string | null>(null);
   const [currentShipmentLineId, setCurrentShipmentLineId] = useState<string | null>(null);
   const [showAllLines, setShowAllLines] = useState(false);
+  const [isStorePickup, setIsStorePickup] = useState(false);
 
   // ✅ A안: RECEIPT 모드 제거 (임시/수기만 유지)
   const [costMode, setCostMode] = useState<"PROVISIONAL" | "MANUAL">("PROVISIONAL");
@@ -251,12 +290,12 @@ export default function ShipmentsPage() {
   const getOrderStatusBadge = (status?: string | null) => {
     const s = (status ?? "").trim();
 
-    const configs: Record<string, { tone: "neutral" | "active" | "warning" | "success" | "danger"; label: string }> = {
+    const configs: Record<string, { tone: "neutral" | "active" | "warning" | "danger" | "primary"; label: string }> = {
       ORDER_PENDING: { tone: "warning", label: "주문대기" },
       SENT_TO_VENDOR: { tone: "neutral", label: "공장발주" },
       WAITING_INBOUND: { tone: "neutral", label: "입고대기" },
       READY_TO_SHIP: { tone: "active", label: "출고대기" },
-      SHIPPED: { tone: "success", label: "출고완료" },
+      SHIPPED: { tone: "primary", label: "출고완료" },
       CLOSED: { tone: "neutral", label: "마감" },
       CANCELLED: { tone: "danger", label: "취소" },
     };
@@ -318,6 +357,51 @@ export default function ShipmentsPage() {
     },
   });
 
+  const shipmentHeaderQuery = useQuery({
+    queryKey: ["shipment-header", normalizedShipmentId, confirmModalOpen],
+    enabled: Boolean(normalizedShipmentId) && confirmModalOpen,
+    queryFn: async () => {
+      const shipmentId = normalizedShipmentId;
+      if (!shipmentId) return null;
+      const sb = getSchemaClient();
+      if (!sb) return null;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data } = await (sb as any)
+        .from("cms_shipment_header")
+        .select("is_store_pickup, pricing_locked_at, pricing_source")
+        .eq("shipment_id", shipmentId)
+        .maybeSingle();
+      return (data ?? null) as ShipmentHeaderRow | null;
+    },
+  });
+
+  const shipmentValuationQuery = useQuery({
+    queryKey: ["shipment-valuation", normalizedShipmentId, confirmModalOpen],
+    enabled: Boolean(normalizedShipmentId) && confirmModalOpen,
+    queryFn: async () => {
+      const shipmentId = normalizedShipmentId;
+      if (!shipmentId) return null;
+      const sb = getSchemaClient();
+      if (!sb) return null;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data } = await (sb as any)
+        .from("cms_shipment_valuation")
+        .select(
+          "pricing_locked_at, pricing_source, gold_krw_per_g_snapshot, silver_krw_per_g_snapshot, silver_adjust_factor_snapshot, material_value_krw, labor_value_krw, total_value_krw"
+        )
+        .eq("shipment_id", shipmentId)
+        .maybeSingle();
+      return (data ?? null) as ShipmentValuationRow | null;
+    },
+  });
+
+  useEffect(() => {
+    if (!confirmModalOpen) return;
+    const header = shipmentHeaderQuery.data;
+    if (!header?.is_store_pickup) return;
+    setIsStorePickup(true);
+  }, [confirmModalOpen, shipmentHeaderQuery.data]);
+
   const shipmentUpsertMutation = useRpcMutation<ShipmentUpsertResult>({
     fn: CONTRACTS.functions.shipmentUpsertFromOrder,
     successMessage: "출고 저장 완료",
@@ -329,8 +413,6 @@ export default function ShipmentsPage() {
       setCurrentShipmentId(shipmentId);
       setCurrentShipmentLineId(shipmentLineId);
       setShowAllLines(false);
-
-      setConfirmModalOpen(true);
 
       setCostMode("PROVISIONAL");
       setCostInputs({});
@@ -347,12 +429,44 @@ export default function ShipmentsPage() {
       setReceiptPreviewTitle("");
       setReceiptPreviewError(null);
 
+      if (isStorePickup) {
+        await shipmentSetStorePickupMutation.mutateAsync({
+          p_shipment_id: shipmentId,
+          p_is_store_pickup: true,
+          p_actor_person_id: actorId,
+          p_note: "set from shipments prefill",
+        });
+
+        setConfirmModalOpen(false);
+        setCurrentShipmentId(null);
+        setCurrentShipmentLineId(null);
+        setShowAllLines(false);
+        setIsStorePickup(false);
+
+        setSelectedOrderLineId(null);
+        setSelectedOrderStatus(null);
+        setPrefill(null);
+        setSearchQuery("");
+        setDebouncedQuery("");
+        setWeightG("");
+        setDeductionWeightG("");
+        setTotalLabor("");
+
+        return;
+      }
+
+      setConfirmModalOpen(true);
       await currentLinesQuery.refetch();
     },
   });
 
   const shipmentLineUpdateMutation = useRpcMutation<unknown>({
     fn: CONTRACTS.functions.shipmentUpdateLine,
+  });
+
+  const shipmentSetStorePickupMutation = useRpcMutation<unknown>({
+    fn: CONTRACTS.functions.shipmentSetStorePickup,
+    successMessage: "매장출고 지정 완료",
   });
 
   // ✅ 영수증 “연결” upsert
@@ -392,37 +506,6 @@ export default function ShipmentsPage() {
       p_actor_person_id: actorId,
       p_idempotency_key: idempotencyKey,
     });
-
-    // ✅ 공임 직접 업데이트 (DB 함수가 저장하지 않는 문제 해결)
-    const shipmentLineId = result?.shipment_line_id;
-    if (shipmentLineId && laborValue > 0) {
-      const supabase = getSchemaClient();
-      if (supabase) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const { data: lineData } = await (supabase as any)
-          .from("cms_shipment_line")
-          .select("material_amount_sell_krw")
-          .eq("shipment_line_id", shipmentLineId)
-          .single();
-
-        const materialCost = lineData?.material_amount_sell_krw || 0;
-        const newTotal = materialCost + laborValue;
-
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        await (supabase as any)
-          .from("cms_shipment_line")
-          .update({
-            manual_labor_krw: laborValue,
-            labor_total_sell_krw: laborValue,
-            total_amount_sell_krw: newTotal,
-            actual_labor_cost_krw: laborValue,
-            actual_cost_krw: newTotal,
-          })
-          .eq("shipment_line_id", shipmentLineId);
-
-        console.log("[Labor Update] shipment_line_id:", shipmentLineId, "labor:", laborValue, "total:", newTotal);
-      }
-    }
   };
 
   const displayedLines = useMemo(() => {
@@ -596,6 +679,41 @@ export default function ShipmentsPage() {
       setCurrentShipmentId(null);
       setCurrentShipmentLineId(null);
       setShowAllLines(false);
+      setIsStorePickup(false);
+
+      setSelectedOrderLineId(null);
+      setSelectedOrderStatus(null);
+      setPrefill(null);
+      setSearchQuery("");
+      setDebouncedQuery("");
+      setWeightG("");
+      setDeductionWeightG("");
+      setTotalLabor("");
+      setCostMode("PROVISIONAL");
+      setCostInputs({});
+
+      setLinkedReceiptId(null);
+      setReceiptFile(null);
+      setReceiptUploading(false);
+      setReceiptFileInputKey((k) => k + 1);
+
+      setReceiptPreviewSrc(null);
+      setReceiptPreviewOpenUrl(null);
+      setReceiptPreviewKind(null);
+      setReceiptPreviewTitle("");
+      setReceiptPreviewError(null);
+    },
+  });
+
+  const confirmStorePickupMutation = useRpcMutation<unknown>({
+    fn: CONTRACTS.functions.shipmentConfirmStorePickup,
+    successMessage: "매장출고 확정 완료",
+    onSuccess: () => {
+      setConfirmModalOpen(false);
+      setCurrentShipmentId(null);
+      setCurrentShipmentLineId(null);
+      setShowAllLines(false);
+      setIsStorePickup(false);
 
       setSelectedOrderLineId(null);
       setSelectedOrderStatus(null);
@@ -631,6 +749,14 @@ export default function ShipmentsPage() {
     const shipmentId = normalizeId(currentShipmentId);
     if (!shipmentId) return;
 
+    const currentLines = currentLinesQuery.data ?? [];
+    const currentLine = currentShipmentLineId
+      ? currentLines.find((line) => String(line.shipment_line_id) === String(currentShipmentLineId))
+      : null;
+
+    const currentLineId = currentShipmentLineId ? String(currentShipmentLineId) : null;
+    const currentLineWeightText = currentLineId ? (weightG ?? "").trim() : "";
+
     // ✅ 확정 직전, 현재 라인의 차감중량을 한번 더 저장 (모달에서 수정했을 수 있음)
     if (currentShipmentLineId) {
       const dText = (deductionWeightG ?? "").trim();
@@ -641,11 +767,47 @@ export default function ShipmentsPage() {
         toast.error("차감중량(g)을 올바르게 입력해주세요.");
         return;
       }
-      await shipmentLineUpdateMutation.mutateAsync({
+
+      const updatePayload: Record<string, unknown> = {
         p_shipment_line_id: String(currentShipmentLineId),
         p_deduction_weight_g: dValue,
-      });
+      };
+      if (currentLineWeightText !== "") {
+        const weightValue = Number(currentLineWeightText);
+        if (!Number.isFinite(weightValue) || Number.isNaN(weightValue) || weightValue <= 0) {
+          toast.error("중량(g)을 올바르게 입력해주세요.");
+          return;
+        }
+        updatePayload.p_measured_weight_g = weightValue;
+      }
+      await shipmentLineUpdateMutation.mutateAsync(updatePayload);
     }
+
+    const missingWeightLines: ShipmentLineRow[] = [];
+    for (const line of currentLines) {
+      const lineId = line.shipment_line_id ? String(line.shipment_line_id) : "";
+      if (!lineId) continue;
+      const resolvedWeight =
+        lineId === currentLineId && currentLineWeightText !== ""
+          ? Number(currentLineWeightText)
+          : Number(line.measured_weight_g ?? NaN);
+      if (!Number.isFinite(resolvedWeight) || resolvedWeight <= 0) {
+        missingWeightLines.push(line);
+      }
+    }
+
+    if (missingWeightLines.length > 0) {
+      const missingLabels = missingWeightLines
+        .slice(0, 3)
+        .map((line) => `${line.model_name ?? "-"} (${String(line.shipment_line_id).slice(0, 8)})`)
+        .join(", ");
+      const more = missingWeightLines.length > 3 ? ` 외 ${missingWeightLines.length - 3}건` : "";
+      toast.error("중량이 없는 출고 라인이 있습니다.", {
+        description: missingLabels ? `${missingLabels}${more}` : `라인 수: ${missingWeightLines.length}`,
+      });
+      return;
+    }
+
 
     // ✅ MANUAL 모드일 때만 현재 화면에 보이는 라인(기본: 지금 출고한 라인)만 전송
     const allowedLineIds = new Set(
@@ -665,7 +827,9 @@ export default function ShipmentsPage() {
           .filter((x) => !Number.isNaN(x.unit_cost_krw) && x.unit_cost_krw >= 0)
         : [];
 
-    await confirmMutation.mutateAsync({
+    const confirmHandler = isStorePickup ? confirmStorePickupMutation : confirmMutation;
+
+    await confirmHandler.mutateAsync({
       p_shipment_id: shipmentId,
       p_actor_person_id: actorId,
       p_note: "confirm from web",
@@ -712,6 +876,11 @@ export default function ShipmentsPage() {
     (master?.labor_center ?? 0) +
     (master?.labor_side1 ?? 0) +
     (master?.labor_side2 ?? 0);
+
+  const valuation = shipmentValuationQuery.data;
+  const pricingLockedAt = valuation?.pricing_locked_at ?? shipmentHeaderQuery.data?.pricing_locked_at ?? null;
+  const pricingSource = valuation?.pricing_source ?? shipmentHeaderQuery.data?.pricing_source ?? null;
+  const isConfirming = confirmMutation.isPending || confirmStorePickupMutation.isPending;
 
   // --- UI Helpers ---
   const currentStep = !selectedOrderLineId
@@ -1142,27 +1311,39 @@ export default function ShipmentsPage() {
                             setWeightG("");
                             setDeductionWeightG("");
                             setTotalLabor("");
+                            setIsStorePickup(false);
                           }}
                           className="text-[var(--muted)] hover:text-[var(--foreground)]"
                         >
                           초기화
                         </Button>
-                        <Button
-                          variant="primary"
-                          size="lg"
-                          onClick={handleSaveShipment}
-                          disabled={shipmentUpsertMutation.isPending}
-                          className="px-8 shadow-lg shadow-[var(--primary)]/20"
-                        >
-                          {shipmentUpsertMutation.isPending ? (
-                            <div className="flex items-center gap-2">
-                              <div className="w-4 h-4 border-2 border-[var(--background)]/30 border-t-[var(--background)] rounded-full animate-spin" />
-                              저장 중...
-                            </div>
-                          ) : (
-                            "출고 저장"
-                          )}
-                        </Button>
+                        <div className="flex items-center gap-4">
+                          <label className="inline-flex items-center gap-2 text-sm font-semibold text-[var(--foreground)]">
+                            <input
+                              type="checkbox"
+                              checked={isStorePickup}
+                              onChange={(event) => setIsStorePickup(event.target.checked)}
+                              className="h-4 w-4"
+                            />
+                            매장출고
+                          </label>
+                          <Button
+                            variant="primary"
+                            size="lg"
+                            onClick={handleSaveShipment}
+                            disabled={shipmentUpsertMutation.isPending}
+                            className="px-8 shadow-lg shadow-[var(--primary)]/20"
+                          >
+                            {shipmentUpsertMutation.isPending ? (
+                              <div className="flex items-center gap-2">
+                                <div className="w-4 h-4 border-2 border-[var(--background)]/30 border-t-[var(--background)] rounded-full animate-spin" />
+                                저장 중...
+                              </div>
+                            ) : (
+                              "출고 저장"
+                            )}
+                          </Button>
+                        </div>
                       </div>
                     </CardBody>
                   </Card>
@@ -1204,9 +1385,9 @@ export default function ShipmentsPage() {
 
       {/* Confirm Modal - Preserved Logic */}
       <Modal open={confirmModalOpen} onClose={() => setConfirmModalOpen(false)} title="출고 확정" className="max-w-6xl">
-        <div className="space-y-6">
-          {/* Summary Section */}
-          <div className="bg-[var(--primary)]/5 border border-[var(--primary)]/20 rounded-xl p-4 space-y-3">
+          <div className="space-y-6">
+            {/* Summary Section */}
+            <div className="bg-[var(--primary)]/5 border border-[var(--primary)]/20 rounded-xl p-4 space-y-3">
             <div className="flex items-center justify-between">
               <div className="flex items-start gap-4">
                 {/* Master Photo in Confirm Modal - Using prefill data */}
@@ -1249,7 +1430,12 @@ export default function ShipmentsPage() {
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4 pt-3 border-t border-[var(--primary)]/20">
               <div>
                 <span className="text-xs text-[var(--primary)] block mb-1">중량</span>
-                <span className="text-sm font-semibold tabular-nums">{weightG || "-"}g</span>
+                <Input
+                  className="h-7 text-xs w-24 bg-[var(--input-bg)] tabular-nums"
+                  placeholder="0.00"
+                  value={weightG}
+                  onChange={(e) => setWeightG(e.target.value)}
+                />
               </div>
               <div>
                 <span className="text-xs text-[var(--primary)] block mb-1">차감</span>
@@ -1274,10 +1460,41 @@ export default function ShipmentsPage() {
                 <span className="text-sm font-semibold tabular-nums">{totalLabor || "-"}원</span>
               </div>
             </div>
-          </div>
 
-          {/* Cost Mode Selection */}
-          <div className="space-y-3">
+            <div className="grid gap-4 pt-4 border-t border-[var(--primary)]/20">
+              <label className="inline-flex items-center gap-2 text-sm font-semibold text-[var(--primary)]">
+                <input
+                  type="checkbox"
+                  checked={isStorePickup}
+                  onChange={(event) => setIsStorePickup(event.target.checked)}
+                  className="h-4 w-4"
+                />
+                매장출고 (가격 확정 시점 = 매장출고 확정)
+              </label>
+
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <div>
+                  <span className="text-xs text-[var(--primary)] block mb-1">가격 확정</span>
+                  <span className="text-sm font-semibold tabular-nums">{formatDateTimeKst(pricingLockedAt)}</span>
+                </div>
+                <div>
+                  <span className="text-xs text-[var(--primary)] block mb-1">확정 소스</span>
+                  <span className="text-sm font-semibold tabular-nums">{pricingSource ?? "-"}</span>
+                </div>
+                <div>
+                  <span className="text-xs text-[var(--primary)] block mb-1">Gold 스냅샷</span>
+                  <span className="text-sm font-semibold tabular-nums">{valuation?.gold_krw_per_g_snapshot ?? "-"}</span>
+                </div>
+                <div>
+                  <span className="text-xs text-[var(--primary)] block mb-1">Silver 스냅샷</span>
+                  <span className="text-sm font-semibold tabular-nums">{valuation?.silver_krw_per_g_snapshot ?? "-"}</span>
+                </div>
+              </div>
+            </div>
+            </div>
+
+            {/* Cost Mode Selection */}
+            <div className="space-y-3">
             <div className="text-sm font-semibold flex items-center gap-2">
               <Hammer className="w-4 h-4" />
               원가 모드 선택
@@ -1484,10 +1701,10 @@ export default function ShipmentsPage() {
             <Button
               variant="primary"
               onClick={handleFinalConfirm}
-              disabled={confirmMutation.isPending}
+              disabled={isConfirming}
               className="px-6"
             >
-              {confirmMutation.isPending ? "확정 처리 중..." : "출고 확정"}
+              {isConfirming ? "확정 처리 중..." : isStorePickup ? "매장출고 확정" : "출고 확정"}
             </Button>
           </div>
         </div>

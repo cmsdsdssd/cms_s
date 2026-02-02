@@ -37,6 +37,10 @@ export const CONTRACTS = {
     // ✅ 원가 작업대 / 영수증 인박스
     purchaseCostWorklist: "cms_v_purchase_cost_worklist_v1",
     receiptInboxOpen: "cms_v_receipt_inbox_open_v1",
+
+    // ✅ Factory Purchase Order (공장발주) Views
+    unshippedOrderLines: "cms_v_unshipped_order_lines",
+    factoryPoSummary: "cms_v_factory_po_summary",
   },
   functions: {
     partyUpsert: process.env.NEXT_PUBLIC_CMS_FN_PARTY_UPSERT ?? "",
@@ -59,10 +63,19 @@ export const CONTRACTS = {
 
     shipmentConfirm:
       process.env.NEXT_PUBLIC_RPC_SHIPMENT_CONFIRM || "cms_fn_confirm_shipment_v3_cost_v1",
+    shipmentConfirmStorePickup:
+      process.env.NEXT_PUBLIC_RPC_SHIPMENT_CONFIRM_STORE_PICKUP || "cms_fn_confirm_store_pickup_v1",
+    shipmentSetStorePickup:
+      process.env.NEXT_PUBLIC_RPC_SHIPMENT_SET_STORE_PICKUP || "cms_fn_set_shipment_store_pickup_v1",
+    shipmentClearShipDate:
+      process.env.NEXT_PUBLIC_RPC_SHIPMENT_CLEAR_SHIP_DATE || "cms_fn_clear_shipment_ship_date_v1",
+    shipmentUnconfirm:
+      process.env.NEXT_PUBLIC_RPC_SHIPMENT_UNCONFIRM || "cms_fn_unconfirm_shipment_v1",
     applyPurchaseCost:
       process.env.NEXT_PUBLIC_RPC_APPLY_PURCHASE_COST || "cms_fn_apply_purchase_cost_to_shipment_v1",
 
-    recordPayment: process.env.NEXT_PUBLIC_CMS_FN_RECORD_PAYMENT ?? "",
+    recordPayment:
+      process.env.NEXT_PUBLIC_CMS_FN_RECORD_PAYMENT || "cms_fn_record_payment_v2",
     recordReturn:
       process.env.NEXT_PUBLIC_CMS_FN_RECORD_RETURN_V2 ??
       process.env.NEXT_PUBLIC_CMS_FN_RECORD_RETURN ??
@@ -96,6 +109,14 @@ export const CONTRACTS = {
     bomRecipeUpsert: "cms_fn_upsert_bom_recipe_v1",
     bomRecipeLineAdd: "cms_fn_add_bom_recipe_line_v1",
     bomRecipeLineVoid: "cms_fn_void_bom_recipe_line_v1",
+
+    // ✅ Factory Purchase Order (공장발주) RPCs
+    factoryPoCreate: "cms_fn_factory_po_create_from_order_lines",
+    factoryPoMarkSent: "cms_fn_factory_po_mark_sent",
+    factoryPoGetDetails: "cms_fn_factory_po_get_details",
+    factoryPoCancel: "cms_fn_factory_po_cancel",
+    receiptAttachToOrderLines: "cms_fn_receipt_attach_to_order_lines",
+    markShipped: "cms_fn_mark_shipped",
   },
 };
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useId, useMemo, useState } from "react";
+import { useId, useMemo, useState, lazy, Suspense } from "react";
 import Link from "next/link";
 import {
   UnifiedToolbar,
@@ -17,6 +17,10 @@ import { ActionBar } from "@/components/layout/action-bar";
 import { useQuery } from "@tanstack/react-query";
 import { getSchemaClient } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
+import { Building2, X } from "lucide-react";
+
+// Lazy load Factory Order Wizard
+const FactoryOrderWizard = lazy(() => import("@/components/factory-order/factory-order-wizard"));
 
 type OrderRow = {
   order_line_id?: string;
@@ -38,6 +42,7 @@ type OrderRow = {
   plating_color_code?: string | null;
   memo?: string | null;
   created_at?: string | null;
+  factory_po_id?: string | null;
 };
 
 type PartyRow = {
@@ -75,6 +80,7 @@ export default function OrdersMainPage() {
     type: "date",
     value: todayKey,
   }]);
+  const [showFactoryOrderWizard, setShowFactoryOrderWizard] = useState(false);
 
   const ordersQuery = useQuery({
     queryKey: ["cms", "orders", "main"],
@@ -83,7 +89,7 @@ export default function OrdersMainPage() {
       const { data, error } = await schemaClient
         .from("cms_order_line")
         .select(
-          "order_line_id, customer_party_id, model_name, suffix, color, size, qty, status, created_at, center_stone_name, center_stone_qty, sub1_stone_name, sub1_stone_qty, sub2_stone_name, sub2_stone_qty, is_plated, plating_color_code, memo"
+          "order_line_id, customer_party_id, model_name, suffix, color, size, qty, status, created_at, center_stone_name, center_stone_qty, sub1_stone_name, sub1_stone_qty, sub2_stone_name, sub2_stone_qty, is_plated, plating_color_code, memo, factory_po_id"
         )
         .order("created_at", { ascending: false })
         .limit(400);
@@ -161,15 +167,35 @@ export default function OrdersMainPage() {
   }, [customersQuery.data]);
 
   const ordersWithFactory = useMemo(() => {
+    console.log('=== Vendor Prefix Debug ===');
+    console.log('vendorPrefixes loaded:', vendorPrefixes);
+    
     return (ordersQuery.data ?? []).map((order) => {
       const model = (order.model_name ?? "").toLowerCase();
       let vendorPartyId = "";
+      let matchedPrefix = "";
+      
       for (const row of vendorPrefixes) {
-        if (model.startsWith(row.prefix.toLowerCase())) {
+        const prefixLower = row.prefix.toLowerCase();
+        if (model.startsWith(prefixLower)) {
           vendorPartyId = row.vendorPartyId;
+          matchedPrefix = row.prefix;
           break;
         }
       }
+      
+      // Debug log for each order
+      if (order.model_name?.includes('TEST') || order.model_name?.startsWith('MS')) {
+        console.log('Order mapping:', {
+          model: order.model_name,
+          modelLower: model,
+          vendorPrefixes: vendorPrefixes.map(p => p.prefix),
+          matchedPrefix,
+          vendorPartyId,
+          hasVendor: !!vendorPartyId
+        });
+      }
+      
       return {
         ...order,
         customer_name: order.customer_party_id
@@ -211,6 +237,29 @@ export default function OrdersMainPage() {
     });
   }, [ordersWithFactory, filters]);
 
+  // Debug: log all orders
+  console.log('All orders:', ordersWithFactory.map(o => ({ 
+    id: o.order_line_id?.slice(0,8), 
+    model: o.model_name, 
+    status: o.status,
+    factory_po_id: o.factory_po_id,
+    vendor_guess: o.vendor_guess
+  })));
+
+  // Calculate pending orders count for factory order button
+  // Only counts ORDER_PENDING status (not SENT_TO_VENDOR or others)
+  const pendingOrdersCount = useMemo(() => {
+    const eligible = ordersWithFactory.filter(order => {
+      // Must be ORDER_PENDING specifically (not SENT_TO_VENDOR, etc)
+      const isPending = order.status === 'ORDER_PENDING';
+      const noPo = !order.factory_po_id;
+      const hasVendor = !!order.vendor_guess_id;
+      return isPending && noPo && hasVendor;
+    });
+    
+    return eligible.length;
+  }, [ordersWithFactory]);
+
   const addFilter = (type: FilterType) => {
     setFilters((prev) => [...prev, createFilter(type)]);
   };
@@ -250,15 +299,56 @@ export default function OrdersMainPage() {
 
   return (
     <div className="space-y-3" id="orders_main.root">
+      {/* Factory Order Wizard Modal */}
+      {showFactoryOrderWizard && (
+        <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
+          <Suspense fallback={
+            <div className="bg-card p-8 rounded-lg">
+              <div className="animate-spin w-8 h-8 border-2 border-primary border-t-transparent rounded-full mx-auto" />
+              <p className="text-sm text-muted mt-4">로딩중...</p>
+            </div>
+          }>
+            <FactoryOrderWizard
+              orderLines={ordersWithFactory}
+              onClose={() => setShowFactoryOrderWizard(false)}
+              onSuccess={() => {
+                setShowFactoryOrderWizard(false);
+                ordersQuery.refetch();
+              }}
+            />
+          </Suspense>
+        </div>
+      )}
+
       {/* Unified Toolbar - Compact Header */}
       <UnifiedToolbar
         title="주문관리"
         actions={
-          <Link href="/orders">
-            <ToolbarButton variant="primary">
-              + 주문 입력
-            </ToolbarButton>
-          </Link>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => {
+                console.log('=== 공장발주 버튼 클릭 ===');
+                console.log('vendorPrefixes:', vendorPrefixes);
+                console.log('ordersWithFactory 샘플:', ordersWithFactory.slice(0, 3));
+                console.log('pendingOrdersCount:', pendingOrdersCount);
+                setShowFactoryOrderWizard(true);
+              }}
+              className="flex items-center gap-1"
+            >
+              <Building2 className="w-4 h-4" />
+              공장발주
+              <Badge tone="neutral" className="ml-1 text-[10px] h-4 px-1">
+                {pendingOrdersCount}
+              </Badge>
+            </Button>
+            <Link href="/orders">
+              <ToolbarButton variant="primary">
+                + 주문 입력
+              </ToolbarButton>
+            </Link>
+          </div>
         }
       >
         {/* Quick Filters */}
@@ -425,7 +515,7 @@ export default function OrdersMainPage() {
                     onClick={() => removeFilter(filter.id)}
                     className="text-[var(--muted)] hover:text-red-500 transition-colors"
                   >
-                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 6 6 18"/><path d="m6 6 18 18"/></svg>
+                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
                   </button>
                 </div>
                 
@@ -573,11 +663,15 @@ export default function OrdersMainPage() {
                       </Link>
                     </div>
                   </div>
-                  {/* Status Indicator - if status exists */}
+                  {/* Status Indicator */}
                   {order.status && (
                     <div className={cn(
                       "absolute right-0 top-0 h-full w-1 rounded-r-[14px]",
-                      order.status === "CONFIRMED" ? "bg-[var(--success)]/50" : "bg-[var(--warning)]/50"
+                      order.status === "ORDER_PENDING" ? "bg-[var(--warning)]/50" :
+                      order.status === "SENT_TO_VENDOR" ? "bg-blue-500/50" :
+                      order.status === "READY_TO_SHIP" ? "bg-[var(--success)]/50" :
+                      order.status === "SHIPPED" ? "bg-green-600/50" :
+                      "bg-[var(--muted)]/30"
                     )} />
                   )}
                 </div>

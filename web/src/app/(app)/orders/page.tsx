@@ -337,6 +337,7 @@ function OrdersPageContent() {
   const saveCache = useRef(new Map<string, string>());
   const saveInFlight = useRef(new Set<string>());
   const [pageIndex, setPageIndex] = useState(1);
+  const loadToastRef = useRef<string | null>(null);
 
   const clientCache = useRef(new Map<string, ClientSummary>());
   const masterCache = useRef(new Map<string, MasterLookup>());
@@ -492,10 +493,16 @@ function OrdersPageContent() {
           memo: normalizeText(loadedRow.memo),
         }));
 
-        toast.success("주문을 불러왔습니다.");
+        if (loadToastRef.current !== editId) {
+          toast.success("주문을 불러왔습니다.");
+          loadToastRef.current = editId;
+        }
 
       } catch (err) {
-        toast.error("주문 로드 실패", { description: err instanceof Error ? err.message : String(err) });
+        if (loadToastRef.current !== editId) {
+          toast.error("주문 로드 실패", { description: err instanceof Error ? err.message : String(err) });
+          loadToastRef.current = editId;
+        }
       } finally {
         setInitLoading(false);
       }
@@ -530,6 +537,20 @@ function OrdersPageContent() {
     setRowErrors((prev) => ({ ...prev, [rowId]: { ...prev[rowId], ...patch } }));
   };
 
+  const formatRpcError = (error: unknown) => {
+    const e = error as
+      | { message?: string; error_description?: string; details?: string; hint?: string }
+      | string
+      | null;
+    const message =
+      (typeof e === "string" ? e : e?.message) ??
+      (typeof e === "string" ? undefined : e?.error_description) ??
+      "잠시 후 다시 시도해 주세요";
+    const details = typeof e === "string" ? "" : e?.details ?? "";
+    const hint = typeof e === "string" ? "" : e?.hint ?? "";
+    return [message, details, hint].filter(Boolean).join(" | ");
+  };
+
   const clearRowError = (rowId: string, key: keyof RowErrors) => {
     setRowErrors((prev) => ({ ...prev, [rowId]: { ...prev[rowId], [key]: undefined } }));
   };
@@ -546,12 +567,12 @@ function OrdersPageContent() {
 
         await callRpc(setStatusFn, {
           p_order_line_id: row.order_line_id,
-          p_status: "CANCELLED",
+          p_to_status: "CANCELLED",
           p_actor_person_id: process.env.NEXT_PUBLIC_CMS_ACTOR_ID ?? null
         });
         toast.success("주문이 취소되었습니다.");
       } catch (e) {
-        toast.error("주문 취소 실패", { description: e instanceof Error ? e.message : String(e) });
+        toast.error("주문 취소 실패", { description: formatRpcError(e) });
         return;
       }
     }

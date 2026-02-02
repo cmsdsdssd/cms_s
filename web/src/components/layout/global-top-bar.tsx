@@ -17,6 +17,7 @@ import { cn } from "@/lib/utils";
 import { findNavMatch } from "@/components/layout/nav-items";
 import { CommandPalette } from "@/components/layout/command-palette";
 import { ThemeToggle } from "@/components/ui/theme-toggle";
+import { MarketTicker } from "@/components/ui/market-ticker";
 
 interface GlobalTopBarProps {
   onMobileMenuOpen: () => void;
@@ -79,9 +80,9 @@ export function GlobalTopBar({ onMobileMenuOpen }: GlobalTopBarProps) {
         ))}
       </nav>
 
-      {/* Center Search */}
-      <div className="flex-1 flex justify-center max-w-md mx-auto">
-        <div className="relative w-full max-w-sm hidden sm:block">
+      {/* Left Search */}
+      <div className="hidden sm:block w-full max-w-xs">
+        <div className="relative">
           <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-[var(--muted)]" />
           <Input
             type="search"
@@ -96,6 +97,13 @@ export function GlobalTopBar({ onMobileMenuOpen }: GlobalTopBarProps) {
               }
             }}
           />
+        </div>
+      </div>
+
+      {/* Center Market Ticker */}
+      <div className="flex-1 flex justify-center">
+        <div className="min-w-0 max-w-[52vw] sm:max-w-[60vw] lg:max-w-none">
+          <MarketTicker variant="compact" />
         </div>
       </div>
 

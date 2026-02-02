@@ -1126,7 +1126,7 @@ export default function PurchaseCostWorklistPage() {
                     variant="ghost" 
                     onClick={() => {
                       setSelectedFile(null);
-                      setPreviewUrl(null);
+                      setUploadPreviewUrl(null);
                     }} 
                     className="text-xs mt-2 h-7 px-2"
                   >

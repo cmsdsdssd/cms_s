@@ -1,21 +1,31 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/field";
+import { Input, Select } from "@/components/ui/field";
 import { CONTRACTS } from "@/lib/contracts";
 import { getSchemaClient } from "@/lib/supabase/client";
 import { useRpcMutation } from "@/hooks/use-rpc-mutation";
+import { Factory, Phone, Save } from "lucide-react";
 
 type MarketTickConfig = {
   fx_markup: number;
   cs_correction_factor: number;
   silver_kr_correction_factor: number;
   updated_at?: string | null;
+};
+
+type VendorFaxConfig = {
+  config_id: string;
+  vendor_party_id: string;
+  vendor_name: string;
+  fax_number: string | null;
+  fax_provider: 'mock' | 'twilio' | 'sendpulse' | 'custom';
+  is_active: boolean;
 };
 
 export default function SettingsPage() {
@@ -102,6 +112,98 @@ export default function SettingsPage() {
 
   };
 
+  // ============================================
+  // Vendor Fax Config Section
+  // ============================================
+  const queryClient = useQueryClient();
+  
+  const vendorsQuery = useQuery({
+    queryKey: ["cms_vendor_fax_configs"],
+    queryFn: async (): Promise<VendorFaxConfig[]> => {
+      if (!sb) throw new Error("Supabase env is missing");
+      
+      // Get vendors from party table with fax config
+      const { data, error } = await sb
+        .from("cms_party")
+        .select(`
+          party_id,
+          name,
+          cms_vendor_fax_config!left(
+            config_id,
+            fax_number,
+            fax_provider,
+            is_active
+          )
+        `)
+        .eq("party_type", "vendor")
+        .order("name");
+
+      if (error) throw error;
+
+      return (data || []).map((v: any) => ({
+        config_id: v.cms_vendor_fax_config?.[0]?.config_id || "",
+        vendor_party_id: v.party_id,
+        vendor_name: v.name,
+        fax_number: v.cms_vendor_fax_config?.[0]?.fax_number || null,
+        fax_provider: v.cms_vendor_fax_config?.[0]?.fax_provider || "mock",
+        is_active: v.cms_vendor_fax_config?.[0]?.is_active ?? true,
+      }));
+    },
+  });
+
+  const [editingConfigs, setEditingConfigs] = useState<Record<string, {
+    fax_number: string;
+    fax_provider: string;
+  }>>({});
+
+  const updateFaxConfigMutation = useMutation({
+    mutationFn: async (config: { vendor_party_id: string; fax_number: string; fax_provider: string }) => {
+      if (!sb) throw new Error("Supabase env is missing");
+      
+      const { error } = await sb
+        .from("cms_vendor_fax_config")
+        .upsert({
+          vendor_party_id: config.vendor_party_id,
+          fax_number: config.fax_number || null,
+          fax_provider: config.fax_provider,
+          is_active: true,
+        } as any, {
+          onConflict: "vendor_party_id",
+        });
+
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      toast.success("팩스 설정 저장 완료");
+      queryClient.invalidateQueries({ queryKey: ["cms_vendor_fax_configs"] });
+    },
+    onError: (error) => {
+      toast.error(`저장 실패: ${error instanceof Error ? error.message : "알 수 없는 오류"}`);
+    },
+  });
+
+  const handleSaveFaxConfig = (vendor: VendorFaxConfig) => {
+    const edit = editingConfigs[vendor.vendor_party_id];
+    if (!edit) return;
+    
+    updateFaxConfigMutation.mutate({
+      vendor_party_id: vendor.vendor_party_id,
+      fax_number: edit.fax_number,
+      fax_provider: edit.fax_provider,
+    });
+  };
+
+  const setEditingConfig = (vendorPartyId: string, field: 'fax_number' | 'fax_provider', value: string) => {
+    setEditingConfigs(prev => ({
+      ...prev,
+      [vendorPartyId]: {
+        fax_number: prev[vendorPartyId]?.fax_number ?? vendorsQuery.data?.find(v => v.vendor_party_id === vendorPartyId)?.fax_number ?? "",
+        fax_provider: prev[vendorPartyId]?.fax_provider ?? vendorsQuery.data?.find(v => v.vendor_party_id === vendorPartyId)?.fax_provider ?? "mock",
+        [field]: value,
+      }
+    }));
+  };
+
   return (
     // [변경됨] space-y-6 대신 Grid 시스템 적용 (큰 화면에서 2열 배치)
     <div className="grid grid-cols-1 gap-6 lg:grid-cols-2 items-start">
@@ -157,18 +259,109 @@ export default function SettingsPage() {
         </CardBody>
       </Card>
 
-      {/* 오른쪽 컬럼: 계정 (향후 추가) */}
+      {/* 오른쪽 컬럼: 공장 팩스 설정 */}
       <Card>
         <CardHeader>
-          <div>
-            <div className="text-sm font-semibold">계정</div>
-            <div className="text-xs text-[var(--muted)]">사용자 정보 및 권한 관리</div>
+          <div className="flex items-center gap-2">
+            <Factory className="w-4 h-4 text-[var(--primary)]" />
+            <div>
+              <div className="text-sm font-semibold">공장 팩스 설정</div>
+              <div className="text-xs text-[var(--muted)]">업체별 팩스 번호 및 전송 방식 설정</div>
+            </div>
           </div>
         </CardHeader>
-        <CardBody>
-          <div className="flex flex-col items-center justify-center py-12 text-[var(--muted)] space-y-2">
-            <span className="text-2xl opacity-20">🏗️</span>
-            <span>기능 준비 중입니다.</span>
+        <CardBody className="space-y-4">
+          {vendorsQuery.isLoading ? (
+            <div className="text-center py-8 text-[var(--muted)]">
+              <div className="w-6 h-6 border-2 border-current border-t-transparent rounded-full animate-spin mx-auto mb-2" />
+              <p className="text-sm">공장 목록 로딩 중...</p>
+            </div>
+          ) : vendorsQuery.error ? (
+            <div className="text-center py-8 text-red-500">
+              <p className="text-sm">공장 목록을 불러올 수 없습니다</p>
+              <p className="text-xs mt-1">{vendorsQuery.error instanceof Error ? vendorsQuery.error.message : "알 수 없는 오류"}</p>
+            </div>
+          ) : vendorsQuery.data?.length === 0 ? (
+            <div className="text-center py-8 text-[var(--muted)]">
+              <p className="text-sm">등록된 공장 업체가 없습니다</p>
+              <p className="text-xs mt-1">거래처 관리에서 공장을 먼저 등록해주세요</p>
+            </div>
+          ) : (
+            <div className="space-y-3 max-h-[400px] overflow-y-auto">
+              {vendorsQuery.data?.map((vendor) => {
+                const edit = editingConfigs[vendor.vendor_party_id];
+                const faxNumber = edit?.fax_number ?? vendor.fax_number ?? "";
+                const faxProvider = edit?.fax_provider ?? vendor.fax_provider ?? "mock";
+                const hasChanges = edit !== undefined;
+
+                return (
+                  <div
+                    key={vendor.vendor_party_id}
+                    className={`p-3 rounded-lg border transition-all ${
+                      hasChanges 
+                        ? "border-[var(--primary)] bg-[var(--primary)]/5" 
+                        : "border-[var(--panel-border)] bg-[var(--panel)]"
+                    }`}
+                  >
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="font-medium text-sm">{vendor.vendor_name}</span>
+                      {hasChanges && (
+                        <Button
+                          size="sm"
+                          variant="primary"
+                          className="h-7 text-xs"
+                          onClick={() => handleSaveFaxConfig(vendor)}
+                          disabled={updateFaxConfigMutation.isPending}
+                        >
+                          <Save className="w-3 h-3 mr-1" />
+                          저장
+                        </Button>
+                      )}
+                    </div>
+                    
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="text-[10px] text-[var(--muted)] uppercase tracking-wider">팩스 번호</label>
+                        <div className="flex items-center gap-1">
+                          <Phone className="w-3 h-3 text-[var(--muted)]" />
+                          <Input
+                            value={faxNumber}
+                            onChange={(e) => setEditingConfig(vendor.vendor_party_id, "fax_number", e.target.value)}
+                            placeholder="02-1234-5678"
+                            className="h-8 text-sm"
+                          />
+                        </div>
+                      </div>
+                      <div>
+                        <label className="text-[10px] text-[var(--muted)] uppercase tracking-wider">전송 방식</label>
+                        <Select
+                          value={faxProvider}
+                          onChange={(e) => setEditingConfig(vendor.vendor_party_id, "fax_provider", e.target.value)}
+                          className="h-8 text-sm"
+                        >
+                          <option value="mock">Mock (테스트용)</option>
+                          <option value="twilio">Twilio (실제 팩스)</option>
+                          <option value="sendpulse">SendPulse</option>
+                          <option value="custom">Custom</option>
+                        </Select>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+          
+          <div className="text-xs text-[var(--muted-weak)] leading-relaxed pt-2 border-t border-[var(--border)] mt-2">
+            <p className="mb-1">
+              • <strong>Mock 모드:</strong> 실제 전송 없이 HTML 파일을 저장합니다 (테스트용)
+            </p>
+            <p className="mb-1">
+              • <strong>Twilio:</strong> 실제 팩스 전송을 위해서는 Twilio 계정 설정이 필요합니다
+            </p>
+            <p>
+              • 공장발주 시 설정된 팩스 번호로 자동 전송됩니다
+            </p>
           </div>
         </CardBody>
       </Card>

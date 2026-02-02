@@ -70,6 +70,20 @@ type TenderLine = {
   method: string;
   amount: string;
   meta: string;
+  weightG: string;
+  purity: string;
+};
+
+type ShipmentValuationRow = {
+  shipment_id?: string | null;
+  pricing_locked_at?: string | null;
+  pricing_source?: string | null;
+  gold_krw_per_g_snapshot?: number | null;
+  silver_krw_per_g_snapshot?: number | null;
+  silver_adjust_factor_snapshot?: number | null;
+  material_value_krw?: number | null;
+  labor_value_krw?: number | null;
+  total_value_krw?: number | null;
 };
 
 type ReturnResponse = {
@@ -150,6 +164,8 @@ const createTenderLine = (): TenderLine => ({
   method: paymentMethods[0],
   amount: "",
   meta: "",
+  weightG: "",
+  purity: "",
 });
 
 export default function ArPage() {
@@ -163,6 +179,7 @@ export default function ArPage() {
   const [paidAt, setPaidAt] = useState(toKstInputValue);
   const [paymentMemo, setPaymentMemo] = useState("");
   const [tenders, setTenders] = useState<TenderLine[]>([createTenderLine()]);
+  const [paymentShipmentId, setPaymentShipmentId] = useState("");
   const [returnPartyId, setReturnPartyId] = useState("");
   const [returnShipmentLineId, setReturnShipmentLineId] = useState("");
   const [returnQty, setReturnQty] = useState("1");
@@ -287,6 +304,13 @@ export default function ArPage() {
     enabled: Boolean(effectiveSelectedPartyId),
   });
 
+  const selectedLedger = useMemo(() => {
+    if (!selectedLedgerId) return null;
+    return (ledgerQuery.data ?? []).find((row) => row.ar_ledger_id === selectedLedgerId) ?? null;
+  }, [ledgerQuery.data, selectedLedgerId]);
+
+  const selectedLedgerShipmentId = selectedLedger?.shipment_id ?? null;
+
   const shipmentLinesQuery = useQuery({
     queryKey: ["cms", "shipment_line", "ar", effectiveReturnPartyId],
     queryFn: async () => {
@@ -380,6 +404,58 @@ export default function ArPage() {
       });
   }, [scopedShipmentLines, remainingQtyByLine]);
 
+  const paymentShipmentOptions = useMemo(() => {
+    const map = new Map<string, { shipDate: string; label: string }>();
+    scopedShipmentLines.forEach((line) => {
+      if (!line.shipment_id) return;
+      const shipmentId = String(line.shipment_id);
+      if (map.has(shipmentId)) return;
+      const shipDate = line.shipment_header?.ship_date
+        ? line.shipment_header?.ship_date.slice(0, 10)
+        : "-";
+      const nameParts = [line.model_name, line.suffix, line.color, line.size].filter(Boolean);
+      const label = `${shipDate} · ${shipmentId.slice(0, 8)} · ${nameParts.join(" / ") || "-"}`;
+      map.set(shipmentId, { shipDate, label });
+    });
+    return [...map.entries()].map(([value, item]) => ({ value, label: item.label }));
+  }, [scopedShipmentLines]);
+
+  const paymentValuationQuery = useQuery({
+    queryKey: ["cms", "shipment_valuation", paymentShipmentId],
+    enabled: Boolean(paymentShipmentId),
+    queryFn: async () => {
+      if (!schemaClient) throw new Error("Supabase env is missing");
+      if (!paymentShipmentId) return null;
+      const { data, error } = await schemaClient
+        .from("cms_shipment_valuation")
+        .select(
+          "shipment_id, pricing_locked_at, pricing_source, gold_krw_per_g_snapshot, silver_krw_per_g_snapshot, silver_adjust_factor_snapshot, material_value_krw, labor_value_krw, total_value_krw"
+        )
+        .eq("shipment_id", paymentShipmentId)
+        .maybeSingle();
+      if (error) throw error;
+      return (data ?? null) as ShipmentValuationRow | null;
+    },
+  });
+
+  const selectedLedgerValuationQuery = useQuery({
+    queryKey: ["cms", "shipment_valuation", selectedLedgerShipmentId],
+    enabled: Boolean(selectedLedgerShipmentId),
+    queryFn: async () => {
+      if (!schemaClient) throw new Error("Supabase env is missing");
+      if (!selectedLedgerShipmentId) return null;
+      const { data, error } = await schemaClient
+        .from("cms_shipment_valuation")
+        .select(
+          "shipment_id, pricing_locked_at, pricing_source, gold_krw_per_g_snapshot, silver_krw_per_g_snapshot, silver_adjust_factor_snapshot, material_value_krw, labor_value_krw, total_value_krw"
+        )
+        .eq("shipment_id", selectedLedgerShipmentId)
+        .maybeSingle();
+      if (error) throw error;
+      return (data ?? null) as ShipmentValuationRow | null;
+    },
+  });
+
   const effectiveReturnShipmentLineId = useMemo(() => {
     if (!returnShipmentLineId) return "";
     const exists = scopedShipmentLines.some(
@@ -406,6 +482,32 @@ export default function ArPage() {
   const overrideAmount = Number(returnOverrideAmount);
   const finalReturnAmount = Number.isFinite(overrideAmount) && returnOverrideAmount !== "" ? overrideAmount : autoReturnAmount;
 
+  const paymentValuation = paymentValuationQuery.data;
+  const goldSnapshotPrice = paymentValuation?.gold_krw_per_g_snapshot ?? null;
+  const silverSnapshotPrice = paymentValuation?.silver_krw_per_g_snapshot ?? null;
+  const silverSnapshotFactor = paymentValuation?.silver_adjust_factor_snapshot ?? null;
+  const silverEffectivePrice =
+    silverSnapshotPrice === null
+      ? null
+      : silverSnapshotPrice * (silverSnapshotFactor ?? 1);
+
+  const getMetalAmount = (line: TenderLine) => {
+    const weight = Number(line.weightG);
+    if (!Number.isFinite(weight) || weight <= 0) return null;
+    const purity = line.purity?.trim().toUpperCase();
+    if (line.method === "GOLD") {
+      const factor = purity === "14K" ? 0.6435 : purity === "18K" ? 0.825 : purity === "24K" ? 1 : null;
+      if (!factor || goldSnapshotPrice === null) return null;
+      return Math.round(weight * factor * goldSnapshotPrice);
+    }
+    if (line.method === "SILVER") {
+      if (purity !== "925") return null;
+      if (silverEffectivePrice === null) return null;
+      return Math.round(weight * silverEffectivePrice);
+    }
+    return null;
+  };
+
   const paymentMutation = useRpcMutation<{ ok?: boolean }>({
     fn: CONTRACTS.functions.recordPayment,
     successMessage: "결제 등록 완료",
@@ -414,6 +516,7 @@ export default function ArPage() {
       ledgerQuery.refetch();
       setPaymentMemo("");
       setTenders([createTenderLine()]);
+      setPaymentShipmentId("");
     },
   });
 
@@ -441,20 +544,35 @@ export default function ArPage() {
   });
 
   const canSavePayment = isFnConfigured(CONTRACTS.functions.recordPayment);
-  const totalTenderAmount = tenders.reduce((sum, line) => sum + Number(line.amount || 0), 0);
-  const tenderPayload = tenders
-    .map((line) => ({
+  const tenderAmounts = tenders.map((line) => {
+    const isMetal = line.method === "GOLD" || line.method === "SILVER";
+    const computed = isMetal ? getMetalAmount(line) : Number(line.amount);
+    return { line, amount: Number.isFinite(computed ?? NaN) ? Number(computed) : null };
+  });
+  const totalTenderAmount = tenderAmounts.reduce((sum, item) => sum + Number(item.amount || 0), 0);
+  const tenderPayload = tenderAmounts
+    .map(({ line, amount }) => ({
       method: line.method,
-      amount_krw: Number(line.amount),
+      amount_krw: amount,
+      weight_g: line.weightG ? Number(line.weightG) : null,
+      purity: line.purity || null,
       meta: line.meta ? { note: line.meta } : {},
     }))
-    .filter((line) => Number.isFinite(line.amount_krw) && line.amount_krw > 0);
+    .filter((line) => Number.isFinite(line.amount_krw ?? NaN) && Number(line.amount_krw) > 0);
 
+  const hasMetalTender = tenders.some((line) => line.method === "GOLD" || line.method === "SILVER");
+  const metalInputsReady = tenders.every((line) => {
+    if (line.method !== "GOLD" && line.method !== "SILVER") return true;
+    const amount = getMetalAmount(line);
+    return amount !== null && amount > 0;
+  });
   const canSubmitPayment =
     canSavePayment &&
     Boolean(effectivePaymentPartyId) &&
     Boolean(paidAt) &&
     tenderPayload.length > 0 &&
+    (!hasMetalTender || Boolean(paymentShipmentId)) &&
+    metalInputsReady &&
     !paymentMutation.isPending;
 
   const canSaveReturn = isFnConfigured(CONTRACTS.functions.recordReturn);
@@ -766,6 +884,59 @@ export default function ArPage() {
         </div>
 
         <div className="lg:col-span-4 space-y-4">
+          {selectedLedgerShipmentId ? (
+            <Card className="shadow-sm">
+              <CardHeader>
+                <ActionBar title="출고 시세 스냅샷" />
+              </CardHeader>
+              <CardBody>
+                <div className="grid grid-cols-2 gap-4 text-sm">
+                  <div>
+                    <p className="text-xs text-[var(--muted)]">확정시각</p>
+                    <p className="font-semibold">
+                      {formatDateTimeKst(selectedLedgerValuationQuery.data?.pricing_locked_at ?? null)}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-[var(--muted)]">확정소스</p>
+                    <p className="font-semibold">
+                      {selectedLedgerValuationQuery.data?.pricing_source ?? "-"}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-[var(--muted)]">Gold/g</p>
+                    <p className="font-semibold">
+                      {selectedLedgerValuationQuery.data?.gold_krw_per_g_snapshot ?? "-"}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-[var(--muted)]">Silver/g</p>
+                    <p className="font-semibold">
+                      {selectedLedgerValuationQuery.data?.silver_krw_per_g_snapshot ?? "-"}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-[var(--muted)]">소재</p>
+                    <p className="font-semibold">
+                      {formatKrw(selectedLedgerValuationQuery.data?.material_value_krw ?? null)}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-[var(--muted)]">공임</p>
+                    <p className="font-semibold">
+                      {formatKrw(selectedLedgerValuationQuery.data?.labor_value_krw ?? null)}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-[var(--muted)]">총액</p>
+                    <p className="font-semibold">
+                      {formatKrw(selectedLedgerValuationQuery.data?.total_value_krw ?? null)}
+                    </p>
+                  </div>
+                </div>
+              </CardBody>
+            </Card>
+          ) : null}
           <div className="flex items-center gap-1 p-1 bg-[var(--chip)] rounded-lg w-full border">
             {([
               { key: "payment", label: "수금 등록" },
@@ -812,6 +983,7 @@ export default function ArPage() {
                         p_paid_at: new Date(paidAt).toISOString(),
                         p_tenders: tenderPayload,
                         p_memo: paymentMemo || null,
+                        p_shipment_id: paymentShipmentId || null,
                       });
                     }}
                   >
@@ -826,6 +998,48 @@ export default function ArPage() {
                     />
                   </div>
 
+                  <div className="space-y-2">
+                    <p className="text-xs font-semibold uppercase tracking-wider text-[var(--muted)]">
+                      출고(시세 스냅샷)
+                    </p>
+                    <SearchSelect
+                      placeholder="출고 선택"
+                      options={paymentShipmentOptions}
+                      value={paymentShipmentId}
+                      onChange={(value) => setPaymentShipmentId(value)}
+                    />
+                    {paymentValuationQuery.data ? (
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs text-[var(--muted)]">
+                        <div>
+                          <span className="block">확정시각</span>
+                          <span className="font-semibold text-[var(--foreground)]">
+                            {formatDateTimeKst(paymentValuationQuery.data.pricing_locked_at)}
+                          </span>
+                        </div>
+                        <div>
+                          <span className="block">확정소스</span>
+                          <span className="font-semibold text-[var(--foreground)]">
+                            {paymentValuationQuery.data.pricing_source ?? "-"}
+                          </span>
+                        </div>
+                        <div>
+                          <span className="block">Gold/g</span>
+                          <span className="font-semibold text-[var(--foreground)]">
+                            {paymentValuationQuery.data.gold_krw_per_g_snapshot ?? "-"}
+                          </span>
+                        </div>
+                        <div>
+                          <span className="block">Silver/g</span>
+                          <span className="font-semibold text-[var(--foreground)]">
+                            {paymentValuationQuery.data.silver_krw_per_g_snapshot ?? "-"}
+                          </span>
+                        </div>
+                      </div>
+                    ) : hasMetalTender ? (
+                      <p className="text-xs text-[var(--danger)]">금/은 결제는 출고 스냅샷 선택이 필요합니다.</p>
+                    ) : null}
+                  </div>
+
                   <div className="space-y-3 border rounded-lg p-4 bg-[var(--chip)]">
                     <div className="flex items-center justify-between mb-2">
                       <p className="text-xs font-semibold uppercase tracking-wider text-[var(--muted)]">결제 수단</p>
@@ -838,7 +1052,15 @@ export default function ArPage() {
                             onChange={(event) =>
                               setTenders((prev) =>
                                 prev.map((item) =>
-                                  item.id === line.id ? { ...item, method: event.target.value } : item
+                                  item.id === line.id
+                                    ? {
+                                      ...item,
+                                      method: event.target.value,
+                                      amount: "",
+                                      weightG: "",
+                                      purity: "",
+                                    }
+                                    : item
                                 )
                               )
                             }
@@ -853,7 +1075,11 @@ export default function ArPage() {
                             type="number"
                             min={0}
                             placeholder="금액"
-                            value={line.amount}
+                            value={
+                              line.method === "GOLD" || line.method === "SILVER"
+                                ? getMetalAmount(line) ?? ""
+                                : line.amount
+                            }
                             onChange={(event) =>
                               setTenders((prev) =>
                                 prev.map((item) =>
@@ -862,8 +1088,48 @@ export default function ArPage() {
                               )
                             }
                             className="tabular-nums text-right"
+                            readOnly={line.method === "GOLD" || line.method === "SILVER"}
                           />
                         </div>
+                        {line.method === "GOLD" || line.method === "SILVER" ? (
+                          <div className="grid grid-cols-2 gap-2">
+                            <Input
+                              type="number"
+                              min={0}
+                              placeholder="중량(g)"
+                              value={line.weightG}
+                              onChange={(event) =>
+                                setTenders((prev) =>
+                                  prev.map((item) =>
+                                    item.id === line.id ? { ...item, weightG: event.target.value } : item
+                                  )
+                                )
+                              }
+                              className="tabular-nums"
+                            />
+                            <Select
+                              value={line.purity}
+                              onChange={(event) =>
+                                setTenders((prev) =>
+                                  prev.map((item) =>
+                                    item.id === line.id ? { ...item, purity: event.target.value } : item
+                                  )
+                                )
+                              }
+                            >
+                              <option value="">순도 선택</option>
+                              {line.method === "GOLD" ? (
+                                <>
+                                  <option value="14K">14K</option>
+                                  <option value="18K">18K</option>
+                                  <option value="24K">24K</option>
+                                </>
+                              ) : (
+                                <option value="925">925</option>
+                              )}
+                            </Select>
+                          </div>
+                        ) : null}
                         <div className="flex gap-2">
                           <Input
                             placeholder="메모"
