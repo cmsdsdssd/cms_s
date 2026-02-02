@@ -622,11 +622,7 @@ export default function ShipmentsPrintPage() {
       <div className="receipt-print-actions px-6 py-4 border-b border-[var(--panel-border)] bg-[var(--background)]/80 backdrop-blur">
         <ActionBar
           title="출고 영수증(통상)"
-          subtitle={
-            <span suppressHydrationWarning>
-              기준일: {today} · {nowLabel} · 매장출고 제외 · 출고확정됨
-            </span>
-          }
+          subtitle={`기준일: ${today} · ${nowLabel} · 매장출고 제외 · 출고확정됨`}
           actions={
             <div className="flex items-center gap-2">
               <Button variant="secondary" onClick={() => shipmentsQuery.refetch()}>

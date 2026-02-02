@@ -17,9 +17,16 @@ type SearchSelectProps = {
 
 export function SearchSelect({ label, placeholder, options, value, onChange, className }: SearchSelectProps) {
   const [query, setQuery] = useState("");
+  const normalizedQuery = query.trim();
+  const showAll = normalizedQuery.includes("*");
+  const cleanedQuery = normalizedQuery.replace(/\*/g, "").trim();
   const filtered = useMemo(
-    () => options.filter((o) => o.label.toLowerCase().includes(query.toLowerCase())),
-    [options, query]
+    () => {
+      if (showAll) return options;
+      const needle = cleanedQuery.toLowerCase();
+      return options.filter((o) => o.label.toLowerCase().includes(needle));
+    },
+    [options, cleanedQuery, showAll]
   );
 
   return (

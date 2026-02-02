@@ -386,8 +386,8 @@ export default function ShipmentsMainPage() {
                 <Badge tone="neutral" className="text-xs">
                   {selectedLines.size}개 선택
                 </Badge>
-                <Button
-                  variant="default"
+                  <Button
+                    variant="primary"
                   size="sm"
                   onClick={handleCreateShipment}
                   className="text-xs"
@@ -589,7 +589,7 @@ export default function ShipmentsMainPage() {
               {selectedLines.size > 0 && (
                 <>
                   <span className="text-xs text-[var(--muted)]">|</span>
-                  <Badge variant="secondary" className="text-[10px]">
+                  <Badge tone="neutral" className="text-[10px]">
                     {selectedLines.size}개 선택
                   </Badge>
                   <button

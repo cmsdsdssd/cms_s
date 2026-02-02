@@ -122,8 +122,8 @@ const OTHER_LABOR_OPTIONS = [
   { label: "보조2공임", value: "SUB2" },
   { label: "기타", value: "OTHER" },
 ];
-// ✅ 0265에 있는 함수명을 그대로 사용 (영수증 “연결” upsert)
-const FN_RECEIPT_USAGE_UPSERT = "cms_fn_upsert_receipt_usage_alloc_v1";
+// ✅ 영수증 “연결” upsert
+const FN_RECEIPT_USAGE_UPSERT = CONTRACTS.functions.receiptUsageUpsert;
 
 const normalizeId = (value: unknown) => {
   if (value === null || value === undefined) return null;

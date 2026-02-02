@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useRef, useState, useEffect } from "react";
+import { useSearchParams } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 
@@ -11,7 +12,10 @@ import { Input, Select, Textarea } from "@/components/ui/field";
 import { Badge } from "@/components/ui/badge";
 import { Modal } from "@/components/ui/modal";
 import { Skeleton } from "@/components/ui/skeleton";
+import { SearchSelect } from "@/components/ui/search-select";
 import { useRpcMutation } from "@/hooks/use-rpc-mutation";
+import { CONTRACTS } from "@/lib/contracts";
+import { getSchemaClient } from "@/lib/supabase/client";
 
 type LinkedShipment = {
   shipment_id: string;
@@ -30,6 +34,7 @@ type ReceiptWorklistRow = {
   status: string;
   vendor_party_id?: string | null;
   vendor_name?: string | null;
+  bill_no?: string | null;
   issued_at?: string | null;
 
   inbox_currency_code?: string | null;
@@ -63,10 +68,34 @@ type ReceiptWorklistRow = {
 type ReceiptLineItem = {
   id: string;
   model_name: string;
+  material_code?: string | null;
   weight_g: number | null;
   labor_basic: number | null;
   labor_other: number | null;
   qty: number;
+};
+
+type ShipmentCostCandidate = {
+  shipment_id: string;
+  ship_date?: string | null;
+  status?: string | null;
+  customer_party_id?: string | null;
+  customer_name?: string | null;
+  line_cnt?: number | null;
+  total_qty?: number | null;
+  total_cost_krw?: number | null;
+  total_sell_krw?: number | null;
+  cost_confirmed?: boolean | null;
+  has_receipt?: boolean | null;
+  model_names?: string | null;
+};
+
+type PartyOption = { label: string; value: string };
+
+type VendorRow = {
+  party_id: string;
+  name: string;
+  party_type?: string | null;
 };
 
 type UpsertSnapshotResult = {
@@ -77,12 +106,6 @@ type UpsertSnapshotResult = {
   total_amount_krw?: number;
 };
 
-type ApplySnapshotResult = {
-  ok: boolean;
-  receipt_id: string;
-  total_amount_krw: number;
-  shipment_count: number;
-};
 
 function formatNumber(n: number | null | undefined) {
   if (n === null || n === undefined || Number.isNaN(Number(n))) return "-";
@@ -134,6 +157,53 @@ function calcAllocations(totalKrw: number | null, linked: LinkedShipment[]) {
   return out;
 }
 
+function getMaterialFactor(code?: string | null) {
+  const normalized = (code ?? "").trim().toUpperCase();
+  if (normalized === "14" || normalized === "14K") return 0.6435;
+  if (normalized === "18" || normalized === "18K") return 0.825;
+  if (normalized === "24" || normalized === "24K") return 1;
+  if (normalized === "925" || normalized === "S925") return 0.925;
+  return 1;
+}
+
+function getMaterialBucket(code?: string | null) {
+  const normalized = (code ?? "").trim().toUpperCase();
+  if (normalized === "14" || normalized === "14K") return "GOLD";
+  if (normalized === "18" || normalized === "18K") return "GOLD";
+  if (normalized === "24" || normalized === "24K") return "GOLD";
+  if (normalized === "925" || normalized === "S925") return "SILVER";
+  return "OTHER";
+}
+
+function calcShipmentAllocations(
+  totalKrw: number | null,
+  rows: ShipmentCostCandidate[],
+  method: "PROVISIONAL" | "QTY"
+) {
+  if (!totalKrw || totalKrw <= 0) return [] as Array<ShipmentCostCandidate & { alloc_krw: number; basis: number }>;
+  const basisForRow = (row: ShipmentCostCandidate) => {
+    if (method === "QTY") return Number(row.total_qty) || 0;
+    return Number(row.total_cost_krw) || Number(row.total_sell_krw) || Number(row.total_qty) || 0;
+  };
+  const totalBasis = rows.reduce((sum, row) => sum + basisForRow(row), 0);
+  if (totalBasis <= 0) return rows.map((row) => ({ ...row, alloc_krw: 0, basis: 0 }));
+
+  let remainingKrw = totalKrw;
+  let remainingBasis = totalBasis;
+  const sorted = [...rows].sort((a, b) => (a.shipment_id > b.shipment_id ? 1 : -1));
+  const out: Array<ShipmentCostCandidate & { alloc_krw: number; basis: number }> = [];
+
+  for (const row of sorted) {
+    const basis = basisForRow(row);
+    const alloc = remainingBasis > 0 ? Math.round((remainingKrw * basis) / remainingBasis) : remainingKrw;
+    remainingKrw -= alloc;
+    remainingBasis -= basis;
+    out.push({ ...row, alloc_krw: alloc, basis });
+  }
+
+  return out;
+}
+
 function filterRowsByStatus(
   rows: ReceiptWorklistRow[],
   filter: "ALL" | "NEED_INPUT" | "NEED_APPLY" | "APPLIED"
@@ -155,17 +225,33 @@ function pickFirstRow(
 
 export default function PurchaseCostWorklistPage() {
   // NOTE: route 이름은 유지하지만, 실제로는 "영수증 작업대"를 구현합니다.
+  const schemaClient = getSchemaClient();
+  const searchParams = useSearchParams();
   const [filter, setFilter] = useState<"ALL" | "NEED_INPUT" | "NEED_APPLY" | "APPLIED">("NEED_APPLY");
   const [selectedReceiptId, setSelectedReceiptId] = useState<string | null>(null);
+  const [isCreating, setIsCreating] = useState(false);
+
+  const [vendorPartyId, setVendorPartyId] = useState<string>("");
+  const [billNo, setBillNo] = useState<string>("");
+  const [billDate, setBillDate] = useState<string>("");
 
   const [currencyCode, setCurrencyCode] = useState<"KRW" | "CNY">("KRW");
   const [totalAmount, setTotalAmount] = useState<string>("");
   const [weightG, setWeightG] = useState<string>("");
+  const [goldWeightG, setGoldWeightG] = useState<string>("");
+  const [silverWeightG, setSilverWeightG] = useState<string>("");
   const [laborBasic, setLaborBasic] = useState<string>("");
   const [laborOther, setLaborOther] = useState<string>("");
   const [lineItems, setLineItems] = useState<ReceiptLineItem[]>([]);
   const [note, setNote] = useState<string>("");
   const [forceReapply, setForceReapply] = useState<boolean>(false);
+
+  const [applyOpen, setApplyOpen] = useState(false);
+  const [applyMethod, setApplyMethod] = useState<"PROVISIONAL" | "QTY">("PROVISIONAL");
+  const [selectedShipments, setSelectedShipments] = useState<Set<string>>(new Set());
+  const [shipmentPartyFilter, setShipmentPartyFilter] = useState<string>("");
+  const [shipmentModelFilter, setShipmentModelFilter] = useState<string>("");
+  const [shipmentDateFilter, setShipmentDateFilter] = useState<string>("");
 
   const [uploadOpen, setUploadOpen] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
@@ -211,6 +297,39 @@ export default function PurchaseCostWorklistPage() {
       }
     };
   }, [previewBlobUrl]);
+
+  const vendorOptionsQuery = useQuery({
+    queryKey: ["vendor-parties"],
+    queryFn: async () => {
+      if (!schemaClient) return [] as PartyOption[];
+      const { data, error } = await schemaClient
+        .from("cms_party")
+        .select("party_id, name, party_type")
+        .eq("party_type", "vendor")
+        .eq("is_active", true)
+        .order("name", { ascending: true });
+      if (error) throw error;
+      return (data as VendorRow[] | null | undefined ?? []).map((row) => ({
+        label: row.name,
+        value: row.party_id,
+      }));
+    },
+    enabled: Boolean(schemaClient),
+  });
+
+  const shipmentCandidatesQuery = useQuery({
+    queryKey: ["shipment-cost-candidates"],
+    queryFn: async () => {
+      if (!schemaClient) return [] as ShipmentCostCandidate[];
+      const { data, error } = await schemaClient
+        .from(CONTRACTS.views.shipmentCostApplyCandidates)
+        .select("*")
+        .order("ship_date", { ascending: false });
+      if (error) throw error;
+      return (data ?? []) as ShipmentCostCandidate[];
+    },
+    enabled: Boolean(schemaClient),
+  });
 
   async function handleReceiptDoubleClick(receiptId: string) {
     if (previewReceiptId === receiptId) {
@@ -263,6 +382,7 @@ export default function PurchaseCostWorklistPage() {
       {
         id: crypto.randomUUID(),
         model_name: "",
+        material_code: "",
         weight_g: null,
         labor_basic: null,
         labor_other: null,
@@ -275,7 +395,21 @@ export default function PurchaseCostWorklistPage() {
     setLineItems(lineItems.filter((item) => item.id !== id));
   }
 
-  function updateLine(id: string, field: keyof ReceiptLineItem, value: any) {
+  function updateLine(
+    id: string,
+    field: keyof ReceiptLineItem,
+    value: ReceiptLineItem[keyof ReceiptLineItem]
+  ) {
+    if (field === "material_code" && typeof value === "string") {
+      const normalized = value.trim().toUpperCase();
+      const cleaned = normalized.replace(/[^0-9A-Z]/g, "");
+      setLineItems(
+        lineItems.map((item) =>
+          item.id === id ? { ...item, material_code: cleaned } : item
+        )
+      );
+      return;
+    }
     setLineItems(
       lineItems.map((item) =>
         item.id === id ? { ...item, [field]: value } : item
@@ -288,28 +422,69 @@ export default function PurchaseCostWorklistPage() {
     setCurrencyCode((c === "CNY" ? "CNY" : "KRW") as "KRW" | "CNY");
     setTotalAmount(receipt.pricing_total_amount != null ? String(receipt.pricing_total_amount) : "");
     setWeightG(receipt.weight_g != null ? String(receipt.weight_g) : "");
+    setGoldWeightG("");
+    setSilverWeightG("");
     setLaborBasic(receipt.labor_basic != null ? String(receipt.labor_basic) : "");
     setLaborOther(receipt.labor_other != null ? String(receipt.labor_other) : "");
     setLineItems(receipt.meta?.line_items ?? []);
+    setNote(receipt.memo ?? "");
+    setVendorPartyId(receipt.vendor_party_id ?? "");
+    setBillNo(receipt.bill_no ?? "");
+    setBillDate(receipt.issued_at ? receipt.issued_at.slice(0, 10) : "");
+    setIsCreating(false);
+    setForceReapply(false);
+  }
+
+  function startCreateBill() {
+    setSelectedReceiptId(null);
+    setIsCreating(true);
+    setVendorPartyId("");
+    setBillNo("");
+    setBillDate("");
+    setCurrencyCode("KRW");
+    setTotalAmount("");
+    setWeightG("");
+    setGoldWeightG("");
+    setSilverWeightG("");
+    setLaborBasic("");
+    setLaborOther("");
+    setLineItems([]);
     setNote("");
     setForceReapply(false);
   }
 
   // Auto-calculate totals from line items
   useEffect(() => {
-    if (lineItems.length === 0) return;
+    if (lineItems.length === 0) {
+      setGoldWeightG("");
+      setSilverWeightG("");
+      return;
+    }
 
     const totalAmt = lineItems.reduce((acc, item) => {
       const price = (item.labor_basic ?? 0) + (item.labor_other ?? 0);
       return acc + price * item.qty;
     }, 0);
 
-    const totalWgt = lineItems.reduce((acc, item) => acc + (item.weight_g ?? 0) * item.qty, 0);
+    let totalWgt = 0;
+    let totalGold = 0;
+    let totalSilver = 0;
+    lineItems.forEach((item) => {
+      const factor = getMaterialFactor(item.material_code);
+      const bucket = getMaterialBucket(item.material_code);
+      const raw = (item.weight_g ?? 0) * item.qty;
+      const converted = raw * factor;
+      totalWgt += raw;
+      if (bucket === "GOLD") totalGold += converted;
+      if (bucket === "SILVER") totalSilver += converted;
+    });
     const totalBasic = lineItems.reduce((acc, item) => acc + (item.labor_basic ?? 0) * item.qty, 0);
     const totalOther = lineItems.reduce((acc, item) => acc + (item.labor_other ?? 0) * item.qty, 0);
 
     setTotalAmount(String(totalAmt));
     setWeightG(String(totalWgt));
+    setGoldWeightG(String(totalGold));
+    setSilverWeightG(String(totalSilver));
     setLaborBasic(String(totalBasic));
     setLaborOther(String(totalOther));
   }, [lineItems]);
@@ -321,7 +496,7 @@ export default function PurchaseCostWorklistPage() {
         const res = await fetch("/api/purchase-cost-worklist?limit=250", { cache: "no-store" });
         const json = await res.json();
         if (!res.ok) throw new Error(json?.error ?? "작업대 조회 실패");
-        if (!selectedReceiptId) {
+        if (!selectedReceiptId && !isCreating) {
           const first = pickFirstRow(json?.data ?? [], filter);
           if (first?.receipt_id) {
             queueMicrotask(() => {
@@ -337,10 +512,23 @@ export default function PurchaseCostWorklistPage() {
   );
 
   const rows = useMemo(() => worklist.data?.data ?? [], [worklist.data]);
+  const vendorOptions = vendorOptionsQuery.data ?? [];
+
+  useEffect(() => {
+    const rid = searchParams.get("receipt_id");
+    if (!rid) return;
+    if (rows.length === 0) return;
+    if (isCreating) return;
+    if (selectedReceiptId === rid) return;
+    selectReceiptId(rid, rows);
+  }, [searchParams, rows, isCreating, selectedReceiptId]);
 
   const selectReceiptId = (receiptId: string | null, sourceRows: ReceiptWorklistRow[] = rows) => {
     setSelectedReceiptId(receiptId);
-    if (!receiptId) return;
+    if (!receiptId) {
+      setIsCreating(false);
+      return;
+    }
     const target = sourceRows.find((r) => r.receipt_id === receiptId) ?? null;
     if (target) {
       applySelectedReceipt(target);
@@ -361,10 +549,46 @@ export default function PurchaseCostWorklistPage() {
     return filterRowsByStatus(rows, filter);
   }, [rows, filter]);
 
+  const shipmentCandidates = useMemo(() => shipmentCandidatesQuery.data ?? [], [shipmentCandidatesQuery.data]);
+
+  const filteredShipmentCandidates = useMemo(() => {
+    return shipmentCandidates.filter((row) => {
+      if (row.cost_confirmed) return false;
+      if (shipmentPartyFilter && row.customer_party_id !== shipmentPartyFilter) return false;
+      if (shipmentDateFilter && row.ship_date !== shipmentDateFilter) return false;
+      if (shipmentModelFilter.trim()) {
+        const needle = shipmentModelFilter.trim().toLowerCase();
+        const models = String(row.model_names ?? "").toLowerCase();
+        if (!models.includes(needle)) return false;
+      }
+      return true;
+    });
+  }, [shipmentCandidates, shipmentPartyFilter, shipmentDateFilter, shipmentModelFilter]);
+
+  const shipmentPartyOptions = useMemo(() => {
+    const map = new Map<string, string>();
+    shipmentCandidates.forEach((row) => {
+      if (row.customer_party_id) {
+        map.set(row.customer_party_id, row.customer_name ?? row.customer_party_id);
+      }
+    });
+    return Array.from(map.entries()).map(([value, label]) => ({ value, label }));
+  }, [shipmentCandidates]);
+
   const selected = useMemo(() => {
     if (!selectedReceiptId) return null;
     return rows.find((r) => r.receipt_id === selectedReceiptId) ?? null;
   }, [rows, selectedReceiptId]);
+
+  const selectedCandidateRows = useMemo(
+    () => shipmentCandidates.filter((row) => selectedShipments.has(row.shipment_id)),
+    [shipmentCandidates, selectedShipments]
+  );
+
+  const allocationPreview = useMemo(() => {
+    const totalKrw = selected?.pricing_total_amount_krw ?? parseNumOrNull(totalAmount);
+    return calcShipmentAllocations(totalKrw, selectedCandidateRows, applyMethod);
+  }, [selected, totalAmount, selectedCandidateRows, applyMethod]);
 
   const upsertSnapshot = useRpcMutation<UpsertSnapshotResult>({
     fn: "cms_fn_upsert_receipt_pricing_snapshot_v1",
@@ -372,20 +596,71 @@ export default function PurchaseCostWorklistPage() {
     onSuccess: () => worklist.refetch(),
   });
 
-  const applySnapshot = useRpcMutation<ApplySnapshotResult>({
-    fn: "cms_fn_apply_receipt_pricing_snapshot_v1",
-    successMessage: "출고 원가 배분/적용 완료",
+  const vendorBillHeaderUpdate = useRpcMutation<void>({
+    fn: "cms_fn_update_vendor_bill_header_v1",
+    successMessage: "영수증 헤더 저장 완료",
     onSuccess: () => worklist.refetch(),
   });
 
-  async function onSave() {
-    if (!selectedReceiptId) return;
+  const vendorBillCreate = useRpcMutation<string>({
+    fn: CONTRACTS.functions.vendorBillCreate,
+    successMessage: "영수증 저장 완료",
+    onSuccess: (receiptId) => {
+      setSelectedReceiptId(String(receiptId));
+      setIsCreating(false);
+      worklist.refetch();
+    },
+  });
 
+  const vendorBillApply = useRpcMutation<unknown>({
+    fn: CONTRACTS.functions.vendorBillApply,
+    successMessage: "출고 배분 완료",
+    onSuccess: () => {
+      setApplyOpen(false);
+      setSelectedShipments(new Set());
+      shipmentCandidatesQuery.refetch();
+      worklist.refetch();
+    },
+  });
+
+  async function onSave() {
     const p_total_amount = parseNumOrNull(totalAmount);
     if (p_total_amount == null) {
       toast.error("총금액은 필수입니다");
       return;
     }
+
+    if (isCreating) {
+      if (!vendorPartyId) {
+        toast.error("공장을 선택해주세요");
+        return;
+      }
+      if (currencyCode !== "KRW") {
+        toast.error("수기 영수증은 KRW만 지원합니다");
+        return;
+      }
+
+      await vendorBillCreate.mutateAsync({
+        p_vendor_party_id: vendorPartyId,
+        p_bill_no: billNo || null,
+        p_bill_date: billDate || null,
+        p_memo: note || null,
+        p_total_amount_krw: p_total_amount,
+        p_lines: lineItems,
+      });
+      return;
+    }
+
+    if (!selectedReceiptId) return;
+
+    await vendorBillHeaderUpdate.mutateAsync({
+      p_receipt_id: selectedReceiptId,
+      p_vendor_party_id: vendorPartyId || null,
+      p_bill_no: billNo || null,
+      p_bill_date: billDate || null,
+      p_memo: note || null,
+      p_lines: lineItems,
+    });
 
     await upsertSnapshot.mutateAsync({
       p_receipt_id: selectedReceiptId,
@@ -399,35 +674,66 @@ export default function PurchaseCostWorklistPage() {
   }
 
   async function onApply() {
+    if (isCreating) {
+      toast.error("먼저 영수증을 저장하세요");
+      return;
+    }
     if (!selected) return;
-    if ((selected.linked_shipment_cnt ?? 0) <= 0) {
-      toast.error("이 영수증에 연결된 출고가 없습니다. 먼저 출고에서 영수증을 선택해 연결하세요.");
+
+    await onSave();
+    setApplyOpen(true);
+  }
+
+  async function handleApplyToShipments() {
+    if (!selected) return;
+    const totalKrw = selected.pricing_total_amount_krw ?? parseNumOrNull(totalAmount);
+    if (!totalKrw || totalKrw <= 0) {
+      toast.error("총금액(KRW)이 필요합니다");
+      return;
+    }
+    if (selectedCandidateRows.length === 0) {
+      toast.error("출고를 선택해주세요");
       return;
     }
 
-    // ✅ Apply 버튼 한 번에 끝내기: 저장(스냅샷) → 적용
-    const p_total_amount = parseNumOrNull(totalAmount);
-    if (p_total_amount == null) {
-      toast.error("총금액은 필수입니다");
-      return;
-    }
+    const allocations = calcShipmentAllocations(totalKrw, selectedCandidateRows, applyMethod).map((row) => ({
+      shipment_id: row.shipment_id,
+      allocated_cost_krw: row.alloc_krw,
+    }));
 
-    await upsertSnapshot.mutateAsync({
-      p_receipt_id: selected.receipt_id,
-      p_currency_code: currencyCode,
-      p_total_amount,
-      p_weight_g: parseNumOrNull(weightG),
-      p_labor_basic: parseNumOrNull(laborBasic),
-      p_labor_other: parseNumOrNull(laborOther),
-      p_note: note || null,
-    });
-
-    await applySnapshot.mutateAsync({
-      p_receipt_id: selected.receipt_id,
-      p_note: note || null,
+    await vendorBillApply.mutateAsync({
+      p_bill_id: selected.receipt_id,
+      p_allocations: allocations,
+      p_allocation_method: applyMethod,
       p_force: forceReapply,
+      p_note: note || null,
     });
   }
+
+  const toggleShipment = (shipmentId: string) => {
+    setSelectedShipments((prev) => {
+      const next = new Set(prev);
+      if (next.has(shipmentId)) {
+        next.delete(shipmentId);
+      } else {
+        next.add(shipmentId);
+      }
+      return next;
+    });
+  };
+
+  const toggleAllVisibleShipments = (checked: boolean) => {
+    setSelectedShipments((prev) => {
+      const next = new Set(prev);
+      const ids = filteredShipmentCandidates.map((row) => row.shipment_id);
+      if (checked) {
+        ids.forEach((id) => next.add(id));
+      } else {
+        ids.forEach((id) => next.delete(id));
+      }
+      return next;
+    });
+  };
 
   async function openReceiptPreview(receiptId: string) {
     try {
@@ -501,7 +807,13 @@ export default function PurchaseCostWorklistPage() {
     return calcAllocations(totalKrw, selected.linked_shipments ?? []);
   }, [selected]);
 
-  const busy = worklist.isLoading || upsertSnapshot.isPending || applySnapshot.isPending;
+  const busy =
+    worklist.isLoading ||
+    upsertSnapshot.isPending ||
+    vendorBillCreate.isPending ||
+    vendorBillApply.isPending ||
+    vendorBillHeaderUpdate.isPending;
+  const isEditing = isCreating || Boolean(selected);
 
   return (
     <div className="mx-auto max-w-[1800px] space-y-8 px-4 pb-10 pt-4 md:px-6">
@@ -513,6 +825,9 @@ export default function PurchaseCostWorklistPage() {
             <div className="flex items-center gap-2">
               <Button variant="secondary" onClick={() => worklist.refetch()} disabled={busy}>
                 새로고침
+              </Button>
+              <Button variant="secondary" onClick={startCreateBill} disabled={busy}>
+                수기 영수증
               </Button>
               <Button onClick={() => setUploadOpen(true)} disabled={busy}>
                 영수증 업로드
@@ -704,7 +1019,7 @@ export default function PurchaseCostWorklistPage() {
             <CardHeader className="flex items-center justify-between gap-3 border-b border-[var(--panel-border)] bg-[var(--panel)]/50 px-6 py-4 backdrop-blur-sm">
               <div className="flex items-center gap-2">
                 <div className="text-base font-semibold text-[var(--foreground)]">
-                  {selected ? "영수증 상세 및 배분" : "영수증을 선택하세요"}
+                  {isCreating ? "수기 영수증 입력" : selected ? "영수증 상세 및 배분" : "영수증을 선택하세요"}
                 </div>
                 {selected?.applied_at && (
                   <Badge tone="active" className="ml-2">적용완료</Badge>
@@ -719,6 +1034,10 @@ export default function PurchaseCostWorklistPage() {
                     닫기
                   </Button>
                 </div>
+              ) : isCreating ? (
+                <Button size="sm" variant="ghost" onClick={() => setIsCreating(false)}>
+                  닫기
+                </Button>
               ) : null}
             </CardHeader>
             <CardBody className="p-6">
@@ -738,7 +1057,7 @@ export default function PurchaseCostWorklistPage() {
                     <Skeleton className="mt-3 h-24 w-full" />
                   </div>
                 </div>
-              ) : !selected ? (
+              ) : !isEditing ? (
                 <div className="flex h-full flex-col items-center justify-center rounded-xl border border-dashed border-[var(--panel-border)] bg-[var(--surface)]/60 py-20 text-center">
                   <div className="mb-4 rounded-full bg-[var(--panel)] p-4 shadow-sm">
                     <svg className="h-8 w-8 text-[var(--muted-weak)]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -752,71 +1071,113 @@ export default function PurchaseCostWorklistPage() {
                 </div>
               ) : (
                 <div className="space-y-8">
-                  {/* Summary Section */}
                   <div className="rounded-xl border border-[var(--panel-border)] bg-[var(--panel)] p-4 shadow-sm">
-                    <div className="flex flex-wrap items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <div className="truncate text-sm font-semibold text-[var(--foreground)]">
-                          {(() => {
-                            // 현재 선택된 영수증의 날짜별 순번 계산 (목록과 동일한 로직)
-                            if (!selected) return '-';
-                            
-                            // rows를 received_at 기준으로 정렬 (목록과 동일)
-                            const sortedRows = [...rows].sort((a, b) => 
-                              new Date(a.received_at).getTime() - new Date(b.received_at).getTime()
-                            );
-                            
-                            const selectedDate = selected.received_at ? new Date(selected.received_at).toISOString().slice(0, 10) : 'unknown';
-                            let index = 1;
-                            
-                            for (const row of sortedRows) {
-                              if (row.receipt_id === selected.receipt_id) break;
-                              const rowDate = row.received_at ? new Date(row.received_at).toISOString().slice(0, 10) : 'unknown';
-                              if (rowDate === selectedDate) index++;
-                            }
-                            
-                            return getReceiptDisplayName(index, selected.received_at);
-                          })()}
-                        </div>
-                        <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-[var(--muted)]">
-                          <span className="tabular-nums">{formatYmd(selected.received_at)}</span>
-                          <span className="text-[var(--muted-weak)]">·</span>
-                          <span className="truncate font-medium text-[var(--muted-foreground)]">{selected.vendor_name ?? "거래처 미지정"}</span>
-                        </div>
-                      </div>
-                      <div className="flex flex-wrap items-center gap-1.5">
-                        <Badge tone={selected.applied_at ? "active" : "warning"} className="h-5 px-1.5 text-[10px]">
-                          {selected.applied_at ? "적용" : "미적용"}
-                        </Badge>
-                        <Badge tone={selected.pricing_total_amount_krw ? "active" : "warning"} className="h-5 px-1.5 text-[10px]">
-                          {selected.pricing_total_amount_krw ? "입력" : "미입력"}
-                        </Badge>
-                        <Badge tone={selected.linked_shipment_cnt > 0 ? "primary" : "neutral"} className="h-5 px-1.5 text-[10px]">
-                          연결 {selected.linked_shipment_cnt ?? 0}
-                        </Badge>
-                      </div>
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="text-sm font-semibold text-[var(--foreground)]">영수증 헤더</div>
+                      {vendorPartyId ? (
+                        <Badge tone="neutral" className="text-xs">{vendorOptions.find((v) => v.value === vendorPartyId)?.label ?? ""}</Badge>
+                      ) : null}
                     </div>
-                    <div className="mt-4 grid grid-cols-1 gap-3 text-xs text-[var(--muted)] sm:grid-cols-2 lg:grid-cols-3">
-                      <div className="rounded-lg border border-[var(--panel-border)] bg-[var(--surface)]/70 px-3 py-2">
-                        <div className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-weak)]">통화</div>
-                        <div className="mt-1 text-sm font-semibold text-[var(--foreground)]">
-                          {selected.pricing_currency_code ?? selected.inbox_currency_code ?? "-"}
-                        </div>
+                    <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-3">
+                      <SearchSelect
+                        label="공장(거래처)*"
+                        placeholder="검색"
+                        options={vendorOptions}
+                        value={vendorPartyId}
+                        onChange={(value) => setVendorPartyId(value)}
+                      />
+                      <div className="space-y-1.5">
+                        <label className="text-xs font-semibold uppercase tracking-wider text-[var(--muted)]">영수증번호</label>
+                        <Input
+                          placeholder="예: VB-202602"
+                          value={billNo}
+                          onChange={(e) => setBillNo(e.target.value)}
+                          className="bg-[var(--input-bg)]"
+                        />
                       </div>
-                      <div className="rounded-lg border border-[var(--panel-border)] bg-[var(--surface)]/70 px-3 py-2">
-                        <div className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-weak)]">총금액</div>
-                        <div className="mt-1 text-sm font-semibold text-[var(--foreground)] tabular-nums">
-                          {formatNumber(selected.pricing_total_amount)}
-                        </div>
-                      </div>
-                      <div className="rounded-lg border border-[var(--panel-border)] bg-[var(--surface)]/70 px-3 py-2">
-                        <div className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-weak)]">KRW 환산</div>
-                        <div className="mt-1 text-sm font-semibold text-[var(--foreground)] tabular-nums">
-                          {formatNumber(selected.pricing_total_amount_krw)}
-                        </div>
+                      <div className="space-y-1.5">
+                        <label className="text-xs font-semibold uppercase tracking-wider text-[var(--muted)]">영수증일자</label>
+                        <Input
+                          type="date"
+                          value={billDate}
+                          onChange={(e) => setBillDate(e.target.value)}
+                          className="bg-[var(--input-bg)]"
+                        />
                       </div>
                     </div>
                   </div>
+
+                  {/* Summary Section */}
+                  {selected ? (
+                    <div className="rounded-xl border border-[var(--panel-border)] bg-[var(--panel)] p-4 shadow-sm">
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="truncate text-sm font-semibold text-[var(--foreground)]">
+                            {(() => {
+                              // 현재 선택된 영수증의 날짜별 순번 계산 (목록과 동일한 로직)
+                              if (!selected) return '-';
+                              
+                              // rows를 received_at 기준으로 정렬 (목록과 동일)
+                              const sortedRows = [...rows].sort((a, b) => 
+                                new Date(a.received_at).getTime() - new Date(b.received_at).getTime()
+                              );
+                              
+                              const selectedDate = selected.received_at ? new Date(selected.received_at).toISOString().slice(0, 10) : 'unknown';
+                              let index = 1;
+                              
+                              for (const row of sortedRows) {
+                                if (row.receipt_id === selected.receipt_id) break;
+                                const rowDate = row.received_at ? new Date(row.received_at).toISOString().slice(0, 10) : 'unknown';
+                                if (rowDate === selectedDate) index++;
+                              }
+                              
+                              return getReceiptDisplayName(index, selected.received_at);
+                            })()}
+                          </div>
+                          <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-[var(--muted)]">
+                            <span className="tabular-nums">{formatYmd(selected.received_at)}</span>
+                            <span className="text-[var(--muted-weak)]">·</span>
+                            <span className="truncate font-medium text-[var(--muted-foreground)]">{selected.vendor_name ?? "거래처 미지정"}</span>
+                          </div>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <Badge tone={selected.applied_at ? "active" : "warning"} className="h-5 px-1.5 text-[10px]">
+                            {selected.applied_at ? "적용" : "미적용"}
+                          </Badge>
+                          <Badge tone={selected.pricing_total_amount_krw ? "active" : "warning"} className="h-5 px-1.5 text-[10px]">
+                            {selected.pricing_total_amount_krw ? "입력" : "미입력"}
+                          </Badge>
+                          <Badge tone={selected.linked_shipment_cnt > 0 ? "primary" : "neutral"} className="h-5 px-1.5 text-[10px]">
+                            연결 {selected.linked_shipment_cnt ?? 0}
+                          </Badge>
+                        </div>
+                      </div>
+                      <div className="mt-4 grid grid-cols-1 gap-3 text-xs text-[var(--muted)] sm:grid-cols-2 lg:grid-cols-3">
+                        <div className="rounded-lg border border-[var(--panel-border)] bg-[var(--surface)]/70 px-3 py-2">
+                          <div className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-weak)]">통화</div>
+                          <div className="mt-1 text-sm font-semibold text-[var(--foreground)]">
+                            {selected.pricing_currency_code ?? selected.inbox_currency_code ?? "-"}
+                          </div>
+                        </div>
+                        <div className="rounded-lg border border-[var(--panel-border)] bg-[var(--surface)]/70 px-3 py-2">
+                          <div className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-weak)]">총금액</div>
+                          <div className="mt-1 text-sm font-semibold text-[var(--foreground)] tabular-nums">
+                            {formatNumber(selected.pricing_total_amount)}
+                          </div>
+                        </div>
+                        <div className="rounded-lg border border-[var(--panel-border)] bg-[var(--surface)]/70 px-3 py-2">
+                          <div className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-weak)]">KRW 환산</div>
+                          <div className="mt-1 text-sm font-semibold text-[var(--foreground)] tabular-nums">
+                            {formatNumber(selected.pricing_total_amount_krw)}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="rounded-xl border border-[var(--panel-border)] bg-[var(--surface)]/60 p-4 text-xs text-[var(--muted)]">
+                      수기 영수증은 저장 후 요약 정보가 표시됩니다.
+                    </div>
+                  )}
 
                   {/* Line Items Section */}
                   <div className="space-y-3">
@@ -824,7 +1185,7 @@ export default function PurchaseCostWorklistPage() {
                       <label className="text-xs font-semibold uppercase tracking-wider text-[var(--muted)]">
                         상세 내역 ({lineItems.length})
                       </label>
-                      <Button size="sm" variant="secondary" onClick={addLine} disabled={!selectedReceiptId}>
+                      <Button size="sm" variant="secondary" onClick={addLine} disabled={!selectedReceiptId && !isCreating}>
                         + 라인 추가
                       </Button>
                     </div>
@@ -844,6 +1205,14 @@ export default function PurchaseCostWorklistPage() {
                                   value={item.model_name}
                                   onChange={(e) => updateLine(item.id, "model_name", e.target.value)}
                                   className="h-7 text-xs px-2"
+                                />
+                              </div>
+                              <div className="w-[70px]">
+                                <Input
+                                  placeholder="소재"
+                                  value={item.material_code ?? ""}
+                                  onChange={(e) => updateLine(item.id, "material_code", e.target.value)}
+                                  className="h-7 text-xs text-center px-1"
                                 />
                               </div>
                               <div className="w-[70px]">
@@ -934,15 +1303,15 @@ export default function PurchaseCostWorklistPage() {
                         className={`font-mono text-lg font-medium tabular-nums ${lineItems.length > 0 ? "bg-[var(--surface)] text-[var(--muted-foreground)]" : ""}`}
                       />
                       <p className="text-[11px] text-[var(--muted-weak)]">
-                        KRW 환산: <span className="font-medium text-[var(--muted-foreground)]">{formatNumber(selected.pricing_total_amount_krw)}</span>
-                        {selected.fx_rate_krw_per_unit && (
+                        KRW 환산: <span className="font-medium text-[var(--muted-foreground)]">{formatNumber(selected?.pricing_total_amount_krw)}</span>
+                        {selected?.fx_rate_krw_per_unit && (
                           <span className="ml-1">(fx {formatNumber(selected.fx_rate_krw_per_unit)})</span>
                         )}
                       </p>
                     </div>
 
                     <div className="space-y-1.5">
-                      <label className="text-xs font-semibold uppercase tracking-wider text-[var(--muted)]">중량 (g)</label>
+                      <label className="text-xs font-semibold uppercase tracking-wider text-[var(--muted)]">원물 중량 (g)</label>
                       <Input
                         inputMode="decimal"
                         placeholder="0.00"
@@ -950,6 +1319,28 @@ export default function PurchaseCostWorklistPage() {
                         onChange={(e) => setWeightG(e.target.value)}
                         readOnly={lineItems.length > 0}
                         className={`font-mono tabular-nums ${lineItems.length > 0 ? "bg-[var(--surface)] text-[var(--muted-foreground)]" : ""}`}
+                      />
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-semibold uppercase tracking-wider text-[var(--muted)]">금 중량 (g)</label>
+                      <Input
+                        inputMode="decimal"
+                        placeholder="0.00"
+                        value={goldWeightG}
+                        readOnly
+                        className="font-mono tabular-nums bg-[var(--surface)] text-[var(--muted-foreground)]"
+                      />
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-semibold uppercase tracking-wider text-[var(--muted)]">은 중량 (g)</label>
+                      <Input
+                        inputMode="decimal"
+                        placeholder="0.00"
+                        value={silverWeightG}
+                        readOnly
+                        className="font-mono tabular-nums bg-[var(--surface)] text-[var(--muted-foreground)]"
                       />
                     </div>
 
@@ -1000,74 +1391,88 @@ export default function PurchaseCostWorklistPage() {
                       <span>기존 데이터 덮어쓰기 (재적용)</span>
                     </label>
                     <div className="flex items-center gap-2">
-                      <Button variant="secondary" onClick={onSave} disabled={busy || !selectedReceiptId}>
+                      <Button
+                        variant="secondary"
+                        onClick={onSave}
+                        disabled={busy || (!selectedReceiptId && !isCreating)}
+                      >
                         저장만 하기
                       </Button>
-                      <Button onClick={onApply} disabled={busy || !selectedReceiptId} className="px-6 shadow-sm">
+                      <Button
+                        onClick={onApply}
+                        disabled={busy || isCreating || !selectedReceiptId}
+                        className="px-6 shadow-sm"
+                      >
                         저장 및 배분 적용
                       </Button>
                     </div>
                   </div>
 
                   {/* Allocations Section */}
-                  <div className="space-y-4">
-                    <div className="flex items-end justify-between border-b border-[var(--panel-border)] pb-2">
-                      <div>
-                        <h4 className="text-sm font-bold text-[var(--foreground)]">연결된 출고 내역</h4>
-                        <p className="mt-0.5 text-xs text-[var(--muted)]">
-                          출고확정 당시 내부원가 합계 비례 배분
-                        </p>
+                  {selected ? (
+                    <div className="space-y-4">
+                      <div className="flex items-end justify-between border-b border-[var(--panel-border)] pb-2">
+                        <div>
+                          <h4 className="text-sm font-bold text-[var(--foreground)]">연결된 출고 내역</h4>
+                          <p className="mt-0.5 text-xs text-[var(--muted)]">
+                            출고확정 당시 내부원가 합계 비례 배분
+                          </p>
+                        </div>
+                        <div className="text-right text-xs">
+                          <span className="font-medium text-[var(--foreground)]">{selected.linked_shipment_cnt ?? 0}건</span>
+                          <span className="mx-2 text-[var(--muted-weak)]">|</span>
+                          <span className="text-[var(--muted)]">기준합 {formatNumber(selected.linked_basis_cost_krw)} KRW</span>
+                        </div>
                       </div>
-                      <div className="text-right text-xs">
-                        <span className="font-medium text-[var(--foreground)]">{selected.linked_shipment_cnt ?? 0}건</span>
-                        <span className="mx-2 text-[var(--muted-weak)]">|</span>
-                        <span className="text-[var(--muted)]">기준합 {formatNumber(selected.linked_basis_cost_krw)} KRW</span>
-                      </div>
-                    </div>
 
-                    <div className="space-y-2">
-                      {selected.linked_shipments?.length ? (
-                        allocations.map((s) => (
-                          <div
-                            key={s.shipment_id}
-                            className="group flex flex-wrap items-center justify-between gap-3 rounded-lg border border-[var(--panel-border)] bg-[var(--panel)] px-4 py-3 transition-all hover:border-[var(--panel-border)] hover:shadow-sm"
-                          >
-                            <div className="min-w-0 flex-1">
-                              <div className="flex flex-wrap items-center gap-2">
-                                <span className="font-semibold text-[var(--foreground)]">
-                                  {s.customer_name ?? "(거래처 미상)"}
-                                </span>
-                                <div className="flex items-center gap-1.5">
-                                  <Badge tone="neutral" className="bg-[var(--muted)]/10 text-[var(--muted)]">{formatYmd(s.ship_date)}</Badge>
-                                  <Badge tone="neutral" className="bg-[var(--muted)]/10 text-[var(--muted)]">라인 {s.line_cnt ?? 0}</Badge>
+                      <div className="space-y-2">
+                        {selected.linked_shipments?.length ? (
+                          allocations.map((s) => (
+                            <div
+                              key={s.shipment_id}
+                              className="group flex flex-wrap items-center justify-between gap-3 rounded-lg border border-[var(--panel-border)] bg-[var(--panel)] px-4 py-3 transition-all hover:border-[var(--panel-border)] hover:shadow-sm"
+                            >
+                              <div className="min-w-0 flex-1">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <span className="font-semibold text-[var(--foreground)]">
+                                    {s.customer_name ?? "(거래처 미상)"}
+                                  </span>
+                                  <div className="flex items-center gap-1.5">
+                                    <Badge tone="neutral" className="bg-[var(--muted)]/10 text-[var(--muted)]">{formatYmd(s.ship_date)}</Badge>
+                                    <Badge tone="neutral" className="bg-[var(--muted)]/10 text-[var(--muted)]">라인 {s.line_cnt ?? 0}</Badge>
+                                  </div>
+                                </div>
+                                <div className="mt-1 flex items-center gap-2 text-xs text-[var(--muted)]">
+                                  <span className="font-mono text-[10px] text-[var(--muted-weak)]">{s.shipment_id}</span>
+                                  <span>·</span>
+                                  <span>기준 {formatNumber(s.basis_cost_krw)} KRW</span>
                                 </div>
                               </div>
-                              <div className="mt-1 flex items-center gap-2 text-xs text-[var(--muted)]">
-                                <span className="font-mono text-[10px] text-[var(--muted-weak)]">{s.shipment_id}</span>
-                                <span>·</span>
-                                <span>기준 {formatNumber(s.basis_cost_krw)} KRW</span>
+                              <div className="text-right">
+                                <div className="text-sm font-bold text-[var(--primary)] tabular-nums">
+                                  {formatNumber(s.alloc_krw)} KRW
+                                </div>
+                                <div className="text-[10px] text-[var(--muted-weak)]">
+                                  배분금액
+                                </div>
                               </div>
                             </div>
-                            <div className="text-right">
-                              <div className="text-sm font-bold text-[var(--primary)] tabular-nums">
-                                {formatNumber(s.alloc_krw)} KRW
-                              </div>
-                              <div className="text-[10px] text-[var(--muted-weak)]">
-                                배분금액
-                              </div>
-                            </div>
+                          ))
+                        ) : (
+                          <div className="flex flex-col items-center justify-center rounded-lg border border-dashed border-[var(--panel-border)] py-12 text-center">
+                            <p className="text-sm text-[var(--muted)]">연결된 출고가 없습니다.</p>
+                            <p className="mt-1 text-xs text-[var(--muted-weak)]">출고 관리에서 영수증을 연결해주세요.</p>
                           </div>
-                        ))
-                      ) : (
-                        <div className="flex flex-col items-center justify-center rounded-lg border border-dashed border-[var(--panel-border)] py-12 text-center">
-                          <p className="text-sm text-[var(--muted)]">연결된 출고가 없습니다.</p>
-                          <p className="mt-1 text-xs text-[var(--muted-weak)]">출고 관리에서 영수증을 연결해주세요.</p>
-                        </div>
-                      )}
+                        )}
+                      </div>
                     </div>
-                  </div>
+                  ) : (
+                    <div className="rounded-lg border border-dashed border-[var(--panel-border)] py-10 text-center text-sm text-[var(--muted)]">
+                      저장 후 배분 결과가 표시됩니다.
+                    </div>
+                  )}
 
-                  {selected.applied_at && (
+                  {selected?.applied_at && (
                     <div className="flex items-center gap-3 rounded-lg border border-[var(--success)]/30 bg-[var(--success)]/10 p-4 text-sm text-[var(--success)]">
                       <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[var(--success)]/20 text-[var(--success)]">
                         <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -1186,6 +1591,113 @@ export default function PurchaseCostWorklistPage() {
               ) : (
                 `${getDisplayName()} 업로드`
               )}
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
+      <Modal open={applyOpen} onClose={() => setApplyOpen(false)} title="출고 배분">
+        <div className="space-y-4">
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
+            <Select
+              value={applyMethod}
+              onChange={(e) => setApplyMethod(e.target.value as "PROVISIONAL" | "QTY")}
+              className="bg-[var(--input-bg)]"
+            >
+              <option value="PROVISIONAL">임시원가 비율</option>
+              <option value="QTY">수량 비율</option>
+            </Select>
+            <Select value={shipmentPartyFilter} onChange={(e) => setShipmentPartyFilter(e.target.value)}>
+              <option value="">거래처</option>
+              {shipmentPartyOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </Select>
+            <Input
+              placeholder="모델 검색"
+              value={shipmentModelFilter}
+              onChange={(e) => setShipmentModelFilter(e.target.value)}
+            />
+            <Input
+              type="date"
+              value={shipmentDateFilter}
+              onChange={(e) => setShipmentDateFilter(e.target.value)}
+            />
+          </div>
+
+          <div className="flex items-center justify-between text-sm">
+            <div className="text-[var(--muted)]">
+              총금액: {formatNumber(selected?.pricing_total_amount_krw ?? parseNumOrNull(totalAmount))} KRW
+            </div>
+            <label className="flex items-center gap-2 text-xs text-[var(--muted)]">
+              <input
+                type="checkbox"
+                checked={
+                  filteredShipmentCandidates.length > 0 &&
+                  filteredShipmentCandidates.every((row) => selectedShipments.has(row.shipment_id))
+                }
+                onChange={(e) => toggleAllVisibleShipments(e.target.checked)}
+              />
+              전체 선택
+            </label>
+          </div>
+
+          <div className="max-h-[320px] overflow-y-auto space-y-2">
+            {filteredShipmentCandidates.length === 0 ? (
+              <div className="rounded-lg border border-dashed border-[var(--panel-border)] bg-[var(--surface)]/60 p-6 text-center text-sm text-[var(--muted)]">
+                선택 가능한 출고가 없습니다.
+              </div>
+            ) : (
+              filteredShipmentCandidates.map((row) => {
+                const checked = selectedShipments.has(row.shipment_id);
+                return (
+                  <div
+                    key={row.shipment_id}
+                    className="flex items-center justify-between gap-3 rounded-lg border border-[var(--panel-border)] bg-[var(--panel)] px-4 py-3"
+                  >
+                    <label className="flex items-start gap-3 text-sm">
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() => toggleShipment(row.shipment_id)}
+                      />
+                      <div>
+                        <div className="font-semibold text-[var(--foreground)]">
+                          {row.customer_name ?? "거래처"}
+                        </div>
+                        <div className="text-xs text-[var(--muted)]">
+                          {row.model_names ?? "-"}
+                        </div>
+                        <div className="text-xs text-[var(--muted-weak)]">
+                          {row.ship_date ? formatYmd(row.ship_date) : "-"} · 수량 {row.total_qty ?? 0}
+                        </div>
+                      </div>
+                    </label>
+                    <div className="text-right text-xs text-[var(--muted)]">
+                      <div>기준 {formatNumber(row.total_cost_krw || row.total_sell_krw || row.total_qty)} KRW</div>
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+
+          {allocationPreview.length > 0 ? (
+            <div className="rounded-lg border border-[var(--panel-border)] bg-[var(--surface)]/50 p-3 text-xs text-[var(--muted)]">
+              선택 {allocationPreview.length}건 · 배분 합계 {formatNumber(
+                allocationPreview.reduce((sum, row) => sum + row.alloc_krw, 0)
+              )} KRW
+            </div>
+          ) : null}
+
+          <div className="flex justify-end gap-2">
+            <Button variant="secondary" onClick={() => setApplyOpen(false)}>
+              취소
+            </Button>
+            <Button onClick={handleApplyToShipments} disabled={vendorBillApply.isPending}>
+              배분 적용
             </Button>
           </div>
         </div>

@@ -39,6 +39,8 @@ export const CONTRACTS = {
     // ✅ 원가 작업대 / 영수증 인박스
     purchaseCostWorklist: "cms_v_purchase_cost_worklist_v1",
     receiptInboxOpen: "cms_v_receipt_inbox_open_v1",
+    repairLineEnriched: "cms_v_repair_line_enriched_v1",
+    shipmentCostApplyCandidates: "cms_v_shipment_cost_apply_candidates_v1",
 
     // ✅ Factory Purchase Order (공장발주) Views
     unshippedOrderLines: "cms_v_unshipped_order_lines",
@@ -121,6 +123,12 @@ export const CONTRACTS = {
     factoryPoCancel: "cms_fn_factory_po_cancel",
     receiptAttachToOrderLines: "cms_fn_receipt_attach_to_order_lines",
     markShipped: "cms_fn_mark_shipped",
+    repairCreate: "cms_fn_create_repair_v1",
+    repairSetStatus: "cms_fn_set_repair_status_v1",
+    repairSendToShipment: "cms_fn_send_repair_to_shipment_v1",
+    vendorBillCreate: "cms_fn_create_vendor_bill_v1",
+    vendorBillApply: "cms_fn_apply_vendor_bill_to_shipments_v1",
+    receiptUsageUpsert: "cms_fn_upsert_receipt_usage_alloc_v1",
   },
 };
 

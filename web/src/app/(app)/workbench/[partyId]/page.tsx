@@ -69,6 +69,9 @@ interface ShipmentItem {
   status: string;
   confirmed_at?: string;
   ship_date?: string;
+  purchase_cost_status?: string | null;
+  purchase_receipt_id?: string | null;
+  repair_line_id?: string | null;
 }
 
 interface PaymentItem {
@@ -370,7 +373,9 @@ function WorkbenchContent() {
       if (!schemaClient || !partyId) return [];
       const { data, error } = await schemaClient
         .from("cms_shipment_header")
-        .select("shipment_id, status, confirmed_at, ship_date, cms_shipment_line!inner(order_line_id, model_name, qty, total_amount_sell_krw)")
+        .select(
+          "shipment_id, status, confirmed_at, ship_date, cms_shipment_line!inner(shipment_line_id, order_line_id, model_name, qty, total_amount_sell_krw, purchase_cost_status, purchase_receipt_id, repair_line_id)"
+        )
         .eq("customer_party_id", partyId)
         .order("created_at", { ascending: false });
       if (error) throw error;
@@ -381,7 +386,7 @@ function WorkbenchContent() {
         header.cms_shipment_line?.forEach((line: any) => {
           flattened.push({
             shipment_id: header.shipment_id,
-            shipment_line_id: line.order_line_id,
+            shipment_line_id: line.shipment_line_id,
             order_line_id: line.order_line_id,
             model_name: line.model_name,
             qty: line.qty,
@@ -389,6 +394,9 @@ function WorkbenchContent() {
             status: header.status,
             confirmed_at: header.confirmed_at,
             ship_date: header.ship_date,
+            purchase_cost_status: line.purchase_cost_status ?? null,
+            purchase_receipt_id: line.purchase_receipt_id ?? null,
+            repair_line_id: line.repair_line_id ?? null,
           });
         });
       });
@@ -453,7 +461,7 @@ function WorkbenchContent() {
         {
           label: "상세보기",
           onClick: () => router.push(`/orders?edit_order_line_id=${order.order_line_id}`),
-          variant: "outline" as const,
+          variant: "secondary" as const,
         },
       ] : [],
     })) || []),
@@ -715,9 +723,34 @@ function WorkbenchContent() {
                       <div className="font-semibold text-lg">
                         ₩{shipment.total_amount_sell_krw.toLocaleString()}
                       </div>
-                      <Badge tone={shipment.status === "CONFIRMED" ? "active" : "neutral"} className="text-xs">
-                        {shipment.status === "CONFIRMED" ? "확정" : "임시"}
-                      </Badge>
+                      <div className="flex flex-col items-end gap-1">
+                        <Badge tone={shipment.status === "CONFIRMED" ? "active" : "neutral"} className="text-xs">
+                          {shipment.status === "CONFIRMED" ? "확정" : "임시"}
+                        </Badge>
+                        <div className="flex flex-wrap items-center justify-end gap-1">
+                          {shipment.repair_line_id ? (
+                            <Badge tone="primary" className="text-[10px]">
+                              수리
+                            </Badge>
+                          ) : null}
+                          <Badge
+                            tone={shipment.purchase_cost_status === "ACTUAL" ? "active" : "warning"}
+                            className="text-[10px]"
+                          >
+                            {shipment.purchase_cost_status === "ACTUAL" ? "원가확정" : "원가미확정"}
+                          </Badge>
+                          {shipment.purchase_receipt_id ? (
+                            <Link
+                              href={`/purchase_cost_worklist?receipt_id=${encodeURIComponent(
+                                shipment.purchase_receipt_id
+                              )}`}
+                              className="text-[10px] text-[var(--primary)] hover:underline"
+                            >
+                              영수증
+                            </Link>
+                          ) : null}
+                        </div>
+                      </div>
                     </div>
                   </div>
                 </CardBody>
