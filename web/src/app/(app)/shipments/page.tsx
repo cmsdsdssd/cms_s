@@ -16,6 +16,7 @@ import { SearchSelect } from "@/components/ui/search-select";
 
 import { CONTRACTS } from "@/lib/contracts";
 import { readView } from "@/lib/supabase/read";
+import { getSchemaClient } from "@/lib/supabase/client";
 import { useRpcMutation } from "@/hooks/use-rpc-mutation";
 import { cn } from "@/lib/utils";
 
@@ -105,18 +106,29 @@ const normalizeId = (value: unknown) => {
 };
 
 // Helper function to convert relative photo path to full Supabase Storage URL
-const getMasterPhotoUrl = (photoUrl: string | null | undefined): string => {
-  if (!photoUrl) return "";
+const getMasterPhotoUrl = (photoUrl: string | null | undefined): string | null => {
+  if (!photoUrl || photoUrl.trim() === "") return null;
   // If it's already a full URL, return it
   if (photoUrl.startsWith("http://") || photoUrl.startsWith("https://")) {
     return photoUrl;
   }
   // Convert relative path to full Supabase Storage URL
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  if (!supabaseUrl) return "";
+  if (!supabaseUrl) {
+    console.warn("[getMasterPhotoUrl] NEXT_PUBLIC_SUPABASE_URL not set");
+    return null;
+  }
   // Remove leading slash if present
   const cleanPath = photoUrl.startsWith("/") ? photoUrl.slice(1) : photoUrl;
-  return `${supabaseUrl}/storage/v1/object/public/${cleanPath}`;
+  // 🔥 FIX: 버킷 이름 명시 (실제 버킷명: master_images)
+  const bucketName = process.env.NEXT_PUBLIC_SUPABASE_BUCKET || "master_images";
+  // If path already includes bucket name, remove it first (like inventory page)
+  const finalPath = cleanPath.startsWith(`${bucketName}/`) 
+    ? cleanPath.slice(bucketName.length + 1) 
+    : cleanPath;
+  const fullUrl = `${supabaseUrl}/storage/v1/object/public/${bucketName}/${finalPath}`;
+  console.log("[getMasterPhotoUrl] Input:", photoUrl, "-> Output:", fullUrl);
+  return fullUrl;
 };
 
 export default function ShipmentsPage() {
@@ -338,13 +350,44 @@ export default function ShipmentsPage() {
       return;
     }
 
-    await shipmentUpsertMutation.mutateAsync({
+    const result = await shipmentUpsertMutation.mutateAsync({
       p_order_line_id: selectedOrderLineId,
       p_weight_g: weightValue,
       p_total_labor: laborValue,
       p_actor_person_id: actorId,
       p_idempotency_key: idempotencyKey,
     });
+    
+    // ✅ 공임 직접 업데이트 (DB 함수가 저장하지 않는 문제 해결)
+    const shipmentLineId = result?.shipment_line_id;
+    if (shipmentLineId && laborValue > 0) {
+      const supabase = getSchemaClient();
+      if (supabase) {
+        // 1. 현재 소재비 조회
+        const { data: lineData } = await supabase
+          .from('cms_shipment_line')
+          .select('material_amount_sell_krw')
+          .eq('shipment_line_id', shipmentLineId)
+          .single();
+        
+        const materialCost = lineData?.material_amount_sell_krw || 0;
+        const newTotal = materialCost + laborValue;
+        
+        // 2. 공임과 총액 업데이트
+        await supabase
+          .from('cms_shipment_line')
+          .update({ 
+            manual_labor_krw: laborValue,
+            labor_total_sell_krw: laborValue,
+            total_amount_sell_krw: newTotal,
+            actual_labor_cost_krw: laborValue,
+            actual_cost_krw: newTotal
+          })
+          .eq('shipment_line_id', shipmentLineId);
+          
+        console.log('[Labor Update] shipment_line_id:', shipmentLineId, 'labor:', laborValue, 'total:', newTotal);
+      }
+    }
   };
 
   const displayedLines = useMemo(() => {
@@ -825,22 +868,28 @@ export default function ShipmentsPage() {
                         <div className="flex items-start gap-4">
                           {/* Master Photo Thumbnail - Using prefill data */}
                           <div className="relative h-28 w-28 shrink-0 overflow-hidden rounded-xl bg-gradient-to-br from-[var(--panel)] to-[var(--background)] border-2 border-[var(--primary)]/40 shadow-sm">
-                            <img
-                              src={getMasterPhotoUrl(prefill?.photo_url)}
-                              alt={prefill?.model_no ?? "모델 이미지"}
-                              className="h-full w-full object-cover"
-                              loading="eager"
-                              onLoad={() => console.log("[Master Photo] Loaded successfully:", getMasterPhotoUrl(prefill?.photo_url))}
-                              onError={(e) => {
-                                console.error("[Master Photo] Failed to load:", prefill?.photo_url, "Full URL:", getMasterPhotoUrl(prefill?.photo_url));
-                                const target = e.target as HTMLImageElement;
-                                target.style.display = "none";
-                              }}
-                              style={{ display: prefill?.photo_url ? "block" : "none" }}
-                            />
+                            {getMasterPhotoUrl(prefill?.photo_url) ? ( // ✅ null 체크 추가
+                              <img
+                                src={getMasterPhotoUrl(prefill?.photo_url) || undefined}
+                                alt={prefill?.model_no ?? "모델 이미지"}
+                                className="h-full w-full object-cover"
+                                loading="eager"
+                                onLoad={() => console.log("[Master Photo] Loaded successfully:", getMasterPhotoUrl(prefill?.photo_url))}
+                                onError={(e) => {
+                                  // ✅ 에러 로그 한 번만 출력
+                                  if (process.env.NODE_ENV === 'development') {
+                                    console.error("[Master Photo] Failed to load:", prefill?.photo_url);
+                                  }
+                                  const target = e.target as HTMLImageElement;
+                                  target.style.display = "none";
+                                }}
+                              />
+                            ) : null}
                             <div 
-                              className="flex h-full w-full items-center justify-center text-[var(--muted)]"
-                              style={{ display: prefill?.photo_url ? "none" : "flex" }}
+                              className={cn(
+                                "flex h-full w-full items-center justify-center text-[var(--muted)]",
+                                getMasterPhotoUrl(prefill?.photo_url) ? "absolute inset-0 -z-10" : "" // ✅ 이미지 있을 때는 뒤로
+                              )}
                             >
                               <Package className="w-10 h-10 opacity-40" />
                             </div>
@@ -1103,22 +1152,27 @@ export default function ShipmentsPage() {
               <div className="flex items-start gap-4">
                 {/* Master Photo in Confirm Modal - Using prefill data */}
                 <div className="relative h-24 w-24 shrink-0 overflow-hidden rounded-xl bg-gradient-to-br from-[var(--panel)] to-[var(--background)] border-2 border-[var(--primary)]/40 shadow-sm">
-                  <img
-                    src={getMasterPhotoUrl(prefill?.photo_url)}
-                    alt={prefill?.model_no ?? "모델 이미지"}
-                    className="h-full w-full object-cover"
-                    loading="eager"
-                    onLoad={() => console.log("[Master Photo Modal] Loaded:", getMasterPhotoUrl(prefill?.photo_url))}
-                    onError={(e) => {
-                      console.error("[Master Photo Modal] Failed:", prefill?.photo_url, "Full URL:", getMasterPhotoUrl(prefill?.photo_url));
-                      const target = e.target as HTMLImageElement;
-                      target.style.display = "none";
-                    }}
-                    style={{ display: prefill?.photo_url ? "block" : "none" }}
-                  />
+                  {getMasterPhotoUrl(prefill?.photo_url) ? (
+                    <img
+                      src={getMasterPhotoUrl(prefill?.photo_url) || undefined}
+                      alt={prefill?.model_no ?? "모델 이미지"}
+                      className="h-full w-full object-cover"
+                      loading="eager"
+                      onLoad={() => console.log("[Master Photo Modal] Loaded:", getMasterPhotoUrl(prefill?.photo_url))}
+                      onError={(e) => {
+                        if (process.env.NODE_ENV === 'development') {
+                          console.error("[Master Photo Modal] Failed:", prefill?.photo_url);
+                        }
+                        const target = e.target as HTMLImageElement;
+                        target.style.display = "none";
+                      }}
+                    />
+                  ) : null}
                   <div 
-                    className="flex h-full w-full items-center justify-center text-[var(--muted)]"
-                    style={{ display: prefill?.photo_url ? "none" : "flex" }}
+                    className={cn(
+                      "flex h-full w-full items-center justify-center text-[var(--muted)]",
+                      getMasterPhotoUrl(prefill?.photo_url) ? "absolute inset-0 -z-10" : ""
+                    )}
                   >
                     <Package className="w-8 h-8 opacity-40" />
                   </div>

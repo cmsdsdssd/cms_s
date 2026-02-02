@@ -178,14 +178,45 @@ export function InlineShipmentPanel({
       if (!shipmentId || !schemaClient) throw new Error("No shipment");
       
       // Update shipment line with weights and pricing
+      // ✅ 총액 직접 계산 (소재비 + 공임 + 도금 + 수리비)
+      const calculatedTotal = materialCost + laborTotal + platingTotal + repairTotal;
+      
       await callRpc("cms_fn_shipment_update_line_v1", {
         p_shipment_id: shipmentId,
         p_measured_weight_g: weightNum / orderData.qty, // per unit
         p_deduction_weight_g: deductionNum / orderData.qty, // per unit
         p_plating_amount_sell_krw: parseFloat(platingCost) || 0,
         p_repair_fee_krw: parseFloat(repairFee) || 0,
+        p_manual_total_amount_krw: calculatedTotal,
         p_pricing_mode: "RULE",
       });
+      
+      // ✅ 공임 직접 업데이트 (DB 함수가 labor 컬럼을 업데이트하지 않는 문제 해결)
+      const { data: lineData } = await schemaClient
+        .from('cms_shipment_line')
+        .select('shipment_line_id, material_amount_sell_krw')
+        .eq('shipment_id', shipmentId)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .single();
+      
+      if (lineData?.shipment_line_id && laborTotal > 0) {
+        const materialCostFromDb = lineData.material_amount_sell_krw || materialCost;
+        const newTotal = materialCostFromDb + laborTotal;
+        
+        await schemaClient
+          .from('cms_shipment_line')
+          .update({ 
+            manual_labor_krw: laborTotal,
+            labor_total_sell_krw: laborTotal,
+            total_amount_sell_krw: newTotal,
+            actual_labor_cost_krw: laborTotal,
+            actual_cost_krw: newTotal
+          })
+          .eq('shipment_line_id', lineData.shipment_line_id);
+          
+        console.log('[Inline Panel Labor Update] labor:', laborTotal, 'total:', newTotal);
+      }
       
       return true;
     },

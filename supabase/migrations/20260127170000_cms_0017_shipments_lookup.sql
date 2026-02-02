@@ -105,7 +105,9 @@ begin
 
   update public.cms_shipment_line
   set measured_weight_g = p_weight_g,
-      manual_labor_krw = p_total_labor
+      manual_labor_krw = p_total_labor,
+      labor_total_sell_krw = p_total_labor,
+      total_amount_sell_krw = COALESCE(material_amount_sell_krw, 0) + p_total_labor
   where shipment_line_id = v_line_id;
 
   return jsonb_build_object(
