@@ -107,6 +107,8 @@ type ArPaymentAllocDetailRow = {
   alloc_gold_g?: number | null;
   alloc_silver_g?: number | null;
   alloc_value_krw?: number | null;
+  alloc_labor_krw?: number | null;
+  alloc_material_krw?: number | null;
   shipment_line_id?: string | null;
   model_name?: string | null;
   suffix?: string | null;
@@ -395,7 +397,7 @@ export default function ArPage() {
       const { data, error } = await schemaClient
         .from(CONTRACTS.views.arPaymentAllocDetail)
         .select(
-          "payment_id, paid_at, cash_krw, gold_g, silver_g, note, alloc_id, ar_id, alloc_cash_krw, alloc_gold_g, alloc_silver_g, alloc_value_krw, shipment_line_id, model_name, suffix, color, size, invoice_occurred_at"
+          "payment_id, paid_at, cash_krw, gold_g, silver_g, note, alloc_id, ar_id, alloc_cash_krw, alloc_gold_g, alloc_silver_g, alloc_value_krw, alloc_labor_krw, alloc_material_krw, shipment_line_id, model_name, suffix, color, size, invoice_occurred_at"
         )
         .eq("party_id", effectiveSelectedPartyId)
         .order("paid_at", { ascending: false });
@@ -420,6 +422,29 @@ export default function ArPage() {
       }
     });
     return Array.from(map.values());
+  }, [paymentAllocQuery.data]);
+
+  const paymentSummaryById = useMemo(() => {
+    const map = new Map<
+      string,
+      { labor: number; material: number; gold: number; silver: number }
+    >();
+    (paymentAllocQuery.data ?? []).forEach((row) => {
+      if (!row.payment_id) return;
+      if (!map.has(row.payment_id)) {
+        map.set(row.payment_id, { labor: 0, material: 0, gold: 0, silver: 0 });
+      }
+      const entry = map.get(row.payment_id);
+      if (!entry) return;
+      const laborValue = Number(row.alloc_labor_krw ?? 0);
+      const rawMaterial = Number(row.alloc_material_krw ?? 0);
+      const materialValue = rawMaterial > 0 ? rawMaterial : Number(row.alloc_value_krw ?? 0);
+      entry.labor += laborValue;
+      entry.material += materialValue;
+      entry.gold += Number(row.alloc_gold_g ?? 0);
+      entry.silver += Number(row.alloc_silver_g ?? 0);
+    });
+    return map;
   }, [paymentAllocQuery.data]);
 
   const shipmentLinesQuery = useQuery({
@@ -868,9 +893,20 @@ export default function ArPage() {
                         : undefined;
                       const modelName = shipmentLine?.model_name ?? "-";
                       const optionParts = [shipmentLine?.suffix, shipmentLine?.color, shipmentLine?.size].filter(Boolean);
+                      const paymentSummary = row.payment_id
+                        ? paymentSummaryById.get(row.payment_id)
+                        : undefined;
+                      const paymentMetalLabel = paymentSummary
+                        ? `금 ${formatGram(paymentSummary.gold)} · 은 ${formatGram(paymentSummary.silver)}`
+                        : "-";
                       const materialAmount = shipmentLine?.material_amount_sell_krw ?? null;
                       const laborAmount = shipmentLine?.labor_total_sell_krw ?? null;
                       const totalAmount = shipmentLine?.total_amount_sell_krw ?? null;
+                      const paymentMaterial = paymentSummary ? paymentSummary.material : null;
+                      const paymentLabor = paymentSummary ? paymentSummary.labor : null;
+                      const paymentTotal = paymentSummary
+                        ? paymentSummary.material + paymentSummary.labor
+                        : null;
                       return (
                         <tr
                           key={row.ar_ledger_id}
@@ -895,7 +931,7 @@ export default function ArPage() {
                           <td className="px-4 py-3">
                             <div className="space-y-1">
                               <p className="text-sm font-semibold text-[var(--foreground)]">
-                                {isShipment ? modelName : "-"}
+                                {isShipment ? modelName : paymentMetalLabel}
                               </p>
                               <p className="text-[11px] text-[var(--muted)]">
                                 {isShipment && optionParts.length > 0 ? optionParts.join(" / ") : "-"}
@@ -903,13 +939,13 @@ export default function ArPage() {
                             </div>
                           </td>
                           <td className="px-4 py-3 text-right tabular-nums text-[var(--muted)]">
-                            {isShipment ? formatKrw(materialAmount) : "-"}
+                            {isShipment ? formatKrw(materialAmount) : formatKrw(paymentMaterial)}
                           </td>
                           <td className="px-4 py-3 text-right tabular-nums text-[var(--muted)]">
-                            {isShipment ? formatKrw(laborAmount) : "-"}
+                            {isShipment ? formatKrw(laborAmount) : formatKrw(paymentLabor)}
                           </td>
                           <td className="px-4 py-3 text-right tabular-nums font-semibold text-[var(--foreground)]">
-                            {isShipment ? formatKrw(totalAmount) : "-"}
+                            {isShipment ? formatKrw(totalAmount) : formatKrw(paymentTotal)}
                           </td>
                           <td className="px-4 py-3 text-right">
                             <AmountPill amount={row.amount_krw} />
