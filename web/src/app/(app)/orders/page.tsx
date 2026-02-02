@@ -258,14 +258,14 @@ const LoadingOverlay = () => (
 );
 
 // Color Checkbox Component
-function ColorCheckbox({ 
-  checked, 
-  onChange, 
+function ColorCheckbox({
+  checked,
+  onChange,
   label,
   color
-}: { 
-  checked: boolean; 
-  onChange: () => void; 
+}: {
+  checked: boolean;
+  onChange: () => void;
   label: string;
   color: "pink" | "gold" | "white" | "black";
 }) {
@@ -278,7 +278,7 @@ function ColorCheckbox({
       text: "text-white",
     },
     gold: {
-      bg: "bg-amber-500", 
+      bg: "bg-amber-500",
       bgLight: "bg-amber-200",
       border: "border-amber-500",
       borderLight: "border-amber-300",
@@ -308,8 +308,8 @@ function ColorCheckbox({
       onClick={onChange}
       className={cn(
         "w-6 h-6 rounded border text-xs font-bold transition-all duration-150 flex items-center justify-center",
-        checked 
-          ? `${style.bg} ${style.border} ${style.text} shadow-md scale-110 ring-2 ring-offset-1 ring-primary/30` 
+        checked
+          ? `${style.bg} ${style.border} ${style.text} shadow-md scale-110 ring-2 ring-offset-1 ring-primary/30`
           : `${style.bgLight} ${style.borderLight} hover:opacity-70 text-transparent`
       )}
     >
@@ -681,7 +681,7 @@ function OrdersPageContent() {
     const master = masterCache.current.get(row.model_input.toLowerCase());
     const colorStr = getColorString(row);
     const platingStr = getPlatingString(row);
-    
+
     return {
       p_customer_party_id: row.client_id,
       p_master_id: row.master_item_id ?? master?.master_item_id ?? null,
@@ -780,7 +780,7 @@ function OrdersPageContent() {
   return (
     <>
       {initLoading && <LoadingOverlay />}
-      
+
       {/* Sticky Status Bar */}
       <div className="sticky top-0 z-40 w-full bg-background/80 backdrop-blur-md border-b border-border/40 px-4 py-2 flex items-center justify-between transition-all duration-200">
         <div className="flex items-center gap-3">
@@ -791,25 +791,25 @@ function OrdersPageContent() {
           </div>
           <div className="h-6 w-px bg-border/50 mx-1" />
           <div className="flex items-center gap-2 text-xs text-[var(--muted)]">
-             <span className={cn("w-2 h-2 rounded-full", saveInFlight.current.size > 0 ? "bg-[var(--warning)] animate-pulse" : "bg-[var(--success)]")} />
-             {saveInFlight.current.size > 0 ? "Saving..." : "Ready"}
+            <span className={cn("w-2 h-2 rounded-full", saveInFlight.current.size > 0 ? "bg-[var(--warning)] animate-pulse" : "bg-[var(--success)]")} />
+            {saveInFlight.current.size > 0 ? "Saving..." : "Ready"}
           </div>
         </div>
         <div className="flex items-center gap-2">
-            <Link href="/orders_main">
-              <Button variant="ghost" size="sm" className="h-7 text-xs text-[var(--muted)] hover:text-[var(--foreground)]">
-                닫기
-              </Button>
-            </Link>
+          <Link href="/orders_main">
+            <Button variant="ghost" size="sm" className="h-7 text-xs text-[var(--muted)] hover:text-[var(--foreground)]">
+              닫기
+            </Button>
+          </Link>
         </div>
       </div>
 
       <div className="max-w-[1920px] mx-auto px-2 py-2 grid grid-cols-1 lg:grid-cols-[1fr_280px] gap-3 pb-20">
-        
+
         {/* Left Column: Compact Order Grid */}
         <div className="space-y-1 min-w-0">
           {/* Header Row */}
-          <div className="grid grid-cols-[30px_110px_99px_70px_45px_50px_100px_30px_0.8fr_30px] gap-1 px-1 py-1 text-[10px] font-semibold text-[var(--muted)] uppercase tracking-wider border-b border-border/40 items-center">
+          <div className="grid grid-cols-[30px_160px_160px_70px_45px_50px_100px_30px_0.8fr_30px] gap-1 px-1 py-1 text-[10px] font-semibold text-[var(--muted)] uppercase tracking-wider border-b border-border/40 items-center">
             <span className="text-center">#</span>
             <span>거래처</span>
             <span>모델</span>
@@ -824,243 +824,243 @@ function OrdersPageContent() {
 
           {/* Data Rows */}
           {rows.slice((pageIndex - 1) * PAGE_SIZE, pageIndex * PAGE_SIZE).map((row, idx) => {
-             const errors = rowErrors[row.id] ?? {};
-             const realIdx = (pageIndex - 1) * PAGE_SIZE + idx + 1;
-             const hasStones = row.center_stone || row.sub1_stone || row.sub2_stone;
-             
-             return (
-               <div key={row.id} className="space-y-0.5">
-                 {/* Main Row */}
-                  <div 
+            const errors = rowErrors[row.id] ?? {};
+            const realIdx = (pageIndex - 1) * PAGE_SIZE + idx + 1;
+            const hasStones = row.center_stone || row.sub1_stone || row.sub2_stone;
+
+            return (
+              <div key={row.id} className="space-y-0.5">
+                {/* Main Row */}
+                <div
+                  className={cn(
+                    "grid grid-cols-[30px_160px_160px_70px_45px_50px_100px_30px_0.8fr_30px] gap-1 px-1 py-1 items-center text-xs rounded-md border transition-all",
+                    row.order_line_id ? "bg-primary/5 border-primary/20" : "bg-card border-border/50 hover:border-border",
+                    (errors.client || errors.model) ? "bg-[var(--danger)]/5 border-[var(--danger)]/30" : ""
+                  )}
+                  onBlur={(event) => {
+                    const next = event.relatedTarget as Node | null;
+                    if (next && event.currentTarget.contains(next)) return;
+                    const current = rows.find((item) => item.id === row.id);
+                    if (current) void saveRow(current);
+                  }}
+                >
+                  {/* Row Number */}
+                  <span className="text-[9px] font-mono text-[var(--muted)] text-center">{realIdx}</span>
+
+                  {/* Client Input */}
+                  <input
                     className={cn(
-                      "grid grid-cols-[30px_110px_99px_70px_45px_50px_100px_30px_0.8fr_30px] gap-1 px-1 py-1 items-center text-xs rounded-md border transition-all",
-                      row.order_line_id ? "bg-primary/5 border-primary/20" : "bg-card border-border/50 hover:border-border",
-                      (errors.client || errors.model) ? "bg-[var(--danger)]/5 border-[var(--danger)]/30" : ""
+                      "w-full bg-transparent border border-transparent focus:border-primary/50 focus:bg-background rounded px-1 py-0.5 text-xs transition-colors",
+                      errors.client ? "border-[var(--danger)]/50 bg-[var(--danger)]/5" : "hover:border-border/50"
                     )}
-                   onBlur={(event) => {
-                      const next = event.relatedTarget as Node | null;
-                      if (next && event.currentTarget.contains(next)) return;
-                      const current = rows.find((item) => item.id === row.id);
-                      if (current) void saveRow(current);
-                   }}
-                 >
-                   {/* Row Number */}
-                   <span className="text-[9px] font-mono text-[var(--muted)] text-center">{realIdx}</span>
-                   
-                   {/* Client Input */}
-                   <input
-                     className={cn(
-                       "w-full bg-transparent border border-transparent focus:border-primary/50 focus:bg-background rounded px-1 py-0.5 text-xs transition-colors",
-                       errors.client ? "border-[var(--danger)]/50 bg-[var(--danger)]/5" : "hover:border-border/50"
-                     )}
-                     value={row.client_input}
-                     onChange={(e) => updateRow(row.id, { client_input: e.target.value })}
-                     onBlur={(e) => resolveClient(row.id, e.currentTarget.value)}
-                     placeholder="거래처..."
-                   />
-                   
-                   {/* Model Input */}
-                   <input
-                     className={cn(
-                       "w-full bg-transparent border border-transparent focus:border-primary/50 focus:bg-background rounded px-1 py-0.5 text-xs font-medium transition-colors",
-                       errors.model ? "border-[var(--danger)]/50 bg-[var(--danger)]/5" : "hover:border-border/50"
-                     )}
-                     value={row.model_input}
-                     onChange={(e) => updateRow(row.id, { model_input: e.target.value })}
-                     onBlur={(e) => resolveMaster(row.id, e.currentTarget.value)}
-                     placeholder="모델..."
-                   />
-                   
-                   {/* Color Checkboxes (P, G, W) */}
-                   <div className="flex items-center justify-center gap-0.5">
-                     <ColorCheckbox 
-                       checked={row.color_p} 
-                       onChange={() => toggleColor(row.id, "color_p")} 
-                       label="P"
-                       color="pink"
-                     />
-                     <ColorCheckbox 
-                       checked={row.color_g} 
-                       onChange={() => toggleColor(row.id, "color_g")} 
-                       label="G"
-                       color="gold"
-                     />
-                     <ColorCheckbox 
-                       checked={row.color_w} 
-                       onChange={() => toggleColor(row.id, "color_w")} 
-                       label="W"
-                       color="white"
-                     />
-                   </div>
-                   
-                   {/* Size Input */}
-                   <input
-                     className="w-full bg-transparent border border-transparent focus:border-primary/50 focus:bg-background rounded px-1 py-0.5 text-xs text-center hover:border-border/50 transition-colors"
-                     value={row.size}
-                     onChange={(e) => updateRow(row.id, { size: e.target.value })}
-                     placeholder="Size"
-                   />
-                   
-                   {/* Qty Input */}
-                   <input
-                     type="number"
-                     className={cn(
-                       "w-full bg-transparent border border-transparent focus:border-primary/50 focus:bg-background rounded px-1 py-0.5 text-xs text-center tabular-nums transition-colors",
-                       errors.qty ? "border-[var(--danger)]/50" : "hover:border-border/50"
-                     )}
-                     value={row.qty}
-                     onChange={(e) => updateRow(row.id, { qty: e.target.value })}
-                     min="1"
-                   />
-                   
-                   {/* Plating Checkboxes (P, G, W, B) */}
-                   <div className="flex items-center justify-center gap-0.5">
-                     <ColorCheckbox 
-                       checked={row.plating_p} 
-                       onChange={() => togglePlating(row.id, "plating_p")} 
-                       label="P"
-                       color="pink"
-                     />
-                     <ColorCheckbox 
-                       checked={row.plating_g} 
-                       onChange={() => togglePlating(row.id, "plating_g")} 
-                       label="G"
-                       color="gold"
-                     />
-                     <ColorCheckbox 
-                       checked={row.plating_w} 
-                       onChange={() => togglePlating(row.id, "plating_w")} 
-                       label="W"
-                       color="white"
-                     />
-                     <ColorCheckbox 
-                       checked={row.plating_b} 
-                       onChange={() => togglePlating(row.id, "plating_b")} 
-                       label="B"
-                       color="black"
-                     />
-                   </div>
-                   
-                   {/* Stone Toggle */}
-                   <button
-                     type="button"
-                     onClick={() => toggleStones(row.id)}
-                     className={cn(
-                       "w-5 h-5 rounded flex items-center justify-center text-xs transition-colors",
-                       row.show_stones || hasStones
+                    value={row.client_input}
+                    onChange={(e) => updateRow(row.id, { client_input: e.target.value })}
+                    onBlur={(e) => resolveClient(row.id, e.currentTarget.value)}
+                    placeholder="거래처..."
+                  />
+
+                  {/* Model Input */}
+                  <input
+                    className={cn(
+                      "w-full bg-transparent border border-transparent focus:border-primary/50 focus:bg-background rounded px-1 py-0.5 text-xs font-medium transition-colors",
+                      errors.model ? "border-[var(--danger)]/50 bg-[var(--danger)]/5" : "hover:border-border/50"
+                    )}
+                    value={row.model_input}
+                    onChange={(e) => updateRow(row.id, { model_input: e.target.value })}
+                    onBlur={(e) => resolveMaster(row.id, e.currentTarget.value)}
+                    placeholder="모델..."
+                  />
+
+                  {/* Color Checkboxes (P, G, W) */}
+                  <div className="flex items-center justify-center gap-0.5">
+                    <ColorCheckbox
+                      checked={row.color_p}
+                      onChange={() => toggleColor(row.id, "color_p")}
+                      label="P"
+                      color="pink"
+                    />
+                    <ColorCheckbox
+                      checked={row.color_g}
+                      onChange={() => toggleColor(row.id, "color_g")}
+                      label="G"
+                      color="gold"
+                    />
+                    <ColorCheckbox
+                      checked={row.color_w}
+                      onChange={() => toggleColor(row.id, "color_w")}
+                      label="W"
+                      color="white"
+                    />
+                  </div>
+
+                  {/* Size Input */}
+                  <input
+                    className="w-full bg-transparent border border-transparent focus:border-primary/50 focus:bg-background rounded px-1 py-0.5 text-xs text-center hover:border-border/50 transition-colors"
+                    value={row.size}
+                    onChange={(e) => updateRow(row.id, { size: e.target.value })}
+                    placeholder="Size"
+                  />
+
+                  {/* Qty Input */}
+                  <input
+                    type="number"
+                    className={cn(
+                      "w-full bg-transparent border border-transparent focus:border-primary/50 focus:bg-background rounded px-1 py-0.5 text-xs text-center tabular-nums transition-colors",
+                      errors.qty ? "border-[var(--danger)]/50" : "hover:border-border/50"
+                    )}
+                    value={row.qty}
+                    onChange={(e) => updateRow(row.id, { qty: e.target.value })}
+                    min="1"
+                  />
+
+                  {/* Plating Checkboxes (P, G, W, B) */}
+                  <div className="flex items-center justify-center gap-0.5">
+                    <ColorCheckbox
+                      checked={row.plating_p}
+                      onChange={() => togglePlating(row.id, "plating_p")}
+                      label="P"
+                      color="pink"
+                    />
+                    <ColorCheckbox
+                      checked={row.plating_g}
+                      onChange={() => togglePlating(row.id, "plating_g")}
+                      label="G"
+                      color="gold"
+                    />
+                    <ColorCheckbox
+                      checked={row.plating_w}
+                      onChange={() => togglePlating(row.id, "plating_w")}
+                      label="W"
+                      color="white"
+                    />
+                    <ColorCheckbox
+                      checked={row.plating_b}
+                      onChange={() => togglePlating(row.id, "plating_b")}
+                      label="B"
+                      color="black"
+                    />
+                  </div>
+
+                  {/* Stone Toggle */}
+                  <button
+                    type="button"
+                    onClick={() => toggleStones(row.id)}
+                    className={cn(
+                      "w-5 h-5 rounded flex items-center justify-center text-xs transition-colors",
+                      row.show_stones || hasStones
                         ? "bg-blue-100 text-blue-700 border border-blue-300"
                         : "bg-muted/50 text-[var(--muted)] border border-border hover:border-primary/50"
-                     )}
-                   >
-                     {row.show_stones ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
-                   </button>
-                   
-                   {/* Memo Input (Large) */}
-                   <input
-                     className="w-full bg-transparent border border-transparent focus:border-primary/50 focus:bg-background rounded px-2 py-0.5 text-xs hover:border-border/50 transition-colors"
-                     value={row.memo}
-                     onChange={(e) => updateRow(row.id, { memo: e.target.value })}
-                     placeholder="비고 입력..."
-                   />
-                   
-                   {/* Delete Button */}
-                   <button
-                     onClick={() => handleDeleteRow(row.id)}
-                     className="w-5 h-5 flex items-center justify-center text-[var(--muted)] hover:text-[var(--danger)] hover:bg-[var(--danger)]/10 rounded transition-colors"
-                   >
-                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
-                   </button>
-                 </div>
+                    )}
+                  >
+                    {row.show_stones ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+                  </button>
 
-                 {/* Expanded Stone Row */}
-                 {row.show_stones && (
-                   <div className="grid grid-cols-[30px_1fr_1fr_1fr_1fr_1fr_1fr_30px] gap-2 px-1 py-2 bg-muted/30 rounded-md border border-border/30 items-center text-xs">
-                     <span></span>
-                     
-                     {/* Center Stone */}
-                     <div className="flex items-center gap-1">
-                       <span className="text-[10px] text-[var(--muted)]">중심석</span>
-                       <select
-                         className="flex-1 bg-background border border-border/60 rounded px-1 py-0.5 text-xs focus:border-primary/50"
-                         value={row.center_stone}
-                         onChange={(e) => updateRow(row.id, { center_stone: e.target.value })}
-                       >
-                         <option value="">-</option>
-                         {stoneOptions.map((stone) => (
-                           <option key={stone} value={stone}>{stone}</option>
-                         ))}
-                       </select>
-                     </div>
-                     <input
-                       type="number"
-                       className="w-full bg-background border border-border/60 rounded px-1 py-0.5 text-xs text-center tabular-nums focus:border-primary/50"
-                       value={row.center_qty}
-                       onChange={(e) => updateRow(row.id, { center_qty: e.target.value })}
-                       placeholder="개수"
-                     />
-                     
-                     {/* Sub1 Stone */}
-                     <div className="flex items-center gap-1">
-                       <span className="text-[10px] text-[var(--muted)]">보조1</span>
-                       <select
-                         className="flex-1 bg-background border border-border/60 rounded px-1 py-0.5 text-xs focus:border-primary/50"
-                         value={row.sub1_stone}
-                         onChange={(e) => updateRow(row.id, { sub1_stone: e.target.value })}
-                       >
-                         <option value="">-</option>
-                         {stoneOptions.map((stone) => (
-                           <option key={stone} value={stone}>{stone}</option>
-                         ))}
-                       </select>
-                     </div>
-                     <input
-                       type="number"
-                       className="w-full bg-background border border-border/60 rounded px-1 py-0.5 text-xs text-center tabular-nums focus:border-primary/50"
-                       value={row.sub1_qty}
-                       onChange={(e) => updateRow(row.id, { sub1_qty: e.target.value })}
-                       placeholder="개수"
-                     />
-                     
-                     {/* Sub2 Stone */}
-                     <div className="flex items-center gap-1">
-                       <span className="text-[10px] text-[var(--muted)]">보조2</span>
-                       <select
-                         className="flex-1 bg-background border border-border/60 rounded px-1 py-0.5 text-xs focus:border-primary/50"
-                         value={row.sub2_stone}
-                         onChange={(e) => updateRow(row.id, { sub2_stone: e.target.value })}
-                       >
-                         <option value="">-</option>
-                         {stoneOptions.map((stone) => (
-                           <option key={stone} value={stone}>{stone}</option>
-                         ))}
-                       </select>
-                     </div>
-                     <input
-                       type="number"
-                       className="w-full bg-background border border-border/60 rounded px-1 py-0.5 text-xs text-center tabular-nums focus:border-primary/50"
-                       value={row.sub2_qty}
-                       onChange={(e) => updateRow(row.id, { sub2_qty: e.target.value })}
-                       placeholder="개수"
-                     />
-                     
-                     <span></span>
-                   </div>
-                 )}
-               </div>
-             );
+                  {/* Memo Input (Large) */}
+                  <input
+                    className="w-full bg-transparent border border-transparent focus:border-primary/50 focus:bg-background rounded px-2 py-0.5 text-xs hover:border-border/50 transition-colors"
+                    value={row.memo}
+                    onChange={(e) => updateRow(row.id, { memo: e.target.value })}
+                    placeholder="비고 입력..."
+                  />
+
+                  {/* Delete Button */}
+                  <button
+                    onClick={() => handleDeleteRow(row.id)}
+                    className="w-5 h-5 flex items-center justify-center text-[var(--muted)] hover:text-[var(--danger)] hover:bg-[var(--danger)]/10 rounded transition-colors"
+                  >
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6 6 18" /><path d="m6 6 12 12" /></svg>
+                  </button>
+                </div>
+
+                {/* Expanded Stone Row */}
+                {row.show_stones && (
+                  <div className="grid grid-cols-[30px_1fr_1fr_1fr_1fr_1fr_1fr_30px] gap-2 px-1 py-2 bg-muted/30 rounded-md border border-border/30 items-center text-xs">
+                    <span></span>
+
+                    {/* Center Stone */}
+                    <div className="flex items-center gap-1">
+                      <span className="text-[10px] text-[var(--muted)]">중심석</span>
+                      <select
+                        className="flex-1 bg-background border border-border/60 rounded px-1 py-0.5 text-xs focus:border-primary/50"
+                        value={row.center_stone}
+                        onChange={(e) => updateRow(row.id, { center_stone: e.target.value })}
+                      >
+                        <option value="">-</option>
+                        {stoneOptions.map((stone) => (
+                          <option key={stone} value={stone}>{stone}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <input
+                      type="number"
+                      className="w-full bg-background border border-border/60 rounded px-1 py-0.5 text-xs text-center tabular-nums focus:border-primary/50"
+                      value={row.center_qty}
+                      onChange={(e) => updateRow(row.id, { center_qty: e.target.value })}
+                      placeholder="개수"
+                    />
+
+                    {/* Sub1 Stone */}
+                    <div className="flex items-center gap-1">
+                      <span className="text-[10px] text-[var(--muted)]">보조1</span>
+                      <select
+                        className="flex-1 bg-background border border-border/60 rounded px-1 py-0.5 text-xs focus:border-primary/50"
+                        value={row.sub1_stone}
+                        onChange={(e) => updateRow(row.id, { sub1_stone: e.target.value })}
+                      >
+                        <option value="">-</option>
+                        {stoneOptions.map((stone) => (
+                          <option key={stone} value={stone}>{stone}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <input
+                      type="number"
+                      className="w-full bg-background border border-border/60 rounded px-1 py-0.5 text-xs text-center tabular-nums focus:border-primary/50"
+                      value={row.sub1_qty}
+                      onChange={(e) => updateRow(row.id, { sub1_qty: e.target.value })}
+                      placeholder="개수"
+                    />
+
+                    {/* Sub2 Stone */}
+                    <div className="flex items-center gap-1">
+                      <span className="text-[10px] text-[var(--muted)]">보조2</span>
+                      <select
+                        className="flex-1 bg-background border border-border/60 rounded px-1 py-0.5 text-xs focus:border-primary/50"
+                        value={row.sub2_stone}
+                        onChange={(e) => updateRow(row.id, { sub2_stone: e.target.value })}
+                      >
+                        <option value="">-</option>
+                        {stoneOptions.map((stone) => (
+                          <option key={stone} value={stone}>{stone}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <input
+                      type="number"
+                      className="w-full bg-background border border-border/60 rounded px-1 py-0.5 text-xs text-center tabular-nums focus:border-primary/50"
+                      value={row.sub2_qty}
+                      onChange={(e) => updateRow(row.id, { sub2_qty: e.target.value })}
+                      placeholder="개수"
+                    />
+
+                    <span></span>
+                  </div>
+                )}
+              </div>
+            );
           })}
-          
+
           {/* Pagination */}
           <div className="flex items-center justify-between pt-2">
-             <Button variant="secondary" size="sm" className="h-7 text-xs" onClick={() => setPageIndex(p => Math.max(1, p - 1))} disabled={pageIndex === 1}>이전</Button>
-             <span className="text-xs text-[var(--muted)]">{pageIndex} / {Math.max(1, Math.ceil(rows.length / PAGE_SIZE))}</span>
-             <Button variant="secondary" size="sm" className="h-7 text-xs" onClick={() => {
-                const pageCount = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
-                if (pageIndex >= pageCount) {
-                   setRows(prev => [...prev, ...Array.from({ length: PAGE_SIZE }, (_, i) => createEmptyRow(prev.length + i))]);
-                }
-                setPageIndex(p => p + 1);
-             }}>다음</Button>
+            <Button variant="secondary" size="sm" className="h-7 text-xs" onClick={() => setPageIndex(p => Math.max(1, p - 1))} disabled={pageIndex === 1}>이전</Button>
+            <span className="text-xs text-[var(--muted)]">{pageIndex} / {Math.max(1, Math.ceil(rows.length / PAGE_SIZE))}</span>
+            <Button variant="secondary" size="sm" className="h-7 text-xs" onClick={() => {
+              const pageCount = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
+              if (pageIndex >= pageCount) {
+                setRows(prev => [...prev, ...Array.from({ length: PAGE_SIZE }, (_, i) => createEmptyRow(prev.length + i))]);
+              }
+              setPageIndex(p => p + 1);
+            }}>다음</Button>
           </div>
         </div>
 
@@ -1137,7 +1137,7 @@ function OrdersPageContent() {
                   </div>
                 )}
               </div>
-              
+
               <div className="space-y-1">
                 <div className="flex items-center justify-between text-xs">
                   <span className="text-[var(--muted)]">모델</span>
@@ -1148,7 +1148,7 @@ function OrdersPageContent() {
                   <span className="text-[10px]">{getCategoryName(activeMaster?.category_code)}</span>
                 </div>
               </div>
-              
+
               <div className="grid grid-cols-2 gap-2 pt-1 border-t border-border/30 text-xs">
                 <div className="space-y-0.5">
                   <span className="text-[var(--muted)] text-[10px]">기본중량</span>
