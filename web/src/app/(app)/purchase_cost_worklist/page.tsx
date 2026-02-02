@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 
@@ -55,6 +55,18 @@ type ReceiptWorklistRow = {
   linked_shipment_cnt: number;
   linked_basis_cost_krw: number;
   linked_shipments: LinkedShipment[];
+  meta?: {
+    line_items?: ReceiptLineItem[] | null;
+  } | null;
+};
+
+type ReceiptLineItem = {
+  id: string;
+  model_name: string;
+  weight_g: number | null;
+  labor_basic: number | null;
+  labor_other: number | null;
+  qty: number;
 };
 
 type UpsertSnapshotResult = {
@@ -87,6 +99,11 @@ function formatYmd(iso: string | null | undefined) {
 function shortPath(path: string) {
   const name = (path ?? "").split("/").pop() ?? "";
   return name || path;
+}
+
+function getReceiptDisplayName(index: number, receivedAt: string | null | undefined) {
+  const date = receivedAt ? new Date(receivedAt).toISOString().slice(0, 10).replace(/-/g, '') : 'unknown';
+  return `영수증_${date}_${index}`;
 }
 
 function parseNumOrNull(v: string) {
@@ -146,11 +163,125 @@ export default function PurchaseCostWorklistPage() {
   const [weightG, setWeightG] = useState<string>("");
   const [laborBasic, setLaborBasic] = useState<string>("");
   const [laborOther, setLaborOther] = useState<string>("");
+  const [lineItems, setLineItems] = useState<ReceiptLineItem[]>([]);
   const [note, setNote] = useState<string>("");
   const [forceReapply, setForceReapply] = useState<boolean>(false);
 
   const [uploadOpen, setUploadOpen] = useState(false);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [uploadPreviewUrl, setUploadPreviewUrl] = useState<string | null>(null);
+  const [isUploading, setIsUploading] = useState(false);
+  const [uploadCount, setUploadCount] = useState(1);
   const fileRef = useRef<HTMLInputElement>(null);
+
+  // Receipt preview in left panel (double-click)
+  const [previewReceiptId, setPreviewReceiptId] = useState<string | null>(null);
+  const [previewBlobUrl, setPreviewBlobUrl] = useState<string | null>(null);
+  const [previewMime, setPreviewMime] = useState<string | null>(null);
+  const [isPreviewLoading, setIsPreviewLoading] = useState(false);
+
+  function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0] || null;
+    setSelectedFile(file);
+    
+    if (file && file.type.startsWith('image/')) {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setUploadPreviewUrl(reader.result as string);
+      };
+      reader.readAsDataURL(file);
+    } else {
+      setUploadPreviewUrl(null);
+    }
+  }
+
+  function resetUpload() {
+    setSelectedFile(null);
+    setUploadPreviewUrl(null);
+    setIsUploading(false);
+    if (fileRef.current) {
+      fileRef.current.value = '';
+    }
+  }
+
+  useEffect(() => {
+    return () => {
+      if (previewBlobUrl) {
+        URL.revokeObjectURL(previewBlobUrl);
+      }
+    };
+  }, [previewBlobUrl]);
+
+  async function handleReceiptDoubleClick(receiptId: string) {
+    if (previewReceiptId === receiptId) {
+      // Toggle off if clicking same receipt
+      setPreviewReceiptId(null);
+      setPreviewBlobUrl(null);
+      setPreviewMime(null);
+      return;
+    }
+
+    setPreviewReceiptId(receiptId);
+    setIsPreviewLoading(true);
+    setPreviewBlobUrl(null);
+    setPreviewMime(null);
+    
+    try {
+      const res = await fetch(`/api/receipt-file?receipt_id=${encodeURIComponent(receiptId)}`);
+      let blob: Blob | null = null;
+      if (res.ok) {
+        blob = await res.blob();
+      } else {
+        const previewRes = await fetch(`/api/receipt-preview?receipt_id=${encodeURIComponent(receiptId)}`);
+        if (previewRes.ok) {
+          blob = await previewRes.blob();
+        }
+      }
+
+      if (blob) {
+        const url = URL.createObjectURL(blob);
+        setPreviewBlobUrl(url);
+        setPreviewMime(blob.type || null);
+      } else {
+        toast.error("미리보기 로드 실패");
+      }
+    } catch (err) {
+      toast.error("미리보기 로드 실패");
+    } finally {
+      setIsPreviewLoading(false);
+    }
+  }
+
+  function getDisplayName() {
+    const today = new Date().toISOString().split('T')[0].replace(/-/g, '');
+    return `영수증_${today}_${uploadCount}`;
+  }
+
+  function addLine() {
+    setLineItems([
+      ...lineItems,
+      {
+        id: crypto.randomUUID(),
+        model_name: "",
+        weight_g: null,
+        labor_basic: null,
+        labor_other: null,
+        qty: 1,
+      },
+    ]);
+  }
+
+  function removeLine(id: string) {
+    setLineItems(lineItems.filter((item) => item.id !== id));
+  }
+
+  function updateLine(id: string, field: keyof ReceiptLineItem, value: any) {
+    setLineItems(
+      lineItems.map((item) =>
+        item.id === id ? { ...item, [field]: value } : item
+      )
+    );
+  }
 
   function applySelectedReceipt(receipt: ReceiptWorklistRow) {
     const c = (receipt.pricing_currency_code ?? receipt.inbox_currency_code ?? "KRW").toUpperCase();
@@ -159,9 +290,29 @@ export default function PurchaseCostWorklistPage() {
     setWeightG(receipt.weight_g != null ? String(receipt.weight_g) : "");
     setLaborBasic(receipt.labor_basic != null ? String(receipt.labor_basic) : "");
     setLaborOther(receipt.labor_other != null ? String(receipt.labor_other) : "");
+    setLineItems(receipt.meta?.line_items ?? []);
     setNote("");
     setForceReapply(false);
   }
+
+  // Auto-calculate totals from line items
+  useEffect(() => {
+    if (lineItems.length === 0) return;
+
+    const totalAmt = lineItems.reduce((acc, item) => {
+      const price = (item.labor_basic ?? 0) + (item.labor_other ?? 0);
+      return acc + price * item.qty;
+    }, 0);
+
+    const totalWgt = lineItems.reduce((acc, item) => acc + (item.weight_g ?? 0) * item.qty, 0);
+    const totalBasic = lineItems.reduce((acc, item) => acc + (item.labor_basic ?? 0) * item.qty, 0);
+    const totalOther = lineItems.reduce((acc, item) => acc + (item.labor_other ?? 0) * item.qty, 0);
+
+    setTotalAmount(String(totalAmt));
+    setWeightG(String(totalWgt));
+    setLaborBasic(String(totalBasic));
+    setLaborOther(String(totalOther));
+  }, [lineItems]);
 
   const worklist = useQuery<{ data: ReceiptWorklistRow[] }>(
     {
@@ -288,34 +439,59 @@ export default function PurchaseCostWorklistPage() {
   }
 
   async function uploadReceipt() {
-    const file = fileRef.current?.files?.[0];
+    const file = selectedFile;
     if (!file) {
       toast.error("파일을 선택해 주세요");
       return;
     }
 
-    const form = new FormData();
-    form.append("file", file);
+    setIsUploading(true);
 
-    const res = await fetch("/api/receipt-upload", {
-      method: "POST",
-      body: form,
-    });
+    try {
+      const form = new FormData();
+      form.append("file", file);
 
-    const json = await res.json();
-    if (!res.ok) {
-      toast.error("업로드 실패", { description: json?.error ?? "" });
-      return;
-    }
+      const res = await fetch("/api/receipt-upload", {
+        method: "POST",
+        body: form,
+      });
 
-    const receiptId = json?.data?.receipt_id as string | undefined;
-    if (receiptId) {
-      toast.success("영수증 업로드 완료");
+      const json = await res.json();
+      if (!res.ok) {
+        toast.error("업로드 실패", { description: json?.error ?? "" });
+        return;
+      }
+
+      const receiptId = json?.receipt_id as string | undefined;
+      
+      // 성공 여부와 관계없이 먼저 팝업 닫고 초기화
       setUploadOpen(false);
-      // refresh and select
-      const refreshed = await worklist.refetch();
-      const nextRows = refreshed.data?.data ?? [];
-      selectReceiptId(receiptId, nextRows);
+      resetUpload();
+      setUploadCount(prev => prev + 1);
+      
+      if (receiptId) {
+        toast.success(`영수증 업로드 완료: ${getDisplayName()}`);
+        
+        // 목록 강제 새로고침
+        await worklist.refetch();
+        
+        // 새로고침 후 데이터가 반영될 시간을 주고 선택
+        setTimeout(() => {
+          worklist.refetch().then((refreshed) => {
+            const nextRows = refreshed.data?.data ?? [];
+            const newReceipt = nextRows.find((r) => r.receipt_id === receiptId);
+            if (newReceipt) {
+              selectReceiptId(receiptId, nextRows);
+            }
+          });
+        }, 500);
+      } else {
+        toast.error(`업로드는 완료되었으나 영수증 ID를 받지 못했습니다: ${json?.error || 'Unknown error'}`);
+      }
+    } catch (err) {
+      toast.error("업로드 중 오류 발생");
+    } finally {
+      setIsUploading(false);
     }
   }
 
@@ -349,6 +525,66 @@ export default function PurchaseCostWorklistPage() {
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-12 items-start">
         {/* Left: receipt list */}
         <div className="lg:col-span-5 xl:col-span-4 flex flex-col gap-4">
+          {/* Receipt Preview Panel (double-click to open) */}
+          {previewReceiptId && (
+            <Card className="overflow-hidden border-none shadow-sm ring-1 ring-black/5">
+              <CardHeader className="flex items-center justify-between gap-3 border-b border-[var(--panel-border)] bg-[var(--panel)]/50 px-4 py-2 backdrop-blur-sm">
+                <div className="text-sm font-semibold text-[var(--foreground)]">영수증 미리보기</div>
+                <Button 
+                  size="sm" 
+                  variant="ghost" 
+                  onClick={() => {
+                    setPreviewReceiptId(null);
+                    setPreviewBlobUrl(null);
+                    setPreviewMime(null);
+                  }}
+                  className="h-7 w-7 p-0"
+                >
+                  <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </Button>
+              </CardHeader>
+              <CardBody className="p-0">
+                {isPreviewLoading ? (
+                  <div className="flex h-48 items-center justify-center">
+                    <div className="flex flex-col items-center gap-2">
+                      <svg className="h-8 w-8 animate-spin text-[var(--primary)]" fill="none" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                      </svg>
+                      <span className="text-xs text-[var(--muted)]">로딩 중...</span>
+                    </div>
+                  </div>
+                ) : previewBlobUrl ? (
+                  <div className="relative bg-[var(--surface)]">
+                    {previewMime?.startsWith("image/") ? (
+                      <img 
+                        src={previewBlobUrl} 
+                        alt="Receipt Preview" 
+                        className="max-h-[50vh] w-full object-contain"
+                      />
+                    ) : previewMime === "application/pdf" ? (
+                      <iframe
+                        src={previewBlobUrl}
+                        className="h-[50vh] w-full"
+                        title="Receipt PDF Preview"
+                      />
+                    ) : (
+                      <div className="flex h-48 items-center justify-center text-sm text-[var(--muted)]">
+                        미리보기를 표시할 수 없습니다
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="flex h-48 items-center justify-center text-sm text-[var(--muted)]">
+                    미리보기를 불러올 수 없습니다
+                  </div>
+                )}
+              </CardBody>
+            </Card>
+          )}
+
           <Card className="flex-1 overflow-hidden border-none shadow-sm ring-1 ring-black/5">
             <CardHeader className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--panel-border)] bg-[var(--panel)]/50 px-4 py-3 backdrop-blur-sm">
               <div className="text-sm font-semibold text-[var(--foreground)]">영수증 목록</div>
@@ -391,27 +627,50 @@ export default function PurchaseCostWorklistPage() {
                 </div>
               ) : (
                 <div className="space-y-1.5">
-                  {filteredRows.map((r) => {
-                    const isSelected = r.receipt_id === selectedReceiptId;
-                    const hasInput = !!(r.pricing_total_amount_krw ?? r.pricing_total_amount);
-                    const isApplied = !!r.applied_at;
-                    const hasLinks = (r.linked_shipment_cnt ?? 0) > 0;
+                  {(() => {
+                    // 전체 rows 기준으로 날짜별 순번 계산 (상세 화면과 동일)
+                    const dateIndexMap = new Map<string, number>();
+                    const sortedAllRows = [...rows].sort((a, b) => 
+                      new Date(a.received_at).getTime() - new Date(b.received_at).getTime()
+                    );
+                    
+                    // receipt_id -> displayName 매핑 생성
+                    const displayNameMap = new Map<string, string>();
+                    sortedAllRows.forEach((r) => {
+                      const dateKey = r.received_at ? new Date(r.received_at).toISOString().slice(0, 10) : 'unknown';
+                      const currentIndex = (dateIndexMap.get(dateKey) || 0) + 1;
+                      dateIndexMap.set(dateKey, currentIndex);
+                      displayNameMap.set(r.receipt_id, getReceiptDisplayName(currentIndex, r.received_at));
+                    });
+                    
+                    // 필터링된 행을 날짜순으로 정렬하여 표시
+                    const sortedFilteredRows = [...filteredRows].sort((a, b) => 
+                      new Date(a.received_at).getTime() - new Date(b.received_at).getTime()
+                    );
+                    
+                    return sortedFilteredRows.map((r) => {
+                      const isSelected = r.receipt_id === selectedReceiptId;
+                      const hasInput = !!(r.pricing_total_amount_krw ?? r.pricing_total_amount);
+                      const isApplied = !!r.applied_at;
+                      const hasLinks = (r.linked_shipment_cnt ?? 0) > 0;
+                      const displayName = displayNameMap.get(r.receipt_id) || r.receipt_id.slice(0, 8);
 
                     return (
                       <button
                         key={r.receipt_id}
                         type="button"
                         onClick={() => selectReceiptId(r.receipt_id)}
+                        onDoubleClick={() => handleReceiptDoubleClick(r.receipt_id)}
                         className={`group relative w-full rounded-lg border px-4 py-3.5 text-left transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--primary)] ${
                           isSelected
                             ? "border-[var(--primary)] bg-[var(--primary)]/5 shadow-sm ring-1 ring-[var(--primary)]"
                             : "border-transparent bg-[var(--panel)] hover:border-[var(--panel-border)] hover:bg-[var(--panel-hover)] hover:shadow-sm"
-                        }`}
+                        } ${previewReceiptId === r.receipt_id ? 'ring-2 ring-[var(--secondary)]' : ''}`}
                       >
                         <div className="flex items-start justify-between gap-3">
                           <div className="min-w-0 flex-1">
                             <div className={`truncate text-sm font-semibold transition-colors ${isSelected ? "text-[var(--primary)]" : "text-[var(--foreground)]"}`}>
-                              {shortPath(r.file_path)}
+                              {displayName}
                             </div>
                             <div className="mt-1.5 flex flex-wrap items-center gap-2 text-xs text-[var(--muted)]">
                               <span className="tabular-nums">{formatYmd(r.received_at)}</span>
@@ -432,7 +691,7 @@ export default function PurchaseCostWorklistPage() {
                         </div>
                       </button>
                     );
-                  })}
+                  })})()}
                 </div>
               )}
             </CardBody>
@@ -498,7 +757,26 @@ export default function PurchaseCostWorklistPage() {
                     <div className="flex flex-wrap items-start justify-between gap-3">
                       <div className="min-w-0">
                         <div className="truncate text-sm font-semibold text-[var(--foreground)]">
-                          {shortPath(selected.file_path)}
+                          {(() => {
+                            // 현재 선택된 영수증의 날짜별 순번 계산 (목록과 동일한 로직)
+                            if (!selected) return '-';
+                            
+                            // rows를 received_at 기준으로 정렬 (목록과 동일)
+                            const sortedRows = [...rows].sort((a, b) => 
+                              new Date(a.received_at).getTime() - new Date(b.received_at).getTime()
+                            );
+                            
+                            const selectedDate = selected.received_at ? new Date(selected.received_at).toISOString().slice(0, 10) : 'unknown';
+                            let index = 1;
+                            
+                            for (const row of sortedRows) {
+                              if (row.receipt_id === selected.receipt_id) break;
+                              const rowDate = row.received_at ? new Date(row.received_at).toISOString().slice(0, 10) : 'unknown';
+                              if (rowDate === selectedDate) index++;
+                            }
+                            
+                            return getReceiptDisplayName(index, selected.received_at);
+                          })()}
                         </div>
                         <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-[var(--muted)]">
                           <span className="tabular-nums">{formatYmd(selected.received_at)}</span>
@@ -540,6 +818,94 @@ export default function PurchaseCostWorklistPage() {
                     </div>
                   </div>
 
+                  {/* Line Items Section */}
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between">
+                      <label className="text-xs font-semibold uppercase tracking-wider text-[var(--muted)]">
+                        상세 내역 ({lineItems.length})
+                      </label>
+                      <Button size="sm" variant="secondary" onClick={addLine} disabled={!selectedReceiptId}>
+                        + 라인 추가
+                      </Button>
+                    </div>
+
+                    {lineItems.length > 0 ? (
+                      <div className="space-y-1">
+                        {lineItems.map((item, idx) => {
+                          const subtotal = ((item.labor_basic ?? 0) + (item.labor_other ?? 0)) * item.qty;
+                          return (
+                            <div key={item.id} className="flex items-center gap-1.5 rounded-lg border border-[var(--panel-border)] bg-[var(--surface)]/30 px-2 py-1.5">
+                              <div className="flex items-center justify-center w-5 h-7 text-[11px] text-[var(--muted)] shrink-0">
+                                {idx + 1}
+                              </div>
+                              <div className="flex-1 min-w-[100px]">
+                                <Input
+                                  placeholder="모델명"
+                                  value={item.model_name}
+                                  onChange={(e) => updateLine(item.id, "model_name", e.target.value)}
+                                  className="h-7 text-xs px-2"
+                                />
+                              </div>
+                              <div className="w-[70px]">
+                                <Input
+                                  type="number"
+                                  placeholder="중량(g)"
+                                  value={item.weight_g ?? ""}
+                                  onChange={(e) => updateLine(item.id, "weight_g", parseNumOrNull(e.target.value))}
+                                  className="h-7 text-xs tabular-nums text-right px-2"
+                                />
+                              </div>
+                              <div className="w-[80px]">
+                                <Input
+                                  type="number"
+                                  placeholder="기본공임"
+                                  value={item.labor_basic ?? ""}
+                                  onChange={(e) => updateLine(item.id, "labor_basic", parseNumOrNull(e.target.value))}
+                                  className="h-7 text-xs tabular-nums text-right px-2"
+                                />
+                              </div>
+                              <div className="w-[80px]">
+                                <Input
+                                  type="number"
+                                  placeholder="부가공임"
+                                  value={item.labor_other ?? ""}
+                                  onChange={(e) => updateLine(item.id, "labor_other", parseNumOrNull(e.target.value))}
+                                  className="h-7 text-xs tabular-nums text-right px-2"
+                                />
+                              </div>
+                              <div className="w-[50px]">
+                                <Input
+                                  type="number"
+                                  placeholder="수량"
+                                  value={item.qty}
+                                  onChange={(e) => updateLine(item.id, "qty", Number(e.target.value) || 1)}
+                                  className="h-7 text-xs tabular-nums text-center px-1"
+                                />
+                              </div>
+                              <div className="flex items-center justify-end w-[70px] h-7 text-xs font-medium tabular-nums text-[var(--primary)] shrink-0">
+                                {formatNumber(subtotal)}
+                              </div>
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                onClick={() => removeLine(item.id)}
+                                className="h-7 w-7 p-0 text-[var(--muted)] hover:text-red-500 shrink-0"
+                              >
+                                <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                                </svg>
+                              </Button>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <div className="rounded-lg border border-dashed border-[var(--panel-border)] bg-[var(--surface)]/30 p-4 text-center text-xs text-[var(--muted)]">
+                        라인을 추가하여 상세 내역을 입력할 수 있습니다. (선택사항)
+                      </div>
+                    )}
+                  </div>
+
                   {/* Input Section */}
                   <div className="grid grid-cols-1 gap-x-6 gap-y-6 md:grid-cols-2 lg:grid-cols-3">
                     <div className="space-y-1.5">
@@ -564,7 +930,8 @@ export default function PurchaseCostWorklistPage() {
                         placeholder="0"
                         value={totalAmount}
                         onChange={(e) => setTotalAmount(e.target.value)}
-                        className="font-mono text-lg font-medium tabular-nums"
+                        readOnly={lineItems.length > 0}
+                        className={`font-mono text-lg font-medium tabular-nums ${lineItems.length > 0 ? "bg-[var(--surface)] text-[var(--muted-foreground)]" : ""}`}
                       />
                       <p className="text-[11px] text-[var(--muted-weak)]">
                         KRW 환산: <span className="font-medium text-[var(--muted-foreground)]">{formatNumber(selected.pricing_total_amount_krw)}</span>
@@ -581,7 +948,8 @@ export default function PurchaseCostWorklistPage() {
                         placeholder="0.00"
                         value={weightG}
                         onChange={(e) => setWeightG(e.target.value)}
-                        className="font-mono tabular-nums"
+                        readOnly={lineItems.length > 0}
+                        className={`font-mono tabular-nums ${lineItems.length > 0 ? "bg-[var(--surface)] text-[var(--muted-foreground)]" : ""}`}
                       />
                     </div>
 
@@ -592,7 +960,8 @@ export default function PurchaseCostWorklistPage() {
                         placeholder="0"
                         value={laborBasic}
                         onChange={(e) => setLaborBasic(e.target.value)}
-                        className="font-mono tabular-nums"
+                        readOnly={lineItems.length > 0}
+                        className={`font-mono tabular-nums ${lineItems.length > 0 ? "bg-[var(--surface)] text-[var(--muted-foreground)]" : ""}`}
                       />
                     </div>
 
@@ -603,7 +972,8 @@ export default function PurchaseCostWorklistPage() {
                         placeholder="0"
                         value={laborOther}
                         onChange={(e) => setLaborOther(e.target.value)}
-                        className="font-mono tabular-nums"
+                        readOnly={lineItems.length > 0}
+                        className={`font-mono tabular-nums ${lineItems.length > 0 ? "bg-[var(--surface)] text-[var(--muted-foreground)]" : ""}`}
                       />
                     </div>
 
@@ -717,28 +1087,105 @@ export default function PurchaseCostWorklistPage() {
         </div>
       </div>
 
-      <Modal open={uploadOpen} onClose={() => setUploadOpen(false)} title="영수증 업로드">
-        <div className="space-y-6">
-          <div className="rounded-lg border border-dashed border-[var(--panel-border)] bg-[var(--surface)]/50 p-8 text-center transition-colors hover:bg-[var(--panel-hover)]">
-            <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-[var(--primary)]/10 text-[var(--primary)]">
-              <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
-              </svg>
+      <Modal 
+        open={uploadOpen} 
+        onClose={() => {
+          setUploadOpen(false);
+          resetUpload();
+        }} 
+        title="영수증 업로드"
+      >
+        <div className="space-y-4">
+          {selectedFile ? (
+            <div className="rounded-lg border border-[var(--primary)] bg-[var(--primary)]/5 p-4">
+              <div className="flex gap-4">
+                {uploadPreviewUrl && selectedFile.type.startsWith('image/') ? (
+                  <div className="relative h-24 w-24 shrink-0 overflow-hidden rounded-lg border border-[var(--panel-border)]">
+                    <img 
+                      src={uploadPreviewUrl} 
+                      alt="Preview" 
+                      className="h-full w-full object-cover"
+                    />
+                  </div>
+                ) : (
+                  <div className="flex h-24 w-24 shrink-0 items-center justify-center rounded-lg border border-[var(--panel-border)] bg-[var(--surface)]">
+                    <svg className="h-10 w-10 text-[var(--muted)]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                    </svg>
+                  </div>
+                )}
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-semibold text-[var(--foreground)] truncate">
+                    {getDisplayName()}
+                  </p>
+                  <p className="text-xs text-[var(--muted)] mt-1">
+                    {selectedFile.type.startsWith('image/') ? '이미지' : 'PDF'} • {(selectedFile.size / 1024 / 1024).toFixed(2)} MB
+                  </p>
+                  <Button 
+                    size="sm" 
+                    variant="ghost" 
+                    onClick={() => {
+                      setSelectedFile(null);
+                      setPreviewUrl(null);
+                    }} 
+                    className="text-xs mt-2 h-7 px-2"
+                  >
+                    다른 파일 선택
+                  </Button>
+                </div>
+              </div>
             </div>
-            <label className="cursor-pointer">
-              <span className="text-sm font-semibold text-[var(--primary)] hover:underline">파일 선택</span>
-              <Input ref={fileRef} type="file" accept="application/pdf,image/*" className="hidden" />
+          ) : (
+            <label className="block cursor-pointer">
+              <div className="rounded-lg border border-dashed border-[var(--panel-border)] bg-[var(--surface)]/50 p-6 text-center transition-colors hover:bg-[var(--panel-hover)] hover:border-[var(--primary)]">
+                <div className="mx-auto flex h-10 w-10 items-center justify-center rounded-full bg-[var(--primary)]/10 text-[var(--primary)]">
+                  <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                  </svg>
+                </div>
+                <p className="text-sm font-semibold text-[var(--primary)] hover:underline mt-3">
+                  파일 선택
+                </p>
+                <p className="text-xs text-[var(--muted)] mt-1">
+                  PDF 또는 이미지 파일 (최대 10MB)
+                </p>
+                <Input 
+                  ref={fileRef} 
+                  type="file" 
+                  accept="application/pdf,image/*" 
+                  className="hidden" 
+                  onChange={handleFileChange}
+                />
+              </div>
             </label>
-            <p className="mt-2 text-xs text-[var(--muted)]">
-              PDF 또는 이미지 파일 (최대 10MB)
-            </p>
-          </div>
+          )}
+          
           <div className="flex justify-end gap-2">
-            <Button variant="secondary" onClick={() => setUploadOpen(false)}>
+            <Button 
+              variant="secondary" 
+              onClick={() => {
+                setUploadOpen(false);
+                resetUpload();
+              }}
+              disabled={isUploading}
+            >
               취소
             </Button>
-            <Button onClick={uploadReceipt} disabled={busy}>
-              업로드
+            <Button 
+              onClick={uploadReceipt} 
+              disabled={!selectedFile || isUploading}
+            >
+              {isUploading ? (
+                <span className="flex items-center gap-2">
+                  <svg className="h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                  </svg>
+                  {getDisplayName()} 업로드 중...
+                </span>
+              ) : (
+                `${getDisplayName()} 업로드`
+              )}
             </Button>
           </div>
         </div>

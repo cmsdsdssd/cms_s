@@ -364,7 +364,8 @@ export default function ShipmentsPage() {
       const supabase = getSchemaClient();
       if (supabase) {
         // 1. 현재 소재비 조회
-        const { data: lineData } = await supabase
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const { data: lineData } = await (supabase as any)
           .from('cms_shipment_line')
           .select('material_amount_sell_krw')
           .eq('shipment_line_id', shipmentLineId)
@@ -374,7 +375,8 @@ export default function ShipmentsPage() {
         const newTotal = materialCost + laborValue;
         
         // 2. 공임과 총액 업데이트
-        await supabase
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        await (supabase as any)
           .from('cms_shipment_line')
           .update({ 
             manual_labor_krw: laborValue,
@@ -452,8 +454,19 @@ export default function ShipmentsPage() {
     setReceiptPreviewOpenUrl(openUrl);
     setReceiptPreviewError(null);
 
-    const r = (receiptsQuery.data ?? []).find((x) => x.receipt_id === linkedReceiptId);
-    const title = r?.file_path?.split("/")?.pop() ?? `receipt-${linkedReceiptId.slice(0, 8)}`;
+    const receipts = receiptsQuery.data ?? [];
+    const r = receipts.find((x) => x.receipt_id === linkedReceiptId);
+    let title = `receipt-${linkedReceiptId.slice(0, 8)}`;
+    
+    if (r) {
+      const dateKey = r.received_at.slice(0, 10);
+      let index = 1;
+      for (const receipt of receipts) {
+        if (receipt.receipt_id === linkedReceiptId) break;
+        if (receipt.received_at.slice(0, 10) === dateKey) index++;
+      }
+      title = `영수증_${dateKey.replace(/-/g, '')}_${index}`;
+    }
     setReceiptPreviewTitle(title);
 
     let revoked = false;
@@ -1295,10 +1308,23 @@ export default function ShipmentsPage() {
                       <div className="flex-1">
                         <SearchSelect
                           placeholder="영수증 검색..."
-                          options={(receiptsQuery.data ?? []).map((r) => ({
-                            label: `${r.received_at.slice(0, 10)} · ${r.file_path.split("/").pop()} (${r.status})`,
-                            value: r.receipt_id,
-                          }))}
+                          options={(() => {
+                            const receipts = receiptsQuery.data ?? [];
+                            const dateIndexMap = new Map<string, number>();
+                            const sortedReceipts = [...receipts].sort((a, b) => 
+                              new Date(a.received_at).getTime() - new Date(b.received_at).getTime()
+                            );
+                            return sortedReceipts.map((r) => {
+                              const dateKey = r.received_at.slice(0, 10);
+                              const currentIndex = (dateIndexMap.get(dateKey) || 0) + 1;
+                              dateIndexMap.set(dateKey, currentIndex);
+                              const displayName = `영수증_${dateKey.replace(/-/g, '')}_${currentIndex}`;
+                              return {
+                                label: `${displayName} (${r.status})`,
+                                value: r.receipt_id,
+                              };
+                            });
+                          })()}
                           value={linkedReceiptId ?? undefined}
                           onChange={(v) => {
                             setReceiptFile(null);

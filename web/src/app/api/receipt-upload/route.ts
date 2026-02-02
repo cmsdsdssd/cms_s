@@ -13,8 +13,8 @@ function getSupabaseAdmin() {
 }
 
 function getBucketName() {
-    // Requirements: default to 'receipt_inbox', override with environment variable if present
-    return process.env.SUPABASE_RECEIPT_BUCKET || "receipt_inbox";
+    // 🔥 FIX: 실제 사용하는 버킷은 'ocr_docs'
+    return process.env.SUPABASE_RECEIPT_BUCKET || "ocr_docs";
 }
 
 function sha256(buf: Buffer) {

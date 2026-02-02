@@ -1,0 +1,243 @@
+-- ==============================================================================
+-- 🔍 영수증-출고 링크 검증 SQL (Receipt-Shipment Linkage Verification)
+-- ==============================================================================
+-- 목적: 출고 과정에서 선택된 영수증이 해당 출고와 정확히 링크되는지 확인
+-- 사용처: 머신러닝/딥러닝 학습 데이터 검증
+-- ==============================================================================
+
+-- 먼저 테이블이 없으면 생성 (의존성 해결)
+create table if not exists cms_receipt_usage (
+  usage_id uuid primary key default gen_random_uuid(),
+  receipt_id uuid not null references cms_receipt_inbox(receipt_id) on delete cascade,
+  entity_type text not null, -- 'SHIPMENT_HEADER' | 'SHIPMENT_LINE' | etc.
+  entity_id text not null,   -- uuid as text for polymorphic reference
+  note text,
+  actor_person_id uuid,
+  correlation_id uuid,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists idx_cms_receipt_usage_receipt on cms_receipt_usage(receipt_id);
+create index if not exists idx_cms_receipt_usage_entity on cms_receipt_usage(entity_type, entity_id);
+
+-- 1️⃣ 최근 출고 내역 및 연결된 영수증 확인
+SELECT 
+  '최근 출고-영수증 링크 현황' as 검증항목,
+  h.shipment_id,
+  h.shipment_id::text as 출고번호,
+  h.status,
+  h.confirmed_at,
+  h.customer_party_id,
+  l.shipment_line_id,
+  l.model_name,
+  l.total_amount_sell_krw,
+  l.total_amount_cost_krw,
+  u.receipt_id as linked_receipt_id,
+  i.file_bucket,
+  i.file_path,
+  i.total_amount_krw as receipt_total_amount,
+  i.status as receipt_status,
+  u.entity_type,
+  u.entity_id,
+  u.created_at as link_created_at
+FROM cms_shipment_header h
+LEFT JOIN cms_shipment_line l ON h.shipment_id = l.shipment_id
+LEFT JOIN cms_receipt_usage u ON (
+  (u.entity_type = 'SHIPMENT_HEADER' AND u.entity_id::uuid = h.shipment_id)
+  OR 
+  (u.entity_type = 'SHIPMENT_LINE' AND u.entity_id::uuid = l.shipment_line_id)
+)
+LEFT JOIN cms_receipt_inbox i ON u.receipt_id = i.receipt_id
+WHERE h.created_at >= NOW() - INTERVAL '7 days'
+ORDER BY h.confirmed_at DESC NULLS LAST, h.created_at DESC
+LIMIT 20;
+
+-- 2️⃣ 출고별 영수증 연결 상태 집계
+SELECT 
+  '출고-영수증 연결 통계' as 검증항목,
+  h.shipment_id,
+  h.shipment_id::text as 출고번호,
+  h.status,
+  COUNT(DISTINCT u.receipt_id) as linked_receipt_count,
+  STRING_AGG(DISTINCT i.file_path, ', ') as receipt_files,
+  SUM(l.total_amount_sell_krw) as total_sell_krw,
+  SUM(l.total_amount_cost_krw) as total_cost_krw,
+  SUM(i.total_amount_krw) as receipt_total_krw,
+  CASE 
+    WHEN COUNT(u.receipt_id) > 0 THEN '✅ 영수증 연결됨'
+    ELSE '❌ 영수증 미연결'
+  END as link_status
+FROM cms_shipment_header h
+LEFT JOIN cms_shipment_line l ON h.shipment_id = l.shipment_id
+LEFT JOIN cms_receipt_usage u ON (
+  u.entity_type = 'SHIPMENT_HEADER' 
+  AND u.entity_id::uuid = h.shipment_id
+)
+LEFT JOIN cms_receipt_inbox i ON u.receipt_id = i.receipt_id
+WHERE h.created_at >= NOW() - INTERVAL '7 days'
+GROUP BY h.shipment_id, h.status
+ORDER BY h.shipment_id DESC
+LIMIT 20;
+
+-- 3️⃣ 특정 출고의 영수증 링크 세부 정보 (shipment_id로 조회)
+-- SELECT * FROM verify_shipment_receipt_link('YOUR_SHIPMENT_ID_HERE');
+
+CREATE OR REPLACE FUNCTION verify_shipment_receipt_link(p_shipment_id uuid)
+RETURNS TABLE (
+  검증항목 text,
+  shipment_id uuid,
+  shipment_ref text,
+  shipment_status text,
+  receipt_id uuid,
+  receipt_file_path text,
+  receipt_file_bucket text,
+  receipt_total_amount numeric,
+  link_entity_type text,
+  link_entity_id text,
+  link_created_at timestamptz,
+  verification_status text
+)
+LANGUAGE sql
+STABLE
+AS $$
+  SELECT 
+    '출고-영수증 상세 검증'::text as 검증항목,
+    h.shipment_id,
+    h.shipment_id::text as shipment_ref,
+    h.status::text as shipment_status,
+    i.receipt_id,
+    i.file_path::text as receipt_file_path,
+    i.file_bucket::text as receipt_file_bucket,
+    i.total_amount_krw as receipt_total_amount,
+    u.entity_type::text as link_entity_type,
+    u.entity_id::text as link_entity_id,
+    u.created_at as link_created_at,
+    CASE 
+      WHEN i.receipt_id IS NOT NULL AND i.file_path IS NOT NULL THEN '✅ 유효한 영수증 링크'
+      WHEN u.receipt_id IS NOT NULL AND i.receipt_id IS NULL THEN '❌ 링크는 있으나 영수증 정보 없음 (DB 불일치)'
+      ELSE '⚠️ 영수증 미연결'
+    END::text as verification_status
+  FROM cms_shipment_header h
+  LEFT JOIN cms_receipt_usage u ON (
+    u.entity_type = 'SHIPMENT_HEADER' 
+    AND u.entity_id::uuid = h.shipment_id
+  )
+  LEFT JOIN cms_receipt_inbox i ON u.receipt_id = i.receipt_id
+  WHERE h.shipment_id = p_shipment_id;
+$$;
+
+-- 4️⃣ 영수증 사용처 추적 (receipt_id로 역조회)
+-- SELECT * FROM trace_receipt_usage('YOUR_RECEIPT_ID_HERE');
+
+CREATE OR REPLACE FUNCTION trace_receipt_usage(p_receipt_id uuid)
+RETURNS TABLE (
+  receipt_id uuid,
+  file_path text,
+  file_bucket text,
+  total_amount_krw numeric,
+  receipt_status text,
+  linked_shipment_id uuid,
+  linked_shipment_ref text,
+  linked_shipment_status text,
+  linked_shipment_confirmed_at timestamptz,
+  entity_type text,
+  entity_id text,
+  link_created_at timestamptz,
+  verification_result text
+)
+LANGUAGE sql
+STABLE
+AS $$
+  SELECT 
+    r.receipt_id,
+    r.file_path::text,
+    r.file_bucket::text,
+    r.total_amount_krw,
+    r.status::text as receipt_status,
+    h.shipment_id as linked_shipment_id,
+    h.shipment_id::text as linked_shipment_ref,
+    h.status::text as linked_shipment_status,
+    h.confirmed_at as linked_shipment_confirmed_at,
+    u.entity_type::text,
+    u.entity_id::text,
+    u.created_at as link_created_at,
+    CASE 
+      WHEN h.shipment_id IS NOT NULL THEN '✅ 출고와 연결됨'
+      ELSE '⚠️ 출고 미연결'
+    END::text as verification_result
+  FROM cms_receipt_inbox r
+  LEFT JOIN cms_receipt_usage u ON r.receipt_id = u.receipt_id
+  LEFT JOIN cms_shipment_header h ON (
+    u.entity_type = 'SHIPMENT_HEADER' 
+    AND u.entity_id::uuid = h.shipment_id
+  )
+  WHERE r.receipt_id = p_receipt_id
+  ORDER BY u.created_at DESC;
+$$;
+
+-- 5️⃣ 링크 품질 검증 (불일치 항목 식별)
+SELECT 
+  '링크 품질 검증' as 검증항목,
+  u.receipt_id,
+  u.entity_type,
+  u.entity_id,
+  u.created_at as link_created_at,
+  CASE 
+    -- SHIPMENT_HEADER 타입인데 해당 shipment_id가 없음
+    WHEN u.entity_type = 'SHIPMENT_HEADER' AND h.shipment_id IS NULL 
+      THEN '❌ 오류: 존재하지 않는 출고에 링크'
+    -- SHIPMENT_LINE 타입인데 해당 line_id가 없음  
+    WHEN u.entity_type = 'SHIPMENT_LINE' AND sl.shipment_line_id IS NULL 
+      THEN '❌ 오류: 존재하지 않는 출고라인에 링크'
+    -- 영수증이 삭제됨
+    WHEN i.receipt_id IS NULL 
+      THEN '❌ 오류: 삭제된 영수증에 대한 링크'
+    -- 정상
+    ELSE '✅ 정상'
+  END as quality_check
+FROM cms_receipt_usage u
+LEFT JOIN cms_shipment_header h ON u.entity_type = 'SHIPMENT_HEADER' AND u.entity_id::uuid = h.shipment_id
+LEFT JOIN cms_shipment_line sl ON u.entity_type = 'SHIPMENT_LINE' AND u.entity_id::uuid = sl.shipment_line_id
+LEFT JOIN cms_receipt_inbox i ON u.receipt_id = i.receipt_id
+WHERE u.created_at >= NOW() - INTERVAL '30 days'
+  AND (
+    (u.entity_type = 'SHIPMENT_HEADER' AND h.shipment_id IS NULL)
+    OR (u.entity_type = 'SHIPMENT_LINE' AND sl.shipment_line_id IS NULL)
+    OR i.receipt_id IS NULL
+  )
+ORDER BY u.created_at DESC;
+
+-- 6️⃣ 출고-영수증 매핑 테이블 구조 확인
+SELECT 
+  '테이블 구조 검증' as 검증항목,
+  'cms_receipt_usage' as table_name,
+  column_name,
+  data_type,
+  is_nullable,
+  column_default
+FROM information_schema.columns
+WHERE table_name = 'cms_receipt_usage'
+  AND table_schema = 'public'
+ORDER BY ordinal_position;
+
+-- 7️⃣ 데이터 무결성 검증 결과 요약
+SELECT 
+  '무결성 검증 요약' as 검증항목,
+  COUNT(*) as total_links,
+  COUNT(DISTINCT u.receipt_id) as unique_receipts,
+  COUNT(DISTINCT CASE WHEN u.entity_type = 'SHIPMENT_HEADER' THEN u.entity_id END) as unique_shipments,
+  COUNT(CASE WHEN i.receipt_id IS NULL THEN 1 END) as orphaned_links,
+  COUNT(CASE WHEN u.entity_type = 'SHIPMENT_HEADER' AND h.shipment_id IS NULL THEN 1 END) as invalid_shipment_links,
+  COUNT(CASE WHEN u.entity_type = 'SHIPMENT_LINE' AND sl.shipment_line_id IS NULL THEN 1 END) as invalid_line_links
+FROM cms_receipt_usage u
+LEFT JOIN cms_receipt_inbox i ON u.receipt_id = i.receipt_id
+LEFT JOIN cms_shipment_header h ON u.entity_type = 'SHIPMENT_HEADER' AND u.entity_id::uuid = h.shipment_id
+LEFT JOIN cms_shipment_line sl ON u.entity_type = 'SHIPMENT_LINE' AND u.entity_id::uuid = sl.shipment_line_id;
+
+-- ==============================================================================
+-- 사용법:
+-- 1. 최근 출고-영수증 링크 확인: 쿼리 1, 2 실행
+-- 2. 특정 출고 검증: SELECT * FROM verify_shipment_receipt_link('SHIPMENT_UUID');
+-- 3. 특정 영수증 추적: SELECT * FROM trace_receipt_usage('RECEIPT_UUID');
+-- 4. 품질 검증: 쿼리 5, 6, 7 실행
+-- ==============================================================================

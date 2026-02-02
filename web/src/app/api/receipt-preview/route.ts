@@ -70,12 +70,14 @@ export async function GET(request: Request) {
     }
 
     try {
+        console.log(`[Receipt Preview] Downloading from bucket: ${bucket}, path: ${path}`);
         const { data, error } = await supabase.storage.from(bucket).download(path);
 
         if (error || !data) {
             const msg = error?.message ?? "download failed";
+            console.error(`[Receipt Preview] Download failed: ${msg}, bucket: ${bucket}, path: ${path}`);
             const status = msg.toLowerCase().includes("not found") ? 404 : 500;
-            return NextResponse.json({ error: msg }, { status });
+            return NextResponse.json({ error: msg, bucket, path }, { status });
         }
 
         const filename = safeFilename(path.split("/").pop() ?? "receipt");

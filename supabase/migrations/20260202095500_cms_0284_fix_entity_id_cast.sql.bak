@@ -1,0 +1,214 @@
+-- ==============================================================================
+-- 🔍 영수증-엔티티 링크 조회 SQL (타입 캐스팅 문제 해결)
+-- ==============================================================================
+-- 문제: cms_receipt_usage.entity_id는 TEXT, cms_shipment_header.shipment_id는 UUID
+-- 해결: TEXT를 UUID로 CAST (entity_id::uuid)
+-- ==============================================================================
+
+-- 1️⃣ SHIPMENT_HEADER (출고) 링크 조회
+SELECT 
+  u.usage_id,
+  u.receipt_id,
+  i.file_path as 영수증파일,
+  u.entity_type,
+  u.entity_id,
+  h.shipment_id,
+  h.shipment_no as 출고번호,
+  h.status as 출고상태,
+  h.confirmed_at,
+  u.created_at as 연결시간,
+  u.note
+FROM cms_receipt_usage u
+LEFT JOIN cms_receipt_inbox i ON u.receipt_id = i.receipt_id
+LEFT JOIN cms_shipment_header h ON u.entity_id::uuid = h.shipment_id  -- 🔥 TEXT → UUID CAST
+WHERE u.entity_type = 'SHIPMENT_HEADER'
+ORDER BY u.created_at DESC
+LIMIT 10;
+
+-- 2️⃣ SHIPMENT_LINE (출고라인) 링크 조회  
+SELECT 
+  u.usage_id,
+  u.receipt_id,
+  i.file_path,
+  u.entity_type,
+  u.entity_id,
+  sl.shipment_line_id,
+  sl.shipment_id,
+  sl.model_name,
+  sl.total_amount_sell_krw,
+  h.shipment_no,
+  u.created_at
+FROM cms_receipt_usage u
+LEFT JOIN cms_receipt_inbox i ON u.receipt_id = i.receipt_id
+LEFT JOIN cms_shipment_line sl ON u.entity_id::uuid = sl.shipment_line_id  -- 🔥 TEXT → UUID CAST
+LEFT JOIN cms_shipment_header h ON sl.shipment_id = h.shipment_id
+WHERE u.entity_type = 'SHIPMENT_LINE'
+ORDER BY u.created_at DESC
+LIMIT 10;
+
+-- 3️⃣ INVENTORY_MOVE_HEADER (재고이동) 링크 조회
+SELECT 
+  u.usage_id,
+  u.receipt_id,
+  i.file_path,
+  u.entity_type,
+  u.entity_id,
+  im.move_id,
+  im.move_no,
+  im.status,
+  im.occurred_at,
+  u.created_at
+FROM cms_receipt_usage u
+LEFT JOIN cms_receipt_inbox i ON u.receipt_id = i.receipt_id
+LEFT JOIN cms_inventory_move_header im ON u.entity_id::uuid = im.move_id  -- 🔥 TEXT → UUID CAST
+WHERE u.entity_type = 'INVENTORY_MOVE_HEADER'
+ORDER BY u.created_at DESC
+LIMIT 10;
+
+-- 4️⃣ 모든 엔티티 타입별 통계
+SELECT 
+  u.entity_type,
+  COUNT(*) as 링크수,
+  COUNT(DISTINCT u.receipt_id) as unique_receipts,
+  COUNT(DISTINCT u.entity_id) as unique_entities,
+  MIN(u.created_at) as 최초연결,
+  MAX(u.created_at) as 최근연결
+FROM cms_receipt_usage u
+GROUP BY u.entity_type
+ORDER BY 링크수 DESC;
+
+-- 5️⃣ 특정 영수증의 모든 연결 조회
+-- SELECT * FROM get_receipt_links('YOUR_RECEIPT_ID_HERE');
+
+CREATE OR REPLACE FUNCTION get_receipt_links(p_receipt_id uuid)
+RETURNS TABLE (
+  usage_id uuid,
+  receipt_id uuid,
+  file_path text,
+  entity_type text,
+  entity_id text,
+  linked_name text,
+  linked_status text,
+  created_at timestamptz
+)
+LANGUAGE sql
+STABLE
+AS $$
+  -- SHIPMENT_HEADER links
+  SELECT 
+    u.usage_id,
+    u.receipt_id,
+    i.file_path::text,
+    u.entity_type::text,
+    u.entity_id::text,
+    h.shipment_no::text as linked_name,
+    h.status::text as linked_status,
+    u.created_at
+  FROM cms_receipt_usage u
+  LEFT JOIN cms_receipt_inbox i ON u.receipt_id = i.receipt_id
+  LEFT JOIN cms_shipment_header h ON u.entity_id::uuid = h.shipment_id
+  WHERE u.receipt_id = p_receipt_id
+    AND u.entity_type = 'SHIPMENT_HEADER'
+  
+  UNION ALL
+  
+  -- SHIPMENT_LINE links
+  SELECT 
+    u.usage_id,
+    u.receipt_id,
+    i.file_path::text,
+    u.entity_type::text,
+    u.entity_id::text,
+    sl.model_name::text as linked_name,
+    NULL::text as linked_status,
+    u.created_at
+  FROM cms_receipt_usage u
+  LEFT JOIN cms_receipt_inbox i ON u.receipt_id = i.receipt_id
+  LEFT JOIN cms_shipment_line sl ON u.entity_id::uuid = sl.shipment_line_id
+  WHERE u.receipt_id = p_receipt_id
+    AND u.entity_type = 'SHIPMENT_LINE'
+  
+  UNION ALL
+  
+  -- INVENTORY_MOVE_HEADER links
+  SELECT 
+    u.usage_id,
+    u.receipt_id,
+    i.file_path::text,
+    u.entity_type::text,
+    u.entity_id::text,
+    im.move_no::text as linked_name,
+    im.status::text as linked_status,
+    u.created_at
+  FROM cms_receipt_usage u
+  LEFT JOIN cms_receipt_inbox i ON u.receipt_id = i.receipt_id
+  LEFT JOIN cms_inventory_move_header im ON u.entity_id::uuid = im.move_id
+  WHERE u.receipt_id = p_receipt_id
+    AND u.entity_type = 'INVENTORY_MOVE_HEADER'
+  
+  ORDER BY created_at DESC;
+$$;
+
+-- 6️⃣ 특정 출고의 영수증 링크 조회 (수정 버전)
+-- SELECT * FROM get_shipment_receipts('YOUR_SHIPMENT_ID_HERE');
+
+CREATE OR REPLACE FUNCTION get_shipment_receipts(p_shipment_id uuid)
+RETURNS TABLE (
+  shipment_id uuid,
+  shipment_no text,
+  receipt_id uuid,
+  file_path text,
+  file_bucket text,
+  total_amount_krw numeric,
+  link_type text,
+  linked_at timestamptz
+)
+LANGUAGE sql
+STABLE
+AS $$
+  -- SHIPMENT_HEADER 연결
+  SELECT 
+    h.shipment_id,
+    h.shipment_no::text,
+    i.receipt_id,
+    i.file_path::text,
+    i.file_bucket::text,
+    i.total_amount_krw,
+    'SHIPMENT_HEADER'::text as link_type,
+    u.created_at as linked_at
+  FROM cms_shipment_header h
+  LEFT JOIN cms_receipt_usage u ON u.entity_type = 'SHIPMENT_HEADER' 
+    AND u.entity_id::uuid = h.shipment_id
+  LEFT JOIN cms_receipt_inbox i ON u.receipt_id = i.receipt_id
+  WHERE h.shipment_id = p_shipment_id
+  
+  UNION ALL
+  
+  -- SHIPMENT_LINE 연결 (라인별)
+  SELECT 
+    h.shipment_id,
+    h.shipment_no::text,
+    i.receipt_id,
+    i.file_path::text,
+    i.file_bucket::text,
+    i.total_amount_krw,
+    'SHIPMENT_LINE'::text as link_type,
+    u.created_at as linked_at
+  FROM cms_shipment_header h
+  JOIN cms_shipment_line sl ON h.shipment_id = sl.shipment_id
+  LEFT JOIN cms_receipt_usage u ON u.entity_type = 'SHIPMENT_LINE' 
+    AND u.entity_id::uuid = sl.shipment_line_id
+  LEFT JOIN cms_receipt_inbox i ON u.receipt_id = i.receipt_id
+  WHERE h.shipment_id = p_shipment_id
+    AND i.receipt_id IS NOT NULL
+  
+  ORDER BY linked_at DESC;
+$$;
+
+-- ==============================================================================
+-- 사용법:
+-- 1. 특정 출고의 영수증: SELECT * FROM get_shipment_receipts('SHIPMENT_UUID');
+-- 2. 특정 영수증의 연결: SELECT * FROM get_receipt_links('RECEIPT_UUID');
+-- 3. SHIPMENT_HEADER 링크: 쿼리 1 실행
+-- 4. 전체 통계: 쿼리 4 실행
+-- ==============================================================================
