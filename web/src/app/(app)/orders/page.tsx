@@ -57,6 +57,7 @@ type OrderDetailRow = {
   model_name_raw?: string | null;
   suffix?: string | null;
   color?: string | null;
+  material_code?: string | null;
   size?: string | number | null;
   qty?: number | null;
   center_stone_name?: string | null;
@@ -75,6 +76,7 @@ type OrderUpsertPayload = {
   p_master_id: string | null;
   p_suffix: string | null;
   p_color: string | null;
+  p_material_code: string | null;
   p_qty: number | null;
   p_size: string | null;
   p_is_plated: boolean;
@@ -107,6 +109,7 @@ type GridRow = {
   color_p: boolean;
   color_g: boolean;
   color_w: boolean;
+  material_code: string;
   size: string;
   qty: string;
   center_stone: string;
@@ -137,6 +140,7 @@ type RowErrors = {
   model?: string;
   category?: string;
   color?: string;
+  material?: string;
   qty?: string;
   plating?: string;
   stones?: string;
@@ -169,6 +173,14 @@ const CATEGORY_MAP: Record<string, string> = {
   ETC: "기타",
 };
 
+const MATERIAL_OPTIONS = [
+  { label: "14K", value: "14" },
+  { label: "18K", value: "18" },
+  { label: "24K", value: "24" },
+  { label: "925", value: "925" },
+  { label: "00(기타)", value: "00" },
+];
+
 const getCategoryName = (code: string | null | undefined) => {
   if (!code) return "";
   const upper = code.trim().toUpperCase();
@@ -187,6 +199,7 @@ const createEmptyRow = (index: number): GridRow => ({
   color_p: false,
   color_g: false,
   color_w: false,
+  material_code: "",
   size: "",
   qty: "1",
   center_stone: "",
@@ -451,6 +464,7 @@ function OrdersPageContent() {
           color_p,
           color_g,
           color_w,
+          material_code: order.material_code ?? masterInfo?.material_code_default ?? "",
           size: String(order.size ?? ""),
           qty: String(order.qty ?? ""),
           center_stone: order.center_stone_name ?? "",
@@ -634,7 +648,7 @@ function OrdersPageContent() {
 
     const normalizedInput = normalizeText(inputValue).toLowerCase();
     if (!normalizedInput) {
-      updateRow(rowId, { master_item_id: null, model_name: null, suffix: "", photo_url: null });
+      updateRow(rowId, { master_item_id: null, model_name: null, suffix: "", material_code: "", photo_url: null });
       return;
     }
 
@@ -645,6 +659,7 @@ function OrdersPageContent() {
         master_item_id: cached.master_item_id ?? null,
         model_name: cached.model_name ?? null,
         suffix: row.suffix || cached.category_code || "",
+        material_code: row.material_code || cached.material_code_default || "",
         photo_url: signedUrl,
         material_price: cached.material_price ?? null,
         labor_basic: cached.labor_basic ?? null,
@@ -676,6 +691,7 @@ function OrdersPageContent() {
           master_item_id: master.master_item_id ?? null,
           model_name: master.model_name ?? null,
           suffix: row.suffix || master.category_code || "",
+          material_code: row.material_code || master.material_code_default || "",
           photo_url: signedUrl,
           material_price: master.material_price ?? null,
           labor_basic: master.labor_basic ?? null,
@@ -708,6 +724,7 @@ function OrdersPageContent() {
       p_master_id: row.master_item_id ?? master?.master_item_id ?? null,
       p_suffix: normalizeText(row.suffix) || master?.category_code || null,
       p_color: colorStr || null,
+      p_material_code: row.material_code || master?.material_code_default || null,
       p_qty: toNumber(row.qty),
       p_size: normalizeText(row.size),
       p_is_plated: !!(platingStr),
@@ -733,6 +750,7 @@ function OrdersPageContent() {
       row.client_input.trim() ||
       row.model_input.trim() ||
       row.color_p || row.color_g || row.color_w ||
+      row.material_code ||
       row.size ||
       row.qty !== "1" ||
       row.plating_p || row.plating_g || row.plating_w || row.plating_b ||
@@ -753,6 +771,10 @@ function OrdersPageContent() {
     }
     if (row.model_input.trim() && !(row.color_p || row.color_g || row.color_w)) {
       setRowError(row.id, { color: "색상을 선택하세요" });
+      isValid = false;
+    }
+    if (row.model_input.trim() && !row.material_code) {
+      setRowError(row.id, { material: "소재를 선택하세요" });
       isValid = false;
     }
     if (row.model_input.trim() && !toNumber(row.qty)) {
@@ -830,10 +852,11 @@ function OrdersPageContent() {
         {/* Left Column: Compact Order Grid */}
         <div className="space-y-1 min-w-0">
           {/* Header Row */}
-          <div className="grid grid-cols-[30px_160px_160px_70px_45px_50px_100px_30px_0.8fr_30px] gap-1 px-1 py-1 text-[10px] font-semibold text-[var(--muted)] uppercase tracking-wider border-b border-border/40 items-center">
+          <div className="grid grid-cols-[30px_160px_160px_70px_70px_45px_50px_100px_30px_0.8fr_30px] gap-1 px-1 py-1 text-[10px] font-semibold text-[var(--muted)] uppercase tracking-wider border-b border-border/40 items-center">
             <span className="text-center">#</span>
             <span>거래처</span>
             <span>모델</span>
+            <span className="text-center">소재</span>
             <span className="text-center">색상</span>
             <span className="text-center">사이즈</span>
             <span className="text-center">수량</span>
@@ -854,7 +877,7 @@ function OrdersPageContent() {
                 {/* Main Row */}
                 <div
                   className={cn(
-                    "grid grid-cols-[30px_160px_160px_70px_45px_50px_100px_30px_0.8fr_30px] gap-1 px-1 py-1 items-center text-xs rounded-md border transition-all",
+                    "grid grid-cols-[30px_160px_160px_70px_70px_45px_50px_100px_30px_0.8fr_30px] gap-1 px-1 py-1 items-center text-xs rounded-md border transition-all",
                     row.order_line_id ? "bg-primary/5 border-primary/20" : "bg-card border-border/50 hover:border-border",
                     (errors.client || errors.model) ? "bg-[var(--danger)]/5 border-[var(--danger)]/30" : ""
                   )}
@@ -891,6 +914,25 @@ function OrdersPageContent() {
                     onBlur={(e) => resolveMaster(row.id, e.currentTarget.value)}
                     placeholder="모델..."
                   />
+
+                  {/* Material Select */}
+                  <select
+                    className={cn(
+                      "w-full bg-transparent border border-transparent focus:border-primary/50 focus:bg-background rounded px-1 py-0.5 text-xs text-center transition-colors",
+                      errors.material ? "border-[var(--danger)]/50 bg-[var(--danger)]/5" : "hover:border-border/50"
+                    )}
+                    value={row.material_code}
+                    onChange={(e) => updateRow(row.id, { material_code: e.target.value })}
+                    aria-label="소재"
+                    title="소재"
+                  >
+                    <option value="">소재</option>
+                    {MATERIAL_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
 
                   {/* Color Checkboxes (P, G, W) */}
                   <div className="flex items-center justify-center gap-0.5">

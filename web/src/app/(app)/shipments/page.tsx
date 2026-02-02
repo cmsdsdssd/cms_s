@@ -76,6 +76,10 @@ type ShipmentLineRow = {
   model_name?: string;
   qty?: number;
   measured_weight_g?: number | null;
+  deduction_weight_g?: number | null;
+  base_labor_krw?: number | null;
+  extra_labor_krw?: number | null;
+  extra_labor_items?: unknown;
 };
 
 type ShipmentHeaderRow = {
@@ -111,6 +115,13 @@ type ShipmentUpsertResult = {
 };
 
 const debounceMs = 250;
+const OTHER_LABOR_OPTIONS = [
+  { label: "도금", value: "PLATING" },
+  { label: "중심공임", value: "CENTER" },
+  { label: "보조1공임", value: "SUB1" },
+  { label: "보조2공임", value: "SUB2" },
+  { label: "기타", value: "OTHER" },
+];
 // ✅ 0265에 있는 함수명을 그대로 사용 (영수증 “연결” upsert)
 const FN_RECEIPT_USAGE_UPSERT = "cms_fn_upsert_receipt_usage_alloc_v1";
 
@@ -141,6 +152,12 @@ const formatDateTimeKst = (value?: string | null) => {
     minute: "2-digit",
     hour12: false,
   }).format(parsed);
+};
+type ExtraLaborItem = {
+  id: string;
+  type: string;
+  label: string;
+  amount: string;
 };
 
 // Helper function to convert relative photo path to full Supabase Storage URL
@@ -193,7 +210,9 @@ export default function ShipmentsPage() {
   // --- 입력값 ---
   const [weightG, setWeightG] = useState("");
   const [deductionWeightG, setDeductionWeightG] = useState("");
-  const [totalLabor, setTotalLabor] = useState(""); // 헤더 입력(참고/빠른 입력)
+  const [baseLabor, setBaseLabor] = useState("");
+  const [extraLaborItems, setExtraLaborItems] = useState<ExtraLaborItem[]>([]);
+  const [extraLaborSelect, setExtraLaborSelect] = useState<string | null>(null);
 
   // --- confirm modal ---
   const [confirmModalOpen, setConfirmModalOpen] = useState(false);
@@ -223,6 +242,52 @@ export default function ShipmentsPage() {
 
   // UI State
   const [activeTab, setActiveTab] = useState<"create" | "confirmed">("create");
+
+  const normalizeExtraLaborItems = (value: unknown): ExtraLaborItem[] => {
+    if (!Array.isArray(value)) return [];
+    return value
+      .map((item, index) => {
+        const record = item as {
+          id?: string;
+          type?: string;
+          label?: string;
+          amount?: number | string | null;
+        };
+        const type = String(record?.type ?? "").trim();
+        const label = String(record?.label ?? type ?? "기타").trim() || "기타";
+        const amount = record?.amount === null || record?.amount === undefined
+          ? ""
+          : String(record.amount);
+        return {
+          id: String(record?.id ?? `extra-${Date.now()}-${index}`),
+          type,
+          label,
+          amount,
+        };
+      })
+      .filter((item) => item.label);
+  };
+
+  const handleAddExtraLabor = (value: string | null) => {
+    if (!value) return;
+    const option = OTHER_LABOR_OPTIONS.find((item) => item.value === value);
+    const label = option?.label ?? value;
+    const nextId = typeof crypto !== "undefined" && "randomUUID" in crypto
+      ? crypto.randomUUID()
+      : `extra-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    setExtraLaborItems((prev) => [...prev, { id: nextId, type: value, label, amount: "" }]);
+    setExtraLaborSelect(null);
+  };
+
+  const handleExtraLaborAmountChange = (id: string, amount: string) => {
+    setExtraLaborItems((prev) =>
+      prev.map((item) => (item.id === id ? { ...item, amount } : item))
+    );
+  };
+
+  const handleRemoveExtraLabor = (id: string) => {
+    setExtraLaborItems((prev) => prev.filter((item) => item.id !== id));
+  };
 
   useEffect(() => {
     const handler = setTimeout(() => setDebouncedQuery(searchQuery.trim()), debounceMs);
@@ -338,7 +403,9 @@ export default function ShipmentsPage() {
 
     setWeightG("");
     setDeductionWeightG("");
-    setTotalLabor("");
+    setBaseLabor("");
+    setExtraLaborItems([]);
+    setExtraLaborSelect(null);
   };
 
   // --- RPC: 출고 저장 ---
@@ -356,6 +423,39 @@ export default function ShipmentsPage() {
       });
     },
   });
+
+  useEffect(() => {
+    if (!confirmModalOpen) return;
+    if (!currentShipmentLineId) return;
+    const line = (currentLinesQuery.data ?? []).find(
+      (item) => String(item.shipment_line_id) === String(currentShipmentLineId)
+    );
+    if (!line) return;
+
+    if (line.measured_weight_g !== null && line.measured_weight_g !== undefined) {
+      setWeightG(String(line.measured_weight_g));
+    }
+    if (line.deduction_weight_g !== null && line.deduction_weight_g !== undefined) {
+      setDeductionWeightG(String(line.deduction_weight_g));
+    }
+    if (line.base_labor_krw !== null && line.base_labor_krw !== undefined) {
+      setBaseLabor(String(line.base_labor_krw));
+    }
+    if (line.extra_labor_items !== null && line.extra_labor_items !== undefined) {
+      setExtraLaborItems(normalizeExtraLaborItems(line.extra_labor_items));
+    } else if (line.extra_labor_krw !== null && line.extra_labor_krw !== undefined) {
+      setExtraLaborItems([
+        {
+          id: typeof crypto !== "undefined" && "randomUUID" in crypto
+            ? crypto.randomUUID()
+            : `extra-${Date.now()}-0`,
+          type: "OTHER",
+          label: "기타",
+          amount: String(line.extra_labor_krw ?? ""),
+        },
+      ]);
+    }
+  }, [confirmModalOpen, currentShipmentLineId, currentLinesQuery.data]);
 
   const shipmentHeaderQuery = useQuery({
     queryKey: ["shipment-header", normalizedShipmentId, confirmModalOpen],
@@ -450,7 +550,9 @@ export default function ShipmentsPage() {
         setDebouncedQuery("");
         setWeightG("");
         setDeductionWeightG("");
-        setTotalLabor("");
+        setBaseLabor("");
+        setExtraLaborItems([]);
+        setExtraLaborSelect(null);
 
         return;
       }
@@ -475,6 +577,7 @@ export default function ShipmentsPage() {
     successMessage: "영수증 연결 완료",
   });
 
+
   const handleSaveShipment = async () => {
     if (!actorId) {
       toast.error("ACTOR_ID 설정이 필요합니다.", {
@@ -488,21 +591,46 @@ export default function ShipmentsPage() {
     }
 
     const weightValue = Number(weightG);
-    const laborValue = Number(totalLabor);
+    const baseValue = Number(baseLabor);
+    const laborValue = resolvedTotalLabor;
+    const deductionText = (deductionWeightG ?? "").trim();
+    const masterDeduct = Number(masterLookupQuery.data?.deduction_weight_default_g ?? 0);
+    const deductionValue = deductionText === "" ? masterDeduct : Number(deductionText);
 
     if (Number.isNaN(weightValue) || weightValue <= 0) {
       toast.error("중량(g)을 올바르게 입력해주세요.");
       return;
     }
-    if (Number.isNaN(laborValue) || laborValue < 0) {
-      toast.error("총 공임(원)을 올바르게 입력해주세요.");
+    if (!Number.isFinite(deductionValue) || deductionValue < 0) {
+      toast.error("차감중량(g)을 올바르게 입력해주세요.");
+      return;
+    }
+    if (deductionValue > weightValue) {
+      toast.error("차감중량은 중량보다 클 수 없습니다.");
+      return;
+    }
+    if (!Number.isFinite(baseValue) || baseValue < 0) {
+      toast.error("기본 공임(원)을 올바르게 입력해주세요.");
+      return;
+    }
+    const invalidExtra = extraLaborItems.find((item) => {
+      if (item.amount.trim() === "") return false;
+      const value = Number(item.amount);
+      return !Number.isFinite(value) || value < 0;
+    });
+    if (invalidExtra) {
+      toast.error("기타 공임 금액을 올바르게 입력해주세요.");
       return;
     }
 
     const result = await shipmentUpsertMutation.mutateAsync({
       p_order_line_id: selectedOrderLineId,
       p_weight_g: weightValue,
+      p_deduction_weight_g: deductionValue,
       p_total_labor: laborValue,
+      p_base_labor_krw: Number.isFinite(baseValue) ? baseValue : 0,
+      p_extra_labor_krw: resolvedExtraLabor,
+      p_extra_labor_items: extraLaborPayload,
       p_actor_person_id: actorId,
       p_idempotency_key: idempotencyKey,
     });
@@ -688,7 +816,9 @@ export default function ShipmentsPage() {
       setDebouncedQuery("");
       setWeightG("");
       setDeductionWeightG("");
-      setTotalLabor("");
+      setBaseLabor("");
+      setExtraLaborItems([]);
+      setExtraLaborSelect(null);
       setCostMode("PROVISIONAL");
       setCostInputs({});
 
@@ -722,7 +852,9 @@ export default function ShipmentsPage() {
       setDebouncedQuery("");
       setWeightG("");
       setDeductionWeightG("");
-      setTotalLabor("");
+      setBaseLabor("");
+      setExtraLaborItems([]);
+      setExtraLaborSelect(null);
       setCostMode("PROVISIONAL");
       setCostInputs({});
 
@@ -768,9 +900,21 @@ export default function ShipmentsPage() {
         return;
       }
 
+      const currentWeightValue =
+        currentLineWeightText !== ""
+          ? Number(currentLineWeightText)
+          : Number(currentLine?.measured_weight_g ?? NaN);
+      if (Number.isFinite(currentWeightValue) && dValue > currentWeightValue) {
+        toast.error("차감중량은 중량보다 클 수 없습니다.");
+        return;
+      }
+
       const updatePayload: Record<string, unknown> = {
         p_shipment_line_id: String(currentShipmentLineId),
         p_deduction_weight_g: dValue,
+        p_base_labor_krw: resolvedBaseLabor,
+        p_extra_labor_krw: resolvedExtraLabor,
+        p_extra_labor_items: extraLaborPayload,
       };
       if (currentLineWeightText !== "") {
         const weightValue = Number(currentLineWeightText);
@@ -870,6 +1014,32 @@ export default function ShipmentsPage() {
     if (!Number.isFinite(w)) return null;
     return Math.max(w - (resolvedDeductionG ?? 0), 0);
   }, [weightG, resolvedDeductionG]);
+
+  const resolvedBaseLabor = useMemo(() => {
+    const base = Number(baseLabor);
+    return Number.isFinite(base) ? base : 0;
+  }, [baseLabor]);
+
+  const resolvedExtraLabor = useMemo(() => {
+    return extraLaborItems.reduce((sum, item) => {
+      const value = Number(item.amount);
+      return sum + (Number.isFinite(value) ? value : 0);
+    }, 0);
+  }, [extraLaborItems]);
+
+  const resolvedTotalLabor = useMemo(
+    () => resolvedBaseLabor + resolvedExtraLabor,
+    [resolvedBaseLabor, resolvedExtraLabor]
+  );
+
+  const extraLaborPayload = useMemo(() => {
+    return extraLaborItems.map((item) => ({
+      id: item.id,
+      type: item.type,
+      label: item.label,
+      amount: Number(item.amount) || 0,
+    }));
+  }, [extraLaborItems]);
 
   const masterLaborTotal =
     (master?.labor_basic ?? 0) +
@@ -1265,37 +1435,103 @@ export default function ShipmentsPage() {
                       </h3>
                     </CardHeader>
                     <CardBody className="p-6 space-y-6">
-                      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                        <div className="space-y-2">
-                          <label className="text-sm font-medium text-[var(--foreground)]">중량 (g)</label>
-                          <Input
-                            placeholder="0.00"
-                            value={weightG}
-                            onChange={(e) => setWeightG(e.target.value)}
-                            className="tabular-nums text-lg h-12"
-                            autoFocus
-                          />
+                      <div className="space-y-4">
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                          <div className="space-y-1">
+                            <span className="text-xs text-[var(--muted)]">총중량 (중량-차감중량)</span>
+                            <div className="text-base font-semibold tabular-nums">
+                              {resolvedNetWeightG === null ? "-" : `${resolvedNetWeightG.toFixed(3)}g`}
+                            </div>
+                          </div>
+                          <div className="space-y-1">
+                            <span className="text-xs text-[var(--muted)]">총공임 (기본+기타)</span>
+                            <div className="text-base font-semibold tabular-nums">
+                              {resolvedTotalLabor.toLocaleString()}원
+                            </div>
+                          </div>
                         </div>
-                        <div className="space-y-2">
-                          <label className="text-sm font-medium text-[var(--foreground)]">
-                            차감중량 (g)
-                            <span className="text-[var(--muted)] font-normal ml-1 text-xs">(선택)</span>
-                          </label>
-                          <Input
-                            placeholder={master?.deduction_weight_default_g ? `${master.deduction_weight_default_g} (기본값)` : "0.00"}
-                            value={deductionWeightG}
-                            onChange={(e) => setDeductionWeightG(e.target.value)}
-                            className="tabular-nums text-lg h-12"
-                          />
+
+                        <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+                          <div className="space-y-2">
+                            <label className="text-sm font-medium text-[var(--foreground)]">중량 (g)</label>
+                            <Input
+                              placeholder="0.00"
+                              value={weightG}
+                              onChange={(e) => setWeightG(e.target.value)}
+                              className="tabular-nums text-lg h-12"
+                              autoFocus
+                            />
+                          </div>
+                          <div className="space-y-2">
+                            <label className="text-sm font-medium text-[var(--foreground)]">
+                              차감중량 (g)
+                              <span className="text-[var(--muted)] font-normal ml-1 text-xs">(선택)</span>
+                            </label>
+                            <Input
+                              placeholder={master?.deduction_weight_default_g ? `${master.deduction_weight_default_g} (기본값)` : "0.00"}
+                              value={deductionWeightG}
+                              onChange={(e) => setDeductionWeightG(e.target.value)}
+                              className="tabular-nums text-lg h-12"
+                            />
+                          </div>
+                          <div className="space-y-2">
+                            <label className="text-sm font-medium text-[var(--foreground)]">기본공임 (원)</label>
+                            <Input
+                              placeholder="0"
+                              value={baseLabor}
+                              onChange={(e) => setBaseLabor(e.target.value)}
+                              className="tabular-nums text-lg h-12"
+                            />
+                          </div>
+                          <div className="space-y-2">
+                            <label className="text-sm font-medium text-[var(--foreground)]">기타공임 (원)</label>
+                            <Input
+                              placeholder="0"
+                              value={resolvedExtraLabor.toLocaleString()}
+                              readOnly
+                              className="tabular-nums text-lg h-12"
+                            />
+                          </div>
                         </div>
-                        <div className="space-y-2">
-                          <label className="text-sm font-medium text-[var(--foreground)]">총 공임 (원)</label>
-                          <Input
-                            placeholder="0"
-                            value={totalLabor}
-                            onChange={(e) => setTotalLabor(e.target.value)}
-                            className="tabular-nums text-lg h-12"
-                          />
+
+                        <div className="rounded-lg border border-[var(--panel-border)] bg-[var(--surface)]/40 p-4 space-y-3">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="text-sm font-medium text-[var(--foreground)]">기타공임 내역</span>
+                            <div className="min-w-[160px]">
+                              <SearchSelect
+                                placeholder="내역 선택"
+                                options={OTHER_LABOR_OPTIONS}
+                                value={extraLaborSelect ?? undefined}
+                                onChange={(value) => handleAddExtraLabor(value)}
+                              />
+                            </div>
+                          </div>
+                          <div className="space-y-2">
+                            {extraLaborItems.length === 0 && (
+                              <div className="text-xs text-[var(--muted)]">추가된 내역이 없습니다.</div>
+                            )}
+                            {extraLaborItems.map((item) => (
+                              <div key={item.id} className="flex items-center gap-2">
+                                <div className="text-xs font-medium text-[var(--foreground)] min-w-[90px]">
+                                  {item.label}
+                                </div>
+                                <Input
+                                  placeholder="0"
+                                  value={item.amount}
+                                  onChange={(e) => handleExtraLaborAmountChange(item.id, e.target.value)}
+                                  className="tabular-nums h-9"
+                                />
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => handleRemoveExtraLabor(item.id)}
+                                  className="text-[var(--muted)]"
+                                >
+                                  삭제
+                                </Button>
+                              </div>
+                            ))}
+                          </div>
                         </div>
                       </div>
 
@@ -1310,7 +1546,9 @@ export default function ShipmentsPage() {
                             setDebouncedQuery("");
                             setWeightG("");
                             setDeductionWeightG("");
-                            setTotalLabor("");
+                            setBaseLabor("");
+                            setExtraLaborItems([]);
+                            setExtraLaborSelect(null);
                             setIsStorePickup(false);
                           }}
                           className="text-[var(--muted)] hover:text-[var(--foreground)]"
@@ -1427,37 +1665,100 @@ export default function ShipmentsPage() {
               <Badge tone="active">작성 중</Badge>
             </div>
 
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 pt-3 border-t border-[var(--primary)]/20">
-              <div>
-                <span className="text-xs text-[var(--primary)] block mb-1">중량</span>
-                <Input
-                  className="h-7 text-xs w-24 bg-[var(--input-bg)] tabular-nums"
-                  placeholder="0.00"
-                  value={weightG}
-                  onChange={(e) => setWeightG(e.target.value)}
-                />
-              </div>
-              <div>
-                <span className="text-xs text-[var(--primary)] block mb-1">차감</span>
-                <div className="flex items-center gap-2">
-                  <Input
-                    className="h-7 text-xs w-20 bg-[var(--input-bg)] tabular-nums"
-                    placeholder="0.00"
-                    value={deductionWeightG}
-                    onChange={(e) => setDeductionWeightG(e.target.value)}
-                  />
-                  <span className="text-[10px] text-[var(--primary)]">(마스터: {master?.deduction_weight_default_g ?? "-"})</span>
+            <div className="space-y-3 pt-3 border-t border-[var(--primary)]/20">
+              <div className="grid grid-cols-2 md:grid-cols-2 gap-4">
+                <div>
+                  <span className="text-xs text-[var(--primary)] block mb-1">총중량</span>
+                  <span className="text-sm font-semibold tabular-nums">
+                    {resolvedNetWeightG === null ? "-" : `${resolvedNetWeightG.toFixed(3)}g`}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-xs text-[var(--primary)] block mb-1">총공임</span>
+                  <span className="text-sm font-semibold tabular-nums">{resolvedTotalLabor.toLocaleString()}원</span>
                 </div>
               </div>
-              <div>
-                <span className="text-xs text-[var(--primary)] block mb-1">순중량</span>
-                <span className="text-sm font-semibold tabular-nums">
-                  {resolvedNetWeightG === null ? "-" : resolvedNetWeightG.toFixed(3)}g
-                </span>
+
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <div>
+                  <span className="text-xs text-[var(--primary)] block mb-1">중량</span>
+                  <Input
+                    className="h-7 text-xs w-24 bg-[var(--input-bg)] tabular-nums"
+                    placeholder="0.00"
+                    value={weightG}
+                    onChange={(e) => setWeightG(e.target.value)}
+                  />
+                </div>
+                <div>
+                  <span className="text-xs text-[var(--primary)] block mb-1">차감</span>
+                  <div className="flex items-center gap-2">
+                    <Input
+                      className="h-7 text-xs w-20 bg-[var(--input-bg)] tabular-nums"
+                      placeholder="0.00"
+                      value={deductionWeightG}
+                      onChange={(e) => setDeductionWeightG(e.target.value)}
+                    />
+                    <span className="text-[10px] text-[var(--primary)]">(마스터: {master?.deduction_weight_default_g ?? "-"})</span>
+                  </div>
+                </div>
+                <div>
+                  <span className="text-xs text-[var(--primary)] block mb-1">기본공임</span>
+                  <Input
+                    className="h-7 text-xs w-24 bg-[var(--input-bg)] tabular-nums"
+                    placeholder="0"
+                    value={baseLabor}
+                    onChange={(e) => setBaseLabor(e.target.value)}
+                  />
+                </div>
+                <div>
+                  <span className="text-xs text-[var(--primary)] block mb-1">기타공임</span>
+                  <Input
+                    className="h-7 text-xs w-24 bg-[var(--input-bg)] tabular-nums"
+                    placeholder="0"
+                    value={resolvedExtraLabor.toLocaleString()}
+                    readOnly
+                  />
+                </div>
               </div>
-              <div>
-                <span className="text-xs text-[var(--primary)] block mb-1">총 공임</span>
-                <span className="text-sm font-semibold tabular-nums">{totalLabor || "-"}원</span>
+
+              <div className="rounded-md border border-[var(--primary)]/20 bg-[var(--surface)]/40 p-3 space-y-2">
+                <div className="flex items-center gap-2 text-xs text-[var(--primary)]">
+                  <span className="font-semibold">기타공임 내역</span>
+                  <div className="min-w-[120px]">
+                    <SearchSelect
+                      placeholder="내역 선택"
+                      options={OTHER_LABOR_OPTIONS}
+                      value={extraLaborSelect ?? undefined}
+                      onChange={(value) => handleAddExtraLabor(value)}
+                    />
+                  </div>
+                </div>
+                <div className="space-y-1">
+                  {extraLaborItems.length === 0 && (
+                    <div className="text-[10px] text-[var(--muted)]">추가된 내역이 없습니다.</div>
+                  )}
+                  {extraLaborItems.map((item) => (
+                    <div key={item.id} className="flex items-center gap-2">
+                      <span className="text-[10px] text-[var(--primary)] min-w-[80px]">
+                        {item.label}
+                      </span>
+                      <Input
+                        className="h-7 text-xs w-20 bg-[var(--input-bg)] tabular-nums"
+                        placeholder="0"
+                        value={item.amount}
+                        onChange={(e) => handleExtraLaborAmountChange(item.id, e.target.value)}
+                      />
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => handleRemoveExtraLabor(item.id)}
+                        className="text-[var(--muted)]"
+                      >
+                        삭제
+                      </Button>
+                    </div>
+                  ))}
+                </div>
               </div>
             </div>
 

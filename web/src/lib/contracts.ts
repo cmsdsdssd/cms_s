@@ -5,7 +5,9 @@ export const CONTRACTS = {
     ordersWorklist: "cms_v_order_worklist",
 
     arBalanceByParty: "cms_v_ar_balance_by_party",
-    arPositionByParty: "cms_v_ar_position_by_party",
+    arPositionByParty: "cms_v_ar_position_by_party_v2",
+    arInvoicePosition: "cms_v_ar_invoice_position_v1",
+    arPaymentAllocDetail: "cms_v_ar_payment_alloc_detail_v1",
     masterItems: "cms_master_item",
     arClientSummary: "v_cms_ar_client_summary",
     masterItemLookup: "v_cms_master_item_lookup",
@@ -76,6 +78,8 @@ export const CONTRACTS = {
 
     recordPayment:
       process.env.NEXT_PUBLIC_CMS_FN_RECORD_PAYMENT || "cms_fn_record_payment_v2",
+    arApplyPaymentFifo:
+      process.env.NEXT_PUBLIC_CMS_FN_AR_APPLY_PAYMENT_FIFO || "cms_fn_ar_apply_payment_fifo_v1",
     recordReturn:
       process.env.NEXT_PUBLIC_CMS_FN_RECORD_RETURN_V2 ??
       process.env.NEXT_PUBLIC_CMS_FN_RECORD_RETURN ??

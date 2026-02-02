@@ -25,6 +25,11 @@ type ArPositionRow = {
   receivable_krw?: number | null;
   credit_krw?: number | null;
   last_activity_at?: string | null;
+  labor_cash_outstanding_krw?: number | null;
+  material_cash_outstanding_krw?: number | null;
+  total_cash_outstanding_krw?: number | null;
+  gold_outstanding_g?: number | null;
+  silver_outstanding_g?: number | null;
 };
 
 type LedgerRow = {
@@ -65,13 +70,49 @@ type ReturnLineRow = {
   return_qty?: number | null;
 };
 
-type TenderLine = {
-  id: string;
-  method: string;
-  amount: string;
-  meta: string;
-  weightG: string;
-  purity: string;
+type ArInvoicePositionRow = {
+  ar_id?: string;
+  party_id?: string;
+  shipment_id?: string | null;
+  shipment_line_id?: string | null;
+  occurred_at?: string | null;
+  model_name?: string | null;
+  suffix?: string | null;
+  color?: string | null;
+  size?: string | null;
+  qty?: number | null;
+  material_code?: string | null;
+  labor_cash_due_krw?: number | null;
+  material_cash_due_krw?: number | null;
+  total_cash_due_krw?: number | null;
+  labor_cash_outstanding_krw?: number | null;
+  material_cash_outstanding_krw?: number | null;
+  total_cash_outstanding_krw?: number | null;
+  commodity_type?: string | null;
+  commodity_due_g?: number | null;
+  commodity_outstanding_g?: number | null;
+  commodity_price_snapshot_krw_per_g?: number | null;
+};
+
+type ArPaymentAllocDetailRow = {
+  payment_id?: string;
+  paid_at?: string | null;
+  cash_krw?: number | null;
+  gold_g?: number | null;
+  silver_g?: number | null;
+  note?: string | null;
+  alloc_id?: string | null;
+  ar_id?: string | null;
+  alloc_cash_krw?: number | null;
+  alloc_gold_g?: number | null;
+  alloc_silver_g?: number | null;
+  alloc_value_krw?: number | null;
+  shipment_line_id?: string | null;
+  model_name?: string | null;
+  suffix?: string | null;
+  color?: string | null;
+  size?: string | null;
+  invoice_occurred_at?: string | null;
 };
 
 type ShipmentValuationRow = {
@@ -94,11 +135,20 @@ type ReturnResponse = {
   remaining_qty?: number;
 };
 
-const paymentMethods = ["BANK", "CASH", "GOLD", "SILVER", "OFFSET"];
-
 const formatKrw = (value?: number | null) => {
   if (value === null || value === undefined) return "-";
   return `₩${new Intl.NumberFormat("ko-KR").format(Math.round(value))}`;
+};
+
+const formatGram = (value?: number | null) => {
+  if (value === null || value === undefined) return "-";
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return "-";
+  const formatted = new Intl.NumberFormat("ko-KR", {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 4,
+  }).format(numeric);
+  return `${formatted}g`;
 };
 
 type AmountPillProps = {
@@ -159,15 +209,6 @@ const toKstInputValue = () => {
   return kst.toISOString().slice(0, 16);
 };
 
-const createTenderLine = (): TenderLine => ({
-  id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
-  method: paymentMethods[0],
-  amount: "",
-  meta: "",
-  weightG: "",
-  purity: "",
-});
-
 export default function ArPage() {
   const schemaClient = getSchemaClient();
   const [searchQuery, setSearchQuery] = useState("");
@@ -178,8 +219,10 @@ export default function ArPage() {
   const [paymentPartyId, setPaymentPartyId] = useState("");
   const [paidAt, setPaidAt] = useState(toKstInputValue);
   const [paymentMemo, setPaymentMemo] = useState("");
-  const [tenders, setTenders] = useState<TenderLine[]>([createTenderLine()]);
-  const [paymentShipmentId, setPaymentShipmentId] = useState("");
+  const [paymentCashKrw, setPaymentCashKrw] = useState("");
+  const [paymentGoldG, setPaymentGoldG] = useState("");
+  const [paymentSilverG, setPaymentSilverG] = useState("");
+  const [paymentIdempotencyKey, setPaymentIdempotencyKey] = useState(() => crypto.randomUUID());
   const [returnPartyId, setReturnPartyId] = useState("");
   const [returnShipmentLineId, setReturnShipmentLineId] = useState("");
   const [returnQty, setReturnQty] = useState("1");
@@ -234,7 +277,9 @@ export default function ArPage() {
       if (!schemaClient) throw new Error("Supabase env is missing");
       const { data, error } = await schemaClient
         .from(CONTRACTS.views.arPositionByParty)
-        .select("party_id, party_type, name, balance_krw, receivable_krw, credit_krw, last_activity_at")
+        .select(
+          "party_id, party_type, name, balance_krw, receivable_krw, credit_krw, last_activity_at, labor_cash_outstanding_krw, material_cash_outstanding_krw, total_cash_outstanding_krw, gold_outstanding_g, silver_outstanding_g"
+        )
         .eq("party_type", "customer")
         .order("name");
       if (error) throw error;
@@ -310,6 +355,72 @@ export default function ArPage() {
   }, [ledgerQuery.data, selectedLedgerId]);
 
   const selectedLedgerShipmentId = selectedLedger?.shipment_id ?? null;
+
+  const invoicePositionsQuery = useQuery({
+    queryKey: ["cms", "ar_invoice_position", effectiveSelectedPartyId],
+    queryFn: async () => {
+      if (!schemaClient) throw new Error("Supabase env is missing");
+      if (!effectiveSelectedPartyId) return [] as ArInvoicePositionRow[];
+      const { data, error } = await schemaClient
+        .from(CONTRACTS.views.arInvoicePosition)
+        .select(
+          "ar_id, party_id, shipment_id, shipment_line_id, occurred_at, model_name, suffix, color, size, qty, material_code, labor_cash_due_krw, material_cash_due_krw, total_cash_due_krw, labor_cash_outstanding_krw, material_cash_outstanding_krw, total_cash_outstanding_krw, commodity_type, commodity_due_g, commodity_outstanding_g, commodity_price_snapshot_krw_per_g"
+        )
+        .eq("party_id", effectiveSelectedPartyId)
+        .order("occurred_at", { ascending: true })
+        .order("created_at", { ascending: true });
+      if (error) throw error;
+      return (data ?? []) as ArInvoicePositionRow[];
+    },
+    enabled: Boolean(effectiveSelectedPartyId),
+  });
+
+  const invoicePositions = useMemo(
+    () => invoicePositionsQuery.data ?? [],
+    [invoicePositionsQuery.data]
+  );
+  const openInvoices = useMemo(() => {
+    return invoicePositions.filter((row) => {
+      const cashOutstanding = Number(row.total_cash_outstanding_krw ?? 0);
+      const commodityOutstanding = Number(row.commodity_outstanding_g ?? 0);
+      return cashOutstanding > 0 || commodityOutstanding > 0;
+    });
+  }, [invoicePositions]);
+
+  const paymentAllocQuery = useQuery({
+    queryKey: ["cms", "ar_payment_alloc", effectiveSelectedPartyId],
+    queryFn: async () => {
+      if (!schemaClient) throw new Error("Supabase env is missing");
+      if (!effectiveSelectedPartyId) return [] as ArPaymentAllocDetailRow[];
+      const { data, error } = await schemaClient
+        .from(CONTRACTS.views.arPaymentAllocDetail)
+        .select(
+          "payment_id, paid_at, cash_krw, gold_g, silver_g, note, alloc_id, ar_id, alloc_cash_krw, alloc_gold_g, alloc_silver_g, alloc_value_krw, shipment_line_id, model_name, suffix, color, size, invoice_occurred_at"
+        )
+        .eq("party_id", effectiveSelectedPartyId)
+        .order("paid_at", { ascending: false });
+      if (error) throw error;
+      return (data ?? []) as ArPaymentAllocDetailRow[];
+    },
+    enabled: Boolean(effectiveSelectedPartyId),
+  });
+
+  const paymentGroups = useMemo(() => {
+    const map = new Map<
+      string,
+      { payment: ArPaymentAllocDetailRow; allocations: ArPaymentAllocDetailRow[] }
+    >();
+    (paymentAllocQuery.data ?? []).forEach((row) => {
+      if (!row.payment_id) return;
+      if (!map.has(row.payment_id)) {
+        map.set(row.payment_id, { payment: row, allocations: [] });
+      }
+      if (row.alloc_id) {
+        map.get(row.payment_id)?.allocations.push(row);
+      }
+    });
+    return Array.from(map.values());
+  }, [paymentAllocQuery.data]);
 
   const shipmentLinesQuery = useQuery({
     queryKey: ["cms", "shipment_line", "ar", effectiveReturnPartyId],
@@ -404,40 +515,6 @@ export default function ArPage() {
       });
   }, [scopedShipmentLines, remainingQtyByLine]);
 
-  const paymentShipmentOptions = useMemo(() => {
-    const map = new Map<string, { shipDate: string; label: string }>();
-    scopedShipmentLines.forEach((line) => {
-      if (!line.shipment_id) return;
-      const shipmentId = String(line.shipment_id);
-      if (map.has(shipmentId)) return;
-      const shipDate = line.shipment_header?.ship_date
-        ? line.shipment_header?.ship_date.slice(0, 10)
-        : "-";
-      const nameParts = [line.model_name, line.suffix, line.color, line.size].filter(Boolean);
-      const label = `${shipDate} · ${shipmentId.slice(0, 8)} · ${nameParts.join(" / ") || "-"}`;
-      map.set(shipmentId, { shipDate, label });
-    });
-    return [...map.entries()].map(([value, item]) => ({ value, label: item.label }));
-  }, [scopedShipmentLines]);
-
-  const paymentValuationQuery = useQuery({
-    queryKey: ["cms", "shipment_valuation", paymentShipmentId],
-    enabled: Boolean(paymentShipmentId),
-    queryFn: async () => {
-      if (!schemaClient) throw new Error("Supabase env is missing");
-      if (!paymentShipmentId) return null;
-      const { data, error } = await schemaClient
-        .from("cms_shipment_valuation")
-        .select(
-          "shipment_id, pricing_locked_at, pricing_source, gold_krw_per_g_snapshot, silver_krw_per_g_snapshot, silver_adjust_factor_snapshot, material_value_krw, labor_value_krw, total_value_krw"
-        )
-        .eq("shipment_id", paymentShipmentId)
-        .maybeSingle();
-      if (error) throw error;
-      return (data ?? null) as ShipmentValuationRow | null;
-    },
-  });
-
   const selectedLedgerValuationQuery = useQuery({
     queryKey: ["cms", "shipment_valuation", selectedLedgerShipmentId],
     enabled: Boolean(selectedLedgerShipmentId),
@@ -482,41 +559,19 @@ export default function ArPage() {
   const overrideAmount = Number(returnOverrideAmount);
   const finalReturnAmount = Number.isFinite(overrideAmount) && returnOverrideAmount !== "" ? overrideAmount : autoReturnAmount;
 
-  const paymentValuation = paymentValuationQuery.data;
-  const goldSnapshotPrice = paymentValuation?.gold_krw_per_g_snapshot ?? null;
-  const silverSnapshotPrice = paymentValuation?.silver_krw_per_g_snapshot ?? null;
-  const silverSnapshotFactor = paymentValuation?.silver_adjust_factor_snapshot ?? null;
-  const silverEffectivePrice =
-    silverSnapshotPrice === null
-      ? null
-      : silverSnapshotPrice * (silverSnapshotFactor ?? 1);
-
-  const getMetalAmount = (line: TenderLine) => {
-    const weight = Number(line.weightG);
-    if (!Number.isFinite(weight) || weight <= 0) return null;
-    const purity = line.purity?.trim().toUpperCase();
-    if (line.method === "GOLD") {
-      const factor = purity === "14K" ? 0.6435 : purity === "18K" ? 0.825 : purity === "24K" ? 1 : null;
-      if (!factor || goldSnapshotPrice === null) return null;
-      return Math.round(weight * factor * goldSnapshotPrice);
-    }
-    if (line.method === "SILVER") {
-      if (purity !== "925") return null;
-      if (silverEffectivePrice === null) return null;
-      return Math.round(weight * silverEffectivePrice);
-    }
-    return null;
-  };
-
   const paymentMutation = useRpcMutation<{ ok?: boolean }>({
-    fn: CONTRACTS.functions.recordPayment,
+    fn: CONTRACTS.functions.arApplyPaymentFifo,
     successMessage: "결제 등록 완료",
     onSuccess: () => {
       positionsQuery.refetch();
       ledgerQuery.refetch();
+      invoicePositionsQuery.refetch();
+      paymentAllocQuery.refetch();
       setPaymentMemo("");
-      setTenders([createTenderLine()]);
-      setPaymentShipmentId("");
+      setPaymentCashKrw("");
+      setPaymentGoldG("");
+      setPaymentSilverG("");
+      setPaymentIdempotencyKey(crypto.randomUUID());
     },
   });
 
@@ -526,6 +581,8 @@ export default function ArPage() {
       toast.success("반품 등록 완료");
       positionsQuery.refetch();
       ledgerQuery.refetch();
+      invoicePositionsQuery.refetch();
+      paymentAllocQuery.refetch();
       shipmentLinesQuery.refetch();
       returnLinesQuery.refetch();
       setReturnQty("1");
@@ -543,36 +600,19 @@ export default function ArPage() {
     },
   });
 
-  const canSavePayment = isFnConfigured(CONTRACTS.functions.recordPayment);
-  const tenderAmounts = tenders.map((line) => {
-    const isMetal = line.method === "GOLD" || line.method === "SILVER";
-    const computed = isMetal ? getMetalAmount(line) : Number(line.amount);
-    return { line, amount: Number.isFinite(computed ?? NaN) ? Number(computed) : null };
-  });
-  const totalTenderAmount = tenderAmounts.reduce((sum, item) => sum + Number(item.amount || 0), 0);
-  const tenderPayload = tenderAmounts
-    .map(({ line, amount }) => ({
-      method: line.method,
-      amount_krw: amount,
-      weight_g: line.weightG ? Number(line.weightG) : null,
-      purity: line.purity || null,
-      meta: line.meta ? { note: line.meta } : {},
-    }))
-    .filter((line) => Number.isFinite(line.amount_krw ?? NaN) && Number(line.amount_krw) > 0);
-
-  const hasMetalTender = tenders.some((line) => line.method === "GOLD" || line.method === "SILVER");
-  const metalInputsReady = tenders.every((line) => {
-    if (line.method !== "GOLD" && line.method !== "SILVER") return true;
-    const amount = getMetalAmount(line);
-    return amount !== null && amount > 0;
-  });
+  const canSavePayment = isFnConfigured(CONTRACTS.functions.arApplyPaymentFifo);
+  const parsedCash = Number(paymentCashKrw);
+  const parsedGold = Number(paymentGoldG);
+  const parsedSilver = Number(paymentSilverG);
+  const cashValue = Number.isFinite(parsedCash) ? parsedCash : 0;
+  const goldValue = Number.isFinite(parsedGold) ? parsedGold : 0;
+  const silverValue = Number.isFinite(parsedSilver) ? parsedSilver : 0;
+  const hasPaymentValue = cashValue > 0 || goldValue > 0 || silverValue > 0;
   const canSubmitPayment =
     canSavePayment &&
     Boolean(effectivePaymentPartyId) &&
     Boolean(paidAt) &&
-    tenderPayload.length > 0 &&
-    (!hasMetalTender || Boolean(paymentShipmentId)) &&
-    metalInputsReady &&
+    hasPaymentValue &&
     !paymentMutation.isPending;
 
   const canSaveReturn = isFnConfigured(CONTRACTS.functions.recordReturn);
@@ -617,8 +657,10 @@ export default function ArPage() {
           </div>
           {selectedParty && (
             <div className="hidden sm:block text-right">
-              <p className="text-xs font-medium text-[var(--muted)]">현재 잔액</p>
-              <AmountPill amount={selectedParty.balance_krw} className="text-lg" />
+              <p className="text-xs font-medium text-[var(--muted)]">총 잔액</p>
+              <p className="text-lg font-bold tabular-nums">
+                {formatKrw(selectedParty.total_cash_outstanding_krw)}
+              </p>
             </div>
           )}
         </div>
@@ -670,11 +712,19 @@ export default function ArPage() {
                       <div>
                         <p className="font-medium">{party.name}</p>
                         <p className="text-xs text-[var(--muted)]">
-                          최근 활동: {formatDateTimeKst(party.last_activity_at)}
+                          공임 {formatKrw(party.labor_cash_outstanding_krw)} · 소재 {formatKrw(party.material_cash_outstanding_krw)}
+                        </p>
+                        <p className="text-xs text-[var(--muted)]">
+                          금 {formatGram(party.gold_outstanding_g)} · 은 {formatGram(party.silver_outstanding_g)}
                         </p>
                       </div>
                       <div className="text-right">
-                        <AmountPill amount={party.balance_krw} />
+                        <p className="font-semibold tabular-nums">
+                          {formatKrw(party.total_cash_outstanding_krw)}
+                        </p>
+                        <p className="text-[11px] text-[var(--muted)]">
+                          {formatDateTimeKst(party.last_activity_at)}
+                        </p>
                       </div>
                     </button>
                   ))}
@@ -740,18 +790,26 @@ export default function ArPage() {
                   <Skeleton className="h-10 w-full" />
                 </div>
               ) : selectedParty ? (
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
                   <div>
-                    <p className="text-xs text-[var(--muted)]">미수</p>
-                    <p className="text-lg font-bold">{formatKrw(selectedParty.receivable_krw)}</p>
+                    <p className="text-xs text-[var(--muted)]">공임 잔액</p>
+                    <p className="text-lg font-bold">{formatKrw(selectedParty.labor_cash_outstanding_krw)}</p>
                   </div>
                   <div>
-                    <p className="text-xs text-[var(--muted)]">크레딧</p>
-                    <p className="text-lg font-bold">{formatKrw(selectedParty.credit_krw)}</p>
+                    <p className="text-xs text-[var(--muted)]">소재 환산</p>
+                    <p className="text-lg font-bold">{formatKrw(selectedParty.material_cash_outstanding_krw)}</p>
                   </div>
                   <div>
-                    <p className="text-xs text-[var(--muted)]">잔액</p>
-                    <AmountPill amount={selectedParty.balance_krw} className="text-lg" />
+                    <p className="text-xs text-[var(--muted)]">총 잔액</p>
+                    <p className="text-lg font-bold">{formatKrw(selectedParty.total_cash_outstanding_krw)}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-[var(--muted)]">금 잔액</p>
+                    <p className="text-sm font-semibold tabular-nums">{formatGram(selectedParty.gold_outstanding_g)}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-[var(--muted)]">은 잔액</p>
+                    <p className="text-sm font-semibold tabular-nums">{formatGram(selectedParty.silver_outstanding_g)}</p>
                   </div>
                   <div>
                     <p className="text-xs text-[var(--muted)]">최근 활동</p>
@@ -881,6 +939,92 @@ export default function ArPage() {
               </div>
             </CardBody>
           </Card>
+          <Card className="shadow-sm">
+            <CardHeader>
+              <ActionBar title="미수 잔액 (FIFO)" />
+            </CardHeader>
+            <CardBody className="p-0">
+              <div className="max-h-[420px] overflow-auto">
+                <table className="w-full text-left text-xs">
+                  <thead className="text-[var(--muted)] bg-[var(--chip)] sticky top-0 z-10 shadow-sm">
+                    <tr>
+                      <th className="px-4 py-3 font-medium whitespace-nowrap">출고일</th>
+                      <th className="px-4 py-3 font-medium whitespace-nowrap">모델</th>
+                      <th className="px-4 py-3 font-medium whitespace-nowrap">소재</th>
+                      <th className="px-4 py-3 font-medium text-right whitespace-nowrap">공임 잔액</th>
+                      <th className="px-4 py-3 font-medium text-right whitespace-nowrap">소재 환산</th>
+                      <th className="px-4 py-3 font-medium text-right whitespace-nowrap">금/은 잔량</th>
+                      <th className="px-4 py-3 font-medium text-right whitespace-nowrap">총 잔액</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-[var(--panel-border)]">
+                    {invoicePositionsQuery.isLoading ? (
+                      Array.from({ length: 6 }).map((_, i) => (
+                        <tr key={i}>
+                          <td className="px-4 py-3"><Skeleton className="h-4 w-20" /></td>
+                          <td className="px-4 py-3"><Skeleton className="h-4 w-28" /></td>
+                          <td className="px-4 py-3"><Skeleton className="h-4 w-10" /></td>
+                          <td className="px-4 py-3"><Skeleton className="h-4 w-16 ml-auto" /></td>
+                          <td className="px-4 py-3"><Skeleton className="h-4 w-16 ml-auto" /></td>
+                          <td className="px-4 py-3"><Skeleton className="h-4 w-16 ml-auto" /></td>
+                          <td className="px-4 py-3"><Skeleton className="h-4 w-16 ml-auto" /></td>
+                        </tr>
+                      ))
+                    ) : openInvoices.map((row) => {
+                      const optionParts = [row.suffix, row.color, row.size].filter(Boolean);
+                      const modelLabel = [row.model_name, optionParts.join(" / ")].filter(Boolean).join(" · ");
+                      const commodityLabel = row.commodity_type === "gold"
+                        ? `금 ${formatGram(row.commodity_outstanding_g)}`
+                        : row.commodity_type === "silver"
+                          ? `은 ${formatGram(row.commodity_outstanding_g)}`
+                          : "-";
+                      return (
+                        <tr key={row.ar_id}>
+                          <td className="px-4 py-3 text-[var(--muted)] tabular-nums">
+                            {formatDateTimeKst(row.occurred_at)}
+                          </td>
+                          <td className="px-4 py-3">
+                            <p className="text-sm font-semibold text-[var(--foreground)]">
+                              {modelLabel || "-"}
+                            </p>
+                          </td>
+                          <td className="px-4 py-3 text-[var(--muted)]">
+                            {row.material_code ?? "-"}
+                          </td>
+                          <td className="px-4 py-3 text-right tabular-nums">
+                            {formatKrw(row.labor_cash_outstanding_krw)}
+                          </td>
+                          <td className="px-4 py-3 text-right tabular-nums">
+                            {formatKrw(row.material_cash_outstanding_krw)}
+                          </td>
+                          <td className="px-4 py-3 text-right tabular-nums">
+                            {commodityLabel}
+                          </td>
+                          <td className="px-4 py-3 text-right font-semibold tabular-nums">
+                            {formatKrw(row.total_cash_outstanding_krw)}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                    {!invoicePositionsQuery.isLoading && invoicePositionsQuery.isError ? (
+                      <tr>
+                        <td className="px-4 py-8 text-center text-[var(--danger)]" colSpan={7}>
+                          미수 잔액을 불러오지 못했습니다.
+                        </td>
+                      </tr>
+                    ) : null}
+                    {!invoicePositionsQuery.isLoading && !invoicePositionsQuery.isError && openInvoices.length === 0 ? (
+                      <tr>
+                        <td className="px-4 py-8 text-center text-[var(--muted)]" colSpan={7}>
+                          FIFO 잔액이 없습니다.
+                        </td>
+                      </tr>
+                    ) : null}
+                  </tbody>
+                </table>
+              </div>
+            </CardBody>
+          </Card>
         </div>
 
         <div className="lg:col-span-4 space-y-4">
@@ -981,9 +1125,11 @@ export default function ArPage() {
                       paymentMutation.mutate({
                         p_party_id: effectivePaymentPartyId,
                         p_paid_at: new Date(paidAt).toISOString(),
-                        p_tenders: tenderPayload,
-                        p_memo: paymentMemo || null,
-                        p_shipment_id: paymentShipmentId || null,
+                        p_cash_krw: cashValue,
+                        p_gold_g: goldValue,
+                        p_silver_g: silverValue,
+                        p_idempotency_key: paymentIdempotencyKey,
+                        p_note: paymentMemo || null,
                       });
                     }}
                   >
@@ -998,166 +1144,54 @@ export default function ArPage() {
                     />
                   </div>
 
-                  <div className="space-y-2">
-                    <p className="text-xs font-semibold uppercase tracking-wider text-[var(--muted)]">
-                      출고(시세 스냅샷)
-                    </p>
-                    <SearchSelect
-                      placeholder="출고 선택"
-                      options={paymentShipmentOptions}
-                      value={paymentShipmentId}
-                      onChange={(value) => setPaymentShipmentId(value)}
-                    />
-                    {paymentValuationQuery.data ? (
-                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs text-[var(--muted)]">
-                        <div>
-                          <span className="block">확정시각</span>
-                          <span className="font-semibold text-[var(--foreground)]">
-                            {formatDateTimeKst(paymentValuationQuery.data.pricing_locked_at)}
-                          </span>
-                        </div>
-                        <div>
-                          <span className="block">확정소스</span>
-                          <span className="font-semibold text-[var(--foreground)]">
-                            {paymentValuationQuery.data.pricing_source ?? "-"}
-                          </span>
-                        </div>
-                        <div>
-                          <span className="block">Gold/g</span>
-                          <span className="font-semibold text-[var(--foreground)]">
-                            {paymentValuationQuery.data.gold_krw_per_g_snapshot ?? "-"}
-                          </span>
-                        </div>
-                        <div>
-                          <span className="block">Silver/g</span>
-                          <span className="font-semibold text-[var(--foreground)]">
-                            {paymentValuationQuery.data.silver_krw_per_g_snapshot ?? "-"}
-                          </span>
-                        </div>
-                      </div>
-                    ) : hasMetalTender ? (
-                      <p className="text-xs text-[var(--danger)]">금/은 결제는 출고 스냅샷 선택이 필요합니다.</p>
-                    ) : null}
-                  </div>
-
                   <div className="space-y-3 border rounded-lg p-4 bg-[var(--chip)]">
                     <div className="flex items-center justify-between mb-2">
-                      <p className="text-xs font-semibold uppercase tracking-wider text-[var(--muted)]">결제 수단</p>
+                      <p className="text-xs font-semibold uppercase tracking-wider text-[var(--muted)]">결제 입력</p>
                     </div>
-                    {tenders.map((line) => (
-                      <div key={line.id} className="grid gap-3">
-                        <div className="grid grid-cols-2 gap-2">
-                          <Select
-                            value={line.method}
-                            onChange={(event) =>
-                              setTenders((prev) =>
-                                prev.map((item) =>
-                                  item.id === line.id
-                                    ? {
-                                      ...item,
-                                      method: event.target.value,
-                                      amount: "",
-                                      weightG: "",
-                                      purity: "",
-                                    }
-                                    : item
-                                )
-                              )
-                            }
-                          >
-                            {paymentMethods.map((method) => (
-                              <option key={method} value={method}>
-                                {method}
-                              </option>
-                            ))}
-                          </Select>
+                    <div className="grid gap-3">
+                      <div className="grid grid-cols-2 gap-2">
+                        <div className="space-y-1">
+                          <p className="text-xs text-[var(--muted)]">현금(원)</p>
                           <Input
                             type="number"
                             min={0}
-                            placeholder="금액"
-                            value={
-                              line.method === "GOLD" || line.method === "SILVER"
-                                ? getMetalAmount(line) ?? ""
-                                : line.amount
-                            }
-                            onChange={(event) =>
-                              setTenders((prev) =>
-                                prev.map((item) =>
-                                  item.id === line.id ? { ...item, amount: event.target.value } : item
-                                )
-                              )
-                            }
+                            placeholder="현금"
+                            value={paymentCashKrw}
+                            onChange={(event) => setPaymentCashKrw(event.target.value)}
                             className="tabular-nums text-right"
-                            readOnly={line.method === "GOLD" || line.method === "SILVER"}
                           />
                         </div>
-                        {line.method === "GOLD" || line.method === "SILVER" ? (
-                          <div className="grid grid-cols-2 gap-2">
-                            <Input
-                              type="number"
-                              min={0}
-                              placeholder="중량(g)"
-                              value={line.weightG}
-                              onChange={(event) =>
-                                setTenders((prev) =>
-                                  prev.map((item) =>
-                                    item.id === line.id ? { ...item, weightG: event.target.value } : item
-                                  )
-                                )
-                              }
-                              className="tabular-nums"
-                            />
-                            <Select
-                              value={line.purity}
-                              onChange={(event) =>
-                                setTenders((prev) =>
-                                  prev.map((item) =>
-                                    item.id === line.id ? { ...item, purity: event.target.value } : item
-                                  )
-                                )
-                              }
-                            >
-                              <option value="">순도 선택</option>
-                              {line.method === "GOLD" ? (
-                                <>
-                                  <option value="14K">14K</option>
-                                  <option value="18K">18K</option>
-                                  <option value="24K">24K</option>
-                                </>
-                              ) : (
-                                <option value="925">925</option>
-                              )}
-                            </Select>
-                          </div>
-                        ) : null}
-                        <div className="flex gap-2">
+                        <div className="space-y-1">
+                          <p className="text-xs text-[var(--muted)]">금(g)</p>
                           <Input
-                            placeholder="메모"
-                            value={line.meta}
-                            onChange={(event) =>
-                              setTenders((prev) =>
-                                prev.map((item) =>
-                                  item.id === line.id ? { ...item, meta: event.target.value } : item
-                                )
-                              )
-                            }
-                            className="flex-1"
+                            type="number"
+                            min={0}
+                            step="0.0001"
+                            placeholder="금 중량"
+                            value={paymentGoldG}
+                            onChange={(event) => setPaymentGoldG(event.target.value)}
+                            className="tabular-nums text-right"
                           />
-                      <Button
-                        type="button"
-                        variant="secondary"
-                        onClick={() => setTenders((prev) => prev.filter((item) => item.id !== line.id))}
-                        disabled={tenders.length === 1}
-                        className="px-3"
-                      >
-                        삭제
-                      </Button>
                         </div>
                       </div>
-                    ))}
-                    <Button type="button" variant="secondary" onClick={() => setTenders((prev) => [...prev, createTenderLine()])} className="w-full">
-                      결제 수단 추가
-                    </Button>
+                      <div className="grid grid-cols-2 gap-2">
+                        <div className="space-y-1">
+                          <p className="text-xs text-[var(--muted)]">은(g)</p>
+                          <Input
+                            type="number"
+                            min={0}
+                            step="0.0001"
+                            placeholder="은 중량"
+                            value={paymentSilverG}
+                            onChange={(event) => setPaymentSilverG(event.target.value)}
+                            className="tabular-nums text-right"
+                          />
+                        </div>
+                        <div className="rounded-lg border border-dashed border-[var(--panel-border)] bg-[var(--panel)] p-3 text-xs text-[var(--muted)]">
+                          FIFO 자동 상계 (출고 시세 스냅샷 기준)
+                        </div>
+                      </div>
+                    </div>
                   </div>
 
                   <div className="space-y-2">
@@ -1174,8 +1208,11 @@ export default function ArPage() {
 
                   <div className="flex items-center justify-between pt-4 border-t">
                     <div className="space-y-1">
-                      <p className="text-xs text-[var(--muted)]">총 결제 금액</p>
-                      <p className="text-lg font-bold tabular-nums">{formatKrw(totalTenderAmount)}</p>
+                      <p className="text-xs text-[var(--muted)]">현금 입력</p>
+                      <p className="text-lg font-bold tabular-nums">{formatKrw(cashValue)}</p>
+                      <p className="text-xs text-[var(--muted)]">
+                        금 {formatGram(goldValue)} · 은 {formatGram(silverValue)}
+                      </p>
                     </div>
                     <div className="flex items-center gap-3">
                       {!canSavePayment ? (
@@ -1326,6 +1363,82 @@ export default function ArPage() {
                 </CardBody>
               </Card>
             </div>
+            <Card className="shadow-sm">
+              <CardHeader>
+                <ActionBar title="결제/상계 내역" />
+              </CardHeader>
+              <CardBody className="p-0">
+                <div className="max-h-[420px] overflow-auto">
+                  {paymentAllocQuery.isLoading ? (
+                    <div className="p-4 space-y-3">
+                      {Array.from({ length: 4 }).map((_, i) => (
+                        <div key={i} className="space-y-2">
+                          <Skeleton className="h-4 w-40" />
+                          <Skeleton className="h-3 w-60" />
+                        </div>
+                      ))}
+                    </div>
+                  ) : paymentGroups.length > 0 ? (
+                    <div className="divide-y divide-[var(--panel-border)]">
+                      {paymentGroups.map(({ payment, allocations }) => (
+                        <div key={payment.payment_id} className="p-4 space-y-3">
+                          <div className="flex items-start justify-between gap-4">
+                            <div>
+                              <p className="text-sm font-semibold text-[var(--foreground)]">
+                                수금 {formatDateTimeKst(payment.paid_at)}
+                              </p>
+                              <p className="text-xs text-[var(--muted)]">{payment.note ?? "-"}</p>
+                            </div>
+                            <div className="text-right text-xs text-[var(--muted)]">
+                              <p>현금 {formatKrw(payment.cash_krw)}</p>
+                              <p>금 {formatGram(payment.gold_g)} · 은 {formatGram(payment.silver_g)}</p>
+                            </div>
+                          </div>
+                          {allocations.length > 0 ? (
+                            <table className="w-full text-left text-[11px]">
+                              <thead className="text-[var(--muted)]">
+                                <tr>
+                                  <th className="py-1 pr-2">AR</th>
+                                  <th className="py-1 text-right">현금</th>
+                                  <th className="py-1 text-right">금(g)</th>
+                                  <th className="py-1 text-right">은(g)</th>
+                                  <th className="py-1 text-right">환산</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-[var(--panel-border)]">
+                                {allocations.map((row) => {
+                                  const optionParts = [row.suffix, row.color, row.size].filter(Boolean);
+                                  const modelLabel = row.model_name
+                                    ? `${row.model_name}${optionParts.length ? ` · ${optionParts.join(" / ")}` : ""}`
+                                    : row.shipment_line_id
+                                      ? `#${row.shipment_line_id.slice(0, 8)}`
+                                      : "-";
+                                  return (
+                                    <tr key={row.alloc_id}>
+                                      <td className="py-2 pr-2 text-[var(--foreground)]">{modelLabel}</td>
+                                      <td className="py-2 text-right tabular-nums">{formatKrw(row.alloc_cash_krw)}</td>
+                                      <td className="py-2 text-right tabular-nums">{formatGram(row.alloc_gold_g)}</td>
+                                      <td className="py-2 text-right tabular-nums">{formatGram(row.alloc_silver_g)}</td>
+                                      <td className="py-2 text-right tabular-nums">{formatKrw(row.alloc_value_krw)}</td>
+                                    </tr>
+                                  );
+                                })}
+                              </tbody>
+                            </table>
+                          ) : (
+                            <p className="text-xs text-[var(--muted)]">상계 내역이 없습니다.</p>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="p-6 text-center text-[var(--muted)]">
+                      결제 내역이 없습니다.
+                    </div>
+                  )}
+                </div>
+              </CardBody>
+            </Card>
           </div>
         </div>
       </div>

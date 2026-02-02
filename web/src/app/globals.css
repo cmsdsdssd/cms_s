@@ -244,3 +244,64 @@ body {
 ::-webkit-scrollbar-thumb:hover {
   background: var(--muted);
 }
+
+@page {
+  size: A4 landscape;
+  margin: 8mm;
+}
+
+@media print {
+  html,
+  body {
+    background: #ffffff;
+  }
+
+  .receipt-print-actions {
+    display: none !important;
+  }
+
+  .receipt-party-sidebar {
+    display: none !important;
+  }
+
+  .receipt-print-page {
+    page-break-after: always;
+    break-after: page;
+  }
+
+  .receipt-print-page:last-child {
+    page-break-after: auto;
+    break-after: auto;
+  }
+
+  body * {
+    visibility: hidden;
+  }
+
+  .receipt-print-root,
+  .receipt-print-root * {
+    visibility: visible;
+  }
+
+  .receipt-print-root {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  .receipt-print-page {
+    width: 100% !important;
+    min-height: 100% !important;
+    height: 100% !important;
+    margin: 0 !important;
+    box-shadow: none !important;
+    border: 0 !important;
+  }
+
+  body {
+    overflow: hidden;
+  }
+}

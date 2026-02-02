@@ -78,6 +78,20 @@ interface PaymentItem {
   memo?: string;
 }
 
+interface StorePickupShipment {
+  shipment_id: string;
+  status: string;
+  created_at?: string;
+  ship_date?: string;
+  confirmed_at?: string;
+  memo?: string;
+  cms_shipment_line?: Array<{
+    model_name?: string | null;
+    qty?: number | null;
+    total_amount_sell_krw?: number | null;
+  }> | null;
+}
+
 interface ARItem {
   ar_ledger_id: string;
   entry_type: string;
@@ -87,7 +101,7 @@ interface ARItem {
   payment_id?: string;
 }
 
-type ViewType = "timeline" | "orders" | "shipments" | "payments";
+type ViewType = "timeline" | "orders" | "shipments" | "payments" | "store_pickup";
 type OrderFilterType = "all" | "pending" | "ready" | "completed";
 
 // Loading component
@@ -327,9 +341,11 @@ function WorkbenchContent() {
   const schemaClient = getSchemaClient();
   
   const partyId = params.partyId as string;
+  const actorId = (process.env.NEXT_PUBLIC_CMS_ACTOR_ID || "").trim();
   const [activeTab, setActiveTab] = useState<ViewType>((searchParams.get("view") as ViewType) || "timeline");
   const [orderFilter, setOrderFilter] = useState<OrderFilterType>("all");
   const [expandedOrderId, setExpandedOrderId] = useState<string | null>(null);
+  const [selectedStorePickups, setSelectedStorePickups] = useState<Set<string>>(new Set());
 
   // Fetch orders
   const { data: orders, isLoading: ordersLoading } = useQuery({
@@ -377,6 +393,23 @@ function WorkbenchContent() {
         });
       });
       return flattened;
+    },
+    enabled: !!schemaClient && !!partyId,
+  });
+
+  const { data: storePickupShipments, isLoading: storePickupLoading } = useQuery({
+    queryKey: ["workbench-store-pickup", partyId],
+    queryFn: async () => {
+      if (!schemaClient || !partyId) return [];
+      const { data, error } = await schemaClient
+        .from("cms_shipment_header")
+        .select("shipment_id, status, created_at, ship_date, confirmed_at, memo, cms_shipment_line(model_name, qty, total_amount_sell_krw)")
+        .eq("customer_party_id", partyId)
+        .eq("is_store_pickup", true)
+        .neq("status", "CONFIRMED")
+        .order("created_at", { ascending: false });
+      if (error) throw error;
+      return data as StorePickupShipment[];
     },
     enabled: !!schemaClient && !!partyId,
   });
@@ -468,6 +501,69 @@ function WorkbenchContent() {
     orders: orders?.length || 0,
     shipments: shipments?.length || 0,
     payments: payments?.length || 0,
+    store_pickup: storePickupShipments?.length || 0,
+  };
+
+  const confirmStorePickupMutation = useMutation({
+    mutationFn: async (shipmentId: string) => {
+      return callRpc(CONTRACTS.functions.shipmentConfirmStorePickup, {
+        p_shipment_id: shipmentId,
+        p_actor_person_id: actorId || null,
+        p_note: "confirm store pickup from workbench",
+        p_emit_inventory: true,
+        p_cost_mode: "PROVISIONAL",
+        p_receipt_id: null,
+        p_cost_lines: [],
+        p_force: false,
+      });
+    },
+    onSuccess: () => {
+      toast.success("당일출고 확정 완료");
+      queryClient.invalidateQueries({ queryKey: ["workbench-store-pickup", partyId] });
+      queryClient.invalidateQueries({ queryKey: ["workbench-shipments", partyId] });
+    },
+    onError: (error) => {
+      const message = error instanceof Error ? error.message : "확정 실패";
+      toast.error("당일출고 확정 실패", { description: message });
+    },
+  });
+
+  const handleConfirmStorePickup = async (shipmentId: string) => {
+    await confirmStorePickupMutation.mutateAsync(shipmentId);
+    const url = `/shipments_print?mode=store_pickup&party_id=${encodeURIComponent(partyId)}`;
+    window.open(url, "_blank", "noopener,noreferrer");
+  };
+
+  const handleToggleStorePickup = (shipmentId: string) => {
+    setSelectedStorePickups((prev) => {
+      const next = new Set(prev);
+      if (next.has(shipmentId)) {
+        next.delete(shipmentId);
+      } else {
+        next.add(shipmentId);
+      }
+      return next;
+    });
+  };
+
+  const handleToggleAllStorePickups = (checked: boolean) => {
+    if (!storePickupShipments) return;
+    if (checked) {
+      setSelectedStorePickups(new Set(storePickupShipments.map((row) => row.shipment_id)));
+    } else {
+      setSelectedStorePickups(new Set());
+    }
+  };
+
+  const handleConfirmSelectedStorePickups = async () => {
+    const targets = Array.from(selectedStorePickups);
+    if (targets.length === 0) return;
+    for (const shipmentId of targets) {
+      await confirmStorePickupMutation.mutateAsync(shipmentId);
+    }
+    setSelectedStorePickups(new Set());
+    const url = `/shipments_print?mode=store_pickup&party_id=${encodeURIComponent(partyId)}`;
+    window.open(url, "_blank", "noopener,noreferrer");
   };
 
   return (
@@ -509,6 +605,7 @@ function WorkbenchContent() {
           { id: "timeline" as const, label: "전체 타임라인", count: tabCounts.timeline },
           { id: "orders" as const, label: "주문", count: tabCounts.orders },
           { id: "shipments" as const, label: "출고", count: tabCounts.shipments },
+          { id: "store_pickup" as const, label: "당일출고", count: tabCounts.store_pickup },
           { id: "payments" as const, label: "수금", count: tabCounts.payments },
         ].map(({ id, label, count }) => (
           <button
@@ -628,6 +725,92 @@ function WorkbenchContent() {
             ))}
             {shipments?.length === 0 && (
               <TimelineEmpty message="출고 내역이 없습니다" />
+            )}
+          </div>
+        )}
+
+        {activeTab === "store_pickup" && (
+          <div className="space-y-3">
+            <div className="flex items-center justify-between gap-3 rounded-lg border border-border/60 bg-muted/40 px-4 py-3 text-sm">
+              <label className="inline-flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  className="h-4 w-4"
+                  checked={
+                    (storePickupShipments?.length ?? 0) > 0 &&
+                    selectedStorePickups.size === (storePickupShipments?.length ?? 0)
+                  }
+                  onChange={(event) => handleToggleAllStorePickups(event.target.checked)}
+                />
+                전체 선택
+              </label>
+              <Button
+                size="sm"
+                variant="primary"
+                onClick={handleConfirmSelectedStorePickups}
+                disabled={confirmStorePickupMutation.isPending || selectedStorePickups.size === 0}
+              >
+                선택 영수증 확정 ({selectedStorePickups.size})
+              </Button>
+            </div>
+            {storePickupShipments?.map((shipment) => {
+              const lines = shipment.cms_shipment_line ?? [];
+              const totalQty = lines.reduce((sum, line) => sum + Number(line.qty ?? 0), 0);
+              const totalAmount = lines.reduce((sum, line) => sum + Number(line.total_amount_sell_krw ?? 0), 0);
+              const modelNames = lines
+                .map((line) => (line.model_name ?? "-").trim())
+                .filter(Boolean)
+                .slice(0, 3)
+                .join(", ");
+              const moreCount = Math.max(lines.length - 3, 0);
+
+              return (
+                <Card
+                  key={shipment.shipment_id}
+                  className="hover:border-primary/30 transition-colors"
+                >
+                  <CardBody className="p-4">
+                    <div className="flex items-center justify-between gap-4">
+                      <div className="flex items-center gap-3">
+                        <input
+                          type="checkbox"
+                          className="h-4 w-4"
+                          checked={selectedStorePickups.has(shipment.shipment_id)}
+                          onChange={() => handleToggleStorePickup(shipment.shipment_id)}
+                        />
+                        <div className="w-10 h-10 rounded-lg bg-amber-50 flex items-center justify-center">
+                          <PackageCheck className="w-5 h-5 text-amber-600" />
+                        </div>
+                        <div>
+                          <div className="font-semibold">{modelNames || "모델 없음"}{moreCount > 0 ? ` 외 ${moreCount}건` : ""}</div>
+                          <div className="text-sm text-muted-foreground">
+                            {totalQty}개 · {format(new Date(shipment.created_at ?? new Date()), "MM/dd HH:mm", { locale: ko })}
+                          </div>
+                          {shipment.memo && (
+                            <div className="text-xs text-muted-foreground">{shipment.memo}</div>
+                          )}
+                        </div>
+                      </div>
+                      <div className="text-right space-y-2">
+                        <div className="font-semibold text-lg">
+                          ₩{totalAmount.toLocaleString()}
+                        </div>
+                        <Button
+                          size="sm"
+                          variant="primary"
+                          onClick={() => handleConfirmStorePickup(shipment.shipment_id)}
+                          disabled={confirmStorePickupMutation.isPending}
+                        >
+                          영수증 확정
+                        </Button>
+                      </div>
+                    </div>
+                  </CardBody>
+                </Card>
+              );
+            })}
+            {!storePickupLoading && (storePickupShipments?.length ?? 0) === 0 && (
+              <TimelineEmpty message="당일 출고 내역이 없습니다" />
             )}
           </div>
         )}
