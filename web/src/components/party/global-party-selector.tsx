@@ -150,10 +150,18 @@ export function GlobalPartySelector({
   return (
     <div ref={containerRef} className={cn("relative", className)}>
       {/* Trigger Button */}
-      <button
+      <div
+        role="button"
+        tabIndex={0}
         onClick={() => setIsOpen(!isOpen)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            setIsOpen(!isOpen);
+          }
+        }}
         className={cn(
-          "flex items-center gap-3 w-full max-w-md px-4 py-2.5 rounded-xl border transition-all duration-200",
+          "flex items-center gap-3 w-full max-w-md px-4 py-2.5 rounded-xl border transition-all duration-200 cursor-pointer",
           "hover:shadow-md focus:outline-none focus:ring-2 focus:ring-primary/20",
           selectedParty
             ? "bg-primary/5 border-primary/20"
@@ -227,7 +235,7 @@ export function GlobalPartySelector({
             isOpen && "rotate-180"
           )} />
         </div>
-      </button>
+      </div>
 
       {/* Dropdown */}
       {isOpen && (

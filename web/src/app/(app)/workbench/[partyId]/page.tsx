@@ -596,8 +596,11 @@ function WorkbenchContent() {
 
         {activeTab === "shipments" && (
           <div className="space-y-3">
-            {shipments?.map(shipment => (
-              <Card key={shipment.shipment_id} className="hover:border-primary/30 transition-colors">
+            {shipments?.map((shipment, idx) => (
+              <Card
+                key={`${shipment.shipment_id}-${shipment.shipment_line_id ?? shipment.order_line_id ?? "line"}-${idx}`}
+                className="hover:border-primary/30 transition-colors"
+              >
                 <CardBody className="p-4">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-3">

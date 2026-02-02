@@ -320,9 +320,9 @@ export function TimelineView({
               </div>
               
               <div className="space-y-3">
-                {dateItems.map(item => (
+                {dateItems.map((item, idx) => (
                   <TimelineItemCard
-                    key={item.id}
+                    key={`${item.type}-${item.id}-${idx}`}
                     item={item}
                     onExpand={onItemExpand}
                     onCollapse={onItemCollapse}
@@ -338,9 +338,9 @@ export function TimelineView({
 
   return (
     <div className={cn("space-y-3", className)}>
-      {sortedItems.map(item => (
+      {sortedItems.map((item, idx) => (
         <TimelineItemCard
-          key={item.id}
+          key={`${item.type}-${item.id}-${idx}`}
           item={item}
           onExpand={onItemExpand}
           onCollapse={onItemCollapse}
