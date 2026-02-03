@@ -32,6 +32,7 @@ export const navItems: NavItem[] = [
       { label: "① 주문 관리", href: "/orders_main", icon: ClipboardList },
       { label: "② 출고 관리", href: "/shipments_main", icon: PackageCheck },
       { label: "③ 미수금", href: "/ar", icon: CreditCard },
+      { label: "NEW 영수증/매칭", href: "/new_receipt_line_workbench", icon: ClipboardList },
     ],
   },
   {

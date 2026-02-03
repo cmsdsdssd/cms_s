@@ -51,6 +51,21 @@ type ShipmentPrefillRow = {
   photo_url?: string | null;
 };
 
+type ReceiptMatchPrefillRow = {
+  receipt_id?: string | null;
+  receipt_line_uuid?: string | null;
+  order_line_id?: string | null;
+  status?: string | null;
+  selected_weight_g?: number | null;
+  selected_material_code?: string | null;
+  selected_factory_labor_basic_cost_krw?: number | null;
+  selected_factory_labor_other_cost_krw?: number | null;
+  selected_factory_total_cost_krw?: number | null;
+  confirmed_at?: string | null;
+  receipt_weight_g?: number | null;
+  receipt_deduction_weight_g?: number | null;
+};
+
 type MasterLookupRow = {
   master_item_id?: string;
   model_name?: string;
@@ -330,6 +345,20 @@ export default function ShipmentsPage() {
     },
   });
 
+  const receiptMatchPrefillQuery = useQuery({
+    queryKey: ["shipment-receipt-prefill", selectedOrderLineId],
+    enabled: Boolean(selectedOrderLineId),
+    queryFn: async () => {
+      const id = String(selectedOrderLineId);
+      const res = await fetch(`/api/shipment-receipt-prefill?order_line_id=${encodeURIComponent(id)}`, {
+        cache: "no-store",
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json?.error ?? "shipment receipt prefill failed");
+      return (json?.data ?? null) as ReceiptMatchPrefillRow | null;
+    },
+  });
+
   useEffect(() => {
     if (prefillQuery.data) {
       console.log("[Prefill Data] Loaded:", prefillQuery.data);
@@ -337,6 +366,35 @@ export default function ShipmentsPage() {
       setPrefill(prefillQuery.data);
     }
   }, [prefillQuery.data]);
+
+  useEffect(() => {
+    const data = receiptMatchPrefillQuery.data;
+    if (!data) return;
+    if (weightG.trim() !== "" || baseLabor.trim() !== "" || extraLaborItems.length > 0) return;
+
+    const receiptWeight = data.receipt_weight_g ?? data.selected_weight_g;
+    if (receiptWeight !== null && receiptWeight !== undefined) {
+      setWeightG(String(receiptWeight));
+    }
+    if (data.receipt_deduction_weight_g !== null && data.receipt_deduction_weight_g !== undefined) {
+      setDeductionWeightG(String(data.receipt_deduction_weight_g));
+    }
+    if (data.selected_factory_labor_basic_cost_krw !== null && data.selected_factory_labor_basic_cost_krw !== undefined) {
+      setBaseLabor(String(data.selected_factory_labor_basic_cost_krw));
+    }
+    if (data.selected_factory_labor_other_cost_krw !== null && data.selected_factory_labor_other_cost_krw !== undefined) {
+      setExtraLaborItems([
+        {
+          id: typeof crypto !== "undefined" && "randomUUID" in crypto
+            ? crypto.randomUUID()
+            : `extra-${Date.now()}-receipt`,
+          type: "OTHER",
+          label: "기타",
+          amount: String(data.selected_factory_labor_other_cost_krw ?? ""),
+        },
+      ]);
+    }
+  }, [receiptMatchPrefillQuery.data, weightG, baseLabor, extraLaborItems.length]);
 
   // ✅ 선택된 주문의 model_no로 마스터 정보 조회
   const masterLookupQuery = useQuery({
@@ -590,14 +648,21 @@ export default function ShipmentsPage() {
       return;
     }
 
-    const weightValue = Number(weightG);
+    const materialCode =
+      (receiptMatchPrefillQuery.data?.selected_material_code ?? masterLookupQuery.data?.material_code_default ?? "").trim();
+    const allowZeroWeight = materialCode === "00";
+    const weightText = weightG.trim();
+    let weightValue = Number(weightG);
+    if (allowZeroWeight && (weightText === "" || weightValue === 0)) {
+      weightValue = 0;
+    }
     const baseValue = Number(baseLabor);
     const laborValue = resolvedTotalLabor;
     const deductionText = (deductionWeightG ?? "").trim();
     const masterDeduct = Number(masterLookupQuery.data?.deduction_weight_default_g ?? 0);
     const deductionValue = deductionText === "" ? masterDeduct : Number(deductionText);
 
-    if (Number.isNaN(weightValue) || weightValue <= 0) {
+    if (Number.isNaN(weightValue) || (allowZeroWeight ? weightValue < 0 : weightValue <= 0)) {
       toast.error("중량(g)을 올바르게 입력해주세요.");
       return;
     }
@@ -989,6 +1054,7 @@ export default function ShipmentsPage() {
     if (rid) {
       const corr =
         typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : String(Date.now());
+      const receiptPrefill = receiptMatchPrefillQuery.data;
       await receiptUsageUpsertMutation.mutateAsync({
         p_receipt_id: rid,
         p_entity_type: "SHIPMENT_HEADER",
@@ -996,6 +1062,13 @@ export default function ShipmentsPage() {
         p_actor_person_id: actorId,
         p_note: "link from shipments confirm",
         p_correlation_id: corr,
+        p_allocated_amount_original: null,
+        p_allocated_amount_krw: null,
+        p_allocation_method: null,
+        p_allocation_note: null,
+        p_factory_weight_g: receiptPrefill?.receipt_weight_g ?? null,
+        p_factory_labor_basic_amount_original: receiptPrefill?.selected_factory_labor_basic_cost_krw ?? null,
+        p_factory_labor_other_amount_original: receiptPrefill?.selected_factory_labor_other_cost_krw ?? null,
       });
     }
   };

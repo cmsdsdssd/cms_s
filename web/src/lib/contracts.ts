@@ -39,6 +39,10 @@ export const CONTRACTS = {
     // ✅ 원가 작업대 / 영수증 인박스
     purchaseCostWorklist: "cms_v_purchase_cost_worklist_v1",
     receiptInboxOpen: "cms_v_receipt_inbox_open_v1",
+    receiptLineItemsFlat: "cms_v_receipt_line_items_flat_v1",
+    receiptLineUnlinked: "cms_v_receipt_line_unlinked_v1",
+    receiptLineLinkIntegrity: "cms_v_receipt_line_link_integrity_v1",
+    receiptLineReconcile: "cms_v_receipt_line_reconcile_v1",
     repairLineEnriched: "cms_v_repair_line_enriched_v1",
     shipmentCostApplyCandidates: "cms_v_shipment_cost_apply_candidates_v1",
 
@@ -129,6 +133,9 @@ export const CONTRACTS = {
     vendorBillCreate: "cms_fn_create_vendor_bill_v1",
     vendorBillApply: "cms_fn_apply_vendor_bill_to_shipments_v1",
     receiptUsageUpsert: "cms_fn_upsert_receipt_usage_alloc_v1",
+    receiptPricingSnapshotUpsertV2: "cms_fn_upsert_receipt_pricing_snapshot_v2",
+    receiptLineMatchSuggest: "cms_fn_receipt_line_match_suggest_v1",
+    receiptLineMatchConfirm: "cms_fn_receipt_line_match_confirm_v1",
   },
 };
 
