@@ -562,62 +562,7 @@ export default function ShipmentsPage() {
 
   const shipmentUpsertMutation = useRpcMutation<ShipmentUpsertResult>({
     fn: CONTRACTS.functions.shipmentUpsertFromOrder,
-    successMessage: "출고 저장 완료",
-    onSuccess: async (data) => {
-      const shipmentId = normalizeId(data?.shipment_id);
-      const shipmentLineId = data?.shipment_line_id ? String(data.shipment_line_id) : null;
-      if (!shipmentId) return;
-
-      setCurrentShipmentId(shipmentId);
-      setCurrentShipmentLineId(shipmentLineId);
-      setShowAllLines(false);
-
-      setCostMode("PROVISIONAL");
-      setCostInputs({});
-
-      // 영수증 연결 상태 초기화
-      setLinkedReceiptId(null);
-      setReceiptFile(null);
-      setReceiptUploading(false);
-      setReceiptFileInputKey((k) => k + 1);
-
-      setReceiptPreviewSrc(null);
-      setReceiptPreviewOpenUrl(null);
-      setReceiptPreviewKind(null);
-      setReceiptPreviewTitle("");
-      setReceiptPreviewError(null);
-
-      if (isStorePickup) {
-        await shipmentSetStorePickupMutation.mutateAsync({
-          p_shipment_id: shipmentId,
-          p_is_store_pickup: true,
-          p_actor_person_id: actorId,
-          p_note: "set from shipments prefill",
-        });
-
-        setConfirmModalOpen(false);
-        setCurrentShipmentId(null);
-        setCurrentShipmentLineId(null);
-        setShowAllLines(false);
-        setIsStorePickup(false);
-
-        setSelectedOrderLineId(null);
-        setSelectedOrderStatus(null);
-        setPrefill(null);
-        setSearchQuery("");
-        setDebouncedQuery("");
-        setWeightG("");
-        setDeductionWeightG("");
-        setBaseLabor("");
-        setExtraLaborItems([]);
-        setExtraLaborSelect(null);
-
-        return;
-      }
-
-      setConfirmModalOpen(true);
-      await currentLinesQuery.refetch();
-    },
+    successMessage: "출고 확정 준비",
   });
 
   const shipmentLineUpdateMutation = useRpcMutation<unknown>({
@@ -698,6 +643,33 @@ export default function ShipmentsPage() {
       p_extra_labor_items: extraLaborPayload,
       p_actor_person_id: actorId,
       p_idempotency_key: idempotencyKey,
+    });
+
+    const shipmentId = normalizeId(result?.shipment_id);
+    if (!shipmentId) {
+      toast.error("출고 확정 실패", { description: "shipment_id를 받지 못했습니다." });
+      return;
+    }
+
+    if (isStorePickup) {
+      await shipmentSetStorePickupMutation.mutateAsync({
+        p_shipment_id: shipmentId,
+        p_is_store_pickup: true,
+        p_actor_person_id: actorId,
+        p_note: "set from shipments confirm",
+      });
+    }
+
+    const confirmHandler = isStorePickup ? confirmStorePickupMutation : confirmMutation;
+    await confirmHandler.mutateAsync({
+      p_shipment_id: shipmentId,
+      p_actor_person_id: actorId,
+      p_note: "confirm from shipments save",
+      p_emit_inventory: true,
+      p_cost_mode: costMode,
+      p_receipt_id: null,
+      p_cost_lines: [],
+      p_force: false,
     });
   };
 
@@ -1050,27 +1022,6 @@ export default function ShipmentsPage() {
     });
 
     // ✅ 영수증 연결만 (receipt_usage upsert)
-    const rid = normalizeId(linkedReceiptId);
-    if (rid) {
-      const corr =
-        typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : String(Date.now());
-      const receiptPrefill = receiptMatchPrefillQuery.data;
-      await receiptUsageUpsertMutation.mutateAsync({
-        p_receipt_id: rid,
-        p_entity_type: "SHIPMENT_HEADER",
-        p_entity_id: shipmentId,
-        p_actor_person_id: actorId,
-        p_note: "link from shipments confirm",
-        p_correlation_id: corr,
-        p_allocated_amount_original: null,
-        p_allocated_amount_krw: null,
-        p_allocation_method: null,
-        p_allocation_note: null,
-        p_factory_weight_g: receiptPrefill?.receipt_weight_g ?? null,
-        p_factory_labor_basic_amount_original: receiptPrefill?.selected_factory_labor_basic_cost_krw ?? null,
-        p_factory_labor_other_amount_original: receiptPrefill?.selected_factory_labor_other_cost_krw ?? null,
-      });
-    }
   };
 
   const master = masterLookupQuery.data;
@@ -1648,10 +1599,10 @@ export default function ShipmentsPage() {
                             {shipmentUpsertMutation.isPending ? (
                               <div className="flex items-center gap-2">
                                 <div className="w-4 h-4 border-2 border-[var(--background)]/30 border-t-[var(--background)] rounded-full animate-spin" />
-                                저장 중...
+                                확정 중...
                               </div>
                             ) : (
-                              "출고 저장"
+                              "출고 확정"
                             )}
                           </Button>
                         </div>
