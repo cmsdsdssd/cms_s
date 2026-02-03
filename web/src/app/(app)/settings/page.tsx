@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
@@ -24,8 +24,19 @@ type VendorFaxConfig = {
   vendor_party_id: string;
   vendor_name: string;
   fax_number: string | null;
-  fax_provider: 'mock' | 'twilio' | 'sendpulse' | 'custom';
+  fax_provider: 'mock' | 'twilio' | 'sendpulse' | 'custom' | 'apiplex';
   is_active: boolean;
+};
+
+type VendorFaxConfigRow = {
+  party_id: string;
+  name: string;
+  cms_vendor_fax_config?: {
+    config_id: string;
+    fax_number: string | null;
+    fax_provider: string | null;
+    is_active: boolean | null;
+  }[];
 };
 
 export default function SettingsPage() {
@@ -140,7 +151,7 @@ export default function SettingsPage() {
 
       if (error) throw error;
 
-      return (data || []).map((v: any) => ({
+      return (data || []).map((v: VendorFaxConfigRow) => ({
         config_id: v.cms_vendor_fax_config?.[0]?.config_id || "",
         vendor_party_id: v.party_id,
         vendor_name: v.name,
@@ -156,29 +167,19 @@ export default function SettingsPage() {
     fax_provider: string;
   }>>({});
 
-  const updateFaxConfigMutation = useMutation({
-    mutationFn: async (config: { vendor_party_id: string; fax_number: string; fax_provider: string }) => {
-      if (!sb) throw new Error("Supabase env is missing");
-      
-      const { error } = await sb
-        .from("cms_vendor_fax_config")
-        .upsert({
-          vendor_party_id: config.vendor_party_id,
-          fax_number: config.fax_number || null,
-          fax_provider: config.fax_provider,
-          is_active: true,
-        } as any, {
-          onConflict: "vendor_party_id",
-        });
+  type VendorFaxConfigUpsertResponse = {
+    ok?: boolean;
+    vendor_party_id?: string;
+    fax_number?: string | null;
+    fax_provider?: string | null;
+    is_active?: boolean;
+  };
 
-      if (error) throw error;
-    },
+  const updateFaxConfigMutation = useRpcMutation<VendorFaxConfigUpsertResponse>({
+    fn: CONTRACTS.functions.vendorFaxConfigUpsert,
+    successMessage: "팩스 설정 저장 완료",
     onSuccess: () => {
-      toast.success("팩스 설정 저장 완료");
       queryClient.invalidateQueries({ queryKey: ["cms_vendor_fax_configs"] });
-    },
-    onError: (error) => {
-      toast.error(`저장 실패: ${error instanceof Error ? error.message : "알 수 없는 오류"}`);
     },
   });
 
@@ -187,9 +188,11 @@ export default function SettingsPage() {
     if (!edit) return;
     
     updateFaxConfigMutation.mutate({
-      vendor_party_id: vendor.vendor_party_id,
-      fax_number: edit.fax_number,
-      fax_provider: edit.fax_provider,
+      p_vendor_party_id: vendor.vendor_party_id,
+      p_fax_number: edit.fax_number || null,
+      p_fax_provider: edit.fax_provider,
+      p_is_active: true,
+      p_actor_person_id: process.env.NEXT_PUBLIC_CMS_ACTOR_ID ?? null,
     });
   };
 
@@ -343,6 +346,7 @@ export default function SettingsPage() {
                           <option value="twilio">Twilio (실제 팩스)</option>
                           <option value="sendpulse">SendPulse</option>
                           <option value="custom">Custom</option>
+                          <option value="apiplex">API PLEX (국내 팩스)</option>
                         </Select>
                       </div>
                     </div>

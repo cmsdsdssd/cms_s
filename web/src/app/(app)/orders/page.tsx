@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useMemo, useRef, useState, useEffect } from "react";
+import { Suspense, useMemo, useRef, useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
@@ -37,6 +37,9 @@ type MasterLookup = {
   center_qty_default?: number | null;
   sub1_qty_default?: number | null;
   sub2_qty_default?: number | null;
+  center_stone_name_default?: string | null;
+  sub1_stone_name_default?: string | null;
+  sub2_stone_name_default?: string | null;
   material_price?: number | null;
   labor_basic?: number | null;
   labor_center?: number | null;
@@ -109,6 +112,7 @@ type GridRow = {
   color_p: boolean;
   color_g: boolean;
   color_w: boolean;
+  color_x: boolean;
   material_code: string;
   size: string;
   qty: string;
@@ -199,6 +203,7 @@ const createEmptyRow = (index: number): GridRow => ({
   color_p: false,
   color_g: false,
   color_w: false,
+  color_x: false,
   material_code: "",
   size: "",
   qty: "1",
@@ -224,6 +229,50 @@ const createEmptyRow = (index: number): GridRow => ({
 });
 
 const normalizeText = (value: string) => value.trim();
+const normalizeSearchText = (value: string) => value.trim().toLowerCase();
+const getOrderedMatchPositions = (label: string, query: string): number[] | null => {
+  const normalizedLabel = label.toLowerCase();
+  let lastIndex = -1;
+  const positions: number[] = [];
+  for (const ch of query) {
+    const idx = normalizedLabel.indexOf(ch, lastIndex + 1);
+    if (idx < 0) return null;
+    positions.push(idx);
+    lastIndex = idx;
+  }
+  return positions;
+};
+
+const compareMatchPositions = (a: number[], b: number[]) => {
+  const len = Math.min(a.length, b.length);
+  for (let i = 0; i < len; i += 1) {
+    if (a[i] !== b[i]) return a[i] - b[i];
+  }
+  return a.length - b.length;
+};
+
+const rankMatches = <T,>(items: T[], query: string, getLabel: (item: T) => string) => {
+  const normalizedQuery = normalizeSearchText(query);
+  if (!normalizedQuery) return [] as T[];
+
+  const ranked = items
+    .map((item) => {
+      const label = getLabel(item);
+      const positions = getOrderedMatchPositions(label, normalizedQuery);
+      if (!positions) return null;
+      return { item, label, positions } as { item: T; label: string; positions: number[] };
+    })
+    .filter((row): row is { item: T; label: string; positions: number[] } => Boolean(row));
+
+  ranked.sort((a, b) => {
+    const posDiff = compareMatchPositions(a.positions, b.positions);
+    if (posDiff !== 0) return posDiff;
+    if (a.label.length !== b.label.length) return a.label.length - b.label.length;
+    return a.label.localeCompare(b.label);
+  });
+
+  return ranked.map((row) => row.item);
+};
 const toNumber = (value: string) => {
   const v = value.trim();
   if (v === "") return null;
@@ -234,6 +283,7 @@ const toNumber = (value: string) => {
 
 // Get color string from checkboxes
 const getColorString = (row: GridRow): string => {
+  if (row.color_x) return "";
   const colors: string[] = [];
   if (row.color_p) colors.push("P");
   if (row.color_g) colors.push("G");
@@ -280,7 +330,7 @@ function ColorCheckbox({
   checked: boolean;
   onChange: () => void;
   label: string;
-  color: "pink" | "gold" | "white" | "black";
+  color: "pink" | "gold" | "white" | "black" | "none";
 }) {
   const colorStyles = {
     pink: {
@@ -311,23 +361,33 @@ function ColorCheckbox({
       borderLight: "border-gray-400",
       text: "text-white",
     },
+    none: {
+      bg: "bg-transparent",
+      bgLight: "bg-transparent",
+      border: "border-[var(--danger)]/60",
+      borderLight: "border-[var(--danger)]/40",
+      text: "text-[var(--danger)]",
+    },
   };
 
   const style = colorStyles[color];
+  const isNone = color === "none";
 
   return (
     <button
       type="button"
       onClick={onChange}
       className={cn(
-        "w-6 h-6 rounded border text-xs font-bold transition-all duration-150 flex items-center justify-center",
-        checked
-          ? `${style.bg} ${style.border} ${style.text} shadow-md scale-110 ring-2 ring-offset-1 ring-primary/30`
-          : `${style.bgLight} ${style.borderLight} hover:opacity-70 text-transparent`
+        "w-6 h-6 rounded border text-xs font-bold transition-all duration-150 flex items-center justify-center shrink-0 leading-none",
+        isNone
+          ? `bg-transparent border-transparent ${style.text} hover:opacity-80`
+          : checked
+            ? `${style.bg} ${style.border} ${style.text} shadow-md scale-110 ring-2 ring-offset-1 ring-primary/30`
+            : `${style.bgLight} ${style.borderLight} hover:opacity-70`
       )}
     >
       {/* 선택된 경우: 글씨 표시 / 선택안된 경우: 글씨 숨김(transparent) */}
-      {label}
+      {checked || isNone ? label : null}
     </button>
   );
 }
@@ -347,6 +407,8 @@ function OrdersPageContent() {
   const [receiptDate, setReceiptDate] = useState("");
   const [activeMaster, setActiveMaster] = useState<MasterLookup | null>(null);
   const [imageLoading, setImageLoading] = useState(false);
+  const [clientSuggestions, setClientSuggestions] = useState<Record<string, ClientSummary[]>>({});
+  const [modelSuggestions, setModelSuggestions] = useState<Record<string, MasterLookup[]>>({});
   const saveCache = useRef(new Map<string, string>());
   const saveInFlight = useRef(new Set<string>());
   const [pageIndex, setPageIndex] = useState(1);
@@ -354,6 +416,10 @@ function OrdersPageContent() {
 
   const clientCache = useRef(new Map<string, ClientSummary>());
   const masterCache = useRef(new Map<string, MasterLookup>());
+  const clientSuggestTimers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
+  const modelSuggestTimers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
+  const clientSuggestQuery = useRef(new Map<string, string>());
+  const modelSuggestQuery = useRef(new Map<string, string>());
 
   const stoneQuery = useQuery({
     queryKey: ["cms", "stone_catalog"],
@@ -397,6 +463,7 @@ function OrdersPageContent() {
         const color_p = colorStr.includes("P");
         const color_g = colorStr.includes("G");
         const color_w = colorStr.includes("W");
+        const color_x = !color_p && !color_g && !color_w;
 
         // Parse plating string (e.g., "P+W+G")
         const platingStr = order.plating_color_code || "";
@@ -464,6 +531,7 @@ function OrdersPageContent() {
           color_p,
           color_g,
           color_w,
+          color_x,
           material_code: order.material_code ?? masterInfo?.material_code_default ?? "",
           size: String(order.size ?? ""),
           qty: String(order.qty ?? ""),
@@ -532,7 +600,19 @@ function OrdersPageContent() {
   const toggleColor = (rowId: string, color: "color_p" | "color_g" | "color_w") => {
     const row = rows.find((r) => r.id === rowId);
     if (!row) return;
-    updateRow(rowId, { [color]: !row[color] });
+    updateRow(rowId, { [color]: !row[color], color_x: false });
+  };
+
+  const toggleNoColor = (rowId: string) => {
+    const row = rows.find((r) => r.id === rowId);
+    if (!row) return;
+    const next = !row.color_x;
+    updateRow(rowId, {
+      color_x: next,
+      color_p: next ? false : row.color_p,
+      color_g: next ? false : row.color_g,
+      color_w: next ? false : row.color_w,
+    });
   };
 
   const togglePlating = (rowId: string, plating: "plating_p" | "plating_g" | "plating_w" | "plating_b") => {
@@ -569,6 +649,72 @@ function OrdersPageContent() {
     setRowErrors((prev) => ({ ...prev, [rowId]: { ...prev[rowId], [key]: undefined } }));
   };
 
+  const requestClientSuggestions = useCallback((rowId: string, inputValue: string) => {
+    if (!schemaClient) return;
+    const normalizedInput = normalizeSearchText(inputValue);
+    if (!normalizedInput) {
+      setClientSuggestions((prev) => ({ ...prev, [rowId]: [] }));
+      return;
+    }
+
+    const existing = clientSuggestTimers.current.get(rowId);
+    if (existing) clearTimeout(existing);
+
+    const timer = setTimeout(async () => {
+      try {
+        clientSuggestQuery.current.set(rowId, normalizedInput);
+        const { data, error } = await schemaClient
+          .from(CONTRACTS.views.arClientSummary)
+          .select("client_id, client_name, balance_krw, last_tx_at, open_invoices_count, credit_limit_krw, risk_flag")
+          .ilike("client_name", `%${normalizedInput}%`)
+          .limit(50);
+
+        if (error) throw error;
+
+        const ranked = rankMatches((data ?? []) as ClientSummary[], normalizedInput, (client) => client.client_name ?? "");
+        if (clientSuggestQuery.current.get(rowId) !== normalizedInput) return;
+        setClientSuggestions((prev) => ({ ...prev, [rowId]: ranked.slice(0, 30) }));
+      } catch (err) {
+        console.error("Client suggestion error:", err);
+      }
+    }, 150);
+
+    clientSuggestTimers.current.set(rowId, timer);
+  }, [schemaClient]);
+
+  const requestModelSuggestions = useCallback((rowId: string, inputValue: string) => {
+    if (!schemaClient) return;
+    const normalizedInput = normalizeSearchText(inputValue);
+    if (!normalizedInput) {
+      setModelSuggestions((prev) => ({ ...prev, [rowId]: [] }));
+      return;
+    }
+
+    const existing = modelSuggestTimers.current.get(rowId);
+    if (existing) clearTimeout(existing);
+
+    const timer = setTimeout(async () => {
+      try {
+        modelSuggestQuery.current.set(rowId, normalizedInput);
+        const { data, error } = await schemaClient
+          .from(CONTRACTS.views.masterItemLookup)
+          .select("master_item_id, model_name")
+          .ilike("model_name", `%${normalizedInput}%`)
+          .limit(50);
+
+        if (error) throw error;
+
+        const ranked = rankMatches((data ?? []) as MasterLookup[], normalizedInput, (master) => master.model_name ?? "");
+        if (modelSuggestQuery.current.get(rowId) !== normalizedInput) return;
+        setModelSuggestions((prev) => ({ ...prev, [rowId]: ranked.slice(0, 30) }));
+      } catch (err) {
+        console.error("Model suggestion error:", err);
+      }
+    }, 150);
+
+    modelSuggestTimers.current.set(rowId, timer);
+  }, [schemaClient]);
+
   const handleDeleteRow = async (rowId: string) => {
     const row = rows.find((r) => r.id === rowId);
     if (row && row.order_line_id) {
@@ -603,7 +749,7 @@ function OrdersPageContent() {
     const row = rows.find((r) => r.id === rowId);
     if (!row || !schemaClient) return;
 
-    const normalizedInput = normalizeText(inputValue).toLowerCase();
+    const normalizedInput = normalizeSearchText(inputValue);
     if (!normalizedInput) {
       updateRow(rowId, { client_id: null, client_name: null });
       return;
@@ -622,13 +768,13 @@ function OrdersPageContent() {
         .from(CONTRACTS.views.arClientSummary)
         .select("client_id, client_name, balance_krw, last_tx_at, open_invoices_count, credit_limit_krw, risk_flag")
         .ilike("client_name", `%${normalizedInput}%`)
-        .limit(1)
-        .maybeSingle();
+        .limit(50);
 
       if (error) throw error;
 
-      if (data) {
-        const client = data as ClientSummary;
+      const ranked = rankMatches((data ?? []) as ClientSummary[], normalizedInput, (client) => client.client_name ?? "");
+      const client = ranked[0];
+      if (client) {
         updateRow(rowId, { client_id: client.client_id, client_name: client.client_name });
         clientCache.current.set(normalizedInput, client);
         clientCache.current.set((client.client_name ?? "").toLowerCase(), client);
@@ -646,7 +792,7 @@ function OrdersPageContent() {
     const row = rows.find((r) => r.id === rowId);
     if (!row || !schemaClient) return;
 
-    const normalizedInput = normalizeText(inputValue).toLowerCase();
+    const normalizedInput = normalizeSearchText(inputValue);
     if (!normalizedInput) {
       updateRow(rowId, { master_item_id: null, model_name: null, suffix: "", material_code: "", photo_url: null });
       return;
@@ -678,14 +824,14 @@ function OrdersPageContent() {
       const { data, error } = await schemaClient
         .from(CONTRACTS.views.masterItemLookup)
         .select("*")
-        .ilike("model_name", normalizedInput)
-        .limit(1)
-        .maybeSingle();
+        .ilike("model_name", `%${normalizedInput}%`)
+        .limit(50);
 
       if (error) throw error;
 
-      if (data) {
-        const master = data as MasterLookup;
+      const ranked = rankMatches((data ?? []) as MasterLookup[], normalizedInput, (master) => master.model_name ?? "");
+      const master = ranked[0];
+      if (master) {
         const signedUrl = await resolveSignedImageUrl(master.photo_url ?? null);
         updateRow(rowId, {
           master_item_id: master.master_item_id ?? null,
@@ -749,7 +895,7 @@ function OrdersPageContent() {
     return (
       row.client_input.trim() ||
       row.model_input.trim() ||
-      row.color_p || row.color_g || row.color_w ||
+      row.color_p || row.color_g || row.color_w || row.color_x ||
       row.material_code ||
       row.size ||
       row.qty !== "1" ||
@@ -769,7 +915,7 @@ function OrdersPageContent() {
       setRowError(row.id, { model: "등록되지 않은 모델입니다" });
       isValid = false;
     }
-    if (row.model_input.trim() && !(row.color_p || row.color_g || row.color_w)) {
+    if (row.model_input.trim() && !(row.color_p || row.color_g || row.color_w || row.color_x)) {
       setRowError(row.id, { color: "색상을 선택하세요" });
       isValid = false;
     }
@@ -852,7 +998,7 @@ function OrdersPageContent() {
         {/* Left Column: Compact Order Grid */}
         <div className="space-y-1 min-w-0">
           {/* Header Row */}
-          <div className="grid grid-cols-[30px_160px_160px_70px_70px_45px_50px_100px_30px_0.8fr_30px] gap-1 px-1 py-1 text-[10px] font-semibold text-[var(--muted)] uppercase tracking-wider border-b border-border/40 items-center">
+          <div className="grid grid-cols-[30px_160px_220px_80px_90px_70px_55px_130px_30px_0.75fr_40px] gap-1 px-1 py-1 text-[10px] font-semibold text-[var(--muted)] uppercase tracking-wider border-b border-border/40 items-center">
             <span className="text-center">#</span>
             <span>거래처</span>
             <span>모델</span>
@@ -877,7 +1023,7 @@ function OrdersPageContent() {
                 {/* Main Row */}
                 <div
                   className={cn(
-                    "grid grid-cols-[30px_160px_160px_70px_70px_45px_50px_100px_30px_0.8fr_30px] gap-1 px-1 py-1 items-center text-xs rounded-md border transition-all",
+                    "grid grid-cols-[30px_160px_220px_80px_90px_70px_55px_130px_30px_0.75fr_40px] gap-1 px-1 py-1 items-center text-xs rounded-md border transition-all",
                     row.order_line_id ? "bg-primary/5 border-primary/20" : "bg-card border-border/50 hover:border-border",
                     (errors.client || errors.model) ? "bg-[var(--danger)]/5 border-[var(--danger)]/30" : ""
                   )}
@@ -897,11 +1043,21 @@ function OrdersPageContent() {
                       "w-full bg-transparent border border-transparent focus:border-primary/50 focus:bg-background rounded px-1 py-0.5 text-xs transition-colors",
                       errors.client ? "border-[var(--danger)]/50 bg-[var(--danger)]/5" : "hover:border-border/50"
                     )}
+                    list={`client-suggest-${row.id}`}
                     value={row.client_input}
-                    onChange={(e) => updateRow(row.id, { client_input: e.target.value })}
+                    onChange={(e) => {
+                      const next = e.target.value;
+                      updateRow(row.id, { client_input: next });
+                      requestClientSuggestions(row.id, next);
+                    }}
                     onBlur={(e) => resolveClient(row.id, e.currentTarget.value)}
                     placeholder="거래처..."
                   />
+                  <datalist id={`client-suggest-${row.id}`}>
+                    {(clientSuggestions[row.id] ?? []).map((client) => (
+                      <option key={client.client_id ?? client.client_name ?? ""} value={client.client_name ?? ""} />
+                    ))}
+                  </datalist>
 
                   {/* Model Input */}
                   <input
@@ -909,16 +1065,26 @@ function OrdersPageContent() {
                       "w-full bg-transparent border border-transparent focus:border-primary/50 focus:bg-background rounded px-1 py-0.5 text-xs font-medium transition-colors",
                       errors.model ? "border-[var(--danger)]/50 bg-[var(--danger)]/5" : "hover:border-border/50"
                     )}
+                    list={`model-suggest-${row.id}`}
                     value={row.model_input}
-                    onChange={(e) => updateRow(row.id, { model_input: e.target.value })}
+                    onChange={(e) => {
+                      const next = e.target.value;
+                      updateRow(row.id, { model_input: next });
+                      requestModelSuggestions(row.id, next);
+                    }}
                     onBlur={(e) => resolveMaster(row.id, e.currentTarget.value)}
                     placeholder="모델..."
                   />
+                  <datalist id={`model-suggest-${row.id}`}>
+                    {(modelSuggestions[row.id] ?? []).map((master) => (
+                      <option key={master.master_item_id ?? master.model_name ?? ""} value={master.model_name ?? ""} />
+                    ))}
+                  </datalist>
 
                   {/* Material Select */}
                   <select
                     className={cn(
-                      "w-full bg-transparent border border-transparent focus:border-primary/50 focus:bg-background rounded px-1 py-0.5 text-xs text-center transition-colors",
+                      "w-full bg-transparent border border-transparent focus:border-primary/50 focus:bg-background rounded px-1 py-0.5 text-xs text-center transition-colors mr-1",
                       errors.material ? "border-[var(--danger)]/50 bg-[var(--danger)]/5" : "hover:border-border/50"
                     )}
                     value={row.material_code}
@@ -935,7 +1101,7 @@ function OrdersPageContent() {
                   </select>
 
                   {/* Color Checkboxes (P, G, W) */}
-                  <div className="flex items-center justify-center gap-0.5">
+                  <div className="flex items-center justify-center gap-0.5 px-0.5 ml-1">
                     <ColorCheckbox
                       checked={row.color_p}
                       onChange={() => toggleColor(row.id, "color_p")}
@@ -954,11 +1120,17 @@ function OrdersPageContent() {
                       label="W"
                       color="white"
                     />
+                    <ColorCheckbox
+                      checked={row.color_x}
+                      onChange={() => toggleNoColor(row.id)}
+                      label="X"
+                      color="none"
+                    />
                   </div>
 
                   {/* Size Input */}
                   <input
-                    className="w-full bg-transparent border border-transparent focus:border-primary/50 focus:bg-background rounded px-1 py-0.5 text-xs text-center hover:border-border/50 transition-colors"
+                    className="w-full bg-transparent border border-transparent focus:border-primary/50 focus:bg-background rounded px-1.5 py-0.5 text-xs text-center hover:border-border/50 transition-colors"
                     value={row.size}
                     onChange={(e) => updateRow(row.id, { size: e.target.value })}
                     placeholder="Size"
@@ -968,7 +1140,7 @@ function OrdersPageContent() {
                   <input
                     type="number"
                     className={cn(
-                      "w-full bg-transparent border border-transparent focus:border-primary/50 focus:bg-background rounded px-1 py-0.5 text-xs text-center tabular-nums transition-colors",
+                      "w-full bg-transparent border border-transparent focus:border-primary/50 focus:bg-background rounded px-1.5 py-0.5 text-xs text-center tabular-nums transition-colors",
                       errors.qty ? "border-[var(--danger)]/50" : "hover:border-border/50"
                     )}
                     value={row.qty}
@@ -977,7 +1149,7 @@ function OrdersPageContent() {
                   />
 
                   {/* Plating Checkboxes (P, G, W, B) */}
-                  <div className="flex items-center justify-center gap-0.5">
+                  <div className="flex items-center justify-center gap-0.5 px-0.5">
                     <ColorCheckbox
                       checked={row.plating_p}
                       onChange={() => togglePlating(row.id, "plating_p")}
@@ -1029,7 +1201,7 @@ function OrdersPageContent() {
                   {/* Delete Button */}
                   <button
                     onClick={() => handleDeleteRow(row.id)}
-                    className="w-5 h-5 flex items-center justify-center text-[var(--muted)] hover:text-[var(--danger)] hover:bg-[var(--danger)]/10 rounded transition-colors"
+                    className="w-5 h-5 ml-auto flex items-center justify-center text-[var(--muted)] hover:text-[var(--danger)] hover:bg-[var(--danger)]/10 rounded transition-colors"
                   >
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6 6 18" /><path d="m6 6 12 12" /></svg>
                   </button>
@@ -1043,16 +1215,12 @@ function OrdersPageContent() {
                     {/* Center Stone */}
                     <div className="flex items-center gap-1">
                       <span className="text-[10px] text-[var(--muted)]">중심석</span>
-                      <select
+                      <input
+                        list={`stone-options-${row.id}`}
                         className="flex-1 bg-background border border-border/60 rounded px-1 py-0.5 text-xs focus:border-primary/50"
                         value={row.center_stone}
                         onChange={(e) => updateRow(row.id, { center_stone: e.target.value })}
-                      >
-                        <option value="">-</option>
-                        {stoneOptions.map((stone) => (
-                          <option key={stone} value={stone}>{stone}</option>
-                        ))}
-                      </select>
+                      />
                     </div>
                     <input
                       type="number"
@@ -1065,16 +1233,12 @@ function OrdersPageContent() {
                     {/* Sub1 Stone */}
                     <div className="flex items-center gap-1">
                       <span className="text-[10px] text-[var(--muted)]">보조1</span>
-                      <select
+                      <input
+                        list={`stone-options-${row.id}`}
                         className="flex-1 bg-background border border-border/60 rounded px-1 py-0.5 text-xs focus:border-primary/50"
                         value={row.sub1_stone}
                         onChange={(e) => updateRow(row.id, { sub1_stone: e.target.value })}
-                      >
-                        <option value="">-</option>
-                        {stoneOptions.map((stone) => (
-                          <option key={stone} value={stone}>{stone}</option>
-                        ))}
-                      </select>
+                      />
                     </div>
                     <input
                       type="number"
@@ -1087,17 +1251,29 @@ function OrdersPageContent() {
                     {/* Sub2 Stone */}
                     <div className="flex items-center gap-1">
                       <span className="text-[10px] text-[var(--muted)]">보조2</span>
-                      <select
+                      <input
+                        list={`stone-options-${row.id}`}
                         className="flex-1 bg-background border border-border/60 rounded px-1 py-0.5 text-xs focus:border-primary/50"
                         value={row.sub2_stone}
                         onChange={(e) => updateRow(row.id, { sub2_stone: e.target.value })}
-                      >
-                        <option value="">-</option>
-                        {stoneOptions.map((stone) => (
-                          <option key={stone} value={stone}>{stone}</option>
-                        ))}
-                      </select>
+                      />
                     </div>
+                    {(() => {
+                      const master = masterCache.current.get(row.model_input.toLowerCase());
+                      const masterNames = [
+                        master?.center_stone_name_default,
+                        master?.sub1_stone_name_default,
+                        master?.sub2_stone_name_default,
+                      ].filter((value): value is string => Boolean(value));
+                      const combined = Array.from(new Set([...masterNames, ...stoneOptions])).filter(Boolean);
+                      return (
+                        <datalist id={`stone-options-${row.id}`}>
+                          {combined.map((stone) => (
+                            <option key={stone} value={stone} />
+                          ))}
+                        </datalist>
+                      );
+                    })()}
                     <input
                       type="number"
                       className="w-full bg-background border border-border/60 rounded px-1 py-0.5 text-xs text-center tabular-nums focus:border-primary/50"

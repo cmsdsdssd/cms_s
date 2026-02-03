@@ -46,6 +46,9 @@ type CatalogDetail = {
   centerQty: number;
   sub1Qty: number;
   sub2Qty: number;
+  centerStoneName: string;
+  sub1StoneName: string;
+  sub2StoneName: string;
   laborBaseSell: number;
   laborCenterSell: number;
   laborSub1Sell: number;
@@ -219,6 +222,9 @@ export default function CatalogPage() {
   const [centerQty, setCenterQty] = useState(0);
   const [sub1Qty, setSub1Qty] = useState(0);
   const [sub2Qty, setSub2Qty] = useState(0);
+  const [centerStoneName, setCenterStoneName] = useState("");
+  const [sub1StoneName, setSub1StoneName] = useState("");
+  const [sub2StoneName, setSub2StoneName] = useState("");
   const [laborBaseSell, setLaborBaseSell] = useState(0);
   const [laborCenterSell, setLaborCenterSell] = useState(0);
   const [laborSub1Sell, setLaborSub1Sell] = useState(0);
@@ -486,6 +492,9 @@ export default function CatalogPage() {
         centerQty: selectedItem.stone === "없음" ? 0 : 1,
         sub1Qty: 0,
         sub2Qty: 0,
+        centerStoneName: "",
+        sub1StoneName: "",
+        sub2StoneName: "",
         laborBaseSell: 0,
         laborCenterSell: 0,
         laborSub1Sell: 0,
@@ -523,6 +532,9 @@ export default function CatalogPage() {
       centerQty: Number(row.center_qty_default ?? 0),
       sub1Qty: Number(row.sub1_qty_default ?? 0),
       sub2Qty: Number(row.sub2_qty_default ?? 0),
+      centerStoneName: String(row.center_stone_name_default ?? ""),
+      sub1StoneName: String(row.sub1_stone_name_default ?? ""),
+      sub2StoneName: String(row.sub2_stone_name_default ?? ""),
       laborBaseSell: Number(row.labor_base_sell ?? 0),
       laborCenterSell: Number(row.labor_center_sell ?? 0),
       laborSub1Sell: Number(row.labor_sub1_sell ?? 0),
@@ -816,6 +828,9 @@ export default function CatalogPage() {
     setCenterQty(0);
     setSub1Qty(0);
     setSub2Qty(0);
+    setCenterStoneName("");
+    setSub1StoneName("");
+    setSub2StoneName("");
     setLaborBaseSell(0);
     setLaborCenterSell(0);
     setLaborSub1Sell(0);
@@ -863,6 +878,9 @@ export default function CatalogPage() {
     setCenterQty(detail?.centerQty ?? 0);
     setSub1Qty(detail?.sub1Qty ?? 0);
     setSub2Qty(detail?.sub2Qty ?? 0);
+    setCenterStoneName(detail?.centerStoneName ?? "");
+    setSub1StoneName(detail?.sub1StoneName ?? "");
+    setSub2StoneName(detail?.sub2StoneName ?? "");
     setLaborBaseSell(detail?.laborBaseSell ?? 0);
     setLaborCenterSell(detail?.laborCenterSell ?? 0);
     setLaborSub1Sell(detail?.laborSub1Sell ?? 0);
@@ -906,6 +924,9 @@ export default function CatalogPage() {
       center_qty_default: centerQty,
       sub1_qty_default: sub1Qty,
       sub2_qty_default: sub2Qty,
+      center_stone_name_default: centerStoneName || null,
+      sub1_stone_name_default: sub1StoneName || null,
+      sub2_stone_name_default: sub2StoneName || null,
       labor_base_sell: laborBaseSell,
       labor_center_sell: laborCenterSell,
       labor_sub1_sell: laborSub1Sell,
@@ -2121,6 +2142,13 @@ export default function CatalogPage() {
                           setLaborCenterCost(toNumber(e.target.value))
                         }
                       />
+                      <div className="text-center text-[var(--muted)]">센터석</div>
+                      <Input
+                        className="col-span-3"
+                        placeholder="센터석 이름"
+                        value={centerStoneName}
+                        onChange={(e) => setCenterStoneName(e.target.value)}
+                      />
 
                       {/* Sub1 */}
                       <div className="text-center font-medium text-[var(--foreground)]">
@@ -2150,6 +2178,13 @@ export default function CatalogPage() {
                           setLaborSub1Cost(toNumber(e.target.value))
                         }
                       />
+                      <div className="text-center text-[var(--muted)]">서브1석</div>
+                      <Input
+                        className="col-span-3"
+                        placeholder="서브1석 이름"
+                        value={sub1StoneName}
+                        onChange={(e) => setSub1StoneName(e.target.value)}
+                      />
 
                       {/* Sub2 */}
                       <div className="text-center font-medium text-[var(--foreground)]">
@@ -2178,6 +2213,13 @@ export default function CatalogPage() {
                         onChange={(e) =>
                           setLaborSub2Cost(toNumber(e.target.value))
                         }
+                      />
+                      <div className="text-center text-[var(--muted)]">서브2석</div>
+                      <Input
+                        className="col-span-3"
+                        placeholder="서브2석 이름"
+                        value={sub2StoneName}
+                        onChange={(e) => setSub2StoneName(e.target.value)}
                       />
 
                       <div className="col-span-4 h-px bg-dashed border-t border-[var(--panel-border)] my-2" />

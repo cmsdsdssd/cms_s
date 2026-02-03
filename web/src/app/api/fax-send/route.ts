@@ -1,5 +1,8 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
+import { chromium } from "playwright";
+
+export const runtime = "nodejs";
 
 function getSupabaseAdmin() {
     const url = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
@@ -11,9 +14,11 @@ function getSupabaseAdmin() {
 interface FaxSendRequest {
     po_id: string;
     vendor_prefix: string;
+    vendor_name?: string;
+    line_count?: number;
     html_content: string;
     fax_number?: string;
-    provider?: 'mock' | 'twilio' | 'sendpulse' | 'custom';
+    provider?: 'mock' | 'twilio' | 'sendpulse' | 'custom' | 'apiplex';
 }
 
 interface FaxSendResult {
@@ -66,6 +71,17 @@ export async function POST(request: Request) {
             case 'custom':
                 result = await sendCustomFax(supabase, po_id, fax_number, html_content);
                 break;
+            case 'apiplex':
+                result = await sendApiPlexFax({
+                    po_id,
+                    vendor_prefix,
+                    vendor_name: body.vendor_name,
+                    line_count: body.line_count,
+                    fax_number,
+                    html_content,
+                    request_url: request.url
+                });
+                break;
             default:
                 result = await sendMockFax(supabase, po_id, vendor_prefix, html_content);
         }
@@ -107,14 +123,21 @@ export async function POST(request: Request) {
                 rpc_result: rpcResult
             });
         } else {
-            // Log failed fax attempt
-            await supabase.from('cms_fax_log').insert({
-                po_id,
-                provider: result.provider,
-                request_meta: result.request,
-                response_meta: result.response,
-                success: false,
-                error_message: result.error
+            await supabase.rpc('cms_fn_fax_log_record_v1', {
+                p_po_id: po_id,
+                p_provider: result.provider,
+                p_request_meta: result.request,
+                p_response_meta: result.response,
+                p_success: false,
+                p_error_message: result.error ?? null,
+                p_provider_message_id: result.provider_message_id ?? null,
+                p_actor_person_id: null
+            });
+
+            await supabase.rpc('cms_fn_factory_po_cancel', {
+                p_po_id: po_id,
+                p_reason: `Fax failed: ${result.error ?? 'unknown error'}`,
+                p_actor_person_id: null
             });
 
             return NextResponse.json({
@@ -192,6 +215,111 @@ async function sendMockFax(
             provider: 'mock',
             error: error instanceof Error ? error.message : 'Mock fax failed',
             request: { po_id, vendor_prefix },
+            response: {}
+        };
+    }
+}
+
+async function renderHtmlToPdf(html: string): Promise<Buffer> {
+    const browser = await chromium.launch();
+    try {
+        const page = await browser.newPage();
+        await page.setContent(html, { waitUntil: 'networkidle' });
+        const pdf = await page.pdf({ format: 'A4', printBackground: true });
+        return Buffer.from(pdf);
+    } finally {
+        await browser.close();
+    }
+}
+
+async function sendApiPlexFax(params: {
+        po_id: string;
+        vendor_prefix: string;
+        vendor_name?: string;
+        line_count?: number;
+        fax_number?: string;
+        html_content: string;
+        request_url: string;
+    }
+): Promise<FaxSendResult> {
+    const userId = process.env.API_PLEX_USER_ID ?? "";
+    const secretKey = process.env.API_PLEX_SECRET_KEY ?? "";
+    const cid = process.env.API_PLEX_CID ?? "";
+    const baseUrl = process.env.API_PLEX_BASE_URL ?? "https://571bv9t3z5.apigw.ntruss.com";
+
+    if (!userId || !secretKey || !cid) {
+        return {
+            success: false,
+            provider: 'apiplex',
+            error: 'API PLEX credentials not configured',
+            request: { po_id: params.po_id },
+            response: {}
+        };
+    }
+
+    if (!params.fax_number) {
+        return {
+            success: false,
+            provider: 'apiplex',
+            error: 'Fax number not provided',
+            request: { po_id: params.po_id },
+            response: {}
+        };
+    }
+
+    try {
+        const pdfBuffer = await renderHtmlToPdf(params.html_content);
+        const filename = `factory-po-${params.vendor_prefix}-${params.po_id}.pdf`;
+        const callbackUrl = new URL('/api/fax-webhook/apiplex', params.request_url).toString();
+        const coverType = "NONE";
+        const today = new Date().toLocaleDateString('ko-KR');
+        const subject = `발주서 ${params.vendor_name ?? params.vendor_prefix} · ${today}`;
+        const coverContent = `공장: ${params.vendor_name ?? params.vendor_prefix}\n발주일: ${today}\n라인수: ${params.line_count ?? 0}`;
+
+        const formPayload = {
+            cid,
+            coverType,
+            desFax: params.fax_number,
+            callback: callbackUrl,
+            subject,
+            coverContent
+        };
+
+        const form = new FormData();
+        form.append('form', new Blob([JSON.stringify(formPayload)], { type: 'application/json' }));
+        form.append('file', new Blob([pdfBuffer], { type: 'application/pdf' }), filename);
+
+        const response = await fetch(`${baseUrl}/fax/v1/send`, {
+            method: 'POST',
+            headers: {
+                'Authorization': `${userId};${secretKey}`
+            },
+            body: form
+        });
+
+        const contentType = response.headers.get('content-type') ?? '';
+        const payload = contentType.includes('application/json') ? await response.json() : await response.text();
+
+        if (!response.ok) {
+            throw new Error(typeof payload === 'string' ? payload : payload?.desc || 'API PLEX fax failed');
+        }
+
+        const jobId = typeof payload === 'string' ? undefined : payload?.jobId;
+
+        return {
+            success: true,
+            provider: 'apiplex',
+            provider_message_id: jobId,
+            payload_url: filename,
+            request: { form: formPayload, file: filename },
+            response: payload
+        };
+    } catch (error) {
+        return {
+            success: false,
+            provider: 'apiplex',
+            error: error instanceof Error ? error.message : 'API PLEX fax failed',
+            request: { po_id: params.po_id },
             response: {}
         };
     }

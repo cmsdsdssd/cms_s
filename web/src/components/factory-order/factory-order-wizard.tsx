@@ -47,10 +47,17 @@ interface FactoryGroup {
   vendorName: string;
   lines: OrderLine[];
   faxNumber?: string;
-  faxProvider?: 'mock' | 'twilio' | 'sendpulse' | 'etan' | 'efax';
+  faxProvider?: FaxProvider;
 }
 
 type WizardStep = 'select' | 'preview' | 'confirm';
+
+const FAX_PROVIDERS = ['mock', 'twilio', 'sendpulse', 'custom', 'apiplex'] as const;
+type FaxProvider = typeof FAX_PROVIDERS[number];
+
+function isFaxProvider(value: string | null | undefined): value is FaxProvider {
+  return !!value && (FAX_PROVIDERS as readonly string[]).includes(value);
+}
 
 interface FactoryOrderWizardProps {
   orderLines: OrderLine[];
@@ -58,27 +65,22 @@ interface FactoryOrderWizardProps {
   onSuccess?: () => void;
 }
 
-// Color chip helper
-function ColorChip({ color }: { color: string }) {
-  const colors: Record<string, string> = {
-    'P': 'bg-rose-400',
-    'G': 'bg-amber-400', 
-    'W': 'bg-slate-300',
-    'B': 'bg-gray-800',
-  };
-  
-  return (
-    <span className={cn(
-      "inline-block w-4 h-4 rounded-sm border border-black/20",
-      colors[color] || "bg-gray-400"
-    )} />
-  );
+function normalizeImagePath(path: string, bucket: string) {
+  if (path.startsWith(`${bucket}/`)) return path.slice(bucket.length + 1);
+  if (path.startsWith("storage/v1/object/public/")) {
+    return path.replace("storage/v1/object/public/", "").split("/").slice(1).join("/");
+  }
+  return path;
 }
 
-// Parse color string into array
-function parseColors(colorStr: string | null | undefined): string[] {
-  if (!colorStr) return [];
-  return colorStr.split('+').filter(Boolean);
+function buildPublicImageUrl(path: string | null) {
+  if (!path) return null;
+  if (path.startsWith("http://") || path.startsWith("https://")) return path;
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
+  const bucket = process.env.NEXT_PUBLIC_SUPABASE_BUCKET ?? "master_images";
+  if (!url) return null;
+  const normalized = normalizeImagePath(path, bucket);
+  return `${url}/storage/v1/object/public/${bucket}/${normalized}`;
 }
 
 export function FactoryOrderWizard({ orderLines, onClose, onSuccess }: FactoryOrderWizardProps) {
@@ -149,6 +151,7 @@ export function FactoryOrderWizard({ orderLines, onClose, onSuccess }: FactoryOr
       if (!groups.has(key)) {
         const vendorPartyId = order.vendor_guess_id || '';
         const faxConfig = faxConfigMap.get(vendorPartyId);
+        const provider = isFaxProvider(faxConfig?.fax_provider) ? faxConfig?.fax_provider : 'mock';
         
         groups.set(key, {
           prefix,
@@ -156,7 +159,7 @@ export function FactoryOrderWizard({ orderLines, onClose, onSuccess }: FactoryOr
           vendorName: order.vendor_guess || 'Unknown',
           lines: [],
           faxNumber: faxConfig?.fax_number,
-          faxProvider: (faxConfig?.fax_provider as any) || 'mock',
+          faxProvider: provider,
         });
       }
       
@@ -189,17 +192,55 @@ export function FactoryOrderWizard({ orderLines, onClose, onSuccess }: FactoryOr
       }
       return next;
     });
-  }, []);
+  }, [masterImageMap]);
 
   // Select all factories
   const selectAll = useCallback(() => {
-    setSelectedPrefixes(new Set(factoryGroups.map(g => g.prefix)));
+    setSelectedPrefixes(new Set(factoryGroups.filter(g => g.faxNumber).map(g => g.prefix)));
   }, [factoryGroups]);
 
   // Clear selection
   const clearSelection = useCallback(() => {
     setSelectedPrefixes(new Set());
   }, []);
+
+  const modelNames = useMemo(() => {
+    const set = new Set<string>();
+    eligibleOrders.forEach(order => {
+      if (order.model_name) set.add(order.model_name);
+    });
+    return Array.from(set.values());
+  }, [eligibleOrders]);
+
+  const masterImagesQuery = useQuery({
+    queryKey: ["cms_master_images_for_fax", modelNames],
+    queryFn: async () => {
+      if (!schemaClient || modelNames.length === 0) return [] as { model_name: string | null; image_path: string | null }[];
+      const { data, error } = await schemaClient
+        .from("cms_master_item")
+        .select("model_name, image_path")
+        .in("model_name", modelNames);
+
+      if (error) {
+        console.error("Failed to load master images:", error);
+        return [] as { model_name: string | null; image_path: string | null }[];
+      }
+      return (data ?? []) as { model_name: string | null; image_path: string | null }[];
+    },
+    enabled: !!schemaClient && modelNames.length > 0,
+  });
+
+  const masterImageMap = useMemo(() => {
+    const map = new Map<string, string>();
+    masterImagesQuery.data?.forEach(row => {
+      const name = row.model_name ? String(row.model_name) : "";
+      const imageUrl = buildPublicImageUrl(row.image_path ? String(row.image_path) : null);
+      if (name && imageUrl) {
+        map.set(name, imageUrl);
+      }
+    });
+    return map;
+  }, [masterImagesQuery.data]);
 
   // Generate fax HTML for a SPECIFIC factory group (NOT combined)
   const generateFaxHtmlForGroup = useCallback((group: FactoryGroup): string => {
@@ -209,9 +250,16 @@ export function FactoryOrderWizard({ orderLines, onClose, onSuccess }: FactoryOr
     // Use random mask code from order_line (saved in DB)
     const getMaskCode = (line: OrderLine) => line.customer_mask_code || 'UNKNOWN';
     
-    const rowsHtml = lines.map((line, idx) => `
+    const rowsHtml = lines.map((line, idx) => {
+      const imageUrl = line.model_name ? masterImageMap.get(line.model_name) : null;
+      const imageCell = imageUrl
+        ? `<img src="${imageUrl}" alt="${line.model_name || 'thumb'}" style="width: 42px; height: 42px; object-fit: cover; border: 1px solid #ddd;" />`
+        : "-";
+
+      return `
       <tr style="border-bottom: 1px solid #ddd;">
         <td style="padding: 6px; text-align: center; font-size: 10px;">${idx + 1}</td>
+        <td style="padding: 6px; text-align: center; font-size: 9px;">${imageCell}</td>
         <td style="padding: 6px; font-size: 9px; font-family: monospace;">${getMaskCode(line)}</td>
         <td style="padding: 6px; font-size: 11px;">${line.model_name || '-'}</td>
         <td style="padding: 6px; text-align: center; font-size: 10px;">${line.suffix || '-'}</td>
@@ -222,7 +270,8 @@ export function FactoryOrderWizard({ orderLines, onClose, onSuccess }: FactoryOr
         <td style="padding: 6px; text-align: center; font-size: 9px;">${line.is_plated ? (line.plating_color_code || 'Y') : 'N'}</td>
         <td style="padding: 6px; font-size: 9px;">${line.memo || ''}</td>
       </tr>
-    `).join('');
+    `;
+    }).join('');
 
     return `
 <!DOCTYPE html>
@@ -266,6 +315,7 @@ export function FactoryOrderWizard({ orderLines, onClose, onSuccess }: FactoryOr
     <thead>
       <tr>
         <th style="width: 30px;">#</th>
+        <th style="width: 50px; font-size: 10px;">이미지</th>
         <th style="width: 60px; font-size: 10px;">거래처</th>
         <th style="width: 90px;">모델</th>
         <th style="width: 35px; font-size: 10px;">Suffix</th>
@@ -358,6 +408,8 @@ export function FactoryOrderWizard({ orderLines, onClose, onSuccess }: FactoryOr
           body: JSON.stringify({
             po_id: poId,
             vendor_prefix: group.prefix,
+            vendor_name: group.vendorName,
+            line_count: group.lines.length,
             html_content: html,
             fax_number: group.faxNumber,
             provider: group.faxProvider || 'mock',
@@ -469,12 +521,15 @@ export function FactoryOrderWizard({ orderLines, onClose, onSuccess }: FactoryOr
           return (
             <div
               key={group.prefix}
-              onClick={() => toggleFactory(group.prefix)}
+              onClick={() => {
+                if (hasFax) toggleFactory(group.prefix);
+              }}
               className={cn(
-                "p-4 rounded-lg border-2 cursor-pointer transition-all",
+                "p-4 rounded-lg border-2 transition-all",
                 isSelected
                   ? "border-primary bg-primary/5"
-                  : "border-border hover:border-primary/50 hover:bg-muted/50"
+                  : "border-border hover:border-primary/50 hover:bg-muted/50",
+                hasFax ? "cursor-pointer" : "cursor-not-allowed opacity-60"
               )}
             >
               <div className="flex items-start gap-3">
@@ -503,7 +558,7 @@ export function FactoryOrderWizard({ orderLines, onClose, onSuccess }: FactoryOr
                     ) : (
                       <span className="text-amber-600 flex items-center gap-1">
                         <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
-                        팩스 번호 미설정 (mock 모드로 전송)
+                        팩스 번호 미설정 (선택 불가)
                       </span>
                     )}
                   </div>
@@ -562,90 +617,21 @@ export function FactoryOrderWizard({ orderLines, onClose, onSuccess }: FactoryOr
       </div>
 
       {/* Preview Document */}
-      <div className="flex-1 bg-white text-black p-8 overflow-auto border rounded-lg shadow-inner">
-        <div 
-          className="max-w-[210mm] mx-auto min-h-[297mm] bg-white p-8"
-          style={{ fontFamily: "'Malgun Gothic', sans-serif" }}
-        >
-          <div className="text-center mb-6 border-b-2 border-black pb-4">
-            <h1 className="text-2xl font-bold">발 주 서</h1>
-            <p className="text-xs text-gray-500 mt-1">
-              Order Date: {new Date().toLocaleDateString('ko-KR')}
-            </p>
-          </div>
-
-          <div className="mb-6 space-y-1 text-sm">
-            <div className="flex">
-              <span className="w-24 font-bold">공장:</span>
-              <span>{selectedGroups.map(g => `${g.vendorName}(${g.prefix})`).join(', ')}</span>
+      <div className="flex-1 bg-white text-black p-4 overflow-auto border rounded-lg shadow-inner">
+        <div className="space-y-6">
+          {selectedGroups.map(group => (
+            <div key={group.prefix} className="border rounded-md overflow-hidden">
+              <div className="px-3 py-2 bg-gray-50 text-xs text-gray-600 flex items-center justify-between">
+                <span>{group.vendorName} ({group.prefix})</span>
+                <span>{group.lines.length}건</span>
+              </div>
+              <iframe
+                title={`fax-preview-${group.prefix}`}
+                srcDoc={generateFaxHtmlForGroup(group)}
+                className="w-full h-[297mm] bg-white"
+              />
             </div>
-            <div className="flex">
-              <span className="w-24 font-bold">총 라인:</span>
-              <span>{selectedLines.length}건 / {selectedLines.reduce((sum, l) => sum + (l.qty || 1), 0)}수량</span>
-            </div>
-          </div>
-
-          <table className="w-full text-xs border-collapse">
-            <thead>
-              <tr className="border-t-2 border-b border-black bg-gray-100">
-                <th className="py-1 px-1 w-8 text-[10px]">#</th>
-                <th className="py-1 px-1 text-left text-[10px] w-16">거래처</th>
-                <th className="py-1 px-1 text-left">모델</th>
-                <th className="py-1 px-1 w-12 text-[10px]">Suffix</th>
-                <th className="py-1 px-1 w-14">색상</th>
-                <th className="py-1 px-1 w-10 text-[10px]">소재</th>
-                <th className="py-1 px-1 w-10">Size</th>
-                <th className="py-1 px-1 w-8">수량</th>
-                <th className="py-1 px-1 w-10 text-[10px]">도금</th>
-                <th className="py-1 px-1 text-left text-[10px]">비고</th>
-              </tr>
-            </thead>
-            <tbody>
-              {selectedLines.map((line, idx) => (
-                <tr key={line.order_line_id} className="border-b border-gray-200">
-                  <td className="py-1 px-1 text-center text-[10px]">{idx + 1}</td>
-                  <td className="py-1 px-1 text-[9px] font-mono">{line.customer_mask_code || 'TEMP'}</td>
-                  <td className="py-1 px-1 font-medium">{line.model_name || '-'}</td>
-                  <td className="py-1 px-1 text-center text-[10px]">{line.suffix || '-'}</td>
-                  <td className="py-1 px-1 text-center">
-                    <div className="flex justify-center gap-0.5">
-                      {parseColors(line.color).map((c, i) => (
-                        <span key={i} className={cn(
-                          "inline-block w-3 h-3 rounded-sm border border-black/20",
-                          c === 'P' ? 'bg-rose-400' :
-                          c === 'G' ? 'bg-amber-400' :
-                          c === 'W' ? 'bg-slate-300' :
-                          c === 'B' ? 'bg-gray-800' : 'bg-gray-400'
-                        )} />
-                      ))}
-                    </div>
-                  </td>
-                  <td className="py-1 px-1 text-center text-[9px]">{line.is_plated ? '14K' : 'SV'}</td>
-                  <td className="py-1 px-1 text-center text-[10px]">{line.size || '-'}</td>
-                  <td className="py-1 px-1 text-center font-semibold">{line.qty || 1}</td>
-                  <td className="py-1 px-1 text-center">
-                    <div className="flex justify-center gap-0.5">
-                      {parseColors(line.plating_color_code).map((c, i) => (
-                        <span key={i} className={cn(
-                          "inline-block w-3 h-3 rounded-sm border border-black/20",
-                          c === 'P' ? 'bg-rose-400' :
-                          c === 'G' ? 'bg-amber-400' :
-                          c === 'W' ? 'bg-slate-300' :
-                          c === 'B' ? 'bg-gray-800' : 'bg-gray-400'
-                        )} />
-                      ))}
-                    </div>
-                  </td>
-                  <td className="py-1 px-1 text-[9px] text-gray-600">{line.memo || ''}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-
-          <div className="mt-8 pt-4 border-t text-center text-[10px] text-gray-500">
-            <p>이 발주서는 전산시스템에서 자동 생성되었습니다.</p>
-            <p>문의사항 있으시면 연락 바랍니다.</p>
-          </div>
+          ))}
         </div>
       </div>
 

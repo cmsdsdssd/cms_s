@@ -64,5 +64,25 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: error.message ?? "저장에 실패했습니다." }, { status: 400 });
   }
 
-  return NextResponse.json({ master_id: data });
+  const masterId = data as string | null;
+  const centerStoneName = (body.center_stone_name_default as string | null) ?? null;
+  const sub1StoneName = (body.sub1_stone_name_default as string | null) ?? null;
+  const sub2StoneName = (body.sub2_stone_name_default as string | null) ?? null;
+
+  if (masterId) {
+    const { error: updateError } = await supabase
+      .from("cms_master_item")
+      .update({
+        center_stone_name_default: centerStoneName,
+        sub1_stone_name_default: sub1StoneName,
+        sub2_stone_name_default: sub2StoneName,
+      })
+      .eq("master_id", masterId);
+
+    if (updateError) {
+      return NextResponse.json({ error: updateError.message ?? "저장에 실패했습니다." }, { status: 400 });
+    }
+  }
+
+  return NextResponse.json({ master_id: masterId ?? undefined });
 }
