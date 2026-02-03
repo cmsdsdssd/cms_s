@@ -28,6 +28,13 @@ type VendorFaxConfig = {
   is_active: boolean;
 };
 
+const FAX_PROVIDERS = ['mock', 'twilio', 'sendpulse', 'custom', 'apiplex'] as const;
+type FaxProvider = typeof FAX_PROVIDERS[number];
+
+function toFaxProvider(value: string | null | undefined): FaxProvider {
+  return FAX_PROVIDERS.includes(value as FaxProvider) ? (value as FaxProvider) : "mock";
+}
+
 type VendorFaxConfigRow = {
   party_id: string;
   name: string;
@@ -156,7 +163,7 @@ export default function SettingsPage() {
         vendor_party_id: v.party_id,
         vendor_name: v.name,
         fax_number: v.cms_vendor_fax_config?.[0]?.fax_number || null,
-        fax_provider: v.cms_vendor_fax_config?.[0]?.fax_provider || "mock",
+        fax_provider: toFaxProvider(v.cms_vendor_fax_config?.[0]?.fax_provider),
         is_active: v.cms_vendor_fax_config?.[0]?.is_active ?? true,
       }));
     },

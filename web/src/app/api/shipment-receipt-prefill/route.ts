@@ -23,7 +23,7 @@ export async function GET(request: Request) {
   const { data, error } = await supabase
     .from("cms_receipt_line_match")
     .select(
-      "receipt_id, receipt_line_uuid, order_line_id, status, selected_weight_g, selected_material_code, selected_factory_labor_basic_cost_krw, selected_factory_labor_other_cost_krw, selected_factory_total_cost_krw, confirmed_at"
+      "receipt_id, receipt_line_uuid, order_line_id, shipment_line_id, status, selected_weight_g, selected_material_code, selected_factory_labor_basic_cost_krw, selected_factory_labor_other_cost_krw, selected_factory_total_cost_krw, confirmed_at"
     )
     .eq("order_line_id", orderLineId)
     .eq("status", "CONFIRMED")
@@ -41,6 +41,8 @@ export async function GET(request: Request) {
 
   let receiptWeightG: number | null = null;
   let receiptDeductionWeightG: number | null = null;
+  let shipmentBaseLaborKrw: number | null = null;
+  let shipmentExtraLaborKrw: number | null = null;
 
   if (data.receipt_id && data.receipt_line_uuid) {
     const { data: lineRow } = await supabase
@@ -69,11 +71,28 @@ export async function GET(request: Request) {
     }
   }
 
+  if (data.shipment_line_id) {
+    const { data: shipmentLineRow } = await supabase
+      .from("cms_shipment_line")
+      .select("base_labor_krw, extra_labor_krw")
+      .eq("shipment_line_id", data.shipment_line_id)
+      .maybeSingle();
+
+    if (shipmentLineRow?.base_labor_krw !== null && shipmentLineRow?.base_labor_krw !== undefined) {
+      shipmentBaseLaborKrw = Number(shipmentLineRow.base_labor_krw);
+    }
+    if (shipmentLineRow?.extra_labor_krw !== null && shipmentLineRow?.extra_labor_krw !== undefined) {
+      shipmentExtraLaborKrw = Number(shipmentLineRow.extra_labor_krw);
+    }
+  }
+
   return NextResponse.json({
     data: {
       ...data,
       receipt_weight_g: receiptWeightG,
       receipt_deduction_weight_g: receiptDeductionWeightG,
+      shipment_base_labor_krw: shipmentBaseLaborKrw,
+      shipment_extra_labor_krw: shipmentExtraLaborKrw,
     },
   });
 }

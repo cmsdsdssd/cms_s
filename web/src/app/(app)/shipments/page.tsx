@@ -61,6 +61,8 @@ type ReceiptMatchPrefillRow = {
   selected_factory_labor_basic_cost_krw?: number | null;
   selected_factory_labor_other_cost_krw?: number | null;
   selected_factory_total_cost_krw?: number | null;
+  shipment_base_labor_krw?: number | null;
+  shipment_extra_labor_krw?: number | null;
   confirmed_at?: string | null;
   receipt_weight_g?: number | null;
   receipt_deduction_weight_g?: number | null;
@@ -94,6 +96,7 @@ type ShipmentLineRow = {
   deduction_weight_g?: number | null;
   base_labor_krw?: number | null;
   extra_labor_krw?: number | null;
+  manual_labor_krw?: number | null;
   extra_labor_items?: unknown;
 };
 
@@ -102,6 +105,19 @@ type ShipmentHeaderRow = {
   pricing_locked_at?: string | null;
   pricing_source?: string | null;
 };
+
+function getVendorInitials(name?: string | null) {
+  if (!name) return "NA";
+  const trimmed = name.trim();
+  if (!trimmed) return "NA";
+  const parts = trimmed.split(/\s+/);
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return `${parts[0][0] ?? ""}${parts[1][0] ?? ""}`.toUpperCase();
+}
+
+function buildReceiptBaseName(dateKey: string, vendorInitials: string, pageIndex: number) {
+  return `${dateKey.replace(/-/g, "")}_${vendorInitials}_${pageIndex}`;
+}
 
 type ShipmentValuationRow = {
   pricing_locked_at?: string | null;
@@ -228,6 +244,8 @@ export default function ShipmentsPage() {
   const [baseLabor, setBaseLabor] = useState("");
   const [extraLaborItems, setExtraLaborItems] = useState<ExtraLaborItem[]>([]);
   const [extraLaborSelect, setExtraLaborSelect] = useState<string | null>(null);
+  const [useManualLabor, setUseManualLabor] = useState(false);
+  const [manualLabor, setManualLabor] = useState("");
 
   // --- confirm modal ---
   const [confirmModalOpen, setConfirmModalOpen] = useState(false);
@@ -379,10 +397,24 @@ export default function ShipmentsPage() {
     if (data.receipt_deduction_weight_g !== null && data.receipt_deduction_weight_g !== undefined) {
       setDeductionWeightG(String(data.receipt_deduction_weight_g));
     }
-    if (data.selected_factory_labor_basic_cost_krw !== null && data.selected_factory_labor_basic_cost_krw !== undefined) {
+    if (data.shipment_base_labor_krw !== null && data.shipment_base_labor_krw !== undefined) {
+      setBaseLabor(String(data.shipment_base_labor_krw));
+    } else if (data.selected_factory_labor_basic_cost_krw !== null && data.selected_factory_labor_basic_cost_krw !== undefined) {
       setBaseLabor(String(data.selected_factory_labor_basic_cost_krw));
     }
-    if (data.selected_factory_labor_other_cost_krw !== null && data.selected_factory_labor_other_cost_krw !== undefined) {
+
+    if (data.shipment_extra_labor_krw !== null && data.shipment_extra_labor_krw !== undefined) {
+      setExtraLaborItems([
+        {
+          id: typeof crypto !== "undefined" && "randomUUID" in crypto
+            ? crypto.randomUUID()
+            : `extra-${Date.now()}-receipt`,
+          type: "OTHER",
+          label: "기타",
+          amount: String(data.shipment_extra_labor_krw ?? ""),
+        },
+      ]);
+    } else if (data.selected_factory_labor_other_cost_krw !== null && data.selected_factory_labor_other_cost_krw !== undefined) {
       setExtraLaborItems([
         {
           id: typeof crypto !== "undefined" && "randomUUID" in crypto
@@ -408,6 +440,11 @@ export default function ShipmentsPage() {
       return rows?.[0] ?? null;
     },
   });
+
+  const receiptVendorInitials = useMemo(
+    () => getVendorInitials(masterLookupQuery.data?.vendor_name),
+    [masterLookupQuery.data?.vendor_name]
+  );
 
   // ✅ (필수) 상태 배지 렌더러 - map에서 사용 중인데 기존 코드엔 없어서 런타임 에러 났을 가능성 큼
   const getOrderStatusBadge = (status?: string | null) => {
@@ -462,6 +499,8 @@ export default function ShipmentsPage() {
     setWeightG("");
     setDeductionWeightG("");
     setBaseLabor("");
+    setManualLabor("");
+    setUseManualLabor(false);
     setExtraLaborItems([]);
     setExtraLaborSelect(null);
   };
@@ -498,6 +537,9 @@ export default function ShipmentsPage() {
     }
     if (line.base_labor_krw !== null && line.base_labor_krw !== undefined) {
       setBaseLabor(String(line.base_labor_krw));
+    }
+    if (line.manual_labor_krw !== null && line.manual_labor_krw !== undefined) {
+      setManualLabor(String(line.manual_labor_krw));
     }
     if (line.extra_labor_items !== null && line.extra_labor_items !== undefined) {
       setExtraLaborItems(normalizeExtraLaborItems(line.extra_labor_items));
@@ -623,6 +665,13 @@ export default function ShipmentsPage() {
       toast.error("기본 공임(원)을 올바르게 입력해주세요.");
       return;
     }
+    if (useManualLabor) {
+      const manualValue = Number(manualLabor);
+      if (!Number.isFinite(manualValue) || manualValue < 0) {
+        toast.error("직접 공임(원)을 올바르게 입력해주세요.");
+        return;
+      }
+    }
     const invalidExtra = extraLaborItems.find((item) => {
       if (item.amount.trim() === "") return false;
       const value = Number(item.amount);
@@ -712,10 +761,12 @@ export default function ShipmentsPage() {
     const isPdf =
       receiptFile.type === "application/pdf" || receiptFile.name.toLowerCase().endsWith(".pdf");
     setReceiptPreviewKind(isPdf ? "pdf" : "image");
-    setReceiptPreviewTitle(receiptFile.name);
+    const todayKey = new Date().toISOString().slice(0, 10);
+    const baseName = buildReceiptBaseName(todayKey, receiptVendorInitials, 1);
+    setReceiptPreviewTitle(baseName);
 
     return () => URL.revokeObjectURL(objUrl);
-  }, [confirmModalOpen, receiptFile]);
+  }, [confirmModalOpen, receiptFile, receiptVendorInitials]);
 
   // 원격 프리뷰(선택/업로드 후): receipt_id 기반
   useEffect(() => {
@@ -746,7 +797,7 @@ export default function ShipmentsPage() {
         if (receipt.receipt_id === linkedReceiptId) break;
         if (receipt.received_at.slice(0, 10) === dateKey) index++;
       }
-      title = `영수증_${dateKey.replace(/-/g, "")}_${index}`;
+      title = buildReceiptBaseName(dateKey, receiptVendorInitials, index);
     }
     setReceiptPreviewTitle(title);
 
@@ -786,7 +837,7 @@ export default function ShipmentsPage() {
       revoked = true;
       if (objUrl) URL.revokeObjectURL(objUrl);
     };
-  }, [confirmModalOpen, receiptFile, linkedReceiptId, receiptsQuery.data]);
+  }, [confirmModalOpen, receiptFile, linkedReceiptId, receiptsQuery.data, receiptVendorInitials]);
 
   const handleUploadReceipt = async () => {
     if (!receiptFile) {
@@ -833,6 +884,38 @@ export default function ShipmentsPage() {
     const url = receiptPreviewOpenUrl || receiptPreviewSrc;
     if (!url) return;
     window.open(url, "_blank", "noopener,noreferrer");
+  };
+
+  const handleDownloadReceipt = async () => {
+    const url = receiptPreviewOpenUrl || receiptPreviewSrc;
+    if (!url) return;
+    const extension = receiptPreviewKind === "pdf" ? "pdf" : "png";
+    const fileName = `${receiptPreviewTitle || "receipt"}.${extension}`;
+
+    try {
+      if (receiptPreviewOpenUrl) {
+        const res = await fetch(receiptPreviewOpenUrl);
+        if (!res.ok) {
+          const text = await res.text();
+          throw new Error(text || `download failed (${res.status})`);
+        }
+        const blob = await res.blob();
+        const objUrl = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = objUrl;
+        link.download = fileName;
+        link.click();
+        URL.revokeObjectURL(objUrl);
+      } else {
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = fileName;
+        link.click();
+      }
+    } catch (error) {
+      const err = error as { message?: string } | null;
+      toast.error("영수증 다운로드 실패", { description: err?.message ?? String(error) });
+    }
   };
 
   // --- RPC: 출고 확정 ---
@@ -1026,6 +1109,7 @@ export default function ShipmentsPage() {
 
   const master = masterLookupQuery.data;
 
+
   const resolvedDeductionG = useMemo(() => {
     const t = (deductionWeightG ?? "").trim();
     if (t === "") return Number(master?.deduction_weight_default_g ?? 0);
@@ -1044,6 +1128,11 @@ export default function ShipmentsPage() {
     return Number.isFinite(base) ? base : 0;
   }, [baseLabor]);
 
+  const resolvedManualLabor = useMemo(() => {
+    const manual = Number(manualLabor);
+    return Number.isFinite(manual) ? manual : 0;
+  }, [manualLabor]);
+
   const resolvedExtraLabor = useMemo(() => {
     return extraLaborItems.reduce((sum, item) => {
       const value = Number(item.amount);
@@ -1052,8 +1141,8 @@ export default function ShipmentsPage() {
   }, [extraLaborItems]);
 
   const resolvedTotalLabor = useMemo(
-    () => resolvedBaseLabor + resolvedExtraLabor,
-    [resolvedBaseLabor, resolvedExtraLabor]
+    () => (useManualLabor ? resolvedManualLabor : resolvedBaseLabor + resolvedExtraLabor),
+    [useManualLabor, resolvedManualLabor, resolvedBaseLabor, resolvedExtraLabor]
   );
 
   const extraLaborPayload = useMemo(() => {
@@ -1468,11 +1557,43 @@ export default function ShipmentsPage() {
                             </div>
                           </div>
                           <div className="space-y-1">
-                            <span className="text-xs text-[var(--muted)]">총공임 (기본+기타)</span>
+                            <span className="text-xs text-[var(--muted)]">
+                              총공임 ({useManualLabor ? "직접입력" : "기본+기타"})
+                            </span>
                             <div className="text-base font-semibold tabular-nums">
                               {resolvedTotalLabor.toLocaleString()}원
                             </div>
                           </div>
+                        </div>
+
+                        <div className="flex flex-wrap items-center gap-3 rounded-lg border border-[var(--panel-border)] bg-[var(--surface)]/40 p-4">
+                          <label className="flex items-center gap-2 text-sm font-medium text-[var(--foreground)]">
+                            <input
+                              type="checkbox"
+                              checked={useManualLabor}
+                              onChange={(event) => {
+                                const checked = event.target.checked;
+                                setUseManualLabor(checked);
+                                if (checked && manualLabor.trim() === "") {
+                                  setManualLabor(String(resolvedBaseLabor + resolvedExtraLabor));
+                                }
+                              }}
+                              className="h-4 w-4 accent-[var(--brand)]"
+                            />
+                            총공임 직접입력
+                          </label>
+                          <div className="min-w-[220px]">
+                            <Input
+                              placeholder="0"
+                              value={manualLabor}
+                              onChange={(e) => setManualLabor(e.target.value)}
+                              className="tabular-nums h-10"
+                              disabled={!useManualLabor}
+                            />
+                          </div>
+                          <span className="text-xs text-[var(--muted)]">
+                            직접입력 시 기본+기타 합계 대신 이 값으로 저장됩니다.
+                          </span>
                         </div>
 
                         <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
@@ -2000,7 +2121,21 @@ export default function ShipmentsPage() {
             <div className="space-y-2">
               <div className="text-sm font-semibold flex items-center justify-between">
                 <span>영수증 미리보기</span>
-                {receiptPreviewTitle && <span className="text-xs text-[var(--muted)] truncate max-w-[200px]">{receiptPreviewTitle}</span>}
+                <div className="flex items-center gap-2">
+                  {receiptPreviewTitle && (
+                    <span className="text-xs text-[var(--muted)] truncate max-w-[200px]">
+                      {receiptPreviewTitle}
+                    </span>
+                  )}
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={handleDownloadReceipt}
+                    disabled={!receiptPreviewOpenUrl && !receiptPreviewSrc}
+                  >
+                    다운로드
+                  </Button>
+                </div>
               </div>
               <div className="rounded-xl border border-[var(--panel-border)] bg-[#2a2a2a] h-[500px] overflow-hidden relative flex items-center justify-center">
                 {receiptPreviewError ? (

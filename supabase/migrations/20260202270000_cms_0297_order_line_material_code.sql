@@ -84,7 +84,7 @@ begin
     from public.cms_order_line
     where order_line_id = p_order_line_id;
 
-    if found and v_old_status not in ('ORDER_PENDING', 'ORDER_ACCEPTED') then
+    if found and v_old_status::text not in ('ORDER_PENDING', 'ORDER_ACCEPTED') then
       null;
     end if;
   end if;

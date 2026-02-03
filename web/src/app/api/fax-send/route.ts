@@ -1,10 +1,11 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { chromium } from "playwright";
 
 export const runtime = "nodejs";
 
-function getSupabaseAdmin() {
+function getSupabaseAdmin(): SupabaseClient | null {
     const url = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
     const key = process.env.SUPABASE_SERVICE_ROLE_KEY ?? "";
     if (!url || !key) return null;
@@ -161,7 +162,7 @@ export async function POST(request: Request) {
  * Mock fax provider - generates PDF and stores in Supabase Storage
  */
 async function sendMockFax(
-    supabase: ReturnType<typeof createClient>,
+    supabase: SupabaseClient,
     po_id: string,
     vendor_prefix: string,
     html_content: string
@@ -271,7 +272,7 @@ async function sendApiPlexFax(params: {
         const pdfBuffer = await renderHtmlToPdf(params.html_content);
         const filename = `factory-po-${params.vendor_prefix}-${params.po_id}.pdf`;
         const callbackUrl = new URL('/api/fax-webhook/apiplex', params.request_url).toString();
-        const coverType = "NONE";
+        const coverType = "1";
         const today = new Date().toLocaleDateString('ko-KR');
         const subject = `발주서 ${params.vendor_name ?? params.vendor_prefix} · ${today}`;
         const coverContent = `공장: ${params.vendor_name ?? params.vendor_prefix}\n발주일: ${today}\n라인수: ${params.line_count ?? 0}`;
@@ -287,7 +288,7 @@ async function sendApiPlexFax(params: {
 
         const form = new FormData();
         form.append('form', new Blob([JSON.stringify(formPayload)], { type: 'application/json' }));
-        form.append('file', new Blob([pdfBuffer], { type: 'application/pdf' }), filename);
+        form.append('file', new Blob([new Uint8Array(pdfBuffer)], { type: 'application/pdf' }), filename);
 
         const response = await fetch(`${baseUrl}/fax/v1/send`, {
             method: 'POST',
@@ -329,7 +330,7 @@ async function sendApiPlexFax(params: {
  * Twilio Fax provider
  */
 async function sendTwilioFax(
-    supabase: ReturnType<typeof createClient>,
+    supabase: SupabaseClient,
     po_id: string,
     fax_number: string | undefined,
     html_content: string
@@ -433,7 +434,7 @@ async function sendTwilioFax(
  * SendPulse Fax provider (placeholder)
  */
 async function sendSendpulseFax(
-    supabase: ReturnType<typeof createClient>,
+    supabase: SupabaseClient,
     po_id: string,
     fax_number: string | undefined,
     html_content: string
@@ -453,7 +454,7 @@ async function sendSendpulseFax(
  * Custom Fax provider (placeholder for custom integration)
  */
 async function sendCustomFax(
-    supabase: ReturnType<typeof createClient>,
+    supabase: SupabaseClient,
     po_id: string,
     fax_number: string | undefined,
     html_content: string

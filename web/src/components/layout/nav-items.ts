@@ -29,17 +29,16 @@ export const navItems: NavItem[] = [
   {
     label: "업무 흐름",
     items: [
-      { label: "① 주문 관리", href: "/orders_main", icon: ClipboardList },
-      { label: "② 출고 관리", href: "/shipments_main", icon: PackageCheck },
-      { label: "③ 미수금", href: "/ar", icon: CreditCard },
-      { label: "NEW 영수증/매칭", href: "/new_receipt_line_workbench", icon: ClipboardList },
+      { label: "① 주문", href: "/orders_main", icon: ClipboardList },
+      { label: "② 영수증/매칭", href: "/new_receipt_line_workbench", icon: ClipboardList },
+      { label: "③ 출고", href: "/shipments_main", icon: PackageCheck },
+      { label: "④ 미수", href: "/ar", icon: CreditCard },
     ],
   },
   {
     label: "현황 및 조회",
     items: [
       { label: "재고 관리", href: "/inventory", icon: Package },
-      { label: "원가 마감", href: "/purchase_cost_worklist", icon: Calculator },
     ],
   },
   {
@@ -48,7 +47,6 @@ export const navItems: NavItem[] = [
       { label: "거래처 관리", href: "/party", icon: Store },
       { label: "제품 카탈로그", href: "/catalog", icon: Boxes },
       { label: "시세 관리", href: "/market", icon: TrendingUp },
-      { label: "자재 명세서", href: "/bom", icon: Settings },
     ],
   },
   {

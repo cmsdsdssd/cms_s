@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo, useCallback } from "react";
+import { useState, useMemo, useCallback, useRef } from "react";
 import { useMutation, useQueryClient, useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
@@ -23,6 +23,7 @@ interface OrderLine {
   customer_mask_code?: string;  // Added for factory PO masking
   model_name?: string;
   suffix?: string;
+  material_code?: string | null;
   color?: string;
   size?: string | null;
   qty?: number;
@@ -40,6 +41,25 @@ interface OrderLine {
   status?: string;
   factory_po_id?: string | null;
 }
+
+type FaxConfigRow = {
+  vendor_party_id: string;
+  fax_number: string | null;
+  fax_provider: string | null;
+  is_active: boolean | null;
+};
+
+type FactoryPoCreateResponse = {
+  ok?: boolean;
+  pos?: { po_id: string }[];
+};
+
+type FaxSendGroupResult = {
+  group: FactoryGroup;
+  poId: string;
+  success: boolean;
+  warning?: string;
+};
 
 interface FactoryGroup {
   prefix: string;
@@ -65,23 +85,43 @@ interface FactoryOrderWizardProps {
   onSuccess?: () => void;
 }
 
-function normalizeImagePath(path: string, bucket: string) {
-  if (path.startsWith(`${bucket}/`)) return path.slice(bucket.length + 1);
-  if (path.startsWith("storage/v1/object/public/")) {
-    return path.replace("storage/v1/object/public/", "").split("/").slice(1).join("/");
-  }
-  return path;
+const CATEGORY_LABELS: Record<string, string> = {
+  BRACELET: "팔찌",
+  ANKLET: "발찌",
+  NECKLACE: "목걸이",
+  EARRING: "귀걸이",
+  RING: "반지",
+  PIERCING: "피어싱",
+  PENDANT: "펜던트",
+  WATCH: "시계",
+  KEYRING: "키링",
+  SYMBOL: "상징",
+  ACCESSORY: "부속",
+  ETC: "기타",
+};
+
+const MATERIAL_LABELS: Record<string, string> = {
+  "14": "14K",
+  "18": "18K",
+  "24": "24K",
+  "925": "925",
+  "999": "999",
+  "00": "00",
+};
+
+function getCategoryLabel(value?: string | null) {
+  if (!value) return "-";
+  return CATEGORY_LABELS[value] ?? value;
 }
 
-function buildPublicImageUrl(path: string | null) {
-  if (!path) return null;
-  if (path.startsWith("http://") || path.startsWith("https://")) return path;
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
-  const bucket = process.env.NEXT_PUBLIC_SUPABASE_BUCKET ?? "master_images";
-  if (!url) return null;
-  const normalized = normalizeImagePath(path, bucket);
-  return `${url}/storage/v1/object/public/${bucket}/${normalized}`;
+function getMaterialLabel(code?: string | null, plated?: boolean | null) {
+  if (code) return MATERIAL_LABELS[code] ?? code;
+  if (plated === true) return "14K";
+  if (plated === false) return "925";
+  return "-";
 }
+
+
 
 export function FactoryOrderWizard({ orderLines, onClose, onSuccess }: FactoryOrderWizardProps) {
   const queryClient = useQueryClient();
@@ -89,14 +129,15 @@ export function FactoryOrderWizard({ orderLines, onClose, onSuccess }: FactoryOr
   const [step, setStep] = useState<WizardStep>('select');
   const [selectedPrefixes, setSelectedPrefixes] = useState<Set<string>>(new Set());
   const [isSending, setIsSending] = useState(false);
+  const previewRefs = useRef(new Map<string, HTMLIFrameElement | null>());
   const [sendResult, setSendResult] = useState<{
     success: boolean; 
     count: number; 
-    results?: {group: FactoryGroup; poId: string; success: boolean}[]
+    results?: FaxSendGroupResult[]
   } | null>(null);
 
   // Fetch vendor fax configs from DB
-  const faxConfigsQuery = useQuery({
+  const faxConfigsQuery = useQuery<FaxConfigRow[]>({
     queryKey: ["cms_vendor_fax_configs_wizard"],
     queryFn: async () => {
       if (!schemaClient) return [];
@@ -108,7 +149,7 @@ export function FactoryOrderWizard({ orderLines, onClose, onSuccess }: FactoryOr
         console.error('Failed to load fax configs:', error);
         return [];
       }
-      return data || [];
+      return (data || []) as FaxConfigRow[];
     },
     enabled: !!schemaClient,
   });
@@ -158,7 +199,7 @@ export function FactoryOrderWizard({ orderLines, onClose, onSuccess }: FactoryOr
           vendorPartyId,
           vendorName: order.vendor_guess || 'Unknown',
           lines: [],
-          faxNumber: faxConfig?.fax_number,
+          faxNumber: faxConfig?.fax_number ?? undefined,
           faxProvider: provider,
         });
       }
@@ -192,7 +233,7 @@ export function FactoryOrderWizard({ orderLines, onClose, onSuccess }: FactoryOr
       }
       return next;
     });
-  }, [masterImageMap]);
+  }, []);
 
   // Select all factories
   const selectAll = useCallback(() => {
@@ -204,74 +245,52 @@ export function FactoryOrderWizard({ orderLines, onClose, onSuccess }: FactoryOr
     setSelectedPrefixes(new Set());
   }, []);
 
-  const modelNames = useMemo(() => {
-    const set = new Set<string>();
-    eligibleOrders.forEach(order => {
-      if (order.model_name) set.add(order.model_name);
-    });
-    return Array.from(set.values());
-  }, [eligibleOrders]);
-
-  const masterImagesQuery = useQuery({
-    queryKey: ["cms_master_images_for_fax", modelNames],
-    queryFn: async () => {
-      if (!schemaClient || modelNames.length === 0) return [] as { model_name: string | null; image_path: string | null }[];
-      const { data, error } = await schemaClient
-        .from("cms_master_item")
-        .select("model_name, image_path")
-        .in("model_name", modelNames);
-
-      if (error) {
-        console.error("Failed to load master images:", error);
-        return [] as { model_name: string | null; image_path: string | null }[];
-      }
-      return (data ?? []) as { model_name: string | null; image_path: string | null }[];
-    },
-    enabled: !!schemaClient && modelNames.length > 0,
-  });
-
-  const masterImageMap = useMemo(() => {
-    const map = new Map<string, string>();
-    masterImagesQuery.data?.forEach(row => {
-      const name = row.model_name ? String(row.model_name) : "";
-      const imageUrl = buildPublicImageUrl(row.image_path ? String(row.image_path) : null);
-      if (name && imageUrl) {
-        map.set(name, imageUrl);
-      }
-    });
-    return map;
-  }, [masterImagesQuery.data]);
-
   // Generate fax HTML for a SPECIFIC factory group (NOT combined)
   const generateFaxHtmlForGroup = useCallback((group: FactoryGroup): string => {
     const today = new Date().toLocaleDateString('ko-KR');
     const lines = group.lines;
+    const isMock = group.faxProvider === "mock";
     
-    // Use random mask code from order_line (saved in DB)
-    const getMaskCode = (line: OrderLine) => line.customer_mask_code || 'UNKNOWN';
+    const getMaskCode = (line: OrderLine) => line.customer_mask_code || '-';
     
     const rowsHtml = lines.map((line, idx) => {
-      const imageUrl = line.model_name ? masterImageMap.get(line.model_name) : null;
-      const imageCell = imageUrl
-        ? `<img src="${imageUrl}" alt="${line.model_name || 'thumb'}" style="width: 42px; height: 42px; object-fit: cover; border: 1px solid #ddd;" />`
-        : "-";
+      const stoneParts = [
+        line.center_stone_name ? `중심석 ${line.center_stone_name}` : "",
+        line.sub1_stone_name ? `보조1석 ${line.sub1_stone_name}` : "",
+        line.sub2_stone_name ? `보조2석 ${line.sub2_stone_name}` : "",
+      ].filter(Boolean);
+      const stonesHtml = stoneParts.length > 0
+        ? `<tr style="border-bottom: 1px solid #ddd;">
+             <td></td>
+             <td></td>
+             <td></td>
+             <td style="padding: 4px 6px; font-size: 9px; font-weight: 700; color: #222;" colspan="7">${stoneParts.join(" / ")}</td>
+           </tr>`
+        : "";
 
       return `
-      <tr style="border-bottom: 1px solid #ddd;">
+      <tr style="border-bottom: ${stoneParts.length > 0 ? "0" : "1px solid #ddd"};">
         <td style="padding: 6px; text-align: center; font-size: 10px;">${idx + 1}</td>
-        <td style="padding: 6px; text-align: center; font-size: 9px;">${imageCell}</td>
-        <td style="padding: 6px; font-size: 9px; font-family: monospace;">${getMaskCode(line)}</td>
+        <td style="padding: 6px; text-align: center; font-size: 10px;">${getMaskCode(line)}</td>
         <td style="padding: 6px; font-size: 11px;">${line.model_name || '-'}</td>
-        <td style="padding: 6px; text-align: center; font-size: 10px;">${line.suffix || '-'}</td>
+        <td style="padding: 6px; text-align: center; font-size: 10px;">${getMaterialLabel(line.material_code, line.is_plated)}</td>
+        <td style="padding: 6px; text-align: center; font-size: 10px;">${getCategoryLabel(line.suffix)}</td>
         <td style="padding: 6px; text-align: center; font-size: 10px;">${line.color || '-'}</td>
-        <td style="padding: 6px; text-align: center; font-size: 9px;">${line.is_plated ? '14K' : 'SV'}</td>
-        <td style="padding: 6px; text-align: center; font-size: 10px;">${line.size || '-'}</td>
+        <td style="padding: 6px; text-align: center; font-size: 10px;">${line.is_plated ? 'Y' : 'N'}</td>
+        <td style="padding: 6px; text-align: center; font-size: 10px;">${line.plating_color_code || '-'}</td>
         <td style="padding: 6px; text-align: center; font-size: 10px;">${line.qty || 1}</td>
-        <td style="padding: 6px; text-align: center; font-size: 9px;">${line.is_plated ? (line.plating_color_code || 'Y') : 'N'}</td>
         <td style="padding: 6px; font-size: 9px;">${line.memo || ''}</td>
       </tr>
+      ${stonesHtml}
     `;
     }).join('');
+
+    const mockBanner = isMock
+      ? `
+  <div style="margin: 10px 0 16px 0; padding: 8px 12px; border: 2px dashed #c0392b; background: #fdecea; color: #c0392b; font-weight: bold; text-align: center; font-size: 14px; letter-spacing: 1px;">
+    MOCK MODE · 실제 팩스 전송 없음
+  </div>`
+      : "";
 
     return `
 <!DOCTYPE html>
@@ -280,21 +299,22 @@ export function FactoryOrderWizard({ orderLines, onClose, onSuccess }: FactoryOr
   <meta charset="UTF-8">
   <title>발주서 - ${group.prefix}</title>
   <style>
-    body { font-family: 'Malgun Gothic', sans-serif; margin: 20px; }
+     body { font-family: 'Malgun Gothic', sans-serif; margin: 20px; ${isMock ? "border: 4px solid #c0392b; padding: 16px;" : ""} }
     .header { text-align: center; margin-bottom: 20px; }
     .header h1 { font-size: 24px; margin: 0; }
     .info { margin-bottom: 20px; }
     .info-row { display: flex; margin-bottom: 5px; }
     .info-label { width: 100px; font-weight: bold; }
-    table { width: 100%; border-collapse: collapse; font-size: 12px; }
-    th { background: #f0f0f0; padding: 8px; border-top: 2px solid #333; border-bottom: 1px solid #333; }
-    td { padding: 8px; }
+     table { width: 100%; border-collapse: collapse; font-size: 12px; }
+     th { background: #f0f0f0; padding: 8px; border-top: 2px solid #333; border-bottom: 1px solid #333; }
+     td { padding: 8px; }
     .footer { margin-top: 30px; text-align: center; font-size: 11px; color: #666; }
     .fax-info { margin-top: 20px; padding: 10px; background: #f9f9f9; border: 1px solid #ddd; }
   </style>
 </head>
-<body>
-  <div class="header">
+ <body>
+   ${mockBanner}
+   <div class="header">
     <h1>발 주 서</h1>
     <p style="font-size: 12px; color: #666;">Order Date: ${today}</p>
     <p style="font-size: 11px; color: #999;">Vendor: ${group.vendorName} (${group.prefix})</p>
@@ -313,19 +333,18 @@ export function FactoryOrderWizard({ orderLines, onClose, onSuccess }: FactoryOr
   
   <table>
     <thead>
-      <tr>
-        <th style="width: 30px;">#</th>
-        <th style="width: 50px; font-size: 10px;">이미지</th>
-        <th style="width: 60px; font-size: 10px;">거래처</th>
-        <th style="width: 90px;">모델</th>
-        <th style="width: 35px; font-size: 10px;">Suffix</th>
-        <th style="width: 45px;">색상</th>
-        <th style="width: 35px; font-size: 10px;">소재</th>
-        <th style="width: 35px;">Size</th>
-        <th style="width: 30px;">수량</th>
-        <th style="width: 35px; font-size: 10px;">도금</th>
-        <th style="font-size: 10px;">비고</th>
-      </tr>
+        <tr>
+          <th style="width: 30px;">#</th>
+          <th style="width: 60px; font-size: 10px;">거래처</th>
+          <th style="width: 30%;">모델명</th>
+          <th style="width: 50px; font-size: 10px;">소재</th>
+          <th style="width: 60px; font-size: 10px;">카테고리</th>
+          <th style="width: 50px;">색상</th>
+          <th style="width: 60px; font-size: 10px;">도금여부</th>
+          <th style="width: 60px; font-size: 10px;">도금색</th>
+          <th style="width: 40px;">수량</th>
+          <th style="font-size: 10px;">비고</th>
+        </tr>
     </thead>
     <tbody>
       ${rowsHtml}
@@ -337,11 +356,11 @@ export function FactoryOrderWizard({ orderLines, onClose, onSuccess }: FactoryOr
     <p style="font-size: 9px; margin: 2px 0 0 0; color: #666;">Provider: ${group.faxProvider || 'mock'}</p>
   </div>
   
-  <div class="footer">
-    <p>이 발주서는 전산시스템에서 자동 생성되었습니다.</p>
-    <p>문의사항 있으시면 연락 바랍니다.</p>
-  </div>
-</body>
+   <div class="footer">
+     <p>이 발주서는 전산시스템에서 자동 생성되었습니다.</p>
+     <p>문의사항 있으시면 연락 바랍니다.</p>
+   </div>
+ </body>
 </html>
     `;
   }, []);
@@ -362,6 +381,52 @@ export function FactoryOrderWizard({ orderLines, onClose, onSuccess }: FactoryOr
     }
   }, [selectedGroups, generateFaxHtmlForGroup]);
 
+  const handleDownloadPreview = useCallback(async (group: FactoryGroup, pageIndex: number) => {
+    const html = generateFaxHtmlForGroup(group);
+    const previewWindow = window.open("", "_blank", "width=900,height=1300");
+    if (!previewWindow) {
+      toast.error("다운로드 실패", { description: "팝업 차단을 해제해주세요." });
+      return;
+    }
+    previewWindow.document.open();
+    previewWindow.document.write(html);
+    previewWindow.document.close();
+
+    const doc = previewWindow.document;
+    if (doc.fonts?.ready) await doc.fonts.ready;
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    const target = doc.body as HTMLElement | null;
+    if (!target) {
+      previewWindow.close();
+      toast.error("미리보기 로드 실패", { description: "미리보기를 다시 열어주세요." });
+      return;
+    }
+
+    try {
+      const html2canvas = (await import("html2canvas")).default;
+      if (doc.fonts?.ready) await doc.fonts.ready;
+      const canvas = await html2canvas(target, {
+        backgroundColor: "#ffffff",
+        scale: 2,
+        useCORS: true,
+      });
+      const dataUrl = canvas.toDataURL("image/jpeg", 0.92);
+      const todayKey = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+      const pageKey = String(pageIndex + 1).padStart(2, "0");
+      const filename = `${todayKey}_${group.prefix}_${pageKey}.jpg`;
+
+      const link = document.createElement("a");
+      link.href = dataUrl;
+      link.download = filename;
+      link.click();
+      previewWindow.close();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "다운로드 실패";
+      toast.error("다운로드 실패", { description: message });
+      previewWindow.close();
+    }
+  }, []);
+
   // Handle send fax - SEPARATE PO for each factory
   const handleSendFax = useCallback(async () => {
     if (selectedGroups.length === 0) return;
@@ -371,7 +436,7 @@ export function FactoryOrderWizard({ orderLines, onClose, onSuccess }: FactoryOr
     try {
       // Process EACH factory group SEPARATELY (each gets their own PO and fax)
       let totalSuccess = 0;
-      const results: {group: FactoryGroup, poId: string, success: boolean}[] = [];
+      const results: FaxSendGroupResult[] = [];
       
       for (const group of selectedGroups) {
         const lineIds = group.lines.map(l => l.order_line_id);
@@ -379,7 +444,7 @@ export function FactoryOrderWizard({ orderLines, onClose, onSuccess }: FactoryOr
         toast.info(`${group.vendorName} 발주 생성 중...`);
         
         // 1. Create PO for THIS factory only
-        const createResult = await callRpc(CONTRACTS.functions.factoryPoCreate, {
+        const createResult = await callRpc<FactoryPoCreateResponse>(CONTRACTS.functions.factoryPoCreate, {
           p_order_line_ids: lineIds,
           p_actor_person_id: process.env.NEXT_PUBLIC_CMS_ACTOR_ID ?? null,
         });
@@ -399,7 +464,8 @@ export function FactoryOrderWizard({ orderLines, onClose, onSuccess }: FactoryOr
         // 2. Generate SEPARATE fax HTML for THIS factory only
         const html = generateFaxHtmlForGroup(group);
         
-        toast.info(`${group.vendorName} 팩스 전송 중 (${group.faxNumber || '번호 미설정'})...`);
+        const isMock = group.faxProvider === "mock";
+        toast.info(`${group.vendorName} ${isMock ? 'MOCK' : ''} 팩스 전송 중 (${group.faxNumber || '번호 미설정'})...`);
         
         // 3. Send fax for THIS factory
         const response = await fetch('/api/fax-send', {
@@ -471,7 +537,7 @@ export function FactoryOrderWizard({ orderLines, onClose, onSuccess }: FactoryOr
         } else {
           totalSuccess += group.lines.length;
           results.push({group, poId, success: true});
-          toast.success(`${group.vendorName} 발주 및 팩스 전송 완료`);
+          toast.success(`${group.vendorName} ${isMock ? 'MOCK ' : ''}발주 및 팩스 전송 완료`);
         }
       }
       
@@ -505,7 +571,7 @@ export function FactoryOrderWizard({ orderLines, onClose, onSuccess }: FactoryOr
           공장 선택
         </h3>
         <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" onClick={selectAll}>
+          <Button variant="secondary" size="sm" onClick={selectAll}>
             전체 선택
           </Button>
           <Button variant="ghost" size="sm" onClick={clearSelection}>
@@ -517,7 +583,8 @@ export function FactoryOrderWizard({ orderLines, onClose, onSuccess }: FactoryOr
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
         {factoryGroups.map((group) => {
           const isSelected = selectedPrefixes.has(group.prefix);
-          const hasFax = !!group.faxNumber;
+          const hasFax = !!group.faxNumber || group.faxProvider === "mock";
+          const isMock = group.faxProvider === "mock";
           return (
             <div
               key={group.prefix}
@@ -543,14 +610,19 @@ export function FactoryOrderWizard({ orderLines, onClose, onSuccess }: FactoryOr
                   <div className="font-semibold text-lg">{group.vendorName}</div>
                   <div className="text-sm text-muted">코드: {group.prefix}</div>
                   <div className="text-sm mt-2">
-                    <Badge variant="secondary">{group.lines.length}건</Badge>
+                    <Badge tone="neutral">{group.lines.length}건</Badge>
                     <span className="ml-2 text-muted">
                       {group.lines.reduce((sum, l) => sum + (l.qty || 1), 0)}수량
                     </span>
                   </div>
                   {/* Fax Config Status */}
                   <div className="mt-2 text-xs">
-                    {hasFax ? (
+                    {isMock ? (
+                      <span className="text-red-600 flex items-center gap-2 font-semibold">
+                        <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
+                        MOCK 전송 모드 - 실제 팩스 전송 없음
+                      </span>
+                    ) : hasFax ? (
                       <span className="text-green-600 flex items-center gap-1">
                         <span className="w-1.5 h-1.5 rounded-full bg-green-500" />
                         팩스: {group.faxNumber} ({group.faxProvider || 'mock'})
@@ -600,7 +672,7 @@ export function FactoryOrderWizard({ orderLines, onClose, onSuccess }: FactoryOr
           팩스 미리보기
         </h3>
         <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" onClick={handlePrint}>
+          <Button variant="secondary" size="sm" onClick={handlePrint}>
             <Printer className="w-4 h-4 mr-1" />
             인쇄
           </Button>
@@ -610,7 +682,7 @@ export function FactoryOrderWizard({ orderLines, onClose, onSuccess }: FactoryOr
       {/* Selected Factories Summary */}
       <div className="flex flex-wrap gap-2">
         {selectedGroups.map(group => (
-          <Badge key={group.prefix} variant="outline" className="px-3 py-1">
+          <Badge key={group.prefix} tone="neutral" className="px-3 py-1">
             {group.vendorName} ({group.prefix}): {group.lines.length}건
           </Badge>
         ))}
@@ -619,24 +691,30 @@ export function FactoryOrderWizard({ orderLines, onClose, onSuccess }: FactoryOr
       {/* Preview Document */}
       <div className="flex-1 bg-white text-black p-4 overflow-auto border rounded-lg shadow-inner">
         <div className="space-y-6">
-          {selectedGroups.map(group => (
-            <div key={group.prefix} className="border rounded-md overflow-hidden">
-              <div className="px-3 py-2 bg-gray-50 text-xs text-gray-600 flex items-center justify-between">
-                <span>{group.vendorName} ({group.prefix})</span>
-                <span>{group.lines.length}건</span>
-              </div>
-              <iframe
-                title={`fax-preview-${group.prefix}`}
-                srcDoc={generateFaxHtmlForGroup(group)}
-                className="w-full h-[297mm] bg-white"
-              />
-            </div>
-          ))}
+           {selectedGroups.map((group, idx) => (
+             <div key={group.prefix} className="border rounded-md overflow-hidden">
+               <div className="px-3 py-2 bg-gray-50 text-xs text-gray-600 flex items-center justify-between">
+                 <span>{group.vendorName} ({group.prefix})</span>
+                 <div className="flex items-center gap-2">
+                   <span>{group.lines.length}건</span>
+                   <Button size="sm" variant="secondary" onClick={() => handleDownloadPreview(group, idx)}>
+                     JPG 다운로드
+                   </Button>
+                 </div>
+               </div>
+               <iframe
+                 title={`fax-preview-${group.prefix}`}
+                 srcDoc={generateFaxHtmlForGroup(group)}
+                 className="w-full h-[297mm] bg-white"
+                 ref={(el) => previewRefs.current.set(group.prefix, el)}
+               />
+             </div>
+           ))}
         </div>
       </div>
 
       <div className="flex justify-between pt-4 border-t">
-        <Button variant="outline" onClick={() => setStep('select')}>
+        <Button variant="secondary" onClick={() => setStep('select')}>
           <ArrowLeft className="w-4 h-4 mr-1" />
           이전
         </Button>
@@ -667,6 +745,7 @@ export function FactoryOrderWizard({ orderLines, onClose, onSuccess }: FactoryOr
     const results = sendResult?.results || [];
     const successResults = results.filter(r => r.success);
     const failedResults = results.filter(r => !r.success);
+    const hasMock = results.some(r => r.group.faxProvider === "mock");
     
     return (
       <div className="flex flex-col items-center justify-center py-8 space-y-4">
@@ -682,6 +761,11 @@ export function FactoryOrderWizard({ orderLines, onClose, onSuccess }: FactoryOr
           <p className="text-sm text-muted mt-1">
             {successResults.length}개 공장 성공, {failedResults.length}개 실패
           </p>
+          {hasMock && (
+            <p className="text-sm text-red-600 font-semibold mt-2">
+              MOCK 전송 포함: 실제 팩스 전송되지 않음
+            </p>
+          )}
         </div>
 
         <div className="w-full max-w-lg space-y-2 max-h-60 overflow-auto">
@@ -701,10 +785,13 @@ export function FactoryOrderWizard({ orderLines, onClose, onSuccess }: FactoryOr
                 <div>
                   <span className="font-medium">{result.group.vendorName}</span>
                   <span className="text-xs text-muted ml-2">({result.group.prefix})</span>
+                  {result.group.faxProvider === "mock" && (
+                    <span className="text-xs text-red-600 font-semibold ml-2">MOCK</span>
+                  )}
                 </div>
               </div>
               <div className="text-right">
-                <Badge variant={result.success ? "default" : "destructive"}>
+                <Badge tone={result.success ? "active" : "danger"}>
                   {result.group.lines.length}건
                 </Badge>
                 <div className="text-xs text-muted mt-1">

@@ -1,12 +1,9 @@
-set search_path = public, pg_temp;
-
--- 0034d: fix NOT NULL violation on cms_order_line.suffix
--- - suffix/color를 (1) 요청값(p_suffix/p_color) -> (2) master fallback -> (3) 최종 기본값 으로 보장
--- - 기존 호출 호환을 위해 p_suffix/p_color는 "맨 끝"에 default null로 추가
+-- 0300: Fix cms_fn_upsert_order_line_v3 status enum cast
+-- Prevent enum cast error when comparing legacy ORDER_ACCEPTED
 
 create or replace function public.cms_fn_upsert_order_line_v3(
   p_customer_party_id uuid,
-  p_master_id uuid,            -- STRICT: required
+  p_master_id uuid,
   p_qty int default 1,
   p_size text default null,
   p_is_plated boolean default false,
@@ -17,19 +14,16 @@ create or replace function public.cms_fn_upsert_order_line_v3(
   p_source_channel text default null,
   p_memo text default null,
   p_order_line_id uuid default null,
-  -- stone specs
   p_center_stone_name text default null,
   p_center_stone_qty int default null,
   p_sub1_stone_name text default null,
   p_sub1_stone_qty int default null,
   p_sub2_stone_name text default null,
   p_sub2_stone_qty int default null,
-  -- actor
   p_actor_person_id uuid default null,
-
-  -- ✅ optional overrides (backward-compatible)
   p_suffix text default null,
-  p_color  text default null
+  p_color text default null,
+  p_material_code cms_e_material_code default null
 )
 returns uuid
 language plpgsql
@@ -42,12 +36,9 @@ declare
   v_master_category text;
   v_master_color text;
   v_old_status cms_e_order_status;
-
-  -- ✅ 실제 저장값
   v_suffix text;
-  v_color  text;
+  v_color text;
 begin
-  -- 1. Validate inputs
   if p_customer_party_id is null then raise exception 'customer_party_id required'; end if;
   if p_master_id is null then raise exception 'P0001: master_id required (strict mode)'; end if;
   if p_qty is null or p_qty <= 0 then raise exception 'qty must be > 0'; end if;
@@ -59,7 +50,6 @@ begin
     raise exception 'color_code required when is_plated=true';
   end if;
 
-  -- 2. Lookup Master Info (Auto-fill)
   select model_name, category_code, color
     into v_master_model_name, v_master_category, v_master_color
   from public.cms_master_item
@@ -69,7 +59,6 @@ begin
     raise exception 'P0001: master_id not found in registry';
   end if;
 
-  -- 2.1 ✅ suffix/color 결정 (NOT NULL 보장)
   v_suffix := nullif(trim(coalesce(p_suffix,'')), '');
   if v_suffix is null then
     v_suffix := nullif(trim(coalesce(v_master_category,'')), '');
@@ -86,22 +75,18 @@ begin
     v_color := 'NONE';
   end if;
 
-  -- 3. Prepare ID
   v_id := coalesce(p_order_line_id, gen_random_uuid());
 
-  -- 4. Check if update allowed by status (soft guard)
   if p_order_line_id is not null then
     select status into v_old_status
     from public.cms_order_line
     where order_line_id = p_order_line_id;
 
     if found and v_old_status::text not in ('ORDER_PENDING', 'ORDER_ACCEPTED') then
-      -- keep going (existing behavior), but you can tighten later if needed
       null;
     end if;
   end if;
 
-  -- 5. Upsert
   insert into public.cms_order_line(
     order_line_id,
     customer_party_id,
@@ -109,6 +94,7 @@ begin
     model_name_raw,
     suffix,
     color,
+    material_code,
     size,
     qty,
     is_plated,
@@ -132,10 +118,11 @@ begin
   values(
     v_id,
     p_customer_party_id,
-    v_master_model_name, -- from master
-    v_master_model_name, -- raw = master
-    v_suffix,            -- ✅ NOT NULL 보장
-    v_color,             -- ✅ NOT NULL 보장
+    v_master_model_name,
+    v_master_model_name,
+    v_suffix,
+    v_color,
+    p_material_code,
     nullif(trim(coalesce(p_size,'')), ''),
     p_qty,
     coalesce(p_is_plated,false),
@@ -162,6 +149,7 @@ begin
     model_name_raw      = excluded.model_name_raw,
     suffix              = excluded.suffix,
     color               = excluded.color,
+    material_code       = coalesce(excluded.material_code, public.cms_order_line.material_code),
     size                = excluded.size,
     qty                 = excluded.qty,
     is_plated           = excluded.is_plated,

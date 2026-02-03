@@ -623,6 +623,10 @@ export default function PurchaseCostWorklistPage() {
     },
   });
 
+  const ensureApFromReceipt = useRpcMutation<{ ok?: boolean }>({
+    fn: CONTRACTS.functions.ensureApFromReceipt,
+  });
+
   async function onSave() {
     const p_total_amount = parseNumOrNull(totalAmount);
     if (p_total_amount == null) {
@@ -669,6 +673,11 @@ export default function PurchaseCostWorklistPage() {
       p_weight_g: parseNumOrNull(weightG),
       p_labor_basic: parseNumOrNull(laborBasic),
       p_labor_other: parseNumOrNull(laborOther),
+      p_note: note || null,
+    });
+
+    await ensureApFromReceipt.mutateAsync({
+      p_receipt_id: selectedReceiptId,
       p_note: note || null,
     });
   }

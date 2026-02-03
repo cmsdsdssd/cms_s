@@ -173,6 +173,11 @@ function toNumber(value: string) {
   return Number.isNaN(parsed) ? 0 : parsed;
 }
 
+function formatWeightNumber(value: number) {
+  if (!Number.isFinite(value)) return "";
+  return value.toFixed(2);
+}
+
 function isUuid(value: string) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 }
@@ -425,7 +430,14 @@ export default function CatalogPage() {
         const masterId = String(row.master_id ?? modelName);
         const createdAt = String(row.created_at ?? "");
         const materialCodeValue = String(row.material_code_default ?? "-");
-        const weight = row.weight_default_g ? `${row.weight_default_g} g` : "-";
+        const grossWeight = Number(row.weight_default_g);
+        const deductionValue = Number(row.deduction_weight_default_g);
+        const hasWeight = Number.isFinite(grossWeight);
+        const safeDeduction = Number.isFinite(deductionValue) ? deductionValue : 0;
+        const netWeight = hasWeight ? grossWeight - safeDeduction : 0;
+        const weight = hasWeight
+          ? `${formatWeightNumber(netWeight)} g (+${formatWeightNumber(grossWeight)} g)(-${formatWeightNumber(safeDeduction)} g)`
+          : "-";
         const laborTotal = row.labor_total_cost ?? row.labor_total_sell;
         const cost =
           typeof laborTotal === "number" ? `₩${new Intl.NumberFormat("ko-KR").format(laborTotal)}` : "-";
@@ -2048,7 +2060,7 @@ export default function CatalogPage() {
                     </div>
                   </div>
 
-                  <div className="flex-1 rounded-[18px] border border-[var(--panel-border)] bg-[var(--panel)] p-4 flex flex-col">
+                  <div className="rounded-[18px] border border-[var(--panel-border)] bg-[var(--panel)] p-4 flex flex-col">
                     <p className="mb-3 text-sm font-semibold text-[var(--foreground)]">
                       비고
                     </p>
@@ -2056,7 +2068,7 @@ export default function CatalogPage() {
                       placeholder="상품에 대한 상세 정보를 입력하세요."
                       value={note}
                       onChange={(event) => setNote(event.target.value)}
-                      className="flex-1 resize-none h-full min-h-[120px]"
+                      className="resize-none h-[17rem]"
                     />
                   </div>
                 </div>
@@ -2114,7 +2126,16 @@ export default function CatalogPage() {
                         }
                       />
 
+                      <div className="col-span-4 h-px bg-dashed border-t border-[var(--panel-border)]/70" />
+
                       {/* Center */}
+                      <div className="text-center text-[var(--muted)]">센터석</div>
+                      <Input
+                        className="col-span-3"
+                        placeholder="센터석 이름"
+                        value={centerStoneName}
+                        onChange={(e) => setCenterStoneName(e.target.value)}
+                      />
                       <div className="text-center font-medium text-[var(--foreground)]">
                         센터
                       </div>
@@ -2142,15 +2163,16 @@ export default function CatalogPage() {
                           setLaborCenterCost(toNumber(e.target.value))
                         }
                       />
-                      <div className="text-center text-[var(--muted)]">센터석</div>
-                      <Input
-                        className="col-span-3"
-                        placeholder="센터석 이름"
-                        value={centerStoneName}
-                        onChange={(e) => setCenterStoneName(e.target.value)}
-                      />
+                      <div className="col-span-4 h-px bg-dashed border-t border-[var(--panel-border)]/70" />
 
                       {/* Sub1 */}
+                      <div className="text-center text-[var(--muted)]">서브1석</div>
+                      <Input
+                        className="col-span-3"
+                        placeholder="서브1석 이름"
+                        value={sub1StoneName}
+                        onChange={(e) => setSub1StoneName(e.target.value)}
+                      />
                       <div className="text-center font-medium text-[var(--foreground)]">
                         서브1
                       </div>
@@ -2178,15 +2200,16 @@ export default function CatalogPage() {
                           setLaborSub1Cost(toNumber(e.target.value))
                         }
                       />
-                      <div className="text-center text-[var(--muted)]">서브1석</div>
-                      <Input
-                        className="col-span-3"
-                        placeholder="서브1석 이름"
-                        value={sub1StoneName}
-                        onChange={(e) => setSub1StoneName(e.target.value)}
-                      />
+                      <div className="col-span-4 h-px bg-dashed border-t border-[var(--panel-border)]/70" />
 
                       {/* Sub2 */}
+                      <div className="text-center text-[var(--muted)]">서브2석</div>
+                      <Input
+                        className="col-span-3"
+                        placeholder="서브2석 이름"
+                        value={sub2StoneName}
+                        onChange={(e) => setSub2StoneName(e.target.value)}
+                      />
                       <div className="text-center font-medium text-[var(--foreground)]">
                         서브2
                       </div>
@@ -2213,13 +2236,6 @@ export default function CatalogPage() {
                         onChange={(e) =>
                           setLaborSub2Cost(toNumber(e.target.value))
                         }
-                      />
-                      <div className="text-center text-[var(--muted)]">서브2석</div>
-                      <Input
-                        className="col-span-3"
-                        placeholder="서브2석 이름"
-                        value={sub2StoneName}
-                        onChange={(e) => setSub2StoneName(e.target.value)}
                       />
 
                       <div className="col-span-4 h-px bg-dashed border-t border-[var(--panel-border)] my-2" />
@@ -2270,44 +2286,6 @@ export default function CatalogPage() {
                     </div>
                   </div>
 
-                  <div className="rounded-[18px] border border-[var(--panel-border)] bg-[var(--panel)] p-4">
-                    <div className="mb-3 flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <p className="text-sm font-semibold text-[var(--foreground)]">
-                          프로파일 및 설정
-                        </p>
-                        <span className="text-xs text-[var(--muted)]">
-                          ({isEditMode ? "수정" : "생성"}:{" "}
-                          {isEditMode ? modifiedDate : releaseDate})
-                        </span>
-                      </div>
-                    </div>
-                    <div className="grid gap-3 grid-cols-2">
-                      <Field label="공임 프로파일">
-                        <Select
-                          value={laborProfileMode}
-                          onChange={(event) =>
-                            setLaborProfileMode(event.target.value)
-                          }
-                        >
-                          {laborProfileOptions.map((option) => (
-                            <option key={option.value} value={option.value}>
-                              {option.label}
-                            </option>
-                          ))}
-                        </Select>
-                      </Field>
-                      <Field label="공임 밴드 코드">
-                        <Input
-                          placeholder="B1 ~ B6"
-                          value={laborBandCode}
-                          onChange={(event) =>
-                            setLaborBandCode(event.target.value)
-                          }
-                        />
-                      </Field>
-                    </div>
-                  </div>
                 </div>
               </div>
             </div>

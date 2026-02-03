@@ -1,6 +1,6 @@
 "use client";
 
-import { useId, useMemo, useState, lazy, Suspense } from "react";
+import { useMemo, useState, lazy, Suspense } from "react";
 import Link from "next/link";
 import {
   UnifiedToolbar,
@@ -13,11 +13,10 @@ import { Button } from "@/components/ui/button";
 import { Input, Select } from "@/components/ui/field";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { ActionBar } from "@/components/layout/action-bar";
 import { useQuery } from "@tanstack/react-query";
 import { getSchemaClient } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
-import { Building2, X } from "lucide-react";
+import { Building2 } from "lucide-react";
 
 // Lazy load Factory Order Wizard
 const FactoryOrderWizard = lazy(() => import("@/components/factory-order/factory-order-wizard"));
@@ -26,8 +25,10 @@ type OrderRow = {
   order_line_id?: string;
   customer_party_id?: string;
   customer_name?: string;
+  customer_mask_code?: string | null;
   model_name?: string;
   suffix?: string;
+  material_code?: string | null;
   color?: string;
   size?: string | null;
   qty?: number;
@@ -57,7 +58,12 @@ type VendorPrefixRow = {
   vendor_party_id?: string;
 };
 
-type FilterType = "customer" | "factory" | "model" | "date";
+type MasterImageRow = {
+  model_name?: string | null;
+  image_path?: string | null;
+};
+
+type FilterType = "customer" | "factory" | "model" | "date" | "status";
 
 type FilterRow = {
   id: string;
@@ -71,16 +77,76 @@ const createFilter = (type: FilterType): FilterRow => ({
   value: "",
 });
 
+function normalizeImagePath(path: string, bucket: string) {
+  if (path.startsWith(`${bucket}/`)) return path.slice(bucket.length + 1);
+  if (path.startsWith("storage/v1/object/public/")) {
+    return path.replace("storage/v1/object/public/", "").split("/").slice(1).join("/");
+  }
+  return path;
+}
+
+function buildPublicImageUrl(path: string | null) {
+  if (!path) return null;
+  if (path.startsWith("http://") || path.startsWith("https://")) return path;
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
+  const bucket = process.env.NEXT_PUBLIC_SUPABASE_BUCKET ?? "master_images";
+  if (!url) return null;
+  const normalized = normalizeImagePath(path, bucket);
+  return `${url}/storage/v1/object/public/${bucket}/${normalized}`;
+}
+
+const MATERIAL_LABELS: Record<string, string> = {
+  "14": "14",
+  "18": "18",
+  "24": "24",
+  "925": "925",
+  "999": "999",
+  "00": "00",
+};
+
+function getMaterialLabel(value?: string | null) {
+  if (!value) return "-";
+  return MATERIAL_LABELS[value] ?? value;
+}
+
+const CATEGORY_LABELS: Record<string, string> = {
+  BRACELET: "팔찌",
+  ANKLET: "발찌",
+  NECKLACE: "목걸이",
+  EARRING: "귀걸이",
+  RING: "반지",
+  PIERCING: "피어싱",
+  PENDANT: "펜던트",
+  WATCH: "시계",
+  KEYRING: "키링",
+  SYMBOL: "상징",
+  ACCESSORY: "부속",
+  ETC: "기타",
+};
+
+const STATUS_OPTIONS = [
+  { value: "ORDER_PENDING", label: "주문대기" },
+  { value: "SENT_TO_VENDOR", label: "공장전송" },
+  { value: "READY_TO_SHIP", label: "출고준비" },
+  { value: "SHIPPED", label: "출고완료" },
+  { value: "CANCELLED", label: "주문취소" },
+];
+
+function getCategoryLabel(value?: string | null) {
+  if (!value) return "-";
+  return CATEGORY_LABELS[value] ?? value;
+}
+
 export default function OrdersMainPage() {
   const schemaClient = getSchemaClient();
   const todayKey = new Date().toISOString().slice(0, 10);
-  const initialFilterId = useId();
-  const [filters, setFilters] = useState<FilterRow[]>(() => [{
-    id: `date-${initialFilterId}`,
-    type: "date",
-    value: todayKey,
-  }]);
+  const [filters, setFilters] = useState<FilterRow[]>(() => [
+    { id: `date-${todayKey}`, type: "date", value: todayKey },
+  ]);
   const [showFactoryOrderWizard, setShowFactoryOrderWizard] = useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [includeCancelled, setIncludeCancelled] = useState(false);
+  const [previewImageUrl, setPreviewImageUrl] = useState<string | null>(null);
 
   const ordersQuery = useQuery({
     queryKey: ["cms", "orders", "main"],
@@ -89,7 +155,7 @@ export default function OrdersMainPage() {
       const { data, error } = await schemaClient
         .from("cms_order_line")
         .select(
-          "order_line_id, customer_party_id, model_name, suffix, color, size, qty, status, created_at, center_stone_name, center_stone_qty, sub1_stone_name, sub1_stone_qty, sub2_stone_name, sub2_stone_qty, is_plated, plating_color_code, memo, factory_po_id"
+          "order_line_id, customer_party_id, customer_mask_code, model_name, suffix, material_code, color, size, qty, status, created_at, center_stone_name, center_stone_qty, sub1_stone_name, sub1_stone_qty, sub2_stone_name, sub2_stone_qty, is_plated, plating_color_code, memo, factory_po_id"
         )
         .order("created_at", { ascending: false })
         .limit(400);
@@ -97,6 +163,43 @@ export default function OrdersMainPage() {
       return (data ?? []) as OrderRow[];
     },
   });
+
+  const modelNames = useMemo(() => {
+    const names = new Set<string>();
+    (ordersQuery.data ?? []).forEach((order) => {
+      if (order.model_name) names.add(order.model_name);
+    });
+    return Array.from(names.values()).sort((a, b) => a.localeCompare(b));
+  }, [ordersQuery.data]);
+
+  const masterImagesQuery = useQuery<MasterImageRow[]>({
+    queryKey: ["cms", "master_images", modelNames],
+    queryFn: async () => {
+      if (!schemaClient || modelNames.length === 0) return [];
+      const { data, error } = await schemaClient
+        .from("cms_master_item")
+        .select("model_name, image_path")
+        .in("model_name", modelNames);
+      if (error) {
+        console.error("Failed to load master images:", error);
+        return [];
+      }
+      return (data ?? []) as MasterImageRow[];
+    },
+    enabled: !!schemaClient && modelNames.length > 0,
+  });
+
+  const masterImageMap = useMemo(() => {
+    const map = new Map<string, string>();
+    (masterImagesQuery.data ?? []).forEach((row) => {
+      const name = row.model_name ? String(row.model_name) : "";
+      const imageUrl = buildPublicImageUrl(row.image_path ? String(row.image_path) : null);
+      if (name && imageUrl) {
+        map.set(name, imageUrl);
+      }
+    });
+    return map;
+  }, [masterImagesQuery.data]);
 
   const customersQuery = useQuery({
     queryKey: ["cms", "customers"],
@@ -167,35 +270,18 @@ export default function OrdersMainPage() {
   }, [customersQuery.data]);
 
   const ordersWithFactory = useMemo(() => {
-    console.log('=== Vendor Prefix Debug ===');
-    console.log('vendorPrefixes loaded:', vendorPrefixes);
-    
     return (ordersQuery.data ?? []).map((order) => {
       const model = (order.model_name ?? "").toLowerCase();
       let vendorPartyId = "";
-      let matchedPrefix = "";
-      
+
       for (const row of vendorPrefixes) {
         const prefixLower = row.prefix.toLowerCase();
         if (model.startsWith(prefixLower)) {
           vendorPartyId = row.vendorPartyId;
-          matchedPrefix = row.prefix;
           break;
         }
       }
-      
-      // Debug log for each order
-      if (order.model_name?.includes('TEST') || order.model_name?.startsWith('MS')) {
-        console.log('Order mapping:', {
-          model: order.model_name,
-          modelLower: model,
-          vendorPrefixes: vendorPrefixes.map(p => p.prefix),
-          matchedPrefix,
-          vendorPartyId,
-          hasVendor: !!vendorPartyId
-        });
-      }
-      
+
       return {
         ...order,
         customer_name: order.customer_party_id
@@ -209,6 +295,7 @@ export default function OrdersMainPage() {
 
   const applyFilters = useMemo(() => {
     return ordersWithFactory.filter((order) => {
+      if (!includeCancelled && order.status === "CANCELLED") return false;
       return filters.every((filter) => {
         if (filter.type === "customer") {
           return filter.value ? order.customer_party_id === filter.value : true;
@@ -224,6 +311,10 @@ export default function OrdersMainPage() {
             .toLowerCase();
           return target.includes(filter.value.toLowerCase());
         }
+        if (filter.type === "status") {
+          if (!filter.value) return true;
+          return order.status === filter.value;
+        }
         if (filter.type === "date") {
           if (!filter.value) return true;
           const created = order.created_at ? new Date(order.created_at) : null;
@@ -235,41 +326,60 @@ export default function OrdersMainPage() {
         return true;
       });
     });
-  }, [ordersWithFactory, filters]);
+  }, [ordersWithFactory, filters, includeCancelled]);
 
-  // Debug: log all orders
-  console.log('All orders:', ordersWithFactory.map(o => ({ 
-    id: o.order_line_id?.slice(0,8), 
-    model: o.model_name, 
-    status: o.status,
-    factory_po_id: o.factory_po_id,
-    vendor_guess: o.vendor_guess
-  })));
+  const itemsPerPage = 10;
+  const totalPages = Math.max(1, Math.ceil(applyFilters.length / itemsPerPage));
+  const safePage = Math.min(currentPage, totalPages);
+  const startIndex = (safePage - 1) * itemsPerPage;
 
-  // Calculate pending orders count for factory order button
-  // Only counts ORDER_PENDING status (not SENT_TO_VENDOR or others)
+  const paginatedOrders = useMemo((): Array<OrderRow | null> => {
+    const slice: Array<OrderRow | null> = applyFilters.slice(startIndex, startIndex + itemsPerPage);
+    while (slice.length < itemsPerPage) {
+      slice.push(null);
+    }
+    return slice;
+  }, [applyFilters, itemsPerPage, startIndex]);
+
   const pendingOrdersCount = useMemo(() => {
     const eligible = ordersWithFactory.filter(order => {
-      // Must be ORDER_PENDING specifically (not SENT_TO_VENDOR, etc)
       const isPending = order.status === 'ORDER_PENDING';
       const noPo = !order.factory_po_id;
       const hasVendor = !!order.vendor_guess_id;
       return isPending && noPo && hasVendor;
     });
-    
+
     return eligible.length;
   }, [ordersWithFactory]);
 
+  const editAllHref = useMemo(() => {
+    const params = new URLSearchParams();
+    params.set("edit_all", "1");
+    params.set("include_cancelled", includeCancelled ? "1" : "0");
+    filters.forEach((filter) => {
+      if (!filter.value) return;
+      if (filter.type === "customer") params.set("filter_customer", filter.value);
+      if (filter.type === "factory") params.set("filter_factory", filter.value);
+      if (filter.type === "model") params.set("filter_model", filter.value);
+      if (filter.type === "status") params.set("filter_status", filter.value);
+      if (filter.type === "date") params.set("filter_date", filter.value);
+    });
+    return `/orders?${params.toString()}`;
+  }, [filters, includeCancelled]);
+
   const addFilter = (type: FilterType) => {
     setFilters((prev) => [...prev, createFilter(type)]);
+    setCurrentPage(1);
   };
 
   const updateFilter = (id: string, patch: Partial<FilterRow>) => {
     setFilters((prev) => prev.map((filter) => (filter.id === id ? { ...filter, ...patch } : filter)));
+    setCurrentPage(1);
   };
 
   const removeFilter = (id: string) => {
     setFilters((prev) => prev.filter((filter) => filter.id !== id));
+    setCurrentPage(1);
   };
 
   const customerOptions = (customersQuery.data ?? []).map((row) => ({
@@ -293,9 +403,23 @@ export default function OrdersMainPage() {
     return list;
   }, []);
 
-  const totalCount = ordersQuery.data?.length ?? 0;
   const filteredCount = applyFilters.length;
   const isLoading = ordersQuery.isLoading || customersQuery.isLoading || vendorsQuery.isLoading || vendorPrefixQuery.isLoading;
+  const todayOrderCount = useMemo(() => {
+    return (ordersQuery.data ?? []).filter((order) => {
+      if (order.status === "CANCELLED") return false;
+      if (!order.created_at) return false;
+      return new Date(order.created_at).toISOString().slice(0, 10) === todayKey;
+    }).length;
+  }, [ordersQuery.data, todayKey]);
+
+  const todayCancelledCount = useMemo(() => {
+    return (ordersQuery.data ?? []).filter((order) => {
+      if (order.status !== "CANCELLED") return false;
+      if (!order.created_at) return false;
+      return new Date(order.created_at).toISOString().slice(0, 10) === todayKey;
+    }).length;
+  }, [ordersQuery.data, todayKey]);
 
   return (
     <div className="space-y-3" id="orders_main.root">
@@ -320,6 +444,21 @@ export default function OrdersMainPage() {
         </div>
       )}
 
+      {previewImageUrl && (
+        <div
+          className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-6"
+          onClick={() => setPreviewImageUrl(null)}
+        >
+          <div className="max-h-[90vh] max-w-[90vw]" onClick={(event) => event.stopPropagation()}>
+            <img
+              src={previewImageUrl}
+              alt="model preview"
+              className="max-h-[90vh] max-w-[90vw] object-contain rounded-lg"
+            />
+          </div>
+        </div>
+      )}
+
       {/* Unified Toolbar - Compact Header */}
       <UnifiedToolbar
         title="주문관리"
@@ -328,13 +467,7 @@ export default function OrdersMainPage() {
             <Button
               variant="secondary"
               size="sm"
-              onClick={() => {
-                console.log('=== 공장발주 버튼 클릭 ===');
-                console.log('vendorPrefixes:', vendorPrefixes);
-                console.log('ordersWithFactory 샘플:', ordersWithFactory.slice(0, 3));
-                console.log('pendingOrdersCount:', pendingOrdersCount);
-                setShowFactoryOrderWizard(true);
-              }}
+              onClick={() => setShowFactoryOrderWizard(true)}
               className="flex items-center gap-1"
             >
               <Building2 className="w-4 h-4" />
@@ -453,21 +586,25 @@ export default function OrdersMainPage() {
       </UnifiedToolbar>
 
       {/* Summary Cards */}
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-4 px-4">
+      <div className="grid grid-cols-1 gap-3 md:grid-cols-3 px-4">
         <Card className="p-3 flex flex-col gap-1 shadow-sm border-[var(--panel-border)]">
-          <span className="text-xs font-medium text-[var(--muted)]">전체 주문</span>
-          <span className="text-xl font-bold text-[var(--foreground)]">{totalCount}</span>
+          <span className="text-xs font-medium text-[var(--muted)]">오늘 주문</span>
+          <span className="text-xl font-bold text-blue-400">{todayOrderCount}</span>
+        </Card>
+        <Card className="p-3 flex flex-col gap-1 shadow-sm border-[var(--panel-border)]">
+          <span className="text-xs font-medium text-[var(--muted)]">오늘 취소</span>
+          <span className="text-xl font-bold text-red-400">{todayCancelledCount}</span>
         </Card>
         <Card className="p-3 flex flex-col gap-1 shadow-sm border-[var(--panel-border)]">
           <span className="text-xs font-medium text-[var(--muted)]">필터 결과</span>
-          <span className="text-xl font-bold text-[var(--primary)]">{filteredCount}</span>
+          <span className="text-xl font-bold text-white">{filteredCount}</span>
         </Card>
       </div>
 
       <div className="grid grid-cols-1 gap-3 lg:grid-cols-[280px_1fr] px-4">
         {/* Filters Panel - Compact */}
         <Card className="shadow-sm h-fit border-[var(--panel-border)]" id="orders_main.filters">
-          <CardHeader className="flex items-center justify-between py-2 px-3 border-b border-[var(--panel-border)]">
+          <CardHeader className="flex items-center justify-between py-3 px-3 border-b border-[var(--panel-border)]">
             <div className="flex items-center gap-2">
               <h3 className="text-sm font-semibold">활성 필터</h3>
               {filters.length > 0 && (
@@ -476,9 +613,9 @@ export default function OrdersMainPage() {
                 </Badge>
               )}
             </div>
-            <div className="flex items-center gap-1">
-              <Select 
-                className="h-7 text-xs w-24"
+            <div className="flex items-center gap-2">
+              <Select
+                className="h-8 text-sm w-24"
                 onChange={(event) => addFilter(event.target.value as FilterType)}
                 value=""
               >
@@ -486,10 +623,11 @@ export default function OrdersMainPage() {
                 <option value="customer">고객</option>
                 <option value="factory">공장</option>
                 <option value="model">모델명</option>
+                <option value="status">상태</option>
                 <option value="date">날짜</option>
               </Select>
               {filters.length > 0 && (
-                <button 
+                <button
                   onClick={() => setFilters([])}
                   className="text-xs text-[var(--muted)] hover:text-red-500 px-2 py-1 rounded hover:bg-[var(--panel-hover)] transition-colors"
                 >
@@ -498,27 +636,59 @@ export default function OrdersMainPage() {
               )}
             </div>
           </CardHeader>
-          <CardBody className="grid gap-2 p-3">
+          <CardBody className="grid gap-2 p-3 min-h-[120px]">
             {filters.length === 0 ? (
-              <div className="text-center py-4 text-xs text-[var(--muted)] bg-[var(--panel)] rounded-md border border-dashed border-[var(--panel-border)]">
+              <div className="text-center py-6 text-xs text-[var(--muted)] bg-[var(--panel)] rounded-md border border-dashed border-[var(--panel-border)]">
                 필터가 없습니다
               </div>
             ) : null}
+            <div
+              className={cn(
+                "flex items-center justify-between rounded-xl border border-[var(--panel-border)] p-3 shadow-sm",
+                includeCancelled ? "bg-emerald-500/10" : "bg-red-500/10"
+              )}
+            >
+              <div className="flex items-center gap-2">
+                <Badge tone="neutral" className="text-[10px] px-2 py-0.5 uppercase tracking-wider">status</Badge>
+                <span className="text-xs text-[var(--muted)]">주문취소 포함</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIncludeCancelled((prev) => !prev)}
+                className={cn(
+                  "inline-flex items-center gap-2 rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors",
+                  includeCancelled
+                    ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-500"
+                    : "border-red-500/20 bg-red-500/5 text-red-300"
+                )}
+              >
+                <span
+                  className={cn(
+                    "h-2 w-2 rounded-full",
+                    includeCancelled ? "bg-emerald-400" : "bg-red-300"
+                  )}
+                />
+                {includeCancelled ? "ON" : "OFF"}
+              </button>
+            </div>
             {filters.map((filter) => (
               <div
                 key={filter.id}
-                className="flex flex-col gap-2 rounded-xl border border-[var(--panel-border)] bg-[var(--panel)] p-3 shadow-sm transition-all hover:shadow-md"
+                className={cn(
+                  "flex flex-col gap-2 rounded-xl border border-[var(--panel-border)] bg-[var(--panel)] p-3 shadow-sm transition-all hover:shadow-md",
+                  filter.value ? "bg-emerald-500/10" : "bg-red-500/10"
+                )}
               >
                 <div className="flex items-center justify-between">
                   <Badge tone="neutral" className="text-[10px] px-2 py-0.5 uppercase tracking-wider">{filter.type}</Badge>
-                  <button 
+                  <button
                     onClick={() => removeFilter(filter.id)}
                     className="text-[var(--muted)] hover:text-red-500 transition-colors"
                   >
-                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 6 6 18" /><path d="m6 6 12 12" /></svg>
                   </button>
                 </div>
-                
+
                 {filter.type === "customer" ? (
                   <Select className="h-9 text-sm bg-[var(--input-bg)]" value={filter.value} onChange={(event) => updateFilter(filter.id, { value: event.target.value })}>
                     <option value="">고객 선택</option>
@@ -547,6 +717,16 @@ export default function OrdersMainPage() {
                     onChange={(event) => updateFilter(filter.id, { value: event.target.value })}
                   />
                 ) : null}
+                {filter.type === "status" ? (
+                  <Select className="h-9 text-sm bg-[var(--input-bg)]" value={filter.value} onChange={(event) => updateFilter(filter.id, { value: event.target.value })}>
+                    <option value="">상태 선택</option>
+                    {STATUS_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </Select>
+                ) : null}
                 {filter.type === "date" ? (
                   <Select className="h-9 text-sm bg-[var(--input-bg)]" value={filter.value} onChange={(event) => updateFilter(filter.id, { value: event.target.value })}>
                     <option value="">날짜 선택</option>
@@ -569,114 +749,275 @@ export default function OrdersMainPage() {
               <h3 className="text-sm font-semibold">주문 리스트</h3>
               <span className="text-xs text-[var(--muted)]">{applyFilters.length}건</span>
             </div>
+            <div className="flex items-center gap-3">
+              <div className="flex items-center gap-2 text-xs text-[var(--muted)]">
+                <span className="inline-flex items-center gap-1">
+                  <span className="h-2 w-2 rounded-full bg-[var(--muted)]" />
+                  주문취소
+                </span>
+                <span className="inline-flex items-center gap-1">
+                  <span className="h-2 w-2 rounded-full bg-[var(--warning)]/70" />
+                  주문대기
+                </span>
+                <span className="inline-flex items-center gap-1">
+                  <span className="h-2 w-2 rounded-full bg-blue-500/70" />
+                  공장전송
+                </span>
+                <span className="inline-flex items-center gap-1">
+                  <span className="h-2 w-2 rounded-full bg-[var(--success)]/70" />
+                  출고준비
+                </span>
+                <span className="inline-flex items-center gap-1">
+                  <span className="h-2 w-2 rounded-full bg-teal-500/70" />
+                  출고완료
+                </span>
+              </div>
+              <Link href={editAllHref}>
+                <Button size="sm" variant="secondary">
+                  전체수정
+                </Button>
+              </Link>
+            </div>
           </CardHeader>
-          <CardBody className="space-y-1 p-3 flex-1">
-            {isLoading ? (
-              <div className="space-y-3">
-                {Array.from({ length: 5 }).map((_, i) => (
-                  <div key={i} className="flex items-center gap-4 p-4 border border-[var(--panel-border)] rounded-[14px]">
-                    <Skeleton className="h-4 w-8" />
-                    <Skeleton className="h-4 w-24" />
-                    <Skeleton className="h-4 w-32" />
-                    <Skeleton className="h-4 w-16" />
-                    <Skeleton className="h-4 w-full" />
-                  </div>
-                ))}
-              </div>
-            ) : applyFilters.length === 0 ? (
-              <div className="flex flex-col items-center justify-center h-64 gap-2 text-[var(--muted)] border-2 border-dashed border-[var(--panel-border)] rounded-xl m-4">
-                <p className="text-sm font-medium">조건에 맞는 주문이 없습니다.</p>
-                <p className="text-xs">필터를 변경하거나 새로운 주문을 등록하세요.</p>
-              </div>
-            ) : (
-              applyFilters.map((order, idx) => (
-                <div
-                  key={order.order_line_id}
-                  className={cn(
-                    "group relative rounded-[14px] border border-[var(--panel-border)] px-4 py-3 bg-[var(--panel)] shadow-sm",
-                    "transition-all duration-200 hover:shadow-md hover:-translate-y-0.5 hover:border-[var(--primary)]/20 cursor-default"
-                  )}
-                >
-                  <div className="grid grid-cols-1 gap-2 text-xs lg:grid-cols-[0.35fr_1.3fr_1.3fr_1fr_1fr_0.7fr_0.9fr_0.7fr_0.9fr_0.7fr_0.9fr_0.7fr_0.6fr_0.9fr_1fr_0.6fr] items-center">
-                    <div className="text-[var(--muted)]">{idx + 1} |</div>
-                    <div className="font-semibold text-[var(--foreground)] flex flex-col">
-                      <span>{order.customer_name ?? "-"}</span>
-                      <span className="text-[10px] text-[var(--muted)] font-normal lg:hidden">고객</span>
+          <CardBody className="p-3 flex-1 flex flex-col">
+            <div className="space-y-1 flex-1">
+              {isLoading ? (
+                <div className="space-y-3">
+                  {Array.from({ length: 5 }).map((_, i) => (
+                    <div key={i} className="flex items-center gap-4 p-4 border border-[var(--panel-border)] rounded-[14px]">
+                      <Skeleton className="h-4 w-8" />
+                      <Skeleton className="h-4 w-24" />
+                      <Skeleton className="h-4 w-32" />
+                      <Skeleton className="h-4 w-16" />
+                      <Skeleton className="h-4 w-full" />
                     </div>
-                    <div className="font-semibold text-[var(--foreground)] flex flex-col">
-                      <span>{order.model_name ?? "-"}</span>
-                      <span className="text-[10px] text-[var(--muted)] font-normal lg:hidden">모델</span>
-                    </div>
-                    <div className="font-semibold text-[var(--foreground)] flex flex-col">
-                      <span>{order.suffix ?? "-"}</span>
-                      <span className="text-[10px] text-[var(--muted)] font-normal lg:hidden">Suffix</span>
-                    </div>
-                    <div className="font-semibold text-[var(--foreground)] flex flex-col">
-                      <span>{order.color ?? "-"}</span>
-                      <span className="text-[10px] text-[var(--muted)] font-normal lg:hidden">색상</span>
-                    </div>
-                    <div className="font-semibold text-[var(--foreground)] flex flex-col">
-                      <span>{order.qty ?? 0}</span>
-                      <span className="text-[10px] text-[var(--muted)] font-normal lg:hidden">수량</span>
-                    </div>
-                    <div className="text-[var(--muted)] flex flex-col">
-                      <span>{order.center_stone_name ?? "-"}</span>
-                      <span className="text-[10px] text-[var(--muted)] font-normal lg:hidden">메인석</span>
-                    </div>
-                    <div className="text-[var(--muted)] flex flex-col">
-                      <span>{order.center_stone_qty ?? "-"}</span>
-                      <span className="text-[10px] text-[var(--muted)] font-normal lg:hidden">개수</span>
-                    </div>
-                    <div className="text-[var(--muted)] flex flex-col">
-                      <span>{order.sub1_stone_name ?? "-"}</span>
-                      <span className="text-[10px] text-[var(--muted)] font-normal lg:hidden">보조1</span>
-                    </div>
-                    <div className="text-[var(--muted)] flex flex-col">
-                      <span>{order.sub1_stone_qty ?? "-"}</span>
-                      <span className="text-[10px] text-[var(--muted)] font-normal lg:hidden">개수</span>
-                    </div>
-                    <div className="text-[var(--muted)] flex flex-col">
-                      <span>{order.sub2_stone_name ?? "-"}</span>
-                      <span className="text-[10px] text-[var(--muted)] font-normal lg:hidden">보조2</span>
-                    </div>
-                    <div className="text-[var(--muted)] flex flex-col">
-                      <span>{order.sub2_stone_qty ?? "-"}</span>
-                      <span className="text-[10px] text-[var(--muted)] font-normal lg:hidden">개수</span>
-                    </div>
-                    <div className="text-[var(--muted)] flex flex-col">
-                      <span>{order.is_plated ? "Y" : "N"}</span>
-                      <span className="text-[10px] text-[var(--muted)] font-normal lg:hidden">도금</span>
-                    </div>
-                    <div className="text-[var(--muted)] flex flex-col">
-                      <span>{order.plating_color_code ?? "-"}</span>
-                      <span className="text-[10px] text-[var(--muted)] font-normal lg:hidden">색상</span>
-                    </div>
-                    <div className="text-[var(--muted)] truncate flex flex-col">
-                      <span>{order.memo ?? "-"}</span>
-                      <span className="text-[10px] text-[var(--muted)] font-normal lg:hidden">메모</span>
-                    </div>
-                    <div className="flex justify-end">
-                      <Link href={`/orders?edit_order_line_id=${order.order_line_id}`}>
-                        <Button size="sm" variant="secondary" className="opacity-0 group-hover:opacity-100 transition-opacity">
-                          수정
-                        </Button>
-                      </Link>
-                    </div>
-                  </div>
-                  {/* Status Indicator */}
-                  {order.status && (
-                    <div className={cn(
-                      "absolute right-0 top-0 h-full w-1 rounded-r-[14px]",
-                      order.status === "ORDER_PENDING" ? "bg-[var(--warning)]/50" :
-                      order.status === "SENT_TO_VENDOR" ? "bg-blue-500/50" :
-                      order.status === "READY_TO_SHIP" ? "bg-[var(--success)]/50" :
-                      order.status === "SHIPPED" ? "bg-green-600/50" :
-                      "bg-[var(--muted)]/30"
-                    )} />
-                  )}
+                  ))}
                 </div>
-              ))
-            )}
+              ) : applyFilters.length === 0 ? (
+                <div className="flex flex-col items-center justify-center h-64 gap-2 text-[var(--muted)] border-2 border-dashed border-[var(--panel-border)] rounded-xl m-4">
+                  <p className="text-sm font-medium">조건에 맞는 주문이 없습니다.</p>
+                  <p className="text-xs">필터를 변경하거나 새로운 주문을 등록하세요.</p>
+                </div>
+              ) : (
+                <>
+                  <div className="sticky top-0 z-10 rounded-[12px] border border-[var(--panel-border)] bg-[var(--panel)] px-4 py-2 text-[11px] font-semibold text-[var(--muted)]">
+                  <div className="grid grid-cols-1 gap-2 lg:grid-cols-[0.35fr_64px_1.3fr_2.03fr_0.6fr_0.6fr_0.6fr_0.6fr_0.6fr_0.6fr_0.8fr_1fr] items-center">
+                    <div className="text-center text-sm">#</div>
+                    <div className="text-center">모델사진</div>
+                    <div className="text-center">거래처</div>
+                    <div className="text-center">모델명</div>
+                      <div>소재</div>
+                      <div>카테고리</div>
+                      <div>색상</div>
+                      <div>사이즈</div>
+                      <div>도금여부</div>
+                      <div>도금색</div>
+                      <div>석여부</div>
+                      <div>비고</div>
+                    </div>
+                  </div>
+                  {paginatedOrders.map((order, idx) => {
+                    const isEmpty = !order || !order.order_line_id;
+                const hasStone = order
+                  ? Boolean(
+                      (order.center_stone_name && String(order.center_stone_name).trim() !== "") ||
+                        (order.sub1_stone_name && String(order.sub1_stone_name).trim() !== "") ||
+                        (order.sub2_stone_name && String(order.sub2_stone_name).trim() !== "")
+                    )
+                  : false;
+                    const materialLabel = order
+                      ? getMaterialLabel(
+                        order.material_code ??
+                        (order.is_plated === null || order.is_plated === undefined
+                          ? null
+                          : order.is_plated
+                            ? "14"
+                            : "925")
+                      )
+                      : "-";
+                    const platingLabel = order
+                      ? order.is_plated === null || order.is_plated === undefined
+                        ? "-"
+                        : order.is_plated
+                          ? "Y"
+                          : "N"
+                      : "-";
+                    const rowKey = order?.order_line_id ?? `empty-${startIndex + idx}`;
+
+                    return (
+                      <div
+                        key={rowKey}
+                        className={cn(
+                          "group relative rounded-[14px] border border-[var(--panel-border)] px-4 py-[0.13rem] bg-[var(--panel)] shadow-sm", // py 줄임
+                          "transition-all duration-200 hover:shadow-md hover:-translate-y-0.5 hover:border-[var(--primary)]/20",
+                          isEmpty ? "opacity-40 min-h-[70.5px]" : "cursor-default",
+                          order?.status === "CANCELLED" ? "line-through decoration-[2px] decoration-[var(--muted)] text-[var(--muted)]" : ""
+                        )}
+                      >
+                        <div className="grid grid-cols-1 gap-2 text-xs lg:grid-cols-[0.35fr_64px_1.3fr_2.03fr_0.6fr_0.6fr_0.6fr_0.6fr_0.6fr_0.6fr_0.8fr_1fr] items-stretch">
+                          {/* 1. 번호 */}
+                          <div className="text-[var(--muted)] text-center text-base font-bold flex items-center justify-center">
+                            {startIndex + idx + 1}
+                          </div>
+
+                          {/* 2. 모델사진 (absolute 유지하여 행 높이 영향 최소화 + 중앙 정렬) */}
+                          <div className="font-semibold text-[var(--foreground)] flex flex-col items-center justify-center">
+                            <div className="relative h-full w-full">
+                              {order?.model_name && masterImageMap.get(order.model_name) ? (
+                                <div
+                                  className={cn(
+                                    "absolute left-1/2 top-1/2 mt-5 h-15 w-15 -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-md border border-[var(--panel-border)] bg-[var(--panel)]",
+                                    order?.status === "CANCELLED" ? "grayscale" : ""
+                                  )}
+                                >
+                                  <img
+                                    src={masterImageMap.get(order.model_name)}
+                                    alt={order.model_name}
+                                    className="h-full w-full object-cover"
+                                    loading="lazy"
+                                    onDoubleClick={() => setPreviewImageUrl(masterImageMap.get(order.model_name) ?? null)}
+                                  />
+                                </div>
+                              ) : (
+                                <div
+                                  className={cn(
+                                    "absolute left-1/2 top-1/2 mt-5 h-15 w-15 -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-md border border-[var(--panel-border)] bg-[var(--panel)] flex items-center justify-center text-[10px] text-[var(--muted)]",
+                                    order?.status === "CANCELLED" ? "grayscale" : ""
+                                  )}
+                                >
+                                  {order ? "-" : ""}
+                                </div>
+                              )}
+                            </div>
+                            <span className="text-[10px] text-[var(--muted)] font-normal lg:hidden">모델사진</span>
+                          </div>
+
+                          {/* 3. 거래처 - 중앙 정렬 적용 */}
+                          <div className="font-semibold text-[var(--foreground)] flex flex-col justify-center items-center text-center">
+                            <span
+                              className={cn(
+                                "text-[17px] font-semibold",
+                                order?.status === "CANCELLED" ? "text-[var(--muted)]" : "text-[#b08d2a]"
+                              )}
+                            >
+                              {order?.customer_name ?? ""}
+                            </span>
+                            <span className="text-[10px] text-[var(--muted)] font-normal lg:hidden">거래처</span>
+                          </div>
+
+                          {/* 4. 모델명 - 중앙 정렬 적용 */}
+                          <div className="font-semibold text-[var(--foreground)] flex flex-col h-full justify-center items-center text-center">
+                            <span
+                              className={cn(
+                                "text-base",
+                                order?.status === "CANCELLED" ? "text-[var(--muted)]" : "text-[var(--foreground)]"
+                              )}
+                            >
+                              {order?.model_name ?? ""}
+                            </span>
+                            <span className="text-[10px] text-[var(--muted)] font-normal lg:hidden">모델명</span>
+                          </div>
+
+                          {/* 5. 소재 */}
+                          <div className="text-[var(--muted)] flex flex-col justify-center">
+                            <span>{order ? materialLabel : ""}</span>
+                            <span className="text-[10px] text-[var(--muted)] font-normal lg:hidden">소재</span>
+                          </div>
+
+                          {/* 6. 카테고리 */}
+                          <div className="text-[var(--muted)] flex flex-col justify-center">
+                            <span>{getCategoryLabel(order?.suffix)}</span>
+                            <span className="text-[10px] text-[var(--muted)] font-normal lg:hidden">카테고리</span>
+                          </div>
+
+                          {/* 7. 색상 */}
+                          <div className="text-[var(--muted)] flex flex-col justify-center">
+                            <span>{order?.color ?? ""}</span>
+                            <span className="text-[10px] text-[var(--muted)] font-normal lg:hidden">색상</span>
+                          </div>
+
+                          {/* 8. 사이즈 */}
+                          <div className="text-[var(--muted)] flex flex-col justify-center">
+                            <span>{order?.size ?? ""}</span>
+                            <span className="text-[10px] text-[var(--muted)] font-normal lg:hidden">사이즈</span>
+                          </div>
+
+                          {/* 9. 도금여부 */}
+                          <div className="text-[var(--muted)] flex flex-col justify-center">
+                            <span>{order ? platingLabel : ""}</span>
+                            <span className="text-[10px] text-[var(--muted)] font-normal lg:hidden">도금여부</span>
+                          </div>
+
+                          {/* 10. 도금색 */}
+                          <div className="text-[var(--muted)] flex flex-col justify-center">
+                            <span>{order?.plating_color_code ?? ""}</span>
+                            <span className="text-[10px] text-[var(--muted)] font-normal lg:hidden">도금색</span>
+                          </div>
+
+                          {/* 11. 석여부 */}
+                          <div className="text-[var(--muted)] flex flex-col justify-center">
+                            <span>{order ? (hasStone ? "✓" : "-") : ""}</span>
+                            <span className="text-[10px] text-[var(--muted)] font-normal lg:hidden">석여부</span>
+                          </div>
+
+                          {/* 12. 비고 */}
+                          <div className="text-[var(--muted)] truncate flex flex-col justify-center">
+                            <span>{order?.memo ?? ""}</span>
+                            <span className="text-[10px] text-[var(--muted)] font-normal lg:hidden">비고</span>
+                          </div>
+
+                          {!isEmpty ? (
+                            <div className="flex justify-end items-center">
+                              <Link href={`/orders?edit_order_line_id=${order.order_line_id}`}>
+                                <Button size="sm" variant="secondary" className="opacity-0 group-hover:opacity-100 transition-opacity">
+                                  수정
+                                </Button>
+                              </Link>
+                            </div>
+                          ) : (
+                            <div />
+                          )}
+                        </div>
+                    {!isEmpty && order?.status && (
+                      <div className={cn(
+                        "absolute inset-0 rounded-[14px] pointer-events-none",
+                        order.status === "ORDER_PENDING" ? "bg-[var(--warning)]/10" :
+                        order.status === "SENT_TO_VENDOR" ? "bg-sky-500/12" :
+                        order.status === "READY_TO_SHIP" ? "bg-emerald-500/12" :
+                        order.status === "SHIPPED" ? "bg-indigo-500/12" :
+                        order.status === "CANCELLED" ? "bg-[var(--muted)]/12" :
+                        "bg-[var(--muted)]/6"
+                      )} />
+                    )}
+                      </div>
+                    );
+                  })}
+                </>
+              )}
+            </div>
+            <div className="mt-auto flex flex-wrap items-center justify-between gap-2 border-t border-[var(--panel-border)] pt-3">
+              <span className="text-[11px] text-[var(--muted)]">
+                페이지 {safePage} / {totalPages}
+              </span>
+              <div className="flex items-center gap-2">
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => setCurrentPage((prev) => Math.max(1, prev - 1))}
+                  disabled={safePage === 1}
+                >
+                  이전
+                </Button>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => setCurrentPage((prev) => Math.min(totalPages, prev + 1))}
+                  disabled={safePage === totalPages}
+                >
+                  다음
+                </Button>
+              </div>
+            </div>
           </CardBody>
         </Card>
       </div>

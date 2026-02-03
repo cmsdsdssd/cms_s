@@ -10,7 +10,14 @@ let client: ReturnType<typeof createClient> | null = null;
 export function getSupabaseClient() {
   if (!supabaseUrl || !supabaseAnonKey) return null;
   if (!client) {
-    client = createClient(supabaseUrl, supabaseAnonKey);
+    client = createClient(supabaseUrl, supabaseAnonKey, {
+      global: {
+        headers: {
+          apikey: supabaseAnonKey,
+          Authorization: `Bearer ${supabaseAnonKey}`,
+        },
+      },
+    });
   }
   return client;
 }

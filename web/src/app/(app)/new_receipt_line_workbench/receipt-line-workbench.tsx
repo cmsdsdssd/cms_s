@@ -361,6 +361,10 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
     },
   });
 
+  const ensureApFromReceipt = useRpcMutation<{ ok?: boolean }>({
+    fn: CONTRACTS.functions.ensureApFromReceipt,
+  });
+
   const headerUpdate = useRpcMutation<void>({
     fn: "cms_fn_update_vendor_bill_header_v1",
     successMessage: "헤더 저장 완료",
@@ -732,6 +736,11 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
       p_labor_basic: lineTotals.laborBasic,
       p_labor_other: lineTotals.laborOther,
       p_line_items: payload,
+    });
+
+    await ensureApFromReceipt.mutateAsync({
+      p_receipt_id: selectedReceiptId,
+      p_note: memo || null,
     });
     setLineItemsDirty(false);
   }

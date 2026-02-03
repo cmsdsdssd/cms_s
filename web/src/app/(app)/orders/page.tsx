@@ -72,7 +72,12 @@ type OrderDetailRow = {
   is_plated?: boolean | null;
   plating_color_code?: string | null;
   memo?: string | null;
+  status?: string | null;
+  created_at?: string | null;
 };
+
+const EDITABLE_STATUSES = new Set(["ORDER_PENDING"]);
+
 
 type OrderUpsertPayload = {
   p_customer_party_id: string | null;
@@ -229,6 +234,10 @@ const createEmptyRow = (index: number): GridRow => ({
 });
 
 const normalizeText = (value: string) => value.trim();
+const normalizeTextOrNull = (value: string) => {
+  const trimmed = value.trim();
+  return trimmed === "" ? null : trimmed;
+};
 const normalizeSearchText = (value: string) => value.trim().toLowerCase();
 const getOrderedMatchPositions = (label: string, query: string): number[] | null => {
   const normalizedLabel = label.toLowerCase();
@@ -283,7 +292,7 @@ const toNumber = (value: string) => {
 
 // Get color string from checkboxes
 const getColorString = (row: GridRow): string => {
-  if (row.color_x) return "";
+  if (row.color_x) return "X";
   const colors: string[] = [];
   if (row.color_p) colors.push("P");
   if (row.color_g) colors.push("G");
@@ -396,10 +405,18 @@ function OrdersPageContent() {
   const schemaClient = useMemo(() => getSchemaClient(), []);
   const searchParams = useSearchParams();
   const editId = searchParams.get("edit_order_line_id");
+  const editAll = searchParams.get("edit_all") === "1";
+  const includeCancelled = searchParams.get("include_cancelled") === "1";
+  const filterCustomer = searchParams.get("filter_customer") ?? "";
+  const filterFactory = searchParams.get("filter_factory") ?? "";
+  const filterModel = searchParams.get("filter_model") ?? "";
+  const filterStatus = searchParams.get("filter_status") ?? "";
+  const filterDate = searchParams.get("filter_date") ?? "";
   const [initLoading, setInitLoading] = useState(false);
   const [rows, setRows] = useState<GridRow[]>(() =>
     Array.from({ length: EMPTY_ROWS }, (_, idx) => createEmptyRow(idx))
   );
+  const [rowStatusMap, setRowStatusMap] = useState<Record<string, string>>({});
   const [rowErrors, setRowErrors] = useState<Record<string, RowErrors>>({});
   const [headerClient, setHeaderClient] = useState<ClientSummary | null>(null);
   const [headerMode, setHeaderMode] = useState<"client" | "model" | null>("client");
@@ -440,9 +457,40 @@ function OrdersPageContent() {
       .filter(Boolean);
   }, [stoneQuery.data]);
 
+  function buildPayload(row: GridRow): OrderUpsertPayload {
+    const master = masterCache.current.get(row.model_input.toLowerCase());
+    const colorStr = getColorString(row);
+    const platingStr = getPlatingString(row);
+
+    return {
+      p_customer_party_id: row.client_id,
+      p_master_id: row.master_item_id ?? master?.master_item_id ?? null,
+      p_suffix: normalizeText(row.suffix) || master?.category_code || null,
+      p_color: colorStr || null,
+      p_material_code: row.material_code || master?.material_code_default || null,
+      p_qty: toNumber(row.qty),
+      p_size: normalizeTextOrNull(row.size) as string | null,
+      p_is_plated: !!(platingStr),
+      p_plating_variant_id: null,
+      p_plating_color_code: platingStr || null,
+      p_requested_due_date: receiptDate || null,
+      p_priority_code: "NORMAL",
+      p_source_channel: "web",
+      p_memo: normalizeTextOrNull(row.memo),
+      p_order_line_id: row.order_line_id ?? null,
+      p_center_stone_name: normalizeTextOrNull(row.center_stone),
+      p_center_stone_qty: toNumber(row.center_qty),
+      p_sub1_stone_name: normalizeTextOrNull(row.sub1_stone),
+      p_sub1_stone_qty: toNumber(row.sub1_qty),
+      p_sub2_stone_name: normalizeTextOrNull(row.sub2_stone),
+      p_sub2_stone_qty: toNumber(row.sub2_qty),
+      p_actor_person_id: process.env.NEXT_PUBLIC_CMS_ACTOR_ID ?? null,
+    };
+  }
+
   // Load existing order if editId is present
   useEffect(() => {
-    if (!editId || !schemaClient) return;
+    if (!editId || editAll || !schemaClient) return;
 
     const loadOrder = async () => {
       setInitLoading(true);
@@ -457,6 +505,17 @@ function OrdersPageContent() {
 
         if (error) throw error;
         if (!order) throw new Error("Order not found");
+
+        if (order.status === "ORDER_ACCEPTED") {
+          try {
+            const normalized = await normalizeInvalidStatus(editId);
+            if (normalized) {
+              order.status = "ORDER_PENDING";
+            }
+          } catch (statusError) {
+            console.error("Failed to normalize order status:", statusError);
+          }
+        }
 
         // Parse color string (e.g., "P+G", "P", "G+W")
         const colorStr = order.color || "";
@@ -557,23 +616,10 @@ function OrdersPageContent() {
         };
 
         setRows([loadedRow]);
+        setRowStatusMap({ [loadedRow.id]: order.status ?? "" });
 
         // Populate Cache
-        saveCache.current.set(loadedRow.id, JSON.stringify({
-          client_id: loadedRow.client_id,
-          model_input: normalizeText(loadedRow.model_input),
-          color: getColorString(loadedRow),
-          size: normalizeText(loadedRow.size),
-          qty: toNumber(loadedRow.qty),
-          center_stone: normalizeText(loadedRow.center_stone),
-          center_qty: toNumber(loadedRow.center_qty),
-          sub1_stone: normalizeText(loadedRow.sub1_stone),
-          sub1_qty: toNumber(loadedRow.sub1_qty),
-          sub2_stone: normalizeText(loadedRow.sub2_stone),
-          sub2_qty: toNumber(loadedRow.sub2_qty),
-          plating: getPlatingString(loadedRow),
-          memo: normalizeText(loadedRow.memo),
-        }));
+        saveCache.current.set(loadedRow.id, JSON.stringify(buildPayload(loadedRow)));
 
         if (loadToastRef.current !== editId) {
           toast.success("주문을 불러왔습니다.");
@@ -591,7 +637,175 @@ function OrdersPageContent() {
     };
 
     loadOrder();
-  }, [editId, schemaClient]);
+  }, [editAll, editId, schemaClient]);
+
+  // Load all orders for bulk edit
+  useEffect(() => {
+    if (!editAll || !schemaClient) return;
+
+    const loadAllOrders = async () => {
+      setInitLoading(true);
+      try {
+        const { data: orderRows, error } = await schemaClient
+          .from("cms_order_line")
+          .select(
+            "order_line_id, customer_party_id, matched_master_id, model_name, model_name_raw, suffix, color, material_code, size, qty, center_stone_name, center_stone_qty, sub1_stone_name, sub1_stone_qty, sub2_stone_name, sub2_stone_qty, is_plated, plating_color_code, memo, created_at, status"
+          )
+          .order("created_at", { ascending: false });
+
+        if (error) throw error;
+
+        let orders = (orderRows ?? []) as OrderDetailRow[];
+        if (!includeCancelled) {
+          orders = orders.filter((order) => order.status !== "CANCELLED");
+        }
+        if (filterCustomer) {
+          orders = orders.filter((order) => order.customer_party_id === filterCustomer);
+        }
+        if (filterModel) {
+          const targetValue = filterModel.toLowerCase();
+          orders = orders.filter((order) => {
+            const target = [order.model_name, order.suffix, order.color]
+              .filter(Boolean)
+              .join(" ")
+              .toLowerCase();
+            return target.includes(targetValue);
+          });
+        }
+        if (filterStatus) {
+          orders = orders.filter((order) => order.status === filterStatus);
+        }
+        if (filterDate) {
+          orders = orders.filter((order) => {
+            const created = order.created_at ? new Date(order.created_at) : null;
+            if (!created) return false;
+            const createdKey = created.toISOString().slice(0, 10);
+            return createdKey === filterDate;
+          });
+        }
+
+        if (filterFactory) {
+          const { data: prefixRows, error: prefixError } = await schemaClient
+            .from("cms_vendor_prefix_map")
+            .select("prefix, vendor_party_id");
+          if (prefixError) throw prefixError;
+
+          const prefixes = (prefixRows ?? [])
+            .filter((row) => row.prefix && row.vendor_party_id)
+            .map((row) => ({
+              prefix: String(row.prefix ?? ""),
+              vendorPartyId: String(row.vendor_party_id ?? ""),
+            }));
+
+          orders = orders.filter((order) => {
+            const model = (order.model_name ?? "").toLowerCase();
+            let vendorPartyId = "";
+            for (const row of prefixes) {
+              const prefixLower = row.prefix.toLowerCase();
+              if (model.startsWith(prefixLower)) {
+                vendorPartyId = row.vendorPartyId;
+                break;
+              }
+            }
+            return vendorPartyId === filterFactory;
+          });
+        }
+
+        const clientIds = Array.from(
+          new Set(
+            orders
+              .map((order) => order.customer_party_id ?? null)
+              .filter((value): value is string => Boolean(value))
+          )
+        );
+
+        const clientMap = new Map<string, ClientSummary>();
+        if (clientIds.length > 0) {
+          const { data: clients, error: clientError } = await schemaClient
+            .from(CONTRACTS.views.arClientSummary)
+            .select("client_id, client_name, balance_krw, last_tx_at, open_invoices_count, credit_limit_krw, risk_flag")
+            .in("client_id", clientIds);
+          if (clientError) throw clientError;
+          (clients ?? []).forEach((client) => {
+            if (client.client_id) clientMap.set(client.client_id, client as ClientSummary);
+          });
+        }
+
+        const mappedRows: GridRow[] = orders.map((order, index) => {
+          const colorStr = order.color ?? "";
+          const color_p = colorStr.includes("P");
+          const color_g = colorStr.includes("G");
+          const color_w = colorStr.includes("W");
+          const color_x = !color_p && !color_g && !color_w;
+
+          const platingStr = order.plating_color_code ?? "";
+          const plating_p = platingStr.includes("P");
+          const plating_g = platingStr.includes("G");
+          const plating_w = platingStr.includes("W");
+          const plating_b = platingStr.includes("B");
+
+          const client = order.customer_party_id ? clientMap.get(order.customer_party_id) ?? null : null;
+
+          return {
+            id: `bulk-${order.order_line_id ?? index}`,
+            order_line_id: order.order_line_id ?? null,
+            client_input: client?.client_name ?? "",
+            client_id: order.customer_party_id ?? null,
+            client_name: client?.client_name ?? null,
+            model_input: order.model_name_raw ?? order.model_name ?? "",
+            model_name: order.model_name ?? null,
+            suffix: order.suffix ?? "",
+            color_p,
+            color_g,
+            color_w,
+            color_x,
+            material_code: order.material_code ?? "",
+            size: String(order.size ?? ""),
+            qty: String(order.qty ?? ""),
+            center_stone: order.center_stone_name ?? "",
+            center_qty: String(order.center_stone_qty ?? ""),
+            sub1_stone: order.sub1_stone_name ?? "",
+            sub1_qty: String(order.sub1_stone_qty ?? ""),
+            sub2_stone: order.sub2_stone_name ?? "",
+            sub2_qty: String(order.sub2_stone_qty ?? ""),
+            plating_p,
+            plating_g,
+            plating_w,
+            plating_b,
+            memo: order.memo ?? "",
+            show_stones: !!(order.center_stone_name || order.sub1_stone_name || order.sub2_stone_name),
+            master_item_id: order.matched_master_id ?? null,
+            photo_url: null,
+            material_price: null,
+            labor_basic: null,
+            labor_center: null,
+            labor_side1: null,
+            labor_side2: null,
+          };
+        });
+
+        setRows(mappedRows);
+        const nextStatusMap: Record<string, string> = {};
+        orders.forEach((order, index) => {
+          const rowId = mappedRows[index]?.id;
+          if (rowId) nextStatusMap[rowId] = order.status ?? "";
+        });
+        setRowStatusMap(nextStatusMap);
+        setPageIndex(1);
+        mappedRows.forEach((row) => {
+          saveCache.current.set(row.id, JSON.stringify(buildPayload(row)));
+        });
+        setRowErrors({});
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "전체 주문 로딩 실패";
+        toast.error("전체 주문 로딩 실패", { description: message });
+      } finally {
+        setInitLoading(false);
+      }
+    };
+
+    void loadAllOrders();
+  }, [editAll, schemaClient, includeCancelled, filterCustomer, filterFactory, filterModel, filterStatus, filterDate]);
 
   const updateRow = (rowId: string, patch: Partial<GridRow>) => {
     setRows((prev) => prev.map((row) => (row.id === rowId ? { ...row, ...patch } : row)));
@@ -630,6 +844,22 @@ function OrdersPageContent() {
   const setRowError = (rowId: string, patch: RowErrors) => {
     setRowErrors((prev) => ({ ...prev, [rowId]: { ...prev[rowId], ...patch } }));
   };
+
+  async function normalizeInvalidStatus(orderLineId: string) {
+    try {
+      const setStatusFn = CONTRACTS.functions.orderSetStatus;
+      if (!setStatusFn) return false;
+      await callRpc(setStatusFn, {
+        p_order_line_id: orderLineId,
+        p_to_status: "ORDER_PENDING",
+        p_actor_person_id: process.env.NEXT_PUBLIC_CMS_ACTOR_ID ?? null,
+      });
+      return true;
+    } catch (err) {
+      console.error("Failed to normalize status:", err);
+      return false;
+    }
+  }
 
   const formatRpcError = (error: unknown) => {
     const e = error as
@@ -718,6 +948,11 @@ function OrdersPageContent() {
   const handleDeleteRow = async (rowId: string) => {
     const row = rows.find((r) => r.id === rowId);
     if (row && row.order_line_id) {
+      const reason = window.prompt("주문 취소 사유를 입력하세요.");
+      if (!reason || reason.trim() === "") {
+        toast.error("취소 사유를 입력해야 합니다.");
+        return;
+      }
       if (!confirm("정말 이 주문을 취소하시겠습니까? (삭제가 아닌 취소 상태로 변경됩니다)")) return;
 
       try {
@@ -728,7 +963,8 @@ function OrdersPageContent() {
         await callRpc(setStatusFn, {
           p_order_line_id: row.order_line_id,
           p_to_status: "CANCELLED",
-          p_actor_person_id: process.env.NEXT_PUBLIC_CMS_ACTOR_ID ?? null
+          p_actor_person_id: process.env.NEXT_PUBLIC_CMS_ACTOR_ID ?? null,
+          p_reason: reason.trim(),
         });
         toast.success("주문이 취소되었습니다.");
       } catch (e) {
@@ -860,37 +1096,6 @@ function OrdersPageContent() {
     }
   };
 
-  const buildPayload = (row: GridRow): OrderUpsertPayload => {
-    const master = masterCache.current.get(row.model_input.toLowerCase());
-    const colorStr = getColorString(row);
-    const platingStr = getPlatingString(row);
-
-    return {
-      p_customer_party_id: row.client_id,
-      p_master_id: row.master_item_id ?? master?.master_item_id ?? null,
-      p_suffix: normalizeText(row.suffix) || master?.category_code || null,
-      p_color: colorStr || null,
-      p_material_code: row.material_code || master?.material_code_default || null,
-      p_qty: toNumber(row.qty),
-      p_size: normalizeText(row.size),
-      p_is_plated: !!(platingStr),
-      p_plating_variant_id: null,
-      p_plating_color_code: platingStr || null,
-      p_requested_due_date: receiptDate || null,
-      p_priority_code: "NORMAL",
-      p_source_channel: "web",
-      p_memo: normalizeText(row.memo),
-      p_order_line_id: row.order_line_id ?? null,
-      p_center_stone_name: normalizeText(row.center_stone) || null,
-      p_center_stone_qty: toNumber(row.center_qty),
-      p_sub1_stone_name: normalizeText(row.sub1_stone) || null,
-      p_sub1_stone_qty: toNumber(row.sub1_qty),
-      p_sub2_stone_name: normalizeText(row.sub2_stone) || null,
-      p_sub2_stone_qty: toNumber(row.sub2_qty),
-      p_actor_person_id: process.env.NEXT_PUBLIC_CMS_ACTOR_ID ?? null,
-    };
-  };
-
   const rowHasData = (row: GridRow) => {
     return (
       row.client_input.trim() ||
@@ -932,6 +1137,11 @@ function OrdersPageContent() {
 
   const saveRow = async (row: GridRow) => {
     if (!schemaClient) return;
+    const status = rowStatusMap[row.id];
+    if (status && !EDITABLE_STATUSES.has(status)) {
+      toast.error("수정 불가", { description: "ORDER_PENDING 상태만 수정 가능합니다. 먼저 주문 취소 후 진행하세요." });
+      return;
+    }
     if (!rowHasData(row)) return;
 
     const errors = rowErrors[row.id];
@@ -960,7 +1170,32 @@ function OrdersPageContent() {
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : "저장 실패";
-      toast.error("저장 실패", { description: message });
+      if (message.includes("ORDER_ACCEPTED") && row.order_line_id) {
+        const normalized = await normalizeInvalidStatus(row.order_line_id);
+        if (normalized) {
+          try {
+            const savedId = await callRpc<string>(CONTRACTS.functions.orderUpsertV3, payload);
+            if (savedId) {
+              saveCache.current.set(row.id, cacheKey);
+              updateRow(row.id, { order_line_id: String(savedId) });
+              setRowErrors((prev) => {
+                const next = { ...prev };
+                delete next[row.id];
+                return next;
+              });
+              toast.success("저장 완료");
+              return;
+            }
+          } catch (retryError) {
+            const retryMessage = retryError instanceof Error ? retryError.message : "저장 실패";
+            toast.error("저장 실패", { description: retryMessage });
+          }
+        } else {
+          toast.error("저장 실패", { description: message });
+        }
+      } else {
+        toast.error("저장 실패", { description: message });
+      }
     } finally {
       saveInFlight.current.delete(row.id);
     }
@@ -975,7 +1210,7 @@ function OrdersPageContent() {
         <div className="flex items-center gap-3">
           <div className="flex flex-col">
             <h1 className="text-base font-bold tracking-tight text-foreground">
-              {editId ? "주문 수정" : "주문 등록"}
+              {editAll ? "전체 수정" : editId ? "주문 수정" : "주문 등록"}
             </h1>
           </div>
           <div className="h-6 w-px bg-border/50 mx-1" />
@@ -993,12 +1228,12 @@ function OrdersPageContent() {
         </div>
       </div>
 
-      <div className="max-w-[1920px] mx-auto px-2 py-2 grid grid-cols-1 lg:grid-cols-[1fr_280px] gap-3 pb-20">
+      <div className="max-w-[1920px] mx-auto px-2 py-2 grid grid-cols-1 lg:grid-cols-[280px_1fr] gap-3 pb-20">
 
         {/* Left Column: Compact Order Grid */}
-        <div className="space-y-1 min-w-0">
+        <div className="space-y-1 min-w-0 order-2">
           {/* Header Row */}
-          <div className="grid grid-cols-[30px_160px_220px_80px_90px_70px_55px_130px_30px_0.75fr_40px] gap-1 px-1 py-1 text-[10px] font-semibold text-[var(--muted)] uppercase tracking-wider border-b border-border/40 items-center">
+          <div className="grid grid-cols-[30px_160px_220px_80px_90px_70px_55px_130px_30px_0.75fr_40px] gap-1 px-1 py-[0.13rem] text-[10px] font-semibold text-[var(--muted)] uppercase tracking-wider border-b border-border/40 items-center">
             <span className="text-center">#</span>
             <span>거래처</span>
             <span>모델</span>
@@ -1023,7 +1258,7 @@ function OrdersPageContent() {
                 {/* Main Row */}
                 <div
                   className={cn(
-                    "grid grid-cols-[30px_160px_220px_80px_90px_70px_55px_130px_30px_0.75fr_40px] gap-1 px-1 py-1 items-center text-xs rounded-md border transition-all",
+                    "grid grid-cols-[30px_160px_220px_80px_90px_70px_55px_130px_30px_0.75fr_40px] gap-1 px-1 py-2 items-center text-xs rounded-md border transition-all",
                     row.order_line_id ? "bg-primary/5 border-primary/20" : "bg-card border-border/50 hover:border-border",
                     (errors.client || errors.model) ? "bg-[var(--danger)]/5 border-[var(--danger)]/30" : ""
                   )}
@@ -1040,7 +1275,7 @@ function OrdersPageContent() {
                   {/* Client Input */}
                   <input
                     className={cn(
-                      "w-full bg-transparent border border-transparent focus:border-primary/50 focus:bg-background rounded px-1 py-0.5 text-xs transition-colors",
+                      "w-full bg-transparent border border-transparent focus:border-primary/50 focus:bg-background rounded px-1 py-0 text-sm transition-colors",
                       errors.client ? "border-[var(--danger)]/50 bg-[var(--danger)]/5" : "hover:border-border/50"
                     )}
                     list={`client-suggest-${row.id}`}
@@ -1062,7 +1297,7 @@ function OrdersPageContent() {
                   {/* Model Input */}
                   <input
                     className={cn(
-                      "w-full bg-transparent border border-transparent focus:border-primary/50 focus:bg-background rounded px-1 py-0.5 text-xs font-medium transition-colors",
+                      "w-full bg-transparent border border-transparent focus:border-primary/50 focus:bg-background rounded px-1 py-0.5 text-sm font-medium transition-colors",
                       errors.model ? "border-[var(--danger)]/50 bg-[var(--danger)]/5" : "hover:border-border/50"
                     )}
                     list={`model-suggest-${row.id}`}
@@ -1084,7 +1319,7 @@ function OrdersPageContent() {
                   {/* Material Select */}
                   <select
                     className={cn(
-                      "w-full bg-transparent border border-transparent focus:border-primary/50 focus:bg-background rounded px-1 py-0.5 text-xs text-center transition-colors mr-1",
+                      "w-full bg-transparent border border-transparent focus:border-primary/50 focus:bg-background rounded px-1 py-0.5 text-sm text-center transition-colors mr-1",
                       errors.material ? "border-[var(--danger)]/50 bg-[var(--danger)]/5" : "hover:border-border/50"
                     )}
                     value={row.material_code}
@@ -1130,7 +1365,7 @@ function OrdersPageContent() {
 
                   {/* Size Input */}
                   <input
-                    className="w-full bg-transparent border border-transparent focus:border-primary/50 focus:bg-background rounded px-1.5 py-0.5 text-xs text-center hover:border-border/50 transition-colors"
+                    className="w-full bg-transparent border border-transparent focus:border-primary/50 focus:bg-background rounded px-1.5 py-0.5 text-sm text-center hover:border-border/50 transition-colors"
                     value={row.size}
                     onChange={(e) => updateRow(row.id, { size: e.target.value })}
                     placeholder="Size"
@@ -1140,7 +1375,7 @@ function OrdersPageContent() {
                   <input
                     type="number"
                     className={cn(
-                      "w-full bg-transparent border border-transparent focus:border-primary/50 focus:bg-background rounded px-1.5 py-0.5 text-xs text-center tabular-nums transition-colors",
+                      "w-full bg-transparent border border-transparent focus:border-primary/50 focus:bg-background rounded px-1.5 py-0.5 text-sm text-center tabular-nums transition-colors",
                       errors.qty ? "border-[var(--danger)]/50" : "hover:border-border/50"
                     )}
                     value={row.qty}
@@ -1192,7 +1427,7 @@ function OrdersPageContent() {
 
                   {/* Memo Input (Large) */}
                   <input
-                    className="w-full bg-transparent border border-transparent focus:border-primary/50 focus:bg-background rounded px-2 py-0.5 text-xs hover:border-border/50 transition-colors"
+                    className="w-full bg-transparent border border-transparent focus:border-primary/50 focus:bg-background rounded px-2 py-0.5 text-sm hover:border-border/50 transition-colors"
                     value={row.memo}
                     onChange={(e) => updateRow(row.id, { memo: e.target.value })}
                     placeholder="비고 입력..."
@@ -1209,7 +1444,15 @@ function OrdersPageContent() {
 
                 {/* Expanded Stone Row */}
                 {row.show_stones && (
-                  <div className="grid grid-cols-[30px_1fr_1fr_1fr_1fr_1fr_1fr_30px] gap-2 px-1 py-2 bg-muted/30 rounded-md border border-border/30 items-center text-xs">
+                  <div
+                    className="grid grid-cols-[30px_1fr_1fr_1fr_30px] gap-2 px-1 py-2 bg-muted/30 rounded-md border border-border/30 items-center text-xs"
+                    onBlur={(event) => {
+                      const next = event.relatedTarget as Node | null;
+                      if (next && event.currentTarget.contains(next)) return;
+                      const current = rows.find((item) => item.id === row.id);
+                      if (current) void saveRow(current);
+                    }}
+                  >
                     <span></span>
 
                     {/* Center Stone */}
@@ -1222,13 +1465,6 @@ function OrdersPageContent() {
                         onChange={(e) => updateRow(row.id, { center_stone: e.target.value })}
                       />
                     </div>
-                    <input
-                      type="number"
-                      className="w-full bg-background border border-border/60 rounded px-1 py-0.5 text-xs text-center tabular-nums focus:border-primary/50"
-                      value={row.center_qty}
-                      onChange={(e) => updateRow(row.id, { center_qty: e.target.value })}
-                      placeholder="개수"
-                    />
 
                     {/* Sub1 Stone */}
                     <div className="flex items-center gap-1">
@@ -1240,13 +1476,6 @@ function OrdersPageContent() {
                         onChange={(e) => updateRow(row.id, { sub1_stone: e.target.value })}
                       />
                     </div>
-                    <input
-                      type="number"
-                      className="w-full bg-background border border-border/60 rounded px-1 py-0.5 text-xs text-center tabular-nums focus:border-primary/50"
-                      value={row.sub1_qty}
-                      onChange={(e) => updateRow(row.id, { sub1_qty: e.target.value })}
-                      placeholder="개수"
-                    />
 
                     {/* Sub2 Stone */}
                     <div className="flex items-center gap-1">
@@ -1274,14 +1503,6 @@ function OrdersPageContent() {
                         </datalist>
                       );
                     })()}
-                    <input
-                      type="number"
-                      className="w-full bg-background border border-border/60 rounded px-1 py-0.5 text-xs text-center tabular-nums focus:border-primary/50"
-                      value={row.sub2_qty}
-                      onChange={(e) => updateRow(row.id, { sub2_qty: e.target.value })}
-                      placeholder="개수"
-                    />
-
                     <span></span>
                   </div>
                 )}
@@ -1295,7 +1516,8 @@ function OrdersPageContent() {
             <span className="text-xs text-[var(--muted)]">{pageIndex} / {Math.max(1, Math.ceil(rows.length / PAGE_SIZE))}</span>
             <Button variant="secondary" size="sm" className="h-7 text-xs" onClick={() => {
               const pageCount = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
-              if (pageIndex >= pageCount) {
+              if (editAll && pageIndex >= pageCount) return;
+              if (!editAll && pageIndex >= pageCount) {
                 setRows(prev => [...prev, ...Array.from({ length: PAGE_SIZE }, (_, i) => createEmptyRow(prev.length + i))]);
               }
               setPageIndex(p => p + 1);
@@ -1304,7 +1526,7 @@ function OrdersPageContent() {
         </div>
 
         {/* Right Column: Match / Preview */}
-        <div className="flex flex-col gap-3 lg:sticky lg:top-20 h-fit">
+        <div className="flex flex-col gap-3 lg:sticky lg:top-20 h-fit order-1">
           <Card className="border border-border/50 shadow-sm rounded-lg overflow-hidden">
             <CardHeader className="py-2 px-3 bg-muted/5 border-b border-border/40">
               <div className="flex items-center justify-between">
@@ -1347,7 +1569,7 @@ function OrdersPageContent() {
               </div>
             </CardHeader>
             <CardBody className="p-3 space-y-2">
-              <div className="aspect-[4/3] relative overflow-hidden rounded-md border border-border/40 bg-muted/10">
+              <div className="aspect-square relative overflow-hidden rounded-md border border-border/40 bg-muted/10">
                 {activeMaster?.photo_url ? (
                   <>
                     {imageLoading ? (

@@ -1,18 +1,37 @@
-import { getSchemaClient, assertSupabaseConfig } from "@/lib/supabase/client";
+import { CMS_SCHEMA } from "@/lib/contracts";
+import { assertSupabaseConfig } from "@/lib/supabase/client";
+
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
+const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? "";
 
 export async function callRpc<T>(fn: string, params: Record<string, unknown>) {
   assertSupabaseConfig();
-  const schema = getSchemaClient();
-  if (!schema) {
-    throw new Error("Supabase env is missing");
+  const url = `${supabaseUrl}/rest/v1/rpc/${fn}`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      apikey: supabaseAnonKey,
+      Authorization: `Bearer ${supabaseAnonKey}`,
+      "Content-Type": "application/json",
+      "Accept-Profile": CMS_SCHEMA,
+      "Content-Profile": CMS_SCHEMA,
+    },
+    body: JSON.stringify(params),
+  });
+
+  if (!res.ok) {
+    let errorPayload: unknown = null;
+    try {
+      errorPayload = await res.json();
+    } catch {
+      errorPayload = await res.text();
+    }
+    const details =
+      typeof errorPayload === "string"
+        ? errorPayload
+        : JSON.stringify(errorPayload);
+    throw new Error(`RPC ${fn} failed (${res.status}) | ${details}`);
   }
-  const rpc = (schema.rpc as unknown as (
-    fn: string,
-    params?: Record<string, unknown>
-  ) => Promise<{ data: T | null; error: unknown }>).bind(schema);
-  const { data, error } = await rpc(fn, params);
-  if (error) {
-    throw error;
-  }
-  return data as T;
+
+  return (await res.json()) as T;
 }
