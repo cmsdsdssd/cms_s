@@ -1,6 +1,8 @@
 "use client";
 
-import { useMemo, useState } from "react";
+"use client";
+
+import { useMemo, useState, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { ActionBar } from "@/components/layout/action-bar";
@@ -285,7 +287,7 @@ const ReceiptHalf = ({
   );
 };
 
-export default function ShipmentsPrintPage() {
+function ShipmentsPrintContent() {
   const schemaClient = getSchemaClient();
   const searchParams = useSearchParams();
   const [reasonModalOpen, setReasonModalOpen] = useState(false);
@@ -783,5 +785,19 @@ export default function ShipmentsPrintPage() {
         </div>
       </Modal>
     </div>
+  );
+}
+
+export default function ShipmentsPrintPage() {
+  return (
+    <Suspense
+      fallback={(
+        <div className="flex min-h-[240px] items-center justify-center text-sm text-[var(--muted)]">
+          Loading...
+        </div>
+      )}
+    >
+      <ShipmentsPrintContent />
+    </Suspense>
   );
 }

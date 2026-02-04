@@ -702,12 +702,14 @@ export function FactoryOrderWizard({ orderLines, onClose, onSuccess }: FactoryOr
                    </Button>
                  </div>
                </div>
-               <iframe
-                 title={`fax-preview-${group.prefix}`}
-                 srcDoc={generateFaxHtmlForGroup(group)}
-                 className="w-full h-[297mm] bg-white"
-                 ref={(el) => previewRefs.current.set(group.prefix, el)}
-               />
+                <iframe
+                  title={`fax-preview-${group.prefix}`}
+                  srcDoc={generateFaxHtmlForGroup(group)}
+                  className="w-full h-[297mm] bg-white"
+                  ref={(el) => {
+                    previewRefs.current.set(group.prefix, el);
+                  }}
+                />
              </div>
            ))}
         </div>

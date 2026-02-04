@@ -251,7 +251,7 @@ function TimelineItemCard({
               {item.actions.map((action, idx) => (
                 <Button
                   key={idx}
-                  variant={action.variant || "secondary"}
+                  variant={action.variant === "default" ? "primary" : action.variant || "secondary"}
                   size="sm"
                   onClick={(e) => {
                     e.stopPropagation();

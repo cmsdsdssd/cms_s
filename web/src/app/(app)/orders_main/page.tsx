@@ -46,6 +46,12 @@ type OrderRow = {
   factory_po_id?: string | null;
 };
 
+type FactoryOrderLine = Omit<OrderRow, "customer_mask_code"> & {
+  customer_mask_code?: string;
+  vendor_guess_id: string;
+  vendor_guess: string;
+};
+
 type PartyRow = {
   party_id?: string;
   name?: string;
@@ -269,7 +275,7 @@ export default function OrdersMainPage() {
     return map;
   }, [customersQuery.data]);
 
-  const ordersWithFactory = useMemo(() => {
+  const ordersWithFactory = useMemo<FactoryOrderLine[]>(() => {
     return (ordersQuery.data ?? []).map((order) => {
       const model = (order.model_name ?? "").toLowerCase();
       let vendorPartyId = "";
@@ -284,12 +290,13 @@ export default function OrdersMainPage() {
 
       return {
         ...order,
+        customer_mask_code: order.customer_mask_code ?? undefined,
         customer_name: order.customer_party_id
           ? customerNameById.get(order.customer_party_id) ?? "-"
           : "-",
         vendor_guess_id: vendorPartyId,
         vendor_guess: vendorPartyId ? vendorNameById.get(vendorPartyId) ?? vendorPartyId : "",
-      } as OrderRow & { vendor_guess_id: string; vendor_guess: string };
+      };
     });
   }, [ordersQuery.data, vendorPrefixes, vendorNameById, customerNameById]);
 
@@ -851,7 +858,8 @@ export default function OrdersMainPage() {
                           "group relative rounded-[14px] border border-[var(--panel-border)] px-4 py-[0.13rem] bg-[var(--panel)] shadow-sm", // py 줄임
                           "transition-all duration-200 hover:shadow-md hover:-translate-y-0.5 hover:border-[var(--primary)]/20",
                           isEmpty ? "opacity-40 min-h-[70.5px]" : "cursor-default",
-                          order?.status === "CANCELLED" ? "line-through decoration-[2px] decoration-[var(--muted)] text-[var(--muted)]" : ""
+                          order?.status === "CANCELLED" ? "line-through decoration-[2px] decoration-[var(--muted)] text-[var(--muted)]" : "",
+                          order?.status === "ORDER_PENDING" ? "bg-[var(--warning)]/10" : ""
                         )}
                       >
                         <div className="grid grid-cols-1 gap-2 text-xs lg:grid-cols-[0.35fr_64px_1.3fr_2.03fr_0.6fr_0.6fr_0.6fr_0.6fr_0.6fr_0.6fr_0.8fr_1fr] items-stretch">
@@ -875,7 +883,9 @@ export default function OrdersMainPage() {
                                     alt={order.model_name}
                                     className="h-full w-full object-cover"
                                     loading="lazy"
-                                    onDoubleClick={() => setPreviewImageUrl(masterImageMap.get(order.model_name) ?? null)}
+                                    onDoubleClick={() =>
+                                      setPreviewImageUrl(order.model_name ? masterImageMap.get(order.model_name) ?? null : null)
+                                    }
                                   />
                                 </div>
                               ) : (
@@ -979,15 +989,17 @@ export default function OrdersMainPage() {
                           )}
                         </div>
                     {!isEmpty && order?.status && (
-                      <div className={cn(
-                        "absolute inset-0 rounded-[14px] pointer-events-none",
-                        order.status === "ORDER_PENDING" ? "bg-[var(--warning)]/10" :
-                        order.status === "SENT_TO_VENDOR" ? "bg-sky-500/12" :
-                        order.status === "READY_TO_SHIP" ? "bg-emerald-500/12" :
-                        order.status === "SHIPPED" ? "bg-indigo-500/12" :
-                        order.status === "CANCELLED" ? "bg-[var(--muted)]/12" :
-                        "bg-[var(--muted)]/6"
-                      )} />
+                      <div
+                        className={cn(
+                          "absolute right-0 top-0 h-full w-2 rounded-r-[14px] pointer-events-none",
+                          order.status === "ORDER_PENDING" ? "bg-[var(--warning)]/70" :
+                          order.status === "SENT_TO_VENDOR" ? "bg-sky-500/70" :
+                          order.status === "READY_TO_SHIP" ? "bg-emerald-500/70" :
+                          order.status === "SHIPPED" ? "bg-indigo-500/70" :
+                          order.status === "CANCELLED" ? "bg-[var(--muted)]/70" :
+                          "bg-[var(--muted)]/40"
+                        )}
+                      />
                     )}
                       </div>
                     );

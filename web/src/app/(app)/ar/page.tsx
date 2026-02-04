@@ -1158,9 +1158,11 @@ export default function ArPage() {
                     onSubmit={(event) => {
                       event.preventDefault();
                       if (!canSubmitPayment) return;
+                      const nowPaidAt = toKstInputValue();
+                      setPaidAt(nowPaidAt);
                       paymentMutation.mutate({
                         p_party_id: effectivePaymentPartyId,
-                        p_paid_at: new Date(paidAt).toISOString(),
+                        p_paid_at: new Date(nowPaidAt).toISOString(),
                         p_cash_krw: cashValue,
                         p_gold_g: goldValue,
                         p_silver_g: silverValue,
@@ -1284,10 +1286,12 @@ export default function ArPage() {
                     onSubmit={(event) => {
                       event.preventDefault();
                       if (!canSubmitReturn) return;
+                      const nowReturnAt = toKstInputValue();
+                      setReturnOccurredAt(nowReturnAt);
                       returnMutation.mutate({
                         p_shipment_line_id: effectiveReturnShipmentLineId,
                         p_return_qty: parsedReturnQty,
-                        p_occurred_at: new Date(returnOccurredAt).toISOString(),
+                        p_occurred_at: new Date(nowReturnAt).toISOString(),
                         p_override_amount_krw:
                           returnOverrideAmount !== "" ? Number(returnOverrideAmount) : null,
                         p_reason: returnReason || null,

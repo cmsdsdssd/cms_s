@@ -36,6 +36,49 @@ export async function GET(request: Request) {
   if (error) {
     return NextResponse.json({ error: error.message ?? "미매칭 라인 조회 실패" }, { status: 500 });
   }
+  const rows = data ?? [];
+  const lineIds = rows
+    .map((row) => row.receipt_line_uuid)
+    .filter((id): id is string => Boolean(id));
 
-  return NextResponse.json({ data: data ?? [] });
+  if (lineIds.length === 0) {
+    return NextResponse.json({ data: rows });
+  }
+
+  const { data: sizeRows, error: sizeError } = await supabase
+    .from("cms_v_receipt_line_items_flat_v1")
+    .select("receipt_line_uuid, size, color, line_item_json")
+    .in("receipt_line_uuid", lineIds);
+
+  if (sizeError) {
+    return NextResponse.json({ error: sizeError.message ?? "사이즈 조회 실패" }, { status: 500 });
+  }
+
+  function parseNumeric(value: unknown) {
+    if (value === null || value === undefined) return null;
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+    if (typeof value === "string" && value.trim() !== "" && Number.isFinite(Number(value))) return Number(value);
+    return null;
+  }
+
+  const sizeMap = new Map(
+    (sizeRows ?? []).map((row) => [row.receipt_line_uuid, row])
+  );
+  const merged = rows.map((row) => {
+    const extra = row.receipt_line_uuid ? sizeMap.get(row.receipt_line_uuid) ?? null : null;
+    const lineJson = (extra?.line_item_json ?? null) as Record<string, unknown> | null;
+
+    return {
+      ...row,
+      size: extra?.size ?? null,
+      color: extra?.color ?? null,
+      weight_raw_g: parseNumeric(lineJson?.weight_raw_g),
+      weight_deduct_g: parseNumeric(lineJson?.weight_deduct_g),
+      stone_center_qty: parseNumeric(lineJson?.stone_center_qty),
+      stone_sub1_qty: parseNumeric(lineJson?.stone_sub1_qty),
+      stone_sub2_qty: parseNumeric(lineJson?.stone_sub2_qty),
+    };
+  });
+
+  return NextResponse.json({ data: merged });
 }

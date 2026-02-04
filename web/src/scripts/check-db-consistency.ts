@@ -32,8 +32,10 @@ async function checkTriggers() {
     return;
   }
 
-  if (data) {
-    console.log("✅ 트리거 발견:", data.tgname);
+  const triggerRow = (data ?? null) as unknown as { tgname?: string } | null;
+
+  if (triggerRow) {
+    console.log("✅ 트리거 발견:", triggerRow.tgname);
   } else {
     console.log("⚠️  트리거 없음! 자동 AR 생성 안 될 수 있음");
   }

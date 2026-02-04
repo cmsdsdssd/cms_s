@@ -1,6 +1,10 @@
 "use client";
 
-import { useMemo, useRef, useState, useEffect } from "react";
+"use client";
+
+export const dynamic = "force-dynamic";
+
+import { useMemo, useRef, useState, useEffect, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -223,7 +227,7 @@ function pickFirstRow(
   return filterRowsByStatus(rows, filter)[0] ?? null;
 }
 
-export default function PurchaseCostWorklistPage() {
+function PurchaseCostWorklistContent() {
   // NOTE: route 이름은 유지하지만, 실제로는 "영수증 작업대"를 구현합니다.
   const schemaClient = getSchemaClient();
   const searchParams = useSearchParams();
@@ -1712,5 +1716,19 @@ export default function PurchaseCostWorklistPage() {
         </div>
       </Modal>
     </div>
+  );
+}
+
+export default function PurchaseCostWorklistPage() {
+  return (
+    <Suspense
+      fallback={(
+        <div className="flex min-h-[240px] items-center justify-center text-sm text-[var(--muted)]">
+          Loading...
+        </div>
+      )}
+    >
+      <PurchaseCostWorklistContent />
+    </Suspense>
   );
 }

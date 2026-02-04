@@ -54,6 +54,19 @@ interface MarketTick {
   silver_price?: number;
 }
 
+type ShipmentLineRow = {
+  shipment_line_id?: string;
+  material_amount_sell_krw?: number | null;
+};
+
+type ShipmentLineUpdate = {
+  manual_labor_krw?: number;
+  labor_total_sell_krw?: number;
+  total_amount_sell_krw?: number;
+  actual_labor_cost_krw?: number;
+  actual_cost_krw?: number;
+};
+
 export function InlineShipmentPanel({
   orderLineId,
   orderData,
@@ -192,20 +205,25 @@ export function InlineShipmentPanel({
       });
       
       // ✅ 공임 직접 업데이트 (DB 함수가 labor 컬럼을 업데이트하지 않는 문제 해결)
-      const { data: lineData } = await schemaClient
+      const { data: lineDataRaw } = await schemaClient
         .from('cms_shipment_line')
         .select('shipment_line_id, material_amount_sell_krw')
         .eq('shipment_id', shipmentId)
         .order('created_at', { ascending: false })
         .limit(1)
         .single();
+
+      const lineData = (lineDataRaw ?? null) as ShipmentLineRow | null;
       
       if (lineData?.shipment_line_id && laborTotal > 0) {
         const materialCostFromDb = lineData.material_amount_sell_krw || materialCost;
         const newTotal = materialCostFromDb + laborTotal;
-        
-        await schemaClient
-          .from('cms_shipment_line')
+
+        const shipmentLineTable = schemaClient.from('cms_shipment_line') as unknown as {
+          update: (values: ShipmentLineUpdate) => { eq: (column: string, value: string) => Promise<unknown> };
+        };
+
+        await shipmentLineTable
           .update({ 
             manual_labor_krw: laborTotal,
             labor_total_sell_krw: laborTotal,

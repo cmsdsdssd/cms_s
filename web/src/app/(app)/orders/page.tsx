@@ -52,6 +52,11 @@ type StoneRow = {
   stone_name?: string;
 };
 
+type VendorPrefixRow = {
+  prefix?: string | null;
+  vendor_party_id?: string | null;
+};
+
 type OrderDetailRow = {
   order_line_id?: string;
   customer_party_id?: string | null;
@@ -154,6 +159,8 @@ type RowErrors = {
   plating?: string;
   stones?: string;
 };
+
+type SuggestField = "client" | "model";
 
 const PAGE_SIZE = 10;
 const INITIAL_PAGES = 1;
@@ -426,6 +433,7 @@ function OrdersPageContent() {
   const [imageLoading, setImageLoading] = useState(false);
   const [clientSuggestions, setClientSuggestions] = useState<Record<string, ClientSummary[]>>({});
   const [modelSuggestions, setModelSuggestions] = useState<Record<string, MasterLookup[]>>({});
+  const [activeSuggest, setActiveSuggest] = useState<{ rowId: string; field: SuggestField } | null>(null);
   const saveCache = useRef(new Map<string, string>());
   const saveInFlight = useRef(new Set<string>());
   const [pageIndex, setPageIndex] = useState(1);
@@ -685,12 +693,12 @@ function OrdersPageContent() {
         }
 
         if (filterFactory) {
-          const { data: prefixRows, error: prefixError } = await schemaClient
+          const { data: prefixRowsRaw, error: prefixError } = await schemaClient
             .from("cms_vendor_prefix_map")
             .select("prefix, vendor_party_id");
           if (prefixError) throw prefixError;
 
-          const prefixes = (prefixRows ?? [])
+          const prefixes = ((prefixRowsRaw ?? []) as VendorPrefixRow[])
             .filter((row) => row.prefix && row.vendor_party_id)
             .map((row) => ({
               prefix: String(row.prefix ?? ""),
@@ -726,8 +734,9 @@ function OrdersPageContent() {
             .select("client_id, client_name, balance_krw, last_tx_at, open_invoices_count, credit_limit_krw, risk_flag")
             .in("client_id", clientIds);
           if (clientError) throw clientError;
-          (clients ?? []).forEach((client) => {
-            if (client.client_id) clientMap.set(client.client_id, client as ClientSummary);
+          const clientRows = (clients ?? []) as ClientSummary[];
+          clientRows.forEach((client) => {
+            if (client.client_id) clientMap.set(client.client_id, client);
           });
         }
 
@@ -945,6 +954,9 @@ function OrdersPageContent() {
     modelSuggestTimers.current.set(rowId, timer);
   }, [schemaClient]);
 
+  const isSuggestOpen = (rowId: string, field: SuggestField) =>
+    activeSuggest?.rowId === rowId && activeSuggest.field === field;
+
   const handleDeleteRow = async (rowId: string) => {
     const row = rows.find((r) => r.id === rowId);
     if (row && row.order_line_id) {
@@ -1094,6 +1106,32 @@ function OrdersPageContent() {
     } finally {
       setImageLoading(false);
     }
+  };
+
+  const applyClientSelection = (rowId: string, client: ClientSummary) => {
+    const clientName = client.client_name ?? "";
+    updateRow(rowId, {
+      client_input: clientName,
+      client_id: client.client_id ?? null,
+      client_name: client.client_name ?? null,
+    });
+    if (clientName) {
+      const normalized = normalizeSearchText(clientName);
+      clientCache.current.set(normalized, client);
+      clientCache.current.set(clientName.toLowerCase(), client);
+    }
+    if (headerMode === "client") setHeaderClient(client);
+    clearRowError(rowId, "client");
+    setClientSuggestions((prev) => ({ ...prev, [rowId]: [] }));
+    setActiveSuggest(null);
+  };
+
+  const applyModelSelection = (rowId: string, master: MasterLookup) => {
+    const modelName = master.model_name ?? "";
+    updateRow(rowId, { model_input: modelName });
+    setModelSuggestions((prev) => ({ ...prev, [rowId]: [] }));
+    setActiveSuggest(null);
+    if (modelName) void resolveMaster(rowId, modelName);
   };
 
   const rowHasData = (row: GridRow) => {
@@ -1273,48 +1311,106 @@ function OrdersPageContent() {
                   <span className="text-[9px] font-mono text-[var(--muted)] text-center">{realIdx}</span>
 
                   {/* Client Input */}
-                  <input
-                    className={cn(
-                      "w-full bg-transparent border border-transparent focus:border-primary/50 focus:bg-background rounded px-1 py-0 text-sm transition-colors",
-                      errors.client ? "border-[var(--danger)]/50 bg-[var(--danger)]/5" : "hover:border-border/50"
-                    )}
-                    list={`client-suggest-${row.id}`}
-                    value={row.client_input}
-                    onChange={(e) => {
-                      const next = e.target.value;
-                      updateRow(row.id, { client_input: next });
-                      requestClientSuggestions(row.id, next);
-                    }}
-                    onBlur={(e) => resolveClient(row.id, e.currentTarget.value)}
-                    placeholder="거래처..."
-                  />
-                  <datalist id={`client-suggest-${row.id}`}>
-                    {(clientSuggestions[row.id] ?? []).map((client) => (
-                      <option key={client.client_id ?? client.client_name ?? ""} value={client.client_name ?? ""} />
-                    ))}
-                  </datalist>
+                  <div className="relative">
+                    <input
+                      className={cn(
+                        "w-full bg-transparent border border-transparent focus:border-primary/50 focus:bg-background rounded px-1 py-0 text-sm transition-colors",
+                        errors.client ? "border-[var(--danger)]/50 bg-[var(--danger)]/5" : "hover:border-border/50"
+                      )}
+                      autoComplete="off"
+                      value={row.client_input}
+                      onFocus={() => {
+                        setActiveSuggest({ rowId: row.id, field: "client" });
+                        requestClientSuggestions(row.id, row.client_input);
+                      }}
+                      onChange={(e) => {
+                        const next = e.target.value;
+                        updateRow(row.id, { client_input: next });
+                        requestClientSuggestions(row.id, next);
+                        setActiveSuggest({ rowId: row.id, field: "client" });
+                      }}
+                      onBlur={(e) => {
+                        resolveClient(row.id, e.currentTarget.value);
+                        setActiveSuggest((prev) =>
+                          prev?.rowId === row.id && prev.field === "client" ? null : prev
+                        );
+                      }}
+                      placeholder="거래처..."
+                    />
+                    {isSuggestOpen(row.id, "client") && (clientSuggestions[row.id] ?? []).length > 0 ? (
+                      <div className="absolute left-0 top-full z-30 mt-1 max-h-48 w-full overflow-y-auto rounded-md border border-border/60 bg-background shadow-lg">
+                        {(clientSuggestions[row.id] ?? []).map((client) => (
+                          <button
+                            key={client.client_id ?? client.client_name ?? ""}
+                            type="button"
+                            onMouseDown={(event) => {
+                              event.preventDefault();
+                              applyClientSelection(row.id, client);
+                            }}
+                            className={cn(
+                              "flex w-full items-center justify-between gap-2 px-2 py-1 text-left text-xs transition-colors",
+                              "hover:bg-[var(--muted)]/10"
+                            )}
+                          >
+                            <span className="truncate">{client.client_name ?? "-"}</span>
+                            {client.risk_flag ? (
+                              <span className="text-[10px] text-[var(--warning)]">주의</span>
+                            ) : null}
+                          </button>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
 
                   {/* Model Input */}
-                  <input
-                    className={cn(
-                      "w-full bg-transparent border border-transparent focus:border-primary/50 focus:bg-background rounded px-1 py-0.5 text-sm font-medium transition-colors",
-                      errors.model ? "border-[var(--danger)]/50 bg-[var(--danger)]/5" : "hover:border-border/50"
-                    )}
-                    list={`model-suggest-${row.id}`}
-                    value={row.model_input}
-                    onChange={(e) => {
-                      const next = e.target.value;
-                      updateRow(row.id, { model_input: next });
-                      requestModelSuggestions(row.id, next);
-                    }}
-                    onBlur={(e) => resolveMaster(row.id, e.currentTarget.value)}
-                    placeholder="모델..."
-                  />
-                  <datalist id={`model-suggest-${row.id}`}>
-                    {(modelSuggestions[row.id] ?? []).map((master) => (
-                      <option key={master.master_item_id ?? master.model_name ?? ""} value={master.model_name ?? ""} />
-                    ))}
-                  </datalist>
+                  <div className="relative">
+                    <input
+                      className={cn(
+                        "w-full bg-transparent border border-transparent focus:border-primary/50 focus:bg-background rounded px-1 py-0.5 text-sm font-medium transition-colors",
+                        errors.model ? "border-[var(--danger)]/50 bg-[var(--danger)]/5" : "hover:border-border/50"
+                      )}
+                      autoComplete="off"
+                      value={row.model_input}
+                      onFocus={() => {
+                        setActiveSuggest({ rowId: row.id, field: "model" });
+                        requestModelSuggestions(row.id, row.model_input);
+                      }}
+                      onChange={(e) => {
+                        const next = e.target.value;
+                        updateRow(row.id, { model_input: next });
+                        requestModelSuggestions(row.id, next);
+                        setActiveSuggest({ rowId: row.id, field: "model" });
+                      }}
+                      onBlur={(e) => {
+                        resolveMaster(row.id, e.currentTarget.value);
+                        setActiveSuggest((prev) =>
+                          prev?.rowId === row.id && prev.field === "model" ? null : prev
+                        );
+                      }}
+                      placeholder="모델..."
+                    />
+                    {isSuggestOpen(row.id, "model") && (modelSuggestions[row.id] ?? []).length > 0 ? (
+                      <div className="absolute left-0 top-full z-30 mt-1 max-h-48 w-full overflow-y-auto rounded-md border border-border/60 bg-background shadow-lg">
+                        {(modelSuggestions[row.id] ?? []).map((master) => (
+                          <button
+                            key={master.master_item_id ?? master.model_name ?? ""}
+                            type="button"
+                            onMouseDown={(event) => {
+                              event.preventDefault();
+                              applyModelSelection(row.id, master);
+                            }}
+                            className={cn(
+                              "flex w-full items-center justify-between gap-2 px-2 py-1 text-left text-xs transition-colors",
+                              "hover:bg-[var(--muted)]/10"
+                            )}
+                          >
+                            <span className="truncate">{master.model_name ?? "-"}</span>
+                            <span className="text-[10px] text-[var(--muted)]">선택</span>
+                          </button>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
 
                   {/* Material Select */}
                   <select

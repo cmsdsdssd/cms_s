@@ -22,6 +22,8 @@ export async function GET(request: Request) {
   const vendorPartyId = searchParams.get("vendor_party_id");
   const receivedFrom = searchParams.get("received_from");
   const receivedTo = searchParams.get("received_to");
+  const unlinkedOnlyRaw = searchParams.get("unlinked_only");
+  const unlinkedOnly = ["true", "1", "yes"].includes((unlinkedOnlyRaw ?? "").toLowerCase());
 
   const limit = Math.min(Math.max(parseInt(limitRaw ?? "50", 10) || 50, 1), 200);
 
@@ -50,6 +52,31 @@ export async function GET(request: Request) {
   if (error) {
     return NextResponse.json({ error: error.message ?? "작업대 조회 실패" }, { status: 500 });
   }
+  const rows = (data ?? []) as Array<{ receipt_id?: string | null }>;
+  if (!unlinkedOnly || rows.length === 0) {
+    return NextResponse.json({ data: rows });
+  }
 
-  return NextResponse.json({ data: data ?? [] });
+  const receiptIds = rows.map((row) => row.receipt_id).filter((id): id is string => Boolean(id));
+  if (receiptIds.length === 0) {
+    return NextResponse.json({ data: [] });
+  }
+
+  const { data: unlinkedRows, error: unlinkedError } = await supabase
+    .from("cms_v_receipt_line_unlinked_v1")
+    .select("receipt_id")
+    .in("receipt_id", receiptIds);
+
+  if (unlinkedError) {
+    return NextResponse.json({ error: unlinkedError.message ?? "미매칭 라인 조회 실패" }, { status: 500 });
+  }
+
+  const unlinkedSet = new Set(
+    (unlinkedRows ?? [])
+      .map((row) => row.receipt_id)
+      .filter((id): id is string => Boolean(id))
+  );
+  const filtered = rows.filter((row) => row.receipt_id && unlinkedSet.has(row.receipt_id));
+
+  return NextResponse.json({ data: filtered });
 }

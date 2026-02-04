@@ -93,19 +93,29 @@ type UnlinkedLineRow = {
   model_name?: string | null;
   material_code?: string | null;
   factory_weight_g?: number | null;
+  weight_raw_g?: number | null;
+  weight_deduct_g?: number | null;
+  stone_center_qty?: number | null;
+  stone_sub1_qty?: number | null;
+  stone_sub2_qty?: number | null;
   vendor_seq_no?: number | null;
   remark?: string | null;
+  size?: string | null;
+  color?: string | null;
 };
 
 type MatchCandidate = {
   order_line_id?: string | null;
   customer_party_id?: string | null;
+  customer_mask_code?: string | null;
   customer_name?: string | null;
   status?: string | null;
   model_name?: string | null;
   size?: string | null;
   color?: string | null;
   material_code?: string | null;
+  is_plated?: boolean | null;
+  plating_color_code?: string | null;
   effective_weight_g?: number | null;
   weight_min_g?: number | null;
   weight_max_g?: number | null;
@@ -147,11 +157,37 @@ function formatYmd(iso?: string | null) {
   return d.toLocaleDateString("ko-KR");
 }
 
+function normalizeVendorToken(label: string) {
+  const trimmed = label.trim();
+  if (!trimmed) return "FAC";
+  const cleaned = trimmed.replace(/\s+/g, "_").replace(/[^0-9A-Za-z가-힣_-]/g, "");
+  return cleaned || "FAC";
+}
+
+function buildBillNo(billDate: string, vendorLabel: string, seq: number) {
+  const dateToken = billDate.replaceAll("-", "");
+  const vendorToken = normalizeVendorToken(vendorLabel);
+  return `${dateToken}_${vendorToken}_${seq}`;
+}
+
 function parseNumber(value: string) {
   const trimmed = value.trim();
   if (!trimmed) return null;
   const n = Number(trimmed.replaceAll(",", ""));
   return Number.isFinite(n) ? n : null;
+}
+
+function isValidSeq(value: string) {
+  const n = parseNumber(value);
+  return n !== null && Number.isInteger(n) && n > 0;
+}
+
+function getNextVendorSeq(items: ReceiptLineItemInput[]) {
+  const seqs = items
+    .map((item) => parseNumber(item.vendor_seq_no))
+    .filter((value): value is number => value !== null && Number.isFinite(value));
+  const maxSeq = seqs.length > 0 ? Math.max(...seqs) : 0;
+  return maxSeq + 1;
 }
 
 function toInputNumber(value?: number | null) {
@@ -186,19 +222,24 @@ function getReceiptLineUuid(line: UnlinkedLineRow) {
   return line.receipt_line_uuid ?? "";
 }
 
-function getDefaultRangeDate(offsetDays: number) {
+const DEFAULT_STATUS_FILTER = "ALL";
+const AUTO_FIELD_CLASS = "bg-[var(--panel)]/70";
+const DEFAULT_RANGE_MONTHS = -3;
+
+function getDefaultRangeDateByMonths(offsetMonths: number) {
   const d = new Date();
-  d.setDate(d.getDate() + offsetDays);
+  d.setMonth(d.getMonth() + offsetMonths);
   return d.toISOString().slice(0, 10);
 }
 
 export default function ReceiptLineWorkbench({ initialReceiptId }: { initialReceiptId?: string | null }) {
   const queryClient = useQueryClient();
 
-  const [statusFilter, setStatusFilter] = useState("ALL");
+  const [statusFilter, setStatusFilter] = useState(DEFAULT_STATUS_FILTER);
   const [vendorFilter, setVendorFilter] = useState("");
-  const [fromDate, setFromDate] = useState(() => getDefaultRangeDate(-45));
-  const [toDate, setToDate] = useState(() => getDefaultRangeDate(0));
+  const [fromDate, setFromDate] = useState(() => getDefaultRangeDateByMonths(DEFAULT_RANGE_MONTHS));
+  const [toDate, setToDate] = useState(() => getDefaultRangeDateByMonths(0));
+  const [unlinkedOnly, setUnlinkedOnly] = useState(true);
   const [limit, setLimit] = useState(50);
   const [lineLimit, setLineLimit] = useState(50);
   const [unlinkedLimit, setUnlinkedLimit] = useState(50);
@@ -208,6 +249,10 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
   const [billNo, setBillNo] = useState("");
   const [billDate, setBillDate] = useState("");
   const [memo, setMemo] = useState("");
+  const [billNoTouched, setBillNoTouched] = useState(false);
+  const [autoBillNo, setAutoBillNo] = useState<string | null>(null);
+  const [billNoAutoEligible, setBillNoAutoEligible] = useState(true);
+  const [billNoSuggestNonce, setBillNoSuggestNonce] = useState(0);
 
   const [lineItems, setLineItems] = useState<ReceiptLineItemInput[]>([]);
   const [lineItemsDirty, setLineItemsDirty] = useState(false);
@@ -222,6 +267,7 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
   const [uploadPreviewUrl, setUploadPreviewUrl] = useState<string | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+  const lastBillNoSuggestKey = useRef<string | null>(null);
 
   const [activeTab, setActiveTab] = useState<"match" | "reconcile" | "integrity">("match");
   const [selectedUnlinked, setSelectedUnlinked] = useState<UnlinkedLineRow | null>(null);
@@ -260,7 +306,7 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
   });
 
   const receiptsQuery = useQuery({
-    queryKey: ["new-receipt-workbench", "receipts", statusFilter, vendorFilter, fromDate, toDate, limit],
+    queryKey: ["new-receipt-workbench", "receipts", statusFilter, vendorFilter, fromDate, toDate, unlinkedOnly, limit],
     queryFn: async () => {
       const params = new URLSearchParams();
       params.set("limit", String(limit));
@@ -268,6 +314,7 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
       if (vendorFilter) params.set("vendor_party_id", vendorFilter);
       if (fromDate) params.set("received_from", fromDate);
       if (toDate) params.set("received_to", toDate);
+      if (unlinkedOnly) params.set("unlinked_only", "1");
 
       const res = await fetch(`/api/new-receipt-workbench/receipts?${params.toString()}`, { cache: "no-store" });
       const json = await res.json();
@@ -389,11 +436,11 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
   const vendorOptions = vendorOptionsQuery.data ?? [];
 
   const statusOptions = useMemo(() => {
-    const set = new Set<string>();
+    const set = new Set<string>([DEFAULT_STATUS_FILTER]);
     receipts.forEach((row) => {
       if (row.status) set.add(row.status);
     });
-    return ["ALL", ...Array.from(set)];
+    return Array.from(new Set(["ALL", ...Array.from(set)]));
   }, [receipts]);
 
   const selectedReceipt = useMemo(() => {
@@ -407,13 +454,66 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
     setBillNo(selectedReceipt.bill_no ?? "");
     setBillDate(selectedReceipt.issued_at ? selectedReceipt.issued_at.slice(0, 10) : "");
     setMemo(selectedReceipt.memo ?? "");
+    setBillNoTouched(false);
+    setAutoBillNo(null);
+    setBillNoAutoEligible(!(selectedReceipt.bill_no ?? ""));
+    lastBillNoSuggestKey.current = null;
   }, [selectedReceipt]);
+
+  useEffect(() => {
+    if (!selectedReceiptId || !vendorPartyId || !billDate) return;
+    if (billNoTouched || !billNoAutoEligible) return;
+
+    const vendorLabel = vendorOptions.find((option) => option.value === vendorPartyId)?.label ?? "FAC";
+    const vendorToken = normalizeVendorToken(vendorLabel);
+    const key = `${selectedReceiptId}:${vendorPartyId}:${billDate}:${billNoSuggestNonce}:${vendorToken}`;
+    if (lastBillNoSuggestKey.current === key) return;
+    lastBillNoSuggestKey.current = key;
+
+    let cancelled = false;
+
+    async function suggestBillNo() {
+      try {
+        const params = new URLSearchParams();
+        params.set("vendor_party_id", vendorPartyId);
+        params.set("bill_date", billDate);
+        params.set("vendor_token", vendorToken);
+        if (selectedReceiptId) {
+          params.set("receipt_id", selectedReceiptId);
+        }
+        const res = await fetch(`/api/new-receipt-workbench/bill-no-suggest?${params.toString()}`, {
+          cache: "no-store",
+        });
+        if (!res.ok) return;
+        const json = await res.json();
+        const nextSeq = Number(json?.data?.next_seq ?? 1) || 1;
+        const suggested = buildBillNo(billDate, vendorLabel, nextSeq);
+        if (cancelled) return;
+        setAutoBillNo(suggested);
+        setBillNo(suggested);
+      } catch {
+        // ignore suggestion errors
+      }
+    }
+
+    suggestBillNo();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [billDate, billNoAutoEligible, billNoSuggestNonce, billNoTouched, selectedReceiptId, vendorOptions, vendorPartyId]);
 
   useEffect(() => {
     if (!lineItemsQuery.data) return;
     if (lineItemsDirty) return;
-    const mapped = lineItemsQuery.data.map((row) => {
+    const rows = lineItemsQuery.data;
+    const existingSeqs = rows
+      .map((row) => row.vendor_seq_no)
+      .filter((value): value is number => value !== null && value !== undefined && Number.isFinite(value));
+    let nextSeq = existingSeqs.length > 0 ? Math.max(...existingSeqs) : 0;
+    const mapped = rows.map((row) => {
       const lineUuid = row.line_uuid ?? row.receipt_line_uuid ?? crypto.randomUUID();
+      const seqValue = row.vendor_seq_no ?? (nextSeq += 1);
       return {
         line_uuid: lineUuid,
         customer_factory_code: row.customer_factory_code ?? "",
@@ -433,7 +533,7 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
         total_amount_krw: toInputNumber(row.total_amount_krw ?? null),
         size: row.size ?? "",
         color: row.color ?? "",
-        vendor_seq_no: toInputNumber(row.vendor_seq_no ?? null),
+        vendor_seq_no: toInputNumber(seqValue),
         remark: row.remark ?? "",
       };
     });
@@ -441,11 +541,13 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
   }, [lineItemsDirty, lineItemsQuery.data]);
 
   useEffect(() => {
+    const unlinkedLines = unlinkedQuery.data ?? [];
     const codes = Array.from(
       new Set(
-        lineItems
-          .map((item) => item.customer_factory_code.trim())
-          .filter((code) => code.length > 0)
+        [
+          ...lineItems.map((item) => item.customer_factory_code.trim()),
+          ...unlinkedLines.map((line) => line.customer_factory_code?.trim() ?? ""),
+        ].filter((code) => code.length > 0)
       )
     );
 
@@ -479,7 +581,7 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
         }
       })
     );
-  }, [customerLookupState, lineItems]);
+  }, [customerLookupState, lineItems, unlinkedQuery.data]);
 
   useEffect(() => {
     if (!initialReceiptId) return;
@@ -604,31 +706,34 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
 
   function addLine() {
     setLineItemsDirty(true);
-    setLineItems((prev) => [
-      ...prev,
-      {
-        line_uuid: crypto.randomUUID(),
-        customer_factory_code: "",
-        model_name: "",
-        material_code: "",
-        qty: "1",
-        weight_raw_g: "",
-        weight_deduct_g: "",
-        labor_basic_cost_krw: "",
-        labor_other_cost_krw: "",
-        stone_center_qty: "0",
-        stone_sub1_qty: "0",
-        stone_sub2_qty: "0",
-        stone_center_unit_cost_krw: "0",
-        stone_sub1_unit_cost_krw: "0",
-        stone_sub2_unit_cost_krw: "0",
-        total_amount_krw: "",
-        size: "",
-        color: "",
-        vendor_seq_no: "",
-        remark: "",
-      },
-    ]);
+    setLineItems((prev) => {
+      const nextSeq = getNextVendorSeq(prev);
+      return [
+        ...prev,
+        {
+          line_uuid: crypto.randomUUID(),
+          customer_factory_code: "",
+          model_name: "",
+          material_code: "",
+          qty: "1",
+          weight_raw_g: "",
+          weight_deduct_g: "",
+          labor_basic_cost_krw: "",
+          labor_other_cost_krw: "",
+          stone_center_qty: "0",
+          stone_sub1_qty: "0",
+          stone_sub2_qty: "0",
+          stone_center_unit_cost_krw: "0",
+          stone_sub1_unit_cost_krw: "0",
+          stone_sub2_unit_cost_krw: "0",
+          total_amount_krw: "",
+          size: "",
+          color: "",
+          vendor_seq_no: String(nextSeq),
+          remark: "",
+        },
+      ];
+    });
   }
 
   function removeLine(lineUuid: string) {
@@ -669,6 +774,28 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
     );
   }, [lineItems]);
 
+  const duplicateSeqSet = useMemo(() => {
+    const counts = new Map<number, number>();
+    lineItems.forEach((item) => {
+      const seqValue = parseNumber(item.vendor_seq_no);
+      if (seqValue === null) return;
+      counts.set(seqValue, (counts.get(seqValue) ?? 0) + 1);
+    });
+    return new Set(Array.from(counts.entries()).filter(([, count]) => count > 1).map(([value]) => value));
+  }, [lineItems]);
+
+  const sortedLineItems = useMemo(() => {
+    return [...lineItems].sort((a, b) => {
+      const aSeq = parseNumber(a.vendor_seq_no);
+      const bSeq = parseNumber(b.vendor_seq_no);
+      if (aSeq === null && bSeq === null) return a.line_uuid.localeCompare(b.line_uuid);
+      if (aSeq === null) return 1;
+      if (bSeq === null) return -1;
+      if (aSeq !== bSeq) return aSeq - bSeq;
+      return a.line_uuid.localeCompare(b.line_uuid);
+    });
+  }, [lineItems]);
+
   async function saveHeader() {
     if (!selectedReceiptId) {
       toast.error("영수증을 선택하세요");
@@ -692,6 +819,16 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
     const invalid = lineItems.find((item) => !item.model_name.trim() || !item.material_code.trim());
     if (invalid) {
       toast.error("모델명/소재는 필수입니다");
+      return;
+    }
+
+    const invalidSeq = lineItems.find((item) => !isValidSeq(item.vendor_seq_no));
+    if (invalidSeq) {
+      toast.error("라인 번호를 확인하세요");
+      return;
+    }
+    if (duplicateSeqSet.size > 0) {
+      toast.error("라인 번호가 중복되었습니다");
       return;
     }
 
@@ -901,12 +1038,22 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                 </Select>
               </div>
 
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold uppercase tracking-wider text-[var(--muted)]">미매칭</label>
+                <Select value={unlinkedOnly ? "only" : "all"} onChange={(e) => setUnlinkedOnly(e.target.value === "only")}
+                >
+                  <option value="only">미매칭만</option>
+                  <option value="all">전체</option>
+                </Select>
+              </div>
+
               <SearchSelect
                 label="공장"
                 placeholder="검색 (* 입력 시 전체)"
                 options={[{ label: "전체", value: "" }, ...vendorOptions]}
                 value={vendorFilter}
                 onChange={(value) => setVendorFilter(value)}
+                showResultsOnEmptyQuery={false}
               />
 
               <div className="grid grid-cols-2 gap-2">
@@ -924,10 +1071,11 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                 variant="ghost"
                 size="sm"
                 onClick={() => {
-                  setStatusFilter("ALL");
+                  setStatusFilter(DEFAULT_STATUS_FILTER);
                   setVendorFilter("");
-                  setFromDate(getDefaultRangeDate(-45));
-                  setToDate(getDefaultRangeDate(0));
+                  setFromDate(getDefaultRangeDateByMonths(DEFAULT_RANGE_MONTHS));
+                  setToDate(getDefaultRangeDateByMonths(0));
+                  setUnlinkedOnly(true);
                   setLimit(50);
                 }}
               >
@@ -1053,16 +1201,18 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                     <table className="w-full table-fixed text-[11px]">
                       <thead className="bg-[var(--panel)] text-[var(--muted)] sticky top-0">
                         <tr>
-                          <th className="px-2 py-2 text-left w-[120px]">고객코드</th>
+                          <th className="px-2 py-2 text-left w-[52px]">라인번호</th>
+                          <th className="px-2 py-2 text-left w-[80px]">고객코드</th>
                           <th className="px-2 py-2 text-left w-[260px]">모델명*</th>
-                          <th className="px-2 py-2 text-left w-[70px]">소재*</th>
+                          <th className="px-2 py-2 text-left w-[90px]">소재*</th>
+                          <th className="px-2 py-2 text-left w-[90px]">색상</th>
                           <th className="px-2 py-2 text-right w-[90px]">총중량</th>
                           <th className="px-2 py-2 text-right w-[100px]">총공임</th>
                           <th className="px-2 py-2 text-right w-[110px]">총합(저장)</th>
                         </tr>
                       </thead>
                       <tbody>
-                        {lineItems.map((item) => {
+                        {sortedLineItems.map((item) => {
                           const weightTotal = calcWeightTotal(item.weight_raw_g, item.weight_deduct_g);
                           const laborBasic = parseNumber(item.labor_basic_cost_krw) ?? 0;
                           const laborOther = parseNumber(item.labor_other_cost_krw) ?? 0;
@@ -1070,6 +1220,12 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                           const factoryTotalCost = laborBasic + laborOther + stoneFactoryCost;
                           const totalAmount = parseNumber(item.total_amount_krw) ?? factoryTotalCost;
                           const isExpanded = expandedLineId === item.line_uuid;
+                          const seqValue = parseNumber(item.vendor_seq_no);
+                          const isSeqDuplicate = seqValue !== null && duplicateSeqSet.has(seqValue);
+                          const seqFieldClass = cn(
+                            "h-8 text-[10px] text-right",
+                            isSeqDuplicate && "ring-1 ring-rose-500/70 bg-rose-500/10 hover:ring-2 hover:ring-rose-500/80"
+                          );
 
                           return (
                             <Fragment key={item.line_uuid}>
@@ -1080,6 +1236,21 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                               >
                                 <td className="px-2 py-1">
                                   <Input
+                                    type="number"
+                                    value={item.vendor_seq_no}
+                                    onChange={(e) => updateLine(item.line_uuid, "vendor_seq_no", e.target.value)}
+                                    onFocus={() => setExpandedLineId(item.line_uuid)}
+                                    onBlur={(e) => {
+                                      const nextId = getLineIdFromTarget(e.relatedTarget);
+                                      if (nextId !== item.line_uuid) setExpandedLineId(null);
+                                    }}
+                                    data-line-id={item.line_uuid}
+                                    className={seqFieldClass}
+                                    title={isSeqDuplicate ? "라인 번호가 중복되었습니다" : undefined}
+                                  />
+                                </td>
+                                <td className="px-2 py-1">
+                                  <Input
                                     value={item.customer_factory_code}
                                     onChange={(e) => updateLine(item.line_uuid, "customer_factory_code", e.target.value)}
                                     onFocus={() => setExpandedLineId(item.line_uuid)}
@@ -1088,7 +1259,7 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                                       if (nextId !== item.line_uuid) setExpandedLineId(null);
                                     }}
                                     data-line-id={item.line_uuid}
-                                    className="h-7 text-[11px]"
+                                    className="h-8 text-[11px]"
                                   />
                                 </td>
                                 <td className="px-2 py-1">
@@ -1101,7 +1272,7 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                                       if (nextId !== item.line_uuid) setExpandedLineId(null);
                                     }}
                                     data-line-id={item.line_uuid}
-                                    className="h-7 text-xs"
+                                    className="h-8 text-xs"
                                   />
                                 </td>
                                 <td className="px-2 py-1">
@@ -1114,7 +1285,7 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                                       if (nextId !== item.line_uuid) setExpandedLineId(null);
                                     }}
                                     data-line-id={item.line_uuid}
-                                    className="h-7 text-[11px]"
+                                    className="h-8 text-[11px] leading-4"
                                   >
                                     <option value="">선택</option>
                                     {MATERIAL_OPTIONS.map((code) => (
@@ -1125,10 +1296,32 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                                   </Select>
                                 </td>
                                 <td className="px-2 py-1">
-                                  <Input value={String(weightTotal)} readOnly className="h-7 text-[11px] text-right bg-[var(--panel)]" />
+                                  <Select
+                                    value={item.color}
+                                    onChange={(e) => updateLine(item.line_uuid, "color", e.target.value)}
+                                    onFocus={() => setExpandedLineId(item.line_uuid)}
+                                    onBlur={(e) => {
+                                      const nextId = getLineIdFromTarget(e.relatedTarget);
+                                      if (nextId !== item.line_uuid) setExpandedLineId(null);
+                                    }}
+                                    data-line-id={item.line_uuid}
+                                    className="h-8 text-[11px] leading-4"
+                                  >
+                                    <option value="">선택</option>
+                                    <option value="P">P</option>
+                                    <option value="W">W</option>
+                                    <option value="G">G</option>
+                                    <option value="PW">PW</option>
+                                    <option value="PG">PG</option>
+                                    <option value="WG">WG</option>
+                                    <option value="PWG">PWG</option>
+                                  </Select>
                                 </td>
                                 <td className="px-2 py-1">
-                                  <Input value={String(factoryTotalCost)} readOnly className="h-7 text-[11px] text-right bg-[var(--panel)]" />
+                                  <Input value={String(weightTotal)} readOnly className={`h-8 text-[11px] text-right ${AUTO_FIELD_CLASS}`} />
+                                </td>
+                                <td className="px-2 py-1">
+                                  <Input value={String(factoryTotalCost)} readOnly className={`h-8 text-[11px] text-right ${AUTO_FIELD_CLASS}`} />
                                 </td>
                                 <td className="px-2 py-1">
                                   <Input
@@ -1141,15 +1334,33 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                                       if (nextId !== item.line_uuid) setExpandedLineId(null);
                                     }}
                                     data-line-id={item.line_uuid}
-                                    className="h-7 text-[11px] text-right"
+                                    className="h-8 text-[11px] text-right"
                                     placeholder={String(totalAmount)}
                                   />
                                 </td>
                               </tr>
                               {isExpanded ? (
                                 <tr className="border-t border-[var(--panel-border)] bg-[var(--panel)]/15 text-[11px]" key={`${item.line_uuid}-detail`}>
-                                  <td colSpan={6} className="px-3 py-3">
+                                  <td colSpan={8} className="px-3 py-3">
                                     <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+                                      <div className="space-y-1">
+                                        <label className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)]">라인 번호</label>
+                                        <Input
+                                          type="number"
+                                          value={item.vendor_seq_no}
+                                          onChange={(e) => updateLine(item.line_uuid, "vendor_seq_no", e.target.value)}
+                                          onBlur={(e) => {
+                                            const nextId = getLineIdFromTarget(e.relatedTarget);
+                                            if (nextId !== item.line_uuid) setExpandedLineId(null);
+                                          }}
+                                          data-line-id={item.line_uuid}
+                                          className={cn(
+                                            "h-7 text-[11px] text-right",
+                                            isSeqDuplicate && "ring-1 ring-rose-500/70 bg-rose-500/10 hover:ring-2 hover:ring-rose-500/80"
+                                          )}
+                                          title={isSeqDuplicate ? "라인 번호가 중복되었습니다" : undefined}
+                                        />
+                                      </div>
                                       <div className="space-y-1">
                                         <label className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)]">고객코드</label>
                                         <Input
@@ -1164,24 +1375,11 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                                         />
                                       </div>
                                       <div className="space-y-1">
-                                        <label className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)]">SEQ</label>
-                                        <Input
-                                          value={item.vendor_seq_no}
-                                          onChange={(e) => updateLine(item.line_uuid, "vendor_seq_no", e.target.value)}
-                                          onBlur={(e) => {
-                                            const nextId = getLineIdFromTarget(e.relatedTarget);
-                                            if (nextId !== item.line_uuid) setExpandedLineId(null);
-                                          }}
-                                          data-line-id={item.line_uuid}
-                                          className="h-7 text-[11px]"
-                                        />
-                                      </div>
-                                      <div className="space-y-1">
                                         <label className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)]">고객명</label>
                                         <Input
                                           value={item.customer_factory_code.trim() ? customerNameMap[item.customer_factory_code.trim()] ?? "매칭되는 고객 없음" : ""}
                                           readOnly
-                                          className="h-7 text-[11px] bg-[var(--panel)]"
+                                          className={`h-7 text-[11px] ${AUTO_FIELD_CLASS}`}
                                         />
                                       </div>
                                     </div>
@@ -1434,23 +1632,46 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                       placeholder="검색"
                       options={vendorOptions}
                       value={vendorPartyId}
-                      onChange={(value) => setVendorPartyId(value)}
+                      onChange={(value) => {
+                        setVendorPartyId(value);
+                        setBillNoTouched(false);
+                        setAutoBillNo(null);
+                        setBillNoAutoEligible(true);
+                        lastBillNoSuggestKey.current = null;
+                      }}
+                      showResultsOnEmptyQuery={false}
                     />
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-semibold uppercase tracking-wider text-[var(--muted)]">영수증 일자</label>
+                      <Input
+                        type="date"
+                        value={billDate}
+                        onChange={(e) => {
+                          setBillDate(e.target.value);
+                          setBillNoTouched(false);
+                          setAutoBillNo(null);
+                          setBillNoAutoEligible(true);
+                          lastBillNoSuggestKey.current = null;
+                        }}
+                        onBlur={() => setBillNoSuggestNonce((prev) => prev + 1)}
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-semibold uppercase tracking-wider text-[var(--muted)]">메모</label>
+                      <Input placeholder="메모" value={memo} onChange={(e) => setMemo(e.target.value)} />
+                    </div>
                     <div className="space-y-1.5">
                       <label className="text-xs font-semibold uppercase tracking-wider text-[var(--muted)]">영수증 번호</label>
                       <Input
                         placeholder="예: 20260203_FAC_1"
                         value={billNo}
-                        onChange={(e) => setBillNo(e.target.value)}
+                        onChange={(e) => {
+                          setBillNo(e.target.value);
+                          setBillNoTouched(true);
+                          setAutoBillNo(null);
+                          setBillNoAutoEligible(false);
+                        }}
                       />
-                    </div>
-                    <div className="space-y-1.5">
-                      <label className="text-xs font-semibold uppercase tracking-wider text-[var(--muted)]">영수증 일자</label>
-                      <Input type="date" value={billDate} onChange={(e) => setBillDate(e.target.value)} />
-                    </div>
-                    <div className="space-y-1.5">
-                      <label className="text-xs font-semibold uppercase tracking-wider text-[var(--muted)]">메모</label>
-                      <Input placeholder="메모" value={memo} onChange={(e) => setMemo(e.target.value)} />
                     </div>
                   </div>
                   <div className="rounded-lg border border-[var(--panel-border)] bg-[var(--panel)] p-3">
@@ -1524,6 +1745,17 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                         (unlinkedQuery.data ?? []).map((line, idx) => {
                           const uuid = getReceiptLineUuid(line) || `${idx}`;
                           const isSelected = selectedUnlinked && getReceiptLineUuid(selectedUnlinked) === getReceiptLineUuid(line);
+                          const customerCode = line.customer_factory_code?.trim() ?? "";
+                          const customerName = customerCode
+                            ? customerNameMap[customerCode] ?? "매칭되는 고객 없음"
+                            : "-";
+                          const weightValue = line.factory_weight_g ?? line.weight_raw_g ?? null;
+                          const weightLabel =
+                            weightValue === null || weightValue === undefined ? "-" : `${formatNumber(weightValue)}g`;
+                          const deductLabel =
+                            line.weight_deduct_g === null || line.weight_deduct_g === undefined
+                              ? "-"
+                              : `${formatNumber(line.weight_deduct_g)}g`;
                           return (
                             <button
                               key={uuid}
@@ -1542,10 +1774,10 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                               )}
                             >
                               <div className="font-semibold text-[var(--foreground)]">
-                                {line.model_name ?? "-"}
+                                {line.model_name ?? "-"} | {line.material_code ?? "-"} | {line.color ?? "-"} | {line.size ?? "-"}
                               </div>
                               <div className="mt-1 text-[var(--muted)]">
-                                {line.material_code ?? "-"} · {formatNumber(line.factory_weight_g)}g
+                                {customerCode || "-"} | {customerName} | {weightLabel} | {deductLabel} | {formatNumber(line.stone_center_qty)} | {formatNumber(line.stone_sub1_qty)} | {formatNumber(line.stone_sub2_qty)} | {line.remark ?? "-"}
                               </div>
                             </button>
                           );
@@ -1567,11 +1799,30 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                   <div className="rounded-lg border border-[var(--panel-border)] bg-[var(--surface)]/60 p-3 text-xs">
                     <div className="text-sm font-semibold">선택 라인</div>
                     {selectedUnlinked ? (
-                      <div className="mt-2 space-y-1 text-[var(--muted)]">
-                        <div>모델: <span className="text-[var(--foreground)]">{selectedUnlinked.model_name ?? "-"}</span></div>
-                        <div>소재: <span className="text-[var(--foreground)]">{selectedUnlinked.material_code ?? "-"}</span></div>
-                        <div>중량: <span className="text-[var(--foreground)]">{formatNumber(selectedUnlinked.factory_weight_g)}</span></div>
-                      </div>
+                      (() => {
+                        const customerCode = selectedUnlinked.customer_factory_code?.trim() ?? "";
+                        const customerName = customerCode
+                          ? customerNameMap[customerCode] ?? "매칭되는 고객 없음"
+                          : "-";
+                        const weightValue = selectedUnlinked.factory_weight_g ?? selectedUnlinked.weight_raw_g ?? null;
+                        const weightLabel =
+                          weightValue === null || weightValue === undefined ? "-" : `${formatNumber(weightValue)}g`;
+                        const deductLabel =
+                          selectedUnlinked.weight_deduct_g === null || selectedUnlinked.weight_deduct_g === undefined
+                            ? "-"
+                            : `${formatNumber(selectedUnlinked.weight_deduct_g)}g`;
+
+                        return (
+                          <div className="mt-2 space-y-1 text-[var(--muted)]">
+                            <div>
+                              {selectedUnlinked.model_name ?? "-"} | {selectedUnlinked.material_code ?? "-"} | {selectedUnlinked.color ?? "-"} | {selectedUnlinked.size ?? "-"}
+                            </div>
+                            <div>
+                              {customerCode || "-"} | {customerName} | {weightLabel} | {deductLabel} | {formatNumber(selectedUnlinked.stone_center_qty)} | {formatNumber(selectedUnlinked.stone_sub1_qty)} | {formatNumber(selectedUnlinked.stone_sub2_qty)} | {selectedUnlinked.remark ?? "-"}
+                            </div>
+                          </div>
+                        );
+                      })()
                     ) : (
                       <div className="mt-2 text-[var(--muted)]">라인을 선택하세요.</div>
                     )}
@@ -1600,33 +1851,36 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                       {suggestions.map((candidate, idx) => {
                         const key = candidate.order_line_id ?? `candidate-${idx}`;
                         const expanded = scoreOpenMap[key] ?? false;
+                        const platedLabel =
+                          candidate.is_plated === null || candidate.is_plated === undefined
+                            ? "-"
+                            : candidate.is_plated
+                              ? "Y"
+                              : "N";
                         return (
-                          <div key={key} className="rounded-lg border border-[var(--panel-border)] bg-[var(--panel)] p-3 text-xs">
-                            <div className="flex items-start justify-between gap-2">
-                              <div>
-                                <div className="font-semibold text-[var(--foreground)]">
-                                  {candidate.customer_name ?? "-"} · {candidate.status ?? "-"}
+                            <div key={key} className="rounded-lg border border-[var(--panel-border)] bg-[var(--panel)] p-3 text-xs">
+                              <div className="flex items-start justify-between gap-2">
+                                <div>
+                                  <div className="font-semibold text-[var(--foreground)]">
+                                    {candidate.model_name ?? "-"} | {candidate.material_code ?? "-"} | {candidate.color ?? "-"} | {candidate.size ?? "-"}
+                                  </div>
+                                  <div className="mt-1 text-[var(--muted)]">
+                                    {candidate.customer_mask_code ?? "-"} | {candidate.customer_name ?? "-"}
+                                  </div>
+                                  <div className="mt-1 text-[var(--muted)]">
+                                    도금여부 {platedLabel} | 도금색상 {candidate.plating_color_code ?? "-"}
+                                  </div>
+                                  <div className="mt-1 text-[var(--muted)]">
+                                    {candidate.memo ?? "-"}
+                                  </div>
                                 </div>
-                                <div className="mt-1 text-[var(--muted)]">
-                                  {candidate.model_name ?? "-"} {candidate.size ?? ""} {candidate.color ?? ""}
-                                </div>
-                                <div className="mt-1 text-[var(--muted)]">
-                                  소재 {candidate.material_code ?? "-"} · 중량 {formatNumber(candidate.effective_weight_g)}g
-                                </div>
-                                <div className="mt-1 text-[var(--muted)]">
-                                  범위 {formatNumber(candidate.weight_min_g)} ~ {formatNumber(candidate.weight_max_g)}g
-                                </div>
-                                <div className="mt-1 text-[var(--muted)]">
-                                  PO {candidate.factory_po_id ?? "-"} · {candidate.memo ?? ""}
-                                </div>
-                              </div>
-                              <div className="flex flex-col items-end gap-2">
-                                <Badge tone="primary" className="h-5 px-2 text-[10px]">{formatNumber(candidate.match_score)}</Badge>
-                                <Button
-                                  size="sm"
-                                  variant={selectedCandidate?.order_line_id === candidate.order_line_id ? "primary" : "secondary"}
-                                  onClick={() => {
-                                    setSelectedCandidate(candidate);
+                                <div className="flex flex-col items-end gap-2">
+                                  <Badge tone="active" className="h-6 px-2 text-xs font-bold">점수 {formatNumber(candidate.match_score)}</Badge>
+                                  <Button
+                                    size="sm"
+                                    variant={selectedCandidate?.order_line_id === candidate.order_line_id ? "primary" : "secondary"}
+                                    onClick={() => {
+                                      setSelectedCandidate(candidate);
                                     setConfirmResult(null);
                                   }}
                                 >
