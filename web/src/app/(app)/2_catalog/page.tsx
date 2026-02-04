@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ActionBar } from "@/components/layout/action-bar";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { NumberText } from "@/components/ui/number-text";
 import { Input, Select } from "@/components/ui/field";
 import { Modal } from "@/components/ui/modal";
 import { Grid2x2, List, Search, X, Filter, Download, Plus, Eye, Edit2, Trash2, Check, ChevronLeft, ChevronRight, Upload } from "lucide-react";
@@ -26,7 +27,7 @@ type CatalogItem = {
   stone: string;
   vendor: string;
   color: string;
-  cost: string;
+  cost: number | null;
   grades: string[];
   imageUrl?: string | null;
   categoryCode?: string;
@@ -289,13 +290,25 @@ function ProductCard({
             <div className="rounded-lg bg-[var(--chip)] p-2">
               <p className="text-[10px] font-medium text-[var(--muted)] uppercase tracking-wider">판매가</p>
               <p className="text-sm font-bold text-[var(--foreground)]">
-                {totalPrice > 0 ? `₩${totalPrice.toLocaleString()}` : "-"}
+                {totalPrice > 0 ? (
+                  <span>
+                    ₩<NumberText value={totalPrice} />
+                  </span>
+                ) : (
+                  "-"
+                )}
               </p>
             </div>
             <div className="rounded-lg bg-[var(--chip)] p-2">
               <p className="text-[10px] font-medium text-[var(--muted)] uppercase tracking-wider">공임</p>
               <p className="text-sm font-bold text-[var(--foreground)]">
-                {laborSell > 0 ? `₩${laborSell.toLocaleString()}` : "-"}
+                {laborSell > 0 ? (
+                  <span>
+                    ₩<NumberText value={laborSell} />
+                  </span>
+                ) : (
+                  "-"
+                )}
               </p>
             </div>
           </div>
@@ -411,7 +424,13 @@ function ProductListRow({
         <div className="col-span-2 text-sm text-[var(--foreground)]">{item.weight}</div>
 
         <div className="col-span-2 text-sm font-semibold text-[var(--primary)]">
-          {totalPrice > 0 ? `₩${totalPrice.toLocaleString()}` : "-"}
+                {totalPrice > 0 ? (
+                  <span>
+                    ₩<NumberText value={totalPrice} />
+                  </span>
+                ) : (
+                  "-"
+                )}
         </div>
 
         <div className="col-span-2 text-sm text-[var(--muted)]">{item.vendor}</div>
@@ -505,13 +524,25 @@ function ProductDetailModal({
               <div className="rounded-lg bg-[var(--chip)] p-3">
                 <p className="text-xs text-[var(--muted)]">예상 총 금액 (판매)</p>
                 <p className="text-lg font-bold text-[var(--foreground)]">
-                  {totalPrice > 0 ? `₩${totalPrice.toLocaleString()}` : "-"}
+              {totalPrice > 0 ? (
+                <span>
+                  ₩<NumberText value={totalPrice} />
+                </span>
+              ) : (
+                "-"
+              )}
                 </p>
               </div>
               <div className="rounded-lg bg-[var(--chip)] p-3">
                 <p className="text-xs text-[var(--muted)]">예상 총 금액 (원가)</p>
                 <p className="text-lg font-bold text-[var(--foreground)]">
-                  {totalCost > 0 ? `₩${totalCost.toLocaleString()}` : "-"}
+              {totalCost > 0 ? (
+                <span>
+                  ₩<NumberText value={totalCost} />
+                </span>
+              ) : (
+                "-"
+              )}
                 </p>
               </div>
             </div>
@@ -557,18 +588,30 @@ function ProductDetailModal({
             </div>
             <div className="grid grid-cols-3 gap-4 text-sm">
               <div>기본공임</div>
-              <div className="text-right font-medium">₩{(item.laborBaseSell || 0).toLocaleString()}</div>
-              <div className="text-right font-medium">₩{(item.laborBaseCost || 0).toLocaleString()}</div>
+              <div className="text-right font-medium">
+                ₩<NumberText value={item.laborBaseSell || 0} />
+              </div>
+              <div className="text-right font-medium">
+                ₩<NumberText value={item.laborBaseCost || 0} />
+              </div>
             </div>
             <div className="grid grid-cols-3 gap-4 text-sm">
               <div>중심공임 × {item.centerQty || 0}</div>
-              <div className="text-right font-medium">₩{((item.laborCenterSell || 0) * (item.centerQty || 0)).toLocaleString()}</div>
-              <div className="text-right font-medium">₩{((item.laborCenterCost || 0) * (item.centerQty || 0)).toLocaleString()}</div>
+              <div className="text-right font-medium">
+                ₩<NumberText value={(item.laborCenterSell || 0) * (item.centerQty || 0)} />
+              </div>
+              <div className="text-right font-medium">
+                ₩<NumberText value={(item.laborCenterCost || 0) * (item.centerQty || 0)} />
+              </div>
             </div>
             <div className="grid grid-cols-3 gap-4 text-sm">
               <div>합계공임</div>
-              <div className="text-right font-bold text-[var(--primary)]">₩{laborSell.toLocaleString()}</div>
-              <div className="text-right font-bold text-[var(--foreground)]">₩{laborCost.toLocaleString()}</div>
+              <div className="text-right font-bold text-[var(--primary)]">
+                ₩<NumberText value={laborSell} />
+              </div>
+              <div className="text-right font-bold text-[var(--foreground)]">
+                ₩<NumberText value={laborCost} />
+              </div>
             </div>
           </div>
         </div>
@@ -639,7 +682,7 @@ function ProductFormModal({
           tone: "active",
           stone: "없음",
           color: "-",
-          cost: "-",
+          cost: null,
           grades: ["-", "-", "-"],
         });
         setImageUrl(null);
@@ -914,10 +957,26 @@ function ProductFormModal({
               <span className="text-[var(--muted)]">계산된 합계공임:</span>
               <div className="flex gap-4">
                 <span className="font-semibold text-[var(--primary)]">
-                  판매 ₩{((formData.laborBaseSell || 0) + ((formData.laborCenterSell || 0) * (formData.centerQty || 0)) + ((formData.laborSub1Sell || 0) * (formData.sub1Qty || 0)) + ((formData.laborSub2Sell || 0) * (formData.sub2Qty || 0))).toLocaleString()}
+                  판매 ₩
+                  <NumberText
+                    value={
+                      (formData.laborBaseSell || 0) +
+                      (formData.laborCenterSell || 0) * (formData.centerQty || 0) +
+                      (formData.laborSub1Sell || 0) * (formData.sub1Qty || 0) +
+                      (formData.laborSub2Sell || 0) * (formData.sub2Qty || 0)
+                    }
+                  />
                 </span>
                 <span className="font-semibold text-[var(--foreground)]">
-                  원가 ₩{((formData.laborBaseCost || 0) + ((formData.laborCenterCost || 0) * (formData.centerQty || 0)) + ((formData.laborSub1Cost || 0) * (formData.sub1Qty || 0)) + ((formData.laborSub2Cost || 0) * (formData.sub2Qty || 0))).toLocaleString()}
+                  원가 ₩
+                  <NumberText
+                    value={
+                      (formData.laborBaseCost || 0) +
+                      (formData.laborCenterCost || 0) * (formData.centerQty || 0) +
+                      (formData.laborSub1Cost || 0) * (formData.sub1Qty || 0) +
+                      (formData.laborSub2Cost || 0) * (formData.sub2Qty || 0)
+                    }
+                  />
                 </span>
               </div>
             </div>
@@ -1230,7 +1289,7 @@ export default function Catalog2Page() {
           stone: "없음",
           vendor: String(row.vendor_party_id || "-"),
           color: "-",
-          cost: row.labor_total_cost ? `₩${Number(row.labor_total_cost).toLocaleString()}` : "-",
+          cost: row.labor_total_cost ? Number(row.labor_total_cost) : null,
           grades: ["-", "-", "-"],
           imageUrl: row.image_url ? String(row.image_url) : null,
           categoryCode: String(row.category_code || ""),

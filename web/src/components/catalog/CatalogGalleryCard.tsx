@@ -1,6 +1,7 @@
 import { memo, useCallback, useEffect, useRef } from "react";
 import type { CSSProperties, MouseEvent, PointerEvent } from "react";
 import { Card } from "@/components/ui/card";
+import { NumberText } from "@/components/ui/number-text";
 import { cn } from "@/lib/utils";
 
 type CatalogGalleryCardProps = {
@@ -9,9 +10,9 @@ type CatalogGalleryCardProps = {
   imageUrl?: string | null;
   isSelected: boolean;
   materialBgClass: string;
-  estimatedTotalPrice: string;
-  estimatedWeight: string;
-  laborSell: string;
+  estimatedTotalPrice: number | null;
+  estimatedWeight: { weight: number; deduction: number } | null;
+  laborSell: number | null;
   onSelect: (id: string) => void;
   onOpenEdit: () => void;
   onPreviewImage: (imageUrl: string) => void;
@@ -247,15 +248,32 @@ function CatalogGalleryCardComponent({
             <p className="text-[clamp(0.56rem,0.52rem+0.18vw,0.66rem)] font-semibold uppercase tracking-wider text-[var(--muted)] mb-0.5 leading-tight">
               예상 총 금액
             </p>
-            <p className="font-semibold text-[var(--foreground)] truncate leading-tight">{estimatedTotalPrice}</p>
+            <p className="font-semibold text-[var(--foreground)] truncate leading-tight">
+              {estimatedTotalPrice === null ? "-" : <NumberText value={estimatedTotalPrice} />} 원
+            </p>
           </div>
           <div className="min-w-0">
             <p className="text-[clamp(0.56rem,0.52rem+0.18vw,0.66rem)] font-semibold uppercase tracking-wider text-[var(--muted)] mb-0.5 leading-tight">
               예상 중량 · 공임
             </p>
             <div className="grid grid-cols-2 gap-2 text-[var(--foreground)] font-semibold leading-tight">
-              <span className="truncate">{estimatedWeight}</span>
-              <span className="truncate text-right">{laborSell}</span>
+              <span className="truncate">
+                {estimatedWeight ? (
+                  <>
+                    <NumberText value={estimatedWeight.weight} />g
+                    {estimatedWeight.deduction > 0 ? (
+                      <span className="ml-1 text-[var(--muted)]">
+                        (-<NumberText value={estimatedWeight.deduction} />)
+                      </span>
+                    ) : null}
+                  </>
+                ) : (
+                  "-"
+                )}
+              </span>
+              <span className="truncate text-right">
+                {laborSell === null ? "-" : <NumberText value={laborSell} />} 원
+              </span>
             </div>
           </div>
         </div>

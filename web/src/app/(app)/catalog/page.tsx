@@ -8,6 +8,7 @@ import { Card, CardBody, CardHeader } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input, Select, Textarea } from "@/components/ui/field";
 import { Badge } from "@/components/ui/badge";
+import { NumberText } from "@/components/ui/number-text";
 import { SearchSelect } from "@/components/ui/search-select";
 import { Modal } from "@/components/ui/modal";
 import { Grid2x2, List, X } from "lucide-react";
@@ -1296,7 +1297,7 @@ export default function CatalogPage() {
                             예상 총 금액 (판매)
                           </p>
                           <p className="text-sm font-semibold text-[var(--foreground)]">
-                            {Math.round(totalEstimatedSell).toLocaleString("ko-KR")} 원
+                            <NumberText value={totalEstimatedSell} /> 원
                           </p>
                         </div>
                         <div className="flex flex-col items-center justify-center text-center rounded-[12px] border border-[var(--panel-border)] bg-[var(--panel)] px-3 py-2">
@@ -1304,19 +1305,19 @@ export default function CatalogPage() {
                             예상 총 금액 (원가)
                           </p>
                           <p className="text-sm font-semibold text-[var(--foreground)]">
-                            {Math.round(totalEstimatedCost).toLocaleString("ko-KR")} 원
+                            <NumberText value={totalEstimatedCost} /> 원
                           </p>
                         </div>
                         <div className="flex flex-col items-center justify-center text-center rounded-[12px] border border-[var(--panel-border)] bg-[var(--panel)] px-3 py-2">
                           <p className="text-xs text-[var(--muted)]">판매 합계공임</p>
                           <p className="text-sm font-semibold text-[var(--foreground)]">
-                            {totalLaborSell.toLocaleString("ko-KR")} 원
+                            <NumberText value={totalLaborSell} /> 원
                           </p>
                         </div>
                         <div className="flex flex-col items-center justify-center text-center rounded-[12px] border border-[var(--panel-border)] bg-[var(--panel)] px-3 py-2">
                           <p className="text-xs text-[var(--muted)]">원가 합계공임</p>
                           <p className="text-sm font-semibold text-[var(--foreground)]">
-                            {totalLaborCost.toLocaleString("ko-KR")} 원
+                            <NumberText value={totalLaborCost} /> 원
                           </p>
                         </div>
                       </div>

@@ -8,6 +8,11 @@ type CatalogGalleryItem = {
   imageUrl?: string | null;
 };
 
+type EstimatedWeight = {
+  weight: number;
+  deduction: number;
+};
+
 type CatalogGalleryGridProps = {
   items: CatalogGalleryItem[];
   selectedItemId: string | null;
@@ -30,11 +35,11 @@ export function CatalogGalleryGrid({
   setPreviewImage,
 }: CatalogGalleryGridProps) {
   const estimatedTotalPriceById = useMemo(() => {
-    const map: Record<string, string> = {};
+    const map: Record<string, number | null> = {};
     items.forEach((item) => {
       const row = masterRowsById[item.id];
       if (!row) {
-        map[item.id] = "-";
+        map[item.id] = null;
         return;
       }
       const weight = parseFloat(item.weight) || 0;
@@ -50,37 +55,35 @@ export function CatalogGalleryGrid({
         (row.labor_total_sell as number | undefined) ??
         (row.labor_base_sell as number | undefined) ??
         0;
-      map[item.id] =
-        Math.round(matPrice + laborSell).toLocaleString("ko-KR") + " 원";
+      map[item.id] = matPrice + laborSell;
     });
     return map;
   }, [items, masterRowsById, calculateMaterialPrice]);
 
   const estimatedWeightById = useMemo(() => {
-    const map: Record<string, string> = {};
+    const map: Record<string, EstimatedWeight | null> = {};
     items.forEach((item) => {
       const row = masterRowsById[item.id];
-      const weight = parseFloat(item.weight) || 0;
-      const deduction =
-        parseFloat(String(row?.deduction_weight_default_g ?? 0)) || 0;
-      if (deduction > 0) {
-        map[item.id] = `${weight.toFixed(2)}g (-${deduction.toFixed(2)})`;
+      if (!row) {
+        map[item.id] = null;
         return;
       }
-      map[item.id] = `${weight.toFixed(2)}g`;
+      const weight = parseFloat(item.weight) || 0;
+      const deduction = parseFloat(String(row?.deduction_weight_default_g ?? 0)) || 0;
+      map[item.id] = { weight, deduction };
     });
     return map;
   }, [items, masterRowsById]);
 
   const laborSellById = useMemo(() => {
-    const map: Record<string, string> = {};
+    const map: Record<string, number | null> = {};
     items.forEach((item) => {
       const row = masterRowsById[item.id];
       const laborSell =
         (row?.labor_total_sell as number | undefined) ??
         (row?.labor_base_sell as number | undefined) ??
         0;
-      map[item.id] = laborSell.toLocaleString("ko-KR") + " 원";
+      map[item.id] = laborSell;
     });
     return map;
   }, [items, masterRowsById]);
