@@ -13,9 +13,9 @@ export function NumberText({ value, className, highlightClassName }: NumberTextP
   const hasComma = Boolean(parts.rest);
   return (
     <span className={className}>
-      {hasComma ? <span className={cn("text-[#39ff14]", highlightClassName)}>{parts.prefix}</span> : parts.prefix}
+      {hasComma ? <span className={cn("text-[color:var(--primary)]", highlightClassName)}>{parts.prefix}</span> : parts.prefix}
       {parts.rest}
-      {parts.decimal ? <span className="text-[#ff4d4f]">{parts.decimal}</span> : null}
+      {parts.decimal ? <span className="text-[#fca5a5]">{parts.decimal}</span> : null}
     </span>
   );
 }

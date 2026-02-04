@@ -414,7 +414,6 @@ function WorkbenchContent() {
         .select("shipment_id, status, created_at, ship_date, confirmed_at, memo, cms_shipment_line(model_name, qty, total_amount_sell_krw)")
         .eq("customer_party_id", partyId)
         .eq("is_store_pickup", true)
-        .neq("status", "CONFIRMED")
         .order("created_at", { ascending: false });
       if (error) throw error;
       return data as StorePickupShipment[];
@@ -566,12 +565,31 @@ function WorkbenchContent() {
   const handleConfirmSelectedStorePickups = async () => {
     const targets = Array.from(selectedStorePickups);
     if (targets.length === 0) return;
+    const succeeded: string[] = [];
+    const failed: Array<{ shipmentId: string; message: string }> = [];
     for (const shipmentId of targets) {
-      await confirmStorePickupMutation.mutateAsync(shipmentId);
+      try {
+        await confirmStorePickupMutation.mutateAsync(shipmentId);
+        succeeded.push(shipmentId);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "확정 실패";
+        failed.push({ shipmentId, message });
+      }
     }
-    setSelectedStorePickups(new Set());
-    const url = `/shipments_print?mode=store_pickup&party_id=${encodeURIComponent(partyId)}`;
-    window.open(url, "_blank", "noopener,noreferrer");
+
+    if (failed.length > 0) {
+      const first = failed[0];
+      toast.error("일부 확정 실패", {
+        description: `${succeeded.length}건 완료, ${failed.length}건 실패 · ${first.shipmentId}: ${first.message}`,
+      });
+    }
+
+    if (succeeded.length > 0) {
+      const url = `/shipments_print?mode=store_pickup&party_id=${encodeURIComponent(partyId)}`;
+      window.open(url, "_blank", "noopener,noreferrer");
+    }
+
+    setSelectedStorePickups(new Set(failed.map((row) => row.shipmentId)));
   };
 
   return (

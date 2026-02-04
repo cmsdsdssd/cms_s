@@ -348,16 +348,14 @@ export default function OrdersMainPage() {
     return slice;
   }, [applyFilters, itemsPerPage, startIndex]);
 
-  const pendingOrdersCount = useMemo(() => {
-    const eligible = ordersWithFactory.filter(order => {
-      const isPending = order.status === 'ORDER_PENDING';
+  const pendingFilteredOrders = useMemo(() => {
+    return applyFilters.filter((order) => {
+      const isPending = order.status === "ORDER_PENDING";
       const noPo = !order.factory_po_id;
       const hasVendor = !!order.vendor_guess_id;
       return isPending && noPo && hasVendor;
     });
-
-    return eligible.length;
-  }, [ordersWithFactory]);
+  }, [applyFilters]);
 
   const editAllHref = useMemo(() => {
     const params = new URLSearchParams();
@@ -440,7 +438,7 @@ export default function OrdersMainPage() {
             </div>
           }>
             <FactoryOrderWizard
-              orderLines={ordersWithFactory}
+              orderLines={pendingFilteredOrders}
               onClose={() => setShowFactoryOrderWizard(false)}
               onSuccess={() => {
                 setShowFactoryOrderWizard(false);
@@ -480,7 +478,7 @@ export default function OrdersMainPage() {
               <Building2 className="w-4 h-4" />
               공장발주
               <Badge tone="neutral" className="ml-1 text-[10px] h-4 px-1">
-                {pendingOrdersCount}
+                {pendingFilteredOrders.length}
               </Badge>
             </Button>
             <Link href="/orders">

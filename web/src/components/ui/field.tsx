@@ -57,9 +57,9 @@ export const Input = React.forwardRef<HTMLInputElement, React.InputHTMLAttribute
         />
         {displayParts ? (
           <div className="pointer-events-none absolute inset-0 flex items-center px-3 py-2 text-sm tabular-nums text-[var(--foreground)]">
-            {hasComma ? <span className="text-[#39ff14]">{displayParts.prefix}</span> : displayParts.prefix}
+            {hasComma ? <span className="text-[color:var(--primary)]">{displayParts.prefix}</span> : displayParts.prefix}
             {displayParts.rest}
-            {displayParts.decimal ? <span className="text-[#ff4d4f]">{displayParts.decimal}</span> : null}
+            {displayParts.decimal ? <span className="text-[#fca5a5]">{displayParts.decimal}</span> : null}
           </div>
         ) : null}
       </div>

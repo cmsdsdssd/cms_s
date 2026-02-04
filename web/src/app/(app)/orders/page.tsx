@@ -52,6 +52,14 @@ type StoneRow = {
   stone_name?: string;
 };
 
+type PlatingColorRow = {
+  plating_variant_id?: string;
+  plating_type?: string | null;
+  color_code?: string | null;
+  thickness_code?: string | null;
+  display_name?: string | null;
+};
+
 type VendorPrefixRow = {
   prefix?: string | null;
   vendor_party_id?: string | null;
@@ -297,6 +305,26 @@ const toNumber = (value: string) => {
   return parsed;
 };
 
+const normalizePlatingCode = (value: string) => value.replace(/[^A-Za-z]/g, "").toUpperCase();
+
+const actorId = (process.env.NEXT_PUBLIC_CMS_ACTOR_ID || "").trim();
+
+const upsertOrderLine = async (payload: OrderUpsertPayload) => {
+  const res = await fetch("/api/order-upsert", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+
+  const data = (await res.json()) as { data?: string; error?: string; details?: string; hint?: string };
+  if (!res.ok) {
+    const detail = [data.error, data.details, data.hint].filter(Boolean).join(" | ");
+    throw new Error(detail || "저장 실패");
+  }
+
+  return data.data ?? null;
+};
+
 // Get color string from checkboxes
 const getColorString = (row: GridRow): string => {
   if (row.color_x) return "X";
@@ -459,16 +487,59 @@ function OrdersPageContent() {
     },
   });
 
+  const platingColorQuery = useQuery({
+    queryKey: ["cms", "plating_color"],
+    queryFn: async () => {
+      const res = await fetch("/api/plating-options");
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(text || "Failed to load plating options");
+      }
+      return (await res.json()) as PlatingColorRow[];
+    },
+  });
+
   const stoneOptions = useMemo(() => {
     return (stoneQuery.data ?? [])
       .map((row) => row.stone_name ?? "")
       .filter(Boolean);
   }, [stoneQuery.data]);
 
+  const platingVariantByCode = useMemo(() => {
+    return new Map(
+      (platingColorQuery.data ?? [])
+        .map((row) => {
+          const id = row.plating_variant_id?.trim();
+          if (!id) return null;
+          const candidates = [row.color_code, row.display_name]
+            .map((value) => value?.trim())
+            .filter((value): value is string => Boolean(value));
+          if (candidates.length === 0) return null;
+          const entries = candidates.map((code) => {
+            const normalized = normalizePlatingCode(code);
+            return [[code, id], [normalized, id]] as const;
+          });
+          return entries.flat();
+        })
+        .flat()
+        .filter((entry): entry is readonly [string, string] => Boolean(entry))
+    );
+  }, [platingColorQuery.data]);
+
   function buildPayload(row: GridRow): OrderUpsertPayload {
     const master = masterCache.current.get(row.model_input.toLowerCase());
     const colorStr = getColorString(row);
     const platingStr = getPlatingString(row);
+    const platingKey = platingStr ? normalizePlatingCode(platingStr) : "";
+    const platingVariantId = platingStr
+      ? (platingVariantByCode.get(platingStr) ?? platingVariantByCode.get(platingKey) ?? null)
+      : null;
+    const centerStoneName = normalizeTextOrNull(row.center_stone);
+    const sub1StoneName = normalizeTextOrNull(row.sub1_stone);
+    const sub2StoneName = normalizeTextOrNull(row.sub2_stone);
+    const centerStoneQty = toNumber(row.center_qty);
+    const sub1StoneQty = toNumber(row.sub1_qty);
+    const sub2StoneQty = toNumber(row.sub2_qty);
 
     return {
       p_customer_party_id: row.client_id,
@@ -479,20 +550,20 @@ function OrdersPageContent() {
       p_qty: toNumber(row.qty),
       p_size: normalizeTextOrNull(row.size) as string | null,
       p_is_plated: !!(platingStr),
-      p_plating_variant_id: null,
+      p_plating_variant_id: platingVariantId,
       p_plating_color_code: platingStr || null,
       p_requested_due_date: receiptDate || null,
       p_priority_code: "NORMAL",
       p_source_channel: "web",
       p_memo: normalizeTextOrNull(row.memo),
       p_order_line_id: row.order_line_id ?? null,
-      p_center_stone_name: normalizeTextOrNull(row.center_stone),
-      p_center_stone_qty: toNumber(row.center_qty),
-      p_sub1_stone_name: normalizeTextOrNull(row.sub1_stone),
-      p_sub1_stone_qty: toNumber(row.sub1_qty),
-      p_sub2_stone_name: normalizeTextOrNull(row.sub2_stone),
-      p_sub2_stone_qty: toNumber(row.sub2_qty),
-      p_actor_person_id: process.env.NEXT_PUBLIC_CMS_ACTOR_ID ?? null,
+      p_center_stone_name: centerStoneName,
+      p_center_stone_qty: centerStoneName ? centerStoneQty : null,
+      p_sub1_stone_name: sub1StoneName,
+      p_sub1_stone_qty: sub1StoneName ? sub1StoneQty : null,
+      p_sub2_stone_name: sub2StoneName,
+      p_sub2_stone_qty: sub2StoneName ? sub2StoneQty : null,
+      p_actor_person_id: actorId || null,
     };
   }
 
@@ -842,6 +913,10 @@ function OrdersPageContent() {
     const row = rows.find((r) => r.id === rowId);
     if (!row) return;
     updateRow(rowId, { [plating]: !row[plating] });
+    setRowErrors((prev) => ({
+      ...prev,
+      [rowId]: { ...prev[rowId], plating: undefined },
+    }));
   };
 
   const toggleStones = (rowId: string) => {
@@ -1150,6 +1225,7 @@ function OrdersPageContent() {
 
   const validateRow = (row: GridRow): boolean => {
     let isValid = true;
+    const platingStr = getPlatingString(row);
     if (!row.client_id && row.client_input.trim()) {
       setRowError(row.id, { client: "등록되지 않은 거래처입니다" });
       isValid = false;
@@ -1170,6 +1246,12 @@ function OrdersPageContent() {
       setRowError(row.id, { qty: "수량을 입력하세요" });
       isValid = false;
     }
+    if (!platingStr) {
+      setRowErrors((prev) => ({
+        ...prev,
+        [row.id]: { ...prev[row.id], plating: undefined },
+      }));
+    }
     return isValid;
   };
 
@@ -1178,6 +1260,10 @@ function OrdersPageContent() {
     const status = rowStatusMap[row.id];
     if (status && !EDITABLE_STATUSES.has(status)) {
       toast.error("수정 불가", { description: "ORDER_PENDING 상태만 수정 가능합니다. 먼저 주문 취소 후 진행하세요." });
+      return;
+    }
+    if (!actorId) {
+      toast.error("저장 불가", { description: "NEXT_PUBLIC_CMS_ACTOR_ID를 확인하세요." });
       return;
     }
     if (!rowHasData(row)) return;
@@ -1195,7 +1281,7 @@ function OrdersPageContent() {
     saveInFlight.current.add(row.id);
 
     try {
-      const savedId = await callRpc<string>(CONTRACTS.functions.orderUpsertV3, payload);
+      const savedId = await upsertOrderLine(payload);
       if (savedId) {
         saveCache.current.set(row.id, cacheKey);
         updateRow(row.id, { order_line_id: String(savedId) });
@@ -1212,7 +1298,7 @@ function OrdersPageContent() {
         const normalized = await normalizeInvalidStatus(row.order_line_id);
         if (normalized) {
           try {
-            const savedId = await callRpc<string>(CONTRACTS.functions.orderUpsertV3, payload);
+            const savedId = await upsertOrderLine(payload);
             if (savedId) {
               saveCache.current.set(row.id, cacheKey);
               updateRow(row.id, { order_line_id: String(savedId) });

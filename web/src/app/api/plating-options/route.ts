@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { createClient } from "@supabase/supabase-js";
 import { getSchemaClient } from "@/lib/supabase/client";
 
 type PlatingOption = {
@@ -9,8 +10,16 @@ type PlatingOption = {
     display_name: string;
 };
 
+function getSupabaseAdmin() {
+    const url = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
+    const key = process.env.SUPABASE_SERVICE_ROLE_KEY ?? "";
+    if (!url || !key) return null;
+    return createClient(url, key);
+}
+
 export async function GET() {
-    const schema = getSchemaClient();
+    const admin = getSupabaseAdmin();
+    const schema = admin ?? getSchemaClient();
     if (!schema) {
         return NextResponse.json({ error: "Supabase not configured" }, { status: 500 });
     }

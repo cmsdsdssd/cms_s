@@ -356,6 +356,11 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
   const [lineItemsDirty, setLineItemsDirty] = useState(false);
   const [expandedLineId, setExpandedLineId] = useState<string | null>(null);
 
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<ReceiptLineItemInput | null>(null);
+  const [deleteReason, setDeleteReason] = useState("입력오류");
+  const [deleteNote, setDeleteNote] = useState("");
+
   const [previewBlobUrl, setPreviewBlobUrl] = useState<string | null>(null);
   const [previewMime, setPreviewMime] = useState<string | null>(null);
   const [isPreviewLoading, setIsPreviewLoading] = useState(false);
@@ -528,6 +533,41 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
     successMessage: "헤더 저장 완료",
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["new-receipt-workbench", "receipts"] });
+    },
+  });
+
+  const receiptLineDelete = useRpcMutation<{ ok?: boolean }>({
+    fn: CONTRACTS.functions.receiptLineDeleteV1,
+    successMessage: "라인 삭제 완료",
+    onSuccess: () => {
+      setApSyncStatus("success");
+      setApSyncMessage(null);
+      queryClient.invalidateQueries({
+        queryKey: ["new-receipt-workbench", "line-items", selectedReceiptId, lineLimit],
+      });
+      queryClient.invalidateQueries({
+        queryKey: [
+          "new-receipt-workbench",
+          "receipts",
+          statusFilter,
+          vendorFilter,
+          fromDate,
+          toDate,
+          unlinkedOnly,
+          limit,
+        ],
+      });
+      queryClient.invalidateQueries({
+        queryKey: ["new-receipt-workbench", "unlinked", selectedReceiptId, unlinkedLimit],
+      });
+      queryClient.invalidateQueries({ queryKey: ["new-receipt-workbench", "reconcile", selectedReceiptId] });
+      queryClient.invalidateQueries({ queryKey: ["new-receipt-workbench", "integrity", selectedReceiptId] });
+      queryClient.invalidateQueries({
+        predicate: (q) => {
+          const k = q.queryKey;
+          return Array.isArray(k) && k.length > 0 && k[0] === "new-receipt-workbench";
+        },
+      });
     },
   });
 
@@ -869,9 +909,59 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
     });
   }
 
-  function removeLine(lineUuid: string) {
+  function removeLineLocal(lineUuid: string) {
     setLineItemsDirty(true);
     setLineItems((prev) => prev.filter((item) => item.line_uuid !== lineUuid));
+  }
+
+  function openDeleteModal(target: ReceiptLineItemInput) {
+    setDeleteTarget(target);
+    setDeleteReason("입력오류");
+    setDeleteNote("");
+    setDeleteOpen(true);
+  }
+
+  function closeDeleteModal() {
+    setDeleteOpen(false);
+    setDeleteTarget(null);
+  }
+
+  async function confirmDelete() {
+    if (!deleteTarget) return;
+    if (!selectedReceiptId) {
+      removeLineLocal(deleteTarget.line_uuid);
+      toast.success("로컬에서만 삭제됨(저장 전)");
+      closeDeleteModal();
+      return;
+    }
+    if (lineItemsDirty) {
+      toast.error("저장되지 않은 변경사항이 있어 삭제 전에 먼저 저장해야 합니다.");
+      return;
+    }
+
+    try {
+      await receiptLineDelete.mutateAsync({
+        p_receipt_id: selectedReceiptId,
+        p_line_uuid: deleteTarget.line_uuid,
+        p_reason: deleteReason.trim() || null,
+        p_actor_person_id: null,
+        p_note: deleteNote.trim() || null,
+        p_correlation_id: null,
+      });
+      setLineItems((prev) => prev.filter((item) => item.line_uuid !== deleteTarget.line_uuid));
+      closeDeleteModal();
+    } catch (error) {
+      const message = getRpcErrorMessage(error);
+      if (message.includes("no pricing snapshot yet")) {
+        toast.error("먼저 ‘라인 저장’을 눌러 저장본을 만든 뒤 삭제하세요.");
+        return;
+      }
+      if (message.includes("cannot delete")) {
+        toast.error("이미 매칭/출고 연결된 라인이라 삭제할 수 없습니다. 먼저 연결 해제 절차가 필요합니다.");
+        return;
+      }
+      toast.error(message);
+    }
   }
 
   function updateLine(lineUuid: string, field: keyof ReceiptLineItemInput, value: string) {
@@ -1318,11 +1408,6 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
           subtitle="영수증 업로드부터 라인 입력, 매칭 확정까지 한 화면에서 처리합니다."
           actions={
             <div className="flex items-center gap-2">
-              {isPreviewExpanded ? (
-                <Button size="sm" variant="secondary" onClick={() => setIsPreviewExpanded(false)}>
-                  목록 열기
-                </Button>
-              ) : null}
               <Button variant="secondary" size="sm" onClick={() => receiptsQuery.refetch()} disabled={busy}>
                 새로고침
               </Button>
@@ -1427,19 +1512,19 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                   {receipts.map((row) => {
                     const isSelected = row.receipt_id === selectedReceiptId;
                     return (
-                    <button
-                      key={row.receipt_id}
-                      type="button"
-                      onClick={() => setSelectedReceiptId(row.receipt_id)}
-                      onDoubleClick={() => {
-                        setSelectedReceiptId(row.receipt_id);
-                        setIsPreviewExpanded(true);
-                      }}
-                      className={cn(
-                        "w-full rounded-lg border px-3 py-3 text-left transition-all",
-                        isSelected
-                          ? "border-[var(--primary)] bg-[var(--primary)]/5"
-                          : "border-transparent bg-[var(--panel)] hover:border-[var(--panel-border)]"
+                      <button
+                        key={row.receipt_id}
+                        type="button"
+                        onClick={() => setSelectedReceiptId(row.receipt_id)}
+                        onDoubleClick={() => {
+                          setSelectedReceiptId(row.receipt_id);
+                          setIsPreviewExpanded(true);
+                        }}
+                        className={cn(
+                          "w-full rounded-lg border px-3 py-3 text-left transition-all",
+                          isSelected
+                            ? "border-[var(--primary)] bg-[var(--primary)]/5"
+                            : "border-transparent bg-[var(--panel)] hover:border-[var(--panel-border)]"
                         )}
                       >
                         <div className="flex items-start justify-between gap-2">
@@ -1480,7 +1565,14 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
           <Card className="border-none shadow-sm ring-1 ring-black/5">
             <CardHeader className="border-b border-[var(--panel-border)] bg-[var(--panel)]/50 px-4 py-3">
               <div className="flex items-center justify-between">
-                <div className="text-sm font-semibold">라인 입력 (1행 요약 + 상세 펼침)</div>
+                <div className="flex items-center gap-2">
+                  <div className="text-sm font-semibold">라인 입력 (1행 요약 + 상세 펼침)</div>
+                  {isPreviewExpanded ? (
+                    <Button size="sm" variant="secondary" onClick={() => setIsPreviewExpanded(false)}>
+                      목록 열기
+                    </Button>
+                  ) : null}
+                </div>
                 <div className="flex items-center gap-2">
                   {apSyncStatus === "error" ? (
                     <div className="flex items-center gap-2">
@@ -1568,11 +1660,11 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                                 onDoubleClick={() => setExpandedLineId(item.line_uuid)}
                               >
                                 <td className="px-2 py-1">
-                                    <Input
-                                      type="text"
-                                      inputMode="numeric"
-                                      value={item.vendor_seq_no}
-                                      onChange={(e) => updateLine(item.line_uuid, "vendor_seq_no", e.target.value)}
+                                  <Input
+                                    type="text"
+                                    inputMode="numeric"
+                                    value={item.vendor_seq_no}
+                                    onChange={(e) => updateLine(item.line_uuid, "vendor_seq_no", e.target.value)}
                                     onFocus={() => setExpandedLineId(item.line_uuid)}
                                     onBlur={(e) => {
                                       const nextId = getLineIdFromTarget(e.relatedTarget);
@@ -1619,7 +1711,7 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                                       if (nextId !== item.line_uuid) setExpandedLineId(null);
                                     }}
                                     data-line-id={item.line_uuid}
-                                    className="h-9 text-[11px] leading-4"
+                                    className="h-9 px-2 py-1 text-[11px] leading-4"
                                   >
                                     <option value="">선택</option>
                                     {MATERIAL_OPTIONS.map((code) => (
@@ -1639,7 +1731,7 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                                       if (nextId !== item.line_uuid) setExpandedLineId(null);
                                     }}
                                     data-line-id={item.line_uuid}
-                                    className="h-9 text-[11px] leading-4"
+                                    className="h-9 px-2 py-1 text-[11px] leading-4"
                                   >
                                     <option value="">선택</option>
                                     <option value="P">P</option>
@@ -1687,9 +1779,9 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                               {isExpanded ? (
                                 <tr className="border-t border-[var(--panel-border)] bg-[var(--panel)]/15 text-[11px]" key={`${item.line_uuid}-detail`}>
                                   <td colSpan={8} className="px-3 py-3">
-                                    <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+                                    <div className="grid grid-cols-1 gap-3 md:grid-cols-[36px_110px_minmax(0,1.2fr)_78px_78px_minmax(0,1fr)]">
                                       <div className="space-y-1">
-                                        <label className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)]">라인 번호</label>
+                                        <label className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)]">번호</label>
                                         <Input
                                           type="text"
                                           inputMode="numeric"
@@ -1721,244 +1813,304 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                                         />
                                       </div>
                                       <div className="space-y-1">
+                                        <label className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)]">모델명</label>
+                                        <Input
+                                          value={item.model_name}
+                                          onChange={(e) => updateLine(item.line_uuid, "model_name", e.target.value)}
+                                          onBlur={(e) => {
+                                            const nextId = getLineIdFromTarget(e.relatedTarget);
+                                            if (nextId !== item.line_uuid) setExpandedLineId(null);
+                                          }}
+                                          data-line-id={item.line_uuid}
+                                          className="h-7 text-[11px]"
+                                        />
+                                      </div>
+                                      <div className="space-y-1">
+                                        <label className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)]">소재</label>
+                                          <Select
+                                            value={item.material_code}
+                                            onChange={(e) => updateLineMaterial(item.line_uuid, e.target.value)}
+                                            onBlur={(e) => {
+                                              const nextId = getLineIdFromTarget(e.relatedTarget);
+                                              if (nextId !== item.line_uuid) setExpandedLineId(null);
+                                            }}
+                                            data-line-id={item.line_uuid}
+                                            className="h-7 px-2 py-1 text-[11px] leading-4"
+                                          >
+                                          <option value="">선택</option>
+                                          {MATERIAL_OPTIONS.map((code) => (
+                                            <option key={code} value={code}>
+                                              {code}
+                                            </option>
+                                          ))}
+                                        </Select>
+                                      </div>
+                                      <div className="space-y-1">
+                                        <label className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)]">색상</label>
+                                          <Select
+                                            value={item.color}
+                                            onChange={(e) => updateLine(item.line_uuid, "color", e.target.value)}
+                                            onBlur={(e) => {
+                                              const nextId = getLineIdFromTarget(e.relatedTarget);
+                                              if (nextId !== item.line_uuid) setExpandedLineId(null);
+                                            }}
+                                            data-line-id={item.line_uuid}
+                                            className="h-7 px-2 py-1 text-[11px] leading-4"
+                                          >
+                                          <option value="">선택</option>
+                                          <option value="P">P</option>
+                                          <option value="W">W</option>
+                                          <option value="G">G</option>
+                                          <option value="PW">PW</option>
+                                          <option value="PG">PG</option>
+                                          <option value="WG">WG</option>
+                                          <option value="PWG">PWG</option>
+                                        </Select>
+                                      </div>
+                                      <div className="space-y-1">
+                                        <label className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)]">비고</label>
+                                        <Input
+                                          value={item.remark}
+                                          onChange={(e) => updateLine(item.line_uuid, "remark", e.target.value)}
+                                          onBlur={(e) => {
+                                            const nextId = getLineIdFromTarget(e.relatedTarget);
+                                            if (nextId !== item.line_uuid) setExpandedLineId(null);
+                                          }}
+                                          data-line-id={item.line_uuid}
+                                          className="h-7 text-[11px]"
+                                        />
+                                      </div>
+                                    </div>
+                                    <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-[36px_minmax(0,1.2fr)_86px_86px_110px_110px]">
+                                      <div className="space-y-1">
+                                        <label className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)]">수량</label>
+                                        <Input
+                                          type="text"
+                                          inputMode="numeric"
+                                          value={item.qty}
+                                          onChange={(e) => updateLineNumber(item.line_uuid, "qty", e.target.value)}
+                                          onBlur={(e) => {
+                                            const nextId = getLineIdFromTarget(e.relatedTarget);
+                                            if (nextId !== item.line_uuid) setExpandedLineId(null);
+                                          }}
+                                          data-line-id={item.line_uuid}
+                                          className="h-8 text-[11px] text-right"
+                                        />
+                                      </div>
+                                      <div className="space-y-1">
                                         <label className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)]">고객명</label>
                                         <Input
                                           value={item.customer_factory_code.trim() ? customerNameMap[item.customer_factory_code.trim()] ?? "매칭되는 고객 없음" : ""}
                                           readOnly
-                                          className={`h-7 text-[11px] ${AUTO_FIELD_CLASS}`}
-                                        />
-                                      </div>
-                                    </div>
-                                    <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-6">
-                                      <div className="space-y-1">
-                                        <label className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)]">중심석 개수</label>
-                                    <Input
-                                      type="text"
-                                      inputMode="numeric"
-                                      value={item.stone_center_qty}
-                                      onChange={(e) =>
-                                        updateLineNumberAndResetTotal(item.line_uuid, "stone_center_qty", e.target.value)
-                                      }
-                                      onBlur={(e) => {
-                                        const nextId = getLineIdFromTarget(e.relatedTarget);
-                                        if (nextId !== item.line_uuid) setExpandedLineId(null);
-                                      }}
-                                          data-line-id={item.line_uuid}
-                                    className="h-9 text-[11px] text-right"
-                                        />
-                                      </div>
-                                      <div className="space-y-1">
-                                        <label className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)]">중심석 단가</label>
-                                    <Input
-                                      type="text"
-                                      inputMode="numeric"
-                                      value={item.stone_center_unit_cost_krw}
-                                      onChange={(e) =>
-                                        updateLineNumberAndResetTotal(
-                                          item.line_uuid,
-                                          "stone_center_unit_cost_krw",
-                                          e.target.value
-                                        )
-                                      }
-                                      onBlur={(e) => {
-                                        const nextId = getLineIdFromTarget(e.relatedTarget);
-                                        if (nextId !== item.line_uuid) setExpandedLineId(null);
-                                      }}
-                                          data-line-id={item.line_uuid}
-                                    className="h-9 text-[11px] text-right"
-                                        />
-                                      </div>
-                                      <div className="space-y-1">
-                                        <label className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)]">보조1석 개수</label>
-                                    <Input
-                                      type="text"
-                                      inputMode="numeric"
-                                      value={item.stone_sub1_qty}
-                                      onChange={(e) =>
-                                        updateLineNumberAndResetTotal(item.line_uuid, "stone_sub1_qty", e.target.value)
-                                      }
-                                      onBlur={(e) => {
-                                        const nextId = getLineIdFromTarget(e.relatedTarget);
-                                        if (nextId !== item.line_uuid) setExpandedLineId(null);
-                                      }}
-                                          data-line-id={item.line_uuid}
-                                    className="h-9 text-[11px] text-right"
-                                        />
-                                      </div>
-                                      <div className="space-y-1">
-                                        <label className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)]">보조1석 단가</label>
-                                    <Input
-                                      type="text"
-                                      inputMode="numeric"
-                                      value={item.stone_sub1_unit_cost_krw}
-                                      onChange={(e) =>
-                                        updateLineNumberAndResetTotal(
-                                          item.line_uuid,
-                                          "stone_sub1_unit_cost_krw",
-                                          e.target.value
-                                        )
-                                      }
-                                      onBlur={(e) => {
-                                        const nextId = getLineIdFromTarget(e.relatedTarget);
-                                        if (nextId !== item.line_uuid) setExpandedLineId(null);
-                                      }}
-                                          data-line-id={item.line_uuid}
-                                    className="h-9 text-[11px] text-right"
-                                        />
-                                      </div>
-                                      <div className="space-y-1">
-                                        <label className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)]">보조2석 개수</label>
-                                    <Input
-                                      type="text"
-                                      inputMode="numeric"
-                                      value={item.stone_sub2_qty}
-                                      onChange={(e) =>
-                                        updateLineNumberAndResetTotal(item.line_uuid, "stone_sub2_qty", e.target.value)
-                                      }
-                                      onBlur={(e) => {
-                                        const nextId = getLineIdFromTarget(e.relatedTarget);
-                                        if (nextId !== item.line_uuid) setExpandedLineId(null);
-                                      }}
-                                          data-line-id={item.line_uuid}
-                                    className="h-9 text-[11px] text-right"
-                                        />
-                                      </div>
-                                      <div className="space-y-1">
-                                        <label className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)]">보조2석 단가</label>
-                                    <Input
-                                      type="text"
-                                      inputMode="numeric"
-                                      value={item.stone_sub2_unit_cost_krw}
-                                      onChange={(e) =>
-                                        updateLineNumberAndResetTotal(
-                                          item.line_uuid,
-                                          "stone_sub2_unit_cost_krw",
-                                          e.target.value
-                                        )
-                                      }
-                                      onBlur={(e) => {
-                                        const nextId = getLineIdFromTarget(e.relatedTarget);
-                                        if (nextId !== item.line_uuid) setExpandedLineId(null);
-                                      }}
-                                          data-line-id={item.line_uuid}
-                                    className="h-9 text-[11px] text-right"
-                                        />
-                                      </div>
-                                    </div>
-                                    <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-3">
-                                      <div className="space-y-1">
-                                        <label className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)]">수량</label>
-                                    <Input
-                                      type="text"
-                                      inputMode="numeric"
-                                      value={item.qty}
-                                      onChange={(e) => updateLineNumber(item.line_uuid, "qty", e.target.value)}
-                                      onBlur={(e) => {
-                                        const nextId = getLineIdFromTarget(e.relatedTarget);
-                                        if (nextId !== item.line_uuid) setExpandedLineId(null);
-                                      }}
-                                          data-line-id={item.line_uuid}
-                                    className="h-9 text-[11px] text-right"
+                                          className={`h-8 text-[11px] ${AUTO_FIELD_CLASS}`}
                                         />
                                       </div>
                                       <div className="space-y-1">
                                         <label className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)]">중량</label>
-                                    <Input
-                                      type="text"
-                                      inputMode="decimal"
-                                      value={item.weight_raw_g}
-                                      onChange={(e) => updateLineNumber(item.line_uuid, "weight_raw_g", e.target.value)}
-                                      onBlur={(e) => {
-                                        const nextId = getLineIdFromTarget(e.relatedTarget);
-                                        if (nextId !== item.line_uuid) setExpandedLineId(null);
-                                      }}
+                                        <Input
+                                          type="text"
+                                          inputMode="decimal"
+                                          value={item.weight_raw_g}
+                                          onChange={(e) => updateLineNumber(item.line_uuid, "weight_raw_g", e.target.value)}
+                                          onBlur={(e) => {
+                                            const nextId = getLineIdFromTarget(e.relatedTarget);
+                                            if (nextId !== item.line_uuid) setExpandedLineId(null);
+                                          }}
                                           data-line-id={item.line_uuid}
-                                    className="h-9 text-[11px] text-right"
+                                          className="h-8 text-[11px] text-right"
                                         />
                                       </div>
                                       <div className="space-y-1">
                                         <label className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)]">차감중량</label>
-                                    <Input
-                                      type="text"
-                                      inputMode="decimal"
-                                      value={item.weight_deduct_g}
-                                      onChange={(e) => updateLineNumber(item.line_uuid, "weight_deduct_g", e.target.value)}
-                                      onBlur={(e) => {
-                                        const nextId = getLineIdFromTarget(e.relatedTarget);
-                                        if (nextId !== item.line_uuid) setExpandedLineId(null);
-                                      }}
+                                        <Input
+                                          type="text"
+                                          inputMode="decimal"
+                                          value={item.weight_deduct_g}
+                                          onChange={(e) => updateLineNumber(item.line_uuid, "weight_deduct_g", e.target.value)}
+                                          onBlur={(e) => {
+                                            const nextId = getLineIdFromTarget(e.relatedTarget);
+                                            if (nextId !== item.line_uuid) setExpandedLineId(null);
+                                          }}
                                           data-line-id={item.line_uuid}
-                                    className="h-9 text-[11px] text-right"
+                                          className="h-8 text-[11px] text-right"
                                         />
                                       </div>
-                                    </div>
-                                    <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-3">
                                       <div className="space-y-1">
                                         <label className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)]">기본공임</label>
-                                    <Input
-                                      type="text"
-                                      inputMode="numeric"
-                                      value={item.labor_basic_cost_krw}
-                                      onChange={(e) =>
-                                        updateLineNumberAndResetTotal(item.line_uuid, "labor_basic_cost_krw", e.target.value)
-                                      }
-                                      onBlur={(e) => {
-                                        const nextId = getLineIdFromTarget(e.relatedTarget);
-                                        if (nextId !== item.line_uuid) setExpandedLineId(null);
-                                      }}
+                                        <Input
+                                          type="text"
+                                          inputMode="numeric"
+                                          value={item.labor_basic_cost_krw}
+                                          onChange={(e) =>
+                                            updateLineNumberAndResetTotal(item.line_uuid, "labor_basic_cost_krw", e.target.value)
+                                          }
+                                          onBlur={(e) => {
+                                            const nextId = getLineIdFromTarget(e.relatedTarget);
+                                            if (nextId !== item.line_uuid) setExpandedLineId(null);
+                                          }}
                                           data-line-id={item.line_uuid}
-                                    className="h-9 text-[11px] text-right"
+                                          className="h-8 text-[11px] text-right"
                                         />
                                       </div>
                                       <div className="space-y-1">
                                         <label className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)]">기타공임</label>
-                                    <Input
-                                      type="text"
-                                      inputMode="numeric"
-                                      value={item.labor_other_cost_krw}
-                                      onChange={(e) =>
-                                        updateLineNumberAndResetTotal(item.line_uuid, "labor_other_cost_krw", e.target.value)
-                                      }
-                                      onBlur={(e) => {
-                                        const nextId = getLineIdFromTarget(e.relatedTarget);
-                                        if (nextId !== item.line_uuid) setExpandedLineId(null);
-                                      }}
+                                        <Input
+                                          type="text"
+                                          inputMode="numeric"
+                                          value={item.labor_other_cost_krw}
+                                          onChange={(e) =>
+                                            updateLineNumberAndResetTotal(item.line_uuid, "labor_other_cost_krw", e.target.value)
+                                          }
+                                          onBlur={(e) => {
+                                            const nextId = getLineIdFromTarget(e.relatedTarget);
+                                            if (nextId !== item.line_uuid) setExpandedLineId(null);
+                                          }}
                                           data-line-id={item.line_uuid}
-                                    className="h-9 text-[11px] text-right"
+                                          className="h-8 text-[11px] text-right"
+                                        />
+                                      </div>
+                                    </div>
+                                    <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-[46px_110px_46px_110px_46px_110px_110px_172px]">
+                                      <div className="space-y-1">
+                                        <label className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)]">중심 개수</label>
+                                        <Input
+                                          type="text"
+                                          inputMode="numeric"
+                                          value={item.stone_center_qty}
+                                          onChange={(e) =>
+                                            updateLineNumberAndResetTotal(item.line_uuid, "stone_center_qty", e.target.value)
+                                          }
+                                          onBlur={(e) => {
+                                            const nextId = getLineIdFromTarget(e.relatedTarget);
+                                            if (nextId !== item.line_uuid) setExpandedLineId(null);
+                                          }}
+                                          data-line-id={item.line_uuid}
+                                          className="h-8 text-[11px] text-right"
                                         />
                                       </div>
                                       <div className="space-y-1">
-                                        <label className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)]">총합(저장)</label>
-                                    <Input
-                                      type="text"
-                                      inputMode="numeric"
-                                      value={item.total_amount_krw}
-                                      onChange={(e) => updateLineNumber(item.line_uuid, "total_amount_krw", e.target.value)}
-                                      onBlur={(e) => {
-                                        const nextId = getLineIdFromTarget(e.relatedTarget);
-                                        if (nextId !== item.line_uuid) setExpandedLineId(null);
-                                      }}
+                                        <label className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)]">중심석 원가</label>
+                                        <Input
+                                          type="text"
+                                          inputMode="numeric"
+                                          value={item.stone_center_unit_cost_krw}
+                                          onChange={(e) =>
+                                            updateLineNumberAndResetTotal(
+                                              item.line_uuid,
+                                              "stone_center_unit_cost_krw",
+                                              e.target.value
+                                            )
+                                          }
+                                          onBlur={(e) => {
+                                            const nextId = getLineIdFromTarget(e.relatedTarget);
+                                            if (nextId !== item.line_uuid) setExpandedLineId(null);
+                                          }}
                                           data-line-id={item.line_uuid}
-                                    className="h-9 text-[11px] text-right"
-                                          placeholder={String(totalAmount)}
+                                          className="h-8 text-[11px] text-right"
+                                        />
+                                      </div>
+                                      <div className="space-y-1">
+                                        <label className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)]">1 개수</label>
+                                        <Input
+                                          type="text"
+                                          inputMode="numeric"
+                                          value={item.stone_sub1_qty}
+                                          onChange={(e) =>
+                                            updateLineNumberAndResetTotal(item.line_uuid, "stone_sub1_qty", e.target.value)
+                                          }
+                                          onBlur={(e) => {
+                                            const nextId = getLineIdFromTarget(e.relatedTarget);
+                                            if (nextId !== item.line_uuid) setExpandedLineId(null);
+                                          }}
+                                          data-line-id={item.line_uuid}
+                                          className="h-8 text-[11px] text-right"
+                                        />
+                                      </div>
+                                      <div className="space-y-1">
+                                        <label className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)]">보조1석 원가</label>
+                                        <Input
+                                          type="text"
+                                          inputMode="numeric"
+                                          value={item.stone_sub1_unit_cost_krw}
+                                          onChange={(e) =>
+                                            updateLineNumberAndResetTotal(
+                                              item.line_uuid,
+                                              "stone_sub1_unit_cost_krw",
+                                              e.target.value
+                                            )
+                                          }
+                                          onBlur={(e) => {
+                                            const nextId = getLineIdFromTarget(e.relatedTarget);
+                                            if (nextId !== item.line_uuid) setExpandedLineId(null);
+                                          }}
+                                          data-line-id={item.line_uuid}
+                                          className="h-8 text-[11px] text-right"
+                                        />
+                                      </div>
+                                      <div className="space-y-1">
+                                        <label className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)]">2 개수</label>
+                                        <Input
+                                          type="text"
+                                          inputMode="numeric"
+                                          value={item.stone_sub2_qty}
+                                          onChange={(e) =>
+                                            updateLineNumberAndResetTotal(item.line_uuid, "stone_sub2_qty", e.target.value)
+                                          }
+                                          onBlur={(e) => {
+                                            const nextId = getLineIdFromTarget(e.relatedTarget);
+                                            if (nextId !== item.line_uuid) setExpandedLineId(null);
+                                          }}
+                                          data-line-id={item.line_uuid}
+                                          className="h-8 text-[11px] text-right"
+                                        />
+                                      </div>
+                                      <div className="space-y-1">
+                                        <label className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)]">보조2석 원가</label>
+                                        <Input
+                                          type="text"
+                                          inputMode="numeric"
+                                          value={item.stone_sub2_unit_cost_krw}
+                                          onChange={(e) =>
+                                            updateLineNumberAndResetTotal(
+                                              item.line_uuid,
+                                              "stone_sub2_unit_cost_krw",
+                                              e.target.value
+                                            )
+                                          }
+                                          onBlur={(e) => {
+                                            const nextId = getLineIdFromTarget(e.relatedTarget);
+                                            if (nextId !== item.line_uuid) setExpandedLineId(null);
+                                          }}
+                                          data-line-id={item.line_uuid}
+                                          className="h-8 text-[11px] text-right"
+                                        />
+                                      </div>
+                                      <div className="space-y-1">
+                                        <label className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)]">총중량</label>
+                                        <Input
+                                          inputMode="decimal"
+                                          value={weightTotal}
+                                          readOnly
+                                          className={`h-8 text-[11px] text-right ${AUTO_FIELD_CLASS}`}
+                                        />
+                                      </div>
+                                      <div className="space-y-1">
+                                        <label className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)]">총공임</label>
+                                        <Input
+                                          inputMode="numeric"
+                                          value={factoryTotalCost}
+                                          readOnly
+                                          className={`h-8 text-[11px] text-right ${AUTO_FIELD_CLASS}`}
                                         />
                                       </div>
                                     </div>
-                                    <div className="mt-3 space-y-1">
-                                      <label className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)]">비고</label>
-                                      <Input
-                                        value={item.remark}
-                                        onChange={(e) => updateLine(item.line_uuid, "remark", e.target.value)}
-                                        onBlur={(e) => {
-                                          const nextId = getLineIdFromTarget(e.relatedTarget);
-                                          if (nextId !== item.line_uuid) setExpandedLineId(null);
-                                        }}
-                                        data-line-id={item.line_uuid}
-                                    className="h-9 text-[11px]"
-                                      />
-                                    </div>
                                     <div className="mt-3 flex justify-end">
-                                      <Button size="sm" variant="ghost" onClick={() => removeLine(item.line_uuid)}>
+                                      <Button
+                                        size="sm"
+                                        variant="ghost"
+                                        onClick={() => openDeleteModal(item)}
+                                        disabled={receiptLineDelete.isPending}
+                                      >
                                         삭제
                                       </Button>
                                     </div>
@@ -2051,11 +2203,11 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                       ) : (
                         <div className="space-y-4">
                           {factoryRows.map((row) => (
-                            <div key={row.rowCode} className="rounded-lg border border-[var(--panel-border)] bg-[var(--panel)] p-4">
-                              <div className="grid grid-cols-1 gap-3 md:grid-cols-[120px_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.2fr)] md:items-center">
+                            <div key={row.rowCode} className="rounded-lg border border-[var(--panel-border)] bg-[var(--panel)] p-3">
+                              <div className="grid grid-cols-1 gap-2 md:grid-cols-[110px_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.2fr)] md:items-center">
                                 <div className="text-sm font-semibold text-[var(--foreground)]">{row.label}</div>
-                                <div className="space-y-1">
-                                  <label className="text-xs font-semibold uppercase tracking-wider text-[var(--muted)]">금</label>
+                                <div className="space-y-0.5">
+                                  <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--muted)]">금</label>
                                   <div className="flex items-center gap-2">
                                     <Input
                                       type="text"
@@ -2064,13 +2216,13 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                                       onChange={(e) =>
                                         updateFactoryMetal(row.rowCode, "gold", { value: formatNumberInput(e.target.value) })
                                       }
-                                      className="h-8 text-sm text-right"
+                                      className="h-7 text-sm text-right"
                                     />
                                     <span className="text-xs text-[var(--muted)]">g</span>
                                   </div>
                                 </div>
-                                <div className="space-y-1">
-                                  <label className="text-xs font-semibold uppercase tracking-wider text-[var(--muted)]">은</label>
+                                <div className="space-y-0.5">
+                                  <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--muted)]">은</label>
                                   <div className="flex items-center gap-2">
                                     <Input
                                       type="text"
@@ -2079,28 +2231,28 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                                       onChange={(e) =>
                                         updateFactoryMetal(row.rowCode, "silver", { value: formatNumberInput(e.target.value) })
                                       }
-                                      className="h-8 text-sm text-right"
+                                      className="h-7 text-sm text-right"
                                     />
                                     <span className="text-xs text-[var(--muted)]">g</span>
                                   </div>
                                 </div>
-                                <div className="space-y-1">
-                                  <label className="text-xs font-semibold uppercase tracking-wider text-[var(--muted)]">공임현금</label>
+                                <div className="space-y-0.5">
+                                  <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--muted)]">공임현금</label>
                                   <Input
                                     type="text"
                                     inputMode="numeric"
                                     value={row.laborKrw}
                                     onChange={(e) => updateFactoryRow(row.rowCode, { laborKrw: formatNumberInput(e.target.value) })}
-                                    className="h-8 text-sm text-right"
+                                    className="h-7 text-sm text-right"
                                   />
                                 </div>
-                                <div className="space-y-1">
-                                  <label className="text-xs font-semibold uppercase tracking-wider text-[var(--muted)]">행 메모</label>
+                                <div className="space-y-0.5">
+                                  <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--muted)]">행 메모</label>
                                   <Input
                                     placeholder="선택"
                                     value={row.note}
                                     onChange={(e) => updateFactoryRow(row.rowCode, { note: e.target.value })}
-                                    className="h-8 text-sm"
+                                    className="h-7 text-sm"
                                   />
                                 </div>
                               </div>
@@ -2112,7 +2264,7 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                             onChange={(e) => setFactoryNote(e.target.value)}
                             className="min-h-[90px] text-sm"
                           />
-                      <div className="text-xs text-[var(--muted)]">g 입력은 자동으로 돈 기준(1 don = 3.75g)으로 기록됩니다.</div>
+                          <div className="text-xs text-[var(--muted)]">g 입력은 자동으로 돈 기준(1 don = 3.75g)으로 기록됩니다.</div>
                         </div>
                       )}
                     </CardBody>
@@ -2129,11 +2281,6 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
               <div className="flex items-center justify-between">
                 <div className="text-sm font-semibold">영수증 미리보기</div>
                 <div className="flex items-center gap-2">
-                  {isPreviewExpanded ? (
-                    <Button size="sm" variant="secondary" onClick={() => setIsPreviewExpanded(false)}>
-                      목록 열기
-                    </Button>
-                  ) : null}
                   <Button size="sm" variant="secondary" onClick={saveHeader} disabled={!selectedReceiptId || headerUpdate.isPending}>
                     헤더 저장
                   </Button>
@@ -2205,11 +2352,11 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                       <div className="flex h-52 items-center justify-center text-sm text-[var(--muted)]">로딩 중...</div>
                     ) : previewBlobUrl ? (
                       <div className="bg-[var(--surface)]">
-                      {previewMime?.startsWith("image/") ? (
-                        <img src={previewBlobUrl} alt="Receipt Preview" className={`${previewImageClass} w-full object-contain`} />
-                      ) : previewMime === "application/pdf" ? (
-                        <iframe src={previewBlobUrl} className={`${previewFrameClass} w-full`} title="Receipt PDF Preview" />
-                      ) : (
+                        {previewMime?.startsWith("image/") ? (
+                          <img src={previewBlobUrl} alt="Receipt Preview" className={`${previewImageClass} w-full object-contain`} />
+                        ) : previewMime === "application/pdf" ? (
+                          <iframe src={previewBlobUrl} className={`${previewFrameClass} w-full`} title="Receipt PDF Preview" />
+                        ) : (
                           <div className="flex h-40 items-center justify-center text-sm text-[var(--muted)]">
                             미리보기를 표시할 수 없습니다
                           </div>
@@ -2283,12 +2430,12 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                 <div className="space-y-4">
                   <div>
                     <div className="flex items-center justify-between">
-                    <div className="text-sm font-semibold">미매칭 라인</div>
-                    <Badge tone="neutral" className="h-5 px-2 text-[10px]">
-                      {unlinkedQuery.data?.length ?? 0}건
-                    </Badge>
-                  </div>
-                  <div className="mt-2 max-h-48 overflow-y-auto space-y-1">
+                      <div className="text-sm font-semibold">미매칭 라인</div>
+                      <Badge tone="neutral" className="h-5 px-2 text-[10px]">
+                        {unlinkedQuery.data?.length ?? 0}건
+                      </Badge>
+                    </div>
+                    <div className="mt-2 max-h-48 overflow-y-auto space-y-1">
                       {unlinkedQuery.isLoading ? (
                         <Skeleton className="h-10 w-full" />
                       ) : (unlinkedQuery.data ?? []).length === 0 ? (
@@ -2420,69 +2567,165 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                   {suggestions.length > 0 && (
                     <div className="space-y-2">
                       <div className="text-sm font-semibold">추천 후보</div>
-                      {suggestions.map((candidate, idx) => {
-                        const key = candidate.order_line_id ?? `candidate-${idx}`;
-                        const expanded = scoreOpenMap[key] ?? false;
-                        const platedLabel =
-                          candidate.is_plated === null || candidate.is_plated === undefined
-                            ? "-"
-                            : candidate.is_plated
-                              ? "Y"
-                              : "N";
+                      {(() => {
+                        const baseCustomerCode = selectedUnlinked?.customer_factory_code?.trim() ?? "";
+                        const baseCustomerName = baseCustomerCode
+                          ? customerNameMap[baseCustomerCode] ?? "매칭되는 고객 없음"
+                          : "-";
+                        const baseLine = selectedUnlinked
+                          ? {
+                            modelName: selectedUnlinked.model_name ?? "-",
+                            material: selectedUnlinked.material_code ?? "-",
+                            color: selectedUnlinked.color ?? "-",
+                            size: selectedUnlinked.size ?? "-",
+                            plated: "-",
+                            platingColor: "-",
+                            memo: selectedUnlinked.remark ?? "-",
+                            customerCode: baseCustomerCode || "-",
+                            customerName: baseCustomerName,
+                            stoneCenter: formatNumber(selectedUnlinked.stone_center_qty),
+                            stoneSub1: formatNumber(selectedUnlinked.stone_sub1_qty),
+                            stoneSub2: formatNumber(selectedUnlinked.stone_sub2_qty),
+                          }
+                          : null;
+
+                        const diffClass = (value: string, base?: string | null) =>
+                          baseLine && base !== undefined && base !== null && value !== base
+                            ? "bg-amber-500/10 text-[var(--foreground)]"
+                            : "";
+
                         return (
-                              <div key={key} className="rounded-lg border border-[var(--panel-border)] bg-[var(--panel)] p-3 text-xs">
-                                <div className="flex items-start justify-between gap-2">
-                                  <div>
-                                  <div className="text-[var(--muted)] grid grid-cols-[160px_1fr]">
-                                    <span className="font-semibold text-[var(--foreground)]">모델명</span>
-                                    <span className="font-semibold text-[var(--foreground)]">{candidate.model_name ?? "-"}</span>
-                                  </div>
-                                  <div className="mt-1 text-[var(--muted)] grid grid-cols-[160px_1fr]">
-                                    <span className="font-semibold text-[var(--foreground)]">소재/색상/사이즈</span>
-                                    <span>{candidate.material_code ?? "-"}&nbsp;&nbsp;&nbsp;{candidate.color ?? "-"}&nbsp;&nbsp;&nbsp;{candidate.size ?? "-"}</span>
-                                  </div>
-                                  <div className="mt-1 text-[var(--muted)] grid grid-cols-[160px_1fr]">
-                                    <span className="font-semibold text-[var(--foreground)]">도금여부/도금색상/비고</span>
-                                    <span>{platedLabel}&nbsp;&nbsp;&nbsp;{candidate.plating_color_code ?? "-"}&nbsp;&nbsp;&nbsp;{candidate.memo ?? "-"}</span>
-                                  </div>
-                                  <div className="mt-1 text-[var(--muted)] grid grid-cols-[160px_1fr]">
-                                    <span className="font-semibold text-[var(--foreground)]">거래처</span>
-                                    <span>{candidate.customer_mask_code ?? "-"}&nbsp;&nbsp;&nbsp;{candidate.customer_name ?? "-"}</span>
-                                  </div>
-                                  <div className="mt-1 text-[var(--muted)] grid grid-cols-[160px_1fr]">
-                                    <span className="font-semibold text-[var(--foreground)]">중심/보조1/보조2</span>
-                                    <span>-&nbsp;&nbsp;&nbsp;-&nbsp;&nbsp;&nbsp;-</span>
-                                  </div>
-                                </div>
-                                <div className="flex flex-col items-end gap-2">
-                                  <Badge tone="active" className="h-6 px-2 text-xs font-bold">점수 {formatNumber(candidate.match_score)}</Badge>
-                                  <Button
-                                    size="sm"
-                                    variant={selectedCandidate?.order_line_id === candidate.order_line_id ? "primary" : "secondary"}
-                                    onClick={() => {
-                                      setSelectedCandidate(candidate);
-                                    setConfirmResult(null);
-                                  }}
-                                >
-                                  선택
-                                </Button>
-                              </div>
-                            </div>
-                            <button
-                              type="button"
-                              className="mt-2 text-[var(--primary)]"
-                              onClick={() => setScoreOpenMap((prev) => ({ ...prev, [key]: !expanded }))}
-                            >
-                              {expanded ? "점수 상세 닫기" : "점수 상세 보기"}
-                            </button>
-                            {expanded ? (
-                              <pre className="mt-2 max-h-40 overflow-auto rounded-md bg-[var(--surface)] p-2 text-[10px] text-[var(--muted)]">
-                                {JSON.stringify(candidate.score_detail_json ?? {}, null, 2)}
-                              </pre>
-                            ) : null}
+                          <div className="overflow-x-auto rounded-lg border border-[var(--panel-border)] bg-[var(--panel)]">
+                            <table className="w-full text-xs">
+                              <thead className="bg-[var(--panel)]/70 text-[var(--muted)]">
+                                <tr>
+                                  <th className="px-2 py-2 text-left w-[56px]">구분</th>
+                                  <th className="px-2 py-2 text-left">모델명</th>
+                                  <th className="px-2 py-2 text-left">소재</th>
+                                  <th className="px-2 py-2 text-left">색상</th>
+                                  <th className="px-2 py-2 text-left">사이즈</th>
+                                  <th className="px-2 py-2 text-left">도금</th>
+                                  <th className="px-2 py-2 text-left">도금색상</th>
+                                  <th className="px-2 py-2 text-left">비고</th>
+                                  <th className="px-2 py-2 text-left">거래처코드</th>
+                                  <th className="px-2 py-2 text-left">거래처명</th>
+                                  <th className="px-2 py-2 text-left">중심</th>
+                                  <th className="px-2 py-2 text-left">보조1</th>
+                                  <th className="px-2 py-2 text-left">보조2</th>
+                                  <th className="px-2 py-2 text-right w-[96px]">점수</th>
+                                  <th className="px-2 py-2 text-right w-[140px]">선택</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {baseLine ? (
+                                  <tr className="border-t border-[var(--panel-border)] bg-[var(--surface)]/40 text-[var(--foreground)]">
+                                    <td className="px-2 py-2 font-semibold">기준</td>
+                                    <td className="px-2 py-2">{baseLine.modelName}</td>
+                                    <td className="px-2 py-2">{baseLine.material}</td>
+                                    <td className="px-2 py-2">{baseLine.color}</td>
+                                    <td className="px-2 py-2">{baseLine.size}</td>
+                                    <td className="px-2 py-2">{baseLine.plated}</td>
+                                    <td className="px-2 py-2">{baseLine.platingColor}</td>
+                                    <td className="px-2 py-2">{baseLine.memo}</td>
+                                    <td className="px-2 py-2">{baseLine.customerCode}</td>
+                                    <td className="px-2 py-2">{baseLine.customerName}</td>
+                                    <td className="px-2 py-2">{baseLine.stoneCenter}</td>
+                                    <td className="px-2 py-2">{baseLine.stoneSub1}</td>
+                                    <td className="px-2 py-2">{baseLine.stoneSub2}</td>
+                                    <td className="px-2 py-2 text-right">-</td>
+                                    <td className="px-2 py-2 text-right">-</td>
+                                  </tr>
+                                ) : null}
+                                {suggestions.map((candidate, idx) => {
+                                  const key = candidate.order_line_id ?? `candidate-${idx}`;
+                                  const expanded = scoreOpenMap[key] ?? false;
+                                  const platedLabel =
+                                    candidate.is_plated === null || candidate.is_plated === undefined
+                                      ? "-"
+                                      : candidate.is_plated
+                                        ? "Y"
+                                        : "N";
+                                  const row = {
+                                    modelName: candidate.model_name ?? "-",
+                                    material: candidate.material_code ?? "-",
+                                    color: candidate.color ?? "-",
+                                    size: candidate.size ?? "-",
+                                    plated: platedLabel,
+                                    platingColor: candidate.plating_color_code ?? "-",
+                                    memo: candidate.memo ?? "-",
+                                    customerCode: candidate.customer_mask_code ?? "-",
+                                    customerName: candidate.customer_name ?? "-",
+                                    stoneCenter: "-",
+                                    stoneSub1: "-",
+                                    stoneSub2: "-",
+                                  };
+
+                                  return (
+                                    <Fragment key={key}>
+                                      <tr className="border-t border-[var(--panel-border)]">
+                                        <td className="px-2 py-2 text-[var(--muted)]">후보</td>
+                                        <td className={cn("px-2 py-2", diffClass(row.modelName, baseLine?.modelName))}>{row.modelName}</td>
+                                        <td className={cn("px-2 py-2", diffClass(row.material, baseLine?.material))}>{row.material}</td>
+                                        <td className={cn("px-2 py-2", diffClass(row.color, baseLine?.color))}>{row.color}</td>
+                                        <td className={cn("px-2 py-2", diffClass(row.size, baseLine?.size))}>{row.size}</td>
+                                        <td className={cn("px-2 py-2", diffClass(row.plated, baseLine?.plated))}>{row.plated}</td>
+                                        <td className={cn("px-2 py-2", diffClass(row.platingColor, baseLine?.platingColor))}>{row.platingColor}</td>
+                                        <td className={cn("px-2 py-2", diffClass(row.memo, baseLine?.memo))}>{row.memo}</td>
+                                        <td className={cn("px-2 py-2", diffClass(row.customerCode, baseLine?.customerCode))}>{row.customerCode}</td>
+                                        <td className={cn("px-2 py-2", diffClass(row.customerName, baseLine?.customerName))}>{row.customerName}</td>
+                                        <td className={cn("px-2 py-2", diffClass(row.stoneCenter, baseLine?.stoneCenter))}>{row.stoneCenter}</td>
+                                        <td className={cn("px-2 py-2", diffClass(row.stoneSub1, baseLine?.stoneSub1))}>{row.stoneSub1}</td>
+                                        <td className={cn("px-2 py-2", diffClass(row.stoneSub2, baseLine?.stoneSub2))}>{row.stoneSub2}</td>
+                                        <td className="px-2 py-2 text-right">
+                                          <Badge tone="warning" className="h-6 px-2 text-[10px] font-bold">
+                                            점수 {formatNumber(candidate.match_score)}
+                                          </Badge>
+                                        </td>
+                                        <td className="px-2 py-2 text-right">
+                                          <div className="flex items-center justify-end gap-2 whitespace-nowrap">
+                                            {selectedCandidate?.order_line_id === candidate.order_line_id ? (
+                                              <Badge tone="active" className="h-5 px-2 text-[10px]">
+                                                선택됨
+                                              </Badge>
+                                            ) : null}
+                                            <Button
+                                              size="sm"
+                                              variant={selectedCandidate?.order_line_id === candidate.order_line_id ? "primary" : "secondary"}
+                                              onClick={() => {
+                                                setSelectedCandidate(candidate);
+                                                setConfirmResult(null);
+                                              }}
+                                            >
+                                              선택
+                                            </Button>
+                                          </div>
+                                        </td>
+                                      </tr>
+                                      <tr className="border-t border-[var(--panel-border)]">
+                                        <td className="px-2 py-1 text-[var(--muted)]"> </td>
+                                        <td className="px-2 py-1" colSpan={13}>
+                                          <button
+                                            type="button"
+                                            className="text-[var(--primary)]"
+                                            onClick={() => setScoreOpenMap((prev) => ({ ...prev, [key]: !expanded }))}
+                                          >
+                                            {expanded ? "점수 상세 닫기" : "점수 상세 보기"}
+                                          </button>
+                                          {expanded ? (
+                                            <pre className="mt-2 max-h-40 overflow-auto rounded-md bg-[var(--surface)] p-2 text-[10px] text-[var(--muted)]">
+                                              {JSON.stringify(candidate.score_detail_json ?? {}, null, 2)}
+                                            </pre>
+                                          ) : null}
+                                        </td>
+                                      </tr>
+                                    </Fragment>
+                                  );
+                                })}
+                              </tbody>
+                            </table>
                           </div>
                         );
-                      })}
+                      })()}
                     </div>
                   )}
 
@@ -2595,6 +2838,78 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
           </Card>
         </div>
       </div>
+
+      <Modal open={deleteOpen} onClose={closeDeleteModal} title="라인 삭제">
+        <div className="space-y-4">
+          {deleteTarget ? (
+            <div className="rounded-lg border border-[var(--panel-border)] bg-[var(--surface)]/60 p-3 text-xs">
+              <div className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)]">삭제 대상</div>
+              <div className="mt-2 flex flex-wrap items-center gap-2 text-sm">
+                <span className="font-semibold text-[var(--foreground)]">
+                  {deleteTarget.model_name?.trim() ? deleteTarget.model_name : "모델명 없음"}
+                </span>
+                <Badge tone="neutral" className="h-5 px-2 text-[10px]">
+                  수량 {formatNumber(parseNumber(deleteTarget.qty) ?? 0)}
+                </Badge>
+                <Badge tone="neutral" className="h-5 px-2 text-[10px]">
+                  금액 {formatNumber(parseNumber(deleteTarget.total_amount_krw) ?? 0)}
+                </Badge>
+              </div>
+              <div className="mt-1 text-[11px] text-[var(--muted)]">
+                UUID {deleteTarget.line_uuid ? deleteTarget.line_uuid.slice(0, 8) : "-"}
+              </div>
+            </div>
+          ) : null}
+
+          <div className="space-y-1.5">
+            <label className="text-xs font-semibold uppercase tracking-wider text-[var(--muted)]">삭제 사유*</label>
+            <Select value={deleteReason} onChange={(e) => setDeleteReason(e.target.value)}>
+              <option value="입력오류">입력오류</option>
+              <option value="중복라인">중복라인</option>
+              <option value="공장 영수증 정정">공장 영수증 정정</option>
+              <option value="테스트/샘플">테스트/샘플</option>
+              <option value="기타">기타</option>
+            </Select>
+          </div>
+
+          <div className="space-y-1.5">
+            <label className="text-xs font-semibold uppercase tracking-wider text-[var(--muted)]">메모</label>
+            <Textarea
+              value={deleteNote}
+              onChange={(e) => setDeleteNote(e.target.value)}
+              placeholder="메모 (선택)"
+              className="min-h-[80px] text-xs"
+            />
+          </div>
+
+          {lineItemsDirty ? (
+            <div className="rounded-lg border border-[var(--danger)]/30 bg-[var(--danger)]/10 p-3 text-xs">
+              <div className="font-semibold text-[var(--danger)]">저장되지 않은 변경사항이 있습니다.</div>
+              <div className="mt-1 text-[11px] text-[var(--danger)]">
+                삭제 전에 먼저 라인 저장을 진행해 주세요.
+              </div>
+              <div className="mt-2">
+                <Button size="sm" variant="secondary" onClick={saveLines} disabled={upsertSnapshot.isPending}>
+                  먼저 저장
+                </Button>
+              </div>
+            </div>
+          ) : null}
+
+          <div className="flex items-center justify-end gap-2">
+            <Button variant="secondary" onClick={closeDeleteModal} disabled={receiptLineDelete.isPending}>
+              취소
+            </Button>
+            <Button
+              variant="danger"
+              onClick={confirmDelete}
+              disabled={lineItemsDirty || receiptLineDelete.isPending || !deleteReason.trim()}
+            >
+              삭제 확정
+            </Button>
+          </div>
+        </div>
+      </Modal>
 
       <Modal open={uploadOpen} onClose={() => setUploadOpen(false)} title="영수증 업로드">
         <div className="space-y-4">

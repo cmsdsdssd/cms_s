@@ -2,7 +2,7 @@
 
 "use client";
 
-import { useMemo, useState, Suspense } from "react";
+import { useMemo, useState, useEffect, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { ActionBar } from "@/components/layout/action-bar";
@@ -301,7 +301,11 @@ function ShipmentsPrintContent() {
   const today = useMemo(() => getKstYmd(), []);
   const todayStartIso = useMemo(() => getKstStartIso(today), [today]);
   const todayEndIso = useMemo(() => getKstNextStartIso(today), [today]);
-  const nowLabel = useMemo(() => getKstDateTime(), []);
+  const [nowLabel, setNowLabel] = useState("");
+
+  useEffect(() => {
+    setNowLabel(getKstDateTime());
+  }, []);
 
   const shipmentsQuery = useQuery({
     queryKey: ["shipments-print", today, mode, filterPartyId],

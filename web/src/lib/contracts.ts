@@ -146,6 +146,7 @@ export const CONTRACTS = {
     receiptPricingSnapshotUpsertV2: "cms_fn_upsert_receipt_pricing_snapshot_v2",
     receiptLineMatchSuggest: "cms_fn_receipt_line_match_suggest_v1",
     receiptLineMatchConfirm: "cms_fn_receipt_line_match_confirm_v1",
+    receiptLineDeleteV1: "cms_fn_receipt_line_delete_v1",
 
     // ✅ AP (미지급) RPCs
     factoryReceiptStatementUpsert: "cms_fn_upsert_factory_receipt_statement_v1",
