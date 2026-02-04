@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 
@@ -37,8 +37,24 @@ type ReceiptInboxRow = {
   labor_other?: number | null;
 };
 
+type HeaderSnapshot = {
+  vendorPartyId: string;
+  billNo: string;
+  billDate: string;
+  memo: string;
+};
+
+type ReceiptHeaderRow = {
+  receipt_id?: string | null;
+  vendor_party_id?: string | null;
+  bill_no?: string | null;
+  issued_at?: string | null;
+  memo?: string | null;
+};
+
 type ReceiptLineItemInput = {
   line_uuid: string;
+  receipt_line_uuid?: string | null;
   customer_factory_code: string;
   model_name: string;
   material_code: string;
@@ -106,6 +122,7 @@ type UnlinkedLineRow = {
 };
 
 type MatchCandidate = {
+  order_no?: string | null;
   order_line_id?: string | null;
   customer_party_id?: string | null;
   customer_mask_code?: string | null;
@@ -189,6 +206,37 @@ function normalizeVendorToken(label: string) {
   if (!trimmed) return "FAC";
   const cleaned = trimmed.replace(/\s+/g, "_").replace(/[^0-9A-Za-z가-힣_-]/g, "");
   return cleaned || "FAC";
+}
+
+function normalizeHeaderValue(value: string | null | undefined) {
+  return value?.trim() ?? "";
+}
+
+function normalizeHeaderSnapshot(snapshot: HeaderSnapshot) {
+  return {
+    vendorPartyId: normalizeHeaderValue(snapshot.vendorPartyId),
+    billNo: normalizeHeaderValue(snapshot.billNo),
+    billDate: normalizeHeaderValue(snapshot.billDate),
+    memo: normalizeHeaderValue(snapshot.memo),
+  };
+}
+
+function buildHeaderSnapshotFromReceipt(receipt: ReceiptInboxRow): HeaderSnapshot {
+  return {
+    vendorPartyId: receipt.vendor_party_id ?? "",
+    billNo: receipt.bill_no ?? "",
+    billDate: receipt.issued_at ? receipt.issued_at.slice(0, 10) : "",
+    memo: receipt.memo ?? "",
+  };
+}
+
+function buildHeaderSnapshotFromRow(row: ReceiptHeaderRow): HeaderSnapshot {
+  return {
+    vendorPartyId: row.vendor_party_id ?? "",
+    billNo: row.bill_no ?? "",
+    billDate: row.issued_at ? row.issued_at.slice(0, 10) : "",
+    memo: row.memo ?? "",
+  };
 }
 
 function buildBillNo(billDate: string, vendorLabel: string, seq: number) {
@@ -334,6 +382,10 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
   const [autoBillNo, setAutoBillNo] = useState<string | null>(null);
   const [billNoAutoEligible, setBillNoAutoEligible] = useState(true);
   const [billNoSuggestNonce, setBillNoSuggestNonce] = useState(0);
+  const headerSnapshotsRef = useRef<Map<string, HeaderSnapshot>>(new Map());
+  const [headerSnapshot, setHeaderSnapshot] = useState<HeaderSnapshot | null>(null);
+  const [headerSaveNudge, setHeaderSaveNudge] = useState(false);
+  const headerNudgeTimerRef = useRef<number | null>(null);
 
   const [factoryRows, setFactoryRows] = useState<FactoryRowInput[]>(() =>
     FACTORY_ROWS.map((row) => ({
@@ -371,6 +423,7 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
   const [isUploading, setIsUploading] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const lastBillNoSuggestKey = useRef<string | null>(null);
+  const suggestTimerRef = useRef<number | null>(null);
 
   const [activeTab, setActiveTab] = useState<"match" | "reconcile" | "integrity">("match");
   const [selectedUnlinked, setSelectedUnlinked] = useState<UnlinkedLineRow | null>(null);
@@ -384,6 +437,20 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
   const [customerLookupState, setCustomerLookupState] = useState<Record<string, "idle" | "loading" | "done">>({});
   const [isSuggesting, setIsSuggesting] = useState(false);
   const [isPreviewExpanded, setIsPreviewExpanded] = useState(false);
+  const [suggestDebugState, setSuggestDebugState] = useState<{ query: string; count: number } | null>(null);
+
+  const debugSuggest = useMemo(() => {
+    if (typeof window === "undefined") return false;
+    return new URLSearchParams(window.location.search).get("debugSuggest") === "1";
+  }, []);
+
+  useEffect(() => {
+    if (!debugSuggest || typeof window === "undefined") return;
+    (window as Window & { __suggestLookup?: (q: string) => void }).__suggestLookup = (q: string) => {
+      void handleSuggestOrdersInput(q, "");
+    };
+    console.log("[suggest-debug] ready: window.__suggestLookup('루')");
+  }, [debugSuggest]);
 
   useEffect(() => {
     return () => {
@@ -392,6 +459,17 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
       }
     };
   }, [previewBlobUrl]);
+
+  useEffect(() => {
+    return () => {
+      if (suggestTimerRef.current) {
+        window.clearTimeout(suggestTimerRef.current);
+      }
+      if (headerNudgeTimerRef.current) {
+        window.clearTimeout(headerNudgeTimerRef.current);
+      }
+    };
+  }, []);
 
   const vendorOptionsQuery = useQuery({
     queryKey: ["vendor-parties"],
@@ -509,6 +587,16 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
       queryClient.invalidateQueries({ queryKey: ["new-receipt-workbench", "line-items", selectedReceiptId] });
       queryClient.invalidateQueries({ queryKey: ["new-receipt-workbench", "unlinked", selectedReceiptId] });
       queryClient.invalidateQueries({ queryKey: ["new-receipt-workbench", "receipts"] });
+      void lineItemsQuery.refetch();
+      void unlinkedQuery.refetch().then((result) => {
+        if (!selectedUnlinked) return;
+        const currentUuid = getReceiptLineUuid(selectedUnlinked);
+        if (!currentUuid) return;
+        const next = (result.data ?? []).find((line) => getReceiptLineUuid(line) === currentUuid);
+        if (next) {
+          setSelectedUnlinked(next);
+        }
+      });
     },
   });
 
@@ -532,6 +620,18 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
     fn: "cms_fn_update_vendor_bill_header_v1",
     successMessage: "헤더 저장 완료",
     onSuccess: () => {
+      if (selectedReceiptId) {
+        const snapshot: HeaderSnapshot = {
+          vendorPartyId,
+          billNo,
+          billDate,
+          memo,
+        };
+        headerSnapshotsRef.current.set(selectedReceiptId, snapshot);
+        setHeaderSnapshot(snapshot);
+        void fetchHeaderSnapshot(selectedReceiptId);
+      }
+      setHeaderSaveNudge(false);
       queryClient.invalidateQueries({ queryKey: ["new-receipt-workbench", "receipts"] });
     },
   });
@@ -599,19 +699,114 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
     return receipts.find((row) => row.receipt_id === selectedReceiptId) ?? null;
   }, [receipts, selectedReceiptId]);
 
-  useEffect(() => {
-    if (!selectedReceipt) return;
-    setVendorPartyId(selectedReceipt.vendor_party_id ?? "");
-    setBillNo(selectedReceipt.bill_no ?? "");
-    const nextBillDate = selectedReceipt.issued_at ? selectedReceipt.issued_at.slice(0, 10) : "";
-    setBillDate(nextBillDate);
-    setMemo(selectedReceipt.memo ?? "");
+  const normalizedCurrentHeader = useMemo(
+    () => normalizeHeaderSnapshot({ vendorPartyId, billNo, billDate, memo }),
+    [vendorPartyId, billNo, billDate, memo]
+  );
+
+  const normalizedHeaderSnapshot = useMemo(() => {
+    if (!headerSnapshot) return null;
+    return normalizeHeaderSnapshot(headerSnapshot);
+  }, [headerSnapshot]);
+
+  const isHeaderDirty = useMemo(() => {
+    if (!selectedReceiptId || !normalizedHeaderSnapshot) return false;
+    return (
+      normalizedCurrentHeader.vendorPartyId !== normalizedHeaderSnapshot.vendorPartyId ||
+      normalizedCurrentHeader.billNo !== normalizedHeaderSnapshot.billNo ||
+      normalizedCurrentHeader.billDate !== normalizedHeaderSnapshot.billDate ||
+      normalizedCurrentHeader.memo !== normalizedHeaderSnapshot.memo
+    );
+  }, [normalizedCurrentHeader, normalizedHeaderSnapshot, selectedReceiptId]);
+
+  const headerSaved = useMemo(() => {
+    if (!selectedReceiptId) return false;
+    const snapshot = normalizedHeaderSnapshot ?? normalizedCurrentHeader;
+    return Boolean(snapshot.vendorPartyId || snapshot.billNo || snapshot.billDate || snapshot.memo);
+  }, [normalizedCurrentHeader, normalizedHeaderSnapshot, selectedReceiptId]);
+
+  const headerNeedsSave = useMemo(() => {
+    if (!selectedReceiptId) return false;
+    return !headerSaved || isHeaderDirty;
+  }, [headerSaved, isHeaderDirty, selectedReceiptId]);
+
+  const triggerHeaderSaveNudge = useCallback(() => {
+    setHeaderSaveNudge(true);
+    if (headerNudgeTimerRef.current) {
+      window.clearTimeout(headerNudgeTimerRef.current);
+    }
+    headerNudgeTimerRef.current = window.setTimeout(() => {
+      setHeaderSaveNudge(false);
+    }, 1400);
+  }, []);
+
+  const applyHeaderSnapshot = useCallback((snapshot: HeaderSnapshot) => {
+    setVendorPartyId(snapshot.vendorPartyId);
+    setBillNo(snapshot.billNo);
+    setBillDate(snapshot.billDate);
+    setMemo(snapshot.memo);
     setBillNoTouched(false);
     setAutoBillNo(null);
-    setBillNoAutoEligible(!(selectedReceipt.bill_no ?? ""));
+    setBillNoAutoEligible(!snapshot.billNo);
     lastBillNoSuggestKey.current = null;
-    setFactoryRefDate(nextBillDate);
-  }, [selectedReceipt]);
+    setFactoryRefDate(snapshot.billDate);
+  }, []);
+
+  const fetchHeaderSnapshot = useCallback(
+    async (receiptId: string) => {
+      try {
+        const res = await fetch(
+          `/api/new-receipt-workbench/receipt?receipt_id=${encodeURIComponent(receiptId)}`,
+          { cache: "no-store" }
+        );
+        const json = await res.json();
+        if (!res.ok) {
+          const message = typeof json?.error === "string" ? json.error : "헤더 조회에 실패했습니다.";
+          toast.error(message);
+          return;
+        }
+        const row = (json?.data ?? null) as ReceiptHeaderRow | null;
+        if (!row) {
+          toast.error("헤더 데이터가 없습니다.");
+          return;
+        }
+        const snapshot = buildHeaderSnapshotFromRow(row);
+        headerSnapshotsRef.current.set(receiptId, snapshot);
+        if (selectedReceiptId === receiptId) {
+          setHeaderSnapshot(snapshot);
+          applyHeaderSnapshot(snapshot);
+        }
+      } catch {
+        toast.error("헤더 조회 중 오류가 발생했습니다.");
+      }
+    },
+    [applyHeaderSnapshot, selectedReceiptId]
+  );
+
+  useEffect(() => {
+    if (!headerNeedsSave) {
+      setHeaderSaveNudge(false);
+    }
+  }, [headerNeedsSave]);
+
+  useEffect(() => {
+    if (!selectedReceiptId) {
+      setHeaderSnapshot(null);
+      return;
+    }
+    const cached = headerSnapshotsRef.current.get(selectedReceiptId);
+    if (cached) {
+      applyHeaderSnapshot(cached);
+      setHeaderSnapshot(cached);
+      return;
+    }
+    if (!selectedReceipt) return;
+    const snapshot = buildHeaderSnapshotFromReceipt(selectedReceipt);
+    headerSnapshotsRef.current.set(selectedReceiptId, snapshot);
+    applyHeaderSnapshot(snapshot);
+    setHeaderSnapshot(snapshot);
+    void fetchHeaderSnapshot(selectedReceiptId);
+  }, [applyHeaderSnapshot, fetchHeaderSnapshot, selectedReceipt, selectedReceiptId]);
 
   useEffect(() => {
     if (!factoryRefDate) return;
@@ -674,6 +869,7 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
       const seqValue = row.vendor_seq_no ?? (nextSeq += 1);
       return {
         line_uuid: lineUuid,
+        receipt_line_uuid: row.receipt_line_uuid ?? null,
         customer_factory_code: row.customer_factory_code ?? "",
         model_name: row.model_name ?? "",
         material_code: row.material_code ?? "",
@@ -697,6 +893,25 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
     });
     setLineItems(mapped);
   }, [lineItemsDirty, lineItemsQuery.data]);
+
+  const handleSelectReceipt = useCallback(
+    (row: ReceiptInboxRow) => {
+      if (headerNeedsSave && selectedReceiptId && row.receipt_id !== selectedReceiptId) {
+        triggerHeaderSaveNudge();
+        toast.error("먼저 헤더 저장을 진행해 주세요.");
+        return;
+      }
+      const receiptId = row.receipt_id;
+      if (!receiptId) return;
+      const snapshot = headerSnapshotsRef.current.get(receiptId) ?? buildHeaderSnapshotFromReceipt(row);
+      headerSnapshotsRef.current.set(receiptId, snapshot);
+      setHeaderSnapshot(snapshot);
+      applyHeaderSnapshot(snapshot);
+      setSelectedReceiptId(receiptId);
+      void fetchHeaderSnapshot(receiptId);
+    },
+    [applyHeaderSnapshot, fetchHeaderSnapshot, headerNeedsSave, selectedReceiptId, triggerHeaderSaveNudge]
+  );
 
   useEffect(() => {
     const unlinkedLines = unlinkedQuery.data ?? [];
@@ -745,10 +960,20 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
     if (!initialReceiptId) return;
     if (selectedReceiptId) return;
     const target = receipts.find((row) => row.receipt_id === initialReceiptId);
-    if (target) {
-      setSelectedReceiptId(target.receipt_id);
+    if (!target) return;
+    if (headerNeedsSave && selectedReceiptId && target.receipt_id !== selectedReceiptId) {
+      triggerHeaderSaveNudge();
+      toast.error("먼저 헤더 저장을 진행해 주세요.");
+      return;
     }
-  }, [initialReceiptId, receipts, selectedReceiptId]);
+    const receiptId = target.receipt_id;
+    if (!receiptId) return;
+    const snapshot = headerSnapshotsRef.current.get(receiptId) ?? buildHeaderSnapshotFromReceipt(target);
+    headerSnapshotsRef.current.set(receiptId, snapshot);
+    setHeaderSnapshot(snapshot);
+    applyHeaderSnapshot(snapshot);
+    setSelectedReceiptId(receiptId);
+  }, [applyHeaderSnapshot, headerNeedsSave, initialReceiptId, receipts, selectedReceiptId, triggerHeaderSaveNudge]);
 
   useEffect(() => {
     setLineItemsDirty(false);
@@ -1138,26 +1363,31 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
     });
   }
 
-  async function saveLines() {
+  async function saveLines(): Promise<boolean> {
     if (!selectedReceiptId) {
       toast.error("영수증을 선택하세요");
-      return;
+      return false;
+    }
+    if (headerNeedsSave) {
+      triggerHeaderSaveNudge();
+      toast.error("먼저 헤더 저장을 진행해 주세요.");
+      return false;
     }
 
     const invalid = lineItems.find((item) => !item.model_name.trim() || !item.material_code.trim());
     if (invalid) {
       toast.error("모델명/소재는 필수입니다");
-      return;
+      return false;
     }
 
     const invalidSeq = lineItems.find((item) => !isValidSeq(item.vendor_seq_no));
     if (invalidSeq) {
       toast.error("라인 번호를 확인하세요");
-      return;
+      return false;
     }
     if (duplicateSeqSet.size > 0) {
       toast.error("라인 번호가 중복되었습니다");
-      return;
+      return false;
     }
 
     const payload = lineItems.map((item) => {
@@ -1215,11 +1445,17 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
       setApSyncMessage(getRpcErrorMessage(error));
     }
     setLineItemsDirty(false);
+    return true;
   }
 
   async function retryEnsureAp() {
     if (!selectedReceiptId) {
       toast.error("영수증을 선택하세요");
+      return;
+    }
+    if (headerNeedsSave) {
+      triggerHeaderSaveNudge();
+      toast.error("먼저 헤더 저장을 진행해 주세요.");
       return;
     }
     try {
@@ -1241,6 +1477,11 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
       toast.error("영수증을 선택하세요");
       return;
     }
+    if (headerNeedsSave) {
+      triggerHeaderSaveNudge();
+      toast.error("먼저 헤더 저장을 진행해 주세요.");
+      return;
+    }
 
     const rows = factoryRows.map((row) => ({
       row_code: row.rowCode,
@@ -1260,21 +1501,96 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
     });
   }
 
-  async function handleSuggest() {
+  async function handleSuggest(lineOverride?: UnlinkedLineRow | null) {
     if (process.env.NODE_ENV !== "production") {
       console.log("[match-suggest] click", {
         receiptId: selectedReceiptId,
         receiptLineUuid: selectedUnlinked?.receipt_line_uuid,
       });
     }
-    if (!selectedReceiptId || !selectedUnlinked) {
+    const fallbackLine = (unlinkedQuery.data ?? [])[0] ?? null;
+    const targetLine = lineOverride ?? selectedUnlinked ?? fallbackLine;
+    if (!selectedReceiptId || !targetLine) {
       toast.error("미매칭 라인을 선택하세요");
       return;
     }
-    const receiptLineUuid = getReceiptLineUuid(selectedUnlinked);
-    if (!receiptLineUuid) {
-      toast.error("라인 UUID를 확인할 수 없습니다");
+    if (headerNeedsSave) {
+      triggerHeaderSaveNudge();
+      toast.error("먼저 헤더 저장을 진행해 주세요.");
       return;
+    }
+    const normalizeText = (value?: string | null) => (value ?? "").replace(/\s+/g, " ").trim();
+    let receiptLineUuid = getReceiptLineUuid(targetLine);
+    if (!receiptLineUuid) {
+      const normalizedModel = normalizeText(targetLine.model_name);
+      const normalizedMaterial = normalizeText(targetLine.material_code);
+      const normalizedColor = normalizeText(targetLine.color);
+      const normalizedSize = normalizeText(targetLine.size);
+      const candidateFromUnlinked = (unlinkedQuery.data ?? []).find((line) => {
+        if (targetLine.vendor_seq_no !== null && targetLine.vendor_seq_no !== undefined) {
+          return line.vendor_seq_no === targetLine.vendor_seq_no && normalizeText(line.model_name) === normalizedModel;
+        }
+        return (
+          normalizeText(line.model_name) === normalizedModel &&
+          normalizeText(line.material_code) === normalizedMaterial &&
+          normalizeText(line.color) === normalizedColor &&
+          normalizeText(line.size) === normalizedSize
+        );
+      });
+      if (candidateFromUnlinked?.receipt_line_uuid) {
+        setSelectedUnlinked(candidateFromUnlinked);
+        receiptLineUuid = candidateFromUnlinked.receipt_line_uuid ?? "";
+      } else if (fallbackLine?.receipt_line_uuid) {
+        setSelectedUnlinked(fallbackLine);
+        receiptLineUuid = fallbackLine.receipt_line_uuid ?? "";
+      }
+    }
+    if (!receiptLineUuid) {
+      const saved = await saveLines();
+      if (!saved) return;
+      const refreshed = await fetch(
+        `/api/new-receipt-workbench/line-items?receipt_id=${encodeURIComponent(selectedReceiptId)}`,
+        { cache: "no-store" }
+      );
+      if (refreshed.ok) {
+        const json = await refreshed.json();
+        const rows = (json?.data ?? []) as Array<{
+          receipt_line_uuid?: string | null;
+          model_name?: string | null;
+          material_code?: string | null;
+          color?: string | null;
+          size?: string | null;
+          vendor_seq_no?: number | null;
+          customer_factory_code?: string | null;
+          remark?: string | null;
+        }>;
+        const updated = rows.find((line) => {
+          if (targetLine.vendor_seq_no !== null && targetLine.vendor_seq_no !== undefined) {
+            return line.vendor_seq_no === targetLine.vendor_seq_no && line.model_name === targetLine.model_name;
+          }
+          return (
+            line.model_name === targetLine.model_name &&
+            line.material_code === targetLine.material_code &&
+            line.color === targetLine.color &&
+            line.size === targetLine.size
+          );
+        });
+        if (updated?.receipt_line_uuid) {
+          const merged: UnlinkedLineRow = {
+            ...targetLine,
+            receipt_id: selectedReceiptId,
+            receipt_line_uuid: updated.receipt_line_uuid,
+            customer_factory_code: updated.customer_factory_code ?? targetLine.customer_factory_code ?? null,
+            remark: updated.remark ?? targetLine.remark ?? null,
+          };
+          setSelectedUnlinked(merged);
+          receiptLineUuid = updated.receipt_line_uuid;
+        }
+      }
+      if (!receiptLineUuid) {
+        toast.error("라인 UUID를 확인할 수 없습니다. 라인 저장 후 다시 시도하세요.");
+        return;
+      }
     }
 
     setIsSuggesting(true);
@@ -1304,6 +1620,88 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
     } finally {
       setIsSuggesting(false);
     }
+  }
+
+  async function handleSuggestOrdersInput(modelName: string, customerCode: string) {
+    const queryText = [modelName, customerCode].filter((value) => value.trim().length > 0).join(" ").trim();
+    if (!queryText) {
+      setSuggestions([]);
+      setSelectedCandidate(null);
+      setSuggestDebugState({ query: "", count: 0 });
+      return;
+    }
+    if (debugSuggest) {
+      console.log("[suggest-debug] orders", { queryText, modelName, customerCode });
+    }
+    setIsSuggesting(true);
+    try {
+      const params = new URLSearchParams();
+      params.set("q", queryText);
+      params.set("limit", "20");
+      const res = await fetch(`/api/order-lookup?${params.toString()}`, { cache: "no-store" });
+      const json = await res.json();
+      if (!res.ok) {
+        toast.error("주문 검색 실패", { description: json?.error ?? "" });
+        return;
+      }
+      const rows = (json?.data ?? []) as Array<{
+        order_no?: string | null;
+        order_line_id?: string | null;
+        client_id?: string | null;
+        client_name?: string | null;
+        client_code?: string | null;
+        model_no?: string | null;
+        color?: string | null;
+        status?: string | null;
+        plating_status?: boolean | null;
+        plating_color?: string | null;
+      }>;
+      const candidates: MatchCandidate[] = rows.map((row) => ({
+        order_no: row.order_no ?? null,
+        order_line_id: row.order_line_id ?? null,
+        customer_party_id: row.client_id ?? null,
+        customer_mask_code: row.client_code ?? null,
+        customer_name: row.client_name ?? null,
+        model_name: row.model_no ?? null,
+        size: null,
+        color: row.color ?? null,
+        material_code: null,
+        status: row.status ?? null,
+        is_plated: row.plating_status ?? null,
+        plating_color_code: row.plating_color ?? null,
+        memo: null,
+        match_score: null,
+        score_detail_json: null,
+      }));
+      setSuggestions(candidates);
+      setSelectedCandidate(null);
+      setConfirmResult(null);
+    } finally {
+      setIsSuggesting(false);
+    }
+  }
+
+  function buildLocalUnlinked(
+    item: ReceiptLineItemInput,
+    overrides?: { modelName?: string; customerCode?: string }
+  ): UnlinkedLineRow {
+    return {
+      receipt_id: selectedReceiptId ?? null,
+      receipt_line_uuid: item.receipt_line_uuid ?? null,
+      customer_factory_code: overrides?.customerCode ?? item.customer_factory_code ?? null,
+      model_name: overrides?.modelName ?? item.model_name ?? null,
+      material_code: item.material_code ?? null,
+      factory_weight_g: calcWeightTotal(item.weight_raw_g, item.weight_deduct_g),
+      weight_raw_g: parseNumber(item.weight_raw_g),
+      weight_deduct_g: parseNumber(item.weight_deduct_g),
+      stone_center_qty: parseNumber(item.stone_center_qty),
+      stone_sub1_qty: parseNumber(item.stone_sub1_qty),
+      stone_sub2_qty: parseNumber(item.stone_sub2_qty),
+      vendor_seq_no: parseNumber(item.vendor_seq_no),
+      remark: item.remark || null,
+      size: item.size || null,
+      color: item.color || null,
+    };
   }
 
   useEffect(() => {
@@ -1337,6 +1735,11 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
 
   async function handleConfirm() {
     if (!selectedReceiptId || !selectedUnlinked || !selectedCandidate) return;
+    if (headerNeedsSave) {
+      triggerHeaderSaveNudge();
+      toast.error("먼저 헤더 저장을 진행해 주세요.");
+      return;
+    }
     const receiptLineUuid = getReceiptLineUuid(selectedUnlinked);
     const orderLineId = selectedCandidate.order_line_id;
     if (!receiptLineUuid || !orderLineId) {
@@ -1515,9 +1918,9 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                       <button
                         key={row.receipt_id}
                         type="button"
-                        onClick={() => setSelectedReceiptId(row.receipt_id)}
+                        onClick={() => handleSelectReceipt(row)}
                         onDoubleClick={() => {
-                          setSelectedReceiptId(row.receipt_id);
+                          handleSelectReceipt(row);
                           setIsPreviewExpanded(true);
                         }}
                         className={cn(
@@ -1592,7 +1995,11 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                   <Button size="sm" variant="secondary" onClick={addLine} disabled={!selectedReceiptId}>
                     + 라인 추가
                   </Button>
-                  <Button size="sm" onClick={saveLines} disabled={!selectedReceiptId || upsertSnapshot.isPending}>
+                  <Button
+                    size="sm"
+                    onClick={saveLines}
+                    disabled={!selectedReceiptId || upsertSnapshot.isPending || headerNeedsSave}
+                  >
                     라인 저장
                   </Button>
                 </div>
@@ -1647,9 +2054,9 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                           const isExpanded = expandedLineId === item.line_uuid;
                           const seqValue = parseNumber(item.vendor_seq_no);
                           const isSeqDuplicate = seqValue !== null && duplicateSeqSet.has(seqValue);
-                          const seqFieldClass = cn(
-                            "h-8 text-[10px] text-right",
-                            isSeqDuplicate && "ring-1 ring-rose-500/70 bg-rose-500/10 hover:ring-2 hover:ring-rose-500/80"
+                          const seqDisplayClass = cn(
+                            "flex h-9 items-center justify-end rounded-md px-2 text-[11px]",
+                            isSeqDuplicate && "ring-1 ring-rose-500/70 bg-rose-500/10"
                           );
 
                           return (
@@ -1660,120 +2067,44 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                                 onDoubleClick={() => setExpandedLineId(item.line_uuid)}
                               >
                                 <td className="px-2 py-1">
-                                  <Input
-                                    type="text"
-                                    inputMode="numeric"
-                                    value={item.vendor_seq_no}
-                                    onChange={(e) => updateLine(item.line_uuid, "vendor_seq_no", e.target.value)}
-                                    onFocus={() => setExpandedLineId(item.line_uuid)}
-                                    onBlur={(e) => {
-                                      const nextId = getLineIdFromTarget(e.relatedTarget);
-                                      if (nextId !== item.line_uuid) setExpandedLineId(null);
-                                    }}
-                                    data-line-id={item.line_uuid}
-                                    className={seqFieldClass}
-                                    title={isSeqDuplicate ? "라인 번호가 중복되었습니다" : undefined}
-                                  />
+                                  <div className={seqDisplayClass} title={isSeqDuplicate ? "라인 번호가 중복되었습니다" : undefined}>
+                                    {item.vendor_seq_no || "-"}
+                                  </div>
                                 </td>
                                 <td className="px-2 py-1">
-                                  <Input
-                                    value={item.customer_factory_code}
-                                    onChange={(e) => updateLine(item.line_uuid, "customer_factory_code", e.target.value)}
-                                    onFocus={() => setExpandedLineId(item.line_uuid)}
-                                    onBlur={(e) => {
-                                      const nextId = getLineIdFromTarget(e.relatedTarget);
-                                      if (nextId !== item.line_uuid) setExpandedLineId(null);
-                                    }}
-                                    data-line-id={item.line_uuid}
-                                    className="h-9 text-[11px]"
-                                  />
+                                  <div className="flex h-9 items-center text-[11px]">
+                                    {item.customer_factory_code || "-"}
+                                  </div>
                                 </td>
                                 <td className="px-2 py-1">
-                                  <Input
-                                    value={item.model_name}
-                                    onChange={(e) => updateLine(item.line_uuid, "model_name", e.target.value)}
-                                    onFocus={() => setExpandedLineId(item.line_uuid)}
-                                    onBlur={(e) => {
-                                      const nextId = getLineIdFromTarget(e.relatedTarget);
-                                      if (nextId !== item.line_uuid) setExpandedLineId(null);
-                                    }}
-                                    data-line-id={item.line_uuid}
-                                    className="h-8 text-xs"
-                                  />
+                                  <div className="flex h-9 items-center text-xs">
+                                    {item.model_name || "-"}
+                                  </div>
                                 </td>
                                 <td className="px-2 py-1">
-                                  <Select
-                                    value={item.material_code}
-                                    onChange={(e) => updateLineMaterial(item.line_uuid, e.target.value)}
-                                    onFocus={() => setExpandedLineId(item.line_uuid)}
-                                    onBlur={(e) => {
-                                      const nextId = getLineIdFromTarget(e.relatedTarget);
-                                      if (nextId !== item.line_uuid) setExpandedLineId(null);
-                                    }}
-                                    data-line-id={item.line_uuid}
-                                    className="h-9 px-2 py-1 text-[11px] leading-4"
-                                  >
-                                    <option value="">선택</option>
-                                    {MATERIAL_OPTIONS.map((code) => (
-                                      <option key={code} value={code}>
-                                        {code}
-                                      </option>
-                                    ))}
-                                  </Select>
+                                  <div className="flex h-9 items-center text-[11px]">
+                                    {item.material_code || "-"}
+                                  </div>
                                 </td>
                                 <td className="px-2 py-1">
-                                  <Select
-                                    value={item.color}
-                                    onChange={(e) => updateLine(item.line_uuid, "color", e.target.value)}
-                                    onFocus={() => setExpandedLineId(item.line_uuid)}
-                                    onBlur={(e) => {
-                                      const nextId = getLineIdFromTarget(e.relatedTarget);
-                                      if (nextId !== item.line_uuid) setExpandedLineId(null);
-                                    }}
-                                    data-line-id={item.line_uuid}
-                                    className="h-9 px-2 py-1 text-[11px] leading-4"
-                                  >
-                                    <option value="">선택</option>
-                                    <option value="P">P</option>
-                                    <option value="W">W</option>
-                                    <option value="G">G</option>
-                                    <option value="PW">PW</option>
-                                    <option value="PG">PG</option>
-                                    <option value="WG">WG</option>
-                                    <option value="PWG">PWG</option>
-                                  </Select>
+                                  <div className="flex h-9 items-center text-[11px]">
+                                    {item.color || "-"}
+                                  </div>
                                 </td>
                                 <td className="px-2 py-1">
-                                  <Input
-                                    inputMode="decimal"
-                                    value={weightTotal}
-                                    readOnly
-                                    className={`h-9 text-[11px] text-right ${AUTO_FIELD_CLASS}`}
-                                  />
+                                  <div className={cn("flex h-9 items-center justify-end text-[11px]", AUTO_FIELD_CLASS)}>
+                                    {formatNumber(weightTotal)}
+                                  </div>
                                 </td>
                                 <td className="px-2 py-1">
-                                  <Input
-                                    inputMode="numeric"
-                                    value={factoryTotalCost}
-                                    readOnly
-                                    className={`h-9 text-[11px] text-right ${AUTO_FIELD_CLASS}`}
-                                  />
+                                  <div className={cn("flex h-9 items-center justify-end text-[11px]", AUTO_FIELD_CLASS)}>
+                                    {formatNumber(factoryTotalCost)}
+                                  </div>
                                 </td>
                                 <td className="px-2 py-1">
-                                  <Input
-                                    type="text"
-                                    inputMode="numeric"
-                                    value={item.total_amount_krw}
-                                    onChange={(e) => updateLineNumber(item.line_uuid, "total_amount_krw", e.target.value)}
-                                    onFocus={() => setExpandedLineId(item.line_uuid)}
-                                    onBlur={(e) => {
-                                      const nextId = getLineIdFromTarget(e.relatedTarget);
-                                      if (nextId !== item.line_uuid) setExpandedLineId(null);
-                                    }}
-                                    data-line-id={item.line_uuid}
-                                    className="h-9 text-[11px] text-right"
-                                    placeholder={formatNumber(totalAmount)}
-                                  />
+                                  <div className="flex h-9 items-center justify-end text-[11px]">
+                                    {formatNumber(totalAmount)}
+                                  </div>
                                 </td>
                               </tr>
                               {isExpanded ? (
@@ -1803,7 +2134,22 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                                         <label className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)]">고객코드</label>
                                         <Input
                                           value={item.customer_factory_code}
-                                          onChange={(e) => updateLine(item.line_uuid, "customer_factory_code", e.target.value)}
+                                          onChange={(e) => {
+                                            const nextCode = e.target.value;
+                                            updateLine(item.line_uuid, "customer_factory_code", nextCode);
+                                          }}
+                                          onInput={(e) => {
+                                            const nextCode = e.currentTarget.value;
+                                            updateLine(item.line_uuid, "customer_factory_code", nextCode);
+                                          }}
+                                          onKeyUp={(e) => {
+                                            const nextCode = e.currentTarget.value;
+                                            updateLine(item.line_uuid, "customer_factory_code", nextCode);
+                                          }}
+                                          onCompositionEnd={(e) => {
+                                            const nextCode = e.currentTarget.value;
+                                            updateLine(item.line_uuid, "customer_factory_code", nextCode);
+                                          }}
                                           onBlur={(e) => {
                                             const nextId = getLineIdFromTarget(e.relatedTarget);
                                             if (nextId !== item.line_uuid) setExpandedLineId(null);
@@ -1816,7 +2162,22 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                                         <label className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)]">모델명</label>
                                         <Input
                                           value={item.model_name}
-                                          onChange={(e) => updateLine(item.line_uuid, "model_name", e.target.value)}
+                                          onChange={(e) => {
+                                            const nextModel = e.target.value;
+                                            updateLine(item.line_uuid, "model_name", nextModel);
+                                          }}
+                                          onInput={(e) => {
+                                            const nextModel = e.currentTarget.value;
+                                            updateLine(item.line_uuid, "model_name", nextModel);
+                                          }}
+                                          onKeyUp={(e) => {
+                                            const nextModel = e.currentTarget.value;
+                                            updateLine(item.line_uuid, "model_name", nextModel);
+                                          }}
+                                          onCompositionEnd={(e) => {
+                                            const nextModel = e.currentTarget.value;
+                                            updateLine(item.line_uuid, "model_name", nextModel);
+                                          }}
                                           onBlur={(e) => {
                                             const nextId = getLineIdFromTarget(e.relatedTarget);
                                             if (nextId !== item.line_uuid) setExpandedLineId(null);
@@ -2106,10 +2467,12 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                                     </div>
                                     <div className="mt-3 flex justify-end">
                                       <Button
+                                        type="button"
                                         size="sm"
                                         variant="ghost"
                                         onClick={() => openDeleteModal(item)}
                                         disabled={receiptLineDelete.isPending}
+                                        data-line-id={item.line_uuid}
                                       >
                                         삭제
                                       </Button>
@@ -2189,7 +2552,7 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                         <Button
                           size="sm"
                           onClick={saveFactoryStatement}
-                          disabled={!selectedReceiptId || factoryStatementUpsert.isPending}
+                          disabled={!selectedReceiptId || factoryStatementUpsert.isPending || headerNeedsSave}
                         >
                           저장
                         </Button>
@@ -2281,7 +2644,16 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
               <div className="flex items-center justify-between">
                 <div className="text-sm font-semibold">영수증 미리보기</div>
                 <div className="flex items-center gap-2">
-                  <Button size="sm" variant="secondary" onClick={saveHeader} disabled={!selectedReceiptId || headerUpdate.isPending}>
+                  <Button
+                    size="sm"
+                    variant={headerNeedsSave ? "primary" : "secondary"}
+                    onClick={saveHeader}
+                    disabled={!selectedReceiptId || headerUpdate.isPending}
+                    className={cn(
+                      headerNeedsSave && "ring-2 ring-[var(--primary)]/30 shadow-[0_0_0_4px_rgba(37,99,235,0.15)]",
+                      headerSaveNudge && "animate-pulse"
+                    )}
+                  >
                     헤더 저장
                   </Button>
                 </div>
@@ -2560,11 +2932,16 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                   >
                     매칭 제안
                   </Button>
+                  {debugSuggest && suggestDebugState ? (
+                    <div className="text-[10px] text-[var(--muted)]">
+                      검색어: {suggestDebugState.query || "-"} · 결과: {suggestDebugState.count}
+                    </div>
+                  ) : null}
                   <div className="text-[10px] text-[var(--muted)]">
                     선택 라인: {selectedUnlinked?.receipt_line_uuid ?? "없음"}
                   </div>
 
-                  {suggestions.length > 0 && (
+                  {suggestions.length > 0 ? (
                     <div className="space-y-2">
                       <div className="text-sm font-semibold">추천 후보</div>
                       {(() => {
@@ -2727,7 +3104,9 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                         );
                       })()}
                     </div>
-                  )}
+                  ) : !isSuggesting ? (
+                    <div className="text-xs text-[var(--muted)]">매칭 후보가 없습니다.</div>
+                  ) : null}
 
                   <div className="rounded-lg border border-[var(--panel-border)] bg-[var(--surface)]/60 p-3 text-xs space-y-2">
                     <div className="text-sm font-semibold">확정</div>
@@ -2913,7 +3292,12 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
 
       <Modal open={uploadOpen} onClose={() => setUploadOpen(false)} title="영수증 업로드">
         <div className="space-y-4">
-          <input ref={fileRef} type="file" onChange={handleFileChange} />
+          <input
+            ref={fileRef}
+            type="file"
+            onChange={handleFileChange}
+            className="w-full cursor-pointer rounded-lg border border-[var(--panel-border)] bg-[var(--panel)]/40 px-4 py-3 text-sm file:mr-4 file:rounded-md file:border-0 file:bg-[var(--primary)]/10 file:px-3 file:py-2 file:text-sm file:font-semibold file:text-[var(--primary)] hover:bg-[var(--panel)]/60"
+          />
           {uploadPreviewUrl ? (
             <img src={uploadPreviewUrl} alt="preview" className="max-h-56 w-full rounded-lg object-contain" />
           ) : null}

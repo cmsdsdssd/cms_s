@@ -79,6 +79,7 @@ export function InlineShipmentPanel({
   
   const [shipmentId, setShipmentId] = useState<string | null>(null);
   const [step, setStep] = useState<"draft" | "pricing" | "confirm">("draft");
+  const [isStorePickup, setIsStorePickup] = useState(false);
   
   // Form states
   const [weight, setWeight] = useState<string>("");
@@ -253,19 +254,43 @@ export function InlineShipmentPanel({
   const confirmShipmentMutation = useMutation({
     mutationFn: async () => {
       if (!shipmentId) throw new Error("No shipment");
-      
-      const result = await callRpc<{ ok: boolean; total_sell_krw: number }>(
+
+      const actorId = process.env.NEXT_PUBLIC_CMS_ACTOR_ID || null;
+
+      if (isStorePickup) {
+        await callRpc(CONTRACTS.functions.shipmentSetStorePickup, {
+          p_shipment_id: shipmentId,
+          p_is_store_pickup: true,
+          p_actor_person_id: actorId,
+          p_note: "set from inline shipment",
+        });
+
+        return callRpc<{ ok: boolean; total_sell_krw: number }>(
+          CONTRACTS.functions.shipmentConfirmStorePickup,
+          {
+            p_shipment_id: shipmentId,
+            p_actor_person_id: actorId,
+            p_note: "confirm store pickup from inline",
+            p_emit_inventory: true,
+            p_cost_mode: "PROVISIONAL",
+            p_receipt_id: null,
+            p_cost_lines: [],
+            p_force: false,
+          }
+        );
+      }
+
+      return callRpc<{ ok: boolean; total_sell_krw: number }>(
         CONTRACTS.functions.shipmentConfirm,
         {
           p_shipment_id: shipmentId,
-          p_actor_person_id: process.env.NEXT_PUBLIC_CMS_ACTOR_ID || null,
+          p_actor_person_id: actorId,
         }
       );
-      
-      return result;
     },
     onSuccess: (data) => {
-      toast.success("출고가 확정되었습니다", {
+      const message = isStorePickup ? "매장출고가 확정되었습니다" : "출고가 확정되었습니다";
+      toast.success(message, {
         description: `총액: ₩${data?.total_sell_krw?.toLocaleString()}`,
       });
       
@@ -279,7 +304,8 @@ export function InlineShipmentPanel({
       }
     },
     onError: (error) => {
-      toast.error("출고 확정 실패", {
+      const message = isStorePickup ? "매장출고 확정 실패" : "출고 확정 실패";
+      toast.error(message, {
         description: error instanceof Error ? error.message : "Unknown error",
       });
     },
@@ -498,6 +524,16 @@ export function InlineShipmentPanel({
                 확정 시 재고가 차감되고 미수금이 생성됩니다.
               </p>
             </div>
+
+            <label className="inline-flex items-center gap-2 text-sm font-semibold text-green-700">
+              <input
+                type="checkbox"
+                checked={isStorePickup}
+                onChange={(event) => setIsStorePickup(event.target.checked)}
+                className="h-4 w-4"
+              />
+              매장출고
+            </label>
 
             <div className="flex gap-2">
               <Button

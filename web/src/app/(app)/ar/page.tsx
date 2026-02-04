@@ -137,6 +137,23 @@ type ReturnResponse = {
   remaining_qty?: number;
 };
 
+type ArResyncResult = {
+  ok?: boolean;
+  shipment_id?: string;
+  updated?: number;
+  inserted?: number;
+};
+
+const isArInvoiceAnomaly = (row: ArInvoicePositionRow) => {
+  if (row.material_code !== "999") return false;
+  return (
+    row.commodity_type === null ||
+    Number(row.material_cash_due_krw ?? 0) === 0 ||
+    Number(row.commodity_due_g ?? 0) === 0 ||
+    Number(row.commodity_price_snapshot_krw_per_g ?? 0) === 0
+  );
+};
+
 const formatKrw = (value?: number | null) => {
   if (value === null || value === undefined) return "-";
   return `₩${new Intl.NumberFormat("ko-KR").format(Math.round(value))}`;
@@ -231,6 +248,7 @@ export default function ArPage() {
   const [returnOccurredAt, setReturnOccurredAt] = useState(toKstInputValue);
   const [returnOverrideAmount, setReturnOverrideAmount] = useState("");
   const [returnReason, setReturnReason] = useState("");
+  const [selectedInvoiceId, setSelectedInvoiceId] = useState<string | null>(null);
 
   const [isSelectorOpen, setIsSelectorOpen] = useState(false);
   const selectorRef = useRef<HTMLDivElement>(null);
@@ -381,13 +399,27 @@ export default function ArPage() {
     () => invoicePositionsQuery.data ?? [],
     [invoicePositionsQuery.data]
   );
+  const resolvedSelectedInvoiceId = useMemo(() => {
+    if (!selectedInvoiceId) return null;
+    const exists = invoicePositions.some((row) => row.ar_id === selectedInvoiceId);
+    return exists ? selectedInvoiceId : null;
+  }, [invoicePositions, selectedInvoiceId]);
   const openInvoices = useMemo(() => {
     return invoicePositions.filter((row) => {
       const cashOutstanding = Number(row.total_cash_outstanding_krw ?? 0);
       const commodityOutstanding = Number(row.commodity_outstanding_g ?? 0);
-      return cashOutstanding > 0 || commodityOutstanding > 0;
+      return cashOutstanding > 0 || commodityOutstanding > 0 || isArInvoiceAnomaly(row);
     });
   }, [invoicePositions]);
+  const anomalyInvoices = useMemo(
+    () => invoicePositions.filter((row) => isArInvoiceAnomaly(row)),
+    [invoicePositions]
+  );
+  const selectedInvoice = useMemo(() => {
+    if (!resolvedSelectedInvoiceId) return null;
+    return invoicePositions.find((row) => row.ar_id === resolvedSelectedInvoiceId) ?? null;
+  }, [invoicePositions, resolvedSelectedInvoiceId]);
+  const selectedInvoiceHasAnomaly = selectedInvoice ? isArInvoiceAnomaly(selectedInvoice) : false;
 
   const paymentAllocQuery = useQuery({
     queryKey: ["cms", "ar_payment_alloc", effectiveSelectedPartyId],
@@ -624,6 +656,30 @@ export default function ArPage() {
       toast.error("처리 실패", { description: message });
     },
   });
+
+  const arInvoiceResyncMutation = useRpcMutation<ArResyncResult>({
+    fn: CONTRACTS.functions.arInvoiceResyncFromShipment,
+    onSuccess: (result) => {
+      const updated = result?.updated ?? 0;
+      const inserted = result?.inserted ?? 0;
+      toast.success(`AR 재계산 완료 (updated=${updated}, inserted=${inserted})`);
+      invoicePositionsQuery.refetch();
+    },
+  });
+
+  const showResyncAction = anomalyInvoices.length > 0 || selectedInvoiceHasAnomaly;
+  const canResyncArInvoice =
+    selectedInvoiceHasAnomaly &&
+    Boolean(selectedInvoice?.shipment_id) &&
+    !arInvoiceResyncMutation.isPending;
+
+  const handleArInvoiceResync = async () => {
+    const shipmentId = selectedInvoice?.shipment_id ?? null;
+    if (!shipmentId) return;
+    await arInvoiceResyncMutation.mutateAsync({
+      p_shipment_id: shipmentId,
+    });
+  };
 
   const canSavePayment = isFnConfigured(CONTRACTS.functions.arApplyPaymentFifo);
   const parsedCash = Number(paymentCashKrw);
@@ -977,7 +1033,21 @@ export default function ArPage() {
           </Card>
           <Card className="shadow-sm">
             <CardHeader>
-              <ActionBar title="미수 잔액 (FIFO)" />
+              <ActionBar
+                title="미수 잔액 (FIFO)"
+                actions={
+                  showResyncAction ? (
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onClick={handleArInvoiceResync}
+                      disabled={!canResyncArInvoice}
+                    >
+                      {arInvoiceResyncMutation.isPending ? "재계산 중..." : "AR 재계산(선택 출고)"}
+                    </Button>
+                  ) : null
+                }
+              />
             </CardHeader>
             <CardBody className="p-0">
               <div className="max-h-[420px] overflow-auto">
@@ -1014,8 +1084,18 @@ export default function ArPage() {
                         : row.commodity_type === "silver"
                           ? `은 ${formatGram(row.commodity_outstanding_g)}`
                           : "-";
+                      const isSelected = row.ar_id && row.ar_id === resolvedSelectedInvoiceId;
                       return (
-                        <tr key={row.ar_id}>
+                        <tr
+                          key={row.ar_id}
+                          onClick={() => {
+                            if (row.ar_id) setSelectedInvoiceId(row.ar_id);
+                          }}
+                          className={cn(
+                            "cursor-pointer transition-colors hover:bg-[var(--panel-hover)]",
+                            isSelected ? "bg-[var(--chip)] ring-1 ring-[var(--panel-border)]" : null
+                          )}
+                        >
                           <td className="px-4 py-3 text-[var(--muted)] tabular-nums">
                             {formatDateTimeKst(row.occurred_at)}
                           </td>

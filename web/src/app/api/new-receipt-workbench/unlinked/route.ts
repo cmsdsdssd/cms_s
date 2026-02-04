@@ -36,7 +36,58 @@ export async function GET(request: Request) {
   if (error) {
     return NextResponse.json({ error: error.message ?? "미매칭 라인 조회 실패" }, { status: 500 });
   }
-  const rows = data ?? [];
+  const rows = (data ?? []) as Array<{
+    receipt_id?: string | null;
+    receipt_line_uuid?: string | null;
+    vendor_party_id?: string | null;
+    vendor_name?: string | null;
+    issued_at?: string | null;
+    model_name?: string | null;
+    material_code?: string | null;
+    factory_weight_g?: number | null;
+    vendor_seq_no?: number | null;
+    customer_factory_code?: string | null;
+    remark?: string | null;
+  }>;
+
+  if (rows.some((row) => !row.receipt_line_uuid)) {
+    const { data: lineRows, error: lineError } = await supabase
+      .from("cms_v_receipt_line_items_flat_v1")
+      .select("receipt_line_uuid, model_name, material_code, color, size, vendor_seq_no, remark")
+      .eq("receipt_id", receiptId);
+
+    if (!lineError) {
+      const candidates = (lineRows ?? []) as Array<{
+        receipt_line_uuid?: string | null;
+        model_name?: string | null;
+        material_code?: string | null;
+        color?: string | null;
+        size?: string | null;
+        vendor_seq_no?: number | null;
+        remark?: string | null;
+      }>;
+
+      rows.forEach((row) => {
+        if (row.receipt_line_uuid) return;
+        const match = candidates.find((candidate) => {
+          if (row.vendor_seq_no !== null && row.vendor_seq_no !== undefined) {
+            return candidate.vendor_seq_no === row.vendor_seq_no && candidate.model_name === row.model_name;
+          }
+          return (
+            candidate.model_name === row.model_name &&
+            candidate.material_code === row.material_code &&
+            candidate.color === (row as { color?: string | null }).color &&
+            candidate.size === (row as { size?: string | null }).size &&
+            candidate.remark === row.remark
+          );
+        });
+        if (match?.receipt_line_uuid) {
+          row.receipt_line_uuid = match.receipt_line_uuid;
+        }
+      });
+    }
+  }
+
   const lineIds = rows
     .map((row) => row.receipt_line_uuid)
     .filter((id): id is string => Boolean(id));

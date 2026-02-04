@@ -22,14 +22,14 @@ export async function GET(request: Request) {
     .schema("public")
     .from("v_cms_order_lookup")
     .select(
-      "order_id, order_line_id, order_no, order_date, client_id, client_name, model_no, color, status, plating_status, plating_color"
+      "order_id, order_line_id, order_no, order_date, client_id, client_name, client_code, model_no, color, status, plating_status, plating_color"
     )
     .order("order_date", { ascending: false })
     .limit(limit);
 
   if (q) {
     query = query.or(
-      `order_no.ilike.%${q}%,client_name.ilike.%${q}%,model_no.ilike.%${q}%`
+      `order_no.ilike.%${q}%,client_name.ilike.%${q}%,client_code.ilike.%${q}%,model_no.ilike.%${q}%,client_name_initials.ilike.%${q}%,client_code_initials.ilike.%${q}%,model_no_initials.ilike.%${q}%`
     );
   }
 

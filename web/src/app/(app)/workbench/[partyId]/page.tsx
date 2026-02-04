@@ -414,6 +414,7 @@ function WorkbenchContent() {
         .select("shipment_id, status, created_at, ship_date, confirmed_at, memo, cms_shipment_line(model_name, qty, total_amount_sell_krw)")
         .eq("customer_party_id", partyId)
         .eq("is_store_pickup", true)
+        .neq("status", "CONFIRMED")
         .order("created_at", { ascending: false });
       if (error) throw error;
       return data as StorePickupShipment[];
@@ -535,10 +536,16 @@ function WorkbenchContent() {
     },
   });
 
+  const getStorePickupPrintUrl = () => {
+    const dateParam = format(new Date(), "yyyy-MM-dd");
+    return `/shipments_print?mode=store_pickup&party_id=${encodeURIComponent(
+      partyId
+    )}&date=${encodeURIComponent(dateParam)}`;
+  };
+
   const handleConfirmStorePickup = async (shipmentId: string) => {
     await confirmStorePickupMutation.mutateAsync(shipmentId);
-    const url = `/shipments_print?mode=store_pickup&party_id=${encodeURIComponent(partyId)}`;
-    window.open(url, "_blank", "noopener,noreferrer");
+    window.open(getStorePickupPrintUrl(), "_blank", "noopener,noreferrer");
   };
 
   const handleToggleStorePickup = (shipmentId: string) => {
@@ -585,8 +592,7 @@ function WorkbenchContent() {
     }
 
     if (succeeded.length > 0) {
-      const url = `/shipments_print?mode=store_pickup&party_id=${encodeURIComponent(partyId)}`;
-      window.open(url, "_blank", "noopener,noreferrer");
+      window.open(getStorePickupPrintUrl(), "_blank", "noopener,noreferrer");
     }
 
     setSelectedStorePickups(new Set(failed.map((row) => row.shipmentId)));

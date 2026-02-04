@@ -104,6 +104,15 @@ type ShipmentHeaderRow = {
   is_store_pickup?: boolean | null;
   pricing_locked_at?: string | null;
   pricing_source?: string | null;
+  confirmed_at?: string | null;
+  status?: string | null;
+};
+
+type ArResyncResult = {
+  ok?: boolean;
+  shipment_id?: string;
+  updated?: number;
+  inserted?: number;
 };
 
 function getVendorInitials(name?: string | null) {
@@ -559,7 +568,7 @@ export default function ShipmentsPage() {
 
   const shipmentHeaderQuery = useQuery({
     queryKey: ["shipment-header", normalizedShipmentId, confirmModalOpen],
-    enabled: Boolean(normalizedShipmentId) && confirmModalOpen,
+    enabled: Boolean(normalizedShipmentId),
     queryFn: async () => {
       const shipmentId = normalizedShipmentId;
       if (!shipmentId) return null;
@@ -568,7 +577,7 @@ export default function ShipmentsPage() {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const { data } = await (sb as any)
         .from("cms_shipment_header")
-        .select("is_store_pickup, pricing_locked_at, pricing_source")
+        .select("is_store_pickup, pricing_locked_at, pricing_source, confirmed_at, status")
         .eq("shipment_id", shipmentId)
         .maybeSingle();
       return (data ?? null) as ShipmentHeaderRow | null;
@@ -616,6 +625,15 @@ export default function ShipmentsPage() {
     successMessage: "매장출고 지정 완료",
   });
 
+  const arInvoiceResyncMutation = useRpcMutation<ArResyncResult>({
+    fn: CONTRACTS.functions.arInvoiceResyncFromShipment,
+    onSuccess: (result) => {
+      const updated = result?.updated ?? 0;
+      const inserted = result?.inserted ?? 0;
+      toast.success(`AR 재계산 완료 (updated=${updated}, inserted=${inserted})`);
+    },
+  });
+
   // ✅ 영수증 “연결” upsert
   const receiptUsageUpsertMutation = useRpcMutation<unknown>({
     fn: FN_RECEIPT_USAGE_UPSERT,
@@ -624,6 +642,7 @@ export default function ShipmentsPage() {
 
 
   const handleSaveShipment = async () => {
+    const shouldStorePickup = isStorePickup;
     if (!actorId) {
       toast.error("ACTOR_ID 설정이 필요합니다.", {
         description: "NEXT_PUBLIC_CMS_ACTOR_ID를 확인하세요.",
@@ -700,7 +719,7 @@ export default function ShipmentsPage() {
       return;
     }
 
-    if (isStorePickup) {
+    if (shouldStorePickup) {
       await shipmentSetStorePickupMutation.mutateAsync({
         p_shipment_id: shipmentId,
         p_is_store_pickup: true,
@@ -709,7 +728,7 @@ export default function ShipmentsPage() {
       });
     }
 
-    const confirmHandler = isStorePickup ? confirmStorePickupMutation : confirmMutation;
+    const confirmHandler = shouldStorePickup ? confirmStorePickupMutation : confirmMutation;
     await confirmHandler.mutateAsync({
       p_shipment_id: shipmentId,
       p_actor_person_id: actorId,
@@ -720,6 +739,15 @@ export default function ShipmentsPage() {
       p_cost_lines: [],
       p_force: false,
     });
+
+    if (shouldStorePickup) {
+      await shipmentSetStorePickupMutation.mutateAsync({
+        p_shipment_id: shipmentId,
+        p_is_store_pickup: true,
+        p_actor_person_id: actorId,
+        p_note: "force store pickup after confirm",
+      });
+    }
   };
 
   const displayedLines = useMemo(() => {
@@ -992,6 +1020,7 @@ export default function ShipmentsPage() {
   });
 
   const handleFinalConfirm = async () => {
+    const shouldStorePickup = isStorePickup;
     if (!actorId) {
       toast.error("ACTOR_ID 설정이 필요합니다.", {
         description: "NEXT_PUBLIC_CMS_ACTOR_ID를 확인하세요.",
@@ -1091,7 +1120,7 @@ export default function ShipmentsPage() {
           .filter((x) => !Number.isNaN(x.unit_cost_krw) && x.unit_cost_krw >= 0)
         : [];
 
-    const confirmHandler = isStorePickup ? confirmStorePickupMutation : confirmMutation;
+    const confirmHandler = shouldStorePickup ? confirmStorePickupMutation : confirmMutation;
 
     await confirmHandler.mutateAsync({
       p_shipment_id: shipmentId,
@@ -1103,6 +1132,15 @@ export default function ShipmentsPage() {
       p_cost_lines: costLines,
       p_force: false,
     });
+
+    if (shouldStorePickup) {
+      await shipmentSetStorePickupMutation.mutateAsync({
+        p_shipment_id: shipmentId,
+        p_is_store_pickup: true,
+        p_actor_person_id: actorId,
+        p_note: "force store pickup after confirm",
+      });
+    }
 
     // ✅ 영수증 연결만 (receipt_usage upsert)
   };
@@ -1164,6 +1202,17 @@ export default function ShipmentsPage() {
   const pricingLockedAt = valuation?.pricing_locked_at ?? shipmentHeaderQuery.data?.pricing_locked_at ?? null;
   const pricingSource = valuation?.pricing_source ?? shipmentHeaderQuery.data?.pricing_source ?? null;
   const isConfirming = confirmMutation.isPending || confirmStorePickupMutation.isPending;
+  const shipmentIdForResync = normalizeId(currentShipmentId);
+  const isShipmentConfirmed =
+    Boolean(shipmentHeaderQuery.data?.confirmed_at) || shipmentHeaderQuery.data?.status === "CONFIRMED";
+  const canResyncAr = Boolean(shipmentIdForResync) && isShipmentConfirmed && !arInvoiceResyncMutation.isPending;
+
+  const handleArResync = async () => {
+    if (!shipmentIdForResync) return;
+    await arInvoiceResyncMutation.mutateAsync({
+      p_shipment_id: shipmentIdForResync,
+    });
+  };
 
   // --- UI Helpers ---
   const currentStep = !selectedOrderLineId
@@ -1186,16 +1235,29 @@ export default function ShipmentsPage() {
       {/* Sticky Header */}
       <div className="sticky top-0 z-20 bg-[var(--background)]/80 backdrop-blur-md border-b border-[var(--panel-border)] shadow-sm transition-all">
         <div className="px-4 sm:px-6 lg:px-8 py-4">
-          <ActionBar
-            title="출고 관리"
-            subtitle="주문 기반 출고 및 원가 확정"
-            actions={
-              <div className="flex items-center gap-2">
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  onClick={() => {
-                    setLookupOpen(true);
+            <ActionBar
+              title="출고 관리"
+              subtitle="주문 기반 출고 및 원가 확정"
+              actions={
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={handleArResync}
+                    disabled={!canResyncAr}
+                  >
+                    {arInvoiceResyncMutation.isPending ? "재계산 중..." : "AR 재계산(999 포함)"}
+                  </Button>
+                  <Link href="/ar">
+                    <Button variant="secondary" size="sm">
+                      AR 페이지로 이동
+                    </Button>
+                  </Link>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => {
+                      setLookupOpen(true);
                     setTimeout(() => lookupInputRef.current?.focus(), 0);
                   }}
                 >

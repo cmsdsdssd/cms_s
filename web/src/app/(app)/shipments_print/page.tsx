@@ -139,6 +139,9 @@ const getKstDateTime = () => {
   }).format(now);
 };
 
+const isValidYmd = (value: string) => /^\d{4}-\d{2}-\d{2}$/.test(value);
+
+
 const zeroAmounts: Amounts = { gold: 0, silver: 0, labor: 0, total: 0 };
 
 const addAmounts = (base: Amounts, add: Amounts) => ({
@@ -220,6 +223,7 @@ const ReceiptHalf = ({
               <th className="py-1 text-right font-medium">중량(g)</th>
               <th className="py-1 text-right font-medium">사이</th>
               <th className="py-1 text-right font-medium">공임</th>
+              <th className="py-1 text-right font-medium">소재비</th>
               <th className="py-1 text-right font-medium">은(g)</th>
               <th className="py-1 text-right font-medium">금액</th>
             </tr>
@@ -241,6 +245,11 @@ const ReceiptHalf = ({
                   {line.labor_total_sell_krw === null || line.labor_total_sell_krw === undefined
                     ? ""
                     : formatKrw(line.labor_total_sell_krw)}
+                </td>
+                <td className="py-1 text-right tabular-nums">
+                  {line.material_amount_sell_krw === null || line.material_amount_sell_krw === undefined
+                    ? ""
+                    : formatKrw(line.material_amount_sell_krw)}
                 </td>
                 <td className="py-1 text-right tabular-nums">
                   {line.material_code === "925" && line.net_weight_g !== null && line.net_weight_g !== undefined
@@ -298,7 +307,8 @@ function ShipmentsPrintContent() {
   const isStorePickupMode = mode === "store_pickup";
   const filterPartyId = (searchParams.get("party_id") ?? "").trim();
 
-  const today = useMemo(() => getKstYmd(), []);
+  const dateParam = (searchParams.get("date") ?? "").trim();
+  const today = useMemo(() => (isValidYmd(dateParam) ? dateParam : getKstYmd()), [dateParam]);
   const todayStartIso = useMemo(() => getKstStartIso(today), [today]);
   const todayEndIso = useMemo(() => getKstNextStartIso(today), [today]);
   const [nowLabel, setNowLabel] = useState("");
@@ -319,10 +329,8 @@ function ShipmentsPrintContent() {
         .eq("status", "CONFIRMED");
 
       if (isStorePickupMode) {
-        query = query
-          .eq("is_store_pickup", true)
-          .gte("confirmed_at", todayStartIso)
-          .lt("confirmed_at", todayEndIso);
+        const dateFilter = `ship_date.eq.${today},and(ship_date.is.null,confirmed_at.gte.${todayStartIso},confirmed_at.lt.${todayEndIso})`;
+        query = query.eq("is_store_pickup", true).or(dateFilter);
         if (filterPartyId) {
           query = query.eq("customer_party_id", filterPartyId);
         }
@@ -419,9 +427,7 @@ function ShipmentsPrintContent() {
         .in("shipment_header.customer_party_id", partyIds);
 
       if (isStorePickupMode) {
-        query = query
-          .eq("shipment_header.is_store_pickup", true)
-          .lte("shipment_header.confirmed_at", todayEndIso);
+        query = query.eq("shipment_header.is_store_pickup", true).lte("shipment_header.ship_date", today);
       } else {
         query = query
           .lte("shipment_header.ship_date", today)
@@ -495,9 +501,7 @@ function ShipmentsPrintContent() {
         .in("shipment_header.customer_party_id", partyIds);
 
       if (isStorePickupMode) {
-        query = query
-          .eq("shipment_header.is_store_pickup", true)
-          .lt("shipment_header.confirmed_at", todayStartIso);
+        query = query.eq("shipment_header.is_store_pickup", true).lt("shipment_header.ship_date", today);
       } else {
         query = query
           .lt("shipment_header.ship_date", today)

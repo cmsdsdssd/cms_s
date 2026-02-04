@@ -26,6 +26,11 @@ export function SearchSelect({
   showResultsOnEmptyQuery = true,
 }: SearchSelectProps) {
   const [query, setQuery] = useState("");
+  const selectedLabel = useMemo(() => {
+    if (!value) return "";
+    return options.find((option) => option.value === value)?.label ?? "";
+  }, [options, value]);
+  const inputValue = query.length > 0 ? query : selectedLabel;
   const normalizedQuery = query.trim();
   const showAll = normalizedQuery.includes("*");
   const cleanedQuery = normalizedQuery.replace(/\*/g, "").trim();
@@ -45,7 +50,7 @@ export function SearchSelect({
         <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">{label}</p>
       ) : null}
 
-      <Input placeholder={placeholder} value={query} onChange={(e) => setQuery(e.target.value)} />
+      <Input placeholder={placeholder} value={inputValue} onChange={(e) => setQuery(e.target.value)} />
 
       {shouldShowResults ? (
         <div className="max-h-40 overflow-y-auto rounded-[12px] border border-[var(--panel-border)] bg-[var(--panel)]">
@@ -55,7 +60,10 @@ export function SearchSelect({
               <button
                 key={option.value}
                 type="button"
-                onClick={() => onChange?.(option.value)}
+                onClick={() => {
+                  onChange?.(option.value);
+                  setQuery("");
+                }}
                 className={cn(
                   "flex w-full items-center justify-between px-3 py-2 text-left text-sm transition-colors",
                   active ? "bg-[var(--primary)]/10 text-[var(--foreground)]" : "hover:bg-[var(--muted)]/10 text-[var(--foreground)]"

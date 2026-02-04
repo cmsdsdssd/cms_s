@@ -1,5 +1,3 @@
-set search_path = public, pg_temp;
-
 create or replace function public.cms_fn_add_shipment_line_from_order_v1(
   p_shipment_id uuid,
   p_order_line_id uuid,
@@ -55,7 +53,7 @@ begin
     gen_random_uuid(), p_shipment_id,
     p_order_line_id,
     coalesce(p_pricing_mode, 'RULE'::cms_e_pricing_mode),
-    coalesce(p_category_code, o.category_code, v_master_category),
+    coalesce(p_category_code, v_master_category),
     coalesce(p_material_code, o.material_code),
     coalesce(p_qty, o.qty, 1),
     o.model_name, o.suffix, o.color, o.size,

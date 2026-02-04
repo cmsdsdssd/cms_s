@@ -34,6 +34,7 @@ type UnshippedRow = {
   queue_sort_date?: string;
   sent_to_vendor_at?: string | null;
   inbound_at?: string | null;
+  created_at?: string | null;
   memo?: string | null;
   is_plated?: boolean | null;
   plating_color_code?: string | null;
@@ -49,14 +50,29 @@ type FilterRow = {
   value: string;
 };
 
-type SortField = "factory_po" | "sent_date" | "inbound_date" | "queue_date";
+type SortField = "order_date" | "factory_po" | "sent_date" | "inbound_date" | "queue_date";
 type SortOrder = "asc" | "desc";
+
+type FilterOperator = "and" | "or";
 
 const createFilter = (type: FilterType): FilterRow => ({
   id: `${type}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
   type,
   value: "",
 });
+
+const createPresetFilter = (type: FilterType, value: string): FilterRow => ({
+  id: `${type}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+  type,
+  value,
+});
+
+const STATUS_PRIORITY: Record<string, number> = {
+  READY_TO_SHIP: 1,
+  SENT_TO_VENDOR: 2,
+  ORDER_PENDING: 3,
+  WAITING_INBOUND: 4,
+};
 
 // Color chip helper
 function ColorChip({ color }: { color: string }) {
@@ -88,6 +104,10 @@ function StatusBadge({ status, displayStatus }: { status: string; displayStatus?
       color: 'bg-blue-100 text-blue-700 border-blue-300',
       icon: <Clock className="w-3 h-3" />
     },
+    'ORDER_PENDING': {
+      color: 'bg-amber-100 text-amber-700 border-amber-300',
+      icon: <Clock className="w-3 h-3" />
+    },
     'WAITING_INBOUND': {
       color: 'bg-amber-100 text-amber-700 border-amber-300',
       icon: <Package className="w-3 h-3" />
@@ -114,10 +134,14 @@ function StatusBadge({ status, displayStatus }: { status: string; displayStatus?
 export default function ShipmentsMainPage() {
   const schemaClient = getSchemaClient();
   const queryClient = useQueryClient();
-  const [filters, setFilters] = useState<FilterRow[]>([]);
+  const [filters, setFilters] = useState<FilterRow[]>(() => [
+    createPresetFilter("status", "READY_TO_SHIP"),
+    createPresetFilter("status", "SENT_TO_VENDOR"),
+  ]);
+  const [filterOperator, setFilterOperator] = useState<FilterOperator>("or");
   const [selectedLines, setSelectedLines] = useState<Set<string>>(new Set());
   const [page, setPage] = useState(1);
-  const [sortField, setSortField] = useState<SortField>("queue_date");
+  const [sortField, setSortField] = useState<SortField>("order_date");
   const [sortOrder, setSortOrder] = useState<SortOrder>("desc");
   const pageSize = 50; // 페이지당 50개씩
 
@@ -166,8 +190,9 @@ export default function ShipmentsMainPage() {
     // 캐싱 설정으로 로딩 속도 개선
     staleTime: 1000 * 60 * 5, // 5분 캐시
     gcTime: 1000 * 60 * 30, // 30분 캐시 유지
-    refetchOnWindowFocus: false,
-    refetchOnMount: true, // 마운트시 한번은 리패치
+    refetchOnWindowFocus: true,
+    refetchOnReconnect: true,
+    refetchOnMount: "always", // 마운트시 항상 리패치
     retry: 2, // 실패시 2번 재시도
     retryDelay: 1000, // 1초 후 재시도
   });
@@ -183,29 +208,46 @@ export default function ShipmentsMainPage() {
     }
   }, [unshippedQuery.data, unshippedQuery.error]);
 
+  useEffect(() => {
+    const handleVisibility = () => {
+      if (document.visibilityState === "visible") {
+        unshippedQuery.refetch();
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisibility);
+    return () => document.removeEventListener("visibilitychange", handleVisibility);
+  }, [unshippedQuery]);
+
   // Apply filters and sorting
   const applyFilters = useMemo(() => {
     if (!unshippedQuery.data) return [];
     
+    const activeFilters = filters.filter((filter) => filter.value);
+
+    const matchesFilter = (row: UnshippedRow, filter: FilterRow) => {
+      if (filter.type === "customer") {
+        return row.customer_party_id === filter.value;
+      }
+      if (filter.type === "status") {
+        return row.status === filter.value;
+      }
+      if (filter.type === "date") {
+        const dates = [
+          row.queue_sort_date,
+          row.sent_to_vendor_at,
+          row.inbound_at,
+        ].filter(Boolean);
+        return dates.some(d => d?.slice(0, 10) === filter.value);
+      }
+      return true;
+    };
+
     let result = unshippedQuery.data.filter((row) => {
-      return filters.every((filter) => {
-        if (filter.type === "customer") {
-          return filter.value ? row.customer_party_id === filter.value : true;
-        }
-        if (filter.type === "status") {
-          return filter.value ? row.status === filter.value : true;
-        }
-        if (filter.type === "date") {
-          if (!filter.value) return true;
-          const dates = [
-            row.queue_sort_date,
-            row.sent_to_vendor_at,
-            row.inbound_at,
-          ].filter(Boolean);
-          return dates.some(d => d?.slice(0, 10) === filter.value);
-        }
-        return true;
-      });
+      if (activeFilters.length === 0) return true;
+      if (filterOperator === "or") {
+        return activeFilters.some((filter) => matchesFilter(row, filter));
+      }
+      return activeFilters.every((filter) => matchesFilter(row, filter));
     });
 
     // Apply sorting
@@ -216,11 +258,11 @@ export default function ShipmentsMainPage() {
       const rowB = b as UnshippedRow & { status_sort_order?: number };
       
       // 1st priority: status_sort_order (DB에서 가져온 값)
-      const sortOrderA = rowA.status_sort_order ?? 4;
-      const sortOrderB = rowB.status_sort_order ?? 4;
+      const sortOrderA = STATUS_PRIORITY[rowA.status ?? ""] ?? rowA.status_sort_order ?? 99;
+      const sortOrderB = STATUS_PRIORITY[rowB.status ?? ""] ?? rowB.status_sort_order ?? 99;
       
       if (sortOrderA !== sortOrderB) {
-        return sortOrderA - sortOrderB; // 1(공장발주) → 2 → 3 순서
+        return sortOrderA - sortOrderB;
       }
       
       // 같은 status 내에서: 선택한 sortField로 정렬
@@ -228,6 +270,10 @@ export default function ShipmentsMainPage() {
       let valB: string | null | undefined;
       
       switch (sortField) {
+        case "order_date":
+          valA = a.created_at ?? null;
+          valB = b.created_at ?? null;
+          break;
         case "factory_po":
           valA = a.factory_po_id;
           valB = b.factory_po_id;
@@ -252,12 +298,22 @@ export default function ShipmentsMainPage() {
       if (!valA) return sortOrder === "asc" ? -1 : 1;
       if (!valB) return sortOrder === "asc" ? 1 : -1;
       
+      if (sortField === "order_date") {
+        const now = Date.now();
+        const timeA = new Date(valA).getTime();
+        const timeB = new Date(valB).getTime();
+        const distA = Math.abs(now - timeA);
+        const distB = Math.abs(now - timeB);
+        const comparison = distA - distB;
+        return sortOrder === "asc" ? comparison : -comparison;
+      }
+
       const comparison = valA.localeCompare(valB);
       return sortOrder === "asc" ? comparison : -comparison;
     });
     
     return result;
-  }, [unshippedQuery.data, filters, sortField, sortOrder]);
+  }, [unshippedQuery.data, filters, filterOperator, sortField, sortOrder]);
 
   // Pagination
   const paginatedData = useMemo(() => {
@@ -281,6 +337,11 @@ export default function ShipmentsMainPage() {
   const addFilter = (type: FilterType) => {
     setFilters((prev) => [...prev, createFilter(type)]);
   };
+
+  const handleRefresh = useCallback(async () => {
+    await queryClient.invalidateQueries({ queryKey: ["cms", "unshipped_order_lines"] });
+    await unshippedQuery.refetch();
+  }, [queryClient, unshippedQuery]);
 
   const updateFilter = (id: string, patch: Partial<FilterRow>) => {
     setFilters((prev) => prev.map((filter) => (filter.id === id ? { ...filter, ...patch } : filter)));
@@ -415,6 +476,9 @@ export default function ShipmentsMainPage() {
                 오늘 출고 영수증
               </ToolbarButton>
             </Link>
+            <ToolbarButton variant="secondary" onClick={handleRefresh}>
+              새로고침
+            </ToolbarButton>
           </div>
         }
       >
@@ -459,6 +523,7 @@ export default function ShipmentsMainPage() {
           className="w-32"
         >
           <option value="">(상태)</option>
+          <option value="ORDER_PENDING">주문대기</option>
           <option value="SENT_TO_VENDOR">공장발주완료</option>
           <option value="WAITING_INBOUND">입고대기</option>
           <option value="READY_TO_SHIP">출고대기</option>
@@ -504,6 +569,17 @@ export default function ShipmentsMainPage() {
                   {filters.length}
                 </Badge>
               )}
+              <button
+                onClick={() => setFilterOperator(prev => prev === "and" ? "or" : "and")}
+                className={cn(
+                  "text-[10px] px-2 py-0.5 rounded-full border transition-colors",
+                  filterOperator === "or"
+                    ? "border-[var(--primary)] text-[var(--primary)] bg-[var(--primary)]/10"
+                    : "border-[var(--panel-border)] text-[var(--muted)]"
+                )}
+              >
+                {filterOperator.toUpperCase()}
+              </button>
             </div>
             <div className="flex items-center gap-1">
               <Select
@@ -560,6 +636,7 @@ export default function ShipmentsMainPage() {
                 {filter.type === "status" ? (
                   <Select className="h-9 text-sm bg-[var(--input-bg)]" value={filter.value} onChange={(event) => updateFilter(filter.id, { value: event.target.value })}>
                     <option value="">상태 선택</option>
+                    <option value="ORDER_PENDING">주문대기</option>
                     <option value="SENT_TO_VENDOR">공장발주완료</option>
                     <option value="WAITING_INBOUND">입고대기</option>
                     <option value="READY_TO_SHIP">출고대기</option>
@@ -616,6 +693,7 @@ export default function ShipmentsMainPage() {
                 className="h-7 text-xs px-2 rounded border border-[var(--panel-border)] bg-[var(--input-bg)]"
               >
                 <option value="queue_date">정렬대기일</option>
+                <option value="order_date">주문일</option>
                 <option value="factory_po">공장발주</option>
                 <option value="sent_date">발주일</option>
                 <option value="inbound_date">입고일</option>
