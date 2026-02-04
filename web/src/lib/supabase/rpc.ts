@@ -33,5 +33,9 @@ export async function callRpc<T>(fn: string, params: Record<string, unknown>) {
     throw new Error(`RPC ${fn} failed (${res.status}) | ${details}`);
   }
 
-  return (await res.json()) as T;
+  const text = await res.text();
+  if (!text) {
+    return undefined as T;
+  }
+  return JSON.parse(text) as T;
 }

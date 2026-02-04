@@ -46,6 +46,14 @@ export const CONTRACTS = {
     repairLineEnriched: "cms_v_repair_line_enriched_v1",
     shipmentCostApplyCandidates: "cms_v_shipment_cost_apply_candidates_v1",
 
+    // ✅ AP (미지급) Views
+    apPositionByVendor: "cms_v_ap_position_by_vendor_v1",
+    apInvoicePosition: "cms_v_ap_invoice_position_v1",
+    apPaymentUnallocated: "cms_v_ap_payment_unallocated_v1",
+    apPaymentAllocDetail: "cms_v_ap_payment_alloc_detail_v1",
+    apReconcileOpenByVendor: "cms_v_ap_reconcile_open_by_vendor_v1",
+    apReconcileIssueList: "cms_v_ap_reconcile_issue_list_v1",
+
     // ✅ Factory Purchase Order (공장발주) Views
     unshippedOrderLines: "cms_v_unshipped_order_lines",
     factoryPoSummary: "cms_v_factory_po_summary",
@@ -138,6 +146,13 @@ export const CONTRACTS = {
     receiptPricingSnapshotUpsertV2: "cms_fn_upsert_receipt_pricing_snapshot_v2",
     receiptLineMatchSuggest: "cms_fn_receipt_line_match_suggest_v1",
     receiptLineMatchConfirm: "cms_fn_receipt_line_match_confirm_v1",
+
+    // ✅ AP (미지급) RPCs
+    factoryReceiptStatementUpsert: "cms_fn_upsert_factory_receipt_statement_v1",
+    apPayAndFifo: "cms_fn_ap2_pay_and_fifo_v1",
+    apManualAlloc: "cms_fn_ap2_manual_alloc_v1",
+    apReconcileSetIssueStatus: "cms_fn_ap_set_reconcile_issue_status_v1",
+    apReconcileCreateAdjustment: "cms_fn_ap_create_adjustment_from_issue_v1",
   },
 };
 

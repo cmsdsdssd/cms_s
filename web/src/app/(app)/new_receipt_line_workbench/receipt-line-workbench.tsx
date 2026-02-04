@@ -145,6 +145,32 @@ const STONE_FIELDS = [
 
 type StoneField = (typeof STONE_FIELDS)[number];
 
+type MetalUnit = "g" | "don";
+
+type FactoryMetalInput = {
+  value: string;
+  unit: MetalUnit;
+};
+
+type FactoryRowInput = {
+  rowCode: "RECENT_PAYMENT" | "PRE_BALANCE" | "SALE" | "POST_BALANCE";
+  label: string;
+  refDate: string;
+  note: string;
+  gold: FactoryMetalInput;
+  silver: FactoryMetalInput;
+  laborKrw: string;
+};
+
+type FactoryStatementResult = {
+  reconcile?: {
+    issue_counts?: {
+      error?: number | null;
+      warn?: number | null;
+    } | null;
+  } | null;
+};
+
 function formatNumber(n?: number | null) {
   if (n === null || n === undefined || Number.isNaN(Number(n))) return "-";
   return new Intl.NumberFormat("ko-KR").format(Number(n));
@@ -175,6 +201,37 @@ function parseNumber(value: string) {
   if (!trimmed) return null;
   const n = Number(trimmed.replaceAll(",", ""));
   return Number.isFinite(n) ? n : null;
+}
+
+function getRpcErrorMessage(error: unknown) {
+  const e = error as
+    | { message?: string; error_description?: string; details?: string; hint?: string }
+    | string
+    | null
+    | undefined;
+  const message =
+    (typeof e === "string" ? e : e?.message) ??
+    (typeof e === "string" ? undefined : e?.error_description) ??
+    "잠시 후 다시 시도해 주세요";
+  if (message.includes("ON CONFLICT specification")) {
+    return "중복 제약이 없어 AP 생성이 실패했습니다. DB 제약 확인이 필요합니다.";
+  }
+  return message;
+}
+
+function getIssueCounts(result: FactoryStatementResult | undefined) {
+  const counts = result?.reconcile?.issue_counts ?? null;
+  if (!counts) return null;
+  const error = Number(counts.error ?? 0);
+  const warn = Number(counts.warn ?? 0);
+  return {
+    error: Number.isFinite(error) ? error : 0,
+    warn: Number.isFinite(warn) ? warn : 0,
+  };
+}
+
+function roundTo6(value: number) {
+  return Math.round(value * 1_000_000) / 1_000_000;
 }
 
 function isValidSeq(value: string) {
@@ -225,6 +282,14 @@ function getReceiptLineUuid(line: UnlinkedLineRow) {
 const DEFAULT_STATUS_FILTER = "ALL";
 const AUTO_FIELD_CLASS = "bg-[var(--panel)]/70";
 const DEFAULT_RANGE_MONTHS = -3;
+const DON_TO_G = 3.75;
+
+const FACTORY_ROWS: Array<Pick<FactoryRowInput, "rowCode" | "label">> = [
+  { rowCode: "RECENT_PAYMENT", label: "최근결제" },
+  { rowCode: "PRE_BALANCE", label: "거래전미수" },
+  { rowCode: "SALE", label: "판매" },
+  { rowCode: "POST_BALANCE", label: "거래후미수" },
+];
 
 function getDefaultRangeDateByMonths(offsetMonths: number) {
   const d = new Date();
@@ -253,6 +318,22 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
   const [autoBillNo, setAutoBillNo] = useState<string | null>(null);
   const [billNoAutoEligible, setBillNoAutoEligible] = useState(true);
   const [billNoSuggestNonce, setBillNoSuggestNonce] = useState(0);
+
+  const [factoryRows, setFactoryRows] = useState<FactoryRowInput[]>(() =>
+    FACTORY_ROWS.map((row) => ({
+      rowCode: row.rowCode,
+      label: row.label,
+      refDate: "",
+      note: "",
+      gold: { value: "", unit: "g" },
+      silver: { value: "", unit: "g" },
+      laborKrw: "",
+    }))
+  );
+  const [factoryNote, setFactoryNote] = useState("");
+  const [reconcileIssueCounts, setReconcileIssueCounts] = useState<{ error: number; warn: number } | null>(null);
+  const [apSyncStatus, setApSyncStatus] = useState<"idle" | "success" | "error">("idle");
+  const [apSyncMessage, setApSyncMessage] = useState<string | null>(null);
 
   const [lineItems, setLineItems] = useState<ReceiptLineItemInput[]>([]);
   const [lineItemsDirty, setLineItemsDirty] = useState(false);
@@ -410,6 +491,18 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
 
   const ensureApFromReceipt = useRpcMutation<{ ok?: boolean }>({
     fn: CONTRACTS.functions.ensureApFromReceipt,
+  });
+
+  const factoryStatementUpsert = useRpcMutation<FactoryStatementResult>({
+    fn: CONTRACTS.functions.factoryReceiptStatementUpsert,
+    successMessage: "저장됨",
+    onSuccess: (result) => {
+      const counts = getIssueCounts(result);
+      if (counts) {
+        setReconcileIssueCounts(counts);
+      }
+      queryClient.invalidateQueries({ queryKey: ["new-receipt-workbench", "reconcile", selectedReceiptId] });
+    },
   });
 
   const headerUpdate = useRpcMutation<void>({
@@ -603,6 +696,21 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
     setLineLimit(50);
     setUnlinkedLimit(50);
     setExpandedLineId(null);
+    setFactoryRows(
+      FACTORY_ROWS.map((row) => ({
+        rowCode: row.rowCode,
+        label: row.label,
+        refDate: "",
+        note: "",
+        gold: { value: "", unit: "g" },
+        silver: { value: "", unit: "g" },
+        laborKrw: "",
+      }))
+    );
+    setFactoryNote("");
+    setReconcileIssueCounts(null);
+    setApSyncStatus("idle");
+    setApSyncMessage(null);
   }, [selectedReceiptId]);
 
   useEffect(() => {
@@ -753,6 +861,47 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
     updateLine(lineUuid, "material_code", normalized);
   }
 
+  function updateFactoryRow(rowCode: FactoryRowInput["rowCode"], patch: Partial<FactoryRowInput>) {
+    setFactoryRows((prev) =>
+      prev.map((row) => (row.rowCode === rowCode ? { ...row, ...patch } : row))
+    );
+  }
+
+  function updateFactoryMetal(
+    rowCode: FactoryRowInput["rowCode"],
+    metal: "gold" | "silver",
+    patch: Partial<FactoryMetalInput>
+  ) {
+    setFactoryRows((prev) =>
+      prev.map((row) =>
+        row.rowCode === rowCode
+          ? { ...row, [metal]: { ...row[metal], ...patch } }
+          : row
+      )
+    );
+  }
+
+  function buildFactoryLeg(assetCode: "XAU_G" | "XAG_G", input: FactoryMetalInput) {
+    const inputQty = parseNumber(input.value) ?? 0;
+    const qty = input.unit === "don" ? roundTo6(inputQty * DON_TO_G) : roundTo6(inputQty);
+    return {
+      asset_code: assetCode,
+      qty,
+      input_unit: input.unit,
+      input_qty: inputQty,
+    };
+  }
+
+  function buildLaborLeg(inputValue: string) {
+    const inputQty = parseNumber(inputValue) ?? 0;
+    return {
+      asset_code: "KRW_LABOR",
+      qty: inputQty,
+      input_unit: "krw",
+      input_qty: inputQty,
+    };
+  }
+
   const lineTotals = useMemo(() => {
     return lineItems.reduce(
       (acc, item) => {
@@ -875,11 +1024,61 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
       p_line_items: payload,
     });
 
-    await ensureApFromReceipt.mutateAsync({
-      p_receipt_id: selectedReceiptId,
-      p_note: memo || null,
-    });
+    try {
+      await ensureApFromReceipt.mutateAsync({
+        p_receipt_id: selectedReceiptId,
+        p_note: memo || null,
+      });
+      setApSyncStatus("success");
+      setApSyncMessage(null);
+    } catch (error) {
+      setApSyncStatus("error");
+      setApSyncMessage(getRpcErrorMessage(error));
+    }
     setLineItemsDirty(false);
+  }
+
+  async function retryEnsureAp() {
+    if (!selectedReceiptId) {
+      toast.error("영수증을 선택하세요");
+      return;
+    }
+    try {
+      await ensureApFromReceipt.mutateAsync({
+        p_receipt_id: selectedReceiptId,
+        p_note: memo || null,
+      });
+      setApSyncStatus("success");
+      setApSyncMessage(null);
+      toast.success("AP 동기화 완료");
+    } catch (error) {
+      setApSyncStatus("error");
+      setApSyncMessage(getRpcErrorMessage(error));
+    }
+  }
+
+  async function saveFactoryStatement() {
+    if (!selectedReceiptId) {
+      toast.error("영수증을 선택하세요");
+      return;
+    }
+
+    const rows = factoryRows.map((row) => ({
+      row_code: row.rowCode,
+      ref_date: row.refDate || null,
+      note: row.note || null,
+      legs: [
+        buildFactoryLeg("XAU_G", row.gold),
+        buildFactoryLeg("XAG_G", row.silver),
+        buildLaborLeg(row.laborKrw),
+      ],
+    }));
+
+    await factoryStatementUpsert.mutateAsync({
+      p_receipt_id: selectedReceiptId,
+      p_statement: { rows },
+      p_note: factoryNote || null,
+    });
   }
 
   async function handleSuggest() {
@@ -999,7 +1198,25 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
     upsertSnapshot.isPending ||
     headerUpdate.isPending ||
     matchConfirm.isPending ||
+    factoryStatementUpsert.isPending ||
     isSuggesting;
+
+  const reconcileStatus = useMemo(() => {
+    if (!reconcileIssueCounts) {
+      return { label: "미확인", tone: "neutral" as const };
+    }
+    if (reconcileIssueCounts.error > 0) {
+      return { label: "ERROR", tone: "danger" as const };
+    }
+    if (reconcileIssueCounts.warn > 0) {
+      return { label: "WARN", tone: "warning" as const };
+    }
+    return { label: "OK", tone: "active" as const };
+  }, [reconcileIssueCounts]);
+
+  const reconcileLink = vendorPartyId
+    ? `/ap/reconcile?vendor_party_id=${encodeURIComponent(vendorPartyId)}&status=OPEN,ACKED`
+    : "/ap/reconcile";
 
   return (
     <div className="mx-auto max-w-[1900px] space-y-6 px-4 pb-10 pt-4 md:px-6">
@@ -1164,6 +1381,21 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
               <div className="flex items-center justify-between">
                 <div className="text-sm font-semibold">라인 입력 (1행 요약 + 상세 펼침)</div>
                 <div className="flex items-center gap-2">
+                  {apSyncStatus === "error" ? (
+                    <div className="flex items-center gap-2">
+                      <Badge tone="warning" className="h-6 px-2 text-[10px]">
+                        AP 동기화 실패
+                      </Badge>
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        onClick={retryEnsureAp}
+                        disabled={!selectedReceiptId || ensureApFromReceipt.isPending}
+                      >
+                        재시도
+                      </Button>
+                    </div>
+                  ) : null}
                   <Button size="sm" variant="secondary" onClick={addLine} disabled={!selectedReceiptId}>
                     + 라인 추가
                   </Button>
@@ -1603,6 +1835,112 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                       합계: <span className="font-semibold text-[var(--foreground)]">{formatNumber(lineTotals.totalAmount)}</span>
                     </div>
                   </div>
+
+                  <Card className="border-none shadow-sm ring-1 ring-black/5">
+                    <CardHeader className="border-b border-[var(--panel-border)] bg-[var(--panel)]/50 px-4 py-3">
+                      <div className="flex items-center justify-between">
+                        <div className="text-sm font-semibold">공장 영수증 하단 4행</div>
+                        <Button
+                          size="sm"
+                          onClick={saveFactoryStatement}
+                          disabled={!selectedReceiptId || factoryStatementUpsert.isPending}
+                        >
+                          저장
+                        </Button>
+                      </div>
+                    </CardHeader>
+                    <CardBody className="space-y-4 p-4">
+                      {!selectedReceiptId ? (
+                        <div className="rounded-lg border border-dashed border-[var(--panel-border)] bg-[var(--surface)]/60 p-4 text-center text-sm text-[var(--muted)]">
+                          영수증을 선택하세요.
+                        </div>
+                      ) : (
+                        <div className="space-y-4">
+                          {factoryRows.map((row) => (
+                            <div key={row.rowCode} className="rounded-lg border border-[var(--panel-border)] bg-[var(--panel)] p-4">
+                              <div className="flex flex-wrap items-center justify-between gap-2">
+                                <div className="text-sm font-semibold text-[var(--foreground)]">{row.label}</div>
+                                {row.rowCode === "RECENT_PAYMENT" ? (
+                                  <Input
+                                    type="date"
+                                    value={row.refDate}
+                                    onChange={(e) => updateFactoryRow(row.rowCode, { refDate: e.target.value })}
+                                    className="h-9 text-sm"
+                                  />
+                                ) : null}
+                              </div>
+                              <div className="mt-3 grid grid-cols-1 gap-3">
+                                <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+                                  <div className="space-y-1">
+                                    <label className="text-xs font-semibold uppercase tracking-wider text-[var(--muted)]">금</label>
+                                    <div className="flex items-center gap-2">
+                                      <Input
+                                        type="number"
+                                        value={row.gold.value}
+                                        onChange={(e) => updateFactoryMetal(row.rowCode, "gold", { value: e.target.value })}
+                                        className="h-9 text-sm text-right"
+                                        step="0.000001"
+                                      />
+                                      <Select
+                                        value={row.gold.unit}
+                                        onChange={(e) => updateFactoryMetal(row.rowCode, "gold", { unit: e.target.value as MetalUnit })}
+                                        className="h-9 text-sm"
+                                      >
+                                        <option value="g">g</option>
+                                        <option value="don">don</option>
+                                      </Select>
+                                    </div>
+                                  </div>
+                                  <div className="space-y-1">
+                                    <label className="text-xs font-semibold uppercase tracking-wider text-[var(--muted)]">은</label>
+                                    <div className="flex items-center gap-2">
+                                      <Input
+                                        type="number"
+                                        value={row.silver.value}
+                                        onChange={(e) => updateFactoryMetal(row.rowCode, "silver", { value: e.target.value })}
+                                        className="h-9 text-sm text-right"
+                                        step="0.000001"
+                                      />
+                                      <Select
+                                        value={row.silver.unit}
+                                        onChange={(e) => updateFactoryMetal(row.rowCode, "silver", { unit: e.target.value as MetalUnit })}
+                                        className="h-9 text-sm"
+                                      >
+                                        <option value="g">g</option>
+                                        <option value="don">don</option>
+                                      </Select>
+                                    </div>
+                                  </div>
+                                  <div className="space-y-1">
+                                    <label className="text-xs font-semibold uppercase tracking-wider text-[var(--muted)]">공임현금</label>
+                                    <Input
+                                      type="number"
+                                      value={row.laborKrw}
+                                      onChange={(e) => updateFactoryRow(row.rowCode, { laborKrw: e.target.value })}
+                                      className="h-9 text-sm text-right"
+                                    />
+                                  </div>
+                                </div>
+                                <Input
+                                  placeholder="행 메모 (선택)"
+                                  value={row.note}
+                                  onChange={(e) => updateFactoryRow(row.rowCode, { note: e.target.value })}
+                                  className="h-9 text-sm"
+                                />
+                              </div>
+                            </div>
+                          ))}
+                          <Textarea
+                            placeholder="정산 메모 (선택)"
+                            value={factoryNote}
+                            onChange={(e) => setFactoryNote(e.target.value)}
+                            className="min-h-[90px] text-sm"
+                          />
+                          <div className="text-xs text-[var(--muted)]">don 입력 시 g 환산(1 don = 3.75g)으로 저장됩니다.</div>
+                        </div>
+                      )}
+                    </CardBody>
+                  </Card>
                 </div>
               )}
             </CardBody>
@@ -1697,6 +2035,34 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                   </div>
                 </div>
               )}
+            </CardBody>
+          </Card>
+
+          <Card className="border-none shadow-sm ring-1 ring-black/5">
+            <CardHeader className="border-b border-[var(--panel-border)] bg-[var(--panel)]/50 px-4 py-3">
+              <div className="flex items-center justify-between">
+                <div className="text-sm font-semibold">정합 상태</div>
+                <Badge tone={reconcileStatus.tone} className="h-6 px-2 text-[10px]">
+                  {reconcileStatus.label}
+                </Badge>
+              </div>
+            </CardHeader>
+            <CardBody className="space-y-2 p-4">
+              <div className="text-xs text-[var(--muted)]">
+                오류 {reconcileIssueCounts?.error ?? "-"} · 경고 {reconcileIssueCounts?.warn ?? "-"}
+              </div>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => {
+                  window.location.href = reconcileLink;
+                }}
+              >
+                정합 큐 열기
+              </Button>
+              {apSyncStatus === "error" && apSyncMessage ? (
+                <div className="text-[11px] text-[var(--danger)]">AP 동기화 실패: {apSyncMessage}</div>
+              ) : null}
             </CardBody>
           </Card>
 

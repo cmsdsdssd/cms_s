@@ -33,6 +33,8 @@ export const navItems: NavItem[] = [
       { label: "② 영수증/매칭", href: "/new_receipt_line_workbench", icon: ClipboardList },
       { label: "③ 출고", href: "/shipments_main", icon: PackageCheck },
       { label: "④ 미수", href: "/ar", icon: CreditCard },
+      { label: "⑤ 미지급", href: "/ap", icon: Calculator },
+      { label: "⑥ AP 정합", href: "/ap/reconcile", icon: Calculator },
     ],
   },
   {
