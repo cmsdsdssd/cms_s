@@ -427,7 +427,7 @@ export default function OrdersMainPage() {
   }, [ordersQuery.data, todayKey]);
 
   return (
-    <div className="space-y-3" id="orders_main.root">
+    <div className="space-y-3 font-sans text-slate-600" id="orders_main.root">
       {/* Factory Order Wizard Modal */}
       {showFactoryOrderWizard && (
         <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
@@ -805,31 +805,31 @@ export default function OrdersMainPage() {
                 </div>
               ) : (
                 <>
-                  <div className="sticky top-0 z-10 rounded-[12px] border border-[var(--panel-border)] bg-[var(--panel)] px-4 py-2 text-[11px] font-semibold text-[var(--muted)]">
-                  <div className="grid grid-cols-1 gap-2 lg:grid-cols-[0.35fr_64px_1.3fr_2.03fr_0.6fr_0.6fr_0.6fr_0.6fr_0.6fr_0.6fr_0.8fr_1fr] items-center">
-                    <div className="text-center text-sm">#</div>
-                    <div className="text-center">모델사진</div>
-                    <div className="text-center">거래처</div>
-                    <div className="text-center">모델명</div>
-                      <div>소재</div>
-                      <div>카테고리</div>
-                      <div>색상</div>
-                      <div>사이즈</div>
-                      <div>도금여부</div>
-                      <div>도금색</div>
-                      <div>석여부</div>
-                      <div>비고</div>
+                  <div className="sticky top-0 z-10 rounded-[12px] border border-[var(--panel-border)] bg-[var(--panel)] px-4 py-3 text-xs font-medium text-slate-500 border-b">
+                    <div className="grid grid-cols-1 gap-2 lg:grid-cols-[0.35fr_64px_1.3fr_2.03fr_0.6fr_0.6fr_0.6fr_0.6fr_0.6fr_0.6fr_0.8fr_1fr] items-center">
+                      <div className="text-center">#</div>
+                      <div className="text-center">모델사진</div>
+                      <div className="text-center">거래처</div>
+                      <div className="text-center">모델명</div>
+                      <div className="text-center">소재</div>
+                      <div className="text-center">카테고리</div>
+                      <div className="text-center">색상</div>
+                      <div className="text-center">사이즈</div>
+                      <div className="text-center">도금여부</div>
+                      <div className="text-center">도금색</div>
+                      <div className="text-center">석여부</div>
+                      <div className="text-center">비고</div>
                     </div>
                   </div>
                   {paginatedOrders.map((order, idx) => {
                     const isEmpty = !order || !order.order_line_id;
-                const hasStone = order
-                  ? Boolean(
-                      (order.center_stone_name && String(order.center_stone_name).trim() !== "") ||
+                    const hasStone = order
+                      ? Boolean(
+                        (order.center_stone_name && String(order.center_stone_name).trim() !== "") ||
                         (order.sub1_stone_name && String(order.sub1_stone_name).trim() !== "") ||
                         (order.sub2_stone_name && String(order.sub2_stone_name).trim() !== "")
-                    )
-                  : false;
+                      )
+                      : false;
                     const materialLabel = order
                       ? getMaterialLabel(
                         order.material_code ??
@@ -904,8 +904,8 @@ export default function OrdersMainPage() {
                           <div className="font-semibold text-[var(--foreground)] flex flex-col justify-center items-center text-center">
                             <span
                               className={cn(
-                                "text-[17px] font-semibold",
-                                order?.status === "CANCELLED" ? "text-[var(--muted)]" : "text-[#b08d2a]"
+                                "text-sm font-semibold truncate px-2",
+                                order?.status === "CANCELLED" ? "text-slate-400" : "text-slate-700"
                               )}
                             >
                               {order?.customer_name ?? ""}
@@ -917,8 +917,8 @@ export default function OrdersMainPage() {
                           <div className="font-semibold text-[var(--foreground)] flex flex-col h-full justify-center items-center text-center">
                             <span
                               className={cn(
-                                "text-base",
-                                order?.status === "CANCELLED" ? "text-[var(--muted)]" : "text-[var(--foreground)]"
+                                "text-sm font-medium truncate px-2",
+                                order?.status === "CANCELLED" ? "text-slate-400" : "text-slate-600"
                               )}
                             >
                               {order?.model_name ?? ""}
@@ -927,43 +927,43 @@ export default function OrdersMainPage() {
                           </div>
 
                           {/* 5. 소재 */}
-                          <div className="text-[var(--muted)] flex flex-col justify-center">
+                          <div className="text-slate-500 flex flex-col justify-center">
                             <span>{order ? materialLabel : ""}</span>
                             <span className="text-[10px] text-[var(--muted)] font-normal lg:hidden">소재</span>
                           </div>
 
                           {/* 6. 카테고리 */}
-                          <div className="text-[var(--muted)] flex flex-col justify-center">
+                          <div className="text-slate-500 flex flex-col justify-center">
                             <span>{getCategoryLabel(order?.suffix)}</span>
                             <span className="text-[10px] text-[var(--muted)] font-normal lg:hidden">카테고리</span>
                           </div>
 
                           {/* 7. 색상 */}
-                          <div className="text-[var(--muted)] flex flex-col justify-center">
+                          <div className="text-slate-500 flex flex-col justify-center">
                             <span>{order?.color ?? ""}</span>
                             <span className="text-[10px] text-[var(--muted)] font-normal lg:hidden">색상</span>
                           </div>
 
                           {/* 8. 사이즈 */}
-                          <div className="text-[var(--muted)] flex flex-col justify-center">
+                          <div className="text-slate-500 flex flex-col justify-center">
                             <span>{order?.size ?? ""}</span>
                             <span className="text-[10px] text-[var(--muted)] font-normal lg:hidden">사이즈</span>
                           </div>
 
                           {/* 9. 도금여부 */}
-                          <div className="text-[var(--muted)] flex flex-col justify-center">
+                          <div className="text-slate-500 flex flex-col justify-center">
                             <span>{order ? platingLabel : ""}</span>
                             <span className="text-[10px] text-[var(--muted)] font-normal lg:hidden">도금여부</span>
                           </div>
 
                           {/* 10. 도금색 */}
-                          <div className="text-[var(--muted)] flex flex-col justify-center">
+                          <div className="text-slate-500 flex flex-col justify-center">
                             <span>{order?.plating_color_code ?? ""}</span>
                             <span className="text-[10px] text-[var(--muted)] font-normal lg:hidden">도금색</span>
                           </div>
 
                           {/* 11. 석여부 */}
-                          <div className="text-[var(--muted)] flex flex-col justify-center">
+                          <div className="text-slate-500 flex flex-col justify-center">
                             <span>{order ? (hasStone ? "✓" : "-") : ""}</span>
                             <span className="text-[10px] text-[var(--muted)] font-normal lg:hidden">석여부</span>
                           </div>
@@ -986,19 +986,19 @@ export default function OrdersMainPage() {
                             <div />
                           )}
                         </div>
-                    {!isEmpty && order?.status && (
-                      <div
-                        className={cn(
-                          "absolute right-0 top-0 h-full w-2 rounded-r-[14px] pointer-events-none",
-                          order.status === "ORDER_PENDING" ? "bg-[var(--warning)]/70" :
-                          order.status === "SENT_TO_VENDOR" ? "bg-sky-500/70" :
-                          order.status === "READY_TO_SHIP" ? "bg-emerald-500/70" :
-                          order.status === "SHIPPED" ? "bg-indigo-500/70" :
-                          order.status === "CANCELLED" ? "bg-[var(--muted)]/70" :
-                          "bg-[var(--muted)]/40"
+                        {!isEmpty && order?.status && (
+                          <div
+                            className={cn(
+                              "absolute right-0 top-0 h-full w-2 rounded-r-[14px] pointer-events-none",
+                              order.status === "ORDER_PENDING" ? "bg-[var(--warning)]/70" :
+                                order.status === "SENT_TO_VENDOR" ? "bg-sky-500/70" :
+                                  order.status === "READY_TO_SHIP" ? "bg-emerald-500/70" :
+                                    order.status === "SHIPPED" ? "bg-indigo-500/70" :
+                                      order.status === "CANCELLED" ? "bg-[var(--muted)]/70" :
+                                        "bg-[var(--muted)]/40"
+                            )}
+                          />
                         )}
-                      />
-                    )}
                       </div>
                     );
                   })}

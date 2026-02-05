@@ -422,12 +422,12 @@ function ColorCheckbox({
       type="button"
       onClick={onChange}
       className={cn(
-        "w-6 h-6 rounded border text-xs font-bold transition-all duration-150 flex items-center justify-center shrink-0 leading-none",
+        "w-5 h-5 rounded-full border text-[10px] font-bold transition-all duration-200 flex items-center justify-center shrink-0 leading-none shadow-sm",
         isNone
-          ? `bg-transparent border-transparent ${style.text} hover:opacity-80`
+          ? `bg-transparent border-transparent ${style.text} hover:bg-[var(--danger)]/10`
           : checked
-            ? `${style.bg} ${style.border} ${style.text} shadow-md scale-110 ring-2 ring-offset-1 ring-primary/30`
-            : `${style.bgLight} ${style.borderLight} hover:opacity-70`
+            ? `${style.bg} ${style.border} ${style.text} shadow-md ring-2 ring-offset-1 ring-[var(--background)] scale-110`
+            : `${style.bgLight} ${style.borderLight} hover:scale-105 opacity-80 hover:opacity-100`
       )}
     >
       {/* 선택된 경우: 글씨 표시 / 선택안된 경우: 글씨 숨김(transparent) */}
@@ -1329,481 +1329,508 @@ function OrdersPageContent() {
     <>
       {initLoading && <LoadingOverlay />}
 
-      {/* Sticky Status Bar */}
-      <div className="sticky top-0 z-40 w-full bg-background/80 backdrop-blur-md border-b border-border/40 px-4 py-2 flex items-center justify-between transition-all duration-200">
-        <div className="flex items-center gap-3">
-          <div className="flex flex-col">
-            <h1 className="text-base font-bold tracking-tight text-foreground">
-              {editAll ? "전체 수정" : editId ? "주문 수정" : "주문 등록"}
-            </h1>
-          </div>
-          <div className="h-6 w-px bg-border/50 mx-1" />
-          <div className="flex items-center gap-2 text-xs text-[var(--muted)]">
-            <span className={cn("w-2 h-2 rounded-full", saveInFlight.current.size > 0 ? "bg-[var(--warning)] animate-pulse" : "bg-[var(--success)]")} />
-            {saveInFlight.current.size > 0 ? "Saving..." : "Ready"}
+      <div className="min-h-screen bg-[var(--background)] pb-20">
+
+        {/* High-grade Sticky Header */}
+        <div className="sticky top-0 z-40 w-full bg-[var(--background)]/80 backdrop-blur-md border-b border-[var(--border)] transition-all duration-200">
+          <div className="max-w-[1920px] mx-auto px-4 h-14 flex items-center justify-between">
+            <div className="flex items-center gap-4">
+              <div className="flex flex-col">
+                <h1 className="text-lg font-bold tracking-tight text-foreground flex items-center gap-2">
+                  {editAll ? "전체 수정" : editId ? "주문 수정" : "주문 등록"}
+                  <span className="text-[10px] font-normal text-[var(--muted)] border border-[var(--border)] rounded-full px-2 py-0.5 bg-[var(--surface-1)]">
+                    {editAll ? "BULK EDIT" : editId ? "EDIT MODE" : "NEW ENTRY"}
+                  </span>
+                </h1>
+              </div>
+              <div className="h-4 w-px bg-border/40 mx-2" />
+              <div className="flex items-center gap-2 text-xs font-medium px-2 py-1 rounded-md bg-[var(--panel)] border border-[var(--panel-border)] shadow-sm">
+                <span className={cn("w-2 h-2 rounded-full shadow-[0_0_4px_currentColor]", saveInFlight.current.size > 0 ? "bg-[var(--warning)] text-[var(--warning)] animate-pulse" : "bg-[var(--success)] text-[var(--success)]")} />
+                <span className="text-[var(--muted)]">{saveInFlight.current.size > 0 ? "저장 중..." : "준비됨"}</span>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <Link href="/orders_main">
+                <Button variant="secondary" size="sm" className="h-8 text-xs gap-1.5 shadow-sm hover:bg-[var(--panel-hover)] border-[var(--panel-border)]">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 12H5" /><path d="M12 19l-7-7 7-7" /></svg>
+                  돌아가기
+                </Button>
+              </Link>
+            </div>
           </div>
         </div>
-        <div className="flex items-center gap-2">
-          <Link href="/orders_main">
-            <Button variant="ghost" size="sm" className="h-7 text-xs text-[var(--muted)] hover:text-[var(--foreground)]">
-              닫기
-            </Button>
-          </Link>
-        </div>
-      </div>
 
-      <div className="max-w-[1920px] mx-auto px-2 py-2 grid grid-cols-1 lg:grid-cols-[280px_1fr] gap-3 pb-20">
+        <div className="max-w-[1920px] mx-auto p-4 grid grid-cols-1 lg:grid-cols-[320px_1fr] gap-4">
 
-        {/* Left Column: Compact Order Grid */}
-        <div className="space-y-1 min-w-0 order-2">
-          {/* Header Row */}
-          <div className="grid grid-cols-[30px_160px_220px_80px_90px_70px_55px_130px_30px_0.75fr_40px] gap-1 px-1 py-[0.13rem] text-[10px] font-semibold text-[var(--muted)] uppercase tracking-wider border-b border-border/40 items-center">
-            <span className="text-center">#</span>
-            <span>거래처</span>
-            <span>모델</span>
-            <span className="text-center">소재</span>
-            <span className="text-center">색상</span>
-            <span className="text-center">사이즈</span>
-            <span className="text-center">수량</span>
-            <span className="text-center">도금</span>
-            <span className="text-center">💎</span>
-            <span>비고</span>
-            <span></span>
+          {/* Left Column: Compact Order Grid - Card Wrapper */}
+          <div className="space-y-1 min-w-0 order-2 lg:col-span-2 xl:col-span-1 bg-[var(--panel)] rounded-xl border border-[var(--panel-border)] shadow-sm overflow-visible flex flex-col h-fit min-h-0">
+            {/* Header Row */}
+            <div className="bg-[var(--surface-1)] border-b border-[var(--panel-border)] grid grid-cols-[40px_160px_200px_90px_110px_70px_60px_140px_30px_1fr_40px] gap-2 px-3 py-2 text-[11px] font-semibold text-[var(--muted-foreground)] uppercase tracking-wider items-center select-none rounded-t-xl">
+              <span className="text-center">No.</span>
+              <span>거래처</span>
+              <span>모델</span>
+              <span className="text-center">소재</span>
+              <span className="text-center">색상</span>
+              <span className="text-center">사이즈</span>
+              <span className="text-center">수량</span>
+              <span className="text-center">도금</span>
+              <span className="text-center">💎</span>
+              <span>비고</span>
+              <span></span>
+            </div>
+
+            {/* Scrollable Rows Area */}
+            <div className="overflow-y-auto flex-1 p-2 space-y-1 custom-scrollbar">
+
+              {/* Data Rows */}
+              {rows.slice((pageIndex - 1) * PAGE_SIZE, pageIndex * PAGE_SIZE).map((row, idx) => {
+                const errors = rowErrors[row.id] ?? {};
+                const realIdx = (pageIndex - 1) * PAGE_SIZE + idx + 1;
+                const hasStones = row.center_stone || row.sub1_stone || row.sub2_stone;
+
+                return (
+                  <div key={row.id} className="space-y-0.5">
+                    {/* Main Row */}
+                    <div
+                      className={cn(
+                        "grid grid-cols-[40px_160px_200px_90px_110px_70px_60px_140px_30px_1fr_40px] gap-2 px-3 py-1.5 items-center text-xs rounded-lg border transition-all duration-200 group relative",
+                        row.order_line_id ? "bg-emerald-500/5 border-emerald-500/20" : "bg-[var(--surface-1)]/50 border-transparent hover:border-[var(--panel-border)] hover:bg-[var(--panel-hover)] hover:shadow-sm",
+                        (errors.client || errors.model) ? "bg-[var(--danger)]/5 border-[var(--danger)]/30" : ""
+                      )}
+                      onBlur={(event) => {
+                        const next = event.relatedTarget as Node | null;
+                        if (next && event.currentTarget.contains(next)) return;
+                        const current = rows.find((item) => item.id === row.id);
+                        if (current) void saveRow(current);
+                      }}
+                    >
+                      {/* Row Number */}
+                      <span className="text-[10px] font-mono text-[var(--muted)] text-center opacity-50">{realIdx}</span>
+
+                      {/* Client Input */}
+                      <div className="relative">
+                        <input
+                          className={cn(
+                            "w-full bg-transparent border-b border-transparent focus:border-[var(--primary)] focus:bg-[var(--background)] rounded-sm px-1.5 py-1 text-sm transition-all outline-none",
+                            errors.client ? "border-[var(--danger)]/50 bg-[var(--danger)]/5" : "hover:border-[var(--border)] group-hover:bg-[var(--background)]/50"
+                          )}
+                          autoComplete="off"
+                          value={row.client_input}
+                          onFocus={() => {
+                            setActiveSuggest({ rowId: row.id, field: "client" });
+                            requestClientSuggestions(row.id, row.client_input);
+                          }}
+                          onChange={(e) => {
+                            const next = e.target.value;
+                            updateRow(row.id, { client_input: next });
+                            requestClientSuggestions(row.id, next);
+                            setActiveSuggest({ rowId: row.id, field: "client" });
+                          }}
+                          onBlur={(e) => {
+                            resolveClient(row.id, e.currentTarget.value);
+                            setActiveSuggest((prev) =>
+                              prev?.rowId === row.id && prev.field === "client" ? null : prev
+                            );
+                          }}
+                          placeholder="거래처..."
+                        />
+                        {isSuggestOpen(row.id, "client") && (clientSuggestions[row.id] ?? []).length > 0 ? (
+                          <div className="absolute left-0 top-full z-[100] mt-1 max-h-60 w-[240px] overflow-y-auto rounded-lg border border-[var(--border)] bg-[var(--popover)] shadow-2xl p-1 animate-in fade-in zoom-in-95 duration-100 ring-1 ring-black/5">
+                            {(clientSuggestions[row.id] ?? []).map((client) => (
+                              <button
+                                key={client.client_id ?? client.client_name ?? ""}
+                                type="button"
+                                onMouseDown={(event) => {
+                                  event.preventDefault();
+                                  applyClientSelection(row.id, client);
+                                }}
+                                className={cn(
+                                  "flex w-full items-center justify-between gap-2 px-2 py-2 text-left text-xs transition-colors rounded-md",
+                                  "hover:bg-[var(--accent)] hover:text-[var(--accent-foreground)]"
+                                )}
+                              >
+                                <span className="truncate font-medium">{client.client_name ?? "-"}</span>
+                                {client.risk_flag ? (
+                                  <Badge tone="danger" className="text-[9px] px-1 py-0 h-4 min-w-fit">주의</Badge>
+                                ) : null}
+                              </button>
+                            ))}
+                          </div>
+                        ) : null}
+                      </div>
+
+                      {/* Model Input */}
+                      <div className="relative">
+                        <input
+                          className={cn(
+                            "w-full bg-transparent border-b border-transparent focus:border-[var(--primary)] focus:bg-[var(--background)] rounded-sm px-1.5 py-1 text-sm font-medium transition-all outline-none",
+                            errors.model ? "border-[var(--danger)]/50 bg-[var(--danger)]/5" : "hover:border-[var(--border)] group-hover:bg-[var(--background)]/50"
+                          )}
+                          autoComplete="off"
+                          value={row.model_input}
+                          onFocus={() => {
+                            setActiveSuggest({ rowId: row.id, field: "model" });
+                            requestModelSuggestions(row.id, row.model_input);
+                          }}
+                          onChange={(e) => {
+                            const next = e.target.value;
+                            updateRow(row.id, { model_input: next });
+                            requestModelSuggestions(row.id, next);
+                            setActiveSuggest({ rowId: row.id, field: "model" });
+                          }}
+                          onBlur={(e) => {
+                            resolveMaster(row.id, e.currentTarget.value);
+                            setActiveSuggest((prev) =>
+                              prev?.rowId === row.id && prev.field === "model" ? null : prev
+                            );
+                          }}
+                          placeholder="모델..."
+                        />
+                        {isSuggestOpen(row.id, "model") && (modelSuggestions[row.id] ?? []).length > 0 ? (
+                          <div className="absolute left-0 top-full z-[100] mt-1 max-h-60 w-[280px] overflow-y-auto rounded-lg border border-[var(--border)] bg-[var(--popover)] shadow-2xl p-1 animate-in fade-in zoom-in-95 duration-100 ring-1 ring-black/5">
+                            {(modelSuggestions[row.id] ?? []).map((master) => (
+                              <button
+                                key={master.master_item_id ?? master.model_name ?? ""}
+                                type="button"
+                                onMouseDown={(event) => {
+                                  event.preventDefault();
+                                  applyModelSelection(row.id, master);
+                                }}
+                                className={cn(
+                                  "flex w-full items-center justify-between gap-2 px-2 py-2 text-left text-xs transition-colors rounded-md",
+                                  "hover:bg-[var(--accent)] hover:text-[var(--accent-foreground)]"
+                                )}
+                              >
+                                <span className="truncate font-medium">{master.model_name ?? "-"}</span>
+                              </button>
+                            ))}
+                          </div>
+                        ) : null}
+                      </div>
+
+                      {/* Material Select */}
+                      <select
+                        className={cn(
+                          "w-full bg-transparent border-b border-transparent focus:border-[var(--primary)] focus:bg-[var(--background)] rounded-sm px-1 py-1 text-sm text-center transition-all outline-none",
+                          errors.material ? "border-[var(--danger)]/50 bg-[var(--danger)]/5" : "hover:border-[var(--border)] group-hover:bg-[var(--background)]/50"
+                        )}
+                        value={row.material_code}
+                        onChange={(e) => updateRow(row.id, { material_code: e.target.value })}
+                        aria-label="소재"
+                        title="소재"
+                      >
+                        <option value="">소재</option>
+                        {MATERIAL_OPTIONS.map((option) => (
+                          <option key={option.value} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+
+                      {/* Color Checkboxes (P, G, W) */}
+                      <div className="flex items-center justify-center gap-1.5 px-1 py-1 bg-[var(--background)]/30 rounded-full border border-transparent group-hover:border-[var(--border)]/30 transition-all">
+                        <ColorCheckbox
+                          checked={row.color_p}
+                          onChange={() => toggleColor(row.id, "color_p")}
+                          label="P"
+                          color="pink"
+                        />
+                        <ColorCheckbox
+                          checked={row.color_g}
+                          onChange={() => toggleColor(row.id, "color_g")}
+                          label="G"
+                          color="gold"
+                        />
+                        <ColorCheckbox
+                          checked={row.color_w}
+                          onChange={() => toggleColor(row.id, "color_w")}
+                          label="W"
+                          color="white"
+                        />
+                        <ColorCheckbox
+                          checked={row.color_x}
+                          onChange={() => toggleNoColor(row.id)}
+                          label="X"
+                          color="none"
+                        />
+                      </div>
+
+                      {/* Size Input */}
+                      <input
+                        className="w-full bg-transparent border-b border-transparent focus:border-[var(--primary)] focus:bg-[var(--background)] rounded-sm px-1 py-1 text-sm text-center transition-all outline-none hover:border-[var(--border)] group-hover:bg-[var(--background)]/50"
+                        value={row.size}
+                        onChange={(e) => updateRow(row.id, { size: e.target.value })}
+                        placeholder="Size"
+                      />
+
+                      {/* Qty Input */}
+                      <input
+                        type="number"
+                        className={cn(
+                          "w-full bg-transparent border-b border-transparent focus:border-[var(--primary)] focus:bg-[var(--background)] rounded-sm px-1 py-1 text-sm text-center tabular-nums transition-all outline-none",
+                          errors.qty ? "border-[var(--danger)]/50" : "hover:border-[var(--border)] group-hover:bg-[var(--background)]/50"
+                        )}
+                        value={row.qty}
+                        onChange={(e) => updateRow(row.id, { qty: e.target.value })}
+                        min="1"
+                      />
+
+                      {/* Plating Checkboxes (P, G, W, B) */}
+                      <div className="flex items-center justify-center gap-1 px-1 py-1">
+                        <ColorCheckbox
+                          checked={row.plating_p}
+                          onChange={() => togglePlating(row.id, "plating_p")}
+                          label="P"
+                          color="pink"
+                        />
+                        <ColorCheckbox
+                          checked={row.plating_g}
+                          onChange={() => togglePlating(row.id, "plating_g")}
+                          label="G"
+                          color="gold"
+                        />
+                        <ColorCheckbox
+                          checked={row.plating_w}
+                          onChange={() => togglePlating(row.id, "plating_w")}
+                          label="W"
+                          color="white"
+                        />
+                        <ColorCheckbox
+                          checked={row.plating_b}
+                          onChange={() => togglePlating(row.id, "plating_b")}
+                          label="B"
+                          color="black"
+                        />
+                      </div>
+
+                      {/* Stone Toggle */}
+                      <button
+                        type="button"
+                        onClick={() => toggleStones(row.id)}
+                        className={cn(
+                          "w-6 h-6 rounded-full flex items-center justify-center text-xs transition-all duration-200",
+                          row.show_stones || hasStones
+                            ? "bg-blue-100 text-blue-700 border border-blue-200 shadow-sm"
+                            : "text-[var(--muted)] hover:bg-[var(--panel-hover)] hover:text-foreground"
+                        )}
+                      >
+                        {row.show_stones ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                      </button>
+
+                      {/* Memo Input (Large) */}
+                      <input
+                        className="w-full bg-transparent border-b border-transparent focus:border-[var(--primary)] focus:bg-[var(--background)] rounded-sm px-2 py-1 text-sm transition-all outline-none hover:border-[var(--border)] group-hover:bg-[var(--background)]/50"
+                        value={row.memo}
+                        onChange={(e) => updateRow(row.id, { memo: e.target.value })}
+                        placeholder="비고 입력..."
+                      />
+
+                      {/* Delete Button */}
+                      <button
+                        onClick={() => handleDeleteRow(row.id)}
+                        className="w-6 h-6 ml-auto flex items-center justify-center text-[var(--muted)] hover:text-[var(--danger)] hover:bg-[var(--danger)]/10 rounded-full transition-colors"
+                      >
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6 6 18" /><path d="m6 6 12 12" /></svg>
+                      </button>
+                    </div>
+
+                    {/* Expanded Stone Row */}
+                    {row.show_stones && (
+                      <div
+                        className="flex items-center gap-4 px-10 py-3 bg-[var(--surface-2)]/50 rounded-lg border border-[var(--border)] shadow-inner my-1 animate-in slide-in-from-top-1 duration-200"
+                        onBlur={(event) => {
+                          const next = event.relatedTarget as Node | null;
+                          if (next && event.currentTarget.contains(next)) return;
+                          const current = rows.find((item) => item.id === row.id);
+                          if (current) void saveRow(current);
+                        }}
+                      >
+                        {/* Center Stone */}
+                        <div className="flex items-center gap-2 flex-1">
+                          <span className="text-[10px] font-medium text-[var(--muted-foreground)] shrink-0 w-8">중심석</span>
+                          <input
+                            list={`stone-options-${row.id}`}
+                            className="flex-1 bg-[var(--background)] border border-[var(--border)] rounded-md px-2 py-1 text-xs focus:border-[var(--primary)] focus:ring-1 focus:ring-[var(--primary)] outline-none transition-all"
+                            value={row.center_stone}
+                            onChange={(e) => updateRow(row.id, { center_stone: e.target.value })}
+                            placeholder="선택/입력"
+                          />
+                        </div>
+
+                        {/* Sub1 Stone */}
+                        <div className="flex items-center gap-2 flex-1">
+                          <span className="text-[10px] font-medium text-[var(--muted-foreground)] shrink-0 w-8">보조1</span>
+                          <input
+                            list={`stone-options-${row.id}`}
+                            className="flex-1 bg-[var(--background)] border border-[var(--border)] rounded-md px-2 py-1 text-xs focus:border-[var(--primary)] focus:ring-1 focus:ring-[var(--primary)] outline-none transition-all"
+                            value={row.sub1_stone}
+                            onChange={(e) => updateRow(row.id, { sub1_stone: e.target.value })}
+                            placeholder="선택/입력"
+                          />
+                        </div>
+
+                        {/* Sub2 Stone */}
+                        <div className="flex items-center gap-2 flex-1">
+                          <span className="text-[10px] font-medium text-[var(--muted-foreground)] shrink-0 w-8">보조2</span>
+                          <input
+                            list={`stone-options-${row.id}`}
+                            className="flex-1 bg-[var(--background)] border border-[var(--border)] rounded-md px-2 py-1 text-xs focus:border-[var(--primary)] focus:ring-1 focus:ring-[var(--primary)] outline-none transition-all"
+                            value={row.sub2_stone}
+                            onChange={(e) => updateRow(row.id, { sub2_stone: e.target.value })}
+                            placeholder="선택/입력"
+                          />
+                        </div>
+
+                        {(() => {
+                          const master = masterCache.current.get(row.model_input.toLowerCase());
+                          const masterNames = [
+                            master?.center_stone_name_default,
+                            master?.sub1_stone_name_default,
+                            master?.sub2_stone_name_default,
+                          ].filter((value): value is string => Boolean(value));
+                          const combined = Array.from(new Set([...masterNames, ...stoneOptions])).filter(Boolean);
+                          return (
+                            <datalist id={`stone-options-${row.id}`}>
+                              {combined.map((stone) => (
+                                <option key={stone} value={stone} />
+                              ))}
+                            </datalist>
+                          );
+                        })()}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+
+              {/* Pagination Row - Inside Scroll Area */}
+              <div className="flex items-center justify-between py-4 px-2 mt-2 border-t border-[var(--border)] bg-[var(--surface-1)]/30 rounded-lg">
+                <Button variant="secondary" size="sm" className="h-8 text-xs border-[var(--panel-border)] shadow-sm bg-[var(--background)] hover:bg-[var(--panel-hover)]" onClick={() => setPageIndex(p => Math.max(1, p - 1))} disabled={pageIndex === 1}>
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="mr-1"><path d="M15 18l-6-6 6-6" /></svg>
+                  이전 페이지
+                </Button>
+                <span className="text-xs font-medium text-[var(--muted-foreground)] bg-[var(--panel)] px-3 py-1 rounded-full border border-[var(--panel-border)]">Page {pageIndex} / {Math.max(1, Math.ceil(rows.length / PAGE_SIZE))}</span>
+                <Button variant="secondary" size="sm" className="h-8 text-xs border-[var(--panel-border)] shadow-sm bg-[var(--background)] hover:bg-[var(--panel-hover)]" onClick={() => {
+                  const pageCount = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
+                  if (editAll && pageIndex >= pageCount) return;
+                  if (!editAll && pageIndex >= pageCount) {
+                    setRows(prev => [...prev, ...Array.from({ length: PAGE_SIZE }, (_, i) => createEmptyRow(prev.length + i))]);
+                  }
+                  setPageIndex(p => p + 1);
+                }}>
+                  다음 페이지
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="ml-1"><path d="M9 18l6-6-6-6" /></svg>
+                </Button>
+              </div>
+
+            </div>
           </div>
 
-          {/* Data Rows */}
-          {rows.slice((pageIndex - 1) * PAGE_SIZE, pageIndex * PAGE_SIZE).map((row, idx) => {
-            const errors = rowErrors[row.id] ?? {};
-            const realIdx = (pageIndex - 1) * PAGE_SIZE + idx + 1;
-            const hasStones = row.center_stone || row.sub1_stone || row.sub2_stone;
-
-            return (
-              <div key={row.id} className="space-y-0.5">
-                {/* Main Row */}
-                <div
-                  className={cn(
-                    "grid grid-cols-[30px_160px_220px_80px_90px_70px_55px_130px_30px_0.75fr_40px] gap-1 px-1 py-2 items-center text-xs rounded-md border transition-all",
-                    row.order_line_id ? "bg-primary/5 border-primary/20" : "bg-card border-border/50 hover:border-border",
-                    (errors.client || errors.model) ? "bg-[var(--danger)]/5 border-[var(--danger)]/30" : ""
+          {/* Right Column: Match / Preview */}
+          <div className="flex flex-col gap-4 lg:sticky lg:top-20 h-fit order-1">
+            <Card className="bg-[var(--panel)] border border-[var(--panel-border)] shadow-sm rounded-xl overflow-hidden">
+              <CardHeader className="py-2.5 px-3 bg-[var(--surface-1)] border-b border-[var(--panel-border)]">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-foreground flex items-center gap-1.5">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" /></svg>
+                    CUSTOMER
+                  </span>
+                  {headerClient?.client_id ? (
+                    <Badge className="bg-emerald-500/10 text-emerald-600 border-emerald-500/20 text-[10px] px-1.5 py-0 h-4 shadow-none">MATCHED</Badge>
+                  ) : (
+                    <Badge tone="danger" className="text-[10px] px-1.5 py-0 h-4 shadow-none">UNMATCHED</Badge>
                   )}
-                  onBlur={(event) => {
-                    const next = event.relatedTarget as Node | null;
-                    if (next && event.currentTarget.contains(next)) return;
-                    const current = rows.find((item) => item.id === row.id);
-                    if (current) void saveRow(current);
-                  }}
-                >
-                  {/* Row Number */}
-                  <span className="text-[9px] font-mono text-[var(--muted)] text-center">{realIdx}</span>
+                </div>
+              </CardHeader>
+              <CardBody className="p-3 space-y-3">
+                <div className="text-sm font-bold text-foreground truncate pl-1">{headerClient?.client_name || "-"}</div>
+                <div className="grid grid-cols-2 gap-2 text-xs">
+                  <div className="bg-[var(--background)] p-2 rounded-md border border-[var(--border)]">
+                    <span className="text-[var(--muted-foreground)] text-[10px] block mb-0.5">미수금</span>
+                    <div className="font-semibold text-foreground tabular-nums text-xs">
+                      {headerClient?.balance_krw !== undefined ? `${headerClient.balance_krw?.toLocaleString()}원` : "-"}
+                    </div>
+                  </div>
+                  <div className="bg-[var(--background)] p-2 rounded-md border border-[var(--border)]">
+                    <span className="text-[var(--muted-foreground)] text-[10px] block mb-0.5">미수 건수</span>
+                    <div className="font-semibold text-foreground text-xs">
+                      {headerClient?.open_invoices_count ?? "-"}
+                    </div>
+                  </div>
+                </div>
+              </CardBody>
+            </Card>
 
-                  {/* Client Input */}
-                  <div className="relative">
-                    <input
-                      className={cn(
-                        "w-full bg-transparent border border-transparent focus:border-primary/50 focus:bg-background rounded px-1 py-0 text-sm transition-colors",
-                        errors.client ? "border-[var(--danger)]/50 bg-[var(--danger)]/5" : "hover:border-border/50"
-                      )}
-                      autoComplete="off"
-                      value={row.client_input}
-                      onFocus={() => {
-                        setActiveSuggest({ rowId: row.id, field: "client" });
-                        requestClientSuggestions(row.id, row.client_input);
-                      }}
-                      onChange={(e) => {
-                        const next = e.target.value;
-                        updateRow(row.id, { client_input: next });
-                        requestClientSuggestions(row.id, next);
-                        setActiveSuggest({ rowId: row.id, field: "client" });
-                      }}
-                      onBlur={(e) => {
-                        resolveClient(row.id, e.currentTarget.value);
-                        setActiveSuggest((prev) =>
-                          prev?.rowId === row.id && prev.field === "client" ? null : prev
-                        );
-                      }}
-                      placeholder="거래처..."
-                    />
-                    {isSuggestOpen(row.id, "client") && (clientSuggestions[row.id] ?? []).length > 0 ? (
-                      <div className="absolute left-0 top-full z-30 mt-1 max-h-48 w-full overflow-y-auto rounded-md border border-border/60 bg-background shadow-lg">
-                        {(clientSuggestions[row.id] ?? []).map((client) => (
-                          <button
-                            key={client.client_id ?? client.client_name ?? ""}
-                            type="button"
-                            onMouseDown={(event) => {
-                              event.preventDefault();
-                              applyClientSelection(row.id, client);
-                            }}
-                            className={cn(
-                              "flex w-full items-center justify-between gap-2 px-2 py-1 text-left text-xs transition-colors",
-                              "hover:bg-[var(--muted)]/10"
-                            )}
-                          >
-                            <span className="truncate">{client.client_name ?? "-"}</span>
-                            {client.risk_flag ? (
-                              <span className="text-[10px] text-[var(--warning)]">주의</span>
-                            ) : null}
-                          </button>
-                        ))}
+            <Card className="bg-[var(--panel)] border border-[var(--panel-border)] shadow-sm rounded-xl overflow-hidden">
+              <CardHeader className="py-2.5 px-3 bg-[var(--surface-1)] border-b border-[var(--panel-border)]">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-foreground flex items-center gap-1.5">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" /><polyline points="3.27 6.96 12 12.01 20.73 6.96" /><line x1="12" y1="22.08" x2="12" y2="12" /></svg>
+                    MASTER
+                  </span>
+                  {activeMaster?.master_item_id ? (
+                    <Badge className="bg-emerald-500/10 text-emerald-600 border-emerald-500/20 text-[10px] px-1.5 py-0 h-4 shadow-none">MATCHED</Badge>
+                  ) : (
+                    <Badge tone="danger" className="text-[10px] px-1.5 py-0 h-4 shadow-none">UNMATCHED</Badge>
+                  )}
+                </div>
+              </CardHeader>
+              <CardBody className="p-3 space-y-3">
+                <div className="aspect-square relative overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--background)] shadow-inner">
+                  {activeMaster?.photo_url ? (
+                    <>
+                      {imageLoading ? (
+                        <div className="absolute inset-0 flex items-center justify-center text-xs font-medium text-[var(--muted)] animate-pulse">
+                          로딩중...
+                        </div>
+                      ) : null}
+                      <img
+                        src={activeMaster.photo_url}
+                        alt={activeMaster.model_name ?? "model"}
+                        className="w-full h-full object-cover transition-transform hover:scale-105 duration-300"
+                        onLoad={() => setImageLoading(false)}
+                        onError={() => setImageLoading(false)}
+                      />
+                    </>
+                  ) : (
+                    <div className="flex flex-col items-center justify-center h-full text-[var(--muted-weak)]">
+                      <div className="w-10 h-10 rounded-full bg-[var(--surface-2)] flex items-center justify-center mb-2">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                          <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+                          <circle cx="8.5" cy="8.5" r="1.5" />
+                          <polyline points="21 15 16 10 5 21" />
+                        </svg>
                       </div>
-                    ) : null}
-                  </div>
-
-                  {/* Model Input */}
-                  <div className="relative">
-                    <input
-                      className={cn(
-                        "w-full bg-transparent border border-transparent focus:border-primary/50 focus:bg-background rounded px-1 py-0.5 text-sm font-medium transition-colors",
-                        errors.model ? "border-[var(--danger)]/50 bg-[var(--danger)]/5" : "hover:border-border/50"
-                      )}
-                      autoComplete="off"
-                      value={row.model_input}
-                      onFocus={() => {
-                        setActiveSuggest({ rowId: row.id, field: "model" });
-                        requestModelSuggestions(row.id, row.model_input);
-                      }}
-                      onChange={(e) => {
-                        const next = e.target.value;
-                        updateRow(row.id, { model_input: next });
-                        requestModelSuggestions(row.id, next);
-                        setActiveSuggest({ rowId: row.id, field: "model" });
-                      }}
-                      onBlur={(e) => {
-                        resolveMaster(row.id, e.currentTarget.value);
-                        setActiveSuggest((prev) =>
-                          prev?.rowId === row.id && prev.field === "model" ? null : prev
-                        );
-                      }}
-                      placeholder="모델..."
-                    />
-                    {isSuggestOpen(row.id, "model") && (modelSuggestions[row.id] ?? []).length > 0 ? (
-                      <div className="absolute left-0 top-full z-30 mt-1 max-h-48 w-full overflow-y-auto rounded-md border border-border/60 bg-background shadow-lg">
-                        {(modelSuggestions[row.id] ?? []).map((master) => (
-                          <button
-                            key={master.master_item_id ?? master.model_name ?? ""}
-                            type="button"
-                            onMouseDown={(event) => {
-                              event.preventDefault();
-                              applyModelSelection(row.id, master);
-                            }}
-                            className={cn(
-                              "flex w-full items-center justify-between gap-2 px-2 py-1 text-left text-xs transition-colors",
-                              "hover:bg-[var(--muted)]/10"
-                            )}
-                          >
-                            <span className="truncate">{master.model_name ?? "-"}</span>
-                            <span className="text-[10px] text-[var(--muted)]">선택</span>
-                          </button>
-                        ))}
-                      </div>
-                    ) : null}
-                  </div>
-
-                  {/* Material Select */}
-                  <select
-                    className={cn(
-                      "w-full bg-transparent border border-transparent focus:border-primary/50 focus:bg-background rounded px-1 py-0.5 text-sm text-center transition-colors mr-1",
-                      errors.material ? "border-[var(--danger)]/50 bg-[var(--danger)]/5" : "hover:border-border/50"
-                    )}
-                    value={row.material_code}
-                    onChange={(e) => updateRow(row.id, { material_code: e.target.value })}
-                    aria-label="소재"
-                    title="소재"
-                  >
-                    <option value="">소재</option>
-                    {MATERIAL_OPTIONS.map((option) => (
-                      <option key={option.value} value={option.value}>
-                        {option.label}
-                      </option>
-                    ))}
-                  </select>
-
-                  {/* Color Checkboxes (P, G, W) */}
-                  <div className="flex items-center justify-center gap-0.5 px-0.5 ml-1">
-                    <ColorCheckbox
-                      checked={row.color_p}
-                      onChange={() => toggleColor(row.id, "color_p")}
-                      label="P"
-                      color="pink"
-                    />
-                    <ColorCheckbox
-                      checked={row.color_g}
-                      onChange={() => toggleColor(row.id, "color_g")}
-                      label="G"
-                      color="gold"
-                    />
-                    <ColorCheckbox
-                      checked={row.color_w}
-                      onChange={() => toggleColor(row.id, "color_w")}
-                      label="W"
-                      color="white"
-                    />
-                    <ColorCheckbox
-                      checked={row.color_x}
-                      onChange={() => toggleNoColor(row.id)}
-                      label="X"
-                      color="none"
-                    />
-                  </div>
-
-                  {/* Size Input */}
-                  <input
-                    className="w-full bg-transparent border border-transparent focus:border-primary/50 focus:bg-background rounded px-1.5 py-0.5 text-sm text-center hover:border-border/50 transition-colors"
-                    value={row.size}
-                    onChange={(e) => updateRow(row.id, { size: e.target.value })}
-                    placeholder="Size"
-                  />
-
-                  {/* Qty Input */}
-                  <input
-                    type="number"
-                    className={cn(
-                      "w-full bg-transparent border border-transparent focus:border-primary/50 focus:bg-background rounded px-1.5 py-0.5 text-sm text-center tabular-nums transition-colors",
-                      errors.qty ? "border-[var(--danger)]/50" : "hover:border-border/50"
-                    )}
-                    value={row.qty}
-                    onChange={(e) => updateRow(row.id, { qty: e.target.value })}
-                    min="1"
-                  />
-
-                  {/* Plating Checkboxes (P, G, W, B) */}
-                  <div className="flex items-center justify-center gap-0.5 px-0.5">
-                    <ColorCheckbox
-                      checked={row.plating_p}
-                      onChange={() => togglePlating(row.id, "plating_p")}
-                      label="P"
-                      color="pink"
-                    />
-                    <ColorCheckbox
-                      checked={row.plating_g}
-                      onChange={() => togglePlating(row.id, "plating_g")}
-                      label="G"
-                      color="gold"
-                    />
-                    <ColorCheckbox
-                      checked={row.plating_w}
-                      onChange={() => togglePlating(row.id, "plating_w")}
-                      label="W"
-                      color="white"
-                    />
-                    <ColorCheckbox
-                      checked={row.plating_b}
-                      onChange={() => togglePlating(row.id, "plating_b")}
-                      label="B"
-                      color="black"
-                    />
-                  </div>
-
-                  {/* Stone Toggle */}
-                  <button
-                    type="button"
-                    onClick={() => toggleStones(row.id)}
-                    className={cn(
-                      "w-5 h-5 rounded flex items-center justify-center text-xs transition-colors",
-                      row.show_stones || hasStones
-                        ? "bg-blue-100 text-blue-700 border border-blue-300"
-                        : "bg-muted/50 text-[var(--muted)] border border-border hover:border-primary/50"
-                    )}
-                  >
-                    {row.show_stones ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
-                  </button>
-
-                  {/* Memo Input (Large) */}
-                  <input
-                    className="w-full bg-transparent border border-transparent focus:border-primary/50 focus:bg-background rounded px-2 py-0.5 text-sm hover:border-border/50 transition-colors"
-                    value={row.memo}
-                    onChange={(e) => updateRow(row.id, { memo: e.target.value })}
-                    placeholder="비고 입력..."
-                  />
-
-                  {/* Delete Button */}
-                  <button
-                    onClick={() => handleDeleteRow(row.id)}
-                    className="w-5 h-5 ml-auto flex items-center justify-center text-[var(--muted)] hover:text-[var(--danger)] hover:bg-[var(--danger)]/10 rounded transition-colors"
-                  >
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6 6 18" /><path d="m6 6 12 12" /></svg>
-                  </button>
+                      <span className="text-[10px] font-medium">No Image</span>
+                    </div>
+                  )}
                 </div>
 
-                {/* Expanded Stone Row */}
-                {row.show_stones && (
-                  <div
-                    className="grid grid-cols-[30px_1fr_1fr_1fr_30px] gap-2 px-1 py-2 bg-muted/30 rounded-md border border-border/30 items-center text-xs"
-                    onBlur={(event) => {
-                      const next = event.relatedTarget as Node | null;
-                      if (next && event.currentTarget.contains(next)) return;
-                      const current = rows.find((item) => item.id === row.id);
-                      if (current) void saveRow(current);
-                    }}
-                  >
-                    <span></span>
-
-                    {/* Center Stone */}
-                    <div className="flex items-center gap-1">
-                      <span className="text-[10px] text-[var(--muted)]">중심석</span>
-                      <input
-                        list={`stone-options-${row.id}`}
-                        className="flex-1 bg-background border border-border/60 rounded px-1 py-0.5 text-xs focus:border-primary/50"
-                        value={row.center_stone}
-                        onChange={(e) => updateRow(row.id, { center_stone: e.target.value })}
-                      />
-                    </div>
-
-                    {/* Sub1 Stone */}
-                    <div className="flex items-center gap-1">
-                      <span className="text-[10px] text-[var(--muted)]">보조1</span>
-                      <input
-                        list={`stone-options-${row.id}`}
-                        className="flex-1 bg-background border border-border/60 rounded px-1 py-0.5 text-xs focus:border-primary/50"
-                        value={row.sub1_stone}
-                        onChange={(e) => updateRow(row.id, { sub1_stone: e.target.value })}
-                      />
-                    </div>
-
-                    {/* Sub2 Stone */}
-                    <div className="flex items-center gap-1">
-                      <span className="text-[10px] text-[var(--muted)]">보조2</span>
-                      <input
-                        list={`stone-options-${row.id}`}
-                        className="flex-1 bg-background border border-border/60 rounded px-1 py-0.5 text-xs focus:border-primary/50"
-                        value={row.sub2_stone}
-                        onChange={(e) => updateRow(row.id, { sub2_stone: e.target.value })}
-                      />
-                    </div>
-                    {(() => {
-                      const master = masterCache.current.get(row.model_input.toLowerCase());
-                      const masterNames = [
-                        master?.center_stone_name_default,
-                        master?.sub1_stone_name_default,
-                        master?.sub2_stone_name_default,
-                      ].filter((value): value is string => Boolean(value));
-                      const combined = Array.from(new Set([...masterNames, ...stoneOptions])).filter(Boolean);
-                      return (
-                        <datalist id={`stone-options-${row.id}`}>
-                          {combined.map((stone) => (
-                            <option key={stone} value={stone} />
-                          ))}
-                        </datalist>
-                      );
-                    })()}
-                    <span></span>
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between text-xs px-1">
+                    <span className="text-[var(--muted-foreground)]">모델</span>
+                    <span className="font-bold truncate max-w-[120px] text-foreground">{activeMaster?.model_name ?? "-"}</span>
                   </div>
-                )}
-              </div>
-            );
-          })}
+                  <div className="flex items-center justify-between text-xs px-1">
+                    <span className="text-[var(--muted-foreground)]">카테고리</span>
+                    <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-[var(--surface-2)] text-[var(--foreground)]">{getCategoryName(activeMaster?.category_code)}</span>
+                  </div>
+                </div>
 
-          {/* Pagination */}
-          <div className="flex items-center justify-between pt-2">
-            <Button variant="secondary" size="sm" className="h-7 text-xs" onClick={() => setPageIndex(p => Math.max(1, p - 1))} disabled={pageIndex === 1}>이전</Button>
-            <span className="text-xs text-[var(--muted)]">{pageIndex} / {Math.max(1, Math.ceil(rows.length / PAGE_SIZE))}</span>
-            <Button variant="secondary" size="sm" className="h-7 text-xs" onClick={() => {
-              const pageCount = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
-              if (editAll && pageIndex >= pageCount) return;
-              if (!editAll && pageIndex >= pageCount) {
-                setRows(prev => [...prev, ...Array.from({ length: PAGE_SIZE }, (_, i) => createEmptyRow(prev.length + i))]);
-              }
-              setPageIndex(p => p + 1);
-            }}>다음</Button>
+                <div className="grid grid-cols-2 gap-2 pt-2 border-t border-[var(--border)] text-xs">
+                  <div className="space-y-0.5">
+                    <span className="text-[var(--muted-foreground)] text-[10px]">기본중량</span>
+                    <div className="font-semibold tabular-nums text-xs">{activeMaster?.weight_default_g?.toFixed(2) ?? "-"}g</div>
+                  </div>
+                  <div className="space-y-0.5">
+                    <span className="text-[var(--muted-foreground)] text-[10px]">차감중량</span>
+                    <div className="font-semibold tabular-nums text-xs">{activeMaster?.deduction_weight_default_g?.toFixed(2) ?? "-"}g</div>
+                  </div>
+                </div>
+              </CardBody>
+            </Card>
           </div>
-        </div>
-
-        {/* Right Column: Match / Preview */}
-        <div className="flex flex-col gap-3 lg:sticky lg:top-20 h-fit order-1">
-          <Card className="border border-border/50 shadow-sm rounded-lg overflow-hidden">
-            <CardHeader className="py-2 px-3 bg-muted/5 border-b border-border/40">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-bold text-foreground">Customer</span>
-                {headerClient?.client_id ? (
-                  <Badge className="bg-[var(--primary)]/10 text-[var(--primary)] border-[var(--primary)]/30 text-[10px]">MATCHED</Badge>
-                ) : (
-                  <Badge className="bg-[var(--danger)]/10 text-[var(--danger)] border-[var(--danger)]/30 text-[10px]">UNMATCHED</Badge>
-                )}
-              </div>
-            </CardHeader>
-            <CardBody className="p-3 space-y-2">
-              <div className="text-sm font-semibold text-foreground truncate">{headerClient?.client_name || "-"}</div>
-              <div className="grid grid-cols-2 gap-2 text-xs">
-                <div className="space-y-0.5">
-                  <span className="text-[var(--muted)]">미수금</span>
-                  <div className="font-semibold text-foreground tabular-nums text-xs">
-                    {headerClient?.balance_krw !== undefined ? `${headerClient.balance_krw?.toLocaleString()}원` : "-"}
-                  </div>
-                </div>
-                <div className="space-y-0.5">
-                  <span className="text-[var(--muted)]">미수 건수</span>
-                  <div className="font-semibold text-foreground text-xs">
-                    {headerClient?.open_invoices_count ?? "-"}
-                  </div>
-                </div>
-              </div>
-            </CardBody>
-          </Card>
-
-          <Card className="border border-border/50 shadow-sm rounded-lg overflow-hidden">
-            <CardHeader className="py-2 px-3 bg-muted/5 border-b border-border/40">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-bold text-foreground">Master</span>
-                {activeMaster?.master_item_id ? (
-                  <Badge className="bg-emerald-50 text-emerald-700 border-emerald-200 text-[10px]">MATCHED</Badge>
-                ) : (
-                  <Badge className="bg-[var(--danger)]/10 text-[var(--danger)] border-[var(--danger)]/30 text-[10px]">UNMATCHED</Badge>
-                )}
-              </div>
-            </CardHeader>
-            <CardBody className="p-3 space-y-2">
-              <div className="aspect-square relative overflow-hidden rounded-md border border-border/40 bg-muted/10">
-                {activeMaster?.photo_url ? (
-                  <>
-                    {imageLoading ? (
-                      <div className="absolute inset-0 flex items-center justify-center text-xs font-medium text-[var(--muted)] animate-pulse">
-                        로딩중...
-                      </div>
-                    ) : null}
-                    <img
-                      src={activeMaster.photo_url}
-                      alt={activeMaster.model_name ?? "model"}
-                      className="w-full h-full object-cover"
-                      onLoad={() => setImageLoading(false)}
-                      onError={() => setImageLoading(false)}
-                    />
-                  </>
-                ) : (
-                  <div className="flex flex-col items-center justify-center h-full text-[var(--muted-weak)]">
-                    <div className="w-8 h-8 rounded-full bg-muted/50 flex items-center justify-center mb-1">
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-                        <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
-                        <circle cx="8.5" cy="8.5" r="1.5" />
-                        <polyline points="21 15 16 10 5 21" />
-                      </svg>
-                    </div>
-                    <span className="text-[9px]">No Image</span>
-                  </div>
-                )}
-              </div>
-
-              <div className="space-y-1">
-                <div className="flex items-center justify-between text-xs">
-                  <span className="text-[var(--muted)]">모델</span>
-                  <span className="font-semibold truncate max-w-[120px]">{activeMaster?.model_name ?? "-"}</span>
-                </div>
-                <div className="flex items-center justify-between text-xs">
-                  <span className="text-[var(--muted)]">카테고리</span>
-                  <span className="text-[10px]">{getCategoryName(activeMaster?.category_code)}</span>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-2 pt-1 border-t border-border/30 text-xs">
-                <div className="space-y-0.5">
-                  <span className="text-[var(--muted)] text-[10px]">기본중량</span>
-                  <div className="font-semibold tabular-nums text-xs">{activeMaster?.weight_default_g?.toFixed(2) ?? "-"}g</div>
-                </div>
-                <div className="space-y-0.5">
-                  <span className="text-[var(--muted)] text-[10px]">차감중량</span>
-                  <div className="font-semibold tabular-nums text-xs">{activeMaster?.deduction_weight_default_g?.toFixed(2) ?? "-"}g</div>
-                </div>
-              </div>
-            </CardBody>
-          </Card>
         </div>
       </div>
     </>

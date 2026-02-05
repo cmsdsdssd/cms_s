@@ -161,6 +161,18 @@ const isArInvoiceAnomaly = (row: ArInvoicePositionRow) => {
   );
 };
 
+const isUnitPricingCashOnlyAr = (row: ArInvoicePositionRow) => {
+  return (
+    row.commodity_type == null &&
+    Number(row.material_cash_due_krw ?? 0) === 0 &&
+    Number(row.material_cash_outstanding_krw ?? 0) === 0 &&
+    Number(row.commodity_due_g ?? 0) === 0 &&
+    Number(row.commodity_outstanding_g ?? 0) === 0 &&
+    Number(row.labor_cash_due_krw ?? 0) === Number(row.total_cash_due_krw ?? 0) &&
+    Number(row.labor_cash_outstanding_krw ?? 0) === Number(row.total_cash_outstanding_krw ?? 0)
+  );
+};
+
 const formatKrw = (value?: number | null) => {
   if (value === null || value === undefined) return "-";
   return `₩${new Intl.NumberFormat("ko-KR").format(Math.round(value))}`;
@@ -392,6 +404,32 @@ export default function ArPage() {
     enabled: Boolean(effectiveSelectedPartyId),
   });
 
+  const displayOutstanding = useMemo(() => {
+    if (!invoicePositionsQuery.data) {
+      return {
+        labor: Number(selectedParty?.labor_cash_outstanding_krw ?? 0),
+        material: Number(selectedParty?.material_cash_outstanding_krw ?? 0),
+        gold: Number(selectedParty?.gold_outstanding_g ?? 0),
+        silver: Number(selectedParty?.silver_outstanding_g ?? 0),
+      };
+    }
+    return invoicePositionsQuery.data.reduce(
+      (acc, row) => {
+        if (isUnitPricingCashOnlyAr(row)) return acc;
+        acc.labor += Number(row.labor_cash_outstanding_krw ?? 0);
+        acc.material += Number(row.material_cash_outstanding_krw ?? 0);
+        if (row.commodity_type === "gold") {
+          acc.gold += Number(row.commodity_outstanding_g ?? 0);
+        }
+        if (row.commodity_type === "silver") {
+          acc.silver += Number(row.commodity_outstanding_g ?? 0);
+        }
+        return acc;
+      },
+      { labor: 0, material: 0, gold: 0, silver: 0 }
+    );
+  }, [invoicePositionsQuery.data, selectedParty]);
+
   // 4. Fetch Payment Details
   const paymentAllocQuery = useQuery({
     queryKey: ["cms", "ar_payment_alloc", effectiveSelectedPartyId],
@@ -434,6 +472,48 @@ export default function ArPage() {
 
   // Derived Data for Returns
   const shipmentLines = useMemo(() => shipmentLinesQuery.data ?? [], [shipmentLinesQuery.data]);
+  const shipmentModelNames = useMemo(() => {
+    const names = new Set<string>();
+    shipmentLines.forEach((line) => {
+      const name = (line.model_name ?? "").trim();
+      if (name) names.add(name);
+    });
+    return Array.from(names);
+  }, [shipmentLines]);
+
+  const shipmentMasterQuery = useQuery({
+    queryKey: ["cms", "shipment-master", shipmentModelNames.join("|")],
+    queryFn: async () => {
+      if (!schemaClient) throw new Error("Supabase env is missing");
+      if (shipmentModelNames.length === 0) return [] as { model_name?: string | null; is_unit_pricing?: boolean | null }[];
+      const { data, error } = await schemaClient
+        .from("cms_master_item")
+        .select("model_name, is_unit_pricing")
+        .in("model_name", shipmentModelNames);
+      if (error) throw error;
+      return (data ?? []) as { model_name?: string | null; is_unit_pricing?: boolean | null }[];
+    },
+    enabled: Boolean(schemaClient) && shipmentModelNames.length > 0,
+  });
+
+  const isUnitPricingByModel = useMemo(() => {
+    const map = new Map<string, boolean>();
+    (shipmentMasterQuery.data ?? []).forEach((row) => {
+      const name = (row.model_name ?? "").trim();
+      if (!name) return;
+      map.set(name, Boolean(row.is_unit_pricing));
+    });
+    return map;
+  }, [shipmentMasterQuery.data]);
+
+  const shipmentLineById = useMemo(() => {
+    const map = new Map<string, ShipmentLineRow>();
+    shipmentLines.forEach((line) => {
+      if (!line.shipment_line_id) return;
+      map.set(line.shipment_line_id, line);
+    });
+    return map;
+  }, [shipmentLines]);
   const shipmentLineIds = useMemo(
     () => shipmentLines.map((line) => line.shipment_line_id).filter(Boolean) as string[],
     [shipmentLines]
@@ -705,21 +785,21 @@ export default function ArPage() {
                   <div className="text-sm space-y-0.5">
                     <div className="flex justify-between">
                       <span className="text-[var(--muted)]">소재</span>
-                      <span className="font-medium">{formatKrw(selectedParty.material_cash_outstanding_krw)}</span>
+                      <span className="font-medium">{formatKrw(displayOutstanding.material)}</span>
                     </div>
                     <div className="flex justify-between">
                       <span className="text-[var(--muted)]">공임</span>
-                      <span className="font-medium">{formatKrw(selectedParty.labor_cash_outstanding_krw)}</span>
+                      <span className="font-medium">{formatKrw(displayOutstanding.labor)}</span>
                     </div>
                   </div>
                 </div>
                 <div>
                   <p className="text-xs font-medium text-[var(--muted)] mb-1">금 잔액</p>
-                  <p className="text-lg font-bold tabular-nums">{formatGram(selectedParty.gold_outstanding_g)}</p>
+                  <p className="text-lg font-bold tabular-nums">{formatGram(displayOutstanding.gold)}</p>
                 </div>
                 <div>
                   <p className="text-xs font-medium text-[var(--muted)] mb-1">은 잔액</p>
-                  <p className="text-lg font-bold tabular-nums">{formatGram(selectedParty.silver_outstanding_g)}</p>
+                  <p className="text-lg font-bold tabular-nums">{formatGram(displayOutstanding.silver)}</p>
                 </div>
               </div>
             </div>
@@ -771,15 +851,23 @@ export default function ArPage() {
                         <tr>
                           <th className="px-4 py-3 whitespace-nowrap w-24">날짜</th>
                           <th className="px-4 py-3 whitespace-nowrap w-20">구분</th>
+                          <th className="px-4 py-3 whitespace-nowrap text-right">소재가격</th>
+                          <th className="px-4 py-3 whitespace-nowrap text-right">총공임</th>
                           <th className="px-4 py-3 whitespace-nowrap text-right">금액</th>
                           <th className="px-4 py-3 whitespace-nowrap min-w-[200px]">내용</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-[var(--panel-border)]">
                         {ledgerQuery.isLoading ? (
-                          <tr><td colSpan={4} className="p-8 text-center"><Skeleton className="h-4 w-32 mx-auto" /></td></tr>
+                          <tr><td colSpan={6} className="p-8 text-center"><Skeleton className="h-4 w-32 mx-auto" /></td></tr>
                         ) : (ledgerQuery.data ?? []).map(row => {
                           const isShipment = row.entry_type === "SHIPMENT";
+                          const shipmentLine = row.shipment_line_id
+                            ? shipmentLineById.get(row.shipment_line_id)
+                            : undefined;
+                          const unitOnly = shipmentLine
+                            ? isUnitPricingByModel.get((shipmentLine.model_name ?? "").trim()) ?? false
+                            : false;
                           return (
                             <tr key={row.ar_ledger_id} className="hover:bg-[var(--panel-hover)] transition-colors">
                               <td className="px-4 py-3 tabular-nums text-[var(--muted)]">{formatTimeKst(row.occurred_at)}</td>
@@ -792,6 +880,12 @@ export default function ArPage() {
                                 )}>
                                   {isShipment ? "매출" : row.entry_type}
                                 </span>
+                              </td>
+                              <td className="px-4 py-3 text-right tabular-nums">
+                                {unitOnly ? "-" : formatKrw(shipmentLine?.material_amount_sell_krw ?? null)}
+                              </td>
+                              <td className="px-4 py-3 text-right tabular-nums">
+                                {unitOnly ? "-" : formatKrw(shipmentLine?.labor_total_sell_krw ?? null)}
                               </td>
                               <td className="px-4 py-3 text-right">
                                 <AmountPill amount={row.amount_krw} simple />
@@ -826,26 +920,37 @@ export default function ArPage() {
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-[var(--panel-border)]">
-                        {invoicePositionsQuery.data && invoicePositionsQuery.data.filter(row => row.total_cash_outstanding_krw! > 0 || row.commodity_outstanding_g! > 0).map(row => (
-                          <tr key={row.ar_id} className="hover:bg-[var(--panel-hover)]">
-                            <td className="px-4 py-3 text-[var(--muted)] tabular-nums">{formatTimeKst(row.occurred_at)}</td>
-                            <td className="px-4 py-3 font-medium">
-                              {row.model_name}
-                              <span className="text-[var(--muted)] font-normal ml-1">
-                                {[row.suffix, row.color, row.size].filter(Boolean).join('/')}
-                              </span>
-                            </td>
-                            <td className="px-4 py-3 text-right tabular-nums">{formatKrw(row.labor_cash_outstanding_krw)}</td>
-                            <td className="px-4 py-3 text-right tabular-nums">{formatKrw(row.material_cash_outstanding_krw)}</td>
-                            <td className="px-4 py-3 text-right tabular-nums text-[var(--muted)]">
-                              {row.commodity_type === 'gold' ? `금 ${formatGram(row.commodity_outstanding_g)}` :
-                                row.commodity_type === 'silver' ? `은 ${formatGram(row.commodity_outstanding_g)}` : '-'}
-                            </td>
-                            <td className="px-4 py-3 text-right tabular-nums font-bold text-[var(--danger)]">
-                              {formatKrw(row.total_cash_outstanding_krw)}
-                            </td>
-                          </tr>
-                        ))}
+                        {invoicePositionsQuery.data && invoicePositionsQuery.data
+                          .filter(row => row.total_cash_outstanding_krw! > 0 || row.commodity_outstanding_g! > 0)
+                          .map(row => {
+                            const unitOnly = isUnitPricingCashOnlyAr(row);
+                            return (
+                              <tr key={row.ar_id} className="hover:bg-[var(--panel-hover)]">
+                                <td className="px-4 py-3 text-[var(--muted)] tabular-nums">{formatTimeKst(row.occurred_at)}</td>
+                                <td className="px-4 py-3 font-medium">
+                                  {row.model_name}
+                                  <span className="text-[var(--muted)] font-normal ml-1">
+                                    {[row.suffix, row.color, row.size].filter(Boolean).join('/')}
+                                  </span>
+                                </td>
+                                <td className="px-4 py-3 text-right tabular-nums">
+                                  {unitOnly ? "-" : formatKrw(row.labor_cash_outstanding_krw)}
+                                </td>
+                                <td className="px-4 py-3 text-right tabular-nums">
+                                  {unitOnly ? "-" : formatKrw(row.material_cash_outstanding_krw)}
+                                </td>
+                                <td className="px-4 py-3 text-right tabular-nums text-[var(--muted)]">
+                                  {unitOnly
+                                    ? "-"
+                                    : row.commodity_type === 'gold' ? `금 ${formatGram(row.commodity_outstanding_g)}` :
+                                      row.commodity_type === 'silver' ? `은 ${formatGram(row.commodity_outstanding_g)}` : '-'}
+                                </td>
+                                <td className="px-4 py-3 text-right tabular-nums font-bold text-[var(--danger)]">
+                                  {formatKrw(row.total_cash_outstanding_krw)}
+                                </td>
+                              </tr>
+                            );
+                          })}
                       </tbody>
                     </table>
                   </div>

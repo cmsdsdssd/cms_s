@@ -18,6 +18,7 @@ export type ReceiptLineItem = {
   labor_total_sell_krw?: number | null;
   gold_tick_krw_per_g?: number | null;
   silver_tick_krw_per_g?: number | null;
+  is_unit_pricing?: boolean | null;
 };
 
 export type ReceiptSummaryRow = {
@@ -99,6 +100,7 @@ export const ReceiptPrintHalf = ({
           </thead>
           <tbody>
             {paddedLines.map((line, index) => {
+              const isUnitPricing = Boolean(line.is_unit_pricing);
               const isSilver = line.material_code === "925" || line.material_code === "999";
               const hasContent = Boolean(
                 line.model_name || line.material_code || line.color || line.size || line.net_weight_g
@@ -108,20 +110,29 @@ export const ReceiptPrintHalf = ({
                 : "";
               return (
                 <tr key={line.shipment_line_id ?? `row-${index}`} className="border-b border-neutral-200">
-                  <td className="py-1 pr-2 align-middle">{modelLabel}</td>
+                  <td className="py-1 pr-2 align-middle">
+                    <div className="flex items-center gap-1">
+                      <span>{modelLabel}</span>
+                      {hasContent && isUnitPricing && (
+                        <span className="rounded border border-neutral-300 px-1 text-[9px] text-neutral-600">단가제</span>
+                      )}
+                    </div>
+                  </td>
                   <td className="py-1 text-left tabular-nums">{line.material_code ?? ""}</td>
                   <td className="py-1 text-left tabular-nums">{line.color ?? ""}</td>
                   <td className="py-1 text-left tabular-nums">{line.size ?? ""}</td>
                   <td className="py-1 text-right tabular-nums">
-                    {isSilver ? "" : formatWeightCell(line.net_weight_g)}
+                    {hasContent && isUnitPricing ? "-" : isSilver ? "" : formatWeightCell(line.net_weight_g)}
                   </td>
                   <td className="py-1 text-right tabular-nums">
-                    {isSilver ? formatWeightCell(line.net_weight_g) : ""}
+                    {hasContent && isUnitPricing ? "-" : isSilver ? formatWeightCell(line.net_weight_g) : ""}
                   </td>
                   <td className="py-1 text-right tabular-nums">
-                    {line.labor_total_sell_krw === null || line.labor_total_sell_krw === undefined
-                      ? ""
-                      : formatKrw(line.labor_total_sell_krw)}
+                    {hasContent && isUnitPricing
+                      ? "-"
+                      : line.labor_total_sell_krw === null || line.labor_total_sell_krw === undefined
+                        ? ""
+                        : formatKrw(line.labor_total_sell_krw)}
                   </td>
                   <td className="py-1 text-right tabular-nums">
                     {line.total_amount_sell_krw === null || line.total_amount_sell_krw === undefined

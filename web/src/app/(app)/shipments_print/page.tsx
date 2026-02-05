@@ -75,6 +75,11 @@ type ArInvoicePositionRow = {
   } | null;
 };
 
+type MasterItemRow = {
+  model_name?: string | null;
+  is_unit_pricing?: boolean | null;
+};
+
 
 type PartyReceiptPage = {
   partyId: string;
@@ -217,6 +222,9 @@ const toLineAmounts = (line: ReceiptLine): Amounts => {
   const netWeight = Number(line.net_weight_g ?? 0);
   const labor = Number(line.labor_total_sell_krw ?? 0);
   const total = Number(line.total_amount_sell_krw ?? 0);
+  if (line.is_unit_pricing) {
+    return { gold: 0, silver: 0, labor: 0, total };
+  }
   const bucket = getMaterialBucket(line.material_code ?? null);
   if (bucket.kind === "none") {
     return { gold: 0, silver: 0, labor: 0, total: 0 };
@@ -299,6 +307,42 @@ function ShipmentsPrintContent() {
     enabled: Boolean(schemaClient),
   });
 
+  const modelNames = useMemo(() => {
+    const names = new Set<string>();
+    (shipmentsQuery.data ?? []).forEach((row) => {
+      (row.cms_shipment_line ?? []).forEach((line) => {
+        const name = (line.model_name ?? "").trim();
+        if (name) names.add(name);
+      });
+    });
+    return Array.from(names);
+  }, [shipmentsQuery.data]);
+
+  const masterItemsQuery = useQuery({
+    queryKey: ["shipments-print-master-items", modelNames.join("|")],
+    queryFn: async () => {
+      if (!schemaClient) throw new Error("Supabase env is missing");
+      if (modelNames.length === 0) return [] as MasterItemRow[];
+      const { data, error } = await schemaClient
+        .from("cms_master_item")
+        .select("model_name, is_unit_pricing")
+        .in("model_name", modelNames);
+      if (error) throw error;
+      return (data ?? []) as MasterItemRow[];
+    },
+    enabled: Boolean(schemaClient) && modelNames.length > 0,
+  });
+
+  const unitPricingMap = useMemo(() => {
+    const map = new Map<string, boolean>();
+    (masterItemsQuery.data ?? []).forEach((row) => {
+      const name = (row.model_name ?? "").trim();
+      if (!name) return;
+      map.set(name, Boolean(row.is_unit_pricing));
+    });
+    return map;
+  }, [masterItemsQuery.data]);
+
   const shipments = useMemo<ShipmentRow[]>(() => {
     return (shipmentsQuery.data ?? [])
       .filter((row) => (isStorePickupMode ? row.is_store_pickup : !row.is_store_pickup))
@@ -338,6 +382,7 @@ function ShipmentsPrintContent() {
           customer: row.customer ?? null,
         };
         return (row.cms_shipment_line ?? []).map((line) => ({
+          is_unit_pricing: unitPricingMap.get((line.model_name ?? "").trim()) ?? false,
           shipment_line_id: line.shipment_line_id ?? undefined,
           model_name: line.model_name ?? null,
           qty: line.qty ?? null,
@@ -352,7 +397,7 @@ function ShipmentsPrintContent() {
           shipment_header: header,
         }));
       });
-  }, [shipmentsQuery.data]);
+  }, [shipmentsQuery.data, isStorePickupMode, unitPricingMap]);
 
   const partyGroups = useMemo(() => {
     const map = new Map<string, { partyId: string; partyName: string; lines: ReceiptLine[] }>();
