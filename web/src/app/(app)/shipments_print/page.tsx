@@ -6,6 +6,7 @@ import { useMemo, useState, useEffect, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { ActionBar } from "@/components/layout/action-bar";
+import { ReceiptPrintHalf, type ReceiptAmounts, type ReceiptLineItem } from "@/components/receipt/receipt-print";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input, Textarea } from "@/components/ui/field";
@@ -29,23 +30,16 @@ type ShipmentHeaderRow = {
     qty?: number | null;
     material_code?: string | null;
     net_weight_g?: number | null;
+    color?: string | null;
     size?: string | null;
-    material_amount_sell_krw?: number | null;
     labor_total_sell_krw?: number | null;
     total_amount_sell_krw?: number | null;
+    gold_tick_krw_per_g?: number | null;
+    silver_tick_krw_per_g?: number | null;
   }> | null;
 };
 
-type ReceiptLine = {
-  shipment_line_id?: string;
-  model_name?: string | null;
-  qty?: number | null;
-  material_code?: string | null;
-  net_weight_g?: number | null;
-  size?: string | null;
-  material_amount_sell_krw?: number | null;
-  labor_total_sell_krw?: number | null;
-  total_amount_sell_krw?: number | null;
+type ReceiptLine = ReceiptLineItem & {
   shipment_header?: {
     ship_date?: string | null;
     status?: string | null;
@@ -55,12 +49,7 @@ type ReceiptLine = {
   } | null;
 };
 
-type Amounts = {
-  gold: number;
-  silver: number;
-  labor: number;
-  total: number;
-};
+type Amounts = ReceiptAmounts;
 
 type PartyReceiptPage = {
   partyId: string;
@@ -69,6 +58,8 @@ type PartyReceiptPage = {
   totals: Amounts;
   today: Amounts;
   previous: Amounts;
+  goldPrice: number | null;
+  silverPrice: number | null;
 };
 
 type ShipmentRow = {
@@ -78,6 +69,7 @@ type ShipmentRow = {
   confirmedAt: string | null;
   memo: string | null;
   totalQty: number;
+  totalLabor: number;
   totalAmount: number;
   models: string[];
 };
@@ -85,14 +77,6 @@ type ShipmentRow = {
 const formatKrw = (value?: number | null) => {
   if (value === null || value === undefined) return "-";
   return `₩${new Intl.NumberFormat("ko-KR").format(Math.round(value))}`;
-};
-
-const formatWeight = (value?: number | null) => {
-  if (value === null || value === undefined) return "-";
-  return `${new Intl.NumberFormat("ko-KR", {
-    minimumFractionDigits: 0,
-    maximumFractionDigits: 2,
-  }).format(value)}g`;
 };
 
 const formatDateTimeKst = (value?: string | null) => {
@@ -151,19 +135,35 @@ const addAmounts = (base: Amounts, add: Amounts) => ({
   total: base.total + add.total,
 });
 
+const getMaterialBucket = (code?: string | null) => {
+  const material = (code ?? "").trim();
+  if (!material || material === "00") return { kind: "none" as const, factor: 0 };
+  if (material === "14") return { kind: "gold" as const, factor: 0.6435 };
+  if (material === "18") return { kind: "gold" as const, factor: 0.825 };
+  if (material === "24") return { kind: "gold" as const, factor: 1 };
+  if (material === "925") return { kind: "silver" as const, factor: 0.925 };
+  if (material === "999") return { kind: "silver" as const, factor: 1 };
+  return { kind: "none" as const, factor: 0 };
+};
+
 
 const toLineAmounts = (line: ReceiptLine): Amounts => {
   const netWeight = Number(line.net_weight_g ?? 0);
   const labor = Number(line.labor_total_sell_krw ?? 0);
   const total = Number(line.total_amount_sell_krw ?? 0);
-  const isSilver = line.material_code === "925";
+  const bucket = getMaterialBucket(line.material_code ?? null);
+  if (bucket.kind === "none") {
+    return { gold: 0, silver: 0, labor: 0, total: 0 };
+  }
+  const weighted = netWeight * bucket.factor;
   return {
-    gold: isSilver ? 0 : netWeight,
-    silver: isSilver ? netWeight : 0,
+    gold: bucket.kind === "gold" ? weighted : 0,
+    silver: bucket.kind === "silver" ? weighted : 0,
     labor,
     total,
   };
 };
+
 
 const chunkLines = (lines: ReceiptLine[], size: number) => {
   const chunks: ReceiptLine[][] = [];
@@ -173,127 +173,10 @@ const chunkLines = (lines: ReceiptLine[], size: number) => {
   return chunks.length > 0 ? chunks : [[]];
 };
 
-const ReceiptHalf = ({
-  partyName,
-  dateLabel,
-  lines,
-  totals,
-  today,
-  previous,
-}: {
-  partyName: string;
-  dateLabel: string;
-  lines: ReceiptLine[];
-  totals: Amounts;
-  today: Amounts;
-  previous: Amounts;
-}) => {
-  const paddedLines = useMemo(() => {
-    const next = [...lines];
-    while (next.length < 8) next.push({});
-    return next;
-  }, [lines]);
-
-  const summaryRows = [
-    { label: "합계", value: totals },
-    { label: "이전 미수", value: previous },
-    { label: "당일 미수", value: today },
-  ];
-
-  return (
-    <div className="flex h-full flex-col gap-4 text-[11px] text-black">
-      <div className="flex items-start justify-between">
-        <div>
-          <div className="text-lg font-semibold">MS</div>
-          <div className="text-[10px] text-neutral-600">거래명세/영수증</div>
-        </div>
-        <div className="text-right text-[10px] text-neutral-600">
-          <div>{dateLabel}</div>
-          <div className="font-medium text-black">{partyName}</div>
-        </div>
-      </div>
-
-      <div className="flex-1 space-y-2">
-        <div className="text-xs font-semibold">당일 출고 내역</div>
-        <table className="w-full border-collapse text-[11px]">
-          <thead>
-            <tr className="border-b border-neutral-300">
-              <th className="py-1 text-left font-medium">모델</th>
-              <th className="py-1 text-left font-medium">소재</th>
-              <th className="py-1 text-right font-medium">중량(g)</th>
-              <th className="py-1 text-right font-medium">사이</th>
-              <th className="py-1 text-right font-medium">공임</th>
-              <th className="py-1 text-right font-medium">소재비</th>
-              <th className="py-1 text-right font-medium">은(g)</th>
-              <th className="py-1 text-right font-medium">금액</th>
-            </tr>
-          </thead>
-          <tbody>
-            {paddedLines.map((line, index) => (
-              <tr key={line.shipment_line_id ?? `row-${index}`} className="border-b border-neutral-200">
-                <td className="py-1 pr-2 align-middle">
-                  {(line.model_name ?? "").toString()}
-                </td>
-                <td className="py-1 text-left tabular-nums">{line.material_code ?? ""}</td>
-                <td className="py-1 text-right tabular-nums">
-                  {line.net_weight_g === null || line.net_weight_g === undefined
-                    ? ""
-                    : formatWeight(line.net_weight_g)}
-                </td>
-                <td className="py-1 text-right tabular-nums">{line.size ?? ""}</td>
-                <td className="py-1 text-right tabular-nums">
-                  {line.labor_total_sell_krw === null || line.labor_total_sell_krw === undefined
-                    ? ""
-                    : formatKrw(line.labor_total_sell_krw)}
-                </td>
-                <td className="py-1 text-right tabular-nums">
-                  {line.material_amount_sell_krw === null || line.material_amount_sell_krw === undefined
-                    ? ""
-                    : formatKrw(line.material_amount_sell_krw)}
-                </td>
-                <td className="py-1 text-right tabular-nums">
-                  {line.material_code === "925" && line.net_weight_g !== null && line.net_weight_g !== undefined
-                    ? formatWeight(line.net_weight_g)
-                    : ""}
-                </td>
-                <td className="py-1 text-right tabular-nums">
-                  {line.total_amount_sell_krw === null || line.total_amount_sell_krw === undefined
-                    ? ""
-                    : formatKrw(line.total_amount_sell_krw)}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-
-      <div className="mt-auto space-y-2">
-        <div className="text-xs font-semibold">미수 내역 (요약)</div>
-        <table className="w-full border-collapse text-[11px]">
-          <thead>
-            <tr className="border-b border-neutral-300">
-              <th className="py-1 text-left font-medium">구분</th>
-              <th className="py-1 text-right font-medium">금(g)</th>
-              <th className="py-1 text-right font-medium">은(g)</th>
-              <th className="py-1 text-right font-medium">공임</th>
-              <th className="py-1 text-right font-medium">총금액</th>
-            </tr>
-          </thead>
-          <tbody>
-            {summaryRows.map((row) => (
-              <tr key={row.label} className="border-b border-neutral-200">
-                <td className="py-1 font-medium">{row.label}</td>
-                <td className="py-1 text-right tabular-nums">{formatWeight(row.value.gold)}</td>
-                <td className="py-1 text-right tabular-nums">{formatWeight(row.value.silver)}</td>
-                <td className="py-1 text-right tabular-nums">{formatKrw(row.value.labor)}</td>
-                <td className="py-1 text-right tabular-nums">{formatKrw(row.value.total)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
+const getTickPrices = (lines: ReceiptLine[]) => {
+  const goldPrice = lines.find((line) => line.gold_tick_krw_per_g != null)?.gold_tick_krw_per_g ?? null;
+  const silverPrice = lines.find((line) => line.silver_tick_krw_per_g != null)?.silver_tick_krw_per_g ?? null;
+  return { goldPrice, silverPrice };
 };
 
 function ShipmentsPrintContent() {
@@ -324,7 +207,7 @@ function ShipmentsPrintContent() {
       let query = schemaClient
         .from("cms_shipment_header")
         .select(
-          "shipment_id, ship_date, confirmed_at, is_store_pickup, memo, customer_party_id, customer:cms_party(name), cms_shipment_line(shipment_line_id, model_name, qty, material_code, net_weight_g, size, material_amount_sell_krw, labor_total_sell_krw, total_amount_sell_krw)"
+          "shipment_id, ship_date, confirmed_at, is_store_pickup, memo, customer_party_id, customer:cms_party(name), cms_shipment_line(shipment_line_id, model_name, qty, material_code, net_weight_g, color, size, labor_total_sell_krw, total_amount_sell_krw, gold_tick_krw_per_g, silver_tick_krw_per_g)"
         )
         .eq("status", "CONFIRMED");
 
@@ -335,9 +218,9 @@ function ShipmentsPrintContent() {
           query = query.eq("customer_party_id", filterPartyId);
         }
       } else {
-        query = query
-          .eq("ship_date", today)
-          .or("is_store_pickup.is.null,is_store_pickup.eq.false");
+        const nonStorePickup = "or(is_store_pickup.is.null,is_store_pickup.eq.false)";
+        const dateFilter = `and(${nonStorePickup},ship_date.eq.${today}),and(${nonStorePickup},confirmed_at.gte.${todayStartIso},confirmed_at.lt.${todayEndIso})`;
+        query = query.or(dateFilter);
       }
 
       const { data, error } = await query.order("confirmed_at", { ascending: true });
@@ -353,6 +236,7 @@ function ShipmentsPrintContent() {
       .map((row) => {
         const lines = row.cms_shipment_line ?? [];
         const totalQty = lines.reduce((sum, line) => sum + Number(line.qty ?? 0), 0);
+        const totalLabor = lines.reduce((sum, line) => sum + Number(line.labor_total_sell_krw ?? 0), 0);
         const totalAmount = lines.reduce((sum, line) => sum + Number(line.total_amount_sell_krw ?? 0), 0);
         const models = lines
           .map((line) => (line.model_name ?? "-").trim())
@@ -365,6 +249,7 @@ function ShipmentsPrintContent() {
           confirmedAt: row.confirmed_at ?? null,
           memo: row.memo ?? null,
           totalQty,
+          totalLabor,
           totalAmount,
           models,
         };
@@ -389,10 +274,12 @@ function ShipmentsPrintContent() {
           qty: line.qty ?? null,
           material_code: line.material_code ?? null,
           net_weight_g: line.net_weight_g ?? null,
+          color: line.color ?? null,
           size: line.size ?? null,
-          material_amount_sell_krw: line.material_amount_sell_krw ?? null,
           labor_total_sell_krw: line.labor_total_sell_krw ?? null,
           total_amount_sell_krw: line.total_amount_sell_krw ?? null,
+          gold_tick_krw_per_g: line.gold_tick_krw_per_g ?? null,
+          silver_tick_krw_per_g: line.silver_tick_krw_per_g ?? null,
           shipment_header: header,
         }));
       });
@@ -421,7 +308,7 @@ function ShipmentsPrintContent() {
       let query = schemaClient
         .from("cms_shipment_line")
         .select(
-          "shipment_line_id, material_code, net_weight_g, material_amount_sell_krw, labor_total_sell_krw, total_amount_sell_krw, shipment_header:cms_shipment_header(ship_date, confirmed_at, status, customer_party_id, is_store_pickup)"
+          "shipment_line_id, material_code, net_weight_g, labor_total_sell_krw, total_amount_sell_krw, shipment_header:cms_shipment_header(ship_date, confirmed_at, status, customer_party_id, is_store_pickup)"
         )
         .eq("shipment_header.status", "CONFIRMED")
         .in("shipment_header.customer_party_id", partyIds);
@@ -429,9 +316,9 @@ function ShipmentsPrintContent() {
       if (isStorePickupMode) {
         query = query.eq("shipment_header.is_store_pickup", true).lte("shipment_header.ship_date", today);
       } else {
-        query = query
-          .lte("shipment_header.ship_date", today)
-          .or("shipment_header.is_store_pickup.is.null,shipment_header.is_store_pickup.eq.false");
+        query = query.and(
+          `shipment_header.ship_date.lte.${today},or(shipment_header.is_store_pickup.is.null,shipment_header.is_store_pickup.eq.false)`
+        );
       }
 
       const { data, error } = await query;
@@ -503,9 +390,9 @@ function ShipmentsPrintContent() {
       if (isStorePickupMode) {
         query = query.eq("shipment_header.is_store_pickup", true).lt("shipment_header.ship_date", today);
       } else {
-        query = query
-          .lt("shipment_header.ship_date", today)
-          .or("shipment_header.is_store_pickup.is.null,shipment_header.is_store_pickup.eq.false");
+        query = query.and(
+          `shipment_header.ship_date.lt.${today},or(shipment_header.is_store_pickup.is.null,shipment_header.is_store_pickup.eq.false)`
+        );
       }
 
       const { data, error } = await query;
@@ -569,6 +456,7 @@ function ShipmentsPrintContent() {
         labor: previous.labor + todaySum.labor,
         total: arBalanceMap.get(group.partyId) ?? previous.total + todaySum.total,
       };
+      const { goldPrice, silverPrice } = getTickPrices(group.lines);
       chunks.forEach((chunk) => {
         result.push({
           partyId: group.partyId,
@@ -577,6 +465,8 @@ function ShipmentsPrintContent() {
           totals,
           today: todaySum,
           previous,
+          goldPrice,
+          silverPrice,
         });
       });
     });
@@ -589,6 +479,8 @@ function ShipmentsPrintContent() {
         totals: { ...zeroAmounts },
         today: { ...zeroAmounts },
         previous: { ...zeroAmounts },
+        goldPrice: null,
+        silverPrice: null,
       });
     }
 
@@ -624,7 +516,7 @@ function ShipmentsPrintContent() {
   };
 
   const totalCount = shipments.length;
-  const totalQty = shipments.reduce((sum, row) => sum + row.totalQty, 0);
+  const totalLabor = shipments.reduce((sum, row) => sum + row.totalLabor, 0);
   const totalAmount = shipments.reduce((sum, row) => sum + row.totalAmount, 0);
 
   return (
@@ -656,8 +548,8 @@ function ShipmentsPrintContent() {
           </Card>
           <Card className="border-[var(--panel-border)]">
             <CardBody className="p-4">
-              <div className="text-xs text-[var(--muted)]">총 수량</div>
-              <div className="text-xl font-semibold tabular-nums">{totalQty}</div>
+              <div className="text-xs text-[var(--muted)]">총 공임</div>
+              <div className="text-xl font-semibold tabular-nums">{formatKrw(totalLabor)}</div>
             </CardBody>
           </Card>
           <Card className="border-[var(--panel-border)]">
@@ -727,27 +619,35 @@ function ShipmentsPrintContent() {
                   "receipt-print-page mx-auto bg-white p-4 text-black shadow-sm",
                   "border border-neutral-200"
                 )}
-                style={{ width: "100%", minHeight: "194mm" }}
+                style={{ width: "100%", height: "194mm" }}
               >
                 <div className="grid h-full grid-cols-2 gap-4">
-                  <div className="border-r border-dashed border-neutral-300 pr-4">
-                    <ReceiptHalf
+                  <div className="h-full border-r border-dashed border-neutral-300 pr-4">
+                    <ReceiptPrintHalf
                       partyName={page.partyName}
                       dateLabel={today}
                       lines={page.lines}
-                      totals={page.totals}
-                      today={page.today}
-                      previous={page.previous}
+                      summaryRows={[
+                        { label: "합계", value: page.totals },
+                        { label: "이전 미수", value: page.previous },
+                        { label: "당일 미수", value: page.today },
+                      ]}
+                      goldPrice={page.goldPrice}
+                      silverPrice={page.silverPrice}
                     />
                   </div>
-                  <div className="pl-4">
-                    <ReceiptHalf
+                  <div className="h-full pl-4">
+                    <ReceiptPrintHalf
                       partyName={page.partyName}
                       dateLabel={today}
                       lines={page.lines}
-                      totals={page.totals}
-                      today={page.today}
-                      previous={page.previous}
+                      summaryRows={[
+                        { label: "합계", value: page.totals },
+                        { label: "이전 미수", value: page.previous },
+                        { label: "당일 미수", value: page.today },
+                      ]}
+                      goldPrice={page.goldPrice}
+                      silverPrice={page.silverPrice}
                     />
                   </div>
                 </div>

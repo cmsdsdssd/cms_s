@@ -24,7 +24,7 @@ export async function GET(request: Request) {
     .select(
       "order_id, order_line_id, order_no, order_date, client_id, client_name, client_code, model_no, color, status, plating_status, plating_color"
     )
-    .order("order_date", { ascending: false })
+    .order("order_date", { ascending: true })
     .limit(limit);
 
   if (q) {

@@ -16,6 +16,7 @@ type MarketTickConfig = {
   fx_markup: number;
   cs_correction_factor: number;
   silver_kr_correction_factor: number;
+  rule_rounding_unit_krw?: number | null;
   updated_at?: string | null;
 };
 
@@ -55,7 +56,7 @@ export default function SettingsPage() {
       if (!sb) throw new Error("Supabase env is missing");
       const { data, error } = await sb
         .from("cms_market_tick_config")
-        .select("fx_markup, cs_correction_factor, silver_kr_correction_factor, updated_at")
+        .select("fx_markup, cs_correction_factor, silver_kr_correction_factor, rule_rounding_unit_krw, updated_at")
         .eq("config_key", "DEFAULT")
         .maybeSingle();
 
@@ -66,6 +67,7 @@ export default function SettingsPage() {
           fx_markup: 1.03,
           cs_correction_factor: 1.2,
           silver_kr_correction_factor: 1.2,
+          rule_rounding_unit_krw: 0,
           updated_at: null,
         }
       );
@@ -75,11 +77,14 @@ export default function SettingsPage() {
   const [fxMarkup, setFxMarkup] = useState<string | null>(null);
   const [csFactor, setCsFactor] = useState<string | null>(null);
   const [silverKrFactor, setSilverKrFactor] = useState<string | null>(null);
+  const [ruleRoundingUnit, setRuleRoundingUnit] = useState<string | null>(null);
 
   const displayFxMarkup = fxMarkup ?? String(cfgQuery.data?.fx_markup ?? 1.03);
   const displayCsFactor = csFactor ?? String(cfgQuery.data?.cs_correction_factor ?? 1.2);
   const displaySilverKrFactor =
     silverKrFactor ?? String(cfgQuery.data?.silver_kr_correction_factor ?? 1.2);
+  const displayRuleRoundingUnit =
+    ruleRoundingUnit ?? String(cfgQuery.data?.rule_rounding_unit_krw ?? 0);
 
   type UpsertMarketTickConfigResponse = {
     ok?: boolean;
@@ -87,11 +92,20 @@ export default function SettingsPage() {
     fx_markup?: number;
     cs_correction_factor?: number;
     silver_kr_correction_factor?: number;
+    rule_rounding_unit_krw?: number | null;
   };
 
   const upsertCfg = useRpcMutation<UpsertMarketTickConfigResponse>({
     fn: CONTRACTS.functions.marketTickConfigUpsert,
     successMessage: "저장 완료",
+  });
+
+  const setRuleRoundingUnitMutation = useRpcMutation<{ ok?: boolean }>({
+    fn: CONTRACTS.functions.setRuleRoundingUnit,
+    successMessage: "저장 완료",
+    onSuccess: () => {
+      cfgQuery.refetch();
+    },
   });
 
   const onSave = async () => {
@@ -128,6 +142,32 @@ export default function SettingsPage() {
       // useRpcMutation.onError에서 토스트 처리됨
     }
 
+  };
+
+  const currentRoundingUnit = Number(cfgQuery.data?.rule_rounding_unit_krw ?? 0);
+  const nextRoundingUnit = Number(displayRuleRoundingUnit);
+  const hasRoundingUnitChange = Number.isFinite(nextRoundingUnit)
+    ? nextRoundingUnit !== currentRoundingUnit
+    : false;
+  const canSaveRoundingUnit =
+    Number.isInteger(nextRoundingUnit) && nextRoundingUnit >= 0 && hasRoundingUnitChange;
+
+  const onSaveRoundingUnit = async () => {
+    if (!Number.isInteger(nextRoundingUnit) || nextRoundingUnit < 0) {
+      toast.error("올림 단위는 0 이상의 정수여야 합니다.");
+      return;
+    }
+
+    try {
+      await setRuleRoundingUnitMutation.mutateAsync({
+        p_rounding_unit_krw: nextRoundingUnit,
+        p_actor_person_id: process.env.NEXT_PUBLIC_CMS_ACTOR_ID ?? null,
+        p_session_id: null,
+        p_memo: null,
+      });
+    } catch {
+      // useRpcMutation.onError에서 토스트 처리됨
+    }
   };
 
   // ============================================
@@ -265,6 +305,47 @@ export default function SettingsPage() {
             <p>
               • 출고확정 시 현재 설정된 시세와 보정계수가 주문 라인에 스냅샷으로 저장됩니다.
             </p>
+          </div>
+        </CardBody>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <div>
+            <div className="text-sm font-semibold">RULE 올림 단위 (확정 시 적용)</div>
+            <div className="text-xs text-[var(--muted)]">확정 시점에만 적용됩니다.</div>
+          </div>
+        </CardHeader>
+        <CardBody className="space-y-3">
+          <label className="space-y-1">
+            <div className="text-xs text-[var(--muted)]">올림 단위 (원)</div>
+            <Select
+              value={displayRuleRoundingUnit}
+              onChange={(event) => setRuleRoundingUnit(event.target.value)}
+            >
+              <option value="0">미적용</option>
+              <option value="1000">1,000</option>
+              <option value="5000">5,000</option>
+              <option value="10000">10,000</option>
+              <option value="50000">50,000</option>
+            </Select>
+          </label>
+
+          <div className="text-xs text-[var(--muted-weak)] leading-relaxed">
+            <p>확정 시점에만 적용됩니다.</p>
+            <p>대상: RULE + (마스터 단가제 체크) + 총액 덮어쓰기 아님</p>
+          </div>
+
+          <div className="flex items-center gap-2 pt-1">
+            <Button
+              onClick={onSaveRoundingUnit}
+              disabled={!canSaveRoundingUnit || setRuleRoundingUnitMutation.isPending}
+            >
+              저장
+            </Button>
+            <div className="text-xs text-[var(--muted)]">
+              현재 값: {Number.isFinite(currentRoundingUnit) ? currentRoundingUnit.toLocaleString() : "-"}
+            </div>
           </div>
         </CardBody>
       </Card>

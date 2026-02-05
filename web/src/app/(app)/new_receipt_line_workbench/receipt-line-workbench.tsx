@@ -554,6 +554,20 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
   }, [previewBlobUrl]);
 
   useEffect(() => {
+    if (!expandedLineId) return;
+    const handleOutsideClick = (event: MouseEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (!target) return;
+      const isInside = target.closest(`[data-line-block="${expandedLineId}"]`);
+      if (!isInside) {
+        setExpandedLineId(null);
+      }
+    };
+    document.addEventListener("mousedown", handleOutsideClick);
+    return () => document.removeEventListener("mousedown", handleOutsideClick);
+  }, [expandedLineId]);
+
+  useEffect(() => {
     return () => {
       if (suggestTimerRef.current) {
         window.clearTimeout(suggestTimerRef.current);
@@ -1516,8 +1530,14 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
     }, 150);
   }
 
-  function updateLineNumber(lineUuid: string, field: keyof ReceiptLineItemInput, value: string) {
-    updateLine(lineUuid, field, formatNumberInput(value));
+  function updateLineNumber(
+    lineUuid: string,
+    field: keyof ReceiptLineItemInput,
+    value: string,
+    options?: { format?: boolean }
+  ) {
+    const nextValue = options?.format === false ? value : formatNumberInput(value);
+    updateLine(lineUuid, field, nextValue);
   }
 
   function updateLineAndResetTotal(lineUuid: string, field: keyof ReceiptLineItemInput, value: string) {
@@ -1531,8 +1551,14 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
     );
   }
 
-  function updateLineNumberAndResetTotal(lineUuid: string, field: keyof ReceiptLineItemInput, value: string) {
-    updateLineAndResetTotal(lineUuid, field, formatNumberInput(value));
+  function updateLineNumberAndResetTotal(
+    lineUuid: string,
+    field: keyof ReceiptLineItemInput,
+    value: string,
+    options?: { format?: boolean }
+  ) {
+    const nextValue = options?.format === false ? value : formatNumberInput(value);
+    updateLineAndResetTotal(lineUuid, field, nextValue);
   }
 
   function updateLineMaterial(lineUuid: string, value: string) {
@@ -1605,10 +1631,11 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
           weight: acc.weight + weight * qty,
           laborBasic: acc.laborBasic + laborBasic * qty,
           laborOther: acc.laborOther + laborOther * qty,
+          stoneLabor: acc.stoneLabor + stoneFactory * qty,
           totalAmount: acc.totalAmount + totalLine * qty,
         };
       },
-      { qty: 0, weight: 0, laborBasic: 0, laborOther: 0, totalAmount: 0 }
+      { qty: 0, weight: 0, laborBasic: 0, laborOther: 0, stoneLabor: 0, totalAmount: 0 }
     );
   }, [lineItems]);
 
@@ -2426,18 +2453,18 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                     </Button>
                   </div>
                   <div className="overflow-x-hidden rounded-lg border border-[var(--panel-border)]">
-                    <table className="w-full table-fixed text-[11px]">
+                    <table className="w-full table-fixed text-[10px]">
                       <thead className="bg-[var(--panel)] text-[var(--muted)] sticky top-0">
                         <tr>
-                          <th className="px-2 py-2 text-left w-[52px]">번호</th>
-                          <th className="px-2 py-2 text-left w-[72px]">고객코드</th>
-                          <th className="px-2 py-2 text-left w-[250px]">모델명*</th>
-                          <th className="px-2 py-2 text-left w-[70px]">소재*</th>
-                          <th className="px-2 py-2 text-left w-[80px]">색상</th>
-                          <th className="px-2 py-2 text-right w-[86px]">총중량</th>
-                          <th className="px-2 py-2 text-right w-[96px]">총공임</th>
-                          <th className="px-2 py-2 text-right w-[130px]">총합(저장)</th>
-                          <th className="px-2 py-2 text-left w-[140px]">상태</th>
+                          <th className="px-1.5 py-2 text-left w-[44px]">번호</th>
+                          <th className="px-1.5 py-2 text-left w-[60px]">고객코드</th>
+                          <th className="px-1.5 py-2 text-left w-[200px]">모델명*</th>
+                          <th className="px-1.5 py-2 text-left w-[56px]">소재*</th>
+                          <th className="px-1.5 py-2 text-left w-[60px]">색상</th>
+                          <th className="px-1.5 py-2 text-right w-[72px]">총중량</th>
+                          <th className="px-1.5 py-2 text-right w-[80px]">총공임</th>
+                          <th className="px-1.5 py-2 text-right w-[96px]">총합(저장)</th>
+                          <th className="px-1.5 py-2 text-left w-[110px]">상태</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -2476,8 +2503,15 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                             <Fragment key={item.line_uuid}>
                               <tr
                                 className="border-t border-[var(--panel-border)] bg-[var(--primary)]/10 hover:bg-[var(--primary)]/15"
-                                onClick={() => setExpandedLineId(item.line_uuid)}
-                                onDoubleClick={() => setExpandedLineId(item.line_uuid)}
+                                data-line-block={item.line_uuid}
+                                onClick={() => {
+                                  updateLineNumber(item.line_uuid, "qty", "1");
+                                  setExpandedLineId(item.line_uuid);
+                                }}
+                                onDoubleClick={() => {
+                                  updateLineNumber(item.line_uuid, "qty", "1");
+                                  setExpandedLineId(item.line_uuid);
+                                }}
                               >
                                 <td className="px-2 py-1">
                                   <div className={seqDisplayClass} title={isSeqDuplicate ? "라인 번호가 중복되었습니다" : undefined}>
@@ -2530,7 +2564,11 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                                 </td>
                               </tr>
                               {isExpanded ? (
-                                <tr className="border-t border-[var(--panel-border)] bg-[var(--panel)]/15 text-[11px]" key={`${item.line_uuid}-detail`}>
+                                <tr
+                                  className="border-t border-[var(--panel-border)] bg-[var(--panel)]/15 text-[11px]"
+                                  key={`${item.line_uuid}-detail`}
+                                  data-line-block={item.line_uuid}
+                                >
                                   <td colSpan={9} className="px-3 py-3">
                                     <div className="grid grid-cols-1 gap-3 md:grid-cols-[36px_110px_minmax(0,1.2fr)_78px_78px_minmax(0,1fr)]">
                                       <div className="space-y-1">
@@ -2541,6 +2579,7 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                                           value={item.vendor_seq_no}
                                           disabled={inputDisabled}
                                           onChange={(e) => updateLine(item.line_uuid, "vendor_seq_no", e.target.value)}
+                                          autoFormat={false}
                                           onBlur={(e) => {
                                             const nextId = getLineIdFromTarget(e.relatedTarget);
                                             if (nextId !== item.line_uuid) setExpandedLineId(null);
@@ -2604,7 +2643,12 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                                                   data-line-id={item.line_uuid}
                                                   onMouseDown={(e) => {
                                                     e.preventDefault();
+                                                  }}
+                                                  onClick={(e) => {
+                                                    e.stopPropagation();
                                                     updateLine(item.line_uuid, "customer_factory_code", option.mask_code);
+                                                    setIsCustomerSuggestLoading(false);
+                                                    setCustomerCodeSuggest([]);
                                                     setActiveLineSuggest(null);
                                                   }}
                                                 >
@@ -2747,19 +2791,15 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                                         />
                                       </div>
                                     </div>
-                                    <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-[36px_minmax(0,1.2fr)_86px_86px_110px_110px]">
+                                    <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-[36px_minmax(0,0.9fr)_70px_70px_110px_110px_110px]">
                                       <div className="space-y-1">
                                         <label className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)]">수량</label>
                                         <Input
                                           type="text"
                                           inputMode="numeric"
-                                          value={item.qty}
-                                          disabled={inputDisabled}
-                                          onChange={(e) => updateLineNumber(item.line_uuid, "qty", e.target.value)}
-                                          onBlur={(e) => {
-                                            const nextId = getLineIdFromTarget(e.relatedTarget);
-                                            if (nextId !== item.line_uuid) setExpandedLineId(null);
-                                          }}
+                                          value="1"
+                                          disabled
+                                          readOnly
                                           data-line-id={item.line_uuid}
                                           className="h-8 text-[11px] text-right"
                                         />
@@ -2779,7 +2819,10 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                                           inputMode="decimal"
                                           value={item.weight_raw_g}
                                           disabled={inputDisabled}
-                                          onChange={(e) => updateLineNumber(item.line_uuid, "weight_raw_g", e.target.value)}
+                                          onChange={(e) =>
+                                            updateLineNumber(item.line_uuid, "weight_raw_g", e.target.value, { format: false })
+                                          }
+                                          autoFormat={false}
                                           onBlur={(e) => {
                                             const nextId = getLineIdFromTarget(e.relatedTarget);
                                             if (nextId !== item.line_uuid) setExpandedLineId(null);
@@ -2795,7 +2838,10 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                                           inputMode="decimal"
                                           value={item.weight_deduct_g}
                                           disabled={inputDisabled}
-                                          onChange={(e) => updateLineNumber(item.line_uuid, "weight_deduct_g", e.target.value)}
+                                          onChange={(e) =>
+                                            updateLineNumber(item.line_uuid, "weight_deduct_g", e.target.value, { format: false })
+                                          }
+                                          autoFormat={false}
                                           onBlur={(e) => {
                                             const nextId = getLineIdFromTarget(e.relatedTarget);
                                             if (nextId !== item.line_uuid) setExpandedLineId(null);
@@ -2812,14 +2858,27 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                                           value={item.labor_basic_cost_krw}
                                           disabled={inputDisabled}
                                           onChange={(e) =>
-                                            updateLineNumberAndResetTotal(item.line_uuid, "labor_basic_cost_krw", e.target.value)
+                                            updateLineNumberAndResetTotal(item.line_uuid, "labor_basic_cost_krw", e.target.value, {
+                                              format: false,
+                                            })
                                           }
+                                          autoFormat={false}
                                           onBlur={(e) => {
                                             const nextId = getLineIdFromTarget(e.relatedTarget);
                                             if (nextId !== item.line_uuid) setExpandedLineId(null);
                                           }}
                                           data-line-id={item.line_uuid}
                                           className="h-8 text-[11px] text-right"
+                                        />
+                                      </div>
+                                      <div className="space-y-1">
+                                        <label className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)]">알공임</label>
+                                        <Input
+                                          type="text"
+                                          inputMode="numeric"
+                                          value={stoneFactoryCost}
+                                          readOnly
+                                          className={`h-8 text-[11px] text-right ${AUTO_FIELD_CLASS}`}
                                         />
                                       </div>
                                       <div className="space-y-1">
@@ -2830,8 +2889,11 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                                           value={item.labor_other_cost_krw}
                                           disabled={inputDisabled}
                                           onChange={(e) =>
-                                            updateLineNumberAndResetTotal(item.line_uuid, "labor_other_cost_krw", e.target.value)
+                                            updateLineNumberAndResetTotal(item.line_uuid, "labor_other_cost_krw", e.target.value, {
+                                              format: false,
+                                            })
                                           }
+                                          autoFormat={false}
                                           onBlur={(e) => {
                                             const nextId = getLineIdFromTarget(e.relatedTarget);
                                             if (nextId !== item.line_uuid) setExpandedLineId(null);
@@ -2850,8 +2912,11 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                                           value={item.stone_center_qty}
                                           disabled={inputDisabled}
                                           onChange={(e) =>
-                                            updateLineNumberAndResetTotal(item.line_uuid, "stone_center_qty", e.target.value)
+                                            updateLineNumberAndResetTotal(item.line_uuid, "stone_center_qty", e.target.value, {
+                                              format: false,
+                                            })
                                           }
+                                          autoFormat={false}
                                           onBlur={(e) => {
                                             const nextId = getLineIdFromTarget(e.relatedTarget);
                                             if (nextId !== item.line_uuid) setExpandedLineId(null);
@@ -2871,9 +2936,11 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                                             updateLineNumberAndResetTotal(
                                               item.line_uuid,
                                               "stone_center_unit_cost_krw",
-                                              e.target.value
+                                              e.target.value,
+                                              { format: false }
                                             )
                                           }
+                                          autoFormat={false}
                                           onBlur={(e) => {
                                             const nextId = getLineIdFromTarget(e.relatedTarget);
                                             if (nextId !== item.line_uuid) setExpandedLineId(null);
@@ -2890,8 +2957,11 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                                           value={item.stone_sub1_qty}
                                           disabled={inputDisabled}
                                           onChange={(e) =>
-                                            updateLineNumberAndResetTotal(item.line_uuid, "stone_sub1_qty", e.target.value)
+                                            updateLineNumberAndResetTotal(item.line_uuid, "stone_sub1_qty", e.target.value, {
+                                              format: false,
+                                            })
                                           }
+                                          autoFormat={false}
                                           onBlur={(e) => {
                                             const nextId = getLineIdFromTarget(e.relatedTarget);
                                             if (nextId !== item.line_uuid) setExpandedLineId(null);
@@ -2911,9 +2981,11 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                                             updateLineNumberAndResetTotal(
                                               item.line_uuid,
                                               "stone_sub1_unit_cost_krw",
-                                              e.target.value
+                                              e.target.value,
+                                              { format: false }
                                             )
                                           }
+                                          autoFormat={false}
                                           onBlur={(e) => {
                                             const nextId = getLineIdFromTarget(e.relatedTarget);
                                             if (nextId !== item.line_uuid) setExpandedLineId(null);
@@ -2930,8 +3002,11 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                                           value={item.stone_sub2_qty}
                                           disabled={inputDisabled}
                                           onChange={(e) =>
-                                            updateLineNumberAndResetTotal(item.line_uuid, "stone_sub2_qty", e.target.value)
+                                            updateLineNumberAndResetTotal(item.line_uuid, "stone_sub2_qty", e.target.value, {
+                                              format: false,
+                                            })
                                           }
+                                          autoFormat={false}
                                           onBlur={(e) => {
                                             const nextId = getLineIdFromTarget(e.relatedTarget);
                                             if (nextId !== item.line_uuid) setExpandedLineId(null);
@@ -2951,9 +3026,11 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                                             updateLineNumberAndResetTotal(
                                               item.line_uuid,
                                               "stone_sub2_unit_cost_krw",
-                                              e.target.value
+                                              e.target.value,
+                                              { format: false }
                                             )
                                           }
+                                          autoFormat={false}
                                           onBlur={(e) => {
                                             const nextId = getLineIdFromTarget(e.relatedTarget);
                                             if (nextId !== item.line_uuid) setExpandedLineId(null);
@@ -3014,7 +3091,7 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                     </table>
                   </div>
 
-                  <div className="grid grid-cols-[72px_minmax(0,1.2fr)_minmax(0,1.2fr)_repeat(3,minmax(0,1fr))] gap-2 text-xs text-[var(--muted)]">
+                  <div className="grid grid-cols-[72px_minmax(0,1.2fr)_minmax(0,1.2fr)_repeat(4,minmax(0,1fr))] gap-2 text-xs text-[var(--muted)]">
                     <div className="rounded-lg border border-[var(--panel-border)] bg-[var(--surface)]/60 px-2 py-2 text-center">
                       총수량
                       <div className="mt-0.5 font-semibold text-[var(--foreground)]">{lineTotals.qty}</div>
@@ -3045,6 +3122,12 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                       공임(기본)
                       <div className="mt-0.5 font-semibold text-[var(--foreground)]">
                         <NumberText value={lineTotals.laborBasic} />
+                      </div>
+                    </div>
+                    <div className="rounded-lg border border-[var(--panel-border)] bg-[var(--surface)]/60 px-3 py-2">
+                      알공임
+                      <div className="mt-0.5 font-semibold text-[var(--foreground)]">
+                        <NumberText value={lineTotals.stoneLabor} />
                       </div>
                     </div>
                     <div className="rounded-lg border border-[var(--panel-border)] bg-[var(--surface)]/60 px-3 py-2">
@@ -3104,8 +3187,9 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                                       inputMode="decimal"
                                       value={row.gold.value}
                                       onChange={(e) =>
-                                        updateFactoryMetal(row.rowCode, "gold", { value: formatNumberInput(e.target.value) })
+                                        updateFactoryMetal(row.rowCode, "gold", { value: e.target.value })
                                       }
+                                      autoFormat={false}
                                       className="h-7 text-sm text-right"
                                     />
                                     <span className="text-xs text-[var(--muted)]">g</span>
@@ -3119,8 +3203,9 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                                       inputMode="decimal"
                                       value={row.silver.value}
                                       onChange={(e) =>
-                                        updateFactoryMetal(row.rowCode, "silver", { value: formatNumberInput(e.target.value) })
+                                        updateFactoryMetal(row.rowCode, "silver", { value: e.target.value })
                                       }
+                                      autoFormat={false}
                                       className="h-7 text-sm text-right"
                                     />
                                     <span className="text-xs text-[var(--muted)]">g</span>
@@ -3132,7 +3217,8 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                                     type="text"
                                     inputMode="numeric"
                                     value={row.laborKrw}
-                                    onChange={(e) => updateFactoryRow(row.rowCode, { laborKrw: formatNumberInput(e.target.value) })}
+                                    onChange={(e) => updateFactoryRow(row.rowCode, { laborKrw: e.target.value })}
+                                    autoFormat={false}
                                     className="h-7 text-sm text-right"
                                   />
                                 </div>
@@ -3477,22 +3563,22 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                         const baseCustomerName = baseCustomerCode
                           ? customerNameMap[baseCustomerCode] ?? "매칭되는 고객 없음"
                           : "-";
-                        const baseLine = selectedUnlinked
-                          ? {
-                            modelName: selectedUnlinked.model_name ?? "-",
-                            material: selectedUnlinked.material_code ?? "-",
-                            color: selectedUnlinked.color ?? "-",
-                            size: selectedUnlinked.size ?? "-",
-                            plated: "-",
-                            platingColor: "-",
-                            memo: selectedUnlinked.remark ?? "-",
-                            customerCode: baseCustomerCode || "-",
-                            customerName: baseCustomerName,
-                            stoneCenter: formatNumber(selectedUnlinked.stone_center_qty),
-                            stoneSub1: formatNumber(selectedUnlinked.stone_sub1_qty),
-                            stoneSub2: formatNumber(selectedUnlinked.stone_sub2_qty),
-                          }
-                          : null;
+                          const baseLine = selectedUnlinked
+                            ? {
+                              modelName: selectedUnlinked.model_name ?? "-",
+                              material: selectedUnlinked.material_code ?? "-",
+                              color: selectedUnlinked.color ?? "-",
+                              size: selectedUnlinked.size ?? "-",
+                              plated: "N",
+                              platingColor: "-",
+                              memo: selectedUnlinked.remark ?? "-",
+                              customerCode: baseCustomerCode || "-",
+                              customerName: baseCustomerName,
+                              stoneCenter: formatNumber(selectedUnlinked.stone_center_qty),
+                              stoneSub1: formatNumber(selectedUnlinked.stone_sub1_qty),
+                              stoneSub2: formatNumber(selectedUnlinked.stone_sub2_qty),
+                            }
+                            : null;
 
                         const diffClass = (value: string, base?: string | null) =>
                           baseLine && base !== undefined && base !== null && value !== base

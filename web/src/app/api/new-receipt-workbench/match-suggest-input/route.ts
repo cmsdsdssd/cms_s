@@ -65,6 +65,7 @@ export async function POST(request: Request) {
   let query = supabase
     .from("v_cms_order_lookup")
     .select("order_line_id, client_id, client_name, model_no, color, status, plating_status, plating_color")
+    .eq("status", "SENT_TO_VENDOR")
     .order("order_date", { ascending: false })
     .limit(limit);
 

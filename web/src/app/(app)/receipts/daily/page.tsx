@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ActionBar } from "@/components/layout/action-bar";
+import { ReceiptPrintHalf, type ReceiptAmounts } from "@/components/receipt/receipt-print";
 import { Button } from "@/components/ui/button";
 import { ListCard } from "@/components/ui/list-card";
 import { getSchemaClient } from "@/lib/supabase/client";
@@ -14,9 +15,13 @@ type ShipmentLineRow = {
   model_name?: string | null;
   qty?: number | null;
   material_code?: string | null;
-  material_amount_sell_krw?: number | null;
+  color?: string | null;
+  size?: string | null;
+  net_weight_g?: number | null;
   labor_total_sell_krw?: number | null;
   total_amount_sell_krw?: number | null;
+  gold_tick_krw_per_g?: number | null;
+  silver_tick_krw_per_g?: number | null;
   shipment_header?: {
     ship_date?: string | null;
     status?: string | null;
@@ -26,12 +31,7 @@ type ShipmentLineRow = {
   } | null;
 };
 
-type Amounts = {
-  gold: number;
-  silver: number;
-  labor: number;
-  total: number;
-};
+type Amounts = ReceiptAmounts;
 
 type PartyReceiptPage = {
   partyId: string;
@@ -40,11 +40,8 @@ type PartyReceiptPage = {
   totals: Amounts;
   today: Amounts;
   previous: Amounts;
-};
-
-const formatKrw = (value?: number | null) => {
-  if (value === null || value === undefined) return "-";
-  return `₩${new Intl.NumberFormat("ko-KR").format(Math.round(value))}`;
+  goldPrice: number | null;
+  silverPrice: number | null;
 };
 
 const getKstYmd = () => {
@@ -70,18 +67,34 @@ const subtractAmounts = (base: Amounts, sub: Amounts) => ({
   total: base.total - sub.total,
 });
 
+const getMaterialBucket = (code?: string | null) => {
+  const material = (code ?? "").trim();
+  if (!material || material === "00") return { kind: "none" as const, factor: 0 };
+  if (material === "14") return { kind: "gold" as const, factor: 0.6435 };
+  if (material === "18") return { kind: "gold" as const, factor: 0.825 };
+  if (material === "24") return { kind: "gold" as const, factor: 1 };
+  if (material === "925") return { kind: "silver" as const, factor: 0.925 };
+  if (material === "999") return { kind: "silver" as const, factor: 1 };
+  return { kind: "none" as const, factor: 0 };
+};
+
 const toLineAmounts = (line: ShipmentLineRow): Amounts => {
-  const material = Number(line.material_amount_sell_krw ?? 0);
+  const netWeight = Number(line.net_weight_g ?? 0);
   const labor = Number(line.labor_total_sell_krw ?? 0);
   const total = Number(line.total_amount_sell_krw ?? 0);
-  const isSilver = line.material_code === "925";
+  const bucket = getMaterialBucket(line.material_code ?? null);
+  if (bucket.kind === "none") {
+    return { gold: 0, silver: 0, labor: 0, total: 0 };
+  }
+  const weighted = netWeight * bucket.factor;
   return {
-    gold: isSilver ? 0 : material,
-    silver: isSilver ? material : 0,
+    gold: bucket.kind === "gold" ? weighted : 0,
+    silver: bucket.kind === "silver" ? weighted : 0,
     labor,
     total,
   };
 };
+
 
 const chunkLines = (lines: ShipmentLineRow[], size: number) => {
   const chunks: ShipmentLineRow[][] = [];
@@ -91,103 +104,10 @@ const chunkLines = (lines: ShipmentLineRow[], size: number) => {
   return chunks.length > 0 ? chunks : [[]];
 };
 
-const ReceiptHalf = ({
-  partyName,
-  dateLabel,
-  lines,
-  totals,
-  today,
-  previous,
-}: {
-  partyName: string;
-  dateLabel: string;
-  lines: ShipmentLineRow[];
-  totals: Amounts;
-  today: Amounts;
-  previous: Amounts;
-}) => {
-  const paddedLines = useMemo(() => {
-    const next = [...lines];
-    while (next.length < 8) next.push({});
-    return next;
-  }, [lines]);
-
-  const summaryRows = [
-    { label: "합계", value: totals },
-    { label: "이전 미수", value: previous },
-    { label: "당일출고 미수", value: today },
-  ];
-
-  return (
-    <div className="flex h-full flex-col gap-4 text-[11px] text-black">
-      <div className="flex items-start justify-between">
-        <div>
-          <div className="text-lg font-semibold">MS</div>
-          <div className="text-[10px] text-neutral-600">거래명세/영수증</div>
-        </div>
-        <div className="text-right text-[10px] text-neutral-600">
-          <div>{dateLabel}</div>
-          <div className="font-medium text-black">{partyName}</div>
-        </div>
-      </div>
-
-      <div className="space-y-2">
-        <div className="text-xs font-semibold">당일 출고 내역</div>
-        <table className="w-full border-collapse text-[11px]">
-          <thead>
-            <tr className="border-b border-neutral-300">
-              <th className="py-1 text-left font-medium">모델</th>
-              <th className="py-1 text-right font-medium">수량</th>
-              <th className="py-1 text-right font-medium">금액</th>
-            </tr>
-          </thead>
-          <tbody>
-            {paddedLines.map((line, index) => (
-              <tr key={line.shipment_line_id ?? `row-${index}`} className="border-b border-neutral-200">
-                <td className="py-1 pr-2 align-middle">
-                  {(line.model_name ?? "").toString()}
-                </td>
-                <td className="py-1 text-right tabular-nums">
-                  {line.qty ?? ""}
-                </td>
-                <td className="py-1 text-right tabular-nums">
-                  {line.total_amount_sell_krw === null || line.total_amount_sell_krw === undefined
-                    ? ""
-                    : formatKrw(line.total_amount_sell_krw)}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-
-      <div className="space-y-2">
-        <div className="text-xs font-semibold">미수 내역 (요약)</div>
-        <table className="w-full border-collapse text-[11px]">
-          <thead>
-            <tr className="border-b border-neutral-300">
-              <th className="py-1 text-left font-medium">구분</th>
-              <th className="py-1 text-right font-medium">금</th>
-              <th className="py-1 text-right font-medium">은</th>
-              <th className="py-1 text-right font-medium">공임</th>
-              <th className="py-1 text-right font-medium">총금액</th>
-            </tr>
-          </thead>
-          <tbody>
-            {summaryRows.map((row) => (
-              <tr key={row.label} className="border-b border-neutral-200">
-                <td className="py-1 font-medium">{row.label}</td>
-                <td className="py-1 text-right tabular-nums">{formatKrw(row.value.gold)}</td>
-                <td className="py-1 text-right tabular-nums">{formatKrw(row.value.silver)}</td>
-                <td className="py-1 text-right tabular-nums">{formatKrw(row.value.labor)}</td>
-                <td className="py-1 text-right tabular-nums">{formatKrw(row.value.total)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
+const getTickPrices = (lines: ShipmentLineRow[]) => {
+  const goldPrice = lines.find((line) => line.gold_tick_krw_per_g != null)?.gold_tick_krw_per_g ?? null;
+  const silverPrice = lines.find((line) => line.silver_tick_krw_per_g != null)?.silver_tick_krw_per_g ?? null;
+  return { goldPrice, silverPrice };
 };
 
 export default function DailyReceiptsPage() {
@@ -202,11 +122,11 @@ export default function DailyReceiptsPage() {
       const { data, error } = await schemaClient
         .from("cms_shipment_line")
         .select(
-          "shipment_line_id, shipment_id, model_name, qty, material_code, material_amount_sell_krw, labor_total_sell_krw, total_amount_sell_krw, shipment_header:cms_shipment_header(ship_date, confirmed_at, status, customer_party_id, is_store_pickup, customer:cms_party(name))"
+          "shipment_line_id, shipment_id, model_name, qty, material_code, color, size, net_weight_g, labor_total_sell_krw, total_amount_sell_krw, gold_tick_krw_per_g, silver_tick_krw_per_g, shipment_header:cms_shipment_header(ship_date, confirmed_at, status, customer_party_id, is_store_pickup, customer:cms_party(name))"
         )
-        .eq("shipment_header.status", "CONFIRMED")
-        .eq("shipment_header.ship_date", today)
-        .or("shipment_header.is_store_pickup.is.null,shipment_header.is_store_pickup.eq.false")
+        .and(
+          `shipment_header.status.eq.CONFIRMED,shipment_header.ship_date.eq.${today},or(shipment_header.is_store_pickup.is.null,shipment_header.is_store_pickup.eq.false)`
+        )
         .order("shipment_header.confirmed_at", { ascending: true });
       if (error) throw error;
       return (data ?? []) as ShipmentLineRow[];
@@ -255,12 +175,12 @@ export default function DailyReceiptsPage() {
       const { data, error } = await schemaClient
         .from("cms_shipment_line")
         .select(
-          "shipment_line_id, material_code, material_amount_sell_krw, labor_total_sell_krw, total_amount_sell_krw, shipment_header:cms_shipment_header(ship_date, status, customer_party_id, is_store_pickup)"
+          "shipment_line_id, material_code, net_weight_g, labor_total_sell_krw, total_amount_sell_krw, shipment_header:cms_shipment_header(ship_date, status, customer_party_id, is_store_pickup)"
         )
         .eq("shipment_header.status", "CONFIRMED")
         .lte("shipment_header.ship_date", today)
         .in("shipment_header.customer_party_id", partyIds)
-        .or("shipment_header.is_store_pickup.is.null,shipment_header.is_store_pickup.eq.false");
+        .and(`or(shipment_header.is_store_pickup.is.null,shipment_header.is_store_pickup.eq.false)`);
       if (error) throw error;
       return (data ?? []) as ShipmentLineRow[];
     },
@@ -309,6 +229,7 @@ export default function DailyReceiptsPage() {
       };
       const todaySum = todayByParty.get(group.partyId) ?? { ...zeroAmounts };
       const previous = subtractAmounts(totals, todaySum);
+      const { goldPrice, silverPrice } = getTickPrices(group.lines);
       chunks.forEach((chunk) => {
         result.push({
           partyId: group.partyId,
@@ -317,6 +238,8 @@ export default function DailyReceiptsPage() {
           totals,
           today: todaySum,
           previous,
+          goldPrice,
+          silverPrice,
         });
       });
     });
@@ -329,6 +252,8 @@ export default function DailyReceiptsPage() {
         totals: { ...zeroAmounts },
         today: { ...zeroAmounts },
         previous: { ...zeroAmounts },
+        goldPrice: null,
+        silverPrice: null,
       });
     }
 
@@ -396,27 +321,35 @@ export default function DailyReceiptsPage() {
                   "receipt-print-page mx-auto bg-white p-4 text-black shadow-sm",
                   "border border-neutral-200"
                 )}
-                style={{ width: "297mm", minHeight: "210mm" }}
+                style={{ width: "297mm", height: "210mm" }}
               >
                 <div className="grid h-full grid-cols-2 gap-4">
-                  <div className="border-r border-dashed border-neutral-300 pr-4">
-                    <ReceiptHalf
+                  <div className="h-full border-r border-dashed border-neutral-300 pr-4">
+                    <ReceiptPrintHalf
                       partyName={page.partyName}
                       dateLabel={today}
                       lines={page.lines}
-                      totals={page.totals}
-                      today={page.today}
-                      previous={page.previous}
+                      summaryRows={[
+                        { label: "합계", value: page.totals },
+                        { label: "이전 미수", value: page.previous },
+                        { label: "당일출고 미수", value: page.today },
+                      ]}
+                      goldPrice={page.goldPrice}
+                      silverPrice={page.silverPrice}
                     />
                   </div>
-                  <div className="pl-4">
-                    <ReceiptHalf
+                  <div className="h-full pl-4">
+                    <ReceiptPrintHalf
                       partyName={page.partyName}
                       dateLabel={today}
                       lines={page.lines}
-                      totals={page.totals}
-                      today={page.today}
-                      previous={page.previous}
+                      summaryRows={[
+                        { label: "합계", value: page.totals },
+                        { label: "이전 미수", value: page.previous },
+                        { label: "당일출고 미수", value: page.today },
+                      ]}
+                      goldPrice={page.goldPrice}
+                      silverPrice={page.silverPrice}
                     />
                   </div>
                 </div>

@@ -25,6 +25,7 @@ declare
   v_factory_basic numeric;
   v_factory_other numeric;
   v_factory_total numeric;
+  v_line_item_json jsonb;
   v_receipt_material public.cms_e_material_code;
   v_receipt_model text;
   v_receipt_seq int;
@@ -37,6 +38,8 @@ declare
   v_selected_material public.cms_e_material_code;
   v_basic_cost numeric;
   v_other_cost numeric;
+  v_other_cost_base numeric;
+  v_stone_cost numeric := 0;
   v_total_amount numeric;
 
   v_base_diff numeric;
@@ -52,6 +55,7 @@ declare
   v_shipment_line_id uuid;
 
   v_overridden jsonb := '{}'::jsonb;
+  v_extra_items jsonb := '[]'::jsonb;
 begin
   if p_receipt_id is null or p_receipt_line_uuid is null or p_order_line_id is null then
     raise exception 'receipt_id, receipt_line_uuid, order_line_id required';
@@ -83,9 +87,10 @@ begin
   end if;
 
   select vendor_party_id, model_name, material_code, vendor_seq_no, customer_factory_code,
-         factory_weight_g, factory_labor_basic_cost_krw, factory_labor_other_cost_krw, factory_total_amount_krw
+         factory_weight_g, factory_labor_basic_cost_krw, factory_labor_other_cost_krw, factory_total_amount_krw,
+         line_item_json
     into v_vendor_party_id, v_receipt_model, v_receipt_material, v_receipt_seq, v_receipt_customer_code,
-         v_factory_weight, v_factory_basic, v_factory_other, v_factory_total
+         v_factory_weight, v_factory_basic, v_factory_other, v_factory_total, v_line_item_json
   from public.cms_v_receipt_line_items_flat_v1
   where receipt_id = p_receipt_id
     and receipt_line_uuid = p_receipt_line_uuid;
@@ -161,7 +166,15 @@ begin
   end if;
 
   v_basic_cost := coalesce(p_selected_factory_labor_basic_cost_krw, v_factory_basic, 0);
-  v_other_cost := coalesce(p_selected_factory_labor_other_cost_krw, v_factory_other, 0);
+  v_other_cost_base := coalesce(p_selected_factory_labor_other_cost_krw, v_factory_other, 0);
+  v_stone_cost :=
+    (case when (v_line_item_json->>'stone_center_qty') ~ '^-?[0-9]+(\.[0-9]+)?$' then (v_line_item_json->>'stone_center_qty')::numeric else 0 end)
+    * (case when (v_line_item_json->>'stone_center_unit_cost_krw') ~ '^-?[0-9]+(\.[0-9]+)?$' then (v_line_item_json->>'stone_center_unit_cost_krw')::numeric else 0 end)
+    + (case when (v_line_item_json->>'stone_sub1_qty') ~ '^-?[0-9]+(\.[0-9]+)?$' then (v_line_item_json->>'stone_sub1_qty')::numeric else 0 end)
+    * (case when (v_line_item_json->>'stone_sub1_unit_cost_krw') ~ '^-?[0-9]+(\.[0-9]+)?$' then (v_line_item_json->>'stone_sub1_unit_cost_krw')::numeric else 0 end)
+    + (case when (v_line_item_json->>'stone_sub2_qty') ~ '^-?[0-9]+(\.[0-9]+)?$' then (v_line_item_json->>'stone_sub2_qty')::numeric else 0 end)
+    * (case when (v_line_item_json->>'stone_sub2_unit_cost_krw') ~ '^-?[0-9]+(\.[0-9]+)?$' then (v_line_item_json->>'stone_sub2_unit_cost_krw')::numeric else 0 end);
+  v_other_cost := v_other_cost_base + v_stone_cost;
   v_total_amount := coalesce(p_selected_factory_total_cost_krw, v_factory_total);
 
   if p_selected_weight_g is not null and v_factory_weight is not null and round(p_selected_weight_g::numeric, 2) <> round(v_factory_weight::numeric, 2) then
@@ -197,6 +210,16 @@ begin
   v_base_sell := greatest(v_basic_cost + v_base_diff, 0);
   v_extra_sell := greatest(v_other_cost + v_extra_diff, 0);
 
+  v_extra_items := jsonb_build_array(
+    jsonb_build_object('kind','RECEIPT','base_cost_krw', v_basic_cost, 'extra_cost_krw', v_other_cost_base),
+    jsonb_build_object('kind','MASTER_DIFF','base_diff_krw', v_base_diff, 'extra_diff_krw', v_extra_diff)
+  );
+  if v_stone_cost > 0 then
+    v_extra_items := v_extra_items || jsonb_build_array(
+      jsonb_build_object('kind','STONE_LABOR','label','알공임','extra_cost_krw', v_stone_cost)
+    );
+  end if;
+
   v_shipment_id := public.cms_fn_create_shipment_header_v1(v_order.customer_party_id, current_date, null);
 
   v_shipment_line_id := public.cms_fn_add_shipment_line_from_order_v1(
@@ -219,10 +242,7 @@ begin
     0,
     v_base_sell,
     v_extra_sell,
-    jsonb_build_array(
-      jsonb_build_object('kind','RECEIPT','base_cost_krw', v_basic_cost, 'extra_cost_krw', v_other_cost),
-      jsonb_build_object('kind','MASTER_DIFF','base_diff_krw', v_base_diff, 'extra_diff_krw', v_extra_diff)
-    )
+    v_extra_items
   );
 
   update public.cms_shipment_line

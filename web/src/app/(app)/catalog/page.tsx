@@ -243,6 +243,7 @@ export default function CatalogPage() {
   const [previewImage, setPreviewImage] = useState<string | null>(null);
   const [goldPrice, setGoldPrice] = useState(0);
   const [silverModifiedPrice, setSilverModifiedPrice] = useState(0);
+  const [isUnitPricing, setIsUnitPricing] = useState(false);
 
   const [showBomPanel, setShowBomPanel] = useState(false);
   const [recipeVariantKey, setRecipeVariantKey] = useState("");
@@ -721,6 +722,14 @@ export default function CatalogPage() {
     },
   });
 
+  const setMasterUnitPricingMutation = useRpcMutation<{ ok?: boolean }>({
+    fn: CONTRACTS.functions.setMasterUnitPricing,
+    successMessage: "저장 완료",
+    onSuccess: () => {
+      void fetchCatalogItems();
+    },
+  });
+
   const addLineMutation = useRpcMutation<string>({
     fn: CONTRACTS.functions.bomRecipeLineAdd,
     successMessage: "구성품 추가 완료",
@@ -752,6 +761,9 @@ export default function CatalogPage() {
 
   const writeDisabledReason =
     "쓰기 기능 비활성: NEXT_PUBLIC_CMS_ACTOR_ID 미설정 또는 CONTRACTS.functions RPC 미설정";
+
+  const canToggleUnitPricing = Boolean(isEditMode && selectedItemId);
+  const unitPricingDisabledReason = canToggleUnitPricing ? "" : "저장 후 설정 가능";
 
   const notifyWriteDisabled = () => {
     if (bomToastRef.current) return;
@@ -928,6 +940,7 @@ export default function CatalogPage() {
     setModifiedDate("");
     setImageUrl(null);
     setImagePath(null);
+    setIsUnitPricing(false);
   };
 
   const handleOpenNew = () => {
@@ -980,8 +993,33 @@ export default function CatalogPage() {
     // Populate image data
     setImageUrl(row?.image_url ? String(row.image_url) : null);
     setImagePath(row?.image_path ? String(row.image_path) : null);
+    setIsUnitPricing(Boolean(row?.is_unit_pricing));
 
     setRegisterOpen(true);
+  };
+
+  const handleToggleUnitPricing = async () => {
+    if (!selectedItemId) return;
+    if (!actorId) {
+      toast.error("ACTOR_ID 설정이 필요합니다.", {
+        description: "NEXT_PUBLIC_CMS_ACTOR_ID를 확인하세요.",
+      });
+      return;
+    }
+
+    const nextValue = !isUnitPricing;
+    try {
+      await setMasterUnitPricingMutation.mutateAsync({
+        p_master_id: selectedItemId,
+        p_is_unit_pricing: nextValue,
+        p_actor_person_id: actorId,
+        p_session_id: null,
+        p_memo: "set from catalog",
+      });
+      setIsUnitPricing(nextValue);
+    } catch {
+      // useRpcMutation.onError에서 토스트 처리됨
+    }
   };
 
   const handleSave = async () => {
@@ -2133,6 +2171,26 @@ export default function CatalogPage() {
                             setDeductionWeight(event.target.value)
                           }
                         />
+                      </Field>
+                      <Field label="단가제 (확정 시 RULE 올림 적용)">
+                        <div className="space-y-2">
+                          <label className="inline-flex items-center gap-2 text-sm">
+                            <input
+                              type="checkbox"
+                              checked={isUnitPricing}
+                              onChange={handleToggleUnitPricing}
+                              disabled={!canToggleUnitPricing || setMasterUnitPricingMutation.isPending}
+                              title={unitPricingDisabledReason || undefined}
+                              className="h-4 w-4"
+                            />
+                            <span>단가제</span>
+                          </label>
+                          <div className="text-[11px] text-[var(--muted)] leading-relaxed">
+                            <p>체크된 모델은 확정 시 RULE 계산 판매가가 설정된 올림 단위로 자동 올림됩니다.</p>
+                            <p>총액 덮어쓰기는 제외됩니다.</p>
+                            {!canToggleUnitPricing ? <p>저장 후 설정 가능</p> : null}
+                          </div>
+                        </div>
                       </Field>
                     </div>
                   </div>

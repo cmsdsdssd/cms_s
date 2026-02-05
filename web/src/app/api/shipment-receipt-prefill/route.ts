@@ -8,6 +8,14 @@ function getSupabaseAdmin() {
   return createClient(url, key);
 }
 
+const parseNumeric = (value: unknown) => {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim() !== "" && Number.isFinite(Number(value))) {
+    return Number(value);
+  }
+  return null;
+};
+
 export async function GET(request: Request) {
   const supabase = getSupabaseAdmin();
   if (!supabase) {
@@ -43,6 +51,12 @@ export async function GET(request: Request) {
   let receiptDeductionWeightG: number | null = null;
   let shipmentBaseLaborKrw: number | null = null;
   let shipmentExtraLaborKrw: number | null = null;
+  let stoneCenterQty: number | null = null;
+  let stoneSub1Qty: number | null = null;
+  let stoneSub2Qty: number | null = null;
+  let stoneCenterUnitCostKrw: number | null = null;
+  let stoneSub1UnitCostKrw: number | null = null;
+  let stoneSub2UnitCostKrw: number | null = null;
 
   if (data.receipt_id && data.receipt_line_uuid) {
     const { data: lineRow } = await supabase
@@ -55,6 +69,13 @@ export async function GET(request: Request) {
     const lineJson = (lineRow?.line_item_json ?? null) as Record<string, unknown> | null;
     const raw = lineJson?.weight_raw_g ?? null;
     const deduct = lineJson?.weight_deduct_g ?? null;
+
+    stoneCenterQty = parseNumeric(lineJson?.stone_center_qty ?? null);
+    stoneSub1Qty = parseNumeric(lineJson?.stone_sub1_qty ?? null);
+    stoneSub2Qty = parseNumeric(lineJson?.stone_sub2_qty ?? null);
+    stoneCenterUnitCostKrw = parseNumeric(lineJson?.stone_center_unit_cost_krw ?? null);
+    stoneSub1UnitCostKrw = parseNumeric(lineJson?.stone_sub1_unit_cost_krw ?? null);
+    stoneSub2UnitCostKrw = parseNumeric(lineJson?.stone_sub2_unit_cost_krw ?? null);
 
     if (typeof raw === "number") {
       receiptWeightG = raw;
@@ -93,6 +114,12 @@ export async function GET(request: Request) {
       receipt_deduction_weight_g: receiptDeductionWeightG,
       shipment_base_labor_krw: shipmentBaseLaborKrw,
       shipment_extra_labor_krw: shipmentExtraLaborKrw,
+      stone_center_qty: stoneCenterQty,
+      stone_sub1_qty: stoneSub1Qty,
+      stone_sub2_qty: stoneSub2Qty,
+      stone_center_unit_cost_krw: stoneCenterUnitCostKrw,
+      stone_sub1_unit_cost_krw: stoneSub1UnitCostKrw,
+      stone_sub2_unit_cost_krw: stoneSub2UnitCostKrw,
     },
   });
 }

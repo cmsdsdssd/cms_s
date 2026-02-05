@@ -13,6 +13,7 @@ import { Input } from "@/components/ui/field";
 import { Badge } from "@/components/ui/badge";
 import { Modal } from "@/components/ui/modal";
 import { SearchSelect } from "@/components/ui/search-select";
+import { NumberText } from "@/components/ui/number-text";
 
 import { CONTRACTS } from "@/lib/contracts";
 import { readView } from "@/lib/supabase/read";
@@ -25,13 +26,37 @@ type OrderLookupRow = {
   order_id?: string;
   order_no?: string;
   order_date?: string;
+  sent_to_vendor_at?: string | null;
+  inbound_at?: string | null;
   client_id?: string;
   client_name?: string;
   model_no?: string;
+  model_name?: string;
+  suffix?: string | null;
+  material_code?: string | null;
   color?: string;
+  size?: string | null;
+  memo?: string | null;
   status?: string;
   plating_status?: boolean | null;
   plating_color?: string | null;
+  // cms_v_unshipped_order_lines 필드명 매핑
+  customer_party_id?: string;
+  customer_name?: string;
+  is_plated?: boolean | null;
+  plating_color_code?: string | null;
+  display_status?: string;
+};
+
+type OrderLineModelRow = {
+  order_line_id?: string | null;
+  model_name?: string | null;
+  suffix?: string | null;
+};
+
+type OrderLookupModelRow = {
+  order_line_id?: string | null;
+  model_no?: string | null;
 };
 
 type ShipmentPrefillRow = {
@@ -51,6 +76,31 @@ type ShipmentPrefillRow = {
   photo_url?: string | null;
 };
 
+type OrderLineDetailRow = {
+  order_line_id?: string | null;
+  model_name?: string | null;
+  model_name_raw?: string | null;
+  color?: string | null;
+  size?: string | null;
+  qty?: number | null;
+  is_plated?: boolean | null;
+  center_stone_name?: string | null;
+  center_stone_qty?: number | null;
+  sub1_stone_name?: string | null;
+  sub1_stone_qty?: number | null;
+  sub2_stone_name?: string | null;
+  sub2_stone_qty?: number | null;
+  requested_due_date?: string | null;
+  priority_code?: string | null;
+  memo?: string | null;
+  status?: string | null;
+  source_channel?: string | null;
+  material_code?: string | null;
+  match_state?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+};
+
 type ReceiptMatchPrefillRow = {
   receipt_id?: string | null;
   receipt_line_uuid?: string | null;
@@ -66,6 +116,12 @@ type ReceiptMatchPrefillRow = {
   confirmed_at?: string | null;
   receipt_weight_g?: number | null;
   receipt_deduction_weight_g?: number | null;
+  stone_center_qty?: number | null;
+  stone_sub1_qty?: number | null;
+  stone_sub2_qty?: number | null;
+  stone_center_unit_cost_krw?: number | null;
+  stone_sub1_unit_cost_krw?: number | null;
+  stone_sub2_unit_cost_krw?: number | null;
 };
 
 type MasterLookupRow = {
@@ -79,24 +135,34 @@ type MasterLookupRow = {
   center_qty_default?: number | null;
   sub1_qty_default?: number | null;
   sub2_qty_default?: number | null;
+  center_stone_name_default?: string | null;
+  sub1_stone_name_default?: string | null;
+  sub2_stone_name_default?: string | null;
   vendor_name?: string | null;
   material_price?: number | null;
   labor_basic?: number | null;
   labor_center?: number | null;
   labor_side1?: number | null;
   labor_side2?: number | null;
+  labor_center_cost?: number | null;
+  labor_sub1_cost?: number | null;
+  labor_sub2_cost?: number | null;
 };
 
 type ShipmentLineRow = {
   shipment_line_id?: string;
   shipment_id?: string;
+  master_id?: string | null;
   model_name?: string;
   qty?: number;
   measured_weight_g?: number | null;
   deduction_weight_g?: number | null;
+  material_amount_sell_krw?: number | null;
   base_labor_krw?: number | null;
   extra_labor_krw?: number | null;
   manual_labor_krw?: number | null;
+  pricing_mode?: string | null;
+  manual_total_amount_krw?: number | null;
   extra_labor_items?: unknown;
 };
 
@@ -106,6 +172,13 @@ type ShipmentHeaderRow = {
   pricing_source?: string | null;
   confirmed_at?: string | null;
   status?: string | null;
+};
+
+type StorePickupLookupRow = {
+  order_line_id?: string | null;
+  shipment_header?: {
+    is_store_pickup?: boolean | null;
+  } | null;
 };
 
 type ArResyncResult = {
@@ -179,6 +252,24 @@ const formatKrw = (value?: number | null) => {
   return `₩${new Intl.NumberFormat("ko-KR").format(Math.round(value))}`;
 };
 
+const renderNumber = (value?: number | null, suffix?: string) => {
+  if (value === null || value === undefined || Number.isNaN(value)) return "-";
+  return (
+    <span className="tabular-nums">
+      <NumberText value={value} />
+      {suffix ? <span className="text-[var(--muted)] ml-0.5">{suffix}</span> : null}
+    </span>
+  );
+};
+
+const parseNumberInput = (value: string) => {
+  if (!value) return 0;
+  const normalized = value.replaceAll(",", "").trim();
+  if (!normalized) return 0;
+  const parsed = Number(normalized);
+  return Number.isFinite(parsed) ? parsed : 0;
+};
+
 const formatDateTimeKst = (value?: string | null) => {
   if (!value) return "-";
   const parsed = new Date(value);
@@ -192,6 +283,49 @@ const formatDateTimeKst = (value?: string | null) => {
     minute: "2-digit",
     hour12: false,
   }).format(parsed);
+};
+
+const formatDateCompact = (value?: string | null) => {
+  if (!value) return "-";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return "-";
+  const parts = new Intl.DateTimeFormat("sv-SE", {
+    timeZone: "Asia/Seoul",
+    year: "2-digit",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(parsed);
+  const year = parts.find((part) => part.type === "year")?.value ?? "";
+  const month = parts.find((part) => part.type === "month")?.value ?? "";
+  const day = parts.find((part) => part.type === "day")?.value ?? "";
+  return `${year}${month}${day}` || "-";
+};
+
+const formatDday = (value?: string | null) => {
+  if (!value) return null;
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return null;
+  const kstOffsetMs = 9 * 60 * 60 * 1000;
+  const now = new Date();
+  const kstNow = new Date(now.getTime() + kstOffsetMs);
+  const todayStart = Date.UTC(kstNow.getUTCFullYear(), kstNow.getUTCMonth(), kstNow.getUTCDate());
+  const kstTarget = new Date(parsed.getTime() + kstOffsetMs);
+  const targetStart = Date.UTC(kstTarget.getUTCFullYear(), kstTarget.getUTCMonth(), kstTarget.getUTCDate());
+  const diffDays = Math.round((targetStart - todayStart) / (24 * 60 * 60 * 1000));
+  if (diffDays === 0) return "D-0";
+  if (diffDays > 0) return `D-${diffDays}`;
+  return `D+${Math.abs(diffDays)}`;
+};
+
+const formatOptionalNumber = (value?: number | null) => {
+  if (value === null || value === undefined) return "-";
+  return value;
+};
+
+const formatMargin = (sell?: number | null, cost?: number | null) => {
+  if (sell === null || sell === undefined) return null;
+  if (cost === null || cost === undefined) return null;
+  return sell - cost;
 };
 type ExtraLaborItem = {
   id: string;
@@ -227,6 +361,7 @@ const getMasterPhotoUrl = (photoUrl: string | null | undefined): string | null =
 };
 
 export default function ShipmentsPage() {
+  const schemaClient = getSchemaClient();
   const actorId = (process.env.NEXT_PUBLIC_CMS_ACTOR_ID || "").trim();
   const idempotencyKey = useMemo(
     () => (typeof crypto !== "undefined" ? crypto.randomUUID() : String(Date.now())),
@@ -234,15 +369,20 @@ export default function ShipmentsPage() {
   );
 
   // --- 주문 검색/선택 ---
-  const [lookupOpen, setLookupOpen] = useState(false);
+  const [lookupOpen, setLookupOpen] = useState(true);
   const lookupInputRef = useRef<HTMLInputElement | null>(null);
 
   const [searchQuery, setSearchQuery] = useState("");
   const [debouncedQuery, setDebouncedQuery] = useState("");
   const [onlyReadyToShip, setOnlyReadyToShip] = useState(true);
+  const [includeStorePickup, setIncludeStorePickup] = useState(false);
 
   const [selectedOrderLineId, setSelectedOrderLineId] = useState<string | null>(null);
   const [selectedOrderStatus, setSelectedOrderStatus] = useState<string | null>(null);
+  const [selectedOrderDates, setSelectedOrderDates] = useState<{
+    orderDate?: string | null;
+    inboundDate?: string | null;
+  } | null>(null);
 
   // --- prefill + master info ---
   const [prefill, setPrefill] = useState<ShipmentPrefillRow | null>(null);
@@ -251,8 +391,10 @@ export default function ShipmentsPage() {
   const [weightG, setWeightG] = useState("");
   const [deductionWeightG, setDeductionWeightG] = useState("");
   const [baseLabor, setBaseLabor] = useState("");
+  const [otherLaborCost, setOtherLaborCost] = useState("");
+  const [manualTotalAmountKrw, setManualTotalAmountKrw] = useState("");
+  const [isManualTotalOverride, setIsManualTotalOverride] = useState(false);
   const [extraLaborItems, setExtraLaborItems] = useState<ExtraLaborItem[]>([]);
-  const [extraLaborSelect, setExtraLaborSelect] = useState<string | null>(null);
   const [useManualLabor, setUseManualLabor] = useState(false);
   const [manualLabor, setManualLabor] = useState("");
 
@@ -296,7 +438,7 @@ export default function ShipmentsPage() {
           amount?: number | string | null;
         };
         const type = String(record?.type ?? "").trim();
-        const label = String(record?.label ?? type ?? "기타").trim() || "기타";
+  const label = String(record?.label ?? type ?? "기타").trim() || "기타";
         const amount = record?.amount === null || record?.amount === undefined
           ? ""
           : String(record.amount);
@@ -318,7 +460,6 @@ export default function ShipmentsPage() {
       ? crypto.randomUUID()
       : `extra-${Date.now()}-${Math.random().toString(16).slice(2)}`;
     setExtraLaborItems((prev) => [...prev, { id: nextId, type: value, label, amount: "" }]);
-    setExtraLaborSelect(null);
   };
 
   const handleExtraLaborAmountChange = (id: string, amount: string) => {
@@ -337,28 +478,121 @@ export default function ShipmentsPage() {
   }, [searchQuery]);
 
   useEffect(() => {
-    if (!lookupOpen) return;
     const t = setTimeout(() => lookupInputRef.current?.focus(), 0);
     return () => clearTimeout(t);
-  }, [lookupOpen]);
+  }, []);
 
-  // ✅ 검색 오픈 시 기본 목록(limit=50)도 조회
+  // ✅ 페이지 로드 시 기본 목록 자동 조회 - shipments_main과 동일한 데이터 소스 사용
   const orderLookupQuery = useQuery({
-    queryKey: ["order-lookup", debouncedQuery, lookupOpen, onlyReadyToShip],
-    enabled: lookupOpen,
+    queryKey: ["shipments-unshipped", debouncedQuery, onlyReadyToShip],
+    enabled: Boolean(schemaClient),
     queryFn: async () => {
-      const params = new URLSearchParams();
-      params.set("limit", "50");
-      if (debouncedQuery) params.set("q", debouncedQuery);
-
-      const res = await fetch(`/api/order-lookup?${params.toString()}`);
-      const json = await res.json();
-
-      if (!res.ok) throw new Error(json?.error ?? `order-lookup failed (${res.status})`);
-      return (json.data ?? []) as OrderLookupRow[];
+      if (!schemaClient) throw new Error("Supabase env is missing");
+      
+      let query = schemaClient
+        .from("cms_v_unshipped_order_lines")
+        .select("*")
+        .order("status_sort_order", { ascending: true })
+        .order("queue_sort_date", { ascending: true })
+        .limit(500);
+      
+      // 검색어가 있으면 모델명이나 고객명으로 필터링
+      if (debouncedQuery) {
+        query = query.or(`model_name.ilike.%${debouncedQuery}%,customer_name.ilike.%${debouncedQuery}%`);
+      }
+      
+      const { data, error } = await query;
+      if (error) throw error;
+      
+      console.log("[DEBUG] cms_v_unshipped_order_lines response:", data?.length, "rows");
+      console.log("[DEBUG] Sample statuses:", data?.slice(0, 5).map((r: OrderLookupRow) => r.status));
+      
+      return (data ?? []) as OrderLookupRow[];
     },
   });
   const orderLookupErrorMessage = (orderLookupQuery.error as { message?: string } | null)?.message ?? "조회 실패";
+
+  const lookupOrderLineIds = useMemo(
+    () => (orderLookupQuery.data ?? []).map((row) => row.order_line_id).filter(Boolean),
+    [orderLookupQuery.data]
+  );
+
+  const orderLineModelQuery = useQuery({
+    queryKey: ["order-lookup-models", lookupOrderLineIds],
+    enabled: Boolean(schemaClient) && lookupOrderLineIds.length > 0,
+    queryFn: async () => {
+      if (!schemaClient) throw new Error("Supabase env is missing");
+      const { data, error } = await schemaClient
+        .from("cms_order_line")
+        .select("order_line_id, model_name, suffix")
+        .in("order_line_id", lookupOrderLineIds);
+      if (error) throw error;
+      return (data ?? []) as OrderLineModelRow[];
+    },
+  });
+
+  const orderLineModelMap = useMemo(() => {
+    const map = new Map<string, { model_name?: string | null; suffix?: string | null }>();
+    (orderLineModelQuery.data ?? []).forEach((row) => {
+      if (!row.order_line_id) return;
+      map.set(row.order_line_id, {
+        model_name: row.model_name ?? null,
+        suffix: row.suffix ?? null,
+      });
+    });
+    return map;
+  }, [orderLineModelQuery.data]);
+
+  const orderLookupModelQuery = useQuery({
+    queryKey: ["order-lookup-models-view", lookupOrderLineIds],
+    enabled: Boolean(schemaClient) && lookupOrderLineIds.length > 0,
+    queryFn: async () => {
+      if (!schemaClient) throw new Error("Supabase env is missing");
+      const { data, error } = await schemaClient
+        .from(CONTRACTS.views.orderLookup)
+        .select("order_line_id, model_no")
+        .in("order_line_id", lookupOrderLineIds);
+      if (error) throw error;
+      return (data ?? []) as OrderLookupModelRow[];
+    },
+  });
+
+  const orderLookupModelMap = useMemo(() => {
+    const map = new Map<string, string | null>();
+    (orderLookupModelQuery.data ?? []).forEach((row) => {
+      if (!row.order_line_id) return;
+      map.set(row.order_line_id, row.model_no ?? null);
+    });
+    return map;
+  }, [orderLookupModelQuery.data]);
+
+  const storePickupLookupQuery = useQuery<StorePickupLookupRow[]>({
+    queryKey: ["order-lookup-store-pickup", lookupOrderLineIds],
+    enabled: Boolean(schemaClient) && lookupOrderLineIds.length > 0,
+    queryFn: async () => {
+      if (!schemaClient) throw new Error("Supabase env is missing");
+      console.log("[DEBUG] storePickupLookupQuery - lookupOrderLineIds:", lookupOrderLineIds);
+      const { data, error } = await schemaClient
+        .from("cms_shipment_line")
+        .select("order_line_id, shipment_header:cms_shipment_header!inner(is_store_pickup)")
+        .in("order_line_id", lookupOrderLineIds)
+        .eq("shipment_header.is_store_pickup", true);
+      if (error) throw error;
+      const rows = (data ?? []) as StorePickupLookupRow[];
+      console.log("[DEBUG] storePickupLookupQuery result:", rows.length, "store pickup rows");
+      console.log("[DEBUG] storePickupLookupQuery order_line_ids:", rows.map((r) => r.order_line_id));
+      return rows;
+    },
+  });
+
+  const storePickupLookupIds = useMemo(() => {
+    const rows = (storePickupLookupQuery.data ?? []) as StorePickupLookupRow[];
+    return new Set(
+      rows
+        .map((row) => row.order_line_id ?? "")
+        .filter((value) => Boolean(value))
+    );
+  }, [storePickupLookupQuery.data]);
 
   const prefillQuery = useQuery({
     queryKey: ["shipment-prefill", selectedOrderLineId],
@@ -369,6 +603,24 @@ export default function ShipmentsPage() {
         filter: { column: "order_line_id", op: "eq", value: id },
       });
       return rows?.[0] ?? null;
+    },
+  });
+
+  const orderLineDetailQuery = useQuery({
+    queryKey: ["order-line-detail", selectedOrderLineId],
+    enabled: Boolean(schemaClient && selectedOrderLineId),
+    queryFn: async () => {
+      if (!schemaClient) throw new Error("Supabase env is missing");
+      const orderLineId = String(selectedOrderLineId);
+      const { data, error } = await schemaClient
+        .from("cms_order_line")
+        .select(
+          "order_line_id, model_name, model_name_raw, color, size, qty, is_plated, center_stone_name, center_stone_qty, sub1_stone_name, sub1_stone_qty, sub2_stone_name, sub2_stone_qty, requested_due_date, priority_code, memo, status, source_channel, material_code, match_state, created_at, updated_at"
+        )
+        .eq("order_line_id", orderLineId)
+        .maybeSingle();
+      if (error) throw error;
+      return (data ?? null) as OrderLineDetailRow | null;
     },
   });
 
@@ -413,27 +665,9 @@ export default function ShipmentsPage() {
     }
 
     if (data.shipment_extra_labor_krw !== null && data.shipment_extra_labor_krw !== undefined) {
-      setExtraLaborItems([
-        {
-          id: typeof crypto !== "undefined" && "randomUUID" in crypto
-            ? crypto.randomUUID()
-            : `extra-${Date.now()}-receipt`,
-          type: "OTHER",
-          label: "기타",
-          amount: String(data.shipment_extra_labor_krw ?? ""),
-        },
-      ]);
+      setOtherLaborCost(String(data.shipment_extra_labor_krw ?? ""));
     } else if (data.selected_factory_labor_other_cost_krw !== null && data.selected_factory_labor_other_cost_krw !== undefined) {
-      setExtraLaborItems([
-        {
-          id: typeof crypto !== "undefined" && "randomUUID" in crypto
-            ? crypto.randomUUID()
-            : `extra-${Date.now()}-receipt`,
-          type: "OTHER",
-          label: "기타",
-          amount: String(data.selected_factory_labor_other_cost_krw ?? ""),
-        },
-      ]);
+      setOtherLaborCost(String(data.selected_factory_labor_other_cost_krw ?? ""));
     }
   }, [receiptMatchPrefillQuery.data, weightG, baseLabor, extraLaborItems.length]);
 
@@ -447,6 +681,21 @@ export default function ShipmentsPage() {
         filter: { column: "model_name", op: "eq", value: model },
       });
       return rows?.[0] ?? null;
+    },
+  });
+
+  const roundingUnitQuery = useQuery({
+    queryKey: ["rule-rounding-unit"],
+    enabled: Boolean(schemaClient),
+    queryFn: async () => {
+      if (!schemaClient) return 0;
+      const { data, error } = await schemaClient
+        .from("cms_market_tick_config")
+        .select("rule_rounding_unit_krw")
+        .eq("config_key", "DEFAULT")
+        .maybeSingle();
+      if (error) return 0;
+      return Number(data?.rule_rounding_unit_krw ?? 0);
     },
   });
 
@@ -478,9 +727,7 @@ export default function ShipmentsPage() {
   };
 
   const PENDING_ORDER_STATUSES = new Set([
-    "ORDER_PENDING",
     "SENT_TO_VENDOR",
-    "WAITING_INBOUND",
     "READY_TO_SHIP",
   ]);
 
@@ -491,10 +738,34 @@ export default function ShipmentsPage() {
   };
 
   const filteredLookupRows = useMemo(() => {
-    const rows = orderLookupQuery.data ?? [];
-    if (!onlyReadyToShip) return rows;
-    return rows.filter((r) => isWorklistStatus(r.status));
-  }, [orderLookupQuery.data, onlyReadyToShip]);
+    let rows = orderLookupQuery.data ?? [];
+    console.log("[DEBUG] orderLookupQuery.data:", rows.length, "rows");
+    console.log("[DEBUG] order_line_ids:", rows.map(r => r.order_line_id));
+    console.log("[DEBUG] onlyReadyToShip:", onlyReadyToShip);
+    console.log("[DEBUG] includeStorePickup:", includeStorePickup);
+    console.log("[DEBUG] storePickupLookupQuery.isLoading:", storePickupLookupQuery.isLoading);
+    console.log("[DEBUG] storePickupLookupIds:", Array.from(storePickupLookupIds));
+    
+    // storePickupLookupQuery가 로딩 완료된 후에만 store pickup 필터링 적용
+    if (!includeStorePickup && !storePickupLookupQuery.isLoading) {
+      const beforeCount = rows.length;
+      const removedIds = rows.filter((row) => storePickupLookupIds.has(row.order_line_id ?? "")).map(r => r.order_line_id);
+      console.log("[DEBUG] Removed order_line_ids (store pickup):", removedIds);
+      rows = rows.filter((row) => !storePickupLookupIds.has(row.order_line_id ?? ""));
+      console.log("[DEBUG] After store pickup filter:", rows.length, "/", beforeCount);
+    }
+    
+    if (!onlyReadyToShip) {
+      console.log("[DEBUG] Returning all rows (onlyReadyToShip=false):", rows.length);
+      return rows;
+    }
+    
+    const filtered = rows.filter((r) => isWorklistStatus(r.status));
+    console.log("[DEBUG] After isWorklistStatus filter:", filtered.length);
+    console.log("[DEBUG] PENDING_ORDER_STATUSES:", Array.from(PENDING_ORDER_STATUSES));
+    console.log("[DEBUG] All statuses in data:", [...new Set(rows.map(r => r.status))]);
+    return filtered;
+  }, [orderLookupQuery.data, includeStorePickup, storePickupLookupIds, onlyReadyToShip, storePickupLookupQuery.isLoading]);
 
   const handleSelectOrder = (row: OrderLookupRow) => {
     const id = row.order_line_id;
@@ -502,16 +773,22 @@ export default function ShipmentsPage() {
 
     setSelectedOrderLineId(String(id));
     setSelectedOrderStatus(row.status ? String(row.status) : null);
-    setSearchQuery(`${row.model_no ?? ""} ${row.client_name ?? ""}`.trim());
+    setSelectedOrderDates({
+      orderDate: row.sent_to_vendor_at ?? row.order_date ?? null,
+      inboundDate: row.inbound_at ?? null,
+    });
+    setSearchQuery(`${row.model_name ?? row.model_no ?? ""} ${row.customer_name ?? row.client_name ?? ""}`.trim());
     setLookupOpen(false);
 
     setWeightG("");
     setDeductionWeightG("");
     setBaseLabor("");
+    setOtherLaborCost("");
+    setManualTotalAmountKrw("");
+    setIsManualTotalOverride(false);
     setManualLabor("");
     setUseManualLabor(false);
     setExtraLaborItems([]);
-    setExtraLaborSelect(null);
   };
 
   // --- RPC: 출고 저장 ---
@@ -530,44 +807,61 @@ export default function ShipmentsPage() {
     },
   });
 
+  const currentLine = useMemo(() => {
+    if (!currentShipmentLineId) return null;
+    return (currentLinesQuery.data ?? []).find(
+      (item) => String(item.shipment_line_id) === String(currentShipmentLineId)
+    ) ?? null;
+  }, [currentLinesQuery.data, currentShipmentLineId]);
+
+  const masterUnitPricingQuery = useQuery({
+    queryKey: ["master-unit-pricing", currentLine?.master_id],
+    enabled: Boolean(schemaClient && currentLine?.master_id),
+    queryFn: async () => {
+      if (!schemaClient || !currentLine?.master_id) return null;
+      const { data, error } = await schemaClient
+        .from("cms_master_item")
+        .select("is_unit_pricing")
+        .eq("master_id", currentLine.master_id)
+        .maybeSingle();
+      if (error) return null;
+      return (data ?? null) as { is_unit_pricing?: boolean | null } | null;
+    },
+  });
+
   useEffect(() => {
     if (!confirmModalOpen) return;
-    if (!currentShipmentLineId) return;
-    const line = (currentLinesQuery.data ?? []).find(
-      (item) => String(item.shipment_line_id) === String(currentShipmentLineId)
-    );
-    if (!line) return;
+    if (!currentLine) return;
 
-    if (line.measured_weight_g !== null && line.measured_weight_g !== undefined) {
-      setWeightG(String(line.measured_weight_g));
+    if (currentLine.measured_weight_g !== null && currentLine.measured_weight_g !== undefined) {
+      setWeightG(String(currentLine.measured_weight_g));
     }
-    if (line.deduction_weight_g !== null && line.deduction_weight_g !== undefined) {
-      setDeductionWeightG(String(line.deduction_weight_g));
+    if (currentLine.deduction_weight_g !== null && currentLine.deduction_weight_g !== undefined) {
+      setDeductionWeightG(String(currentLine.deduction_weight_g));
     }
-    if (line.base_labor_krw !== null && line.base_labor_krw !== undefined) {
-      setBaseLabor(String(line.base_labor_krw));
+    if (currentLine.base_labor_krw !== null && currentLine.base_labor_krw !== undefined) {
+      setBaseLabor(String(currentLine.base_labor_krw));
     }
-    if (line.manual_labor_krw !== null && line.manual_labor_krw !== undefined) {
-      setManualLabor(String(line.manual_labor_krw));
+    if (currentLine.manual_labor_krw !== null && currentLine.manual_labor_krw !== undefined) {
+      setManualLabor(String(currentLine.manual_labor_krw));
     }
-    if (line.extra_labor_items !== null && line.extra_labor_items !== undefined) {
-      setExtraLaborItems(normalizeExtraLaborItems(line.extra_labor_items));
-    } else if (line.extra_labor_krw !== null && line.extra_labor_krw !== undefined) {
-      setExtraLaborItems([
-        {
-          id: typeof crypto !== "undefined" && "randomUUID" in crypto
-            ? crypto.randomUUID()
-            : `extra-${Date.now()}-0`,
-          type: "OTHER",
-          label: "기타",
-          amount: String(line.extra_labor_krw ?? ""),
-        },
-      ]);
+    if (currentLine.extra_labor_items !== null && currentLine.extra_labor_items !== undefined) {
+      setExtraLaborItems(normalizeExtraLaborItems(currentLine.extra_labor_items));
+    } else if (currentLine.extra_labor_krw !== null && currentLine.extra_labor_krw !== undefined) {
+      setOtherLaborCost(String(currentLine.extra_labor_krw ?? ""));
     }
-  }, [confirmModalOpen, currentShipmentLineId, currentLinesQuery.data]);
+
+    if (currentLine.pricing_mode === "AMOUNT_ONLY" && currentLine.manual_total_amount_krw !== null && currentLine.manual_total_amount_krw !== undefined) {
+      setIsManualTotalOverride(true);
+      setManualTotalAmountKrw(String(currentLine.manual_total_amount_krw));
+    } else if (currentLine.pricing_mode === "RULE") {
+      setIsManualTotalOverride(false);
+      setManualTotalAmountKrw("");
+    }
+  }, [confirmModalOpen, currentLine]);
 
   const shipmentHeaderQuery = useQuery({
-    queryKey: ["shipment-header", normalizedShipmentId, confirmModalOpen],
+    queryKey: ["shipment-header", normalizedShipmentId, confirmModalOpen, isStorePickup],
     enabled: Boolean(normalizedShipmentId),
     queryFn: async () => {
       const shipmentId = normalizedShipmentId;
@@ -575,11 +869,18 @@ export default function ShipmentsPage() {
       const sb = getSchemaClient();
       if (!sb) return null;
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const { data } = await (sb as any)
+      let query = (sb as any)
         .from("cms_shipment_header")
         .select("is_store_pickup, pricing_locked_at, pricing_source, confirmed_at, status")
-        .eq("shipment_id", shipmentId)
-        .maybeSingle();
+        .eq("shipment_id", shipmentId);
+
+      if (isStorePickup) {
+        query = query.eq("is_store_pickup", true);
+      } else {
+        query = query.and(`shipment_id.eq.${shipmentId},or(is_store_pickup.is.null,is_store_pickup.eq.false)`);
+      }
+
+      const { data } = await query.maybeSingle();
       return (data ?? null) as ShipmentHeaderRow | null;
     },
   });
@@ -658,16 +959,15 @@ export default function ShipmentsPage() {
       (receiptMatchPrefillQuery.data?.selected_material_code ?? masterLookupQuery.data?.material_code_default ?? "").trim();
     const allowZeroWeight = materialCode === "00";
     const weightText = weightG.trim();
-    let weightValue = Number(weightG);
+    let weightValue = parseNumberInput(weightG);
     if (allowZeroWeight && (weightText === "" || weightValue === 0)) {
       weightValue = 0;
     }
-    const baseValue = Number(baseLabor);
+    const baseValue = parseNumberInput(baseLabor);
     const laborValue = resolvedTotalLabor;
     const deductionText = (deductionWeightG ?? "").trim();
     const masterDeduct = Number(masterLookupQuery.data?.deduction_weight_default_g ?? 0);
-    const deductionValue = deductionText === "" ? masterDeduct : Number(deductionText);
-
+    const deductionValue = deductionText === "" ? masterDeduct : parseNumberInput(deductionText);
     if (Number.isNaN(weightValue) || (allowZeroWeight ? weightValue < 0 : weightValue <= 0)) {
       toast.error("중량(g)을 올바르게 입력해주세요.");
       return;
@@ -685,7 +985,7 @@ export default function ShipmentsPage() {
       return;
     }
     if (useManualLabor) {
-      const manualValue = Number(manualLabor);
+    const manualValue = parseNumberInput(manualLabor);
       if (!Number.isFinite(manualValue) || manualValue < 0) {
         toast.error("직접 공임(원)을 올바르게 입력해주세요.");
         return;
@@ -707,7 +1007,7 @@ export default function ShipmentsPage() {
       p_deduction_weight_g: deductionValue,
       p_total_labor: laborValue,
       p_base_labor_krw: Number.isFinite(baseValue) ? baseValue : 0,
-      p_extra_labor_krw: resolvedExtraLabor,
+      p_extra_labor_krw: resolvedExtraLaborTotal,
       p_extra_labor_items: extraLaborPayload,
       p_actor_person_id: actorId,
       p_idempotency_key: idempotencyKey,
@@ -718,6 +1018,58 @@ export default function ShipmentsPage() {
       toast.error("출고 확정 실패", { description: "shipment_id를 받지 못했습니다." });
       return;
     }
+
+    if (!schemaClient) {
+      toast.error("Supabase env is missing");
+      return;
+    }
+
+    const { data: lineRow, error: lineError } = await schemaClient
+      .from("cms_shipment_line")
+      .select("shipment_line_id, material_amount_sell_krw")
+      .eq("shipment_id", shipmentId)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (lineError) {
+      toast.error("출고 라인 조회 실패", { description: lineError.message });
+      return;
+    }
+    const lineData =
+      (lineRow ?? null) as { shipment_line_id?: string | null; material_amount_sell_krw?: number | null } | null;
+    const shipmentLineId = lineData?.shipment_line_id ? String(lineData.shipment_line_id) : null;
+    if (!shipmentLineId) {
+      toast.error("출고 확정 실패", { description: "shipment_line_id를 찾지 못했습니다." });
+      return;
+    }
+
+    const manualTotalValue = isManualTotalOverride ? parseNumberInput(manualTotalAmountKrw) : 0;
+    const materialAmount = Number(lineData?.material_amount_sell_krw ?? 0);
+    const baseLaborOverride = isManualTotalOverride && manualTotalValue > 0
+      ? manualTotalValue - materialAmount - resolvedExtraLaborTotal
+      : null;
+    if (isManualTotalOverride && manualTotalValue <= 0) {
+      toast.error("총액 덮어쓰기 금액을 입력해주세요.");
+      return;
+    }
+    if (baseLaborOverride !== null && baseLaborOverride < 0) {
+      toast.error("총액이 재료비보다 작습니다.");
+      return;
+    }
+
+    const updatePayload: Record<string, unknown> = {
+      p_shipment_line_id: shipmentLineId,
+      p_deduction_weight_g: deductionValue,
+      p_base_labor_krw:
+        baseLaborOverride !== null ? baseLaborOverride : Number.isFinite(baseValue) ? baseValue : 0,
+      p_extra_labor_krw: resolvedExtraLaborTotal,
+      p_extra_labor_items: extraLaborPayload,
+    };
+    if (weightValue > 0) {
+      updatePayload.p_measured_weight_g = weightValue;
+    }
+
+    await shipmentLineUpdateMutation.mutateAsync(updatePayload);
 
     if (shouldStorePickup) {
       await shipmentSetStorePickupMutation.mutateAsync({
@@ -959,7 +1311,7 @@ export default function ShipmentsPage() {
     setDeductionWeightG("");
     setBaseLabor("");
     setExtraLaborItems([]);
-    setExtraLaborSelect(null);
+    setManualTotalAmountKrw("");
     setCostMode("PROVISIONAL");
     setCostInputs({});
 
@@ -1023,11 +1375,25 @@ export default function ShipmentsPage() {
         return;
       }
 
+      const manualTotalValue = isManualTotalOverride ? parseNumberInput(manualTotalAmountKrw) : 0;
+      const materialAmount = Number(currentLine?.material_amount_sell_krw ?? 0);
+      const baseLaborOverride = isManualTotalOverride && manualTotalValue > 0
+        ? manualTotalValue - materialAmount - resolvedExtraLaborTotal
+        : null;
+      if (isManualTotalOverride && manualTotalValue <= 0) {
+        toast.error("총액 덮어쓰기 금액을 입력해주세요.");
+        return;
+      }
+      if (baseLaborOverride !== null && baseLaborOverride < 0) {
+        toast.error("총액이 재료비보다 작습니다.");
+        return;
+      }
+
       const updatePayload: Record<string, unknown> = {
         p_shipment_line_id: String(currentShipmentLineId),
         p_deduction_weight_g: dValue,
-        p_base_labor_krw: resolvedBaseLabor,
-        p_extra_labor_krw: resolvedExtraLabor,
+        p_base_labor_krw: baseLaborOverride !== null ? baseLaborOverride : resolvedBaseLabor,
+        p_extra_labor_krw: resolvedExtraLaborTotal,
         p_extra_labor_items: extraLaborPayload,
       };
       if (currentLineWeightText !== "") {
@@ -1039,6 +1405,7 @@ export default function ShipmentsPage() {
         updatePayload.p_measured_weight_g = weightValue;
       }
       await shipmentLineUpdateMutation.mutateAsync(updatePayload);
+
     }
 
     const missingWeightLines: ShipmentLineRow[] = [];
@@ -1114,41 +1481,56 @@ export default function ShipmentsPage() {
   };
 
   const master = masterLookupQuery.data;
+  const roundingUnit = roundingUnitQuery.data ?? 0;
+  const showRoundingHint =
+    Boolean(masterUnitPricingQuery.data?.is_unit_pricing) && Number(roundingUnit) > 0;
 
 
   const resolvedDeductionG = useMemo(() => {
     const t = (deductionWeightG ?? "").trim();
     if (t === "") return Number(master?.deduction_weight_default_g ?? 0);
-    const n = Number(t);
-    return Number.isFinite(n) ? n : 0;
+    return parseNumberInput(t);
   }, [deductionWeightG, master?.deduction_weight_default_g]);
 
   const resolvedNetWeightG = useMemo(() => {
-    const w = Number(weightG);
+    const w = parseNumberInput(weightG);
     if (!Number.isFinite(w)) return null;
     return Math.max(w - (resolvedDeductionG ?? 0), 0);
   }, [weightG, resolvedDeductionG]);
 
-  const resolvedBaseLabor = useMemo(() => {
-    const base = Number(baseLabor);
-    return Number.isFinite(base) ? base : 0;
-  }, [baseLabor]);
+  const resolvedBaseLabor = useMemo(() => parseNumberInput(baseLabor), [baseLabor]);
 
-  const resolvedManualLabor = useMemo(() => {
-    const manual = Number(manualLabor);
-    return Number.isFinite(manual) ? manual : 0;
-  }, [manualLabor]);
+  const resolvedManualLabor = useMemo(() => parseNumberInput(manualLabor), [manualLabor]);
 
   const resolvedExtraLabor = useMemo(() => {
-    return extraLaborItems.reduce((sum, item) => {
-      const value = Number(item.amount);
-      return sum + (Number.isFinite(value) ? value : 0);
-    }, 0);
+    return extraLaborItems.reduce((sum, item) => sum + parseNumberInput(item.amount), 0);
   }, [extraLaborItems]);
 
+  const resolvedOtherLaborCost = useMemo(() => parseNumberInput(otherLaborCost), [otherLaborCost]);
+
+  const resolvedExtraLaborTotal = useMemo(
+    () => resolvedExtraLabor + resolvedOtherLaborCost,
+    [resolvedExtraLabor, resolvedOtherLaborCost]
+  );
+
+  const resolvedBaseLaborCost = useMemo(() => {
+    const value = receiptMatchPrefillQuery.data?.selected_factory_labor_basic_cost_krw;
+    return value === null || value === undefined ? null : Number(value);
+  }, [receiptMatchPrefillQuery.data]);
+
+  const resolvedBaseLaborMargin = useMemo(() => {
+    if (resolvedBaseLaborCost === null) return null;
+    return resolvedBaseLabor - resolvedBaseLaborCost;
+  }, [resolvedBaseLabor, resolvedBaseLaborCost]);
+
+  const resolvedExtraLaborMargin = useMemo(
+    () => resolvedExtraLaborTotal - resolvedOtherLaborCost,
+    [resolvedExtraLaborTotal, resolvedOtherLaborCost]
+  );
+
   const resolvedTotalLabor = useMemo(
-    () => (useManualLabor ? resolvedManualLabor : resolvedBaseLabor + resolvedExtraLabor),
-    [useManualLabor, resolvedManualLabor, resolvedBaseLabor, resolvedExtraLabor]
+    () => (useManualLabor ? resolvedManualLabor : resolvedBaseLabor + resolvedExtraLaborTotal),
+    [useManualLabor, resolvedManualLabor, resolvedBaseLabor, resolvedExtraLaborTotal]
   );
 
   const extraLaborPayload = useMemo(() => {
@@ -1156,7 +1538,7 @@ export default function ShipmentsPage() {
       id: item.id,
       type: item.type,
       label: item.label,
-      amount: Number(item.amount) || 0,
+      amount: parseNumberInput(item.amount),
     }));
   }, [extraLaborItems]);
 
@@ -1289,6 +1671,35 @@ export default function ShipmentsPage() {
             <div className="lg:col-span-4 space-y-4">
               <Card className="h-[calc(100vh-250px)] flex flex-col shadow-sm border-[var(--panel-border)]">
                 <CardHeader className="border-b border-[var(--panel-border)] bg-[var(--surface)] p-4 space-y-3">
+                  <div
+                    className={cn(
+                      "flex items-center justify-between rounded-xl border border-[var(--panel-border)] p-3 shadow-sm",
+                      includeStorePickup ? "bg-emerald-500/10" : "bg-red-500/10"
+                    )}
+                  >
+                    <div className="flex items-center gap-2">
+                      <Badge tone="neutral" className="text-[10px] px-2 py-0.5 uppercase tracking-wider">status</Badge>
+                      <span className="text-xs text-[var(--muted)]">매장출고</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setIncludeStorePickup((prev) => !prev)}
+                      className={cn(
+                        "inline-flex items-center gap-2 rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors",
+                        includeStorePickup
+                          ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-500"
+                          : "border-red-500/20 bg-red-500/5 text-red-300"
+                      )}
+                    >
+                      <span
+                        className={cn(
+                          "h-2 w-2 rounded-full",
+                          includeStorePickup ? "bg-emerald-400" : "bg-red-300"
+                        )}
+                      />
+                      {includeStorePickup ? "ON" : "OFF"}
+                    </button>
+                  </div>
                   <div className="flex items-center justify-between">
                     <h3 className="text-sm font-semibold flex items-center gap-2">
                       <Search className="w-4 h-4 text-[var(--muted)]" />
@@ -1307,113 +1718,199 @@ export default function ShipmentsPage() {
                       {onlyReadyToShip ? "미출고만" : "전체 주문"}
                     </button>
                   </div>
-                  <Input
-                    ref={lookupInputRef}
-                    placeholder="모델명 / 고객명 / 주문번호"
-                    value={searchQuery}
-                    onChange={(e) => {
-                      setSearchQuery(e.target.value);
-                      if (!lookupOpen) setLookupOpen(true);
-                    }}
-                    onFocus={() => setLookupOpen(true)}
-                    className="bg-[var(--input-bg)]"
-                  />
+                  <div className="flex items-center gap-2">
+                    <Input
+                      ref={lookupInputRef}
+                      placeholder="모델명 / 고객명 / 주문번호"
+                      value={searchQuery}
+                      onChange={(e) => {
+                        setSearchQuery(e.target.value);
+                        if (!lookupOpen) setLookupOpen(true);
+                      }}
+                      onFocus={() => setLookupOpen(true)}
+                      className="bg-[var(--input-bg)]"
+                    />
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="h-9 px-3 text-xs"
+                      onClick={() => {
+                        setSearchQuery("");
+                        setOnlyReadyToShip(true);
+                        setIncludeStorePickup(false);
+                        setSelectedOrderLineId(null);
+                        setSelectedOrderStatus(null);
+                        setSelectedOrderDates(null);
+                        setLookupOpen(true);
+                        setTimeout(() => lookupInputRef.current?.focus(), 0);
+                      }}
+                    >
+                      초기화
+                    </Button>
+                  </div>
                 </CardHeader>
                 <CardBody className="flex-1 overflow-y-auto p-0">
                   {lookupOpen ? (
-                    <div className="divide-y divide-[var(--panel-border)]">
-                      {orderLookupQuery.isLoading ? (
-                        <div className="p-8 text-center text-sm text-[var(--muted)] flex flex-col items-center gap-2">
-                          <div className="w-5 h-5 border-2 border-current border-t-transparent rounded-full animate-spin" />
-                          불러오는 중...
-                        </div>
-                      ) : orderLookupQuery.isError ? (
-                        <div className="p-4 text-sm text-[var(--danger)] bg-[var(--danger)]/10 m-2 rounded-lg flex items-center gap-2">
-                          <AlertCircle className="w-4 h-4" />
-                          {orderLookupErrorMessage}
-                        </div>
-                      ) : filteredLookupRows.length === 0 ? (
-                        <div className="p-8 text-center text-sm text-[var(--muted)]">
-                          검색 결과가 없습니다.
-                        </div>
-                      ) : (
-                        filteredLookupRows.map((row) => {
-                          const id = row.order_line_id ?? "";
-                          const isSelected = selectedOrderLineId === id;
-                          return (
-                            <button
-                              key={id}
-                              type="button"
-                              onClick={() => handleSelectOrder(row)}
-                              className={cn(
-                                "w-full px-4 py-3 text-left transition-all hover:bg-[var(--panel-hover)] group",
-                                isSelected
-                                  ? "bg-[var(--primary)]/5 border-l-4 border-l-[var(--primary)]"
-                                  : "border-l-4 border-l-transparent"
-                              )}
-                            >
-                              <div className="flex items-start justify-between gap-2">
-                                <div className="min-w-0 space-y-1">
-                                  <div
-                                    className={cn(
-                                      "text-sm font-medium truncate",
-                                      isSelected ? "text-[var(--primary)]" : "text-[var(--foreground)]"
-                                    )}
-                                  >
-                                    {row.client_name ?? "-"} · {row.model_no ?? "-"}
+                    <div className="flex flex-col overflow-x-auto">
+                      <div className="sticky top-0 z-10 grid min-w-[500px] grid-cols-[76px_120px_minmax(140px,1.2fr)_60px_50px_50px] gap-2 px-4 py-2 text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)] bg-[var(--surface)] border-b border-[var(--panel-border)]">
+                        <span>발주일</span>
+                        <span>고객명</span>
+                        <span>모델명</span>
+                        <span>소재</span>
+                        <span>색상</span>
+                        <span>사이즈</span>
+                      </div>
+                      <div className="divide-y divide-[var(--panel-border)]">
+                        {orderLookupQuery.isLoading ? (
+                          <div className="p-8 text-center text-sm text-[var(--muted)] flex flex-col items-center gap-2">
+                            <div className="w-5 h-5 border-2 border-current border-t-transparent rounded-full animate-spin" />
+                            불러오는 중...
+                          </div>
+                        ) : orderLookupQuery.isError ? (
+                          <div className="p-4 text-sm text-[var(--danger)] bg-[var(--danger)]/10 m-2 rounded-lg flex items-center gap-2">
+                            <AlertCircle className="w-4 h-4" />
+                            {orderLookupErrorMessage}
+                          </div>
+                        ) : filteredLookupRows.length === 0 ? (
+                          <div className="p-8 text-center text-sm text-[var(--muted)]">
+                            검색 결과가 없습니다.
+                          </div>
+                        ) : (
+                          filteredLookupRows.map((row) => {
+                            const id = row.order_line_id ?? "";
+                            const isSelected = selectedOrderLineId === id;
+                            const orderDate = row.sent_to_vendor_at ?? row.order_date ?? null;
+                            const inboundDate = row.inbound_at ?? null;
+                            const customerLabel = row.customer_name ?? row.client_name ?? "-";
+                            const modelFallback = orderLineModelMap.get(id);
+                            const lookupModelFallback = orderLookupModelMap.get(id);
+                            const modelRaw = [
+                              row.model_name ?? modelFallback?.model_name ?? lookupModelFallback ?? row.model_no ?? "",
+                            ]
+                              .filter(Boolean)
+                              .join("");
+                            const modelLabel = modelRaw.replace(/\s+/g, " ").trim() || "-";
+                            const materialLabel = row.material_code ?? "-";
+                            const colorLabel = row.color ?? "-";
+                            const sizeLabel = row.size ?? "-";
+                            return (
+                              <button
+                                key={id}
+                                type="button"
+                                onClick={() => handleSelectOrder(row)}
+                                className={cn(
+                                  "w-full px-4 py-2 text-left transition-all hover:bg-[var(--panel-hover)]",
+                                  isSelected
+                                    ? "bg-[var(--primary)]/5 border-l-4 border-l-[var(--primary)]"
+                                    : "border-l-4 border-l-transparent"
+                                )}
+                              >
+                                <div className="grid min-w-[500px] grid-cols-[76px_120px_minmax(140px,1.2fr)_60px_50px_50px] gap-2 items-center text-xs">
+                                  <span className="text-[var(--muted)] tabular-nums">
+                                    {formatDateCompact(orderDate)}
+                                    {formatDday(orderDate) ? (
+                                      <span className="ml-1 text-[10px] text-[var(--muted)]">
+                                        ({formatDday(orderDate)})
+                                      </span>
+                                    ) : null}
+                                  </span>
+                                  <span className="truncate" title={customerLabel}>{customerLabel}</span>
+                                  <div className="min-w-0 flex items-center">
+                                    <span className="min-w-0 truncate whitespace-nowrap font-semibold" title={modelLabel}>
+                                      {modelLabel}
+                                    </span>
                                   </div>
-                                  <div className="text-xs text-[var(--muted)] truncate flex items-center gap-1.5">
-                                    <span className="font-medium text-[var(--foreground)]">{row.order_no}</span>
-                                    <span>·</span>
-                                    <span>{row.color}</span>
-                                    {row.plating_status && (
-                                      <Badge tone="neutral" className="text-[10px] px-1 py-0 h-4">
-                                        {row.plating_color}
-                                      </Badge>
-                                    )}
-                                  </div>
+                                  <span className="text-[var(--muted)]">{materialLabel}</span>
+                                  <span className="text-[var(--muted)]">{colorLabel}</span>
+                                  <span className="text-[var(--muted)]">{sizeLabel}</span>
                                 </div>
-                                <div className="shrink-0 flex flex-col items-end gap-1">
-                                  {getOrderStatusBadge(row.status)}
-                                  <div className="text-[10px] text-[var(--muted)] tabular-nums bg-[var(--panel)] border border-[var(--panel-border)] px-1.5 py-0.5 rounded">
-                                    {row.order_date}
-                                  </div>
-                                </div>
-                              </div>
-                            </button>
-                          );
-                        })
-                      )}
+                              </button>
+                            );
+                          })
+                        )}
+                      </div>
                     </div>
                   ) : selectedOrderLineId ? (
                     <div className="p-4">
-                      <div className="rounded-xl border border-[var(--primary)]/30 bg-[var(--primary)]/5 p-4 space-y-3">
+                      <div className="rounded-xl border border-[var(--panel-border)] bg-[var(--surface)] p-4 space-y-4">
                         <div className="flex items-center justify-between">
-                          <span className="text-xs font-bold text-[var(--primary)] uppercase tracking-wider">선택된 주문</span>
+                          <div>
+                            <div className="text-xs font-semibold text-[var(--muted)] uppercase tracking-wider">선택된 주문</div>
+                            <div className="text-base font-semibold text-[var(--foreground)]">
+                              {prefill?.client_name ?? "-"} · {prefill?.model_no ?? "-"}
+                            </div>
+                          </div>
                           <Button
                             variant="ghost"
                             size="sm"
-                            className="h-6 px-2 text-[var(--primary)] hover:bg-[var(--primary)]/10 hover:text-[var(--primary)]"
+                            className="h-7 px-2 text-[var(--muted)] hover:bg-[var(--panel-hover)]"
                             onClick={() => {
                               setLookupOpen(true);
                               setTimeout(() => lookupInputRef.current?.focus(), 0);
                             }}
                           >
-                            변경
+                            주문 변경
                           </Button>
                         </div>
-                        <div className="flex items-start gap-4">
-                          {/* Master Photo Thumbnail - Using prefill data */}
-                          <div className="relative h-28 w-28 shrink-0 overflow-hidden rounded-xl bg-gradient-to-br from-[var(--panel)] to-[var(--background)] border-2 border-[var(--primary)]/40 shadow-sm">
+                        <div className="grid grid-cols-[1fr_120px] gap-4">
+                          <div className="grid grid-cols-2 gap-3 text-xs">
+                            <div className="space-y-1">
+                              <span className="text-[var(--muted)]">발주일</span>
+                              <div className="font-medium tabular-nums">
+                                {formatDateCompact(selectedOrderDates?.orderDate ?? prefill?.order_date)}
+                                {formatDday(selectedOrderDates?.orderDate ?? prefill?.order_date) ? (
+                                  <span className="ml-1 text-[10px] text-[var(--muted)]">
+                                    ({formatDday(selectedOrderDates?.orderDate ?? prefill?.order_date)})
+                                  </span>
+                                ) : null}
+                              </div>
+                            </div>
+                            <div className="space-y-1">
+                              <span className="text-[var(--muted)]">입고일</span>
+                              <div className="font-medium tabular-nums">
+                                {formatDateCompact(selectedOrderDates?.inboundDate)}
+                                {formatDday(selectedOrderDates?.inboundDate) ? (
+                                  <span className="ml-1 text-[10px] text-[var(--muted)]">
+                                    ({formatDday(selectedOrderDates?.inboundDate)})
+                                  </span>
+                                ) : null}
+                              </div>
+                            </div>
+                            <div className="space-y-1">
+                              <span className="text-[var(--muted)]">카테고리</span>
+                              <div className="font-medium">{prefill?.category ?? "-"}</div>
+                            </div>
+                            <div className="space-y-1">
+                              <span className="text-[var(--muted)]">거래처</span>
+                              <div className="font-medium">{prefill?.client_name ?? "-"}</div>
+                            </div>
+                            <div className="space-y-1">
+                              <span className="text-[var(--muted)]">모델명</span>
+                              <div className="font-semibold">{prefill?.model_no ?? "-"}</div>
+                            </div>
+                            <div className="space-y-1">
+                              <span className="text-[var(--muted)]">색상</span>
+                              <div className="font-medium">{prefill?.color ?? "-"}</div>
+                            </div>
+                            <div className="space-y-1">
+                              <span className="text-[var(--muted)]">사이즈</span>
+                              <div className="font-medium">{prefill?.size ?? "-"}</div>
+                            </div>
+                            <div className="space-y-1">
+                              <span className="text-[var(--muted)]">도금</span>
+                              <div className="font-medium">
+                                {prefill?.plating_status ? prefill.plating_color ?? "Y" : "N"}
+                              </div>
+                            </div>
+                          </div>
+                          <div className="relative h-28 w-28 overflow-hidden rounded-lg border border-[var(--panel-border)] bg-[var(--surface)]">
                             {getMasterPhotoUrl(prefill?.photo_url) ? (
                               <img
                                 src={getMasterPhotoUrl(prefill?.photo_url) || undefined}
                                 alt={prefill?.model_no ?? "모델 이미지"}
                                 className="h-full w-full object-cover"
                                 loading="eager"
-                                onLoad={() =>
-                                  console.log("[Master Photo] Loaded successfully:", getMasterPhotoUrl(prefill?.photo_url))
-                                }
                                 onError={(e) => {
                                   if (process.env.NODE_ENV === "development") {
                                     console.error("[Master Photo] Failed to load:", prefill?.photo_url);
@@ -1422,28 +1919,112 @@ export default function ShipmentsPage() {
                                   target.style.display = "none";
                                 }}
                               />
-                            ) : null}
-                            <div
-                              className={cn(
-                                "flex h-full w-full items-center justify-center text-[var(--muted)]",
-                                getMasterPhotoUrl(prefill?.photo_url) ? "absolute inset-0 -z-10" : ""
-                              )}
-                            >
-                              <Package className="w-10 h-10 opacity-40" />
-                            </div>
-                          </div>
-                          <div className="pt-1">
-                            <div className="text-sm font-semibold text-[var(--primary)]">{prefill?.client_name}</div>
-                            <div className="text-sm text-[var(--primary)]">{prefill?.model_no}</div>
-                            {process.env.NODE_ENV === "development" && (
-                              <div className="text-[10px] text-[var(--muted)] mt-1">
-                                photo_url: {prefill?.photo_url ? "있음" : "없음"}
+                            ) : (
+                              <div className="flex h-full w-full items-center justify-center text-[var(--muted)]">
+                                <Package className="w-6 h-6 opacity-40" />
                               </div>
                             )}
                           </div>
                         </div>
-                        <div className="text-xs text-[var(--primary)] pt-2 border-t border-[var(--primary)]/30">
-                          주문번호: {prefill?.order_no}
+                        <div className="rounded-lg border border-[var(--panel-border)] bg-[var(--panel)] p-3">
+                          <div className="text-xs font-semibold text-[var(--muted)] mb-3">매칭 정보 입력</div>
+                          <div className="grid grid-cols-2 gap-3 text-xs">
+                            <div className="space-y-1">
+                              <span className="text-[var(--muted)]">매칭 상태</span>
+                              <div className="font-medium">{receiptMatchPrefillQuery.data?.status ?? "-"}</div>
+                            </div>
+                            <div className="space-y-1">
+                              <span className="text-[var(--muted)]">매칭일</span>
+                              <div className="font-medium tabular-nums">
+                                {receiptMatchPrefillQuery.data?.confirmed_at
+                                  ? formatDateCompact(receiptMatchPrefillQuery.data.confirmed_at)
+                                  : "-"}
+                              </div>
+                            </div>
+                            <div className="space-y-1">
+                              <span className="text-[var(--muted)]">실측 중량(g)</span>
+                              <div className="font-medium">{receiptMatchPrefillQuery.data?.receipt_weight_g ?? "-"}</div>
+                            </div>
+                            <div className="space-y-1">
+                              <span className="text-[var(--muted)]">공제 중량(g)</span>
+                              <div className="font-medium">
+                                {receiptMatchPrefillQuery.data?.receipt_deduction_weight_g ?? "-"}
+                              </div>
+                            </div>
+                            <div className="space-y-1">
+                              <span className="text-[var(--muted)]">선택 중량(g)</span>
+                              <div className="font-medium">{receiptMatchPrefillQuery.data?.selected_weight_g ?? "-"}</div>
+                            </div>
+                            <div className="space-y-1">
+                              <span className="text-[var(--muted)]">선택 소재</span>
+                              <div className="font-medium">
+                                {receiptMatchPrefillQuery.data?.selected_material_code ?? "-"}
+                              </div>
+                            </div>
+                            <div className="space-y-1">
+                              <span className="text-[var(--muted)]">기본 공임(매칭)</span>
+                              <div className="font-medium">
+                                {receiptMatchPrefillQuery.data?.selected_factory_labor_basic_cost_krw ?? "-"}
+                              </div>
+                            </div>
+                            <div className="space-y-1">
+                              <span className="text-[var(--muted)]">추가 공임(매칭)</span>
+                              <div className="font-medium">
+                                {receiptMatchPrefillQuery.data?.selected_factory_labor_other_cost_krw ?? "-"}
+                              </div>
+                            </div>
+                            <div className="space-y-1">
+                              <span className="text-[var(--muted)]">합계 공임(매칭)</span>
+                              <div className="font-medium">
+                                {receiptMatchPrefillQuery.data?.selected_factory_total_cost_krw ?? "-"}
+                              </div>
+                            </div>
+                            <div className="space-y-1">
+                              <span className="text-[var(--muted)]">출고 기본 공임</span>
+                              <div className="font-medium">
+                                {receiptMatchPrefillQuery.data?.shipment_base_labor_krw ?? "-"}
+                              </div>
+                            </div>
+                            <div className="space-y-1">
+                              <span className="text-[var(--muted)]">출고 추가 공임</span>
+                              <div className="font-medium">
+                                {receiptMatchPrefillQuery.data?.shipment_extra_labor_krw ?? "-"}
+                              </div>
+                            </div>
+                            <div className="space-y-1">
+                              <span className="text-[var(--muted)]">중심석</span>
+                              <div className="font-medium">
+                                {orderLineDetailQuery.data?.center_stone_name ?? masterLookupQuery.data?.center_stone_name_default ?? "-"} · {formatOptionalNumber(receiptMatchPrefillQuery.data?.stone_center_qty ?? orderLineDetailQuery.data?.center_stone_qty)}
+                              </div>
+                              <div className="text-[10px] text-[var(--muted)]">
+                                원가 {formatOptionalNumber(receiptMatchPrefillQuery.data?.stone_center_unit_cost_krw)} · 마진 {formatOptionalNumber(formatMargin(masterLookupQuery.data?.labor_center, masterLookupQuery.data?.labor_center_cost))}
+                              </div>
+                            </div>
+                            <div className="space-y-1">
+                              <span className="text-[var(--muted)]">보조1석</span>
+                              <div className="font-medium">
+                                {orderLineDetailQuery.data?.sub1_stone_name ?? masterLookupQuery.data?.sub1_stone_name_default ?? "-"} · {formatOptionalNumber(receiptMatchPrefillQuery.data?.stone_sub1_qty ?? orderLineDetailQuery.data?.sub1_stone_qty)}
+                              </div>
+                              <div className="text-[10px] text-[var(--muted)]">
+                                원가 {formatOptionalNumber(receiptMatchPrefillQuery.data?.stone_sub1_unit_cost_krw)} · 마진 {formatOptionalNumber(formatMargin(masterLookupQuery.data?.labor_side1, masterLookupQuery.data?.labor_sub1_cost))}
+                              </div>
+                            </div>
+                            <div className="space-y-1">
+                              <span className="text-[var(--muted)]">보조2석</span>
+                              <div className="font-medium">
+                                {orderLineDetailQuery.data?.sub2_stone_name ?? masterLookupQuery.data?.sub2_stone_name_default ?? "-"} · {formatOptionalNumber(receiptMatchPrefillQuery.data?.stone_sub2_qty ?? orderLineDetailQuery.data?.sub2_stone_qty)}
+                              </div>
+                              <div className="text-[10px] text-[var(--muted)]">
+                                원가 {formatOptionalNumber(receiptMatchPrefillQuery.data?.stone_sub2_unit_cost_krw)} · 마진 {formatOptionalNumber(formatMargin(masterLookupQuery.data?.labor_side2, masterLookupQuery.data?.labor_sub2_cost))}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                        <div className="rounded-lg border border-[var(--panel-border)] bg-[var(--panel)] p-3">
+                          <div className="text-xs font-semibold text-[var(--muted)] mb-2">비고</div>
+                          <div className="text-sm font-semibold text-[var(--foreground)] whitespace-pre-wrap min-h-[48px]">
+                            {prefill?.note ?? orderLineDetailQuery.data?.memo ?? "-"}
+                          </div>
                         </div>
                       </div>
                     </div>
@@ -1522,50 +2103,115 @@ export default function ShipmentsPage() {
                       </div>
                     </CardHeader>
                     <CardBody className="p-4">
-                      {masterLookupQuery.isLoading ? (
-                        <div className="space-y-2">
-                          <div className="h-4 w-1/3 bg-[var(--muted)]/10 rounded animate-pulse" />
-                          <div className="h-4 w-2/3 bg-[var(--muted)]/10 rounded animate-pulse" />
-                        </div>
-                      ) : master ? (
-                        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-xs">
-                          <div className="space-y-1">
-                            <span className="text-[var(--muted)]">벤더</span>
-                            <div className="font-medium">{master.vendor_name ?? "-"}</div>
-                          </div>
-                          <div className="space-y-1">
-                            <span className="text-[var(--muted)]">카테고리</span>
-                            <div className="font-medium">{master.category_code ?? "-"}</div>
-                          </div>
-                          <div className="space-y-1">
-                            <span className="text-[var(--muted)]">기본 소재</span>
-                            <div className="font-medium">{master.material_code_default ?? "-"}</div>
-                          </div>
-                          <div className="space-y-1">
-                            <span className="text-[var(--muted)]">기본 중량</span>
-                            <div className="font-medium tabular-nums">
-                              {master.weight_default_g ?? "-"}g <span className="text-[var(--muted)]">(공제 {master.deduction_weight_default_g ?? "-"}g)</span>
+                      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                        <div className="rounded-lg border border-[var(--panel-border)] bg-[var(--panel)] p-3">
+                          <div className="text-xs font-semibold text-[var(--muted)] mb-2">주문 정보</div>
+                          <div className="grid grid-cols-2 gap-3 text-xs">
+                            <div className="space-y-1">
+                              <span className="text-[var(--muted)]">모델</span>
+                              <div className="font-bold">{prefill?.model_no ?? "-"}</div>
+                            </div>
+                            <div className="space-y-1">
+                              <span className="text-[var(--muted)]">주문일</span>
+                              <div className="font-medium tabular-nums">{prefill?.order_date ?? "-"}</div>
+                            </div>
+                            <div className="space-y-1">
+                              <span className="text-[var(--muted)]">카테고리</span>
+                              <div className="font-medium">{prefill?.category ?? "-"}</div>
+                            </div>
+                            <div className="space-y-1">
+                              <span className="text-[var(--muted)]">거래처</span>
+                              <div className="font-medium">{prefill?.client_name ?? "-"}</div>
+                            </div>
+                            <div className="space-y-1">
+                              <span className="text-[var(--muted)]">색상</span>
+                              <div className="font-medium">{prefill?.color ?? "-"}</div>
+                            </div>
+                            <div className="space-y-1">
+                              <span className="text-[var(--muted)]">사이즈</span>
+                              <div className="font-medium">{prefill?.size ?? "-"}</div>
+                            </div>
+                            <div className="space-y-1">
+                              <span className="text-[var(--muted)]">도금</span>
+                              <div className="font-medium">
+                                {prefill?.plating_status ? prefill.plating_color ?? "Y" : "N"}
+                              </div>
+                            </div>
+                            <div className="space-y-1">
+                              <span className="text-[var(--muted)]">메모</span>
+                              <div className="font-medium truncate">{prefill?.note ?? "-"}</div>
                             </div>
                           </div>
-                          <div className="col-span-2 space-y-1">
-                            <span className="text-[var(--muted)]">원석 수량</span>
-                            <div className="font-medium tabular-nums">
-                              C {master.center_qty_default ?? 0}, S1 {master.sub1_qty_default ?? 0}, S2 {master.sub2_qty_default ?? 0}
-                            </div>
-                          </div>
-                          <div className="col-span-2 space-y-1">
-                            <span className="text-[var(--muted)]">공임 (합계)</span>
-                            <div className="font-medium tabular-nums">
-                              {masterLaborTotal.toLocaleString()}원
-                            </div>
-                          </div>
                         </div>
-                      ) : (
-                        <div className="text-sm text-[var(--muted)] flex items-center gap-2">
-                          <AlertCircle className="w-4 h-4" />
-                          마스터 정보가 없습니다. 수기 입력으로 진행됩니다.
+                        <div className="rounded-lg border border-[var(--panel-border)] bg-[var(--panel)] p-3">
+                          <div className="text-xs font-semibold text-[var(--muted)] mb-2">마스터 정보</div>
+                          {masterLookupQuery.isLoading ? (
+                            <div className="space-y-2">
+                              <div className="h-4 w-1/3 bg-[var(--muted)]/10 rounded animate-pulse" />
+                              <div className="h-4 w-2/3 bg-[var(--muted)]/10 rounded animate-pulse" />
+                            </div>
+                          ) : master ? (
+                            <div className="grid grid-cols-[1fr_128px] gap-3 text-xs">
+                              <div className="grid grid-cols-2 gap-3">
+                                <div className="space-y-1">
+                                  <span className="text-[var(--muted)]">벤더</span>
+                                  <div className="font-medium">{master.vendor_name ?? "-"}</div>
+                                </div>
+                                <div className="space-y-1">
+                                  <span className="text-[var(--muted)]">카테고리</span>
+                                  <div className="font-medium">{master.category_code ?? "-"}</div>
+                                </div>
+                                <div className="space-y-1">
+                                  <span className="text-[var(--muted)]">기본 소재</span>
+                                  <div className="font-medium">{master.material_code_default ?? "-"}</div>
+                                </div>
+                                <div className="space-y-1">
+                                  <span className="text-[var(--muted)]">기본 중량</span>
+                                  <div className="font-medium">
+                                    {renderNumber(master.weight_default_g, "g")}
+                                    <span className="text-[var(--muted)] ml-1">
+                                      (공제 {renderNumber(master.deduction_weight_default_g, "g")})
+                                    </span>
+                                  </div>
+                                </div>
+                                <div className="space-y-1">
+                                  <span className="text-[var(--muted)]">원석 수량</span>
+                                  <div className="font-medium tabular-nums">
+                                    C {master.center_qty_default ?? 0}, S1 {master.sub1_qty_default ?? 0}, S2 {master.sub2_qty_default ?? 0}
+                                  </div>
+                                </div>
+                                <div className="space-y-1">
+                                  <span className="text-[var(--muted)]">공임 (합계)</span>
+                                  <div className="font-medium">
+                                    {renderNumber(masterLaborTotal, "원")}
+                                  </div>
+                                </div>
+                              </div>
+                              <div className="flex items-start justify-end">
+                                <div className="relative h-32 w-32 overflow-hidden rounded-lg border border-[var(--panel-border)] bg-[var(--surface)]">
+                                  {getMasterPhotoUrl(master.photo_url ?? prefill?.photo_url) ? (
+                                    <img
+                                      src={getMasterPhotoUrl(master.photo_url ?? prefill?.photo_url) || undefined}
+                                      alt={master.model_name ?? prefill?.model_no ?? "마스터 이미지"}
+                                      className="h-full w-full object-cover"
+                                      loading="eager"
+                                    />
+                                  ) : (
+                                    <div className="flex h-full w-full items-center justify-center text-[var(--muted)]">
+                                      <Package className="h-6 w-6 opacity-40" />
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="text-sm text-[var(--muted)] flex items-center gap-2">
+                              <AlertCircle className="w-4 h-4" />
+                              마스터 정보가 없습니다. 수기 입력으로 진행됩니다.
+                            </div>
+                          )}
                         </div>
-                      )}
+                      </div>
                     </CardBody>
                   </Card>
 
@@ -1582,16 +2228,16 @@ export default function ShipmentsPage() {
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                           <div className="space-y-1">
                             <span className="text-xs text-[var(--muted)]">총중량 (중량-차감중량)</span>
-                            <div className="text-base font-semibold tabular-nums">
-                              {resolvedNetWeightG === null ? "-" : `${resolvedNetWeightG.toFixed(3)}g`}
+                            <div className="text-base font-semibold">
+                              {resolvedNetWeightG === null ? "-" : renderNumber(Number(resolvedNetWeightG.toFixed(3)), "g")}
                             </div>
                           </div>
                           <div className="space-y-1">
                             <span className="text-xs text-[var(--muted)]">
                               총공임 ({useManualLabor ? "직접입력" : "기본+기타"})
                             </span>
-                            <div className="text-base font-semibold tabular-nums">
-                              {resolvedTotalLabor.toLocaleString()}원
+                            <div className="text-base font-semibold">
+                              {renderNumber(resolvedTotalLabor, "원")}
                             </div>
                           </div>
                         </div>
@@ -1605,7 +2251,7 @@ export default function ShipmentsPage() {
                                 const checked = event.target.checked;
                                 setUseManualLabor(checked);
                                 if (checked && manualLabor.trim() === "") {
-                                  setManualLabor(String(resolvedBaseLabor + resolvedExtraLabor));
+                                  setManualLabor(String(resolvedBaseLabor + resolvedExtraLaborTotal));
                                 }
                               }}
                               className="h-4 w-4 accent-[var(--brand)]"
@@ -1613,13 +2259,14 @@ export default function ShipmentsPage() {
                             총공임 직접입력
                           </label>
                           <div className="min-w-[220px]">
-                            <Input
-                              placeholder="0"
-                              value={manualLabor}
-                              onChange={(e) => setManualLabor(e.target.value)}
-                              className="tabular-nums h-10"
-                              disabled={!useManualLabor}
-                            />
+                          <Input
+                            placeholder="0"
+                            value={manualLabor}
+                            onChange={(e) => setManualLabor(e.target.value)}
+                            inputMode="numeric"
+                            className="tabular-nums h-10"
+                            disabled={!useManualLabor}
+                          />
                           </div>
                           <span className="text-xs text-[var(--muted)]">
                             직접입력 시 기본+기타 합계 대신 이 값으로 저장됩니다.
@@ -1633,6 +2280,7 @@ export default function ShipmentsPage() {
                               placeholder="0.00"
                               value={weightG}
                               onChange={(e) => setWeightG(e.target.value)}
+                              inputMode="decimal"
                               className="tabular-nums text-lg h-12"
                               autoFocus
                             />
@@ -1646,66 +2294,89 @@ export default function ShipmentsPage() {
                               placeholder={master?.deduction_weight_default_g ? `${master.deduction_weight_default_g} (기본값)` : "0.00"}
                               value={deductionWeightG}
                               onChange={(e) => setDeductionWeightG(e.target.value)}
+                              inputMode="decimal"
                               className="tabular-nums text-lg h-12"
                             />
                           </div>
                           <div className="space-y-2">
-                            <label className="text-sm font-medium text-[var(--foreground)]">기본공임 (원)</label>
+                            <div className="flex items-center justify-between text-sm font-medium text-[var(--foreground)]">
+                              <span>기본공임 (원)+마진</span>
+                              <span className="text-xs text-[var(--muted)]">마진 {renderNumber(resolvedBaseLaborMargin)}</span>
+                            </div>
                             <Input
                               placeholder="0"
                               value={baseLabor}
                               onChange={(e) => setBaseLabor(e.target.value)}
+                              inputMode="numeric"
                               className="tabular-nums text-lg h-12"
                             />
                           </div>
                           <div className="space-y-2">
-                            <label className="text-sm font-medium text-[var(--foreground)]">기타공임 (원)</label>
+                            <div className="flex items-center justify-between text-sm font-medium text-[var(--foreground)]">
+                              <span>기타공임 (원)+마진</span>
+                              <span className="text-xs text-[var(--muted)]">마진 {renderNumber(resolvedExtraLaborMargin)}</span>
+                            </div>
                             <Input
                               placeholder="0"
-                              value={resolvedExtraLabor.toLocaleString()}
+                              value={resolvedExtraLaborTotal.toLocaleString()}
                               readOnly
+                              inputMode="numeric"
                               className="tabular-nums text-lg h-12"
                             />
                           </div>
                         </div>
 
                         <div className="rounded-lg border border-[var(--panel-border)] bg-[var(--surface)]/40 p-4 space-y-3">
-                          <div className="flex flex-wrap items-center gap-2">
+                          <div className="flex items-center gap-3">
                             <span className="text-sm font-medium text-[var(--foreground)]">기타공임 내역</span>
-                            <div className="min-w-[160px]">
-                              <SearchSelect
-                                placeholder="내역 선택"
-                                options={OTHER_LABOR_OPTIONS}
-                                value={extraLaborSelect ?? undefined}
-                                onChange={(value) => handleAddExtraLabor(value)}
-                              />
+                            <div className="flex items-center gap-2 overflow-x-auto">
+                              {OTHER_LABOR_OPTIONS.map((option) => (
+                                <Button
+                                  key={option.value}
+                                  type="button"
+                                  size="sm"
+                                  variant="secondary"
+                                  onClick={() => handleAddExtraLabor(option.value)}
+                                  className="whitespace-nowrap"
+                                >
+                                  {option.label}
+                                </Button>
+                              ))}
+                            </div>
+                            <div className="flex items-center gap-2 rounded-full border border-[var(--panel-border)] bg-[var(--panel)] px-2 py-1">
+                              <span className="text-xs text-[var(--muted)]">기타원가</span>
+                              <div className="tabular-nums h-7 w-24 flex items-center justify-end">
+                                {renderNumber(resolvedOtherLaborCost)}
+                              </div>
                             </div>
                           </div>
                           <div className="space-y-2">
-                            {extraLaborItems.length === 0 && (
+                            {extraLaborItems.length === 0 ? (
                               <div className="text-xs text-[var(--muted)]">추가된 내역이 없습니다.</div>
-                            )}
-                            {extraLaborItems.map((item) => (
-                              <div key={item.id} className="flex items-center gap-2">
-                                <div className="text-xs font-medium text-[var(--foreground)] min-w-[90px]">
-                                  {item.label}
+                            ) : (
+                              extraLaborItems.map((item) => (
+                                <div key={item.id} className="flex items-center gap-2">
+                                  <div className="text-xs font-medium text-[var(--foreground)] min-w-[90px]">
+                                    {item.label}
+                                  </div>
+                                    <Input
+                                      placeholder="0"
+                                      value={item.amount}
+                                      onChange={(e) => handleExtraLaborAmountChange(item.id, e.target.value)}
+                                      inputMode="numeric"
+                                      className="tabular-nums h-9"
+                                    />
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() => handleRemoveExtraLabor(item.id)}
+                                    className="text-[var(--muted)]"
+                                  >
+                                    삭제
+                                  </Button>
                                 </div>
-                                <Input
-                                  placeholder="0"
-                                  value={item.amount}
-                                  onChange={(e) => handleExtraLaborAmountChange(item.id, e.target.value)}
-                                  className="tabular-nums h-9"
-                                />
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  onClick={() => handleRemoveExtraLabor(item.id)}
-                                  className="text-[var(--muted)]"
-                                >
-                                  삭제
-                                </Button>
-                              </div>
-                            ))}
+                              ))
+                            )}
                           </div>
                         </div>
                       </div>
@@ -1722,8 +2393,8 @@ export default function ShipmentsPage() {
                             setWeightG("");
                             setDeductionWeightG("");
                             setBaseLabor("");
+                            setOtherLaborCost("");
                             setExtraLaborItems([]);
-                            setExtraLaborSelect(null);
                             setIsStorePickup(false);
                           }}
                           className="text-[var(--muted)] hover:text-[var(--foreground)]"
@@ -1857,95 +2528,147 @@ export default function ShipmentsPage() {
               <div className="grid grid-cols-2 md:grid-cols-2 gap-4">
                 <div>
                   <span className="text-xs text-[var(--primary)] block mb-1">총중량</span>
-                  <span className="text-sm font-semibold tabular-nums">
-                    {resolvedNetWeightG === null ? "-" : `${resolvedNetWeightG.toFixed(3)}g`}
+                  <span className="text-sm font-semibold">
+                    {resolvedNetWeightG === null ? "-" : renderNumber(Number(resolvedNetWeightG.toFixed(3)), "g")}
                   </span>
                 </div>
                 <div>
                   <span className="text-xs text-[var(--primary)] block mb-1">총공임</span>
-                  <span className="text-sm font-semibold tabular-nums">{resolvedTotalLabor.toLocaleString()}원</span>
+                  <span className="text-sm font-semibold">{renderNumber(resolvedTotalLabor, "원")}</span>
                 </div>
               </div>
 
               <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                 <div>
                   <span className="text-xs text-[var(--primary)] block mb-1">중량</span>
-                  <Input
-                    className="h-7 text-xs w-24 bg-[var(--input-bg)] tabular-nums"
-                    placeholder="0.00"
-                    value={weightG}
-                    onChange={(e) => setWeightG(e.target.value)}
-                  />
+                      <Input
+                        className="h-7 text-xs w-24 bg-[var(--input-bg)] tabular-nums"
+                        placeholder="0.00"
+                        value={weightG}
+                        onChange={(e) => setWeightG(e.target.value)}
+                        inputMode="decimal"
+                      />
                 </div>
                 <div>
                   <span className="text-xs text-[var(--primary)] block mb-1">차감</span>
                   <div className="flex items-center gap-2">
-                    <Input
-                      className="h-7 text-xs w-20 bg-[var(--input-bg)] tabular-nums"
-                      placeholder="0.00"
-                      value={deductionWeightG}
-                      onChange={(e) => setDeductionWeightG(e.target.value)}
-                    />
+                      <Input
+                        className="h-7 text-xs w-20 bg-[var(--input-bg)] tabular-nums"
+                        placeholder="0.00"
+                        value={deductionWeightG}
+                        onChange={(e) => setDeductionWeightG(e.target.value)}
+                        inputMode="decimal"
+                      />
                     <span className="text-[10px] text-[var(--primary)]">(마스터: {master?.deduction_weight_default_g ?? "-"})</span>
                   </div>
                 </div>
                 <div>
-                  <span className="text-xs text-[var(--primary)] block mb-1">기본공임</span>
-                  <Input
-                    className="h-7 text-xs w-24 bg-[var(--input-bg)] tabular-nums"
-                    placeholder="0"
-                    value={baseLabor}
-                    onChange={(e) => setBaseLabor(e.target.value)}
-                  />
+                    <span className="text-xs text-[var(--primary)] block mb-1">기본공임 (원)+마진</span>
+                    <span className="text-[10px] text-[var(--muted)] block">마진 {renderNumber(resolvedBaseLaborMargin)}</span>
+                      <Input
+                        className="h-7 text-xs w-24 bg-[var(--input-bg)] tabular-nums"
+                        placeholder="0"
+                        value={baseLabor}
+                        onChange={(e) => setBaseLabor(e.target.value)}
+                        inputMode="numeric"
+                      />
                 </div>
                 <div>
-                  <span className="text-xs text-[var(--primary)] block mb-1">기타공임</span>
-                  <Input
-                    className="h-7 text-xs w-24 bg-[var(--input-bg)] tabular-nums"
-                    placeholder="0"
-                    value={resolvedExtraLabor.toLocaleString()}
-                    readOnly
-                  />
+                    <span className="text-xs text-[var(--primary)] block mb-1">기타공임 (원)+마진</span>
+                    <span className="text-[10px] text-[var(--muted)] block">마진 {renderNumber(resolvedExtraLaborMargin)}</span>
+                      <Input
+                        className="h-7 text-xs w-24 bg-[var(--input-bg)] tabular-nums"
+                        placeholder="0"
+                        value={String(resolvedExtraLaborTotal)}
+                        readOnly
+                        inputMode="numeric"
+                      />
+                </div>
+                <div>
+                    <span className="text-xs text-[var(--primary)] block mb-1">총액 덮어쓰기 (AMOUNT_ONLY)</span>
+                    <div className="space-y-2">
+                      <label className="inline-flex items-center gap-2 text-[10px] text-[var(--muted)]">
+                        <input
+                          type="checkbox"
+                          checked={isManualTotalOverride}
+                          onChange={(event) => {
+                            const nextValue = event.target.checked;
+                            setIsManualTotalOverride(nextValue);
+                            if (!nextValue) setManualTotalAmountKrw("");
+                          }}
+                          className="h-3 w-3"
+                        />
+                        총액 덮어쓰기
+                      </label>
+                      <Input
+                        className="h-7 text-xs w-28 bg-[var(--input-bg)] tabular-nums"
+                        placeholder="0"
+                        value={manualTotalAmountKrw}
+                        onChange={(e) => setManualTotalAmountKrw(e.target.value)}
+                        inputMode="numeric"
+                        disabled={!isManualTotalOverride}
+                      />
+                    </div>
                 </div>
               </div>
+
+              {showRoundingHint ? (
+                <div className="rounded-md border border-[var(--primary)]/20 bg-[var(--surface)]/60 px-3 py-2 text-[10px] text-[var(--muted)]">
+                  이 모델은 확정 시 RULE 판매가가 {Number(roundingUnit).toLocaleString()}원 단위로 올림됩니다.
+                </div>
+              ) : null}
 
               <div className="rounded-md border border-[var(--primary)]/20 bg-[var(--surface)]/40 p-3 space-y-2">
                 <div className="flex items-center gap-2 text-xs text-[var(--primary)]">
                   <span className="font-semibold">기타공임 내역</span>
-                  <div className="min-w-[120px]">
-                    <SearchSelect
-                      placeholder="내역 선택"
-                      options={OTHER_LABOR_OPTIONS}
-                      value={extraLaborSelect ?? undefined}
-                      onChange={(value) => handleAddExtraLabor(value)}
-                    />
+                  <div className="flex items-center gap-2 overflow-x-auto">
+                    {OTHER_LABOR_OPTIONS.map((option) => (
+                      <Button
+                        key={option.value}
+                        type="button"
+                        size="sm"
+                        variant="secondary"
+                        onClick={() => handleAddExtraLabor(option.value)}
+                        className="whitespace-nowrap"
+                      >
+                        {option.label}
+                      </Button>
+                    ))}
+                  </div>
+                  <div className="flex items-center gap-2 rounded-full border border-[var(--panel-border)] bg-[var(--panel)] px-2 py-1">
+                    <span className="text-[10px] text-[var(--primary)]">기타원가</span>
+                    <div className="h-7 text-xs w-20 bg-[var(--input-bg)] tabular-nums flex items-center justify-end">
+                      {renderNumber(resolvedOtherLaborCost)}
+                    </div>
                   </div>
                 </div>
                 <div className="space-y-1">
-                  {extraLaborItems.length === 0 && (
+                  {extraLaborItems.length === 0 ? (
                     <div className="text-[10px] text-[var(--muted)]">추가된 내역이 없습니다.</div>
+                  ) : (
+                    extraLaborItems.map((item) => (
+                      <div key={item.id} className="flex items-center gap-2">
+                        <span className="text-[10px] text-[var(--primary)] min-w-[80px]">
+                          {item.label}
+                        </span>
+                        <Input
+                          className="h-7 text-xs w-20 bg-[var(--input-bg)] tabular-nums"
+                          placeholder="0"
+                          value={item.amount}
+                          onChange={(e) => handleExtraLaborAmountChange(item.id, e.target.value)}
+                          inputMode="numeric"
+                        />
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => handleRemoveExtraLabor(item.id)}
+                          className="text-[var(--muted)]"
+                        >
+                          삭제
+                        </Button>
+                      </div>
+                    ))
                   )}
-                  {extraLaborItems.map((item) => (
-                    <div key={item.id} className="flex items-center gap-2">
-                      <span className="text-[10px] text-[var(--primary)] min-w-[80px]">
-                        {item.label}
-                      </span>
-                      <Input
-                        className="h-7 text-xs w-20 bg-[var(--input-bg)] tabular-nums"
-                        placeholder="0"
-                        value={item.amount}
-                        onChange={(e) => handleExtraLaborAmountChange(item.id, e.target.value)}
-                      />
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => handleRemoveExtraLabor(item.id)}
-                        className="text-[var(--muted)]"
-                      >
-                        삭제
-                      </Button>
-                    </div>
-                  ))}
                 </div>
               </div>
             </div>
@@ -1972,11 +2695,19 @@ export default function ShipmentsPage() {
                 </div>
                 <div>
                   <span className="text-xs text-[var(--primary)] block mb-1">Gold 스냅샷</span>
-                  <span className="text-sm font-semibold tabular-nums">{valuation?.gold_krw_per_g_snapshot ?? "-"}</span>
+                  <span className="text-sm font-semibold">
+                    {valuation?.gold_krw_per_g_snapshot === null || valuation?.gold_krw_per_g_snapshot === undefined
+                      ? "-"
+                      : renderNumber(valuation.gold_krw_per_g_snapshot)}
+                  </span>
                 </div>
                 <div>
                   <span className="text-xs text-[var(--primary)] block mb-1">Silver 스냅샷</span>
-                  <span className="text-sm font-semibold tabular-nums">{valuation?.silver_krw_per_g_snapshot ?? "-"}</span>
+                  <span className="text-sm font-semibold">
+                    {valuation?.silver_krw_per_g_snapshot === null || valuation?.silver_krw_per_g_snapshot === undefined
+                      ? "-"
+                      : renderNumber(valuation.silver_krw_per_g_snapshot)}
+                  </span>
                 </div>
               </div>
             </div>
@@ -2120,7 +2851,7 @@ export default function ShipmentsPage() {
                         <tr>
                           <th className="px-4 py-2 font-medium text-[var(--muted)]">MODEL</th>
                           <th className="px-4 py-2 font-medium text-[var(--muted)]">QTY</th>
-                          <th className="px-4 py-2 font-medium text-[var(--muted)]">UNIT COST (KRW)</th>
+                          <th className="px-4 py-2 font-medium text-[var(--muted)]">단가 (KRW)</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-[var(--panel-border)]">

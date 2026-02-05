@@ -27,6 +27,12 @@ export const navItems: NavItem[] = [
     ],
   },
   {
+    label: "카탈로그",
+    items: [
+      { label: "제품 카탈로그", href: "/catalog", icon: Boxes },
+    ],
+  },
+  {
     label: "업무 흐름",
     items: [
       { label: "① 주문", href: "/orders_main", icon: ClipboardList },
@@ -47,7 +53,6 @@ export const navItems: NavItem[] = [
     label: "기준 정보",
     items: [
       { label: "거래처 관리", href: "/party", icon: Store },
-      { label: "제품 카탈로그", href: "/catalog", icon: Boxes },
       { label: "시세 관리", href: "/market", icon: TrendingUp },
     ],
   },

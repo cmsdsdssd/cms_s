@@ -70,7 +70,8 @@ export const CONTRACTS = {
     shipmentAddFromOrder: process.env.NEXT_PUBLIC_CMS_FN_SHIPMENT_ADD_FROM_ORDER ?? "",
 
     shipmentAddAdHoc: process.env.NEXT_PUBLIC_CMS_FN_SHIPMENT_ADD_ADHOC ?? "",
-    shipmentUpdateLine: process.env.NEXT_PUBLIC_CMS_FN_SHIPMENT_UPDATE_LINE ?? "",
+    shipmentUpdateLine:
+      process.env.NEXT_PUBLIC_CMS_FN_SHIPMENT_UPDATE_LINE ?? "cms_fn_shipment_update_line_v1",
 
     // ✅ FIX: 실제 존재하는 RPC로 교체
     shipmentUpsertFromOrder:
@@ -79,6 +80,7 @@ export const CONTRACTS = {
 
     shipmentConfirm:
       process.env.NEXT_PUBLIC_RPC_SHIPMENT_CONFIRM || "cms_fn_confirm_shipment_v3_cost_v1",
+    shipmentConfirmV3Cost: "cms_fn_confirm_shipment_v3_cost_v1",
     shipmentConfirmStorePickup: (() => {
       const confirm =
         process.env.NEXT_PUBLIC_RPC_SHIPMENT_CONFIRM || "cms_fn_confirm_shipment_v3_cost_v1";
@@ -109,6 +111,9 @@ export const CONTRACTS = {
     marketTickUpsertByRole:
       process.env.NEXT_PUBLIC_CMS_FN_MARKET_TICK_UPSERT_BY_ROLE ??
       "cms_fn_upsert_market_tick_by_role_v1",
+
+    setMasterUnitPricing: "cms_fn_set_master_item_unit_pricing_v1",
+    setRuleRoundingUnit: "cms_fn_set_rule_rounding_unit_v1",
 
     // ✅ Settings(시세 파이프라인 설정) 저장용 RPC
     marketTickConfigUpsert: "cms_fn_upsert_market_tick_config_v1",

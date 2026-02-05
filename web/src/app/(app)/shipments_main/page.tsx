@@ -42,6 +42,13 @@ type UnshippedRow = {
   factory_po_id?: string | null;
 };
 
+type StorePickupLineRow = {
+  order_line_id?: string | null;
+  shipment_header?: {
+    is_store_pickup?: boolean | null;
+  } | null;
+};
+
 type FilterType = "customer" | "status" | "date";
 
 type FilterRow = {
@@ -139,22 +146,17 @@ export default function ShipmentsMainPage() {
     createPresetFilter("status", "SENT_TO_VENDOR"),
   ]);
   const [filterOperator, setFilterOperator] = useState<FilterOperator>("or");
+  const [includeStorePickup, setIncludeStorePickup] = useState(false);
   const [selectedLines, setSelectedLines] = useState<Set<string>>(new Set());
   const [page, setPage] = useState(1);
   const [sortField, setSortField] = useState<SortField>("order_date");
   const [sortOrder, setSortOrder] = useState<SortOrder>("desc");
   const pageSize = 50; // 페이지당 50개씩
 
-  // Debug: 콘솔 로그 추가
-  useEffect(() => {
-    console.log('ShipmentsMainPage mounted');
-  }, []);
-
   // Fetch unshipped order lines - OPTIMIZED with caching
   const unshippedQuery = useQuery({
     queryKey: ["cms", "unshipped_order_lines"],
     queryFn: async () => {
-      console.log('Fetching unshipped orders...');
       if (!schemaClient) throw new Error("Supabase 클라이언트가 초기화되지 않았습니다");
       
       try {
@@ -167,7 +169,6 @@ export default function ShipmentsMainPage() {
           .limit(500);
         
         const endTime = performance.now();
-        console.log(`Fetch took ${endTime - startTime}ms, got ${data?.length || 0} rows`);
         
         if (error) {
           console.error('Supabase error:', error);
@@ -197,16 +198,11 @@ export default function ShipmentsMainPage() {
     retryDelay: 1000, // 1초 후 재시도
   });
 
-  // 데이터 로깅
   useEffect(() => {
-    if (unshippedQuery.data) {
-      console.log('Unshipped data loaded:', unshippedQuery.data.length, 'rows');
-      console.log('Sample data:', unshippedQuery.data.slice(0, 3));
-    }
     if (unshippedQuery.error) {
       console.error('Query error:', unshippedQuery.error);
     }
-  }, [unshippedQuery.data, unshippedQuery.error]);
+  }, [unshippedQuery.error]);
 
   useEffect(() => {
     const handleVisibility = () => {
@@ -218,9 +214,53 @@ export default function ShipmentsMainPage() {
     return () => document.removeEventListener("visibilitychange", handleVisibility);
   }, [unshippedQuery]);
 
+  const orderLineIds = useMemo(
+    () => (unshippedQuery.data ?? []).map((row) => row.order_line_id).filter(Boolean),
+    [unshippedQuery.data]
+  );
+
+  const storePickupOrderLinesQuery = useQuery({
+    queryKey: ["cms", "store_pickup_order_lines", orderLineIds],
+    enabled: Boolean(schemaClient) && orderLineIds.length > 0,
+    queryFn: async () => {
+      if (!schemaClient) throw new Error("Supabase 클라이언트가 초기화되지 않았습니다");
+      const { data, error } = await schemaClient
+        .from("cms_shipment_line")
+        .select("order_line_id, shipment_header:cms_shipment_header!inner(is_store_pickup)")
+        .in("order_line_id", orderLineIds)
+        .eq("shipment_header.is_store_pickup", true);
+      if (error) throw error;
+      return (data ?? []) as StorePickupLineRow[];
+    },
+  });
+
+  const storePickupOrderLineIds = useMemo(() => {
+    const rows = storePickupOrderLinesQuery.data ?? [];
+    return new Set(
+      rows
+        .map((row) => row.order_line_id ?? "")
+        .filter((value) => Boolean(value))
+    );
+  }, [storePickupOrderLinesQuery.data]);
+
   // Apply filters and sorting
   const applyFilters = useMemo(() => {
     if (!unshippedQuery.data) return [];
+
+    let result = unshippedQuery.data;
+    console.log("[shipments_main DEBUG] unshippedQuery.data:", result.length, "rows");
+    console.log("[shipments_main DEBUG] order_line_ids:", result.map(r => r.order_line_id));
+    console.log("[shipments_main DEBUG] includeStorePickup:", includeStorePickup);
+    console.log("[shipments_main DEBUG] storePickupOrderLinesQuery.isLoading:", storePickupOrderLinesQuery.isLoading);
+    console.log("[shipments_main DEBUG] storePickupOrderLineIds:", Array.from(storePickupOrderLineIds));
+    
+    if (!includeStorePickup) {
+      const beforeCount = result.length;
+      const removedIds = result.filter((row) => storePickupOrderLineIds.has(row.order_line_id)).map(r => r.order_line_id);
+      console.log("[shipments_main DEBUG] Removed order_line_ids (store pickup):", removedIds);
+      result = result.filter((row) => !storePickupOrderLineIds.has(row.order_line_id));
+      console.log("[shipments_main DEBUG] After store pickup filter:", result.length, "/", beforeCount);
+    }
     
     const activeFilters = filters.filter((filter) => filter.value);
 
@@ -242,7 +282,7 @@ export default function ShipmentsMainPage() {
       return true;
     };
 
-    let result = unshippedQuery.data.filter((row) => {
+    result = result.filter((row) => {
       if (activeFilters.length === 0) return true;
       if (filterOperator === "or") {
         return activeFilters.some((filter) => matchesFilter(row, filter));
@@ -313,7 +353,7 @@ export default function ShipmentsMainPage() {
     });
     
     return result;
-  }, [unshippedQuery.data, filters, filterOperator, sortField, sortOrder]);
+  }, [unshippedQuery.data, storePickupOrderLineIds, includeStorePickup, filters, filterOperator, sortField, sortOrder]);
 
   // Pagination
   const paginatedData = useMemo(() => {
@@ -583,7 +623,7 @@ export default function ShipmentsMainPage() {
             </div>
             <div className="flex items-center gap-1">
               <Select
-                className="h-7 text-xs w-24"
+                className="h-8 text-xs w-28 px-2 py-0.5"
                 onChange={(event) => addFilter(event.target.value as FilterType)}
                 value=""
               >
@@ -608,6 +648,35 @@ export default function ShipmentsMainPage() {
                 필터가 없습니다
               </div>
             ) : null}
+            <div
+              className={cn(
+                "flex items-center justify-between rounded-xl border border-[var(--panel-border)] p-3 shadow-sm",
+                includeStorePickup ? "bg-emerald-500/10" : "bg-red-500/10"
+              )}
+            >
+              <div className="flex items-center gap-2">
+                <Badge tone="neutral" className="text-[10px] px-2 py-0.5 uppercase tracking-wider">status</Badge>
+                <span className="text-xs text-[var(--muted)]">매장출고</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIncludeStorePickup((prev) => !prev)}
+                className={cn(
+                  "inline-flex items-center gap-2 rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors",
+                  includeStorePickup
+                    ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-500"
+                    : "border-red-500/20 bg-red-500/5 text-red-300"
+                )}
+              >
+                <span
+                  className={cn(
+                    "h-2 w-2 rounded-full",
+                    includeStorePickup ? "bg-emerald-400" : "bg-red-300"
+                  )}
+                />
+                {includeStorePickup ? "ON" : "OFF"}
+              </button>
+            </div>
             {filters.map((filter) => (
               <div
                 key={filter.id}
@@ -751,86 +820,73 @@ export default function ShipmentsMainPage() {
                 )}
               </div>
             ) : (
-              paginatedData.map((row) => {
-                const isSelected = selectedLines.has(row.order_line_id);
-                return (
-                  <div
-                    key={row.order_line_id}
-                    className={cn(
-                      "group relative rounded-[14px] border px-4 py-3 bg-[var(--panel)] shadow-sm",
-                      "transition-all duration-200 hover:shadow-md hover:-translate-y-0.5 cursor-pointer",
-                      isSelected
-                        ? "border-[var(--primary)] bg-[var(--primary)]/5"
-                        : "border-[var(--panel-border)] hover:border-[var(--primary)]/20"
-                    )}
-                    onClick={() => toggleSelection(row.order_line_id)}
-                  >
-                    <div className="flex items-start gap-3">
-                      {/* Checkbox */}
-                      <div className={cn(
-                        "w-5 h-5 rounded border flex items-center justify-center transition-colors mt-0.5",
+              <>
+                <div className="sticky top-0 z-10 grid grid-cols-[90px_90px_140px_1.2fr_80px_100px_80px_70px_1fr_70px] gap-2 rounded-xl border border-[var(--panel-border)] bg-[var(--surface)] px-3 py-2 text-[10px] font-semibold text-[var(--muted)]">
+                  <span>발주일</span>
+                  <span>입고일</span>
+                  <span>거래처명</span>
+                  <span>모델명</span>
+                  <span>소재</span>
+                  <span>색상</span>
+                  <span>사이즈</span>
+                  <span>중량</span>
+                  <span>비고</span>
+                  <span>석여부</span>
+                </div>
+                {paginatedData.map((row) => {
+                  const isSelected = selectedLines.has(row.order_line_id);
+                  return (
+                    <div
+                      key={row.order_line_id}
+                      className={cn(
+                        "group relative rounded-[14px] border px-3 py-2 bg-[var(--panel)] shadow-sm",
+                        "transition-all duration-200 hover:shadow-md hover:-translate-y-0.5 cursor-pointer",
                         isSelected
-                          ? "bg-[var(--primary)] border-[var(--primary)] text-white"
-                          : "border-[var(--panel-border)] group-hover:border-[var(--primary)]/50"
-                      )}>
-                        {isSelected && <CheckCircle2 className="w-3.5 h-3.5" />}
-                      </div>
-
-                      {/* Content */}
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 mb-2">
-                          <StatusBadge status={row.status || ''} displayStatus={row.display_status} />
-                          <span className="text-xs text-[var(--muted)]">
-                            {row.vendor_name && `• ${row.vendor_name}`}
+                          ? "border-[var(--primary)] bg-[var(--primary)]/5"
+                          : "border-[var(--panel-border)] hover:border-[var(--primary)]/20"
+                      )}
+                      onClick={() => toggleSelection(row.order_line_id)}
+                    >
+                      <div className="grid grid-cols-[90px_90px_140px_1.2fr_80px_100px_80px_70px_1fr_70px] gap-2 text-xs">
+                        <div className="flex items-center gap-2">
+                          <div className={cn(
+                            "w-4 h-4 rounded border flex items-center justify-center transition-colors",
+                            isSelected
+                              ? "bg-[var(--primary)] border-[var(--primary)] text-white"
+                              : "border-[var(--panel-border)] group-hover:border-[var(--primary)]/50"
+                          )}>
+                            {isSelected && <CheckCircle2 className="w-3 h-3" />}
+                          </div>
+                          <span className="tabular-nums">
+                            {row.sent_to_vendor_at ? new Date(row.sent_to_vendor_at).toLocaleDateString('ko-KR') : "-"}
                           </span>
                         </div>
-
-                        <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-sm">
-                          <div className="flex flex-col">
-                            <span className="text-[10px] text-[var(--muted)]">거래처</span>
-                            <span className="font-medium truncate">{row.customer_name || '-'}</span>
+                        <span className="tabular-nums">
+                          {row.inbound_at ? new Date(row.inbound_at).toLocaleDateString('ko-KR') : "-"}
+                        </span>
+                        <span className="truncate font-medium">{row.customer_name || "-"}</span>
+                        <span className="truncate">
+                          <div className="flex items-center gap-2">
+                            <StatusBadge status={row.status || ""} displayStatus={row.display_status} />
+                            <span className="truncate font-semibold">{row.model_name || "-"}</span>
                           </div>
-                          <div className="flex flex-col">
-                            <span className="text-[10px] text-[var(--muted)]">모델</span>
-                            <span className="font-medium">{row.model_name || '-'}</span>
-                          </div>
-                          <div className="flex flex-col">
-                            <span className="text-[10px] text-[var(--muted)]">색상</span>
-                            <div className="flex items-center gap-1">
-                              {parseColors(row.color).map((c, i) => (
-                                <ColorChip key={i} color={c} />
-                              ))}
-                              <span className="text-xs ml-1">{row.color || '-'}</span>
-                            </div>
-                          </div>
-                          <div className="flex flex-col">
-                            <span className="text-[10px] text-[var(--muted)]">수량</span>
-                            <span className="font-semibold">{row.qty || 1}</span>
-                          </div>
+                        </span>
+                        <span>{"-"}</span>
+                        <div className="flex items-center gap-1">
+                          {parseColors(row.color).map((c, i) => (
+                            <ColorChip key={i} color={c} />
+                          ))}
+                          <span className="truncate">{row.color || "-"}</span>
                         </div>
-
-                        {/* Additional info */}
-                        <div className="flex items-center gap-4 mt-2 text-[10px] text-[var(--muted)]">
-                          {row.sent_to_vendor_at && (
-                            <span>발주: {new Date(row.sent_to_vendor_at).toLocaleDateString('ko-KR')}</span>
-                          )}
-                          {row.inbound_at && (
-                            <span>입고: {new Date(row.inbound_at).toLocaleDateString('ko-KR')}</span>
-                          )}
-                          {row.size && <span>사이즈: {row.size}</span>}
-                          {row.is_plated && <span>도금: {row.plating_color_code || 'Y'}</span>}
-                        </div>
-
-                        {row.memo && (
-                          <div className="mt-2 text-[10px] text-[var(--muted)] truncate">
-                            {row.memo}
-                          </div>
-                        )}
+                        <span className="truncate">{row.size || "-"}</span>
+                        <span>{"-"}</span>
+                        <span className="truncate text-[var(--muted)]">{row.memo || "-"}</span>
+                        <span>{row.is_plated ? "Y" : "N"}</span>
                       </div>
                     </div>
-                  </div>
-                );
-              })
+                  );
+                })}
+              </>
             )}
           </CardBody>
         </Card>

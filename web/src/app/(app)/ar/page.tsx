@@ -225,7 +225,12 @@ const toKstInputValue = () => {
   const now = new Date();
   const utc = now.getTime() + now.getTimezoneOffset() * 60000;
   const kst = new Date(utc + 9 * 60 * 60000);
-  return kst.toISOString().slice(0, 16);
+  const year = kst.getFullYear();
+  const month = String(kst.getMonth() + 1).padStart(2, '0');
+  const day = String(kst.getDate()).padStart(2, '0');
+  const hours = String(kst.getHours()).padStart(2, '0');
+  const minutes = String(kst.getMinutes()).padStart(2, '0');
+  return `${year}-${month}-${day}T${hours}:${minutes}`;
 };
 
 export default function ArPage() {
@@ -252,6 +257,7 @@ export default function ArPage() {
 
   const [isSelectorOpen, setIsSelectorOpen] = useState(false);
   const selectorRef = useRef<HTMLDivElement>(null);
+  const [partySelectedAt, setPartySelectedAt] = useState<string | null>(null);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -281,8 +287,14 @@ export default function ArPage() {
     setSelectedPartyId(nextPartyId);
     if (!nextPartyId) {
       setReturnPartyIdWithReset("");
+      setPartySelectedAt(null);
       return;
     }
+    // 거래처 선택 시간을 현재 시간으로 설정
+    const now = toKstInputValue();
+    setPartySelectedAt(now);
+    setPaidAt(now);
+    setReturnOccurredAt(now);
     if (!paymentPartyId) {
       setPaymentPartyId(nextPartyId);
     }
@@ -628,6 +640,7 @@ export default function ArPage() {
       setPaymentCashKrw("");
       setPaymentGoldG("");
       setPaymentSilverG("");
+      setPaidAt(toKstInputValue());
       setPaymentIdempotencyKey(crypto.randomUUID());
     },
   });
@@ -646,6 +659,7 @@ export default function ArPage() {
       setReturnOverrideAmount("");
       setReturnReason("");
       setReturnShipmentLineId("");
+      setReturnOccurredAt(toKstInputValue());
     },
     onError: (error) => {
       const message = error instanceof Error ? error.message : "잠시 후 다시 시도해 주세요";
@@ -682,9 +696,9 @@ export default function ArPage() {
   };
 
   const canSavePayment = isFnConfigured(CONTRACTS.functions.arApplyPaymentFifo);
-  const parsedCash = Number(paymentCashKrw);
-  const parsedGold = Number(paymentGoldG);
-  const parsedSilver = Number(paymentSilverG);
+  const parsedCash = Number(paymentCashKrw.replace(/,/g, ""));
+  const parsedGold = Number(paymentGoldG.replace(/,/g, ""));
+  const parsedSilver = Number(paymentSilverG.replace(/,/g, ""));
   const cashValue = Number.isFinite(parsedCash) ? parsedCash : 0;
   const goldValue = Number.isFinite(parsedGold) ? parsedGold : 0;
   const silverValue = Number.isFinite(parsedSilver) ? parsedSilver : 0;
@@ -872,6 +886,10 @@ export default function ArPage() {
                 </div>
               ) : selectedParty ? (
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
+                  <div>
+                    <p className="text-xs text-[var(--muted)]">미수금</p>
+                    <p className="text-lg font-bold">{formatKrw(selectedParty.receivable_krw)}</p>
+                  </div>
                   <div>
                     <p className="text-xs text-[var(--muted)]">공임 잔액</p>
                     <p className="text-lg font-bold">{formatKrw(selectedParty.labor_cash_outstanding_krw)}</p>
@@ -1197,6 +1215,16 @@ export default function ArPage() {
               </CardBody>
             </Card>
           ) : null}
+          {!effectiveSelectedPartyId && (
+            <Card className="shadow-sm border-dashed">
+              <CardBody className="p-8 text-center">
+                <p className="text-[var(--muted)]">거래처를 선택하면 미수금, 수금일시, 반품일시가 표시됩니다</p>
+                <p className="text-xs text-[var(--muted)] mt-2">거래처 선택 시간이 수금/반품 일시의 기준이 됩니다</p>
+              </CardBody>
+            </Card>
+          )}
+          {effectiveSelectedPartyId && (
+            <>
           <div className="flex items-center gap-1 p-1 bg-[var(--chip)] rounded-lg w-full border">
             {([
               { key: "payment", label: "수금 등록" },
@@ -1483,9 +1511,12 @@ export default function ArPage() {
                 </CardBody>
               </Card>
             </div>
-            <Card className="shadow-sm">
-              <CardHeader>
-                <ActionBar title="결제/상계 내역" />
+          </div>
+        </>
+      )}
+      <Card className="shadow-sm">
+        <CardHeader>
+          <ActionBar title="결제/상계 내역" />
               </CardHeader>
               <CardBody className="p-0">
                 <div className="max-h-[420px] overflow-auto">
@@ -1562,6 +1593,5 @@ export default function ArPage() {
           </div>
         </div>
       </div>
-    </div>
   );
 }

@@ -2,27 +2,51 @@ import * as React from "react";
 import { cn } from "@/lib/utils";
 import { formatNumberInput, splitFormattedNumberParts } from "@/lib/number";
 
-export const Input = React.forwardRef<HTMLInputElement, React.InputHTMLAttributes<HTMLInputElement>>(
-  ({ className, type, inputMode, onChange, value, defaultValue, ...props }, ref) => {
+export const Input = React.forwardRef<HTMLInputElement, React.InputHTMLAttributes<HTMLInputElement> & { autoFormat?: boolean }>(
+  ({ className, type, inputMode, onChange, value, defaultValue, autoFormat = true, ...props }, ref) => {
     const isNumeric = type === "number" || inputMode === "numeric" || inputMode === "decimal";
     const resolvedType = isNumeric ? "text" : type;
     const resolvedInputMode = isNumeric ? inputMode ?? "numeric" : inputMode;
     const rawValue = typeof value === "number" ? String(value) : typeof value === "string" ? value : "";
-    const formattedValue = isNumeric && rawValue ? formatNumberInput(rawValue) : rawValue;
-    const displayParts = isNumeric && formattedValue ? splitFormattedNumberParts(formattedValue) : null;
+    const formattedValue = isNumeric && rawValue && autoFormat ? formatNumberInput(rawValue) : rawValue;
+    const displayParts = isNumeric && formattedValue && autoFormat ? splitFormattedNumberParts(formattedValue) : null;
     const hasComma = Boolean(displayParts && displayParts.rest);
     const handleChange: React.ChangeEventHandler<HTMLInputElement> = (event) => {
       if (!isNumeric) {
         onChange?.(event);
         return;
       }
-      const formatted = formatNumberInput(event.target.value);
-      if (formatted !== event.target.value) {
-        event.target.value = formatted;
+      if (!autoFormat) {
+        onChange?.(event);
+        return;
+      }
+      const target = event.target;
+      const raw = target.value;
+      const selectionStart = target.selectionStart ?? raw.length;
+      const formatted = formatNumberInput(raw);
+      if (formatted !== raw) {
+        const countBeforeCaret = raw.slice(0, selectionStart).replace(/[^0-9.]/g, "").length;
+        let nextCaret = formatted.length;
+        if (countBeforeCaret > 0) {
+          let seen = 0;
+          for (let i = 0; i < formatted.length; i += 1) {
+            if (/[0-9.]/.test(formatted[i])) {
+              seen += 1;
+            }
+            if (seen >= countBeforeCaret) {
+              nextCaret = i + 1;
+              break;
+            }
+          }
+        }
+        target.value = formatted;
+        if (document.activeElement === target) {
+          target.setSelectionRange(nextCaret, nextCaret);
+        }
       }
       onChange?.(event);
     };
-    if (!isNumeric) {
+    if (!isNumeric || !autoFormat) {
       return (
         <input
           ref={ref}
@@ -39,7 +63,14 @@ export const Input = React.forwardRef<HTMLInputElement, React.InputHTMLAttribute
         />
       );
     }
-
+    const alignClassName =
+      typeof className === "string"
+        ? className.includes("text-right")
+          ? "justify-end text-right"
+          : className.includes("text-center")
+            ? "justify-center text-center"
+            : ""
+        : "";
     return (
       <div className="relative w-full">
         <input
@@ -56,7 +87,12 @@ export const Input = React.forwardRef<HTMLInputElement, React.InputHTMLAttribute
           {...props}
         />
         {displayParts ? (
-          <div className="pointer-events-none absolute inset-0 flex items-center px-3 py-2 text-sm tabular-nums text-[var(--foreground)]">
+          <div
+            className={cn(
+              "pointer-events-none absolute inset-0 flex items-center px-3 py-2 text-sm tabular-nums text-[var(--foreground)]",
+              alignClassName
+            )}
+          >
             {hasComma ? <span className="text-[color:var(--primary)]">{displayParts.prefix}</span> : displayParts.prefix}
             {displayParts.rest}
             {displayParts.decimal ? <span className="text-[#fca5a5]">{displayParts.decimal}</span> : null}
