@@ -51,6 +51,31 @@ type ReceiptLine = ReceiptLineItem & {
 
 type Amounts = ReceiptAmounts;
 
+type ArPositionRow = {
+  party_id?: string | null;
+  receivable_krw?: number | null;
+  labor_cash_outstanding_krw?: number | null;
+  gold_outstanding_g?: number | null;
+  silver_outstanding_g?: number | null;
+};
+
+type ArInvoicePositionRow = {
+  party_id?: string | null;
+  occurred_at?: string | null;
+  commodity_type?: "gold" | "silver" | null;
+  commodity_outstanding_g?: number | null;
+  labor_cash_outstanding_krw?: number | null;
+  total_cash_outstanding_krw?: number | null;
+  shipment_line?: {
+    shipment_header?: {
+      ship_date?: string | null;
+      confirmed_at?: string | null;
+      is_store_pickup?: boolean | null;
+    } | null;
+  } | null;
+};
+
+
 type PartyReceiptPage = {
   partyId: string;
   partyName: string;
@@ -135,6 +160,47 @@ const addAmounts = (base: Amounts, add: Amounts) => ({
   total: base.total + add.total,
 });
 
+const subtractAmounts = (base: Amounts, sub: Amounts) => ({
+  gold: base.gold - sub.gold,
+  silver: base.silver - sub.silver,
+  labor: base.labor - sub.labor,
+  total: base.total - sub.total,
+});
+
+const toArAmounts = (row: ArInvoicePositionRow): Amounts => {
+  const commodity = Number(row.commodity_outstanding_g ?? 0);
+  const labor = Number(row.labor_cash_outstanding_krw ?? 0);
+  const total = Number(row.total_cash_outstanding_krw ?? 0);
+  return {
+    gold: row.commodity_type === "gold" ? commodity : 0,
+    silver: row.commodity_type === "silver" ? commodity : 0,
+    labor,
+    total,
+  };
+};
+
+const getArBucket = (
+  shipDate: string | null,
+  confirmedAtMs: number,
+  occurredAtMs: number,
+  today: string,
+  todayStartMs: number,
+  todayEndMs: number
+) => {
+  const eventMs = Number.isFinite(occurredAtMs) ? occurredAtMs : confirmedAtMs;
+  if (Number.isFinite(eventMs)) {
+    if (eventMs >= todayStartMs && eventMs < todayEndMs) return "today" as const;
+    if (eventMs < todayStartMs) return "previous" as const;
+    return "future" as const;
+  }
+  if (shipDate) {
+    if (shipDate === today) return "today" as const;
+    if (shipDate < today) return "previous" as const;
+    return "future" as const;
+  }
+  return "unknown" as const;
+};
+
 const getMaterialBucket = (code?: string | null) => {
   const material = (code ?? "").trim();
   if (!material || material === "00") return { kind: "none" as const, factor: 0 };
@@ -185,6 +251,7 @@ function ShipmentsPrintContent() {
   const [reasonModalOpen, setReasonModalOpen] = useState(false);
   const [reasonText, setReasonText] = useState("");
   const [targetShipmentId, setTargetShipmentId] = useState<string | null>(null);
+  const [activePartyId, setActivePartyId] = useState<string | null>(null);
 
   const mode = searchParams.get("mode") ?? "";
   const isStorePickupMode = mode === "store_pickup";
@@ -194,6 +261,8 @@ function ShipmentsPrintContent() {
   const today = useMemo(() => (isValidYmd(dateParam) ? dateParam : getKstYmd()), [dateParam]);
   const todayStartIso = useMemo(() => getKstStartIso(today), [today]);
   const todayEndIso = useMemo(() => getKstNextStartIso(today), [today]);
+  const todayStartMs = useMemo(() => new Date(todayStartIso).getTime(), [todayStartIso]);
+  const todayEndMs = useMemo(() => new Date(todayEndIso).getTime(), [todayEndIso]);
   const [nowLabel, setNowLabel] = useState("");
 
   useEffect(() => {
@@ -300,68 +369,59 @@ function ShipmentsPrintContent() {
 
   const partyIds = useMemo(() => partyGroups.map((group) => group.partyId), [partyGroups]);
 
-  const totalsQuery = useQuery({
-    queryKey: ["shipments-print-total", today, mode, filterPartyId, partyIds.join(",")],
-    queryFn: async () => {
-      if (!schemaClient) throw new Error("Supabase env is missing");
-      if (partyIds.length === 0) return [] as ReceiptLine[];
-      let query = schemaClient
-        .from("cms_shipment_line")
-        .select(
-          "shipment_line_id, material_code, net_weight_g, labor_total_sell_krw, total_amount_sell_krw, shipment_header:cms_shipment_header(ship_date, confirmed_at, status, customer_party_id, is_store_pickup)"
-        )
-        .eq("shipment_header.status", "CONFIRMED")
-        .in("shipment_header.customer_party_id", partyIds);
-
-      if (isStorePickupMode) {
-        query = query.eq("shipment_header.is_store_pickup", true).lte("shipment_header.ship_date", today);
-      } else {
-        query = query.and(
-          `shipment_header.ship_date.lte.${today},or(shipment_header.is_store_pickup.is.null,shipment_header.is_store_pickup.eq.false)`
-        );
-      }
-
-      const { data, error } = await query;
-      if (error) throw error;
-      return (data ?? []) as ReceiptLine[];
-    },
-    enabled: Boolean(schemaClient) && partyIds.length > 0,
-  });
+  useEffect(() => {
+    if (!activePartyId && partyGroups.length > 0) {
+      setActivePartyId(partyGroups[0].partyId);
+    }
+  }, [activePartyId, partyGroups]);
 
   const arPositionsQuery = useQuery({
     queryKey: ["shipments-print-ar", partyIds.join(",")],
     queryFn: async () => {
       if (!schemaClient) throw new Error("Supabase env is missing");
-      if (partyIds.length === 0) return [] as Array<{ party_id?: string | null; balance_krw?: number | null }>;
+      if (partyIds.length === 0) return [] as ArPositionRow[];
       const { data, error } = await schemaClient
-        .from("cms_v_ar_position_by_party")
-        .select("party_id, balance_krw")
+        .from("cms_v_ar_position_by_party_v2")
+        .select("party_id, receivable_krw, labor_cash_outstanding_krw, gold_outstanding_g, silver_outstanding_g")
         .in("party_id", partyIds);
       if (error) throw error;
-      return (data ?? []) as Array<{ party_id?: string | null; balance_krw?: number | null }>;
+      return (data ?? []) as ArPositionRow[];
     },
     enabled: Boolean(schemaClient) && partyIds.length > 0,
   });
 
-  const totalsByParty = useMemo(() => {
-    const map = new Map<string, Amounts>();
-    (totalsQuery.data ?? []).forEach((line) => {
-      const partyId = line.shipment_header?.customer_party_id ?? "";
-      if (!partyId) return;
-      const current = map.get(partyId) ?? { ...zeroAmounts };
-      map.set(partyId, addAmounts(current, toLineAmounts(line)));
-    });
-    return map;
-  }, [totalsQuery.data]);
+  const arInvoicePositionsQuery = useQuery({
+    queryKey: ["shipments-print-ar-invoice", today, mode, filterPartyId, partyIds.join(",")],
+    queryFn: async () => {
+      if (!schemaClient) throw new Error("Supabase env is missing");
+      if (partyIds.length === 0) return [] as ArInvoicePositionRow[];
+      const { data, error } = await schemaClient
+        .from("cms_v_ar_invoice_position_v1")
+        .select(
+          "party_id, occurred_at, commodity_type, commodity_outstanding_g, labor_cash_outstanding_krw, total_cash_outstanding_krw, shipment_line:cms_shipment_line(shipment_line_id, shipment_header:cms_shipment_header(ship_date, confirmed_at, is_store_pickup))"
+        )
+        .in("party_id", partyIds);
+      if (error) throw error;
+      return (data ?? []) as ArInvoicePositionRow[];
+    },
+    enabled: Boolean(schemaClient) && partyIds.length > 0,
+  });
 
-  const arBalanceMap = useMemo(() => {
+
+  const arTotalsMap = useMemo(() => {
     return new Map(
       (arPositionsQuery.data ?? []).map((row) => [
         row.party_id ?? "",
-        Number(row.balance_krw ?? 0),
+        {
+          gold: Number(row.gold_outstanding_g ?? 0),
+          silver: Number(row.silver_outstanding_g ?? 0),
+          labor: Number(row.labor_cash_outstanding_krw ?? 0),
+          total: Number(row.receivable_krw ?? 0),
+        },
       ])
     );
   }, [arPositionsQuery.data]);
+
 
   const todayByParty = useMemo(() => {
     const map = new Map<string, Amounts>();
@@ -374,88 +434,34 @@ function ShipmentsPrintContent() {
     return map;
   }, [todayLines]);
 
-  const previousLinesQuery = useQuery({
-    queryKey: ["shipments-print-prev-lines", today, mode, filterPartyId, partyIds.join(",")],
-    queryFn: async () => {
-      if (!schemaClient) throw new Error("Supabase env is missing");
-      if (partyIds.length === 0) return [] as ReceiptLine[];
-      let query = schemaClient
-        .from("cms_shipment_line")
-        .select(
-          "shipment_line_id, model_name, qty, material_code, net_weight_g, material_amount_sell_krw, labor_total_sell_krw, total_amount_sell_krw, shipment_header:cms_shipment_header(ship_date, confirmed_at, status, customer_party_id, is_store_pickup, customer:cms_party(name))"
-        )
-        .eq("shipment_header.status", "CONFIRMED")
-        .in("shipment_header.customer_party_id", partyIds);
-
-      if (isStorePickupMode) {
-        query = query.eq("shipment_header.is_store_pickup", true).lt("shipment_header.ship_date", today);
-      } else {
-        query = query.and(
-          `shipment_header.ship_date.lt.${today},or(shipment_header.is_store_pickup.is.null,shipment_header.is_store_pickup.eq.false)`
-        );
-      }
-
-      const { data, error } = await query;
-      if (error) throw error;
-      return (data ?? []) as ReceiptLine[];
-    },
-    enabled: Boolean(schemaClient) && partyIds.length > 0,
-  });
-
-  const previousByParty = useMemo(() => {
+  const arTodayMap = useMemo(() => {
     const map = new Map<string, Amounts>();
-    (previousLinesQuery.data ?? []).forEach((line) => {
-      const partyId = line.shipment_header?.customer_party_id ?? "";
-      if (!partyId) return;
-      const current = map.get(partyId) ?? { ...zeroAmounts };
-      map.set(partyId, addAmounts(current, toLineAmounts(line)));
-    });
-    return map;
-  }, [previousLinesQuery.data]);
-
-  const arPreviousQuery = useQuery({
-    queryKey: ["shipments-print-ar-prev", todayStartIso, partyIds.join(",")],
-    queryFn: async () => {
-      if (!schemaClient) throw new Error("Supabase env is missing");
-      if (partyIds.length === 0) return [] as Array<{ party_id?: string | null; amount_krw?: number | null }>;
-      const { data, error } = await schemaClient
-        .from("cms_ar_ledger")
-        .select("party_id, amount_krw, occurred_at")
-        .in("party_id", partyIds)
-        .lt("occurred_at", todayStartIso);
-      if (error) throw error;
-      return (data ?? []) as Array<{ party_id?: string | null; amount_krw?: number | null }>;
-    },
-    enabled: Boolean(schemaClient) && partyIds.length > 0,
-  });
-
-  const arPreviousMap = useMemo(() => {
-    const map = new Map<string, number>();
-    (arPreviousQuery.data ?? []).forEach((row) => {
+    (arInvoicePositionsQuery.data ?? []).forEach((row) => {
       const partyId = row.party_id ?? "";
       if (!partyId) return;
-      const current = map.get(partyId) ?? 0;
-      map.set(partyId, current + Number(row.amount_krw ?? 0));
+      const header = row.shipment_line?.shipment_header ?? null;
+      const isStorePickup = header?.is_store_pickup ?? null;
+      if (isStorePickupMode ? !isStorePickup : isStorePickup) return;
+      const shipDate = header?.ship_date ?? null;
+      const confirmedAt = header?.confirmed_at ?? null;
+      const occurredAt = row.occurred_at ?? null;
+      const confirmedAtMs = confirmedAt ? new Date(confirmedAt).getTime() : NaN;
+      const occurredAtMs = occurredAt ? new Date(occurredAt).getTime() : NaN;
+      const bucket = getArBucket(shipDate, confirmedAtMs, occurredAtMs, today, todayStartMs, todayEndMs);
+      if (bucket !== "today") return;
+      const current = map.get(partyId) ?? { ...zeroAmounts };
+      map.set(partyId, addAmounts(current, toArAmounts(row)));
     });
     return map;
-  }, [arPreviousQuery.data]);
+  }, [arInvoicePositionsQuery.data, isStorePickupMode, today, todayStartMs, todayEndMs]);
 
   const receiptPages = useMemo(() => {
     const result: PartyReceiptPage[] = [];
     partyGroups.forEach((group) => {
-      const chunks = chunkLines(group.lines, 8);
-      const todaySum = todayByParty.get(group.partyId) ?? { ...zeroAmounts };
-      const previousBase = previousByParty.get(group.partyId) ?? { ...zeroAmounts };
-      const previous = {
-        ...previousBase,
-        total: arPreviousMap.get(group.partyId) ?? previousBase.total,
-      };
-      const totals = {
-        gold: previous.gold + todaySum.gold,
-        silver: previous.silver + todaySum.silver,
-        labor: previous.labor + todaySum.labor,
-        total: arBalanceMap.get(group.partyId) ?? previous.total + todaySum.total,
-      };
+      const chunks = chunkLines(group.lines, 15);
+      const totals = arTotalsMap.get(group.partyId) ?? { ...zeroAmounts };
+      const todaySummary = arTodayMap.get(group.partyId) ?? { ...zeroAmounts };
+      const previousSummary = subtractAmounts(totals, todaySummary);
       const { goldPrice, silverPrice } = getTickPrices(group.lines);
       chunks.forEach((chunk) => {
         result.push({
@@ -463,8 +469,8 @@ function ShipmentsPrintContent() {
           partyName: group.partyName,
           lines: chunk,
           totals,
-          today: todaySum,
-          previous,
+          today: todaySummary,
+          previous: previousSummary,
           goldPrice,
           silverPrice,
         });
@@ -485,7 +491,16 @@ function ShipmentsPrintContent() {
     }
 
     return result;
-  }, [partyGroups, arBalanceMap, todayByParty, previousByParty, arPreviousMap]);
+  }, [partyGroups, arTotalsMap, arTodayMap]);
+
+  const activeParty = useMemo(() => {
+    return partyGroups.find((group) => group.partyId === activePartyId) ?? partyGroups[0] ?? null;
+  }, [partyGroups, activePartyId]);
+
+  const visiblePages = useMemo(() => {
+    if (!activeParty) return [] as PartyReceiptPage[];
+    return receiptPages.filter((page) => page.partyId === activeParty.partyId);
+  }, [receiptPages, activeParty]);
 
   const unconfirmShipmentMutation = useRpcMutation<unknown>({
     fn: CONTRACTS.functions.shipmentUnconfirm,
@@ -560,100 +575,94 @@ function ShipmentsPrintContent() {
           </Card>
         </div>
 
-        <Card className="border-[var(--panel-border)]">
-          <CardHeader className="border-b border-[var(--panel-border)] py-3">
-            <div className="text-sm font-semibold">오늘 출고 대상</div>
-          </CardHeader>
-          <CardBody className="p-0">
-            {shipmentsQuery.isLoading ? (
-              <div className="p-6 text-sm text-[var(--muted)]">로딩 중...</div>
-            ) : shipments.length === 0 ? (
-              <div className="p-6 text-sm text-[var(--muted)]">대상 없음</div>
-            ) : (
-              <div className="divide-y divide-[var(--panel-border)]">
-                {shipments.map((row) => (
-                  <div key={row.shipmentId} className="p-4 grid grid-cols-1 md:grid-cols-[1.2fr_1fr_1fr_auto] gap-4">
-                    <div>
-                      <div className="text-sm font-semibold">{row.customerName}</div>
-                      <div className="text-xs text-[var(--muted)]">
-                        {row.models.join(", ") || "-"}
-                      </div>
-                      <div className="text-xs text-[var(--muted)]">ID: {row.shipmentId.slice(0, 8)}</div>
-                    </div>
-                    <div>
-                      <div className="text-xs text-[var(--muted)]">확정시각</div>
-                      <div className="text-sm font-medium">{formatDateTimeKst(row.confirmedAt)}</div>
-                    </div>
-                    <div>
-                      <div className="text-xs text-[var(--muted)]">수량/금액</div>
-                      <div className="text-sm font-medium tabular-nums">
-                        {row.totalQty}개 · {formatKrw(row.totalAmount)}
-                      </div>
-                    </div>
-                    <div className="flex items-center justify-end">
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => handleOpenReason(row.shipmentId)}
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-[280px_1fr]">
+          <Card className="border-[var(--panel-border)] h-fit">
+            <CardHeader className="border-b border-[var(--panel-border)] py-3">
+              <div className="text-sm font-semibold">거래처 선택</div>
+            </CardHeader>
+            <CardBody className="p-0">
+              {shipmentsQuery.isLoading ? (
+                <div className="p-6 text-sm text-[var(--muted)]">로딩 중...</div>
+              ) : partyGroups.length === 0 ? (
+                <div className="p-6 text-sm text-[var(--muted)]">대상 없음</div>
+              ) : (
+                <div className="divide-y divide-[var(--panel-border)]">
+                  {partyGroups.map((group) => {
+                    const isActive = group.partyId === activeParty?.partyId;
+                    const todaySum = todayByParty.get(group.partyId) ?? { ...zeroAmounts };
+                    return (
+                      <button
+                        key={group.partyId}
+                        type="button"
+                        onClick={() => setActivePartyId(group.partyId)}
+                        className={cn(
+                          "w-full text-left px-4 py-3 transition-colors",
+                          isActive ? "bg-[var(--panel-hover)]" : "hover:bg-[var(--panel-hover)]"
+                        )}
                       >
-                        출고 초기화
-                      </Button>
+                        <div className="text-sm font-semibold truncate">{group.partyName}</div>
+                        <div className="text-xs text-[var(--muted)] tabular-nums">
+                          {group.lines.length}건 · 공임 {formatKrw(todaySum.labor)}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </CardBody>
+          </Card>
+
+          <div className="receipt-print-root">
+            {shipmentsQuery.isLoading ? (
+              <div className="text-sm text-[var(--muted)]">로딩 중...</div>
+            ) : visiblePages.length === 0 ? (
+              <div className="text-sm text-[var(--muted)]">미리볼 거래처를 선택하세요.</div>
+            ) : (
+              <div className="space-y-6">
+                {visiblePages.map((page, index) => (
+                  <div
+                    key={`${page.partyId}-${index}`}
+                    className={cn(
+                      "receipt-print-page mx-auto bg-white p-4 text-black shadow-sm",
+                      "border border-neutral-200"
+                    )}
+                    style={{ width: "100%", height: "194mm" }}
+                  >
+                    <div className="grid h-full grid-cols-2 gap-4">
+                      <div className="h-full border-r border-dashed border-neutral-300 pr-4">
+                        <ReceiptPrintHalf
+                          partyName={page.partyName}
+                          dateLabel={today}
+                          lines={page.lines}
+                          summaryRows={[
+                            { label: "합계", value: page.totals },
+                            { label: "이전 미수", value: page.previous },
+                            { label: "당일 미수", value: page.today },
+                          ]}
+                          goldPrice={page.goldPrice}
+                          silverPrice={page.silverPrice}
+                        />
+                      </div>
+                      <div className="h-full pl-4">
+                        <ReceiptPrintHalf
+                          partyName={page.partyName}
+                          dateLabel={today}
+                          lines={page.lines}
+                          summaryRows={[
+                            { label: "합계", value: page.totals },
+                            { label: "이전 미수", value: page.previous },
+                            { label: "당일 미수", value: page.today },
+                          ]}
+                          goldPrice={page.goldPrice}
+                          silverPrice={page.silverPrice}
+                        />
+                      </div>
                     </div>
                   </div>
                 ))}
               </div>
             )}
-          </CardBody>
-        </Card>
-      </div>
-
-      <div className="receipt-print-root px-6 pb-10 pt-2">
-        <div className="space-y-6">
-          {shipmentsQuery.isLoading ? (
-            <div className="text-sm text-[var(--muted)]">로딩 중...</div>
-          ) : (
-            receiptPages.map((page, index) => (
-              <div
-                key={`${page.partyId}-${index}`}
-                className={cn(
-                  "receipt-print-page mx-auto bg-white p-4 text-black shadow-sm",
-                  "border border-neutral-200"
-                )}
-                style={{ width: "100%", height: "194mm" }}
-              >
-                <div className="grid h-full grid-cols-2 gap-4">
-                  <div className="h-full border-r border-dashed border-neutral-300 pr-4">
-                    <ReceiptPrintHalf
-                      partyName={page.partyName}
-                      dateLabel={today}
-                      lines={page.lines}
-                      summaryRows={[
-                        { label: "합계", value: page.totals },
-                        { label: "이전 미수", value: page.previous },
-                        { label: "당일 미수", value: page.today },
-                      ]}
-                      goldPrice={page.goldPrice}
-                      silverPrice={page.silverPrice}
-                    />
-                  </div>
-                  <div className="h-full pl-4">
-                    <ReceiptPrintHalf
-                      partyName={page.partyName}
-                      dateLabel={today}
-                      lines={page.lines}
-                      summaryRows={[
-                        { label: "합계", value: page.totals },
-                        { label: "이전 미수", value: page.previous },
-                        { label: "당일 미수", value: page.today },
-                      ]}
-                      goldPrice={page.goldPrice}
-                      silverPrice={page.silverPrice}
-                    />
-                  </div>
-                </div>
-              </div>
-            ))
-          )}
+          </div>
         </div>
       </div>
 

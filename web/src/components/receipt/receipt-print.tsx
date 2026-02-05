@@ -62,7 +62,7 @@ export const ReceiptPrintHalf = ({
 }: ReceiptPrintHalfProps) => {
   const paddedLines = useMemo(() => {
     const next = [...lines];
-    while (next.length < 8) next.push({});
+    while (next.length < 15) next.push({});
     return next;
   }, [lines]);
 

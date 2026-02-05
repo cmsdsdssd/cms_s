@@ -993,7 +993,9 @@ export default function ShipmentsPage() {
     }
     const invalidExtra = extraLaborItems.find((item) => {
       if (item.amount.trim() === "") return false;
-      const value = Number(item.amount);
+      const normalized = item.amount.replaceAll(",", "").trim();
+      if (!normalized) return false;
+      const value = Number(normalized);
       return !Number.isFinite(value) || value < 0;
     });
     if (invalidExtra) {

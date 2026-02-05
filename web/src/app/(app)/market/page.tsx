@@ -1,19 +1,16 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useForm } from "react-hook-form";
 import { toast } from "sonner";
 import { ActionBar } from "@/components/layout/action-bar";
-import { FilterBar } from "@/components/layout/filter-bar";
-import { SplitLayout } from "@/components/layout/split-layout";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input, Select, Textarea } from "@/components/ui/field";
 import { useRpcMutation } from "@/hooks/use-rpc-mutation";
 import { CONTRACTS } from "@/lib/contracts";
 import { getSchemaClient } from "@/lib/supabase/client";
-import { cn } from "@/lib/utils";
 
 // ===================== TYPES =====================
 type LatestGoldSilver = {
@@ -74,13 +71,18 @@ const formatKrw = (value?: number | null) => {
     return `₩${new Intl.NumberFormat("ko-KR").format(Math.round(value))}`;
 };
 
+const formatNumber = (value?: number | null) => {
+    if (value === null || value === undefined) return "-";
+    return Math.round(value).toLocaleString();
+};
+
 const formatDateTimeKst = (value?: string | null) => {
     if (!value) return "-";
     const parsed = new Date(value);
     if (Number.isNaN(parsed.getTime())) return "-";
     return new Intl.DateTimeFormat("ko-KR", {
         timeZone: "Asia/Seoul",
-        year: "numeric",
+        year: "2-digit",
         month: "2-digit",
         day: "2-digit",
         hour: "2-digit",
@@ -107,11 +109,165 @@ const getKstNow = () => {
     return `${year}-${month}-${day}T${hours}:${minutes}`;
 };
 
+// ===================== COMPACT CHART COMPONENT =====================
+function CompactChart({ 
+    data, 
+    stats, 
+    color,
+    monthFilter,
+    secondaryData,
+}: { 
+    data: DailyOhlc[]; 
+    stats: { min: number; max: number; last: number | null };
+    color: string;
+    monthFilter: number;
+    secondaryData?: DailyOhlc[];
+}) {
+    const chartConfig = useMemo(() => ({
+        width: 280,
+        height: 120,
+        paddingLeft: 36,
+        paddingRight: 8,
+        paddingTop: 8,
+        paddingBottom: 16,
+    }), []);
+    
+    const { width, height, paddingLeft, paddingRight, paddingTop, paddingBottom } = chartConfig;
+    const range = stats.max - stats.min || 1;
+    
+    const buildPoints = (chartData: DailyOhlc[]) => {
+        if (chartData.length === 0) return "";
+        return chartData
+            .map((d, i) => {
+                const x = paddingLeft + (i / Math.max(1, chartData.length - 1)) * (width - paddingLeft - paddingRight);
+                const y = height - paddingBottom - ((d.close_krw_per_g - stats.min) / range) * (height - paddingTop - paddingBottom);
+                return `${x},${y}`;
+            })
+            .join(" ");
+    };
+    
+    const ticks = useMemo(() => {
+        const tickCount = 3;
+        return Array.from({ length: tickCount }).map((_, index) => {
+            const value = stats.max - (range / (tickCount - 1)) * index;
+            const y = paddingTop + ((stats.max - value) / range) * (height - paddingTop - paddingBottom);
+            return { value, y };
+        });
+    }, [stats, range, height, paddingTop, paddingBottom]);
+    
+    const points = useMemo(() => buildPoints(data), [data]);
+    const secondaryPoints = useMemo(() => secondaryData ? buildPoints(secondaryData) : "", [secondaryData]);
+    
+    return (
+        <svg
+            className="w-full"
+            style={{ height: '140px' }}
+            viewBox={`0 0 ${width} ${height}`}
+            preserveAspectRatio="none"
+        >
+            <defs>
+                <linearGradient id={`fill-${color}`} x1="0" x2="0" y1="0" y2="1">
+                    <stop offset="0%" stopColor={color} stopOpacity="0.15" />
+                    <stop offset="100%" stopColor={color} stopOpacity="0" />
+                </linearGradient>
+            </defs>
+            
+            {/* Grid lines */}
+            {ticks.map((tick, index) => (
+                <line
+                    key={index}
+                    x1={paddingLeft}
+                    x2={width - paddingRight}
+                    y1={tick.y}
+                    y2={tick.y}
+                    stroke="var(--panel-border)"
+                    strokeWidth="0.5"
+                    opacity="0.3"
+                />
+            ))}
+            
+            {/* Area fill */}
+            {data.length > 0 && (
+                <polygon
+                    fill={`url(#fill-${color})`}
+                    points={`${paddingLeft},${height - paddingBottom} ${points} ${width - paddingRight},${height - paddingBottom}`}
+                />
+            )}
+            
+            {/* Secondary line */}
+            {secondaryData && secondaryData.length > 0 && (
+                <polyline
+                    fill="none"
+                    stroke="#888"
+                    strokeWidth="1"
+                    strokeOpacity="0.4"
+                    strokeDasharray="4 2"
+                    points={secondaryPoints}
+                />
+            )}
+            
+            {/* Main line */}
+            {data.length > 0 && (
+                <polyline
+                    fill="none"
+                    stroke={color}
+                    strokeWidth="1.5"
+                    points={points}
+                />
+            )}
+        </svg>
+    );
+}
+
+// ===================== COMPACT PRICE CARD =====================
+function CompactPriceCard({
+    title,
+    price,
+    observedAt,
+    source,
+    isStale,
+    staleMinutes,
+    color,
+}: {
+    title: string;
+    price: number | undefined;
+    observedAt: string | undefined;
+    source: string | undefined;
+    isStale: boolean;
+    staleMinutes: number | null;
+    color: string;
+}) {
+    return (
+        <div className="flex items-center justify-between p-4 rounded-xl bg-[var(--panel)] border border-[var(--panel-border)]">
+            <div className="flex items-center gap-3">
+                <div 
+                    className="w-2 h-2 rounded-full"
+                    style={{ backgroundColor: color }}
+                />
+                <div>
+                    <div className="text-sm font-semibold text-[var(--foreground)]">{title}</div>
+                    <div className="text-xs text-[var(--muted)]">
+                        {formatDateTimeKst(observedAt)} · {source}
+                    </div>
+                </div>
+            </div>
+            <div className="text-right">
+                <div className="text-2xl font-bold" style={{ color }}>
+                    {formatKrw(price)}
+                </div>
+                <div className="text-xs text-[var(--muted)]">원/그램</div>
+                {isStale && (
+                    <div className="text-xs text-orange-500 mt-1">지연 {staleMinutes}분</div>
+                )}
+            </div>
+        </div>
+    );
+}
+
 // ===================== MAIN COMPONENT =====================
 export default function MarketPage() {
     const queryClient = useQueryClient();
-    const [roleFilter, setRoleFilter] = useState<string>("ALL");
-    const [dayFilter, setDayFilter] = useState<number>(7);
+    const [monthFilter, setMonthFilter] = useState<number>(1);
 
     const form = useForm<TickForm>({
         defaultValues: {
@@ -122,13 +278,11 @@ export default function MarketPage() {
         },
     });
 
-    // CS(중국 은시세) 계산계수 설정 (웹에서 조정)
     const [csFxMarkup, setCsFxMarkup] = useState<string>("1.030000");
     const [csCorrectionFactor, setCsCorrectionFactor] = useState<string>("1.000000");
     const [csConfigSaving, setCsConfigSaving] = useState(false);
 
-    // ===================== QUERIES =====================
-    const { data: latestData, isLoading: latestLoading } = useQuery({
+    const { data: latestData } = useQuery({
         queryKey: ["market", "latest"],
         queryFn: async () => {
             const client = getSchemaClient();
@@ -157,70 +311,20 @@ export default function MarketPage() {
         },
     });
 
-    useEffect(() => {
-        if (!csConfigData) return;
-        setCsFxMarkup(String(csConfigData.fx_markup));
-        setCsCorrectionFactor(String(csConfigData.cs_correction_factor));
-    }, [csConfigData]);
-
-    const saveCsConfig = async () => {
-        const fx = Number(csFxMarkup);
-        const corr = Number(csCorrectionFactor);
-        if (!Number.isFinite(fx) || fx <= 0) {
-            toast.error("CS 설정 저장 실패", { description: "fx_markup 값이 올바르지 않습니다." });
-            return;
-        }
-        if (!Number.isFinite(corr) || corr <= 0) {
-            toast.error("CS 설정 저장 실패", { description: "보정계수 값이 올바르지 않습니다." });
-            return;
-        }
-
-        try {
-            setCsConfigSaving(true);
-            const client = getSchemaClient();
-            if (!client) throw new Error("Supabase client not initialized");
-            const { error } = await (
-                client.from("cms_market_tick_config") as unknown as {
-                    upsert: (values: MarketTickConfigUpsert) => Promise<{ error: { message?: string } | null }>;
-                }
-            ).upsert({
-                config_key: "DEFAULT",
-                fx_markup: fx,
-                cs_correction_factor: corr,
-            });
-            if (error) throw error;
-
-            toast.success("CS 설정 저장 완료", { description: "n8n이 다음 실행부터 새로운 값으로 계산합니다." });
-            queryClient.invalidateQueries({ queryKey: ["market", "csConfig"] });
-        } catch (e) {
-            const msg = e instanceof Error ? e.message : "저장 실패";
-            toast.error("CS 설정 저장 실패", { description: msg });
-        } finally {
-            setCsConfigSaving(false);
-        }
-    };
-
     const { data: seriesData = [] } = useQuery({
-        queryKey: ["market", "series", roleFilter, dayFilter],
+        queryKey: ["market", "series", monthFilter],
         queryFn: async () => {
             const client = getSchemaClient();
             if (!client) throw new Error("Supabase client not initialized");
             const cutoff = new Date();
-            cutoff.setDate(cutoff.getDate() - dayFilter);
+            cutoff.setMonth(cutoff.getMonth() - monthFilter);
 
             const query = client
                 .from(CONTRACTS.views.marketSeries)
                 .select("*")
                 .gte("observed_at", cutoff.toISOString())
                 .order("observed_at", { ascending: false })
-                .limit(100);
-
-            if (roleFilter === "GOLD") {
-                // Filter gold based on role mapping - we'll just use symbol name heuristic
-                // In production, join with role table or filter by returned symbol
-            } else if (roleFilter === "SILVER") {
-                // Same for silver
-            }
+                .limit(50);
 
             const { data, error } = await query;
             if (error) throw error;
@@ -229,12 +333,12 @@ export default function MarketPage() {
     });
 
     const { data: ohlcData = [] } = useQuery({
-        queryKey: ["market", "ohlc", dayFilter],
+        queryKey: ["market", "ohlc", monthFilter],
         queryFn: async () => {
             const client = getSchemaClient();
             if (!client) throw new Error("Supabase client not initialized");
             const cutoff = new Date();
-            cutoff.setDate(cutoff.getDate() - dayFilter);
+            cutoff.setMonth(cutoff.getMonth() - monthFilter);
 
             const { data, error } = await client
                 .from(CONTRACTS.views.marketDailyOhlc)
@@ -247,7 +351,6 @@ export default function MarketPage() {
         },
     });
 
-    // ===================== MUTATION =====================
     const mutation = useRpcMutation<string>({
         fn: CONTRACTS.functions.marketTickUpsertByRole,
         successMessage: "시세 저장 완료",
@@ -280,297 +383,339 @@ export default function MarketPage() {
         });
     };
 
-    // ===================== RENDER HELPERS =====================
+    const saveCsConfig = async () => {
+        const fx = Number(csFxMarkup);
+        const corr = Number(csCorrectionFactor);
+        if (!Number.isFinite(fx) || fx <= 0) {
+            toast.error("fx_markup 값이 올바르지 않습니다.");
+            return;
+        }
+        if (!Number.isFinite(corr) || corr <= 0) {
+            toast.error("보정계수 값이 올바르지 않습니다.");
+            return;
+        }
+
+        try {
+            setCsConfigSaving(true);
+            const client = getSchemaClient();
+            if (!client) throw new Error("Supabase client not initialized");
+            const { error } = await (
+                client.from("cms_market_tick_config") as unknown as {
+                    upsert: (values: MarketTickConfigUpsert) => Promise<{ error: { message?: string } | null }>;
+                }
+            ).upsert({
+                config_key: "DEFAULT",
+                fx_markup: fx,
+                cs_correction_factor: corr,
+            });
+            if (error) throw error;
+            toast.success("CS 설정 저장 완료");
+            queryClient.invalidateQueries({ queryKey: ["market", "csConfig"] });
+        } catch (e) {
+            const msg = e instanceof Error ? e.message : "저장 실패";
+            toast.error("CS 설정 저장 실패", { description: msg });
+        } finally {
+            setCsConfigSaving(false);
+        }
+    };
+
     const goldMinutes = getStaleMinutes(latestData?.gold_observed_at);
     const silverMinutes = getStaleMinutes(latestData?.silver_observed_at);
     const isGoldStale = goldMinutes !== null && goldMinutes > 60;
     const isSilverStale = silverMinutes !== null && silverMinutes > 60;
 
-    // Simple SVG chart data
-    const chartData = useMemo(() => {
-        const filtered = ohlcData.filter((d) => {
-            if (roleFilter === "ALL") return true;
-            // Heuristic: symbol contains 'GOLD' or 'SILVER' or similar
-            // In production, use proper role mapping
-            return d.symbol?.toUpperCase().includes(roleFilter);
-        });
-        return filtered;
-    }, [ohlcData, roleFilter]);
+    const filteredOhlcData = useMemo(() => {
+        return ohlcData
+            .filter((d) => {
+                if (!d.day) return false;
+                const parsed = new Date(d.day);
+                if (Number.isNaN(parsed.getTime())) return false;
+                const cutoff = new Date();
+                cutoff.setMonth(cutoff.getMonth() - monthFilter);
+                return parsed >= cutoff;
+            })
+            .sort((a, b) => String(a.day ?? "").localeCompare(String(b.day ?? "")));
+    }, [ohlcData, monthFilter]);
 
-    const chartMax = useMemo(() => {
-        if (chartData.length === 0) return 1;
-        return Math.max(...chartData.map((d) => d.high_krw_per_g || 0));
-    }, [chartData]);
+    const goldChartData = useMemo(() => {
+        return filteredOhlcData.filter((d) => d.symbol?.toUpperCase().includes("GOLD"));
+    }, [filteredOhlcData]);
 
-    const chartMin = useMemo(() => {
-        if (chartData.length === 0) return 0;
-        return Math.min(...chartData.map((d) => d.low_krw_per_g || 0));
-    }, [chartData]);
+    const silverChartData = useMemo(() => {
+        return filteredOhlcData.filter((d) => d.symbol?.toUpperCase().includes("SILVER"));
+    }, [filteredOhlcData]);
 
-    // ===================== RENDER =====================
+    const silverCnyChartData = useMemo(() => {
+        return filteredOhlcData.filter((d) => d.symbol?.toUpperCase().includes("SILVER_CNY"));
+    }, [filteredOhlcData]);
+
+    const getChartStats = (data: DailyOhlc[]) => {
+        if (data.length === 0) {
+            return { max: 1, min: 0, last: null as number | null };
+        }
+        const highs = data.map((d) => d.high_krw_per_g || 0);
+        const lows = data.map((d) => d.low_krw_per_g || 0);
+        const last = data[data.length - 1]?.close_krw_per_g ?? null;
+        return { max: Math.max(...highs), min: Math.min(...lows), last };
+    };
+
+    const goldStats = useMemo(() => getChartStats(goldChartData), [goldChartData]);
+    const silverStats = useMemo(() => getChartStats(silverChartData), [silverChartData]);
+
+    const rangeLabel = useMemo(() => `최근 ${monthFilter}개월`, [monthFilter]);
+
     return (
-        <div className="space-y-6">
-            <ActionBar title="시세관리" subtitle="금/은 원/그램 입력 및 추이" />
+        <div className="h-screen flex flex-col overflow-hidden">
+            {/* Header */}
+            <div className="flex-none px-6 py-4 border-b border-[var(--panel-border)] bg-[var(--background)]">
+                <ActionBar title="시세관리" subtitle="금/은 원/그램" />
+            </div>
 
-            <FilterBar>
-                <Select className="w-32" value={roleFilter} onChange={(e) => setRoleFilter(e.target.value)}>
-                    <option value="ALL">전체</option>
-                    <option value="GOLD">금</option>
-                    <option value="SILVER">은</option>
-                </Select>
-                <Select className="w-32" value={String(dayFilter)} onChange={(e) => setDayFilter(Number(e.target.value))}>
-                    <option value="7">7일</option>
-                    <option value="30">30일</option>
-                    <option value="90">90일</option>
-                </Select>
-            </FilterBar>
+            <div className="flex-1 overflow-auto px-6 py-4">
+                <div className="max-w-7xl mx-auto space-y-4">
+                    {/* Period Selector */}
+                    <div className="flex gap-1">
+                        {[1, 3, 6, 12].map((months) => (
+                            <button
+                                key={months}
+                                onClick={() => setMonthFilter(months)}
+                                className={`px-3 py-1.5 text-sm rounded-lg font-medium transition-colors ${
+                                    monthFilter === months
+                                        ? 'bg-[var(--primary)] text-white'
+                                        : 'bg-[var(--panel)] hover:bg-[var(--panel-hover)]'
+                                }`}
+                            >
+                                {months}개월
+                            </button>
+                        ))}
+                    </div>
 
-            <SplitLayout
-                left={
-                    <div className="space-y-4">
-                        {/* Latest Gold Card */}
-                        <Card>
-                            <CardHeader>
+                    {/* Current Prices */}
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                        <CompactPriceCard
+                            title="금 (GOLD)"
+                            price={latestData?.gold_price_krw_per_g}
+                            observedAt={latestData?.gold_observed_at}
+                            source={latestData?.gold_source}
+                            isStale={isGoldStale}
+                            staleMinutes={goldMinutes}
+                            color="#f5b942"
+                        />
+                        <CompactPriceCard
+                            title="은 (SILVER)"
+                            price={latestData?.silver_price_krw_per_g}
+                            observedAt={latestData?.silver_observed_at}
+                            source={latestData?.silver_source}
+                            isStale={isSilverStale}
+                            staleMinutes={silverMinutes}
+                            color="#9aa7b4"
+                        />
+                    </div>
+
+                    {/* Charts */}
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <Card className="border-[var(--panel-border)]">
+                            <CardHeader className="py-3 border-b border-[var(--panel-border)]">
                                 <div className="flex items-center justify-between">
-                                    <ActionBar title="금 (GOLD)" />
-                                    {isGoldStale && (
-                                        <span className="text-xs bg-orange-100 text-orange-600 px-2 py-1 rounded border border-orange-200">
-                                            지연 ({goldMinutes}분)
-                                        </span>
-                                    )}
-                                </div>
-                            </CardHeader>
-                            <CardBody>
-                                {latestLoading ? (
-                                    <p className="text-sm text-[var(--muted)]">로딩 중...</p>
-                                ) : latestData?.gold_price_krw_per_g ? (
-                                    <div className="space-y-2">
-                                        <p className="text-3xl font-bold">{formatKrw(latestData.gold_price_krw_per_g)}</p>
-                                        <p className="text-xs text-[var(--muted)]">
-                                            {formatDateTimeKst(latestData.gold_observed_at)} · {latestData.gold_source}
-                                        </p>
+                                    <div className="flex items-center gap-2">
+                                        <div className="w-2 h-2 rounded-full" style={{ background: '#f5b942' }} />
+                                        <span className="font-semibold text-sm">Gold Trend</span>
+                                        <span className="text-xs text-[var(--muted)]">{rangeLabel}</span>
                                     </div>
-                                ) : (
-                                    <p className="text-sm text-[var(--muted)]">데이터 없음</p>
-                                )}
-                            </CardBody>
-                        </Card>
-
-                        {/* Latest Silver Card */}
-                        <Card>
-                            <CardHeader>
-                                <div className="flex items-center justify-between">
-                                    <ActionBar title="은 (SILVER)" />
-                                    {isSilverStale && (
-                                        <span className="text-xs bg-orange-100 text-orange-600 px-2 py-1 rounded border border-orange-200">
-                                            지연 ({silverMinutes}분)
-                                        </span>
-                                    )}
-                                </div>
-                            </CardHeader>
-                            <CardBody>
-                                {latestLoading ? (
-                                    <p className="text-sm text-[var(--muted)]">로딩 중...</p>
-                                ) : latestData?.silver_price_krw_per_g ? (
-                                    <div className="space-y-2">
-                                        <p className="text-3xl font-bold">{formatKrw(latestData.silver_price_krw_per_g)}</p>
-                                        <p className="text-xs text-[var(--muted)]">
-                                            {formatDateTimeKst(latestData.silver_observed_at)} · {latestData.silver_source}
-                                        </p>
-                                    </div>
-                                ) : (
-                                    <p className="text-sm text-[var(--muted)]">데이터 없음</p>
-                                )}
-                            </CardBody>
-                        </Card>
-
-                        {/* CS(중국 은시세) 설정: fx_markup / 보정계수 */}
-                        <Card>
-                            <CardHeader>
-                                <ActionBar title="CS 설정" subtitle="중국 은시세 계산계수" />
-                            </CardHeader>
-                            <CardBody>
-                                {csConfigLoading ? (
-                                    <p className="text-sm text-[var(--muted)]">로딩 중...</p>
-                                ) : (
-                                    <div className="space-y-3">
-                                        <div className="space-y-1">
-                                            <label className="text-xs font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">
-                                                fx_markup
-                                            </label>
-                                            <Input
-                                                type="number"
-                                                step="0.000001"
-                                                value={csFxMarkup}
-                                                onChange={(e) => setCsFxMarkup(e.target.value)}
-                                            />
-                                            <p className="text-xs text-[var(--muted)]">원 환율에 곱하는 마크업(예: 1.03)</p>
+                                    <div className="text-right">
+                                        <div className="text-sm font-bold" style={{ color: '#f5b942' }}>
+                                            {formatKrw(goldStats.last)}
                                         </div>
-
-                                        <div className="space-y-1">
-                                            <label className="text-xs font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">
-                                                보정계수
-                                            </label>
-                                            <Input
-                                                type="number"
-                                                step="0.000001"
-                                                value={csCorrectionFactor}
-                                                onChange={(e) => setCsCorrectionFactor(e.target.value)}
-                                            />
-                                            <p className="text-xs text-[var(--muted)]">최종 CS에 추가로 곱하는 계수(예: 1.00)</p>
-                                        </div>
-
                                         <div className="text-xs text-[var(--muted)]">
-                                            마지막 변경: {csConfigData?.updated_at ? formatDateTimeKst(csConfigData.updated_at) : "-"}
+                                            H:{formatNumber(goldStats.max)} L:{formatNumber(goldStats.min)}
                                         </div>
-
-                                        <Button
-                                            type="button"
-                                            className="w-full"
-                                            onClick={saveCsConfig}
-                                            disabled={csConfigSaving}
-                                        >
-                                            {csConfigSaving ? "저장 중..." : "CS 설정 저장"}
-                                        </Button>
                                     </div>
-                                )}
+                                </div>
+                            </CardHeader>
+                            <CardBody className="py-2">
+                                <CompactChart
+                                    data={goldChartData}
+                                    stats={goldStats}
+                                    color="#f5b942"
+                                    monthFilter={monthFilter}
+                                />
                             </CardBody>
                         </Card>
 
-                        {/* Manual Input Form */}
-                        <Card>
-                            <CardHeader>
-                                <ActionBar title="수동 입력" />
+                        <Card className="border-[var(--panel-border)]">
+                            <CardHeader className="py-3 border-b border-[var(--panel-border)]">
+                                <div className="flex items-center justify-between">
+                                    <div className="flex items-center gap-2">
+                                        <div className="w-2 h-2 rounded-full" style={{ background: '#9aa7b4' }} />
+                                        <span className="font-semibold text-sm">Silver Trend</span>
+                                        <span className="text-xs text-[var(--muted)]">{rangeLabel}</span>
+                                    </div>
+                                    <div className="text-right">
+                                        <div className="text-sm font-bold" style={{ color: '#9aa7b4' }}>
+                                            {formatKrw(silverStats.last)}
+                                        </div>
+                                        <div className="text-xs text-[var(--muted)]">
+                                            H:{formatNumber(silverStats.max)} L:{formatNumber(silverStats.min)}
+                                        </div>
+                                    </div>
+                                </div>
+                            </CardHeader>
+                            <CardBody className="py-2">
+                                <CompactChart
+                                    data={silverChartData}
+                                    stats={silverStats}
+                                    color="#9aa7b4"
+                                    monthFilter={monthFilter}
+                                    secondaryData={silverCnyChartData}
+                                />
+                            </CardBody>
+                        </Card>
+                    </div>
+
+                    {/* History Tables */}
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <Card className="border-[var(--panel-border)]">
+                            <CardHeader className="py-2 border-b border-[var(--panel-border)]">
+                                <div className="flex items-center gap-2">
+                                    <div className="w-2 h-2 rounded-full" style={{ background: '#f5b942' }} />
+                                    <span className="font-semibold text-sm">Gold History</span>
+                                </div>
+                            </CardHeader>
+                            <CardBody className="p-0">
+                                <div className="overflow-auto max-h-40">
+                                    <table className="w-full text-sm">
+                                        <thead className="bg-[var(--panel)] sticky top-0">
+                                            <tr className="text-xs text-[var(--muted)]">
+                                                <th className="text-left px-3 py-2">시각</th>
+                                                <th className="text-right px-3 py-2">가격</th>
+                                                <th className="text-left px-3 py-2">출처</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody className="divide-y divide-[var(--panel-border)]">
+                                            {seriesData
+                                                .filter((tick) => tick.symbol?.toUpperCase().includes("GOLD"))
+                                                .slice(0, 10)
+                                                .map((tick) => (
+                                                    <tr key={tick.tick_id} className="hover:bg-[var(--panel-hover)]">
+                                                        <td className="px-3 py-2 text-xs">{formatDateTimeKst(tick.observed_at)}</td>
+                                                        <td className="px-3 py-2 text-right font-mono text-xs">
+                                                            {formatKrw(tick.price_krw_per_g)}
+                                                        </td>
+                                                        <td className="px-3 py-2 text-xs text-[var(--muted)]">{tick.source}</td>
+                                                    </tr>
+                                                ))}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </CardBody>
+                        </Card>
+
+                        <Card className="border-[var(--panel-border)]">
+                            <CardHeader className="py-2 border-b border-[var(--panel-border)]">
+                                <div className="flex items-center gap-2">
+                                    <div className="w-2 h-2 rounded-full" style={{ background: '#9aa7b4' }} />
+                                    <span className="font-semibold text-sm">Silver History</span>
+                                </div>
+                            </CardHeader>
+                            <CardBody className="p-0">
+                                <div className="overflow-auto max-h-40">
+                                    <table className="w-full text-sm">
+                                        <thead className="bg-[var(--panel)] sticky top-0">
+                                            <tr className="text-xs text-[var(--muted)]">
+                                                <th className="text-left px-3 py-2">시각</th>
+                                                <th className="text-right px-3 py-2">가격</th>
+                                                <th className="text-left px-3 py-2">출처</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody className="divide-y divide-[var(--panel-border)]">
+                                            {seriesData
+                                                .filter((tick) => tick.symbol?.toUpperCase().includes("SILVER"))
+                                                .slice(0, 10)
+                                                .map((tick) => (
+                                                    <tr key={tick.tick_id} className="hover:bg-[var(--panel-hover)]">
+                                                        <td className="px-3 py-2 text-xs">{formatDateTimeKst(tick.observed_at)}</td>
+                                                        <td className="px-3 py-2 text-right font-mono text-xs">
+                                                            {formatKrw(tick.price_krw_per_g)}
+                                                        </td>
+                                                        <td className="px-3 py-2 text-xs text-[var(--muted)]">{tick.source}</td>
+                                                    </tr>
+                                                ))}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </CardBody>
+                        </Card>
+                    </div>
+
+                    {/* Settings & Input */}
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                        <Card className="border-[var(--panel-border)]">
+                            <CardHeader className="py-3 border-b border-[var(--panel-border)]">
+                                <span className="font-semibold text-sm">CS 설정</span>
+                            </CardHeader>
+                            <CardBody className="space-y-3">
+                                <div className="grid grid-cols-2 gap-3">
+                                    <div>
+                                        <label className="text-xs text-[var(--muted)] block mb-1">fx_markup</label>
+                                        <Input
+                                            type="number"
+                                            step="0.000001"
+                                            value={csFxMarkup}
+                                            onChange={(e) => setCsFxMarkup(e.target.value)}
+                                            className="h-8 text-sm"
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="text-xs text-[var(--muted)] block mb-1">보정계수</label>
+                                        <Input
+                                            type="number"
+                                            step="0.000001"
+                                            value={csCorrectionFactor}
+                                            onChange={(e) => setCsCorrectionFactor(e.target.value)}
+                                            className="h-8 text-sm"
+                                        />
+                                    </div>
+                                </div>
+                                <Button
+                                    type="button"
+                                    className="w-full h-8 text-sm"
+                                    onClick={saveCsConfig}
+                                    disabled={csConfigSaving}
+                                >
+                                    {csConfigSaving ? "저장 중..." : "저장"}
+                                </Button>
+                            </CardBody>
+                        </Card>
+
+                        <Card className="border-[var(--panel-border)]">
+                            <CardHeader className="py-3 border-b border-[var(--panel-border)]">
+                                <span className="font-semibold text-sm">수동 입력</span>
                             </CardHeader>
                             <CardBody>
                                 <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-3">
-                                    <div className="space-y-1">
-                                        <label className="text-xs font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">
-                                            종류 *
-                                        </label>
-                                        <Select {...form.register("role_code", { required: true })}>
-                                            <option value="GOLD">금 (GOLD)</option>
-                                            <option value="SILVER">은 (SILVER)</option>
+                                    <div className="grid grid-cols-3 gap-2">
+                                        <Select {...form.register("role_code")} className="h-8 text-sm">
+                                            <option value="GOLD">금</option>
+                                            <option value="SILVER">은</option>
                                         </Select>
-                                    </div>
-
-                                    <div className="space-y-1">
-                                        <label className="text-xs font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">
-                                            관측시각 *
-                                        </label>
-                                        <Input type="datetime-local" {...form.register("observed_at", { required: true })} />
-                                    </div>
-
-                                    <div className="space-y-1">
-                                        <label className="text-xs font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">
-                                            가격 (원/그램) *
-                                        </label>
+                                        <Input type="datetime-local" {...form.register("observed_at")} className="h-8 text-sm" />
                                         <Input
                                             type="number"
                                             step="0.01"
-                                            {...form.register("price_krw_per_g", { required: true, valueAsNumber: true })}
+                                            placeholder="가격"
+                                            {...form.register("price_krw_per_g", { valueAsNumber: true })}
+                                            className="h-8 text-sm"
                                         />
                                     </div>
-
-                                    <div className="space-y-1">
-                                        <label className="text-xs font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">
-                                            출처
-                                        </label>
-                                        <Input {...form.register("source")} placeholder="MANUAL" />
-                                    </div>
-
-                                    <div className="space-y-1">
-                                        <label className="text-xs font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">
-                                            메모
-                                        </label>
-                                        <Textarea {...form.register("note")} rows={2} />
-                                    </div>
-
-                                    <Button type="submit" className="w-full" disabled={mutation.isPending}>
+                                    <Button type="submit" className="w-full h-8 text-sm" disabled={mutation.isPending}>
                                         {mutation.isPending ? "저장 중..." : "저장"}
                                     </Button>
                                 </form>
                             </CardBody>
                         </Card>
                     </div>
-                }
-                right={
-                    <div className="space-y-4">
-                        {/* Simple Chart */}
-                        <Card>
-                            <CardHeader>
-                                <ActionBar title="일자별 추이 (종가)" />
-                            </CardHeader>
-                            <CardBody>
-                                {chartData.length === 0 ? (
-                                    <p className="text-sm text-[var(--muted)] text-center py-8">데이터 없음</p>
-                                ) : (
-                                    <svg className="w-full h-48" viewBox="0 0 400 200" preserveAspectRatio="none">
-                                        <polyline
-                                            fill="none"
-                                            stroke="var(--primary)"
-                                            strokeWidth="2"
-                                            points={chartData
-                                                .map((d, i) => {
-                                                    const x = (i / (chartData.length - 1)) * 400;
-                                                    const y = 200 - ((d.close_krw_per_g - chartMin) / (chartMax - chartMin)) * 180;
-                                                    return `${x},${y}`;
-                                                })
-                                                .join(" ")}
-                                        />
-                                    </svg>
-                                )}
-                            </CardBody>
-                        </Card>
-
-                        {/* History Table */}
-                        <Card>
-                            <CardHeader>
-                                <ActionBar title="히스토리" />
-                            </CardHeader>
-                            <CardBody>
-                                {seriesData.length === 0 ? (
-                                    <p className="text-sm text-[var(--muted)]">데이터 없음</p>
-                                ) : (
-                                    <div className="overflow-auto max-h-96">
-                                        <table className="w-full text-sm">
-                                            <thead className="border-b border-[var(--panel-border)] text-xs text-[var(--muted)]">
-                                                <tr>
-                                                    <th className="text-left pb-2">시각</th>
-                                                    <th className="text-left pb-2">종류</th>
-                                                    <th className="text-right pb-2">가격</th>
-                                                    <th className="text-left pb-2">출처</th>
-                                                </tr>
-                                            </thead>
-                                            <tbody className="divide-y divide-[var(--panel-border)]">
-                                                {seriesData.map((tick) => (
-                                                    <tr key={tick.tick_id} className="hover:bg-[var(--panel-hover)]">
-                                                        <td className="py-2">{formatDateTimeKst(tick.observed_at)}</td>
-                                                        <td className="py-2">
-                                                            <span
-                                                                className={cn(
-                                                                    "text-xs px-1.5 py-0.5 rounded font-semibold",
-                                                                    tick.symbol?.toUpperCase().includes("GOLD")
-                                                                        ? "bg-yellow-100 text-yellow-700"
-                                                                        : "bg-gray-100 text-gray-700"
-                                                                )}
-                                                            >
-                                                                {tick.symbol}
-                                                            </span>
-                                                        </td>
-                                                        <td className="py-2 text-right font-mono">{formatKrw(tick.price_krw_per_g)}</td>
-                                                        <td className="py-2 text-xs text-[var(--muted)]">{tick.source}</td>
-                                                    </tr>
-                                                ))}
-                                            </tbody>
-                                        </table>
-                                    </div>
-                                )}
-                            </CardBody>
-                        </Card>
-                    </div>
-                }
-            />
+                </div>
+            </div>
         </div>
     );
 }
