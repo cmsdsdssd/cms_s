@@ -79,8 +79,13 @@ export const CONTRACTS = {
 
     shipmentConfirm:
       process.env.NEXT_PUBLIC_RPC_SHIPMENT_CONFIRM || "cms_fn_confirm_shipment_v3_cost_v1",
-    shipmentConfirmStorePickup:
-      process.env.NEXT_PUBLIC_RPC_SHIPMENT_CONFIRM_STORE_PICKUP || "cms_fn_confirm_store_pickup_v1",
+    shipmentConfirmStorePickup: (() => {
+      const confirm =
+        process.env.NEXT_PUBLIC_RPC_SHIPMENT_CONFIRM || "cms_fn_confirm_shipment_v3_cost_v1";
+      const envOverride = process.env.NEXT_PUBLIC_RPC_SHIPMENT_CONFIRM_STORE_PICKUP || "";
+      if (envOverride && envOverride !== confirm) return envOverride;
+      return "cms_fn_confirm_store_pickup_v1";
+    })(),
     shipmentSetStorePickup:
       process.env.NEXT_PUBLIC_RPC_SHIPMENT_SET_STORE_PICKUP || "cms_fn_set_shipment_store_pickup_v1",
     shipmentClearShipDate:

@@ -1,23 +1,20 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { 
-  PackageCheck, 
+import {
+  PackageCheck,
   Weight,
   Coins,
-  Palette,
   Calculator,
   Save,
   CheckCircle2,
-  AlertCircle,
-  X
+  X,
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/field";
-import { Badge } from "@/components/ui/badge";
 import { getSchemaClient } from "@/lib/supabase/client";
 import { callRpc } from "@/lib/supabase/rpc";
 import { CONTRACTS } from "@/lib/contracts";
@@ -87,7 +84,9 @@ export function InlineShipmentPanel({
   const [platingCost, setPlatingCost] = useState<string>("0");
   const [repairFee, setRepairFee] = useState<string>("0");
   const [laborCost, setLaborCost] = useState<string>("");
-  const [notes, setNotes] = useState<string>("");
+  const [hasEditedWeight, setHasEditedWeight] = useState(false);
+  const [hasEditedDeduction, setHasEditedDeduction] = useState(false);
+  const [hasEditedLaborCost, setHasEditedLaborCost] = useState(false);
 
   // Fetch master item info
   const { data: masterInfo } = useQuery({
@@ -124,34 +123,34 @@ export function InlineShipmentPanel({
     enabled: !!schemaClient,
   });
 
-  // Initialize with defaults
-  useEffect(() => {
-    if (masterInfo) {
-      if (!weight && masterInfo.weight_default_g) {
-        setWeight(String(masterInfo.weight_default_g * orderData.qty));
-      }
-      if (!deduction && masterInfo.deduction_weight_default_g) {
-        setDeduction(String(masterInfo.deduction_weight_default_g * orderData.qty));
-      }
-      // Calculate labor cost
-      const totalLabor = 
-        (masterInfo.labor_base_sell || 0) + 
-        (masterInfo.labor_center_sell || 0) + 
-        (masterInfo.labor_sub1_sell || 0) + 
-        (masterInfo.labor_sub2_sell || 0);
-      if (!laborCost && totalLabor > 0) {
-        setLaborCost(String(totalLabor * orderData.qty));
-      }
-    }
-  }, [masterInfo, orderData.qty]);
+  const defaultWeight = masterInfo?.weight_default_g
+    ? String(masterInfo.weight_default_g * orderData.qty)
+    : "";
+  const defaultDeduction = masterInfo?.deduction_weight_default_g
+    ? String(masterInfo.deduction_weight_default_g * orderData.qty)
+    : "";
+  const defaultLaborCost = masterInfo
+    ? String(
+      (
+        (masterInfo.labor_base_sell || 0) +
+        (masterInfo.labor_center_sell || 0) +
+        (masterInfo.labor_sub1_sell || 0) +
+        (masterInfo.labor_sub2_sell || 0)
+      ) * orderData.qty
+    )
+    : "";
 
   // Calculate totals
-  const weightNum = parseFloat(weight) || 0;
-  const deductionNum = parseFloat(deduction) || 0;
+  const resolvedWeight = hasEditedWeight ? weight : defaultWeight;
+  const resolvedDeduction = hasEditedDeduction ? deduction : defaultDeduction;
+  const resolvedLaborCost = hasEditedLaborCost ? laborCost : defaultLaborCost;
+
+  const weightNum = parseFloat(resolvedWeight) || 0;
+  const deductionNum = parseFloat(resolvedDeduction) || 0;
   const netWeight = Math.max(0, weightNum - deductionNum);
   const goldPrice = marketTicks?.gold_price || 0;
   const materialCost = netWeight * (masterInfo?.material_price || goldPrice || 0);
-  const laborTotal = parseFloat(laborCost) || 0;
+  const laborTotal = parseFloat(resolvedLaborCost) || 0;
   const platingTotal = parseFloat(platingCost) || 0;
   const repairTotal = parseFloat(repairFee) || 0;
   const totalAmount = materialCost + laborTotal + platingTotal + repairTotal;
@@ -265,19 +264,7 @@ export function InlineShipmentPanel({
           p_note: "set from inline shipment",
         });
 
-        return callRpc<{ ok: boolean; total_sell_krw: number }>(
-          CONTRACTS.functions.shipmentConfirmStorePickup,
-          {
-            p_shipment_id: shipmentId,
-            p_actor_person_id: actorId,
-            p_note: "confirm store pickup from inline",
-            p_emit_inventory: true,
-            p_cost_mode: "PROVISIONAL",
-            p_receipt_id: null,
-            p_cost_lines: [],
-            p_force: false,
-          }
-        );
+        return { ok: true, total_sell_krw: Math.round(totalAmount) };
       }
 
       return callRpc<{ ok: boolean; total_sell_krw: number }>(
@@ -289,10 +276,15 @@ export function InlineShipmentPanel({
       );
     },
     onSuccess: (data) => {
-      const message = isStorePickup ? "매장출고가 확정되었습니다" : "출고가 확정되었습니다";
-      toast.success(message, {
-        description: `총액: ₩${data?.total_sell_krw?.toLocaleString()}`,
-      });
+      if (isStorePickup) {
+        toast.success("매장출고로 저장됨", {
+          description: "확정은 Workbench(당일출고)에서 진행하세요.",
+        });
+      } else {
+        toast.success("출고가 확정되었습니다", {
+          description: `총액: ₩${data?.total_sell_krw?.toLocaleString()}`,
+        });
+      }
       
       // Invalidate queries
       queryClient.invalidateQueries({ queryKey: ["order-worklist"] });
@@ -304,7 +296,7 @@ export function InlineShipmentPanel({
       }
     },
     onError: (error) => {
-      const message = isStorePickup ? "매장출고 확정 실패" : "출고 확정 실패";
+      const message = isStorePickup ? "매장출고 저장 실패" : "출고 확정 실패";
       toast.error(message, {
         description: error instanceof Error ? error.message : "Unknown error",
       });
@@ -316,6 +308,18 @@ export function InlineShipmentPanel({
   };
 
   const handleSave = () => {
+    if (!hasEditedWeight && defaultWeight) {
+      setWeight(defaultWeight);
+      setHasEditedWeight(true);
+    }
+    if (!hasEditedDeduction && defaultDeduction) {
+      setDeduction(defaultDeduction);
+      setHasEditedDeduction(true);
+    }
+    if (!hasEditedLaborCost && defaultLaborCost) {
+      setLaborCost(defaultLaborCost);
+      setHasEditedLaborCost(true);
+    }
     updateLineMutation.mutate();
   };
 
@@ -382,8 +386,11 @@ export function InlineShipmentPanel({
                   <Input
                     type="number"
                     step="0.01"
-                    value={weight}
-                    onChange={(e) => setWeight(e.target.value)}
+                    value={resolvedWeight}
+                    onChange={(e) => {
+                      setHasEditedWeight(true);
+                      setWeight(e.target.value);
+                    }}
                     placeholder="0.00"
                   />
                 </div>
@@ -394,8 +401,11 @@ export function InlineShipmentPanel({
                   <Input
                     type="number"
                     step="0.01"
-                    value={deduction}
-                    onChange={(e) => setDeduction(e.target.value)}
+                    value={resolvedDeduction}
+                    onChange={(e) => {
+                      setHasEditedDeduction(true);
+                      setDeduction(e.target.value);
+                    }}
                     placeholder="0.00"
                   />
                 </div>
@@ -448,8 +458,11 @@ export function InlineShipmentPanel({
                 </label>
                 <Input
                   type="number"
-                  value={laborCost}
-                  onChange={(e) => setLaborCost(e.target.value)}
+                  value={resolvedLaborCost}
+                  onChange={(e) => {
+                    setHasEditedLaborCost(true);
+                    setLaborCost(e.target.value);
+                  }}
                   placeholder="0"
                 />
               </div>
@@ -549,7 +562,13 @@ export function InlineShipmentPanel({
                 className="flex-1 bg-green-600 hover:bg-green-700"
               >
                 <CheckCircle2 className="w-4 h-4 mr-2" />
-                {confirmShipmentMutation.isPending ? "확정 중..." : "출고 확정"}
+                {confirmShipmentMutation.isPending
+                  ? isStorePickup
+                    ? "저장 중..."
+                    : "확정 중..."
+                  : isStorePickup
+                    ? "매장출고 저장 (워크벤치에서 확정)"
+                    : "출고 확정"}
               </Button>
             </div>
           </div>

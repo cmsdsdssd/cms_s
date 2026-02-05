@@ -1,7 +1,7 @@
 "use client";
 
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 
 import { ActionBar } from "@/components/layout/action-bar";
@@ -121,6 +121,17 @@ type UnlinkedLineRow = {
   color?: string | null;
 };
 
+type CustomerCodeSuggestItem = {
+  party_id: string;
+  name: string;
+  mask_code: string;
+};
+
+type ModelNameSuggestItem = {
+  master_item_id: string;
+  model_name: string;
+};
+
 type MatchCandidate = {
   order_no?: string | null;
   order_line_id?: string | null;
@@ -149,9 +160,49 @@ type ConfirmResult = {
   created_shipment_draft?: boolean | null;
 };
 
+type ConfirmedMatchRow = {
+  receipt_id: string;
+  receipt_line_uuid: string;
+  vendor_seq_no?: string | null;
+  customer_factory_code?: string | null;
+  receipt_model_name?: string | null;
+  receipt_material_code?: string | null;
+  receipt_size?: string | null;
+  receipt_color?: string | null;
+  receipt_weight_g?: number | null;
+  receipt_qty?: number | null;
+  order_line_id?: string | null;
+  customer_party_id?: string | null;
+  customer_name?: string | null;
+  order_no?: string | null;
+  shipment_id?: string | null;
+  shipment_line_id?: string | null;
+  shipment_status?: string | null;
+  confirmed_at?: string | null;
+  selected_weight_g?: number | null;
+  selected_material_code?: string | null;
+  note?: string | null;
+};
+
+type MatchClearReasonCode =
+  | "INPUT_ERROR"
+  | "WRONG_MATCH"
+  | "RECEIPT_CORRECTION"
+  | "ORDER_CANCEL"
+  | "TEST"
+  | "OTHER";
+
 type PartyOption = { label: string; value: string };
 
 const MATERIAL_OPTIONS = ["14", "18", "24", "925", "999", "00"] as const;
+const MATCH_CLEAR_REASONS: Array<{ value: MatchClearReasonCode; label: string }> = [
+  { value: "INPUT_ERROR", label: "입력오류(공임/중량/수량)" },
+  { value: "WRONG_MATCH", label: "오매칭(다른 주문에 연결)" },
+  { value: "RECEIPT_CORRECTION", label: "공장 영수증 정정" },
+  { value: "ORDER_CANCEL", label: "주문 취소/변경" },
+  { value: "TEST", label: "테스트/샘플" },
+  { value: "OTHER", label: "기타" },
+];
 const STONE_FIELDS = [
   "stone_center_qty",
   "stone_sub1_qty",
@@ -283,6 +334,28 @@ function getRpcErrorMessage(error: unknown) {
   return message;
 }
 
+function mapMatchClearError(message: string) {
+  if (message.includes("shipment not DRAFT")) {
+    return "출고확정된 건이라 취소할 수 없습니다. 정정 영수증으로 처리하세요.";
+  }
+  if (message.includes("AR ledger exists")) {
+    return "AR 전표가 이미 생성되어 취소할 수 없습니다. 회계 조정이 필요합니다.";
+  }
+  if (message.includes("inventory ISSUE")) {
+    return "재고 출고(ISSUE) 기록이 있어 취소할 수 없습니다.";
+  }
+  if (message.includes("purchase_cost_status") || message.includes("ACTUAL")) {
+    return "원가확정(ACTUAL)이 완료되어 취소할 수 없습니다.";
+  }
+  if (message.includes("vendor_bill_allocation")) {
+    return "원가 배분이 이미 진행되어 취소할 수 없습니다.";
+  }
+  if (message.includes("AP alloc")) {
+    return "AP 배분/상계가 진행되어 취소할 수 없습니다.";
+  }
+  return message;
+}
+
 function getIssueCounts(result: FactoryStatementResult | undefined) {
   const counts = result?.reconcile?.issue_counts ?? null;
   if (!counts) return null;
@@ -408,6 +481,14 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
   const [lineItemsDirty, setLineItemsDirty] = useState(false);
   const [expandedLineId, setExpandedLineId] = useState<string | null>(null);
 
+  const [activeLineSuggest, setActiveLineSuggest] = useState<
+    { lineId: string; field: "customer" | "model" } | null
+  >(null);
+  const [customerCodeSuggest, setCustomerCodeSuggest] = useState<CustomerCodeSuggestItem[]>([]);
+  const [modelNameSuggest, setModelNameSuggest] = useState<ModelNameSuggestItem[]>([]);
+  const [isCustomerSuggestLoading, setIsCustomerSuggestLoading] = useState(false);
+  const [isModelSuggestLoading, setIsModelSuggestLoading] = useState(false);
+
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<ReceiptLineItemInput | null>(null);
   const [deleteReason, setDeleteReason] = useState("입력오류");
@@ -424,8 +505,13 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
   const fileRef = useRef<HTMLInputElement>(null);
   const lastBillNoSuggestKey = useRef<string | null>(null);
   const suggestTimerRef = useRef<number | null>(null);
+  const customerSuggestTimerRef = useRef<number | null>(null);
+  const modelSuggestTimerRef = useRef<number | null>(null);
+  const lastCustomerSuggestKeyRef = useRef<string | null>(null);
+  const lastModelSuggestKeyRef = useRef<string | null>(null);
+  const suppressModelSuggestRef = useRef<{ lineId: string; value: string } | null>(null);
 
-  const [activeTab, setActiveTab] = useState<"match" | "reconcile" | "integrity">("match");
+  const [activeTab, setActiveTab] = useState<"match" | "confirmed" | "reconcile" | "integrity">("match");
   const [selectedUnlinked, setSelectedUnlinked] = useState<UnlinkedLineRow | null>(null);
   const [suggestions, setSuggestions] = useState<MatchCandidate[]>([]);
   const [selectedCandidate, setSelectedCandidate] = useState<MatchCandidate | null>(null);
@@ -438,6 +524,13 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
   const [isSuggesting, setIsSuggesting] = useState(false);
   const [isPreviewExpanded, setIsPreviewExpanded] = useState(false);
   const [suggestDebugState, setSuggestDebugState] = useState<{ query: string; count: number } | null>(null);
+
+  const [matchClearOpen, setMatchClearOpen] = useState(false);
+  const [matchClearTarget, setMatchClearTarget] = useState<ConfirmedMatchRow | null>(null);
+  const [matchClearReason, setMatchClearReason] = useState<MatchClearReasonCode>("INPUT_ERROR");
+  const [matchClearReasonText, setMatchClearReasonText] = useState("");
+  const [matchClearNote, setMatchClearNote] = useState("");
+  const [matchClearError, setMatchClearError] = useState<string | null>(null);
 
   const debugSuggest = useMemo(() => {
     if (typeof window === "undefined") return false;
@@ -464,6 +557,12 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
     return () => {
       if (suggestTimerRef.current) {
         window.clearTimeout(suggestTimerRef.current);
+      }
+      if (customerSuggestTimerRef.current) {
+        window.clearTimeout(customerSuggestTimerRef.current);
+      }
+      if (modelSuggestTimerRef.current) {
+        window.clearTimeout(modelSuggestTimerRef.current);
       }
       if (headerNudgeTimerRef.current) {
         window.clearTimeout(headerNudgeTimerRef.current);
@@ -538,6 +637,31 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
     },
     enabled: Boolean(selectedReceiptId),
     staleTime: 20 * 1000,
+    gcTime: 2 * 60 * 1000,
+  });
+
+  const matchesQuery = useQuery({
+    queryKey: ["new-receipt-workbench", "matches", selectedReceiptId],
+    queryFn: async () => {
+      if (!selectedReceiptId) return [] as ConfirmedMatchRow[];
+      const res = await fetch(
+        `/api/new-receipt-workbench/matches?receipt_id=${encodeURIComponent(selectedReceiptId)}&limit=200`,
+        { cache: "no-store" }
+      );
+      const json = await res.json();
+      if (!res.ok) {
+        const message =
+          typeof json?.error?.message === "string"
+            ? json.error.message
+            : typeof json?.error === "string"
+              ? json.error
+              : "확정 매칭 조회 실패";
+        throw new Error(message);
+      }
+      return (json?.data ?? []) as ConfirmedMatchRow[];
+    },
+    enabled: Boolean(selectedReceiptId),
+    staleTime: 5 * 1000,
     gcTime: 2 * 60 * 1000,
   });
 
@@ -683,8 +807,66 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
     },
   });
 
+  const matchClearMutation = useMutation({
+    mutationFn: async (payload: {
+      receipt_id: string;
+      receipt_line_uuid: string;
+      reason_code: MatchClearReasonCode;
+      reason_text?: string;
+      note?: string;
+    }) => {
+      const res = await fetch("/api/new-receipt-workbench/match-clear", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const message =
+          typeof json?.error?.message === "string"
+            ? json.error.message
+            : typeof json?.error === "string"
+              ? json.error
+              : "매칭취소 실패";
+        throw new Error(message);
+      }
+      return json?.data as Record<string, unknown> | null;
+    },
+    onSuccess: () => {
+      toast.success("매칭취소 완료: 출고대기에서 해제되었습니다.");
+      queryClient.invalidateQueries({ queryKey: ["new-receipt-workbench", "receipts"] });
+      queryClient.invalidateQueries({ queryKey: ["new-receipt-workbench", "line-items", selectedReceiptId] });
+      queryClient.invalidateQueries({ queryKey: ["new-receipt-workbench", "unlinked", selectedReceiptId] });
+      queryClient.invalidateQueries({ queryKey: ["new-receipt-workbench", "matches", selectedReceiptId] });
+      queryClient.invalidateQueries({ queryKey: ["new-receipt-workbench", "reconcile", selectedReceiptId] });
+      queryClient.invalidateQueries({ queryKey: ["new-receipt-workbench", "integrity", selectedReceiptId] });
+      setMatchClearOpen(false);
+      setMatchClearTarget(null);
+      setMatchClearReason("INPUT_ERROR");
+      setMatchClearReasonText("");
+      setMatchClearNote("");
+      setMatchClearError(null);
+    },
+    onError: (error) => {
+      const message = error instanceof Error ? error.message : "매칭취소 실패";
+      const mapped = mapMatchClearError(message);
+      toast.error(mapped);
+      setMatchClearError(mapped);
+    },
+  });
+
   const receipts = receiptsQuery.data ?? [];
   const vendorOptions = vendorOptionsQuery.data ?? [];
+  const confirmedMatches = matchesQuery.data ?? [];
+  const lockedLineMap = useMemo(() => {
+    const map = new Map<string, ConfirmedMatchRow>();
+    confirmedMatches.forEach((row) => {
+      if (row.receipt_line_uuid) {
+        map.set(row.receipt_line_uuid, row);
+      }
+    });
+    return map;
+  }, [confirmedMatches]);
 
   const statusOptions = useMemo(() => {
     const set = new Set<string>([DEFAULT_STATUS_FILTER]);
@@ -986,6 +1168,12 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
     setLineLimit(50);
     setUnlinkedLimit(50);
     setExpandedLineId(null);
+    setMatchClearOpen(false);
+    setMatchClearTarget(null);
+    setMatchClearReason("INPUT_ERROR");
+    setMatchClearReasonText("");
+    setMatchClearNote("");
+    setMatchClearError(null);
     setFactoryRows(
       FACTORY_ROWS.map((row) => ({
         rowCode: row.rowCode,
@@ -1146,6 +1334,21 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
     setDeleteOpen(true);
   }
 
+  function openMatchClearModal(target: ConfirmedMatchRow) {
+    setMatchClearTarget(target);
+    setMatchClearReason("INPUT_ERROR");
+    setMatchClearReasonText("");
+    setMatchClearNote("");
+    setMatchClearError(null);
+    setMatchClearOpen(true);
+  }
+
+  function closeMatchClearModal() {
+    setMatchClearOpen(false);
+    setMatchClearTarget(null);
+    setMatchClearError(null);
+  }
+
   function closeDeleteModal() {
     setDeleteOpen(false);
     setDeleteTarget(null);
@@ -1189,11 +1392,128 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
     }
   }
 
+  async function confirmMatchClear() {
+    if (!selectedReceiptId || !matchClearTarget) return;
+    setMatchClearError(null);
+    await matchClearMutation.mutateAsync({
+      receipt_id: selectedReceiptId,
+      receipt_line_uuid: matchClearTarget.receipt_line_uuid,
+      reason_code: matchClearReason,
+      reason_text: matchClearReasonText.trim() || undefined,
+      note: matchClearNote.trim() || undefined,
+    });
+  }
+
   function updateLine(lineUuid: string, field: keyof ReceiptLineItemInput, value: string) {
     setLineItemsDirty(true);
     setLineItems((prev) =>
       prev.map((item) => (item.line_uuid === lineUuid ? { ...item, [field]: value } : item))
     );
+  }
+
+  async function fetchCustomerCodeSuggest(q: string, lineId: string) {
+    try {
+      const res = await fetch("/api/new-receipt-workbench/customer-code-suggest", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ q, limit: 30 }),
+      });
+      const json = await res.json();
+      const key = `${lineId}:${q}`;
+      if (lastCustomerSuggestKeyRef.current !== key) return;
+      if (!res.ok) {
+        throw new Error(typeof json?.error === "string" ? json.error : "고객코드 조회 실패");
+      }
+      const data = (json?.data ?? []) as CustomerCodeSuggestItem[];
+      setCustomerCodeSuggest(data);
+      setIsCustomerSuggestLoading(false);
+    } catch (error) {
+      const key = `${lineId}:${q}`;
+      if (lastCustomerSuggestKeyRef.current !== key) return;
+      console.log("[customer-code-suggest] failed", error);
+      setCustomerCodeSuggest([]);
+      setIsCustomerSuggestLoading(false);
+    }
+  }
+
+  async function fetchModelNameSuggest(q: string, lineId: string) {
+    try {
+      const res = await fetch("/api/new-receipt-workbench/model-name-suggest", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ q, limit: 30 }),
+      });
+      const json = await res.json();
+      const key = `${lineId}:${q}`;
+      if (lastModelSuggestKeyRef.current !== key) return;
+      if (!res.ok) {
+        throw new Error(typeof json?.error === "string" ? json.error : "모델명 조회 실패");
+      }
+      const data = (json?.data ?? []) as ModelNameSuggestItem[];
+      setModelNameSuggest(data);
+      setIsModelSuggestLoading(false);
+    } catch (error) {
+      const key = `${lineId}:${q}`;
+      if (lastModelSuggestKeyRef.current !== key) return;
+      console.log("[model-name-suggest] failed", error);
+      setModelNameSuggest([]);
+      setIsModelSuggestLoading(false);
+    }
+  }
+
+  function handleCustomerChange(lineId: string, nextValue: string) {
+    updateLine(lineId, "customer_factory_code", nextValue);
+    const query = nextValue.trim();
+    if (customerSuggestTimerRef.current) {
+      window.clearTimeout(customerSuggestTimerRef.current);
+    }
+    if (!query) {
+      if (activeLineSuggest?.field === "customer" && activeLineSuggest.lineId === lineId) {
+        setActiveLineSuggest(null);
+      }
+      setCustomerCodeSuggest([]);
+      setIsCustomerSuggestLoading(false);
+      return;
+    }
+    const key = `${lineId}:${query}`;
+    lastCustomerSuggestKeyRef.current = key;
+    setActiveLineSuggest({ lineId, field: "customer" });
+    setIsCustomerSuggestLoading(true);
+    customerSuggestTimerRef.current = window.setTimeout(() => {
+      void fetchCustomerCodeSuggest(query, lineId);
+    }, 150);
+  }
+
+  function handleModelChange(lineId: string, nextValue: string) {
+    updateLine(lineId, "model_name", nextValue);
+    if (suppressModelSuggestRef.current) {
+      const suppress = suppressModelSuggestRef.current;
+      if (suppress.lineId === lineId && suppress.value === nextValue) {
+        suppressModelSuggestRef.current = null;
+        setActiveLineSuggest(null);
+        setIsModelSuggestLoading(false);
+        return;
+      }
+    }
+    const query = nextValue.trim();
+    if (modelSuggestTimerRef.current) {
+      window.clearTimeout(modelSuggestTimerRef.current);
+    }
+    if (!query) {
+      if (activeLineSuggest?.field === "model" && activeLineSuggest.lineId === lineId) {
+        setActiveLineSuggest(null);
+      }
+      setModelNameSuggest([]);
+      setIsModelSuggestLoading(false);
+      return;
+    }
+    const key = `${lineId}:${query}`;
+    lastModelSuggestKeyRef.current = key;
+    setActiveLineSuggest({ lineId, field: "model" });
+    setIsModelSuggestLoading(true);
+    modelSuggestTimerRef.current = window.setTimeout(() => {
+      void fetchModelNameSuggest(query, lineId);
+    }, 150);
   }
 
   function updateLineNumber(lineUuid: string, field: keyof ReceiptLineItemInput, value: string) {
@@ -1519,6 +1839,11 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
       toast.error("먼저 헤더 저장을 진행해 주세요.");
       return;
     }
+    if (lineItemsDirty) {
+      const saved = await saveLines();
+      if (!saved) return;
+      await Promise.all([lineItemsQuery.refetch(), unlinkedQuery.refetch()]);
+    }
     const normalizeText = (value?: string | null) => (value ?? "").replace(/\s+/g, " ").trim();
     let receiptLineUuid = getReceiptLineUuid(targetLine);
     if (!receiptLineUuid) {
@@ -1612,9 +1937,80 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
         toast.error("매칭 제안 실패", { description: json?.error ?? "" });
         return;
       }
-      const candidates = (json?.data?.candidates ?? []) as MatchCandidate[];
-      const sorted = [...candidates].sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0));
-      setSuggestions(sorted);
+      const payload = json?.data ?? null;
+      const candidates = (Array.isArray(payload?.candidates)
+        ? payload.candidates
+        : Array.isArray(payload)
+          ? payload
+          : Array.isArray(json?.candidates)
+            ? json.candidates
+            : []) as MatchCandidate[];
+      if (payload?.already_confirmed) {
+        toast.error("이미 매칭 확정된 라인입니다.");
+        setSuggestions([]);
+        setSelectedCandidate(null);
+        setConfirmResult(null);
+        return;
+      }
+
+      let nextCandidates = [...candidates].sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0));
+      if (nextCandidates.length === 0) {
+        const modelName = targetLine.model_name ?? "";
+        const customerCode = targetLine.customer_factory_code ?? "";
+        const buildFallbackCandidates = async (payload: { model_name: string; customer_factory_code: string }) => {
+          const resFallback = await fetch("/api/new-receipt-workbench/match-suggest-input", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              model_name: payload.model_name,
+              customer_factory_code: payload.customer_factory_code,
+              limit: 8,
+            }),
+          });
+          const jsonFallback = await resFallback.json();
+          if (!resFallback.ok) return [] as MatchCandidate[];
+          const rows = (jsonFallback?.data?.candidates ?? []) as Array<{
+            order_line_id?: string | null;
+            customer_party_id?: string | null;
+            customer_mask_code?: string | null;
+            customer_name?: string | null;
+            model_name?: string | null;
+            size?: string | null;
+            color?: string | null;
+            material_code?: string | null;
+            status?: string | null;
+            is_plated?: boolean | null;
+            plating_color_code?: string | null;
+            memo?: string | null;
+          }>;
+          return rows.map((row) => ({
+            order_line_id: row.order_line_id ?? null,
+            customer_party_id: row.customer_party_id ?? null,
+            customer_mask_code: row.customer_mask_code ?? null,
+            customer_name: row.customer_name ?? null,
+            model_name: row.model_name ?? null,
+            size: row.size ?? null,
+            color: row.color ?? null,
+            material_code: row.material_code ?? null,
+            status: row.status ?? null,
+            is_plated: row.is_plated ?? null,
+            plating_color_code: row.plating_color_code ?? null,
+            memo: row.memo ?? null,
+            match_score: null,
+            score_detail_json: null,
+          }));
+        };
+
+        nextCandidates = await buildFallbackCandidates({ model_name: modelName, customer_factory_code: customerCode });
+        if (nextCandidates.length === 0 && modelName && customerCode) {
+          nextCandidates = await buildFallbackCandidates({ model_name: modelName, customer_factory_code: "" });
+        }
+      }
+
+      if (nextCandidates.length === 0) {
+        toast.error("매칭 후보가 없습니다.");
+      }
+      setSuggestions(nextCandidates);
       setSelectedCandidate(null);
       setConfirmResult(null);
     } finally {
@@ -2041,6 +2437,7 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                           <th className="px-2 py-2 text-right w-[86px]">총중량</th>
                           <th className="px-2 py-2 text-right w-[96px]">총공임</th>
                           <th className="px-2 py-2 text-right w-[130px]">총합(저장)</th>
+                          <th className="px-2 py-2 text-left w-[140px]">상태</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -2054,6 +2451,22 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                           const isExpanded = expandedLineId === item.line_uuid;
                           const seqValue = parseNumber(item.vendor_seq_no);
                           const isSeqDuplicate = seqValue !== null && duplicateSeqSet.has(seqValue);
+                          const lockRow = item.receipt_line_uuid ? lockedLineMap.get(item.receipt_line_uuid) : null;
+                          const lockStatus = lockRow?.shipment_status ?? null;
+                          const isLocked = Boolean(lockRow);
+                          const isDraftLock = lockStatus === "DRAFT";
+                          const isConfirmedLock = lockStatus === "CONFIRMED";
+                          const inputDisabled = isLocked;
+                          const lockBadgeLabel = isDraftLock
+                            ? "매칭확정(출고대기)"
+                            : isConfirmedLock
+                              ? "출고확정(LOCK)"
+                              : lockStatus ?? null;
+                          const deleteTooltip = isLocked
+                            ? isDraftLock
+                              ? "매칭확정된 라인은 삭제할 수 없습니다. 먼저 매칭취소를 하세요."
+                              : "출고확정된 라인은 삭제할 수 없습니다."
+                            : undefined;
                           const seqDisplayClass = cn(
                             "flex h-9 items-center justify-end rounded-md px-2 text-[11px]",
                             isSeqDuplicate && "ring-1 ring-rose-500/70 bg-rose-500/10"
@@ -2106,10 +2519,19 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                                     {formatNumber(totalAmount)}
                                   </div>
                                 </td>
+                                <td className="px-2 py-1">
+                                  {lockBadgeLabel ? (
+                                    <Badge tone={isDraftLock ? "warning" : "neutral"} className="h-6 px-2 text-[10px]">
+                                      {lockBadgeLabel}
+                                    </Badge>
+                                  ) : (
+                                    <span className="text-[var(--muted)]">-</span>
+                                  )}
+                                </td>
                               </tr>
                               {isExpanded ? (
                                 <tr className="border-t border-[var(--panel-border)] bg-[var(--panel)]/15 text-[11px]" key={`${item.line_uuid}-detail`}>
-                                  <td colSpan={8} className="px-3 py-3">
+                                  <td colSpan={9} className="px-3 py-3">
                                     <div className="grid grid-cols-1 gap-3 md:grid-cols-[36px_110px_minmax(0,1.2fr)_78px_78px_minmax(0,1fr)]">
                                       <div className="space-y-1">
                                         <label className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)]">번호</label>
@@ -2117,6 +2539,7 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                                           type="text"
                                           inputMode="numeric"
                                           value={item.vendor_seq_no}
+                                          disabled={inputDisabled}
                                           onChange={(e) => updateLine(item.line_uuid, "vendor_seq_no", e.target.value)}
                                           onBlur={(e) => {
                                             const nextId = getLineIdFromTarget(e.relatedTarget);
@@ -2132,64 +2555,144 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                                       </div>
                                       <div className="space-y-1">
                                         <label className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)]">고객코드</label>
-                                        <Input
-                                          value={item.customer_factory_code}
-                                          onChange={(e) => {
-                                            const nextCode = e.target.value;
-                                            updateLine(item.line_uuid, "customer_factory_code", nextCode);
-                                          }}
-                                          onInput={(e) => {
-                                            const nextCode = e.currentTarget.value;
-                                            updateLine(item.line_uuid, "customer_factory_code", nextCode);
-                                          }}
-                                          onKeyUp={(e) => {
-                                            const nextCode = e.currentTarget.value;
-                                            updateLine(item.line_uuid, "customer_factory_code", nextCode);
-                                          }}
-                                          onCompositionEnd={(e) => {
-                                            const nextCode = e.currentTarget.value;
-                                            updateLine(item.line_uuid, "customer_factory_code", nextCode);
-                                          }}
-                                          onBlur={(e) => {
-                                            const nextId = getLineIdFromTarget(e.relatedTarget);
-                                            if (nextId !== item.line_uuid) setExpandedLineId(null);
-                                          }}
-                                          data-line-id={item.line_uuid}
-                                          className="h-7 text-[11px]"
-                                        />
+                                        <div className="relative">
+                                          <Input
+                                            value={item.customer_factory_code}
+                                            disabled={inputDisabled}
+                                            onChange={(e) => handleCustomerChange(item.line_uuid, e.currentTarget.value)}
+                                            onInput={(e) => handleCustomerChange(item.line_uuid, e.currentTarget.value)}
+                                            onKeyUp={(e) => handleCustomerChange(item.line_uuid, e.currentTarget.value)}
+                                            onCompositionEnd={(e) => handleCustomerChange(item.line_uuid, e.currentTarget.value)}
+                                            onBlur={(e) => {
+                                              const nextId = getLineIdFromTarget(e.relatedTarget);
+                                              if (nextId !== item.line_uuid) {
+                                                setExpandedLineId(null);
+                                                setActiveLineSuggest(null);
+                                              }
+                                            }}
+                                            data-line-id={item.line_uuid}
+                                            className="h-7 text-[11px]"
+                                          />
+                                          {activeLineSuggest?.lineId === item.line_uuid &&
+                                          activeLineSuggest.field === "customer" &&
+                                          item.customer_factory_code.trim() ? (
+                                            <div
+                                              className="absolute left-0 right-0 top-full mt-1 z-[9999] max-h-60 overflow-y-auto rounded-[12px] border border-[var(--panel-border)] bg-[var(--panel)] shadow-lg pointer-events-auto"
+                                              onMouseDown={(e) => {
+                                                e.preventDefault();
+                                                e.stopPropagation();
+                                              }}
+                                              onClick={(e) => {
+                                                e.stopPropagation();
+                                              }}
+                                              onPointerDown={(e) => {
+                                                e.preventDefault();
+                                                e.stopPropagation();
+                                              }}
+                                            >
+                                              <div className="px-2 py-1 text-xs text-[var(--muted)]">
+                                                {isCustomerSuggestLoading ? "검색 중..." : "\u00A0"}
+                                              </div>
+                                              {customerCodeSuggest.length === 0 && !isCustomerSuggestLoading ? (
+                                                <div className="px-2 py-2 text-xs text-[var(--muted)]">검색 결과 없음</div>
+                                              ) : null}
+                                              {customerCodeSuggest.map((option) => (
+                                                <button
+                                                  key={option.party_id}
+                                                  type="button"
+                                                  className="flex w-full items-center justify-between px-2 py-2 text-left text-[11px] hover:bg-[var(--muted)]/10"
+                                                  data-line-id={item.line_uuid}
+                                                  onMouseDown={(e) => {
+                                                    e.preventDefault();
+                                                    updateLine(item.line_uuid, "customer_factory_code", option.mask_code);
+                                                    setActiveLineSuggest(null);
+                                                  }}
+                                                >
+                                                  <span>{option.mask_code}</span>
+                                                  <span className="text-[10px] text-[var(--muted)]">
+                                                    {option.name ? `| ${option.name}` : ""}
+                                                  </span>
+                                                </button>
+                                              ))}
+                                            </div>
+                                          ) : null}
+                                        </div>
                                       </div>
                                       <div className="space-y-1">
                                         <label className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)]">모델명</label>
-                                        <Input
-                                          value={item.model_name}
-                                          onChange={(e) => {
-                                            const nextModel = e.target.value;
-                                            updateLine(item.line_uuid, "model_name", nextModel);
-                                          }}
-                                          onInput={(e) => {
-                                            const nextModel = e.currentTarget.value;
-                                            updateLine(item.line_uuid, "model_name", nextModel);
-                                          }}
-                                          onKeyUp={(e) => {
-                                            const nextModel = e.currentTarget.value;
-                                            updateLine(item.line_uuid, "model_name", nextModel);
-                                          }}
-                                          onCompositionEnd={(e) => {
-                                            const nextModel = e.currentTarget.value;
-                                            updateLine(item.line_uuid, "model_name", nextModel);
-                                          }}
-                                          onBlur={(e) => {
-                                            const nextId = getLineIdFromTarget(e.relatedTarget);
-                                            if (nextId !== item.line_uuid) setExpandedLineId(null);
-                                          }}
-                                          data-line-id={item.line_uuid}
-                                          className="h-7 text-[11px]"
-                                        />
+                                        <div className="relative">
+                                          <Input
+                                            value={item.model_name}
+                                            disabled={inputDisabled}
+                                            onChange={(e) => handleModelChange(item.line_uuid, e.currentTarget.value)}
+                                            onInput={(e) => handleModelChange(item.line_uuid, e.currentTarget.value)}
+                                            onKeyUp={(e) => handleModelChange(item.line_uuid, e.currentTarget.value)}
+                                            onCompositionEnd={(e) => handleModelChange(item.line_uuid, e.currentTarget.value)}
+                                            onBlur={(e) => {
+                                              const nextId = getLineIdFromTarget(e.relatedTarget);
+                                              if (nextId !== item.line_uuid) {
+                                                setExpandedLineId(null);
+                                                setActiveLineSuggest(null);
+                                              }
+                                            }}
+                                            data-line-id={item.line_uuid}
+                                            className="h-7 text-[11px]"
+                                          />
+                                          {activeLineSuggest?.lineId === item.line_uuid &&
+                                          activeLineSuggest.field === "model" &&
+                                          item.model_name.trim() ? (
+                                            <div
+                                              className="absolute left-0 right-0 top-full mt-1 z-[9999] max-h-60 overflow-y-auto rounded-[12px] border border-[var(--panel-border)] bg-[var(--panel)] shadow-lg pointer-events-auto"
+                                              onMouseDown={(e) => {
+                                                e.preventDefault();
+                                                e.stopPropagation();
+                                              }}
+                                              onClick={(e) => {
+                                                e.stopPropagation();
+                                              }}
+                                              onPointerDown={(e) => {
+                                                e.preventDefault();
+                                                e.stopPropagation();
+                                              }}
+                                            >
+                                              <div className="px-2 py-1 text-xs text-[var(--muted)]">
+                                                {isModelSuggestLoading ? "검색 중..." : "\u00A0"}
+                                              </div>
+                                              {modelNameSuggest.length === 0 && !isModelSuggestLoading ? (
+                                                <div className="px-2 py-2 text-xs text-[var(--muted)]">검색 결과 없음</div>
+                                              ) : null}
+                                              {modelNameSuggest.map((option) => (
+                                                <button
+                                                  key={option.master_item_id}
+                                                  type="button"
+                                                  className="flex w-full items-center justify-between px-2 py-2 text-left text-[11px] hover:bg-[var(--muted)]/10"
+                                                  data-line-id={item.line_uuid}
+                                                  onMouseDown={(e) => {
+                                                    e.preventDefault();
+                                                  }}
+                                                  onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    suppressModelSuggestRef.current = {
+                                                      lineId: item.line_uuid,
+                                                      value: option.model_name,
+                                                    };
+                                                    updateLine(item.line_uuid, "model_name", option.model_name);
+                                                    setIsModelSuggestLoading(false);
+                                                    setActiveLineSuggest(null);
+                                                  }}
+                                                >
+                                                  <span>{option.model_name}</span>
+                                                </button>
+                                              ))}
+                                            </div>
+                                          ) : null}
+                                        </div>
                                       </div>
                                       <div className="space-y-1">
                                         <label className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)]">소재</label>
                                           <Select
                                             value={item.material_code}
+                                            disabled={inputDisabled}
                                             onChange={(e) => updateLineMaterial(item.line_uuid, e.target.value)}
                                             onBlur={(e) => {
                                               const nextId = getLineIdFromTarget(e.relatedTarget);
@@ -2210,6 +2713,7 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                                         <label className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)]">색상</label>
                                           <Select
                                             value={item.color}
+                                            disabled={inputDisabled}
                                             onChange={(e) => updateLine(item.line_uuid, "color", e.target.value)}
                                             onBlur={(e) => {
                                               const nextId = getLineIdFromTarget(e.relatedTarget);
@@ -2232,6 +2736,7 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                                         <label className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)]">비고</label>
                                         <Input
                                           value={item.remark}
+                                          disabled={inputDisabled}
                                           onChange={(e) => updateLine(item.line_uuid, "remark", e.target.value)}
                                           onBlur={(e) => {
                                             const nextId = getLineIdFromTarget(e.relatedTarget);
@@ -2249,6 +2754,7 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                                           type="text"
                                           inputMode="numeric"
                                           value={item.qty}
+                                          disabled={inputDisabled}
                                           onChange={(e) => updateLineNumber(item.line_uuid, "qty", e.target.value)}
                                           onBlur={(e) => {
                                             const nextId = getLineIdFromTarget(e.relatedTarget);
@@ -2272,6 +2778,7 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                                           type="text"
                                           inputMode="decimal"
                                           value={item.weight_raw_g}
+                                          disabled={inputDisabled}
                                           onChange={(e) => updateLineNumber(item.line_uuid, "weight_raw_g", e.target.value)}
                                           onBlur={(e) => {
                                             const nextId = getLineIdFromTarget(e.relatedTarget);
@@ -2287,6 +2794,7 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                                           type="text"
                                           inputMode="decimal"
                                           value={item.weight_deduct_g}
+                                          disabled={inputDisabled}
                                           onChange={(e) => updateLineNumber(item.line_uuid, "weight_deduct_g", e.target.value)}
                                           onBlur={(e) => {
                                             const nextId = getLineIdFromTarget(e.relatedTarget);
@@ -2302,6 +2810,7 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                                           type="text"
                                           inputMode="numeric"
                                           value={item.labor_basic_cost_krw}
+                                          disabled={inputDisabled}
                                           onChange={(e) =>
                                             updateLineNumberAndResetTotal(item.line_uuid, "labor_basic_cost_krw", e.target.value)
                                           }
@@ -2319,6 +2828,7 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                                           type="text"
                                           inputMode="numeric"
                                           value={item.labor_other_cost_krw}
+                                          disabled={inputDisabled}
                                           onChange={(e) =>
                                             updateLineNumberAndResetTotal(item.line_uuid, "labor_other_cost_krw", e.target.value)
                                           }
@@ -2338,6 +2848,7 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                                           type="text"
                                           inputMode="numeric"
                                           value={item.stone_center_qty}
+                                          disabled={inputDisabled}
                                           onChange={(e) =>
                                             updateLineNumberAndResetTotal(item.line_uuid, "stone_center_qty", e.target.value)
                                           }
@@ -2355,6 +2866,7 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                                           type="text"
                                           inputMode="numeric"
                                           value={item.stone_center_unit_cost_krw}
+                                          disabled={inputDisabled}
                                           onChange={(e) =>
                                             updateLineNumberAndResetTotal(
                                               item.line_uuid,
@@ -2376,6 +2888,7 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                                           type="text"
                                           inputMode="numeric"
                                           value={item.stone_sub1_qty}
+                                          disabled={inputDisabled}
                                           onChange={(e) =>
                                             updateLineNumberAndResetTotal(item.line_uuid, "stone_sub1_qty", e.target.value)
                                           }
@@ -2393,6 +2906,7 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                                           type="text"
                                           inputMode="numeric"
                                           value={item.stone_sub1_unit_cost_krw}
+                                          disabled={inputDisabled}
                                           onChange={(e) =>
                                             updateLineNumberAndResetTotal(
                                               item.line_uuid,
@@ -2414,6 +2928,7 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                                           type="text"
                                           inputMode="numeric"
                                           value={item.stone_sub2_qty}
+                                          disabled={inputDisabled}
                                           onChange={(e) =>
                                             updateLineNumberAndResetTotal(item.line_uuid, "stone_sub2_qty", e.target.value)
                                           }
@@ -2431,6 +2946,7 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                                           type="text"
                                           inputMode="numeric"
                                           value={item.stone_sub2_unit_cost_krw}
+                                          disabled={inputDisabled}
                                           onChange={(e) =>
                                             updateLineNumberAndResetTotal(
                                               item.line_uuid,
@@ -2465,17 +2981,28 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                                         />
                                       </div>
                                     </div>
-                                    <div className="mt-3 flex justify-end">
-                                      <Button
-                                        type="button"
-                                        size="sm"
-                                        variant="ghost"
-                                        onClick={() => openDeleteModal(item)}
-                                        disabled={receiptLineDelete.isPending}
-                                        data-line-id={item.line_uuid}
-                                      >
-                                        삭제
-                                      </Button>
+                                    <div className="mt-3 space-y-2">
+                                      {isLocked ? (
+                                        <div className="rounded-md border border-[var(--panel-border)] bg-[var(--surface)]/60 p-2 text-[11px] text-[var(--muted)]">
+                                          {isDraftLock
+                                            ? "수정/삭제하려면 ‘확정/출고대기’ 탭에서 매칭취소 후 진행하세요."
+                                            : "출고확정 이후에는 수정/삭제할 수 없습니다. 정정 영수증으로 처리하세요."}
+                                        </div>
+                                      ) : null}
+                                      <div className="flex justify-end">
+                                        <span className="inline-flex" title={deleteTooltip}>
+                                          <Button
+                                            type="button"
+                                            size="sm"
+                                            variant="ghost"
+                                            onClick={() => openDeleteModal(item)}
+                                            disabled={receiptLineDelete.isPending || isLocked}
+                                            data-line-id={item.line_uuid}
+                                          >
+                                            삭제
+                                          </Button>
+                                        </span>
+                                      </div>
                                     </div>
                                   </td>
                                 </tr>
@@ -2778,6 +3305,7 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
               <div className="flex items-center gap-2">
                 {[
                   { key: "match", label: "매칭" },
+                  { key: "confirmed", label: "확정/출고대기" },
                   { key: "reconcile", label: "정합성" },
                   { key: "integrity", label: "링크오류" },
                 ].map((tab) => (
@@ -3164,6 +3692,96 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                 </div>
               )}
 
+              {activeTab === "confirmed" && (
+                <div className="space-y-4">
+                  <div className="rounded-lg border border-[var(--panel-border)] bg-[var(--surface)]/60 p-3 text-xs text-[var(--muted)]">
+                    <div>확정된 매칭 목록입니다. 출고대기(DRAFT) 상태에서만 ‘매칭취소’가 가능합니다.</div>
+                    <div>출고확정/정산 진행 건은 취소할 수 없으며, 정정 영수증으로 처리합니다.</div>
+                  </div>
+                  {matchesQuery.isLoading ? (
+                    <div className="space-y-2">
+                      {Array.from({ length: 3 }).map((_, idx) => (
+                        <Skeleton key={`match-skel-${idx}`} className="h-12 w-full" />
+                      ))}
+                    </div>
+                  ) : matchesQuery.isError ? (
+                    <div className="rounded-lg border border-dashed border-[var(--panel-border)] p-3 text-xs text-[var(--muted)]">
+                      <div>불러오기 실패</div>
+                      <div className="mt-2">
+                        <Button size="sm" variant="secondary" onClick={() => matchesQuery.refetch()}>
+                          재시도
+                        </Button>
+                      </div>
+                    </div>
+                  ) : confirmedMatches.length === 0 ? (
+                    <div className="rounded-lg border border-dashed border-[var(--panel-border)] p-3 text-xs text-[var(--muted)]">
+                      확정된 매칭이 없습니다.
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      {confirmedMatches.map((row) => {
+                        const statusLabel =
+                          row.shipment_status === "DRAFT"
+                            ? "출고대기"
+                            : row.shipment_status === "CONFIRMED"
+                              ? "출고확정"
+                              : row.shipment_status ?? "기타";
+                        const isCancelable = row.shipment_status === "DRAFT";
+                        const cancelTooltip = isCancelable
+                          ? undefined
+                          : "출고확정 이후에는 취소할 수 없습니다. 정정 영수증으로 처리하세요.";
+                        const weightLabel =
+                          row.receipt_weight_g === null || row.receipt_weight_g === undefined
+                            ? "-"
+                            : `${formatNumber(row.receipt_weight_g)}g`;
+                        const qtyLabel =
+                          row.receipt_qty === null || row.receipt_qty === undefined
+                            ? "-"
+                            : `${formatNumber(row.receipt_qty)}개`;
+                        return (
+                          <div
+                            key={`${row.receipt_line_uuid}:${row.shipment_line_id ?? ""}`}
+                            className="rounded-lg border border-[var(--panel-border)] bg-[var(--panel)] p-3 text-xs"
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="text-sm font-semibold text-[var(--foreground)]">
+                                {row.vendor_seq_no ? `라인 ${row.vendor_seq_no}` : "라인"}
+                                {row.customer_factory_code ? ` · ${row.customer_factory_code}` : ""}
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <Badge tone={row.shipment_status === "DRAFT" ? "warning" : "neutral"} className="h-6 px-2 text-[10px]">
+                                  {statusLabel}
+                                </Badge>
+                                <span className="inline-flex" title={cancelTooltip}>
+                                  <Button
+                                    size="sm"
+                                    variant="secondary"
+                                    onClick={() => openMatchClearModal(row)}
+                                    disabled={!isCancelable || matchClearMutation.isPending}
+                                  >
+                                    매칭취소
+                                  </Button>
+                                </span>
+                              </div>
+                            </div>
+                            <div className="mt-2 text-[var(--muted)]">
+                              {(row.receipt_model_name ?? "-") + " · " + (row.receipt_material_code ?? "-")}
+                              {row.receipt_size ? ` · ${row.receipt_size}` : ""}
+                              {row.receipt_color ? ` · ${row.receipt_color}` : ""}
+                              {` · ${weightLabel} · ${qtyLabel}`}
+                            </div>
+                            <div className="mt-1 text-[var(--muted)]">
+                              고객: {row.customer_name ?? "-"} · 주문번호: {row.order_no ?? "-"}
+                            </div>
+                            <div className="mt-1 text-[var(--muted)]">확정일: {formatYmd(row.confirmed_at)}</div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
+
               {activeTab === "reconcile" && (
                 <div className="space-y-2">
                   {reconcileQuery.isLoading ? (
@@ -3217,6 +3835,87 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
           </Card>
         </div>
       </div>
+
+      <Modal open={matchClearOpen} onClose={closeMatchClearModal} title="매칭취소(출고대기 되돌리기)">
+        <div className="space-y-4">
+          <div className="rounded-lg border border-[var(--panel-border)] bg-[var(--surface)]/60 p-3 text-xs text-[var(--muted)] space-y-1">
+            <div>이 작업은 ‘출고대기(DRAFT)’ 상태에서만 가능합니다.</div>
+            <div>취소 후에는 영수증 라인을 수정/삭제하고 다시 매칭할 수 있습니다.</div>
+            <div>출고확정/정산(AR/AP/재고이동/원가확정/배분)이 진행된 건은 취소할 수 없으며, 정정 영수증으로 처리해야 합니다.</div>
+          </div>
+
+          {matchClearTarget ? (
+            <div className="rounded-lg border border-[var(--panel-border)] bg-[var(--surface)]/60 p-3 text-xs">
+              <div className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)]">대상 라인</div>
+              <div className="mt-2 flex flex-wrap items-center gap-2 text-sm">
+                <span className="font-semibold text-[var(--foreground)]">
+                  {matchClearTarget.receipt_model_name ?? "모델명 없음"}
+                </span>
+                <Badge tone="neutral" className="h-5 px-2 text-[10px]">
+                  {matchClearTarget.vendor_seq_no ? `라인 ${matchClearTarget.vendor_seq_no}` : "라인"}
+                </Badge>
+                {matchClearTarget.customer_factory_code ? (
+                  <Badge tone="neutral" className="h-5 px-2 text-[10px]">
+                    {matchClearTarget.customer_factory_code}
+                  </Badge>
+                ) : null}
+              </div>
+              <div className="mt-1 text-[11px] text-[var(--muted)]">
+                UUID {matchClearTarget.receipt_line_uuid.slice(0, 8)}
+              </div>
+            </div>
+          ) : null}
+
+          <div className="space-y-1.5">
+            <label className="text-xs font-semibold uppercase tracking-wider text-[var(--muted)]">사유*</label>
+            <Select value={matchClearReason} onChange={(e) => setMatchClearReason(e.target.value as MatchClearReasonCode)}>
+              {MATCH_CLEAR_REASONS.map((reason) => (
+                <option key={reason.value} value={reason.value}>
+                  {reason.label}
+                </option>
+              ))}
+            </Select>
+          </div>
+
+          <div className="space-y-1.5">
+            <label className="text-xs font-semibold uppercase tracking-wider text-[var(--muted)]">사유 상세</label>
+            <Input
+              value={matchClearReasonText}
+              onChange={(e) => setMatchClearReasonText(e.target.value)}
+              placeholder="예) 공임 120,000을 1,200,000으로 잘못 입력"
+              className="h-8 text-xs"
+            />
+          </div>
+
+          <div className="space-y-1.5">
+            <label className="text-xs font-semibold uppercase tracking-wider text-[var(--muted)]">메모</label>
+            <Textarea
+              value={matchClearNote}
+              onChange={(e) => setMatchClearNote(e.target.value)}
+              placeholder="팀 내부 공유 메모(선택)"
+              className="min-h-[80px] text-xs"
+            />
+          </div>
+
+          {matchClearError ? (
+            <div className="rounded-lg border border-[var(--danger)]/30 bg-[var(--danger)]/10 p-3 text-xs">
+              <div className="font-semibold text-[var(--danger)]">{matchClearError}</div>
+              <div className="mt-1 text-[11px] text-[var(--danger)]">
+                이 건은 원본을 수정하지 않습니다. 정정 영수증(새 영수증 업로드)로 처리해주세요.
+              </div>
+            </div>
+          ) : null}
+
+          <div className="flex items-center justify-end gap-2">
+            <Button variant="secondary" onClick={closeMatchClearModal} disabled={matchClearMutation.isPending}>
+              취소
+            </Button>
+            <Button onClick={confirmMatchClear} disabled={matchClearMutation.isPending || !matchClearTarget}>
+              매칭취소 실행
+            </Button>
+          </div>
+        </div>
+      </Modal>
 
       <Modal open={deleteOpen} onClose={closeDeleteModal} title="라인 삭제">
         <div className="space-y-4">

@@ -25,30 +25,30 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: "receipt_id required" }, { status: 400 });
   }
 
-  const { data, error } = await supabase
-    .from("cms_v_receipt_line_unlinked_v1")
+  const { data: baseRows, error: baseError } = await supabase
+    .from("cms_v_receipt_line_items_flat_v1")
     .select(
-      "receipt_id, receipt_line_uuid, vendor_party_id, vendor_name, issued_at, model_name, material_code, factory_weight_g, vendor_seq_no, customer_factory_code, remark"
+      "receipt_id, receipt_line_uuid, vendor_party_id, vendor_name, issued_at, model_name, material_code, factory_weight_g, vendor_seq_no, customer_factory_code, remark, size, color, line_item_json"
     )
     .eq("receipt_id", receiptId)
     .limit(limit);
-
-  if (error) {
-    return NextResponse.json({ error: error.message ?? "미매칭 라인 조회 실패" }, { status: 500 });
+  if (baseError) {
+    return NextResponse.json({ error: baseError.message ?? "미매칭 라인 조회 실패" }, { status: 500 });
   }
-  const rows = (data ?? []) as Array<{
-    receipt_id?: string | null;
-    receipt_line_uuid?: string | null;
-    vendor_party_id?: string | null;
-    vendor_name?: string | null;
-    issued_at?: string | null;
-    model_name?: string | null;
-    material_code?: string | null;
-    factory_weight_g?: number | null;
-    vendor_seq_no?: number | null;
-    customer_factory_code?: string | null;
-    remark?: string | null;
-  }>;
+
+  const { data: confirmed, error: confirmedError } = await supabase
+    .from("cms_receipt_line_match")
+    .select("receipt_line_uuid")
+    .eq("receipt_id", receiptId)
+    .eq("status", "CONFIRMED")
+    .limit(1000);
+  if (confirmedError) {
+    return NextResponse.json({ error: confirmedError.message ?? "미매칭 라인 조회 실패" }, { status: 500 });
+  }
+  const confirmedSet = new Set(
+    (confirmed ?? []).map((row) => row.receipt_line_uuid).filter((id): id is string => Boolean(id))
+  );
+  const rows = (baseRows ?? []).filter((row) => !row.receipt_line_uuid || !confirmedSet.has(row.receipt_line_uuid));
 
   if (rows.some((row) => !row.receipt_line_uuid)) {
     const { data: lineRows, error: lineError } = await supabase
@@ -88,23 +88,6 @@ export async function GET(request: Request) {
     }
   }
 
-  const lineIds = rows
-    .map((row) => row.receipt_line_uuid)
-    .filter((id): id is string => Boolean(id));
-
-  if (lineIds.length === 0) {
-    return NextResponse.json({ data: rows });
-  }
-
-  const { data: sizeRows, error: sizeError } = await supabase
-    .from("cms_v_receipt_line_items_flat_v1")
-    .select("receipt_line_uuid, size, color, line_item_json")
-    .in("receipt_line_uuid", lineIds);
-
-  if (sizeError) {
-    return NextResponse.json({ error: sizeError.message ?? "사이즈 조회 실패" }, { status: 500 });
-  }
-
   function parseNumeric(value: unknown) {
     if (value === null || value === undefined) return null;
     if (typeof value === "number" && Number.isFinite(value)) return value;
@@ -112,17 +95,22 @@ export async function GET(request: Request) {
     return null;
   }
 
-  const sizeMap = new Map(
-    (sizeRows ?? []).map((row) => [row.receipt_line_uuid, row])
-  );
-  const merged = rows.map((row) => {
-    const extra = row.receipt_line_uuid ? sizeMap.get(row.receipt_line_uuid) ?? null : null;
-    const lineJson = (extra?.line_item_json ?? null) as Record<string, unknown> | null;
-
+  const mapped = rows.map((row) => {
+    const lineJson = (row.line_item_json ?? null) as Record<string, unknown> | null;
     return {
-      ...row,
-      size: extra?.size ?? null,
-      color: extra?.color ?? null,
+      receipt_id: row.receipt_id ?? null,
+      receipt_line_uuid: row.receipt_line_uuid ?? null,
+      vendor_party_id: row.vendor_party_id ?? null,
+      vendor_name: row.vendor_name ?? null,
+      issued_at: row.issued_at ?? null,
+      model_name: row.model_name ?? null,
+      material_code: row.material_code ?? null,
+      factory_weight_g: row.factory_weight_g ?? null,
+      vendor_seq_no: row.vendor_seq_no ?? null,
+      customer_factory_code: row.customer_factory_code ?? null,
+      remark: row.remark ?? null,
+      size: row.size ?? null,
+      color: row.color ?? null,
       weight_raw_g: parseNumeric(lineJson?.weight_raw_g),
       weight_deduct_g: parseNumeric(lineJson?.weight_deduct_g),
       stone_center_qty: parseNumeric(lineJson?.stone_center_qty),
@@ -131,5 +119,5 @@ export async function GET(request: Request) {
     };
   });
 
-  return NextResponse.json({ data: merged });
+  return NextResponse.json({ data: mapped });
 }

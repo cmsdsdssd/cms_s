@@ -26,7 +26,7 @@ export async function POST(request: Request) {
 
   const { data, error } = await supabase
     .from("cms_master_item")
-    .select("master_item_id, model_name")
+    .select("master_id, model_name")
     .ilike("model_name", `%${query}%`)
     .order("model_name", { ascending: true })
     .limit(limit);
@@ -35,5 +35,10 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: error.message ?? "조회 실패" }, { status: 500 });
   }
 
-  return NextResponse.json({ data: data ?? [] });
+  const mapped = (data ?? []).map((row) => ({
+    master_item_id: row.master_id,
+    model_name: row.model_name,
+  }));
+
+  return NextResponse.json({ data: mapped });
 }

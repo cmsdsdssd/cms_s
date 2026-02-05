@@ -726,10 +726,14 @@ export default function ShipmentsPage() {
         p_actor_person_id: actorId,
         p_note: "set from shipments confirm",
       });
+      toast.success("매장출고로 저장 완료", {
+        description: "확정(시세 스냅샷)은 Workbench(당일출고)에서 ‘선택 영수증 확정’ 시점에만 진행됩니다.",
+      });
+      resetShipmentForm({ keepStorePickup: true });
+      return;
     }
 
-    const confirmHandler = shouldStorePickup ? confirmStorePickupMutation : confirmMutation;
-    await confirmHandler.mutateAsync({
+    await confirmMutation.mutateAsync({
       p_shipment_id: shipmentId,
       p_actor_person_id: actorId,
       p_note: "confirm from shipments save",
@@ -739,15 +743,6 @@ export default function ShipmentsPage() {
       p_cost_lines: [],
       p_force: false,
     });
-
-    if (shouldStorePickup) {
-      await shipmentSetStorePickupMutation.mutateAsync({
-        p_shipment_id: shipmentId,
-        p_is_store_pickup: true,
-        p_actor_person_id: actorId,
-        p_note: "force store pickup after confirm",
-      });
-    }
   };
 
   const displayedLines = useMemo(() => {
@@ -946,76 +941,46 @@ export default function ShipmentsPage() {
     }
   };
 
+  const resetShipmentForm = (options?: { keepStorePickup?: boolean }) => {
+    const keepStorePickup = options?.keepStorePickup ?? false;
+
+    setConfirmModalOpen(false);
+    setCurrentShipmentId(null);
+    setCurrentShipmentLineId(null);
+    setShowAllLines(false);
+    setIsStorePickup((prev) => (keepStorePickup ? prev : false));
+
+    setSelectedOrderLineId(null);
+    setSelectedOrderStatus(null);
+    setPrefill(null);
+    setSearchQuery("");
+    setDebouncedQuery("");
+    setWeightG("");
+    setDeductionWeightG("");
+    setBaseLabor("");
+    setExtraLaborItems([]);
+    setExtraLaborSelect(null);
+    setCostMode("PROVISIONAL");
+    setCostInputs({});
+
+    setLinkedReceiptId(null);
+    setReceiptFile(null);
+    setReceiptUploading(false);
+    setReceiptFileInputKey((k) => k + 1);
+
+    setReceiptPreviewSrc(null);
+    setReceiptPreviewOpenUrl(null);
+    setReceiptPreviewKind(null);
+    setReceiptPreviewTitle("");
+    setReceiptPreviewError(null);
+  };
+
   // --- RPC: 출고 확정 ---
   const confirmMutation = useRpcMutation<unknown>({
     fn: CONTRACTS.functions.shipmentConfirm,
     successMessage: "출고 확정 완료",
     onSuccess: () => {
-      setConfirmModalOpen(false);
-      setCurrentShipmentId(null);
-      setCurrentShipmentLineId(null);
-      setShowAllLines(false);
-      setIsStorePickup(false);
-
-      setSelectedOrderLineId(null);
-      setSelectedOrderStatus(null);
-      setPrefill(null);
-      setSearchQuery("");
-      setDebouncedQuery("");
-      setWeightG("");
-      setDeductionWeightG("");
-      setBaseLabor("");
-      setExtraLaborItems([]);
-      setExtraLaborSelect(null);
-      setCostMode("PROVISIONAL");
-      setCostInputs({});
-
-      setLinkedReceiptId(null);
-      setReceiptFile(null);
-      setReceiptUploading(false);
-      setReceiptFileInputKey((k) => k + 1);
-
-      setReceiptPreviewSrc(null);
-      setReceiptPreviewOpenUrl(null);
-      setReceiptPreviewKind(null);
-      setReceiptPreviewTitle("");
-      setReceiptPreviewError(null);
-    },
-  });
-
-  const confirmStorePickupMutation = useRpcMutation<unknown>({
-    fn: CONTRACTS.functions.shipmentConfirmStorePickup,
-    successMessage: "매장출고 확정 완료",
-    onSuccess: () => {
-      setConfirmModalOpen(false);
-      setCurrentShipmentId(null);
-      setCurrentShipmentLineId(null);
-      setShowAllLines(false);
-      setIsStorePickup(false);
-
-      setSelectedOrderLineId(null);
-      setSelectedOrderStatus(null);
-      setPrefill(null);
-      setSearchQuery("");
-      setDebouncedQuery("");
-      setWeightG("");
-      setDeductionWeightG("");
-      setBaseLabor("");
-      setExtraLaborItems([]);
-      setExtraLaborSelect(null);
-      setCostMode("PROVISIONAL");
-      setCostInputs({});
-
-      setLinkedReceiptId(null);
-      setReceiptFile(null);
-      setReceiptUploading(false);
-      setReceiptFileInputKey((k) => k + 1);
-
-      setReceiptPreviewSrc(null);
-      setReceiptPreviewOpenUrl(null);
-      setReceiptPreviewKind(null);
-      setReceiptPreviewTitle("");
-      setReceiptPreviewError(null);
+      resetShipmentForm();
     },
   });
 
@@ -1101,6 +1066,20 @@ export default function ShipmentsPage() {
       return;
     }
 
+    if (shouldStorePickup) {
+      await shipmentSetStorePickupMutation.mutateAsync({
+        p_shipment_id: shipmentId,
+        p_is_store_pickup: true,
+        p_actor_person_id: actorId,
+        p_note: "set from shipments confirm",
+      });
+      toast.success("매장출고로 저장 완료", {
+        description: "확정은 Workbench(당일출고)에서 진행하세요.",
+      });
+      resetShipmentForm({ keepStorePickup: true });
+      return;
+    }
+
 
     // ✅ MANUAL 모드일 때만 현재 화면에 보이는 라인(기본: 지금 출고한 라인)만 전송
     const allowedLineIds = new Set(
@@ -1120,9 +1099,7 @@ export default function ShipmentsPage() {
           .filter((x) => !Number.isNaN(x.unit_cost_krw) && x.unit_cost_krw >= 0)
         : [];
 
-    const confirmHandler = shouldStorePickup ? confirmStorePickupMutation : confirmMutation;
-
-    await confirmHandler.mutateAsync({
+    await confirmMutation.mutateAsync({
       p_shipment_id: shipmentId,
       p_actor_person_id: actorId,
       p_note: "confirm from web",
@@ -1132,15 +1109,6 @@ export default function ShipmentsPage() {
       p_cost_lines: costLines,
       p_force: false,
     });
-
-    if (shouldStorePickup) {
-      await shipmentSetStorePickupMutation.mutateAsync({
-        p_shipment_id: shipmentId,
-        p_is_store_pickup: true,
-        p_actor_person_id: actorId,
-        p_note: "force store pickup after confirm",
-      });
-    }
 
     // ✅ 영수증 연결만 (receipt_usage upsert)
   };
@@ -1201,7 +1169,7 @@ export default function ShipmentsPage() {
   const valuation = shipmentValuationQuery.data;
   const pricingLockedAt = valuation?.pricing_locked_at ?? shipmentHeaderQuery.data?.pricing_locked_at ?? null;
   const pricingSource = valuation?.pricing_source ?? shipmentHeaderQuery.data?.pricing_source ?? null;
-  const isConfirming = confirmMutation.isPending || confirmStorePickupMutation.isPending;
+  const isConfirming = confirmMutation.isPending || shipmentSetStorePickupMutation.isPending;
   const shipmentIdForResync = normalizeId(currentShipmentId);
   const isShipmentConfirmed =
     Boolean(shipmentHeaderQuery.data?.confirmed_at) || shipmentHeaderQuery.data?.status === "CONFIRMED";
@@ -1782,8 +1750,10 @@ export default function ShipmentsPage() {
                             {shipmentUpsertMutation.isPending ? (
                               <div className="flex items-center gap-2">
                                 <div className="w-4 h-4 border-2 border-[var(--background)]/30 border-t-[var(--background)] rounded-full animate-spin" />
-                                확정 중...
+                                {isStorePickup ? "저장 중..." : "확정 중..."}
                               </div>
+                            ) : isStorePickup ? (
+                              "매장출고 저장 (워크벤치에서 확정)"
                             ) : (
                               "출고 확정"
                             )}
@@ -1831,6 +1801,17 @@ export default function ShipmentsPage() {
       {/* Confirm Modal - Preserved Logic */}
       <Modal open={confirmModalOpen} onClose={() => setConfirmModalOpen(false)} title="출고 확정" className="max-w-6xl">
           <div className="space-y-6">
+            {isStorePickup ? (
+              <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                <AlertCircle className="h-4 w-4 mt-0.5" />
+                <div>
+                  <div className="font-semibold">매장출고는 Shipments에서 확정되지 않습니다.</div>
+                  <div className="text-xs text-amber-700">
+                    Workbench(당일출고)에서 ‘선택 영수증 확정’으로 확정하세요.
+                  </div>
+                </div>
+              </div>
+            ) : null}
             {/* Summary Section */}
             <div className="bg-[var(--primary)]/5 border border-[var(--primary)]/20 rounded-xl p-4 space-y-3">
             <div className="flex items-center justify-between">
@@ -1977,7 +1958,7 @@ export default function ShipmentsPage() {
                   onChange={(event) => setIsStorePickup(event.target.checked)}
                   className="h-4 w-4"
                 />
-                매장출고 (가격 확정 시점 = 매장출고 확정)
+                매장출고 (확정은 Workbench에서 진행)
               </label>
 
               <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
@@ -2226,7 +2207,7 @@ export default function ShipmentsPage() {
               disabled={isConfirming}
               className="px-6"
             >
-              {isConfirming ? "확정 처리 중..." : isStorePickup ? "매장출고 확정" : "출고 확정"}
+              {isConfirming ? "처리 중..." : isStorePickup ? "매장출고 저장 (워크벤치에서 확정)" : "출고 확정"}
             </Button>
           </div>
         </div>

@@ -68,15 +68,37 @@ export async function POST(request: Request) {
   const centerStoneName = (body.center_stone_name_default as string | null) ?? null;
   const sub1StoneName = (body.sub1_stone_name_default as string | null) ?? null;
   const sub2StoneName = (body.sub2_stone_name_default as string | null) ?? null;
+  const laborBaseSell = typeof body.labor_base_sell === "number" ? body.labor_base_sell : undefined;
+  const laborCenterSell = typeof body.labor_center_sell === "number" ? body.labor_center_sell : undefined;
+  const laborSub1Sell = typeof body.labor_sub1_sell === "number" ? body.labor_sub1_sell : undefined;
+  const laborSub2Sell = typeof body.labor_sub2_sell === "number" ? body.labor_sub2_sell : undefined;
+  const laborBaseCost = typeof body.labor_base_cost === "number" ? body.labor_base_cost : undefined;
+  const laborCenterCost = typeof body.labor_center_cost === "number" ? body.labor_center_cost : undefined;
+  const laborSub1Cost = typeof body.labor_sub1_cost === "number" ? body.labor_sub1_cost : undefined;
+  const laborSub2Cost = typeof body.labor_sub2_cost === "number" ? body.labor_sub2_cost : undefined;
+  const laborProfileMode = typeof body.labor_profile_mode === "string" ? body.labor_profile_mode : undefined;
+  const laborBandCode = typeof body.labor_band_code === "string" ? body.labor_band_code : undefined;
 
   if (masterId) {
+    const updatePayload: Record<string, unknown> = {
+      center_stone_name_default: centerStoneName,
+      sub1_stone_name_default: sub1StoneName,
+      sub2_stone_name_default: sub2StoneName,
+    };
+    if (laborBaseSell !== undefined) updatePayload.labor_base_sell = laborBaseSell;
+    if (laborCenterSell !== undefined) updatePayload.labor_center_sell = laborCenterSell;
+    if (laborSub1Sell !== undefined) updatePayload.labor_sub1_sell = laborSub1Sell;
+    if (laborSub2Sell !== undefined) updatePayload.labor_sub2_sell = laborSub2Sell;
+    if (laborBaseCost !== undefined) updatePayload.labor_base_cost = laborBaseCost;
+    if (laborCenterCost !== undefined) updatePayload.labor_center_cost = laborCenterCost;
+    if (laborSub1Cost !== undefined) updatePayload.labor_sub1_cost = laborSub1Cost;
+    if (laborSub2Cost !== undefined) updatePayload.labor_sub2_cost = laborSub2Cost;
+    if (laborProfileMode !== undefined) updatePayload.labor_profile_mode = laborProfileMode;
+    if (laborBandCode !== undefined) updatePayload.labor_band_code = laborBandCode;
+
     const { error: updateError } = await supabase
       .from("cms_master_item")
-      .update({
-        center_stone_name_default: centerStoneName,
-        sub1_stone_name_default: sub1StoneName,
-        sub2_stone_name_default: sub2StoneName,
-      })
+      .update(updatePayload)
       .eq("master_id", masterId);
 
     if (updateError) {

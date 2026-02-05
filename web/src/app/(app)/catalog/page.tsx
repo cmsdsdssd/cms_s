@@ -170,7 +170,7 @@ function getMaterialBgColor(materialCode: string): string {
 }
 
 function toNumber(value: string) {
-  const parsed = Number(value);
+  const parsed = Number(value.replaceAll(",", "").trim());
   return Number.isNaN(parsed) ? 0 : parsed;
 }
 
@@ -206,6 +206,7 @@ export default function CatalogPage() {
   const [modelName, setModelName] = useState("");
   const [vendorId, setVendorId] = useState("");
   const [vendorOptions, setVendorOptions] = useState<VendorOption[]>([]);
+  const [vendorPrefixMap, setVendorPrefixMap] = useState<Record<string, string>>({});
   const [masterRowsById, setMasterRowsById] = useState<Record<string, Record<string, unknown>>>({});
   const [categoryCode, setCategoryCode] = useState("");
   const [categoryTouched, setCategoryTouched] = useState(false);
@@ -303,6 +304,20 @@ export default function CatalogPage() {
   const canSave = true;
 
   const today = new Date().toISOString().slice(0, 10);
+  const applyVendorFromModelName = useCallback((value: string) => {
+    if (!value || vendorId) return;
+    const prefix = value.split("-")[0]?.trim().toUpperCase();
+    if (!prefix) return;
+    const matchedVendorId = vendorPrefixMap[prefix];
+    if (matchedVendorId) {
+      setVendorId(matchedVendorId);
+    }
+  }, [vendorId, vendorPrefixMap]);
+  useEffect(() => {
+    if (!vendorId && modelName && Object.keys(vendorPrefixMap).length > 0) {
+      applyVendorFromModelName(modelName);
+    }
+  }, [vendorId, modelName, vendorPrefixMap, applyVendorFromModelName]);
   const totalLaborSell =
     laborBaseSell + laborCenterSell * centerQty + laborSub1Sell * sub1Qty + laborSub2Sell * sub2Qty;
   const totalLaborCost =
@@ -375,13 +390,27 @@ export default function CatalogPage() {
     () => catalogItemsState.find((item) => item.id === selectedItemId) ?? null,
     [catalogItemsState, selectedItemId]
   );
+  const vendorLabelById = useMemo(() => {
+    const map = new Map<string, string>();
+    vendorOptions.forEach((option) => {
+      if (option.value) {
+        map.set(option.value, option.label);
+      }
+    });
+    return map;
+  }, [vendorOptions]);
+  const selectedVendorName = useMemo(() => {
+    if (!selectedItem?.vendor) return "";
+    const matched = vendorOptions.find((option) => option.value === selectedItem.vendor);
+    return matched?.label ?? selectedItem.vendor;
+  }, [selectedItem?.vendor, vendorOptions]);
   const selectedMasterId = selectedItem?.id ?? null;
 
   // Calculate material price based on material code
   const calculateMaterialPrice = useCallback((material: string, weight: number, deduction: number) => {
     const netWeight = weight - deduction;
     if (material === "925") {
-      return silverModifiedPrice * netWeight;
+      return silverModifiedPrice * netWeight * 0.925;
     } else if (material === "14K" || material === "14") {
       return goldPrice * netWeight * 0.6435;
     } else if (material === "18K" || material === "18") {
@@ -394,12 +423,17 @@ export default function CatalogPage() {
     return 0;
   }, [goldPrice, silverModifiedPrice]);
 
+  function roundUpToThousand(value: number) {
+    return Math.ceil(value / 1000) * 1000;
+  }
+
 
   const fetchVendors = useCallback(async () => {
     try {
       const response = await fetch("/api/vendors");
       const result = (await response.json()) as {
         data?: { party_id?: string; name?: string }[];
+        prefixes?: { prefix?: string; vendor_party_id?: string }[];
         error?: string;
       };
       if (!response.ok || !result.data) {
@@ -411,6 +445,15 @@ export default function CatalogPage() {
           value: row.party_id ?? "",
         }))
       );
+      const nextPrefixMap: Record<string, string> = {};
+      result.prefixes?.forEach((row) => {
+        const prefix = String(row.prefix ?? "").trim();
+        const vendorPartyId = String(row.vendor_party_id ?? "").trim();
+        if (prefix && vendorPartyId) {
+          nextPrefixMap[prefix.toUpperCase()] = vendorPartyId;
+        }
+      });
+      setVendorPrefixMap(nextPrefixMap);
     } catch (error) {
       const message = error instanceof Error ? error.message : "공급처 조회 실패";
       toast.error("처리 실패", { description: message });
@@ -439,7 +482,14 @@ export default function CatalogPage() {
         const weight = hasWeight
           ? `${formatWeightNumber(netWeight)} g (+${formatWeightNumber(grossWeight)} g)(-${formatWeightNumber(safeDeduction)} g)`
           : "-";
-        const laborTotal = row.labor_total_cost ?? row.labor_total_sell;
+      const centerQty = Number(row.center_qty_default ?? 0);
+      const sub1Qty = Number(row.sub1_qty_default ?? 0);
+      const sub2Qty = Number(row.sub2_qty_default ?? 0);
+      const laborTotal =
+        Number(row.labor_base_cost ?? 0) +
+        Number(row.labor_center_cost ?? 0) * centerQty +
+        Number(row.labor_sub1_cost ?? 0) * sub1Qty +
+        Number(row.labor_sub2_cost ?? 0) * sub2Qty;
         const cost =
           typeof laborTotal === "number" ? `₩${new Intl.NumberFormat("ko-KR").format(laborTotal)}` : "-";
         const active = "판매 중";
@@ -528,23 +578,28 @@ export default function CatalogPage() {
       };
     }
 
+    const centerQty = Number(row.center_qty_default ?? 0);
+    const sub1Qty = Number(row.sub1_qty_default ?? 0);
+    const sub2Qty = Number(row.sub2_qty_default ?? 0);
     const laborTotalSellValue =
-      (row.labor_total_sell as number | undefined) ??
-      (row.labor_base_sell as number | undefined) ??
-      0;
+      Number(row.labor_base_sell ?? 0) +
+      Number(row.labor_center_sell ?? 0) * centerQty +
+      Number(row.labor_sub1_sell ?? 0) * sub1Qty +
+      Number(row.labor_sub2_sell ?? 0) * sub2Qty;
     const laborTotalCostValue =
-      (row.labor_total_cost as number | undefined) ??
-      (row.labor_base_cost as number | undefined) ??
-      0;
+      Number(row.labor_base_cost ?? 0) +
+      Number(row.labor_center_cost ?? 0) * centerQty +
+      Number(row.labor_sub1_cost ?? 0) * sub1Qty +
+      Number(row.labor_sub2_cost ?? 0) * sub2Qty;
 
     return {
       categoryCode: String(row.category_code ?? ""),
       materialCode: String(row.material_code_default ?? ""),
       weight: row.weight_default_g ? `${row.weight_default_g} g` : "",
       deductionWeight: row.deduction_weight_default_g ? String(row.deduction_weight_default_g) : "",
-      centerQty: Number(row.center_qty_default ?? 0),
-      sub1Qty: Number(row.sub1_qty_default ?? 0),
-      sub2Qty: Number(row.sub2_qty_default ?? 0),
+      centerQty,
+      sub1Qty,
+      sub2Qty,
       centerStoneName: String(row.center_stone_name_default ?? ""),
       sub1StoneName: String(row.sub1_stone_name_default ?? ""),
       sub2StoneName: String(row.sub2_stone_name_default ?? ""),
@@ -772,8 +827,20 @@ export default function CatalogPage() {
     return calculateMaterialPrice(selectedDetail.materialCode ?? "00", weight, deduction);
   }, [selectedItem, selectedDetail, calculateMaterialPrice]);
 
-  const totalEstimatedCost = materialPrice + totalLaborCost;
-  const totalEstimatedSell = materialPrice + totalLaborSell;
+  const detailLaborSell = selectedDetail
+    ? selectedDetail.laborBaseSell +
+      selectedDetail.laborCenterSell * selectedDetail.centerQty +
+      selectedDetail.laborSub1Sell * selectedDetail.sub1Qty +
+      selectedDetail.laborSub2Sell * selectedDetail.sub2Qty
+    : totalLaborSell;
+  const detailLaborCost = selectedDetail
+    ? selectedDetail.laborBaseCost +
+      selectedDetail.laborCenterCost * selectedDetail.centerQty +
+      selectedDetail.laborSub1Cost * selectedDetail.sub1Qty +
+      selectedDetail.laborSub2Cost * selectedDetail.sub2Qty
+    : totalLaborCost;
+  const totalEstimatedCost = roundUpToThousand(materialPrice + detailLaborCost);
+  const totalEstimatedSell = roundUpToThousand(materialPrice + detailLaborSell);
 
 
   const handleImageUpload = async (file: File) => {
@@ -927,6 +994,11 @@ export default function CatalogPage() {
       return;
     }
 
+    const normalizedLaborProfileMode =
+      laborProfileMode === "BAND" && !laborBandCode.trim() ? "MANUAL" : laborProfileMode;
+    const normalizedLaborBandCode =
+      normalizedLaborProfileMode === "BAND" ? laborBandCode.trim() || null : null;
+
     const payload = {
       master_id: masterId || null,
       model_name: modelName,
@@ -950,8 +1022,8 @@ export default function CatalogPage() {
       labor_sub2_cost: laborSub2Cost,
       plating_price_sell_default: platingSell,
       plating_price_cost_default: platingCost,
-      labor_profile_mode: laborProfileMode,
-      labor_band_code: laborBandCode || null,
+      labor_profile_mode: normalizedLaborProfileMode,
+      labor_band_code: normalizedLaborBandCode,
       vendor_party_id: isUuid(vendorId) ? vendorId : null,
       note,
       image_path: imagePath || null,
@@ -1155,7 +1227,10 @@ export default function CatalogPage() {
                                   { label: "중량", value: item.weight },
                                   { label: "재질", value: item.material },
                                   { label: "스톤", value: item.stone },
-                                  { label: "공급처", value: item.vendor },
+                                  {
+                                    label: "공급처",
+                                    value: vendorLabelById.get(item.vendor) ?? item.vendor,
+                                  },
                                 ].map((meta) => (
                                   <div
                                     key={meta.label}
@@ -1311,13 +1386,13 @@ export default function CatalogPage() {
                         <div className="flex flex-col items-center justify-center text-center rounded-[12px] border border-[var(--panel-border)] bg-[var(--panel)] px-3 py-2">
                           <p className="text-xs text-[var(--muted)]">판매 합계공임</p>
                           <p className="text-sm font-semibold text-[var(--foreground)]">
-                            <NumberText value={totalLaborSell} /> 원
+                            <NumberText value={detailLaborSell} /> 원
                           </p>
                         </div>
                         <div className="flex flex-col items-center justify-center text-center rounded-[12px] border border-[var(--panel-border)] bg-[var(--panel)] px-3 py-2">
                           <p className="text-xs text-[var(--muted)]">원가 합계공임</p>
                           <p className="text-sm font-semibold text-[var(--foreground)]">
-                            <NumberText value={totalLaborCost} /> 원
+                            <NumberText value={detailLaborCost} /> 원
                           </p>
                         </div>
                       </div>
@@ -1364,7 +1439,7 @@ export default function CatalogPage() {
                           <Input
                             className="col-span-1"
                             placeholder="공급처"
-                            value={selectedItem?.vendor ?? ""}
+                            value={selectedVendorName}
                             readOnly
                           />
                           <Select value={selectedDetail?.materialCode ?? ""} disabled>
@@ -1987,6 +2062,7 @@ export default function CatalogPage() {
                             if (!categoryTouched && derived) {
                               setCategoryCode(derived);
                             }
+                            applyVendorFromModelName(modelName);
                           }}
                         />
                       </Field>

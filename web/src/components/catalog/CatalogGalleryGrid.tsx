@@ -24,6 +24,8 @@ type CatalogGalleryGridProps = {
   setPreviewImage: (imageUrl: string | null) => void;
 };
 
+const roundUpToThousand = (value: number) => Math.ceil(value / 1000) * 1000;
+
 export function CatalogGalleryGrid({
   items,
   selectedItemId,
@@ -55,7 +57,7 @@ export function CatalogGalleryGrid({
         (row.labor_total_sell as number | undefined) ??
         (row.labor_base_sell as number | undefined) ??
         0;
-      map[item.id] = matPrice + laborSell;
+      map[item.id] = roundUpToThousand(matPrice + laborSell);
     });
     return map;
   }, [items, masterRowsById, calculateMaterialPrice]);

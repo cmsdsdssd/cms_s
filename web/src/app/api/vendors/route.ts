@@ -14,16 +14,30 @@ export async function GET() {
     return NextResponse.json({ error: "Supabase 환경 변수가 설정되지 않았습니다." }, { status: 500 });
   }
 
-  const { data, error } = await supabase
-    .schema("public")
-    .from("cms_party")
-    .select("party_id,name,party_type")
-    .eq("party_type", "vendor")
-    .order("name");
+  const [vendorsResult, prefixesResult] = await Promise.all([
+    supabase
+      .schema("public")
+      .from("cms_party")
+      .select("party_id,name,party_type")
+      .eq("party_type", "vendor")
+      .order("name"),
+    supabase
+      .schema("public")
+      .from("cms_vendor_prefix_map")
+      .select("prefix,vendor_party_id")
+      .order("prefix"),
+  ]);
+
+  const { data, error } = vendorsResult;
+  const { data: prefixes, error: prefixesError } = prefixesResult;
 
   if (error) {
     return NextResponse.json({ error: error.message ?? "거래처 조회 실패" }, { status: 500 });
   }
 
-  return NextResponse.json({ data: data ?? [] });
+  if (prefixesError) {
+    return NextResponse.json({ error: prefixesError.message ?? "공장이니셜 조회 실패" }, { status: 500 });
+  }
+
+  return NextResponse.json({ data: data ?? [], prefixes: prefixes ?? [] });
 }
