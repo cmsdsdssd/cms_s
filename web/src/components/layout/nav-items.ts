@@ -46,6 +46,7 @@ export const navItems: NavItem[] = [
   {
     label: "현황 및 조회",
     items: [
+      { label: "공장발주 전송내역", href: "/factory_po_history", icon: Package },
       { label: "재고 관리", href: "/inventory", icon: Package },
     ],
   },

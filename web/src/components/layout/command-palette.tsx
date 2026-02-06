@@ -9,6 +9,7 @@ import { navItems, bottomNavItems, NavItem } from "./nav-items";
 interface CommandPaletteProps {
   open: boolean;
   onClose: () => void;
+  onOpenWorkbench?: () => void;
 }
 
 type SearchResult = {
@@ -18,7 +19,7 @@ type SearchResult = {
   icon?: React.ElementType;
 };
 
-export function CommandPalette({ open, onClose }: CommandPaletteProps) {
+export function CommandPalette({ open, onClose, onOpenWorkbench }: CommandPaletteProps) {
   const router = useRouter();
   const [query, setQuery] = React.useState("");
   const [selectedIndex, setSelectedIndex] = React.useState(0);
@@ -117,6 +118,11 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
   }, [open, filteredItems, selectedIndex, onClose]);
 
   const handleSelect = (item: SearchResult) => {
+    if (item.href === "/workbench") {
+      onClose();
+      onOpenWorkbench?.();
+      return;
+    }
     router.push(item.href);
     onClose();
   };

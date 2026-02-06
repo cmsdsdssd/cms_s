@@ -107,6 +107,18 @@ export const CONTRACTS = {
       process.env.NEXT_PUBLIC_CMS_FN_RECORD_RETURN_V2 ??
       process.env.NEXT_PUBLIC_CMS_FN_RECORD_RETURN ??
       "",
+    // AR manual actions (NEW)
+    arApplyOffsetFromUnallocatedCash:
+      process.env.NEXT_PUBLIC_CMS_FN_AR_APPLY_OFFSET_FROM_UNALLOCATED_CASH ||
+      "cms_fn_ar_apply_offset_from_unallocated_cash_v1",
+    arApplyAdjustmentDownFifo:
+      process.env.NEXT_PUBLIC_CMS_FN_AR_APPLY_ADJUSTMENT_DOWN_FIFO ||
+      "cms_fn_ar_apply_adjustment_down_fifo_v1",
+    arCreateAdjustmentUpInvoice:
+      process.env.NEXT_PUBLIC_CMS_FN_AR_CREATE_ADJUSTMENT_UP_INVOICE ||
+      "cms_fn_ar_create_adjustment_up_invoice_v1",
+
+
     enumValues: process.env.NEXT_PUBLIC_CMS_FN_ENUM_VALUES ?? "cms_fn_enum_values_v1",
     marketTickUpsertByRole:
       process.env.NEXT_PUBLIC_CMS_FN_MARKET_TICK_UPSERT_BY_ROLE ??

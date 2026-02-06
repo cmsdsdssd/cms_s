@@ -15,9 +15,10 @@ import { Button } from "@/components/ui/button";
 interface SidebarNavProps {
   mobileOpen: boolean;
   onMobileClose: () => void;
+  onWorkbenchOpen?: () => void;
 }
 
-export function SidebarNav({ mobileOpen, onMobileClose }: SidebarNavProps) {
+export function SidebarNav({ mobileOpen, onMobileClose, onWorkbenchOpen }: SidebarNavProps) {
   const pathname = usePathname();
   const [isCollapsed, setIsCollapsed] = useState(false);
 
@@ -54,6 +55,32 @@ export function SidebarNav({ mobileOpen, onMobileClose }: SidebarNavProps) {
     const Icon = item.icon;
 
     if (!item.href) return null;
+    if (item.href === "/workbench") {
+      return (
+        <button
+          type="button"
+          onClick={() => onWorkbenchOpen?.()}
+          className={cn(
+            "group flex w-full items-center gap-3 rounded-[var(--radius-md)] px-3 py-2 text-sm font-medium transition-colors transition-shadow duration-200 active:scale-[0.98]",
+            isActive
+              ? "bg-[var(--primary)] text-white shadow-[var(--shadow-sm)]"
+              : "text-[var(--muted-strong)] hover:bg-[var(--panel-hover)] hover:text-[var(--foreground)] hover:shadow-[var(--shadow-sm)]",
+            collapsed && "justify-center px-2"
+          )}
+          title={collapsed ? item.label : undefined}
+        >
+          {Icon && (
+            <Icon
+              className={cn(
+                "h-4 w-4 shrink-0 transition-colors",
+                isActive ? "text-white" : "text-[var(--muted)] group-hover:text-[var(--foreground)]"
+              )}
+            />
+          )}
+          {!collapsed && <span>{item.label}</span>}
+        </button>
+      );
+    }
 
     return (
       <Link
@@ -178,21 +205,45 @@ export function SidebarNav({ mobileOpen, onMobileClose }: SidebarNavProps) {
                     {group.label}
                   </h3>
                   <div className="space-y-1">
-                    {group.items?.map((item) => (
-                      <Link
-                        key={item.href}
-                        href={item.href || "#"}
-                        className={cn(
-                          "flex items-center gap-3 rounded-[var(--radius-md)] px-3 py-2 text-sm font-medium transition-colors transition-shadow active:scale-[0.98]",
-                          item.href && isNavItemActive(pathname, item.href)
-                            ? "bg-[var(--primary)] text-white shadow-[var(--shadow-sm)]"
-                            : "text-[var(--muted-strong)] hover:bg-[var(--panel-hover)] hover:shadow-[var(--shadow-sm)]"
-                        )}
-                      >
-                        {item.icon && <item.icon className="h-4 w-4" />}
-                        {item.label}
-                      </Link>
-                    ))}
+                      {group.items?.map((item) => {
+                        if (item.href === "/workbench") {
+                          return (
+                            <button
+                              key={item.href}
+                              type="button"
+                              onClick={() => {
+                                onMobileClose();
+                                onWorkbenchOpen?.();
+                              }}
+                              className={cn(
+                                "flex w-full items-center gap-3 rounded-[var(--radius-md)] px-3 py-2 text-sm font-medium transition-colors transition-shadow active:scale-[0.98]",
+                                item.href && isNavItemActive(pathname, item.href)
+                                  ? "bg-[var(--primary)] text-white shadow-[var(--shadow-sm)]"
+                                  : "text-[var(--muted-strong)] hover:bg-[var(--panel-hover)] hover:shadow-[var(--shadow-sm)]"
+                              )}
+                            >
+                              {item.icon && <item.icon className="h-4 w-4" />}
+                              {item.label}
+                            </button>
+                          );
+                        }
+
+                        return (
+                          <Link
+                            key={item.href}
+                            href={item.href || "#"}
+                            className={cn(
+                              "flex items-center gap-3 rounded-[var(--radius-md)] px-3 py-2 text-sm font-medium transition-colors transition-shadow active:scale-[0.98]",
+                              item.href && isNavItemActive(pathname, item.href)
+                                ? "bg-[var(--primary)] text-white shadow-[var(--shadow-sm)]"
+                                : "text-[var(--muted-strong)] hover:bg-[var(--panel-hover)] hover:shadow-[var(--shadow-sm)]"
+                            )}
+                          >
+                            {item.icon && <item.icon className="h-4 w-4" />}
+                            {item.label}
+                          </Link>
+                        );
+                      })}
                   </div>
                 </div>
               ))}

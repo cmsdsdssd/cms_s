@@ -53,6 +53,8 @@ type ShipmentLineRow = {
   shipment_line_id?: string;
   shipment_id?: string;
   qty?: number | null;
+  material_code?: string | null;
+  net_weight_g?: number | null;
   total_amount_sell_krw?: number | null;
   material_amount_sell_krw?: number | null;
   labor_total_sell_krw?: number | null;
@@ -178,6 +180,14 @@ const formatKrw = (value?: number | null) => {
   return `₩${new Intl.NumberFormat("ko-KR").format(Math.round(value))}`;
 };
 
+const formatKrwDashZero = (value?: number | null) => {
+  if (value === null || value === undefined) return "-";
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return "-";
+  if (Math.round(numeric) === 0) return "-";
+  return formatKrw(numeric);
+};
+
 const formatGram = (value?: number | null) => {
   if (value === null || value === undefined) return "-";
   const numeric = Number(value);
@@ -210,10 +220,29 @@ const formatTimeKst = (value?: string | null) => {
   if (Number.isNaN(parsed.getTime())) return "-";
   return new Intl.DateTimeFormat("sv-SE", {
     timeZone: "Asia/Seoul",
-    year: "2-digit",
+    year: "numeric",
     month: "2-digit",
     day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
   }).format(parsed);
+};
+
+const splitDateTimeKst = (value?: string | null) => {
+  const full = formatTimeKst(value);
+  if (full === "-") return { date: "-", time: "-" };
+  const [date, time] = full.split(" ");
+  return { date: date ?? "-", time: time ?? "-" };
+};
+
+const getMaterialCodeToneClass = (materialCode?: string | null) => {
+  const code = (materialCode ?? "").trim();
+  if (!code) return "text-[var(--muted)]";
+  if (code === "14" || code === "18" || code === "24") return "text-amber-500 dark:text-amber-300";
+  if (code === "00") return "text-amber-700 dark:text-amber-400";
+  return "text-emerald-600 dark:text-emerald-400";
 };
 
 const toKstInputValue = () => {
@@ -251,9 +280,14 @@ const AmountPill = ({ amount, className, simple }: AmountPillProps) => {
         : "text-[var(--muted)]";
 
   if (simple) {
+    if (Math.round(numeric) === 0) {
+      return <span className={cn("tabular-nums font-medium text-[var(--muted)]", className)}>-</span>;
+    }
+    const sign = numeric > 0 ? "+" : numeric < 0 ? "-" : "";
+    const abs = Math.abs(Math.round(numeric));
     return (
       <span className={cn("tabular-nums font-medium", tone, className)}>
-        {formatKrw(numeric)}
+        {`${sign}₩${new Intl.NumberFormat("ko-KR").format(abs)}`}
       </span>
     )
   }
@@ -281,7 +315,9 @@ export default function ArPage() {
 
   // Tabs for the right pane
   const [activeTab, setActiveTab] = useState<"ledger" | "invoice" | "action">("ledger");
-  const [actionTab, setActionTab] = useState<"payment" | "return">("payment");
+  const [actionTab, setActionTab] = useState<
+    "payment" | "return" | "offset" | "adjust_down" | "adjust_up"
+  >("payment");
 
   // Selection
   const [selectedPartyId, setSelectedPartyId] = useState<string | null>(null);
@@ -301,6 +337,29 @@ export default function ArPage() {
   const [returnOverrideAmount, setReturnOverrideAmount] = useState("");
   const [returnReason, setReturnReason] = useState("");
   const [selectedInvoiceId, setSelectedInvoiceId] = useState<string | null>(null);
+  // Manual AR actions (OFFSET / ADJUST)
+  const [offsetOccurredAt, setOffsetOccurredAt] = useState(toKstInputValue);
+  const [offsetCashKrw, setOffsetCashKrw] = useState("");
+  const [offsetReasonCode, setOffsetReasonCode] = useState("OFFSET");
+  const [offsetReasonDetail, setOffsetReasonDetail] = useState("");
+  const [offsetIdempotencyKey, setOffsetIdempotencyKey] = useState(() => crypto.randomUUID());
+  const [offsetConfirm, setOffsetConfirm] = useState(false);
+
+  const [adjustDownOccurredAt, setAdjustDownOccurredAt] = useState(toKstInputValue);
+  const [adjustDownCashKrw, setAdjustDownCashKrw] = useState("");
+  const [adjustDownReasonCode, setAdjustDownReasonCode] = useState("ADJUST_DOWN");
+  const [adjustDownReasonDetail, setAdjustDownReasonDetail] = useState("");
+  const [adjustDownIdempotencyKey, setAdjustDownIdempotencyKey] = useState(() => crypto.randomUUID());
+  const [adjustDownConfirm, setAdjustDownConfirm] = useState(false);
+
+  const [adjustUpOccurredAt, setAdjustUpOccurredAt] = useState(toKstInputValue);
+  const [adjustUpTotalCashKrw, setAdjustUpTotalCashKrw] = useState("");
+  const [adjustUpLaborCashKrw, setAdjustUpLaborCashKrw] = useState("");
+  const [adjustUpMaterialCashKrw, setAdjustUpMaterialCashKrw] = useState("");
+  const [adjustUpReasonCode, setAdjustUpReasonCode] = useState("ADJUST_UP");
+  const [adjustUpReasonDetail, setAdjustUpReasonDetail] = useState("");
+  const [adjustUpIdempotencyKey, setAdjustUpIdempotencyKey] = useState(() => crypto.randomUUID());
+  const [adjustUpConfirm, setAdjustUpConfirm] = useState(false);
 
 
   // 1. Fetch Parties
@@ -458,7 +517,7 @@ export default function ArPage() {
       const { data, error } = await schemaClient
         .from("cms_shipment_line")
         .select(
-          "shipment_line_id, shipment_id, qty, total_amount_sell_krw, material_amount_sell_krw, labor_total_sell_krw, model_name, suffix, color, size, created_at, shipment_header:cms_shipment_header(ship_date, status, customer_party_id)"
+          "shipment_line_id, shipment_id, qty, material_code, net_weight_g, total_amount_sell_krw, material_amount_sell_krw, labor_total_sell_krw, model_name, suffix, color, size, created_at, shipment_header:cms_shipment_header(ship_date, status, customer_party_id)"
         )
         .eq("shipment_header.customer_party_id", effectiveSelectedPartyId)
         .eq("shipment_header.status", "CONFIRMED")
@@ -514,6 +573,30 @@ export default function ArPage() {
     });
     return map;
   }, [shipmentLines]);
+  const invoiceByShipmentLineId = useMemo(() => {
+    const map = new Map<string, ArInvoicePositionRow>();
+    (invoicePositionsQuery.data ?? []).forEach((row) => {
+      const key = row.shipment_line_id ?? "";
+      if (!key || map.has(key)) return;
+      map.set(key, row);
+    });
+    return map;
+  }, [invoicePositionsQuery.data]);
+  const paymentMaterialByPaymentId = useMemo(() => {
+    const map = new Map<string, { materialKrw: number; laborKrw: number; goldG: number; silverG: number }>();
+    (paymentAllocQuery.data ?? []).forEach((row) => {
+      const paymentId = row.payment_id ?? "";
+      if (!paymentId) return;
+      const prev = map.get(paymentId) ?? { materialKrw: 0, laborKrw: 0, goldG: 0, silverG: 0 };
+      map.set(paymentId, {
+        materialKrw: prev.materialKrw + Number(row.alloc_material_krw ?? 0),
+        laborKrw: prev.laborKrw + Number(row.alloc_labor_krw ?? 0),
+        goldG: prev.goldG + Number(row.alloc_gold_g ?? 0),
+        silverG: prev.silverG + Number(row.alloc_silver_g ?? 0),
+      });
+    });
+    return map;
+  }, [paymentAllocQuery.data]);
   const shipmentLineIds = useMemo(
     () => shipmentLines.map((line) => line.shipment_line_id).filter(Boolean) as string[],
     [shipmentLines]
@@ -610,6 +693,76 @@ export default function ArPage() {
       toast.error("처리 실패", { description: message });
     }
   });
+  const offsetMutation = useRpcMutation<{
+    ok?: boolean;
+    action_id?: string | null;
+    applied_cash_krw?: number | null;
+    remaining_cash_krw?: number | null;
+    message?: string | null;
+  }>({
+    fn: CONTRACTS.functions.arApplyOffsetFromUnallocatedCash,
+    successMessage: "상계(OFFSET) 완료",
+    onSuccess: () => {
+      positionsQuery.refetch();
+      ledgerQuery.refetch();
+      invoicePositionsQuery.refetch();
+      paymentAllocQuery.refetch();
+      setOffsetOccurredAt(toKstInputValue());
+      setOffsetCashKrw("");
+      setOffsetReasonCode("OFFSET");
+      setOffsetReasonDetail("");
+      setOffsetIdempotencyKey(crypto.randomUUID());
+      setOffsetConfirm(false);
+    },
+  });
+
+  const adjustDownMutation = useRpcMutation<{
+    ok?: boolean;
+    action_id?: string;
+    payment_id?: string;
+    applied_cash_krw?: number | null;
+  }>({
+    fn: CONTRACTS.functions.arApplyAdjustmentDownFifo,
+    successMessage: "조정-차감 완료",
+    onSuccess: () => {
+      positionsQuery.refetch();
+      ledgerQuery.refetch();
+      invoicePositionsQuery.refetch();
+      paymentAllocQuery.refetch();
+      setAdjustDownOccurredAt(toKstInputValue());
+      setAdjustDownCashKrw("");
+      setAdjustDownReasonCode("ADJUST_DOWN");
+      setAdjustDownReasonDetail("");
+      setAdjustDownIdempotencyKey(crypto.randomUUID());
+      setAdjustDownConfirm(false);
+    },
+  });
+
+  const adjustUpMutation = useRpcMutation<{
+    ok?: boolean;
+    action_id?: string;
+    ar_id?: string;
+    total_cash_due_krw?: number | null;
+    labor_cash_due_krw?: number | null;
+    material_cash_due_krw?: number | null;
+  }>({
+    fn: CONTRACTS.functions.arCreateAdjustmentUpInvoice,
+    successMessage: "조정-증가(인보이스) 생성 완료",
+    onSuccess: () => {
+      positionsQuery.refetch();
+      ledgerQuery.refetch();
+      invoicePositionsQuery.refetch();
+      paymentAllocQuery.refetch();
+      setAdjustUpOccurredAt(toKstInputValue());
+      setAdjustUpTotalCashKrw("");
+      setAdjustUpLaborCashKrw("");
+      setAdjustUpMaterialCashKrw("");
+      setAdjustUpReasonCode("ADJUST_UP");
+      setAdjustUpReasonDetail("");
+      setAdjustUpIdempotencyKey(crypto.randomUUID());
+      setAdjustUpConfirm(false);
+    },
+  });
 
   // Action Logic
   const canSavePayment = isFnConfigured(CONTRACTS.functions.arApplyPaymentFifo);
@@ -650,6 +803,83 @@ export default function ArPage() {
     parsedReturnQty > 0 &&
     parsedReturnQty <= qtyRemains &&
     !returnMutation.isPending;
+  const parseNum = (s: string) => {
+    const n = Number((s ?? "").replace(/,/g, "").trim());
+    return Number.isFinite(n) ? n : 0;
+  };
+  const parseOptNum = (s: string) => {
+    const t = (s ?? "").replace(/,/g, "").trim();
+    if (!t) return null;
+    const n = Number(t);
+    return Number.isFinite(n) ? n : null;
+  };
+
+  // OFFSET
+  const canSaveOffset = isFnConfigured(CONTRACTS.functions.arApplyOffsetFromUnallocatedCash);
+  const offsetCashValue = parseNum(offsetCashKrw);
+  const canSubmitOffset =
+    canSaveOffset &&
+    Boolean(effectiveSelectedPartyId) &&
+    Boolean(offsetOccurredAt) &&
+    offsetCashValue > 0 &&
+    offsetReasonCode.trim().length > 0 &&
+    offsetReasonDetail.trim().length > 0 &&
+    offsetConfirm &&
+    !offsetMutation.isPending;
+
+  // ADJUST_DOWN
+  const canSaveAdjustDown = isFnConfigured(CONTRACTS.functions.arApplyAdjustmentDownFifo);
+  const adjustDownCashValue = parseNum(adjustDownCashKrw);
+  const canSubmitAdjustDown =
+    canSaveAdjustDown &&
+    Boolean(effectiveSelectedPartyId) &&
+    Boolean(adjustDownOccurredAt) &&
+    adjustDownCashValue > 0 &&
+    adjustDownReasonCode.trim().length > 0 &&
+    adjustDownReasonDetail.trim().length > 0 &&
+    adjustDownConfirm &&
+    !adjustDownMutation.isPending;
+
+  // ADJUST_UP (split 자동 보정)
+  const canSaveAdjustUp = isFnConfigured(CONTRACTS.functions.arCreateAdjustmentUpInvoice);
+  const adjustUpTotalValue = parseNum(adjustUpTotalCashKrw);
+  const laborIn = parseOptNum(adjustUpLaborCashKrw);
+  const materialIn = parseOptNum(adjustUpMaterialCashKrw);
+
+  let adjustUpLaborFinal = 0;
+  let adjustUpMaterialFinal = 0;
+  let adjustUpSplitOk = false;
+
+  if (adjustUpTotalValue > 0) {
+    if (laborIn === null && materialIn === null) {
+      adjustUpLaborFinal = adjustUpTotalValue;
+      adjustUpMaterialFinal = 0;
+      adjustUpSplitOk = true;
+    } else if (laborIn !== null && materialIn !== null) {
+      adjustUpLaborFinal = laborIn;
+      adjustUpMaterialFinal = materialIn;
+      adjustUpSplitOk = Math.abs(adjustUpLaborFinal + adjustUpMaterialFinal - adjustUpTotalValue) < 0.0001;
+    } else if (laborIn !== null) {
+      adjustUpLaborFinal = laborIn;
+      adjustUpMaterialFinal = adjustUpTotalValue - adjustUpLaborFinal;
+      adjustUpSplitOk = adjustUpMaterialFinal >= 0;
+    } else if (materialIn !== null) {
+      adjustUpMaterialFinal = materialIn;
+      adjustUpLaborFinal = adjustUpTotalValue - adjustUpMaterialFinal;
+      adjustUpSplitOk = adjustUpLaborFinal >= 0;
+    }
+  }
+
+  const canSubmitAdjustUp =
+    canSaveAdjustUp &&
+    Boolean(effectiveSelectedPartyId) &&
+    Boolean(adjustUpOccurredAt) &&
+    adjustUpTotalValue > 0 &&
+    adjustUpSplitOk &&
+    adjustUpReasonCode.trim().length > 0 &&
+    adjustUpReasonDetail.trim().length > 0 &&
+    adjustUpConfirm &&
+    !adjustUpMutation.isPending;
 
   // Render Helpers
   const renderSidebarItem = (party: ArPositionRow) => {
@@ -849,49 +1079,138 @@ export default function ArPage() {
                     <table className="w-full text-left text-xs">
                       <thead className="bg-[var(--chip)] text-[var(--muted)] font-medium border-b border-[var(--panel-border)]">
                         <tr>
-                          <th className="px-4 py-3 whitespace-nowrap w-24">날짜</th>
+                          <th className="px-4 py-3 whitespace-nowrap w-44">날짜</th>
                           <th className="px-4 py-3 whitespace-nowrap w-20">구분</th>
-                          <th className="px-4 py-3 whitespace-nowrap text-right">소재가격</th>
-                          <th className="px-4 py-3 whitespace-nowrap text-right">총공임</th>
-                          <th className="px-4 py-3 whitespace-nowrap text-right">금액</th>
                           <th className="px-4 py-3 whitespace-nowrap min-w-[200px]">내용</th>
+                          <th className="px-4 py-3 whitespace-nowrap text-right">총금액</th>
+                          <th className="px-4 py-3 whitespace-nowrap text-right">소재가격(판매/결제)</th>
+                          <th className="px-4 py-3 whitespace-nowrap text-right">총공임</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-[var(--panel-border)]">
                         {ledgerQuery.isLoading ? (
                           <tr><td colSpan={6} className="p-8 text-center"><Skeleton className="h-4 w-32 mx-auto" /></td></tr>
-                        ) : (ledgerQuery.data ?? []).map(row => {
+                        ) : (ledgerQuery.data ?? []).map((row, index, rows) => {
                           const isShipment = row.entry_type === "SHIPMENT";
+                          const isPayment = (row.entry_type ?? "").toUpperCase().includes("PAYMENT");
+                          const currentDateKey = formatTimeKst(row.occurred_at).slice(0, 10);
+                          const prevDateKey = index > 0 ? formatTimeKst(rows[index - 1]?.occurred_at).slice(0, 10) : "";
+                          const isNewDateGroup = index > 0 && currentDateKey !== prevDateKey;
                           const shipmentLine = row.shipment_line_id
                             ? shipmentLineById.get(row.shipment_line_id)
+                            : undefined;
+                          const shipmentLabel = [shipmentLine?.model_name, shipmentLine?.suffix, shipmentLine?.color, shipmentLine?.size]
+                            .filter(Boolean)
+                            .join(" /");
+                          const modelName = (shipmentLine?.model_name ?? "").trim();
+                          const modelMeta = [shipmentLine?.suffix, shipmentLine?.color, shipmentLine?.size]
+                            .filter(Boolean)
+                            .join(" /");
+                          const invoice = row.shipment_line_id
+                            ? invoiceByShipmentLineId.get(row.shipment_line_id)
                             : undefined;
                           const unitOnly = shipmentLine
                             ? isUnitPricingByModel.get((shipmentLine.model_name ?? "").trim()) ?? false
                             : false;
+                          const paymentMaterial = row.payment_id
+                            ? paymentMaterialByPaymentId.get(row.payment_id)
+                            : undefined;
+                          const convertedWeight = Number(invoice?.commodity_due_g ?? 0);
+                          const originalWeight = Number(shipmentLine?.net_weight_g ?? 0);
+                          const materialCode = (invoice?.material_code ?? shipmentLine?.material_code ?? "").trim();
+                          const paymentWeightLabel = [
+                            (paymentMaterial?.goldG ?? 0) > 0 ? `금 ${formatGram(paymentMaterial?.goldG ?? 0)}` : null,
+                            (paymentMaterial?.silverG ?? 0) > 0 ? `은 ${formatGram(paymentMaterial?.silverG ?? 0)}` : null,
+                          ].filter(Boolean).join(" / ");
+                          const paymentMaterialKrwLabel = formatKrwDashZero(paymentMaterial?.materialKrw ?? 0);
+                          const paymentLaborKrwLabel = formatKrwDashZero(paymentMaterial?.laborKrw ?? 0);
+                          const materialSellKrwLabel = formatKrwDashZero(shipmentLine?.material_amount_sell_krw ?? null);
+                          const laborSellKrwLabel = formatKrwDashZero(shipmentLine?.labor_total_sell_krw ?? null);
+                          const entryLabel = isShipment
+                            ? "매출"
+                            : isPayment
+                              ? "결제"
+                              : row.entry_type;
+                          const entryToneClass = isShipment
+                            ? "border-[var(--primary)] bg-[var(--chip)] text-[var(--primary)]"
+                            : isPayment
+                              ? "border-red-500 bg-[var(--chip)] text-red-600 dark:border-red-400 dark:text-red-300"
+                              : "border-[var(--panel-border)] bg-[var(--panel)] text-[var(--foreground)]";
+                          const displayTotalAmount = isShipment && unitOnly
+                            ? shipmentLine?.total_amount_sell_krw ?? row.amount_krw
+                            : row.amount_krw;
                           return (
-                            <tr key={row.ar_ledger_id} className="hover:bg-[var(--panel-hover)] transition-colors">
-                              <td className="px-4 py-3 tabular-nums text-[var(--muted)]">{formatTimeKst(row.occurred_at)}</td>
+                            <tr
+                              key={row.ar_ledger_id}
+                              className={cn(
+                                "hover:bg-[var(--panel-hover)] transition-colors",
+                                isNewDateGroup && "border-t-2 border-[var(--panel-border)]"
+                              )}
+                            >
+                              <td className="px-4 py-3 tabular-nums">
+                                {(() => {
+                                  const dt = splitDateTimeKst(row.occurred_at);
+                                  return (
+                                    <span className="inline-flex flex-col items-start leading-tight">
+                                      <span className="font-bold text-[var(--foreground)]">{dt.date}</span>
+                                      <span className="text-[11px] text-[var(--muted)]">{dt.time}</span>
+                                    </span>
+                                  );
+                                })()}
+                              </td>
                               <td className="px-4 py-3">
                                 <span className={cn(
-                                  "px-2 py-0.5 rounded text-[10px] font-bold uppercase",
-                                  isShipment
-                                    ? "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300"
-                                    : "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300"
+                                  "inline-flex items-center rounded border px-2.5 py-1 text-[11px] font-extrabold tracking-wide",
+                                  entryToneClass
                                 )}>
-                                  {isShipment ? "매출" : row.entry_type}
+                                  {entryLabel}
                                 </span>
                               </td>
-                              <td className="px-4 py-3 text-right tabular-nums">
-                                {unitOnly ? "-" : formatKrw(shipmentLine?.material_amount_sell_krw ?? null)}
-                              </td>
-                              <td className="px-4 py-3 text-right tabular-nums">
-                                {unitOnly ? "-" : formatKrw(shipmentLine?.labor_total_sell_krw ?? null)}
+                              <td className="px-4 py-3 text-[var(--foreground)]">
+                                {isShipment ? (
+                                  <span>
+                                    <span className="font-extrabold">{modelName || shipmentLabel || row.memo}</span>
+                                    {modelName && modelMeta ? <span className="font-normal"> / {modelMeta}</span> : null}
+                                  </span>
+                                ) : (
+                                  row.memo
+                                )}
                               </td>
                               <td className="px-4 py-3 text-right">
-                                <AmountPill amount={row.amount_krw} simple />
+                                <AmountPill amount={displayTotalAmount} simple className="font-black" />
                               </td>
-                              <td className="px-4 py-3 text-[var(--muted)]">
-                                {row.memo}
+                              <td className="px-4 py-3 text-right tabular-nums">
+                                {isPayment ? (
+                                  paymentMaterialKrwLabel === "-"
+                                    ? "-"
+                                    : (
+                                      <span>
+                                        {paymentMaterialKrwLabel} (
+                                        <span className="text-[var(--muted)]">{paymentWeightLabel || "중량 -"}</span>
+                                        )
+                                      </span>
+                                    )
+                                ) : unitOnly ? (
+                                  "-"
+                                ) : (
+                                  materialSellKrwLabel === "-"
+                                    ? "-"
+                                    : (
+                                      <span>
+                                        {materialSellKrwLabel} (
+                                        <span className="text-[var(--muted)]">원중량 {formatGram(originalWeight)} / 환산중량 {formatGram(convertedWeight)} / </span>
+                                        <span className={cn("font-semibold", getMaterialCodeToneClass(materialCode))}>{materialCode || "-"}</span>
+                                        )
+                                      </span>
+                                    )
+                                )}
+                              </td>
+                              <td className="px-4 py-3 text-right tabular-nums">
+                                {isPayment ? (
+                                  paymentLaborKrwLabel
+                                ) : unitOnly ? (
+                                  "-"
+                                ) : laborSellKrwLabel}
                               </td>
                             </tr>
                           )
@@ -961,75 +1280,117 @@ export default function ArPage() {
                 <div className="flex flex-col lg:flex-row gap-6 h-full">
                   {/* Action Panel */}
                   <Card className="flex-1 shadow-sm border-2 border-[var(--panel-border)]">
-                    <CardHeader className="border-b border-[var(--panel-border)] p-4 flex gap-2">
-                      <Button
-                        variant={actionTab === 'payment' ? 'primary' : 'secondary'}
-                        onClick={() => setActionTab('payment')}
-                        className="flex-1"
-                      >
-                        <Wallet className="w-4 h-4 mr-2" /> 수금 등록
-                      </Button>
-                      <Button
-                        variant={actionTab === 'return' ? 'primary' : 'secondary'}
-                        onClick={() => setActionTab('return')}
-                        className="flex-1"
-                      >
-                        <RotateCcw className="w-4 h-4 mr-2" /> 반품 등록
-                      </Button>
+                    <CardHeader className="border-b border-[var(--panel-border)] p-4">
+                      <div className="grid grid-cols-2 gap-2">
+                        <Button
+                          variant={actionTab === "payment" ? "primary" : "secondary"}
+                          onClick={() => setActionTab("payment")}
+                        >
+                          <Wallet className="w-4 h-4 mr-2" /> 수금 등록
+                        </Button>
+
+                        <Button
+                          variant={actionTab === "return" ? "primary" : "secondary"}
+                          onClick={() => setActionTab("return")}
+                        >
+                          <RotateCcw className="w-4 h-4 mr-2" /> 반품 등록
+                        </Button>
+
+                        <Button
+                          variant={actionTab === "offset" ? "primary" : "secondary"}
+                          onClick={() => setActionTab("offset")}
+                        >
+                          <Check className="w-4 h-4 mr-2" /> 상계(OFFSET)
+                        </Button>
+
+                        <Button
+                          variant={actionTab === "adjust_down" ? "primary" : "secondary"}
+                          onClick={() => setActionTab("adjust_down")}
+                        >
+                          <ArrowDownLeft className="w-4 h-4 mr-2" /> 조정-차감
+                        </Button>
+
+                        <Button
+                          className="col-span-2"
+                          variant={actionTab === "adjust_up" ? "primary" : "secondary"}
+                          onClick={() => setActionTab("adjust_up")}
+                        >
+                          <ArrowUpRight className="w-4 h-4 mr-2" /> 조정-증가
+                        </Button>
+                      </div>
                     </CardHeader>
+
                     <CardBody className="p-6">
-                      {actionTab === 'payment' ? (
-                        <form className="space-y-6" onSubmit={e => {
-                          e.preventDefault();
-                          if (!canSubmitPayment) return;
-                          paymentMutation.mutate({
-                            p_party_id: effectiveSelectedPartyId,
-                            p_paid_at: new Date(paidAt).toISOString(),
-                            p_cash_krw: cashValue,
-                            p_gold_g: goldValue,
-                            p_silver_g: silverValue,
-                            p_idempotency_key: paymentIdempotencyKey,
-                            p_note: paymentMemo || null,
-                          });
-                        }}>
+                      {/* 1) 수금 */}
+                      {actionTab === "payment" && (
+                        <form
+                          className="space-y-6"
+                          onSubmit={(e) => {
+                            e.preventDefault();
+                            if (!canSubmitPayment) return;
+                            paymentMutation.mutate({
+                              p_party_id: effectiveSelectedPartyId,
+                              p_paid_at: new Date(paidAt).toISOString(),
+                              p_cash_krw: cashValue,
+                              p_gold_g: goldValue,
+                              p_silver_g: silverValue,
+                              p_idempotency_key: paymentIdempotencyKey,
+                              p_note: paymentMemo || null,
+                            });
+                          }}
+                        >
                           <div className="space-y-1">
                             <label className="text-xs font-semibold text-[var(--muted)]">수금일시</label>
-                            <Input type="datetime-local" value={paidAt} onChange={e => setPaidAt(e.target.value)} />
+                            <Input type="datetime-local" value={paidAt} onChange={(e) => setPaidAt(e.target.value)} />
                           </div>
+
                           <div className="grid grid-cols-2 gap-4">
                             <div className="space-y-1 col-span-2">
                               <label className="text-xs font-semibold text-[var(--muted)]">현금 (KRW)</label>
-                              <Input className="text-right text-lg font-bold" value={paymentCashKrw} onChange={e => setPaymentCashKrw(e.target.value)} placeholder="0" />
+                              <Input
+                                className="text-right text-lg font-bold"
+                                value={paymentCashKrw}
+                                onChange={(e) => setPaymentCashKrw(e.target.value)}
+                                placeholder="0"
+                              />
                             </div>
                             <div className="space-y-1">
                               <label className="text-xs font-semibold text-[var(--muted)]">금 (g)</label>
-                              <Input className="text-right" value={paymentGoldG} onChange={e => setPaymentGoldG(e.target.value)} placeholder="0.00" />
+                              <Input className="text-right" value={paymentGoldG} onChange={(e) => setPaymentGoldG(e.target.value)} placeholder="0.00" />
                             </div>
                             <div className="space-y-1">
                               <label className="text-xs font-semibold text-[var(--muted)]">은 (g)</label>
-                              <Input className="text-right" value={paymentSilverG} onChange={e => setPaymentSilverG(e.target.value)} placeholder="0.00" />
+                              <Input className="text-right" value={paymentSilverG} onChange={(e) => setPaymentSilverG(e.target.value)} placeholder="0.00" />
                             </div>
                           </div>
+
                           <div className="space-y-1">
                             <label className="text-xs font-semibold text-[var(--muted)]">메모</label>
-                            <Textarea value={paymentMemo} onChange={e => setPaymentMemo(e.target.value)} placeholder="메모 입력" className="resize-none" />
+                            <Textarea value={paymentMemo} onChange={(e) => setPaymentMemo(e.target.value)} placeholder="메모 입력" className="resize-none" />
                           </div>
+
                           <Button type="submit" size="lg" className="w-full" disabled={!canSubmitPayment}>
                             수금 등록 완료
                           </Button>
                         </form>
-                      ) : (
-                        <form className="space-y-6" onSubmit={e => {
-                          e.preventDefault();
-                          if (!canSubmitReturn) return;
-                          returnMutation.mutate({
-                            p_shipment_line_id: effectiveReturnShipmentLineId,
-                            p_return_qty: parsedReturnQty,
-                            p_occurred_at: new Date(returnOccurredAt).toISOString(),
-                            p_override_amount_krw: returnOverrideAmount !== "" ? Number(returnOverrideAmount) : null,
-                            p_reason: returnReason || null,
-                          });
-                        }}>
+                      )}
+
+                      {/* 2) 반품 */}
+                      {actionTab === "return" && (
+                        <form
+                          className="space-y-6"
+                          onSubmit={(e) => {
+                            e.preventDefault();
+                            if (!canSubmitReturn) return;
+                            returnMutation.mutate({
+                              p_shipment_line_id: effectiveReturnShipmentLineId,
+                              p_return_qty: parsedReturnQty,
+                              p_occurred_at: new Date(returnOccurredAt).toISOString(),
+                              p_override_amount_krw: returnOverrideAmount !== "" ? Number(returnOverrideAmount) : null,
+                              p_reason: returnReason || null,
+                            });
+                          }}
+                        >
                           <div className="space-y-1">
                             <label className="text-xs font-semibold text-[var(--muted)]">출고 선택</label>
                             <SearchSelect
@@ -1039,6 +1400,7 @@ export default function ArPage() {
                               placeholder="출고 내역 검색..."
                             />
                           </div>
+
                           {selectedReturnLine && (
                             <div className="p-3 bg-[var(--chip)] rounded border text-xs space-y-1">
                               <div className="flex justify-between">
@@ -1055,38 +1417,262 @@ export default function ArPage() {
                               </div>
                             </div>
                           )}
+
                           <div className="grid grid-cols-2 gap-4">
                             <div className="space-y-1">
                               <label className="text-xs font-semibold text-[var(--muted)]">반품 수량</label>
-                              <Input type="number" className="text-right" value={returnQty} onChange={e => setReturnQty(e.target.value)} min={1} />
+                              <Input type="number" className="text-right" value={returnQty} onChange={(e) => setReturnQty(e.target.value)} min={1} />
                             </div>
                             <div className="space-y-1">
                               <label className="text-xs font-semibold text-[var(--muted)]">금액 강제지정 (선택)</label>
-                              <Input type="number" className="text-right" value={returnOverrideAmount} onChange={e => setReturnOverrideAmount(e.target.value)} placeholder="자동계산" />
+                              <Input type="number" className="text-right" value={returnOverrideAmount} onChange={(e) => setReturnOverrideAmount(e.target.value)} placeholder="자동계산" />
                             </div>
                           </div>
+
                           <div className="space-y-1">
                             <label className="text-xs font-semibold text-[var(--muted)]">반품일시</label>
-                            <Input type="datetime-local" value={returnOccurredAt} onChange={e => setReturnOccurredAt(e.target.value)} />
+                            <Input type="datetime-local" value={returnOccurredAt} onChange={(e) => setReturnOccurredAt(e.target.value)} />
                           </div>
+
                           <div className="space-y-1">
                             <label className="text-xs font-semibold text-[var(--muted)]">사유</label>
-                            <Textarea value={returnReason} onChange={e => setReturnReason(e.target.value)} placeholder="사유 입력" className="resize-none" />
+                            <Textarea value={returnReason} onChange={(e) => setReturnReason(e.target.value)} placeholder="사유 입력" className="resize-none" />
                           </div>
+
                           <Button type="submit" size="lg" variant="danger" className="w-full" disabled={!canSubmitReturn}>
                             반품 처리 완료
                           </Button>
                         </form>
                       )}
+
+                      {/* 3) OFFSET */}
+                      {actionTab === "offset" && (
+                        <form
+                          className="space-y-6"
+                          onSubmit={(e) => {
+                            e.preventDefault();
+                            if (!canSubmitOffset) return;
+
+                            offsetMutation.mutate({
+                              p_party_id: effectiveSelectedPartyId,
+                              p_idempotency_key: offsetIdempotencyKey,
+                              p_offset_cash_krw: offsetCashValue,
+                              p_occurred_at: new Date(offsetOccurredAt).toISOString(),
+                              p_reason_code: offsetReasonCode.trim(),
+                              p_reason_detail: offsetReasonDetail.trim(),
+                            });
+                          }}
+                        >
+                          <div className="p-3 bg-[var(--chip)] rounded border text-xs text-[var(--muted)]">
+                            <div className="font-semibold text-[var(--foreground)] mb-1">상계(OFFSET)</div>
+                            <div>미할당 선수금(현금)을 FIFO로 미수에 상계합니다. (새 결제 생성 X)</div>
+                          </div>
+
+                          <div className="space-y-1">
+                            <label className="text-xs font-semibold text-[var(--muted)]">상계일시</label>
+                            <Input type="datetime-local" value={offsetOccurredAt} onChange={(e) => setOffsetOccurredAt(e.target.value)} />
+                          </div>
+
+                          <div className="space-y-1">
+                            <label className="text-xs font-semibold text-[var(--muted)]">상계 금액 (KRW)</label>
+                            <Input className="text-right text-lg font-bold" value={offsetCashKrw} onChange={(e) => setOffsetCashKrw(e.target.value)} placeholder="0" />
+                          </div>
+
+                          <div className="space-y-1">
+                            <label className="text-xs font-semibold text-[var(--muted)]">사유 코드</label>
+                            <Input value={offsetReasonCode} onChange={(e) => setOffsetReasonCode(e.target.value)} placeholder="OFFSET" />
+                          </div>
+
+                          <div className="space-y-1">
+                            <label className="text-xs font-semibold text-[var(--muted)]">사유 상세</label>
+                            <Textarea value={offsetReasonDetail} onChange={(e) => setOffsetReasonDetail(e.target.value)} placeholder="왜 상계가 필요한지 구체적으로" className="resize-none" />
+                          </div>
+
+                          <div className="flex gap-2 items-end">
+                            <div className="flex-1 space-y-1">
+                              <label className="text-xs font-semibold text-[var(--muted)]">Idempotency Key</label>
+                              <Input value={offsetIdempotencyKey} readOnly />
+                            </div>
+                            <Button type="button" variant="secondary" onClick={() => setOffsetIdempotencyKey(crypto.randomUUID())}>
+                              재생성
+                            </Button>
+                          </div>
+
+                          <label className="flex items-center gap-2 text-xs">
+                            <input type="checkbox" checked={offsetConfirm} onChange={(e) => setOffsetConfirm(e.target.checked)} />
+                            <span className="text-[var(--muted)]">위 내용을 확인했고 실행합니다 (필수)</span>
+                          </label>
+
+                          <Button type="submit" size="lg" className="w-full" disabled={!canSubmitOffset}>
+                            상계 실행
+                          </Button>
+                        </form>
+                      )}
+
+                      {/* 4) ADJUST_DOWN */}
+                      {actionTab === "adjust_down" && (
+                        <form
+                          className="space-y-6"
+                          onSubmit={(e) => {
+                            e.preventDefault();
+                            if (!canSubmitAdjustDown) return;
+
+                            adjustDownMutation.mutate({
+                              p_party_id: effectiveSelectedPartyId,
+                              p_idempotency_key: adjustDownIdempotencyKey,
+                              p_adjust_cash_krw: adjustDownCashValue,
+                              p_occurred_at: new Date(adjustDownOccurredAt).toISOString(),
+                              p_reason_code: adjustDownReasonCode.trim(),
+                              p_reason_detail: adjustDownReasonDetail.trim(),
+                            });
+                          }}
+                        >
+                          <div className="p-3 bg-[var(--chip)] rounded border text-xs text-[var(--muted)]">
+                            <div className="font-semibold text-[var(--foreground)] mb-1">조정-차감(ADJUST_DOWN)</div>
+                            <div>미수를 줄이는 수동 조정입니다. (내부 정정/오류 수정용)</div>
+                          </div>
+
+                          <div className="space-y-1">
+                            <label className="text-xs font-semibold text-[var(--muted)]">조정일시</label>
+                            <Input type="datetime-local" value={adjustDownOccurredAt} onChange={(e) => setAdjustDownOccurredAt(e.target.value)} />
+                          </div>
+
+                          <div className="space-y-1">
+                            <label className="text-xs font-semibold text-[var(--muted)]">차감 금액 (KRW)</label>
+                            <Input className="text-right text-lg font-bold" value={adjustDownCashKrw} onChange={(e) => setAdjustDownCashKrw(e.target.value)} placeholder="0" />
+                          </div>
+
+                          <div className="space-y-1">
+                            <label className="text-xs font-semibold text-[var(--muted)]">사유 코드</label>
+                            <Input value={adjustDownReasonCode} onChange={(e) => setAdjustDownReasonCode(e.target.value)} placeholder="ADJUST_DOWN" />
+                          </div>
+
+                          <div className="space-y-1">
+                            <label className="text-xs font-semibold text-[var(--muted)]">사유 상세</label>
+                            <Textarea value={adjustDownReasonDetail} onChange={(e) => setAdjustDownReasonDetail(e.target.value)} placeholder="정정 사유/근거를 구체적으로" className="resize-none" />
+                          </div>
+
+                          <div className="flex gap-2 items-end">
+                            <div className="flex-1 space-y-1">
+                              <label className="text-xs font-semibold text-[var(--muted)]">Idempotency Key</label>
+                              <Input value={adjustDownIdempotencyKey} readOnly />
+                            </div>
+                            <Button type="button" variant="secondary" onClick={() => setAdjustDownIdempotencyKey(crypto.randomUUID())}>
+                              재생성
+                            </Button>
+                          </div>
+
+                          <label className="flex items-center gap-2 text-xs">
+                            <input type="checkbox" checked={adjustDownConfirm} onChange={(e) => setAdjustDownConfirm(e.target.checked)} />
+                            <span className="text-[var(--muted)]">위 내용을 확인했고 실행합니다 (필수)</span>
+                          </label>
+
+                          <Button type="submit" size="lg" variant="danger" className="w-full" disabled={!canSubmitAdjustDown}>
+                            차감 조정 실행
+                          </Button>
+                        </form>
+                      )}
+
+                      {/* 5) ADJUST_UP */}
+                      {actionTab === "adjust_up" && (
+                        <form
+                          className="space-y-6"
+                          onSubmit={(e) => {
+                            e.preventDefault();
+                            if (!canSubmitAdjustUp) return;
+
+                            adjustUpMutation.mutate({
+                              p_party_id: effectiveSelectedPartyId,
+                              p_idempotency_key: adjustUpIdempotencyKey,
+                              p_total_cash_due_krw: adjustUpTotalValue,
+                              p_occurred_at: new Date(adjustUpOccurredAt).toISOString(),
+                              p_labor_cash_due_krw: adjustUpLaborFinal,
+                              p_material_cash_due_krw: adjustUpMaterialFinal,
+                              p_reason_code: adjustUpReasonCode.trim(),
+                              p_reason_detail: adjustUpReasonDetail.trim(),
+                            });
+                          }}
+                        >
+                          <div className="p-3 bg-[var(--chip)] rounded border text-xs text-[var(--muted)]">
+                            <div className="font-semibold text-[var(--foreground)] mb-1">조정-증가(ADJUST_UP)</div>
+                            <div>미수를 늘리는 수동 조정입니다. (정정 인보이스를 생성)</div>
+                          </div>
+
+                          <div className="space-y-1">
+                            <label className="text-xs font-semibold text-[var(--muted)]">발생일시</label>
+                            <Input type="datetime-local" value={adjustUpOccurredAt} onChange={(e) => setAdjustUpOccurredAt(e.target.value)} />
+                          </div>
+
+                          <div className="space-y-1">
+                            <label className="text-xs font-semibold text-[var(--muted)]">총 금액 (KRW)</label>
+                            <Input className="text-right text-lg font-bold" value={adjustUpTotalCashKrw} onChange={(e) => setAdjustUpTotalCashKrw(e.target.value)} placeholder="0" />
+                          </div>
+
+                          <div className="grid grid-cols-2 gap-4">
+                            <div className="space-y-1">
+                              <label className="text-xs font-semibold text-[var(--muted)]">공임 (선택)</label>
+                              <Input className="text-right" value={adjustUpLaborCashKrw} onChange={(e) => setAdjustUpLaborCashKrw(e.target.value)} placeholder="미입력 시 자동" />
+                            </div>
+                            <div className="space-y-1">
+                              <label className="text-xs font-semibold text-[var(--muted)]">소재 (선택)</label>
+                              <Input className="text-right" value={adjustUpMaterialCashKrw} onChange={(e) => setAdjustUpMaterialCashKrw(e.target.value)} placeholder="미입력 시 자동" />
+                            </div>
+                          </div>
+
+                          <div className="p-3 bg-[var(--chip)] rounded border text-xs space-y-1">
+                            <div className="flex justify-between">
+                              <span className="text-[var(--muted)]">적용 공임</span>
+                              <span className="font-medium">{formatKrw(adjustUpLaborFinal)}</span>
+                            </div>
+                            <div className="flex justify-between">
+                              <span className="text-[var(--muted)]">적용 소재</span>
+                              <span className="font-medium">{formatKrw(adjustUpMaterialFinal)}</span>
+                            </div>
+                            {!adjustUpSplitOk && adjustUpTotalValue > 0 && (
+                              <div className="text-[var(--danger)]">공임+소재 합이 총액과 맞아야 합니다.</div>
+                            )}
+                          </div>
+
+                          <div className="space-y-1">
+                            <label className="text-xs font-semibold text-[var(--muted)]">사유 코드</label>
+                            <Input value={adjustUpReasonCode} onChange={(e) => setAdjustUpReasonCode(e.target.value)} placeholder="ADJUST_UP" />
+                          </div>
+
+                          <div className="space-y-1">
+                            <label className="text-xs font-semibold text-[var(--muted)]">사유 상세</label>
+                            <Textarea value={adjustUpReasonDetail} onChange={(e) => setAdjustUpReasonDetail(e.target.value)} placeholder="정정 사유/근거를 구체적으로" className="resize-none" />
+                          </div>
+
+                          <div className="flex gap-2 items-end">
+                            <div className="flex-1 space-y-1">
+                              <label className="text-xs font-semibold text-[var(--muted)]">Idempotency Key</label>
+                              <Input value={adjustUpIdempotencyKey} readOnly />
+                            </div>
+                            <Button type="button" variant="secondary" onClick={() => setAdjustUpIdempotencyKey(crypto.randomUUID())}>
+                              재생성
+                            </Button>
+                          </div>
+
+                          <label className="flex items-center gap-2 text-xs">
+                            <input type="checkbox" checked={adjustUpConfirm} onChange={(e) => setAdjustUpConfirm(e.target.checked)} />
+                            <span className="text-[var(--muted)]">위 내용을 확인했고 실행합니다 (필수)</span>
+                          </label>
+
+                          <Button type="submit" size="lg" className="w-full" disabled={!canSubmitAdjustUp}>
+                            증가 조정 실행
+                          </Button>
+                        </form>
+                      )}
                     </CardBody>
+
                   </Card>
 
                   {/* Recent History Side-panel */}
                   <div className="lg:w-80 shrink-0 space-y-4">
                     <h3 className="text-sm font-semibold text-[var(--muted)] px-1">최근 수금/반품 내역</h3>
                     <div className="space-y-2">
-                      {paymentAllocQuery.data?.slice(0, 5).map(pay => (
-                        <div key={pay.payment_id} className="p-3 rounded border bg-[var(--chip)] text-xs">
+                      {paymentAllocQuery.data?.slice(0, 5).map((pay, index) => (
+                        <div key={`${pay.payment_id ?? "payment"}-${pay.alloc_id ?? "alloc"}-${index}`} className="p-3 rounded border bg-[var(--chip)] text-xs">
                           <div className="flex justify-between font-medium mb-1">
                             <span>수금</span>
                             <span>{formatKrw(pay.cash_krw)}</span>

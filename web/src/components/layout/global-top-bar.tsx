@@ -21,9 +21,10 @@ import { MarketTicker } from "@/components/ui/market-ticker";
 
 interface GlobalTopBarProps {
   onMobileMenuOpen: () => void;
+  onWorkbenchOpen?: () => void;
 }
 
-export function GlobalTopBar({ onMobileMenuOpen }: GlobalTopBarProps) {
+export function GlobalTopBar({ onMobileMenuOpen, onWorkbenchOpen }: GlobalTopBarProps) {
   const pathname = usePathname();
   const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
 
@@ -62,15 +63,28 @@ export function GlobalTopBar({ onMobileMenuOpen }: GlobalTopBarProps) {
           <div key={`${crumb.label}-${index}`} className="flex items-center">
             {index > 0 && <span className="mx-2 text-[var(--muted-weak)]">/</span>}
             {crumb.href ? (
-              <Link
-                href={crumb.href}
-                className={cn(
-                  "transition-colors hover:text-[var(--foreground)]",
-                  index === breadcrumbs.length - 1 ? "text-[var(--foreground)] font-semibold" : ""
-                )}
-              >
-                {crumb.label}
-              </Link>
+              crumb.href === "/workbench" ? (
+                <button
+                  type="button"
+                  onClick={() => onWorkbenchOpen?.()}
+                  className={cn(
+                    "transition-colors hover:text-[var(--foreground)]",
+                    index === breadcrumbs.length - 1 ? "text-[var(--foreground)] font-semibold" : ""
+                  )}
+                >
+                  {crumb.label}
+                </button>
+              ) : (
+                <Link
+                  href={crumb.href}
+                  className={cn(
+                    "transition-colors hover:text-[var(--foreground)]",
+                    index === breadcrumbs.length - 1 ? "text-[var(--foreground)] font-semibold" : ""
+                  )}
+                >
+                  {crumb.label}
+                </Link>
+              )
             ) : (
               <span className={index === breadcrumbs.length - 1 ? "text-[var(--foreground)] font-semibold" : ""}>
                 {crumb.label}
@@ -110,6 +124,7 @@ export function GlobalTopBar({ onMobileMenuOpen }: GlobalTopBarProps) {
       <CommandPalette
         open={isCommandPaletteOpen}
         onClose={() => setIsCommandPaletteOpen(false)}
+        onOpenWorkbench={onWorkbenchOpen}
       />
 
       {/* Right Actions */}

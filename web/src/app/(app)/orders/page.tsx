@@ -1436,7 +1436,7 @@ function OrdersPageContent() {
                           placeholder="거래처..."
                         />
                         {isSuggestOpen(row.id, "client") && (clientSuggestions[row.id] ?? []).length > 0 ? (
-                          <div className="absolute left-0 top-full z-[100] mt-1 max-h-60 w-[240px] overflow-y-auto rounded-lg border border-[var(--border)] bg-[var(--popover)] shadow-2xl p-1 animate-in fade-in zoom-in-95 duration-100 ring-1 ring-black/5">
+                          <div className="absolute left-0 top-full z-[100] mt-1 max-h-60 w-[240px] overflow-y-auto rounded-lg border border-[var(--border)] bg-white shadow-2xl p-1 animate-in fade-in zoom-in-95 duration-100 ring-1 ring-black/5">
                             {(clientSuggestions[row.id] ?? []).map((client) => (
                               <button
                                 key={client.client_id ?? client.client_name ?? ""}
@@ -1488,7 +1488,7 @@ function OrdersPageContent() {
                           placeholder="모델..."
                         />
                         {isSuggestOpen(row.id, "model") && (modelSuggestions[row.id] ?? []).length > 0 ? (
-                          <div className="absolute left-0 top-full z-[100] mt-1 max-h-60 w-[280px] overflow-y-auto rounded-lg border border-[var(--border)] bg-[var(--popover)] shadow-2xl p-1 animate-in fade-in zoom-in-95 duration-100 ring-1 ring-black/5">
+                          <div className="absolute left-0 top-full z-[100] mt-1 max-h-60 w-[280px] overflow-y-auto rounded-lg border border-[var(--border)] bg-white shadow-2xl p-1 animate-in fade-in zoom-in-95 duration-100 ring-1 ring-black/5">
                             {(modelSuggestions[row.id] ?? []).map((master) => (
                               <button
                                 key={master.master_item_id ?? master.model_name ?? ""}

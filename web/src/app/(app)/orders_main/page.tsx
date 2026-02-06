@@ -486,6 +486,11 @@ export default function OrdersMainPage() {
                 + 주문 입력
               </ToolbarButton>
             </Link>
+            <Link href="/factory_po_history">
+              <ToolbarButton variant="secondary">
+                발주 전송내역
+              </ToolbarButton>
+            </Link>
           </div>
         }
       >

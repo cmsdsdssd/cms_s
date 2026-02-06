@@ -10,14 +10,10 @@ let client: ReturnType<typeof createClient> | null = null;
 export function getSupabaseClient() {
   if (!supabaseUrl || !supabaseAnonKey) return null;
   if (!client) {
-    client = createClient(supabaseUrl, supabaseAnonKey, {
-      global: {
-        headers: {
-          apikey: supabaseAnonKey,
-          Authorization: `Bearer ${supabaseAnonKey}`,
-        },
-      },
-    });
+    // ✅ supabase-js 기본 동작에 맡김:
+    // - 로그인 전: anon으로 호출 (기존과 동일)
+    // - 로그인 후: session access_token으로 호출 (의도한 동작)
+    client = createClient(supabaseUrl, supabaseAnonKey);
   }
   return client;
 }
@@ -25,6 +21,7 @@ export function getSupabaseClient() {
 export function getSchemaClient() {
   const supabase = getSupabaseClient();
   if (!supabase) return null;
+
   const schemaClient = (supabase as typeof supabase & { schema?: (schema: string) => typeof supabase }).schema;
   if (typeof schemaClient !== "function") {
     return supabase;

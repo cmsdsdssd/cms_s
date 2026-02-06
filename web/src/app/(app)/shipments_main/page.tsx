@@ -9,7 +9,7 @@ import {
 } from "@/components/layout/unified-toolbar";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Select } from "@/components/ui/field";
+import { Input, Select } from "@/components/ui/field";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -81,6 +81,15 @@ const STATUS_PRIORITY: Record<string, number> = {
   WAITING_INBOUND: 4,
 };
 
+const getKstYmd = () => {
+  const now = new Date();
+  const utc = now.getTime() + now.getTimezoneOffset() * 60000;
+  const kst = new Date(utc + 9 * 60 * 60000);
+  return kst.toISOString().slice(0, 10);
+};
+
+const isValidYmd = (value: string) => /^\d{4}-\d{2}-\d{2}$/.test(value);
+
 // Color chip helper
 function ColorChip({ color }: { color: string }) {
   const colors: Record<string, string> = {
@@ -151,6 +160,7 @@ export default function ShipmentsMainPage() {
   const [page, setPage] = useState(1);
   const [sortField, setSortField] = useState<SortField>("order_date");
   const [sortOrder, setSortOrder] = useState<SortOrder>("desc");
+  const [receiptDate, setReceiptDate] = useState(() => getKstYmd());
   const pageSize = 50; // 페이지당 50개씩
 
   // Fetch unshipped order lines - OPTIMIZED with caching
@@ -506,12 +516,22 @@ export default function ShipmentsMainPage() {
                 </Button>
               </div>
             )}
+            <Input
+              type="date"
+              value={receiptDate}
+              onChange={(event) => {
+                const next = event.target.value.trim();
+                if (!isValidYmd(next)) return;
+                setReceiptDate(next);
+              }}
+              className="h-8 w-[140px]"
+            />
             <Link href="/shipments">
               <ToolbarButton variant="primary">
                 + 출고 입력
               </ToolbarButton>
             </Link>
-            <Link href="/shipments_print">
+            <Link href={`/shipments_print?date=${receiptDate}`}>
               <ToolbarButton variant="secondary">
                 오늘 출고 영수증
               </ToolbarButton>

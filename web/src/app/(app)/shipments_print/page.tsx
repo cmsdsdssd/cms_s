@@ -2,8 +2,8 @@
 
 "use client";
 
-import { useMemo, useState, useEffect, Suspense } from "react";
-import { useSearchParams } from "next/navigation";
+import { useMemo, useState, useEffect, Suspense, useCallback } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { ActionBar } from "@/components/layout/action-bar";
 import { ReceiptPrintHalf, type ReceiptAmounts, type ReceiptLineItem } from "@/components/receipt/receipt-print";
@@ -155,6 +155,14 @@ const getKstDateTime = () => {
 
 const isValidYmd = (value: string) => /^\d{4}-\d{2}-\d{2}$/.test(value);
 
+const shiftYmd = (ymd: string, delta: number) =>
+  new Intl.DateTimeFormat("sv-SE", {
+    timeZone: "Asia/Seoul",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date(new Date(`${ymd}T00:00:00+09:00`).getTime() + delta * 86400000));
+
 
 const zeroAmounts: Amounts = { gold: 0, silver: 0, labor: 0, total: 0 };
 
@@ -255,6 +263,8 @@ const getTickPrices = (lines: ReceiptLine[]) => {
 
 function ShipmentsPrintContent() {
   const schemaClient = getSchemaClient();
+  const router = useRouter();
+  const pathname = usePathname();
   const searchParams = useSearchParams();
   const [reasonModalOpen, setReasonModalOpen] = useState(false);
   const [reasonText, setReasonText] = useState("");
@@ -272,6 +282,28 @@ function ShipmentsPrintContent() {
   const todayStartMs = useMemo(() => new Date(todayStartIso).getTime(), [todayStartIso]);
   const todayEndMs = useMemo(() => new Date(todayEndIso).getTime(), [todayEndIso]);
   const [nowLabel, setNowLabel] = useState("");
+
+  const updateQuery = useCallback(
+    (next: { date?: string; mode?: "store_pickup" | ""; partyId?: string | null }) => {
+      const params = new URLSearchParams(searchParams.toString());
+      if (next.date) {
+        params.set("date", next.date);
+      }
+      if (next.mode === "store_pickup") {
+        params.set("mode", "store_pickup");
+      } else if (next.mode !== undefined) {
+        params.delete("mode");
+      }
+      if (next.partyId) {
+        params.set("party_id", next.partyId);
+      } else if (next.partyId === null) {
+        params.delete("party_id");
+      }
+      const queryString = params.toString();
+      router.replace(queryString ? `${pathname}?${queryString}` : pathname);
+    },
+    [searchParams, router, pathname]
+  );
 
   useEffect(() => {
     setNowLabel(getKstDateTime());
@@ -298,6 +330,9 @@ function ShipmentsPrintContent() {
         const nonStorePickup = "or(is_store_pickup.is.null,is_store_pickup.eq.false)";
         const dateFilter = `and(${nonStorePickup},ship_date.eq.${today}),and(${nonStorePickup},confirmed_at.gte.${todayStartIso},confirmed_at.lt.${todayEndIso})`;
         query = query.or(dateFilter);
+        if (filterPartyId) {
+          query = query.eq("customer_party_id", filterPartyId);
+        }
       }
 
       const { data, error } = await query.order("confirmed_at", { ascending: true });
@@ -415,10 +450,12 @@ function ShipmentsPrintContent() {
   const partyIds = useMemo(() => partyGroups.map((group) => group.partyId), [partyGroups]);
 
   useEffect(() => {
-    if (!activePartyId && partyGroups.length > 0) {
-      setActivePartyId(partyGroups[0].partyId);
+    if (filterPartyId) {
+      setActivePartyId(filterPartyId);
+      return;
     }
-  }, [activePartyId, partyGroups]);
+    setActivePartyId(null);
+  }, [filterPartyId]);
 
   const arPositionsQuery = useQuery({
     queryKey: ["shipments-print-ar", partyIds.join(",")],
@@ -538,14 +575,12 @@ function ShipmentsPrintContent() {
     return result;
   }, [partyGroups, arTotalsMap, arTodayMap]);
 
-  const activeParty = useMemo(() => {
-    return partyGroups.find((group) => group.partyId === activePartyId) ?? partyGroups[0] ?? null;
-  }, [partyGroups, activePartyId]);
-
   const visiblePages = useMemo(() => {
+    if (!activePartyId) return receiptPages;
+    const activeParty = partyGroups.find((group) => group.partyId === activePartyId) ?? null;
     if (!activeParty) return [] as PartyReceiptPage[];
     return receiptPages.filter((page) => page.partyId === activeParty.partyId);
-  }, [receiptPages, activeParty]);
+  }, [receiptPages, partyGroups, activePartyId]);
 
   const unconfirmShipmentMutation = useRpcMutation<unknown>({
     fn: CONTRACTS.functions.shipmentUnconfirm,
@@ -583,16 +618,47 @@ function ShipmentsPrintContent() {
     <div className="min-h-screen bg-[var(--background)]">
       <div className="receipt-print-actions px-6 py-4 border-b border-[var(--panel-border)] bg-[var(--background)]/80 backdrop-blur">
         <ActionBar
-          title="출고 영수증(통상)"
-          subtitle={`기준일: ${today} · ${nowLabel} · 매장출고 제외 · 출고확정됨`}
+          title={isStorePickupMode ? "출고 영수증(매장출고)" : "출고 영수증(통상)"}
+          subtitle={`기준일: ${today} · ${nowLabel} · ${isStorePickupMode ? "매장출고만" : "매장출고 제외"} · 출고확정됨`}
           actions={
-            <div className="flex items-center gap-2">
-              <Button variant="secondary" onClick={() => shipmentsQuery.refetch()}>
-                새로고침
-              </Button>
-              <Button variant="primary" onClick={() => window.print()}>
-                영수증 출력
-              </Button>
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="flex items-center gap-1">
+                <Button variant="secondary" onClick={() => updateQuery({ date: shiftYmd(today, -1) })}>
+                  ◀
+                </Button>
+                <Input
+                  type="date"
+                  value={today}
+                  onChange={(event) => {
+                    const next = event.target.value.trim();
+                    if (!isValidYmd(next)) return;
+                    updateQuery({ date: next });
+                  }}
+                  className="h-8 w-[140px]"
+                />
+                <Button variant="secondary" onClick={() => updateQuery({ date: shiftYmd(today, 1) })}>
+                  ▶
+                </Button>
+              </div>
+              <div className="flex items-center gap-1">
+                <Button variant={isStorePickupMode ? "secondary" : "primary"} onClick={() => updateQuery({ mode: "" })}>
+                  통상
+                </Button>
+                <Button
+                  variant={isStorePickupMode ? "primary" : "secondary"}
+                  onClick={() => updateQuery({ mode: "store_pickup" })}
+                >
+                  매장출고
+                </Button>
+              </div>
+              <div className="flex items-center gap-2">
+                <Button variant="secondary" onClick={() => shipmentsQuery.refetch()}>
+                  새로고침
+                </Button>
+                <Button variant="primary" onClick={() => window.print()}>
+                  영수증 출력
+                </Button>
+              </div>
             </div>
           }
         />
@@ -632,14 +698,27 @@ function ShipmentsPrintContent() {
                 <div className="p-6 text-sm text-[var(--muted)]">대상 없음</div>
               ) : (
                 <div className="divide-y divide-[var(--panel-border)]">
+                  <button
+                    type="button"
+                    onClick={() => updateQuery({ partyId: null })}
+                    className={cn(
+                      "w-full text-left px-4 py-3 transition-colors",
+                      activePartyId ? "hover:bg-[var(--panel-hover)]" : "bg-[var(--panel-hover)]"
+                    )}
+                  >
+                    <div className="text-sm font-semibold">전체 보기</div>
+                    <div className="text-xs text-[var(--muted)] tabular-nums">
+                      {partyGroups.reduce((sum, group) => sum + group.lines.length, 0)}건
+                    </div>
+                  </button>
                   {partyGroups.map((group) => {
-                    const isActive = group.partyId === activeParty?.partyId;
+                    const isActive = group.partyId === activePartyId;
                     const todaySum = todayByParty.get(group.partyId) ?? { ...zeroAmounts };
                     return (
                       <button
                         key={group.partyId}
                         type="button"
-                        onClick={() => setActivePartyId(group.partyId)}
+                        onClick={() => updateQuery({ partyId: group.partyId })}
                         className={cn(
                           "w-full text-left px-4 py-3 transition-colors",
                           isActive ? "bg-[var(--panel-hover)]" : "hover:bg-[var(--panel-hover)]"
