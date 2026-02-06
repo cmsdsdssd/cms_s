@@ -352,6 +352,18 @@ const toNumber = (value: string) => {
   return parsed;
 };
 
+const resolveStoneQtyFromMasterOrRow = (
+  stoneName: string | null,
+  rowQty: string,
+  masterQty?: number | null
+) => {
+  if (!stoneName) return null;
+  if (typeof masterQty === "number" && Number.isInteger(masterQty) && masterQty > 0) return masterQty;
+  const parsed = toNumber(rowQty);
+  if (parsed !== null && Number.isInteger(parsed) && parsed > 0) return parsed;
+  return null;
+};
+
 const normalizePlatingCode = (value: string) => value.replace(/[^A-Za-z]/g, "").toUpperCase();
 
 const actorId = (process.env.NEXT_PUBLIC_CMS_ACTOR_ID || "").trim();
@@ -584,9 +596,21 @@ function OrdersPageContent() {
     const centerStoneName = normalizeTextOrNull(row.center_stone);
     const sub1StoneName = normalizeTextOrNull(row.sub1_stone);
     const sub2StoneName = normalizeTextOrNull(row.sub2_stone);
-    const centerStoneQty = toNumber(row.center_qty);
-    const sub1StoneQty = toNumber(row.sub1_qty);
-    const sub2StoneQty = toNumber(row.sub2_qty);
+    const centerStoneQty = resolveStoneQtyFromMasterOrRow(
+      centerStoneName,
+      row.center_qty,
+      master?.center_qty_default ?? null
+    );
+    const sub1StoneQty = resolveStoneQtyFromMasterOrRow(
+      sub1StoneName,
+      row.sub1_qty,
+      master?.sub1_qty_default ?? null
+    );
+    const sub2StoneQty = resolveStoneQtyFromMasterOrRow(
+      sub2StoneName,
+      row.sub2_qty,
+      master?.sub2_qty_default ?? null
+    );
     const centerStoneSource = resolveStoneSourceForPayload(centerStoneName, row.center_stone_source);
     const sub1StoneSource = resolveStoneSourceForPayload(sub1StoneName, row.sub1_stone_source);
     const sub2StoneSource = resolveStoneSourceForPayload(sub2StoneName, row.sub2_stone_source);
@@ -1286,11 +1310,17 @@ function OrdersPageContent() {
   const validateRow = (row: GridRow): boolean => {
     let isValid = true;
     const platingStr = getPlatingString(row);
-    const validateStoneQty = (stoneName: string, qtyText: string, label: string) => {
+    const master = masterCache.current.get(row.model_input.toLowerCase());
+    const validateStoneQty = (
+      stoneName: string,
+      qtyText: string,
+      masterQty: number | null | undefined,
+      label: string
+    ) => {
       if (!stoneName.trim()) return;
-      const qty = toNumber(qtyText);
-      if (qty === null || !Number.isInteger(qty) || qty <= 0) {
-        setRowError(row.id, { stones: `${label} 수량은 1 이상의 정수여야 합니다` });
+      const qty = resolveStoneQtyFromMasterOrRow(stoneName.trim(), qtyText, masterQty ?? null);
+      if (qty === null) {
+        setRowError(row.id, { stones: `${label} 개수는 마스터 기본값이 필요합니다` });
         isValid = false;
       }
     };
@@ -1326,9 +1356,9 @@ function OrdersPageContent() {
         [row.id]: { ...prev[row.id], stones: undefined },
       }));
     }
-    validateStoneQty(row.center_stone, row.center_qty, "중심석");
-    validateStoneQty(row.sub1_stone, row.sub1_qty, "보조1석");
-    validateStoneQty(row.sub2_stone, row.sub2_qty, "보조2석");
+    validateStoneQty(row.center_stone, row.center_qty, master?.center_qty_default, "중심석");
+    validateStoneQty(row.sub1_stone, row.sub1_qty, master?.sub1_qty_default, "보조1석");
+    validateStoneQty(row.sub2_stone, row.sub2_qty, master?.sub2_qty_default, "보조2석");
     return isValid;
   };
 
@@ -1739,17 +1769,19 @@ function OrdersPageContent() {
                             }
                             placeholder="선택/입력"
                           />
-                          <input
-                            type="number"
-                            min="0"
-                            step="1"
-                            className="w-16 bg-[var(--background)] border border-[var(--border)] rounded-md px-2 py-1 text-xs text-right tabular-nums focus:border-[var(--primary)] focus:ring-1 focus:ring-[var(--primary)] outline-none transition-all"
-                            value={row.center_qty}
-                            onChange={(e) => updateRow(row.id, { center_qty: e.target.value })}
-                            placeholder="수량"
-                          />
+                          <span className="w-16 rounded-md border border-[var(--border)] bg-[var(--surface)] px-2 py-1 text-right text-xs tabular-nums text-[var(--muted-foreground)]">
+                            {(() => {
+                              const master = masterCache.current.get(row.model_input.toLowerCase());
+                              const qty = resolveStoneQtyFromMasterOrRow(
+                                normalizeTextOrNull(row.center_stone),
+                                row.center_qty,
+                                master?.center_qty_default ?? null
+                              );
+                              return qty ?? "-";
+                            })()}
+                          </span>
                           <select
-                            className="w-20 bg-[var(--background)] border border-[var(--border)] rounded-md px-2 py-1 text-xs focus:border-[var(--primary)] focus:ring-1 focus:ring-[var(--primary)] outline-none transition-all disabled:opacity-50"
+                            className="w-40 bg-[var(--background)] border border-[var(--border)] rounded-md px-2 py-1 text-xs focus:border-[var(--primary)] focus:ring-1 focus:ring-[var(--primary)] outline-none transition-all disabled:opacity-50"
                             value={row.center_stone.trim() ? row.center_stone_source || "SELF" : ""}
                             disabled={!row.center_stone.trim()}
                             onChange={(e) =>
@@ -1759,8 +1791,9 @@ function OrdersPageContent() {
                             }
                           >
                             <option value="">미정</option>
-                            <option value="SELF">자입</option>
-                            <option value="PROVIDED">타입</option>
+                            <option value="SELF">자입(우리가 구매)</option>
+                            <option value="PROVIDED">타입(고객 제공)</option>
+                            <option value="FACTORY">공입/기성(공장 제공)</option>
                           </select>
                         </div>
 
@@ -1776,17 +1809,19 @@ function OrdersPageContent() {
                             }
                             placeholder="선택/입력"
                           />
-                          <input
-                            type="number"
-                            min="0"
-                            step="1"
-                            className="w-16 bg-[var(--background)] border border-[var(--border)] rounded-md px-2 py-1 text-xs text-right tabular-nums focus:border-[var(--primary)] focus:ring-1 focus:ring-[var(--primary)] outline-none transition-all"
-                            value={row.sub1_qty}
-                            onChange={(e) => updateRow(row.id, { sub1_qty: e.target.value })}
-                            placeholder="수량"
-                          />
+                          <span className="w-16 rounded-md border border-[var(--border)] bg-[var(--surface)] px-2 py-1 text-right text-xs tabular-nums text-[var(--muted-foreground)]">
+                            {(() => {
+                              const master = masterCache.current.get(row.model_input.toLowerCase());
+                              const qty = resolveStoneQtyFromMasterOrRow(
+                                normalizeTextOrNull(row.sub1_stone),
+                                row.sub1_qty,
+                                master?.sub1_qty_default ?? null
+                              );
+                              return qty ?? "-";
+                            })()}
+                          </span>
                           <select
-                            className="w-20 bg-[var(--background)] border border-[var(--border)] rounded-md px-2 py-1 text-xs focus:border-[var(--primary)] focus:ring-1 focus:ring-[var(--primary)] outline-none transition-all disabled:opacity-50"
+                            className="w-40 bg-[var(--background)] border border-[var(--border)] rounded-md px-2 py-1 text-xs focus:border-[var(--primary)] focus:ring-1 focus:ring-[var(--primary)] outline-none transition-all disabled:opacity-50"
                             value={row.sub1_stone.trim() ? row.sub1_stone_source || "SELF" : ""}
                             disabled={!row.sub1_stone.trim()}
                             onChange={(e) =>
@@ -1796,8 +1831,9 @@ function OrdersPageContent() {
                             }
                           >
                             <option value="">미정</option>
-                            <option value="SELF">자입</option>
-                            <option value="PROVIDED">타입</option>
+                            <option value="SELF">자입(우리가 구매)</option>
+                            <option value="PROVIDED">타입(고객 제공)</option>
+                            <option value="FACTORY">공입/기성(공장 제공)</option>
                           </select>
                         </div>
 
@@ -1813,17 +1849,19 @@ function OrdersPageContent() {
                             }
                             placeholder="선택/입력"
                           />
-                          <input
-                            type="number"
-                            min="0"
-                            step="1"
-                            className="w-16 bg-[var(--background)] border border-[var(--border)] rounded-md px-2 py-1 text-xs text-right tabular-nums focus:border-[var(--primary)] focus:ring-1 focus:ring-[var(--primary)] outline-none transition-all"
-                            value={row.sub2_qty}
-                            onChange={(e) => updateRow(row.id, { sub2_qty: e.target.value })}
-                            placeholder="수량"
-                          />
+                          <span className="w-16 rounded-md border border-[var(--border)] bg-[var(--surface)] px-2 py-1 text-right text-xs tabular-nums text-[var(--muted-foreground)]">
+                            {(() => {
+                              const master = masterCache.current.get(row.model_input.toLowerCase());
+                              const qty = resolveStoneQtyFromMasterOrRow(
+                                normalizeTextOrNull(row.sub2_stone),
+                                row.sub2_qty,
+                                master?.sub2_qty_default ?? null
+                              );
+                              return qty ?? "-";
+                            })()}
+                          </span>
                           <select
-                            className="w-20 bg-[var(--background)] border border-[var(--border)] rounded-md px-2 py-1 text-xs focus:border-[var(--primary)] focus:ring-1 focus:ring-[var(--primary)] outline-none transition-all disabled:opacity-50"
+                            className="w-40 bg-[var(--background)] border border-[var(--border)] rounded-md px-2 py-1 text-xs focus:border-[var(--primary)] focus:ring-1 focus:ring-[var(--primary)] outline-none transition-all disabled:opacity-50"
                             value={row.sub2_stone.trim() ? row.sub2_stone_source || "SELF" : ""}
                             disabled={!row.sub2_stone.trim()}
                             onChange={(e) =>
@@ -1833,8 +1871,9 @@ function OrdersPageContent() {
                             }
                           >
                             <option value="">미정</option>
-                            <option value="SELF">자입</option>
-                            <option value="PROVIDED">타입</option>
+                            <option value="SELF">자입(우리가 구매)</option>
+                            <option value="PROVIDED">타입(고객 제공)</option>
+                            <option value="FACTORY">공입/기성(공장 제공)</option>
                           </select>
                         </div>
 

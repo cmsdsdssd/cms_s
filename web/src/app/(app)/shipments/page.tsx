@@ -80,6 +80,7 @@ type ShipmentPrefillRow = {
 
 type OrderLineDetailRow = {
   order_line_id?: string | null;
+  matched_master_id?: string | null;
   model_name?: string | null;
   model_name_raw?: string | null;
   color?: string | null;
@@ -118,6 +119,8 @@ type ReceiptMatchPrefillRow = {
   selected_factory_total_cost_krw?: number | null;
   shipment_base_labor_krw?: number | null;
   shipment_extra_labor_krw?: number | null;
+  shipment_extra_labor_items?: unknown;
+  receipt_match_overridden_fields?: Record<string, unknown> | null;
   confirmed_at?: string | null;
   receipt_weight_g?: number | null;
   receipt_deduction_weight_g?: number | null;
@@ -278,8 +281,15 @@ const parseNumberInput = (value: string) => {
 };
 
 const normalizeStoneSource = (value: unknown): StoneSource | null => {
-  if (value === "SELF" || value === "PROVIDED") return value;
+  if (value === "SELF" || value === "PROVIDED" || value === "FACTORY") return value;
   return null;
+};
+
+const stoneSourceLabel = (value: StoneSource | null) => {
+  if (value === "SELF") return "자입(우리가 구매)";
+  if (value === "PROVIDED") return "타입(고객 제공)";
+  if (value === "FACTORY") return "공입/기성(공장 제공)";
+  return "-";
 };
 
 const formatDateTimeKst = (value?: string | null) => {
@@ -639,7 +649,7 @@ export default function ShipmentsPage() {
       const { data, error } = await schemaClient
         .from("cms_order_line")
         .select(
-          "order_line_id, model_name, model_name_raw, color, size, qty, is_plated, center_stone_name, center_stone_qty, center_stone_source, sub1_stone_name, sub1_stone_qty, sub1_stone_source, sub2_stone_name, sub2_stone_qty, sub2_stone_source, requested_due_date, priority_code, memo, status, source_channel, material_code, match_state, created_at, updated_at"
+          "order_line_id, matched_master_id, model_name, model_name_raw, color, size, qty, is_plated, center_stone_name, center_stone_qty, center_stone_source, sub1_stone_name, sub1_stone_qty, sub1_stone_source, sub2_stone_name, sub2_stone_qty, sub2_stone_source, requested_due_date, priority_code, memo, status, source_channel, material_code, match_state, created_at, updated_at"
         )
         .eq("order_line_id", orderLineId)
         .maybeSingle();
@@ -713,6 +723,23 @@ export default function ShipmentsPage() {
         filter: { column: "model_name", op: "eq", value: model },
       });
       return rows?.[0] ?? null;
+    },
+  });
+
+  const matchedMasterPricingQuery = useQuery({
+    queryKey: ["matched-master-pricing", orderLineDetailQuery.data?.matched_master_id],
+    enabled: Boolean(schemaClient && orderLineDetailQuery.data?.matched_master_id),
+    queryFn: async () => {
+      if (!schemaClient || !orderLineDetailQuery.data?.matched_master_id) return null;
+      const { data, error } = await schemaClient
+        .from("cms_master_item")
+        .select(
+          "master_item_id, labor_base_sell, labor_base_cost, labor_center, labor_center_cost, labor_side1, labor_sub1_cost, labor_side2, labor_sub2_cost, center_qty_default, sub1_qty_default, sub2_qty_default"
+        )
+        .eq("master_item_id", orderLineDetailQuery.data.matched_master_id)
+        .maybeSingle();
+      if (error) throw error;
+      return (data ?? null) as MasterLookupRow | null;
     },
   });
 
@@ -1584,15 +1611,20 @@ export default function ShipmentsPage() {
 
   const masterBaseSell = useMemo(() => {
     const value =
+      matchedMasterPricingQuery.data?.labor_base_sell ??
       masterLookupQuery.data?.labor_base_sell ??
       masterLookupQuery.data?.labor_basic;
     return value === null || value === undefined ? null : Number(value);
-  }, [masterLookupQuery.data?.labor_base_sell, masterLookupQuery.data?.labor_basic]);
+  }, [
+    matchedMasterPricingQuery.data?.labor_base_sell,
+    masterLookupQuery.data?.labor_base_sell,
+    masterLookupQuery.data?.labor_basic,
+  ]);
 
   const masterBaseCost = useMemo(() => {
-    const value = masterLookupQuery.data?.labor_base_cost;
+    const value = matchedMasterPricingQuery.data?.labor_base_cost ?? masterLookupQuery.data?.labor_base_cost;
     return value === null || value === undefined ? null : Number(value);
-  }, [masterLookupQuery.data?.labor_base_cost]);
+  }, [matchedMasterPricingQuery.data?.labor_base_cost, masterLookupQuery.data?.labor_base_cost]);
 
   const masterBaseMargin = useMemo(() => {
     if (masterBaseSell === null || masterBaseCost === null) return null;
@@ -1640,27 +1672,45 @@ export default function ShipmentsPage() {
         supply: normalizeStoneSource(orderLineDetailQuery.data?.center_stone_source),
         qtyReceipt: receiptMatchPrefillQuery.data?.stone_center_qty ?? null,
         qtyOrder: orderLineDetailQuery.data?.center_stone_qty ?? null,
-        qtyMaster: masterLookupQuery.data?.center_qty_default ?? null,
+        qtyMaster:
+          matchedMasterPricingQuery.data?.center_qty_default ??
+          masterLookupQuery.data?.center_qty_default ??
+          null,
         unitCostReceipt: receiptMatchPrefillQuery.data?.stone_center_unit_cost_krw ?? null,
-        marginPerUnit: formatMargin(masterLookupQuery.data?.labor_center, masterLookupQuery.data?.labor_center_cost),
+        marginPerUnit: formatMargin(
+          matchedMasterPricingQuery.data?.labor_center ?? masterLookupQuery.data?.labor_center,
+          matchedMasterPricingQuery.data?.labor_center_cost ?? masterLookupQuery.data?.labor_center_cost
+        ),
       },
       {
         role: "SUB1" as const,
         supply: normalizeStoneSource(orderLineDetailQuery.data?.sub1_stone_source),
         qtyReceipt: receiptMatchPrefillQuery.data?.stone_sub1_qty ?? null,
         qtyOrder: orderLineDetailQuery.data?.sub1_stone_qty ?? null,
-        qtyMaster: masterLookupQuery.data?.sub1_qty_default ?? null,
+        qtyMaster:
+          matchedMasterPricingQuery.data?.sub1_qty_default ??
+          masterLookupQuery.data?.sub1_qty_default ??
+          null,
         unitCostReceipt: receiptMatchPrefillQuery.data?.stone_sub1_unit_cost_krw ?? null,
-        marginPerUnit: formatMargin(masterLookupQuery.data?.labor_side1, masterLookupQuery.data?.labor_sub1_cost),
+        marginPerUnit: formatMargin(
+          matchedMasterPricingQuery.data?.labor_side1 ?? masterLookupQuery.data?.labor_side1,
+          matchedMasterPricingQuery.data?.labor_sub1_cost ?? masterLookupQuery.data?.labor_sub1_cost
+        ),
       },
       {
         role: "SUB2" as const,
         supply: normalizeStoneSource(orderLineDetailQuery.data?.sub2_stone_source),
         qtyReceipt: receiptMatchPrefillQuery.data?.stone_sub2_qty ?? null,
         qtyOrder: orderLineDetailQuery.data?.sub2_stone_qty ?? null,
-        qtyMaster: masterLookupQuery.data?.sub2_qty_default ?? null,
+        qtyMaster:
+          matchedMasterPricingQuery.data?.sub2_qty_default ??
+          masterLookupQuery.data?.sub2_qty_default ??
+          null,
         unitCostReceipt: receiptMatchPrefillQuery.data?.stone_sub2_unit_cost_krw ?? null,
-        marginPerUnit: formatMargin(masterLookupQuery.data?.labor_side2, masterLookupQuery.data?.labor_sub2_cost),
+        marginPerUnit: formatMargin(
+          matchedMasterPricingQuery.data?.labor_side2 ?? masterLookupQuery.data?.labor_side2,
+          matchedMasterPricingQuery.data?.labor_sub2_cost ?? masterLookupQuery.data?.labor_sub2_cost
+        ),
       },
     ],
     [
@@ -1676,6 +1726,15 @@ export default function ShipmentsPage() {
       receiptMatchPrefillQuery.data?.stone_sub1_unit_cost_krw,
       receiptMatchPrefillQuery.data?.stone_sub2_qty,
       receiptMatchPrefillQuery.data?.stone_sub2_unit_cost_krw,
+      matchedMasterPricingQuery.data?.center_qty_default,
+      matchedMasterPricingQuery.data?.labor_center,
+      matchedMasterPricingQuery.data?.labor_center_cost,
+      matchedMasterPricingQuery.data?.sub1_qty_default,
+      matchedMasterPricingQuery.data?.labor_side1,
+      matchedMasterPricingQuery.data?.labor_sub1_cost,
+      matchedMasterPricingQuery.data?.sub2_qty_default,
+      matchedMasterPricingQuery.data?.labor_side2,
+      matchedMasterPricingQuery.data?.labor_sub2_cost,
       masterLookupQuery.data?.center_qty_default,
       masterLookupQuery.data?.labor_center,
       masterLookupQuery.data?.labor_center_cost,
@@ -1689,15 +1748,16 @@ export default function ShipmentsPage() {
   );
 
   const evidenceExtraLaborItems = useMemo(
-    () => currentLine?.extra_labor_items ?? extraLaborPayload,
-    [currentLine?.extra_labor_items, extraLaborPayload]
+    () =>
+      currentLine?.extra_labor_items ??
+      receiptMatchPrefillQuery.data?.shipment_extra_labor_items ??
+      extraLaborPayload,
+    [
+      currentLine?.extra_labor_items,
+      receiptMatchPrefillQuery.data?.shipment_extra_labor_items,
+      extraLaborPayload,
+    ]
   );
-
-  const masterLaborTotal =
-    (master?.labor_basic ?? 0) +
-    (master?.labor_center ?? 0) +
-    (master?.labor_side1 ?? 0) +
-    (master?.labor_side2 ?? 0);
 
   const valuation = shipmentValuationQuery.data;
   const pricingLockedAt = valuation?.pricing_locked_at ?? shipmentHeaderQuery.data?.pricing_locked_at ?? null;
@@ -2054,6 +2114,24 @@ export default function ShipmentsPage() {
                                 {prefill?.plating_status ? prefill.plating_color ?? "Y" : "N"}
                               </div>
                             </div>
+                            <div className="space-y-1 min-w-0">
+                              <span className="text-[var(--muted)]">중심석 공급</span>
+                              <div className="font-medium truncate" title={stoneSourceLabel(normalizeStoneSource(orderLineDetailQuery.data?.center_stone_source))}>
+                                {stoneSourceLabel(normalizeStoneSource(orderLineDetailQuery.data?.center_stone_source))}
+                              </div>
+                            </div>
+                            <div className="space-y-1 min-w-0">
+                              <span className="text-[var(--muted)]">보조1석 공급</span>
+                              <div className="font-medium truncate" title={stoneSourceLabel(normalizeStoneSource(orderLineDetailQuery.data?.sub1_stone_source))}>
+                                {stoneSourceLabel(normalizeStoneSource(orderLineDetailQuery.data?.sub1_stone_source))}
+                              </div>
+                            </div>
+                            <div className="space-y-1 min-w-0">
+                              <span className="text-[var(--muted)]">보조2석 공급</span>
+                              <div className="font-medium truncate" title={stoneSourceLabel(normalizeStoneSource(orderLineDetailQuery.data?.sub2_stone_source))}>
+                                {stoneSourceLabel(normalizeStoneSource(orderLineDetailQuery.data?.sub2_stone_source))}
+                              </div>
+                            </div>
                           </div>
                           <div className="relative h-28 w-28 overflow-hidden rounded-lg border border-[var(--panel-border)] bg-[var(--surface)]">
                             {getMasterPhotoUrl(prefill?.photo_url) ? (
@@ -2077,23 +2155,6 @@ export default function ShipmentsPage() {
                             )}
                           </div>
                         </div>
-                        <ShipmentPricingEvidencePanel
-                          className="min-w-0"
-                          baseLaborSellKrw={resolvedBaseLabor}
-                          factoryBasicCostKrw={resolvedBaseLaborCost}
-                          masterBaseSellKrw={masterBaseSell}
-                          masterBaseCostKrw={masterBaseCost}
-                          masterBaseMarginKrw={masterBaseMargin}
-                          baseCostSource={baseLaborCostSource}
-                          baseMarginSource={baseMarginSource}
-                          isBaseOverridden={isBaseOverridden}
-                          extraLaborSellKrw={resolvedExtraLaborTotal}
-                          factoryOtherCostBaseKrw={resolvedOtherLaborCost}
-                          stoneRows={stoneEvidenceRows}
-                          extraLaborItems={evidenceExtraLaborItems}
-                          expectedBaseLaborSellKrw={resolvedBaseLabor}
-                          expectedExtraLaborSellKrw={resolvedExtraLaborTotal}
-                        />
                         <div className="rounded-lg border border-[var(--panel-border)] bg-[var(--panel)] p-3">
                           <div className="text-xs font-semibold text-[var(--muted)] mb-2">비고</div>
                           <div className="text-sm font-semibold text-[var(--foreground)] whitespace-pre-wrap min-h-[48px]">
@@ -2162,131 +2223,32 @@ export default function ShipmentsPage() {
 
               {selectedOrderLineId ? (
                 <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2 duration-300">
-                  {/* Master Info Card */}
-                  <Card className="border-[var(--panel-border)] shadow-sm overflow-hidden">
+                  <Card className="border-[var(--panel-border)] shadow-sm overflow-visible">
                     <CardHeader className="bg-[var(--surface)] border-b border-[var(--panel-border)] py-3">
-                      <div className="flex items-center justify-between">
-                        <h3 className="text-sm font-semibold flex items-center gap-2">
-                          <FileText className="w-4 h-4 text-[var(--muted)]" />
-                          마스터 정보
-                        </h3>
-                        {master ? (
-                          <Badge tone="active" className="text-[10px]">등록됨</Badge>
-                        ) : (
-                          <Badge tone="neutral" className="text-[10px]">미등록</Badge>
-                        )}
-                      </div>
+                      <h3 className="text-sm font-semibold flex items-center gap-2">
+                        <FileText className="w-4 h-4 text-[var(--muted)]" />
+                        계산근거
+                      </h3>
                     </CardHeader>
-                    <CardBody className="p-4">
-                      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                        <div className="rounded-lg border border-[var(--panel-border)] bg-[var(--panel)] p-3">
-                          <div className="text-xs font-semibold text-[var(--muted)] mb-2">주문 정보</div>
-                          <div className="grid grid-cols-2 gap-3 text-xs">
-                            <div className="space-y-1">
-                              <span className="text-[var(--muted)]">모델</span>
-                              <div className="font-bold">{prefill?.model_no ?? "-"}</div>
-                            </div>
-                            <div className="space-y-1">
-                              <span className="text-[var(--muted)]">주문일</span>
-                              <div className="font-medium tabular-nums">{prefill?.order_date ?? "-"}</div>
-                            </div>
-                            <div className="space-y-1">
-                              <span className="text-[var(--muted)]">카테고리</span>
-                              <div className="font-medium">{prefill?.category ?? "-"}</div>
-                            </div>
-                            <div className="space-y-1">
-                              <span className="text-[var(--muted)]">거래처</span>
-                              <div className="font-medium">{prefill?.client_name ?? "-"}</div>
-                            </div>
-                            <div className="space-y-1">
-                              <span className="text-[var(--muted)]">색상</span>
-                              <div className="font-medium">{prefill?.color ?? "-"}</div>
-                            </div>
-                            <div className="space-y-1">
-                              <span className="text-[var(--muted)]">사이즈</span>
-                              <div className="font-medium">{prefill?.size ?? "-"}</div>
-                            </div>
-                            <div className="space-y-1">
-                              <span className="text-[var(--muted)]">도금</span>
-                              <div className="font-medium">
-                                {prefill?.plating_status ? prefill.plating_color ?? "Y" : "N"}
-                              </div>
-                            </div>
-                            <div className="space-y-1">
-                              <span className="text-[var(--muted)]">메모</span>
-                              <div className="font-medium truncate">{prefill?.note ?? "-"}</div>
-                            </div>
-                          </div>
-                        </div>
-                        <div className="rounded-lg border border-[var(--panel-border)] bg-[var(--panel)] p-3">
-                          <div className="text-xs font-semibold text-[var(--muted)] mb-2">마스터 정보</div>
-                          {masterLookupQuery.isLoading ? (
-                            <div className="space-y-2">
-                              <div className="h-4 w-1/3 bg-[var(--muted)]/10 rounded animate-pulse" />
-                              <div className="h-4 w-2/3 bg-[var(--muted)]/10 rounded animate-pulse" />
-                            </div>
-                          ) : master ? (
-                            <div className="grid grid-cols-[1fr_128px] gap-3 text-xs">
-                              <div className="grid grid-cols-2 gap-3">
-                                <div className="space-y-1">
-                                  <span className="text-[var(--muted)]">벤더</span>
-                                  <div className="font-medium">{master.vendor_name ?? "-"}</div>
-                                </div>
-                                <div className="space-y-1">
-                                  <span className="text-[var(--muted)]">카테고리</span>
-                                  <div className="font-medium">{master.category_code ?? "-"}</div>
-                                </div>
-                                <div className="space-y-1">
-                                  <span className="text-[var(--muted)]">기본 소재</span>
-                                  <div className="font-medium">{master.material_code_default ?? "-"}</div>
-                                </div>
-                                <div className="space-y-1">
-                                  <span className="text-[var(--muted)]">기본 중량</span>
-                                  <div className="font-medium">
-                                    {renderNumber(master.weight_default_g, "g")}
-                                    <span className="text-[var(--muted)] ml-1">
-                                      (공제 {renderNumber(master.deduction_weight_default_g, "g")})
-                                    </span>
-                                  </div>
-                                </div>
-                                <div className="space-y-1">
-                                  <span className="text-[var(--muted)]">원석 수량</span>
-                                  <div className="font-medium tabular-nums">
-                                    C {master.center_qty_default ?? 0}, S1 {master.sub1_qty_default ?? 0}, S2 {master.sub2_qty_default ?? 0}
-                                  </div>
-                                </div>
-                                <div className="space-y-1">
-                                  <span className="text-[var(--muted)]">공임 (합계)</span>
-                                  <div className="font-medium">
-                                    {renderNumber(masterLaborTotal, "원")}
-                                  </div>
-                                </div>
-                              </div>
-                              <div className="flex items-start justify-end">
-                                <div className="relative h-32 w-32 overflow-hidden rounded-lg border border-[var(--panel-border)] bg-[var(--surface)]">
-                                  {getMasterPhotoUrl(master.photo_url ?? prefill?.photo_url) ? (
-                                    <img
-                                      src={getMasterPhotoUrl(master.photo_url ?? prefill?.photo_url) || undefined}
-                                      alt={master.model_name ?? prefill?.model_no ?? "마스터 이미지"}
-                                      className="h-full w-full object-cover"
-                                      loading="eager"
-                                    />
-                                  ) : (
-                                    <div className="flex h-full w-full items-center justify-center text-[var(--muted)]">
-                                      <Package className="h-6 w-6 opacity-40" />
-                                    </div>
-                                  )}
-                                </div>
-                              </div>
-                            </div>
-                          ) : (
-                            <div className="text-sm text-[var(--muted)] flex items-center gap-2">
-                              <AlertCircle className="w-4 h-4" />
-                              마스터 정보가 없습니다. 수기 입력으로 진행됩니다.
-                            </div>
-                          )}
-                        </div>
-                      </div>
+                    <CardBody className="p-4 min-w-0">
+                      <ShipmentPricingEvidencePanel
+                        className="min-w-0"
+                        baseLaborSellKrw={resolvedBaseLabor}
+                        factoryBasicCostKrw={resolvedBaseLaborCost}
+                        masterBaseSellKrw={masterBaseSell}
+                        masterBaseCostKrw={masterBaseCost}
+                        masterBaseMarginKrw={masterBaseMargin}
+                        baseCostSource={baseLaborCostSource}
+                        baseMarginSource={baseMarginSource}
+                        isBaseOverridden={isBaseOverridden}
+                        extraLaborSellKrw={resolvedExtraLaborTotal}
+                        factoryOtherCostBaseKrw={resolvedOtherLaborCost}
+                        stoneRows={stoneEvidenceRows}
+                        extraLaborItems={evidenceExtraLaborItems}
+                        expectedBaseLaborSellKrw={resolvedBaseLabor}
+                        expectedExtraLaborSellKrw={resolvedExtraLaborTotal}
+                        shipmentBaseLaborKrw={receiptMatchPrefillQuery.data?.shipment_base_labor_krw ?? null}
+                      />
                     </CardBody>
                   </Card>
 

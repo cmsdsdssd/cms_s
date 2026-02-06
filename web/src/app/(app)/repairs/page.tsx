@@ -217,6 +217,14 @@ const extractShipmentId = (result: { shipment_id?: string | null } | string | nu
   return normalizeId(result.shipment_id);
 };
 
+const resolveMaterialCodeForShipment = (value: string | null | undefined) => {
+  const code = (value ?? "").trim();
+  if (code === "14" || code === "18" || code === "24" || code === "925" || code === "00") {
+    return code;
+  }
+  return "00";
+};
+
 const statusBadge = (status?: string | null) => {
   const normalized = (status ?? "").trim();
   const found = STATUS_OPTIONS.find((o) => o.value === normalized);
@@ -824,6 +832,22 @@ export default function RepairsPage() {
     const shipmentId = extractShipmentId(sendResult);
     if (!shipmentId) {
       throw new Error("전송은 완료됐지만 shipment_id를 받지 못했습니다. 출고 화면에서 직접 확정해주세요.");
+    }
+
+    {
+      const prepRes = await fetch("/api/repairs-prepare-confirm", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          shipment_id: shipmentId,
+          repair_line_id: selectedRepair.repair_line_id,
+          material_code: resolveMaterialCodeForShipment(selectedRepair.material_code),
+        }),
+      });
+      if (!prepRes.ok) {
+        const json = (await prepRes.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(`출고 라인 보정 실패: ${json?.error ?? `HTTP ${prepRes.status}`}`);
+      }
     }
 
     await confirmShipmentMutation.mutateAsync({

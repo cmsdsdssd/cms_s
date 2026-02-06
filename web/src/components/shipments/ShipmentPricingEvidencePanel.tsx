@@ -1,7 +1,10 @@
+"use client";
+
 import { useMemo } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
 import { type StoneSource } from "@/lib/stone-source";
 
 type StoneRole = "CENTER" | "SUB1" | "SUB2";
@@ -10,10 +13,17 @@ type EvidenceStoneRowInput = {
   role: StoneRole;
   supply: StoneSource | null;
   qtyReceipt?: number | null;
-  qtyOrder?: number | null;
   qtyMaster?: number | null;
   unitCostReceipt?: number | null;
   marginPerUnit?: number | null;
+};
+
+type EvidenceItem = {
+  type?: string;
+  label?: string;
+  amount?: number | string | null;
+  meta?: Record<string, unknown> | null;
+  [key: string]: unknown;
 };
 
 type ShipmentPricingEvidencePanelProps = {
@@ -32,96 +42,57 @@ type ShipmentPricingEvidencePanelProps = {
   extraLaborItems?: unknown;
   expectedBaseLaborSellKrw?: number | null;
   expectedExtraLaborSellKrw?: number | null;
+  shipmentBaseLaborKrw?: number | null;
 };
-
-type ParsedExtraLaborItem = {
-  id: string;
-  type: string;
-  label: string;
-  amount: number;
-  meta: Record<string, unknown> | null;
-};
-
-type StoneEvidenceRow = {
-  role: StoneRole;
-  roleLabel: string;
-  supply: StoneSource | null;
-  qty: number | null;
-  qtySource: "receipt" | "order" | "master" | "none";
-  unitCost: number | null;
-  unitCostSource: "receipt" | "none";
-  includedCost: number | null;
-  marginPerUnit: number | null;
-  marginTotal: number | null;
-  recognizedStoneMargin: number | null;
-  qtyTimesUnitPlusMargin: number | null;
-  warnings: string[];
-};
-
-const roleLabelMap: Record<StoneRole, string> = {
-  CENTER: "CENTER",
-  SUB1: "SUB1",
-  SUB2: "SUB2",
-};
-
-const sourceToneMap = {
-  receipt: "active",
-  match: "active",
-  order: "primary",
-  master: "neutral",
-  none: "neutral",
-} as const;
-
-const sourceLabelMap = {
-  receipt: "영수증/매칭",
-  match: "영수증/매칭",
-  order: "주문",
-  master: "마스터",
-  none: "출처 없음",
-} as const;
 
 const formatKrw = (value?: number | null) => {
   if (value === null || value === undefined || Number.isNaN(value)) return "-";
   return `₩${new Intl.NumberFormat("ko-KR").format(Math.round(value))}`;
 };
 
-const formatQty = (value?: number | null) => {
-  if (value === null || value === undefined || Number.isNaN(value)) return "-";
-  return new Intl.NumberFormat("ko-KR").format(value);
+const sourceLabel = (source: "receipt" | "match" | "none") => {
+  if (source === "receipt") return "영수증";
+  if (source === "match") return "매칭";
+  return "-";
 };
 
-const parseExtraLaborItems = (items?: unknown): ParsedExtraLaborItem[] => {
-  if (!Array.isArray(items)) return [];
-  return items
-    .map((item, index) => {
-      const record = item as {
-        id?: string;
-        type?: string;
-        label?: string;
-        amount?: number | string | null;
-        meta?: unknown;
-      };
-      const amount = Number(record.amount ?? 0);
-      const meta =
-        record.meta && typeof record.meta === "object" && !Array.isArray(record.meta)
-          ? (record.meta as Record<string, unknown>)
-          : null;
-      return {
-        id: String(record.id ?? `extra-${index}`),
-        type: String(record.type ?? ""),
-        label: String(record.label ?? "기타").trim() || "기타",
-        amount: Number.isFinite(amount) ? amount : 0,
-        meta,
-      };
-    })
-    .filter((item) => item.label.length > 0);
+const stoneSourceLabel = (source: StoneSource | null) => {
+  if (source === "SELF") return "자입";
+  if (source === "PROVIDED") return "타입";
+  if (source === "FACTORY") return "공입";
+  return "-";
 };
 
-const pickQty = (qtyReceipt?: number | null, qtyOrder?: number | null, qtyMaster?: number | null) => {
-  if (qtyReceipt !== null && qtyReceipt !== undefined) return { qty: qtyReceipt, source: "receipt" as const };
-  if (qtyOrder !== null && qtyOrder !== undefined) return { qty: qtyOrder, source: "order" as const };
-  if (qtyMaster !== null && qtyMaster !== undefined) return { qty: qtyMaster, source: "master" as const };
-  return { qty: null, source: "none" as const };
+const evidenceSectionLabel = (key: string) => {
+  if (key === "COST_BASIS") return "원가 근거";
+  if (key === "RULE_MARKUP") return "규칙 마진";
+  if (key === "MASTER_ADDON_MARGIN") return "마스터 추가마진";
+  if (key === "WARN") return "주의";
+  if (key === "CENTER") return "중심공임";
+  if (key === "SUB1") return "보조1공임";
+  if (key === "SUB2") return "보조2공임";
+  if (key === "PLATING") return "도금";
+  if (key === "OTHER") return "기타";
+  return key;
+};
+
+const evidenceItemLabel = (item: EvidenceItem) => {
+  const label = String(item.label ?? "").trim();
+  if (label) return label;
+  return evidenceSectionLabel(String(item.type ?? "기타"));
+};
+
+const normalizeItems = (value: unknown): EvidenceItem[] => {
+  if (!Array.isArray(value)) return [];
+  return value.filter((item): item is EvidenceItem => typeof item === "object" && item !== null);
+};
+
+const copyText = async (value: string) => {
+  try {
+    await navigator.clipboard.writeText(value);
+  } catch {
+    // no-op
+  }
 };
 
 export function ShipmentPricingEvidencePanel({
@@ -132,360 +103,165 @@ export function ShipmentPricingEvidencePanel({
   masterBaseCostKrw,
   masterBaseMarginKrw,
   baseCostSource,
-  baseMarginSource,
   isBaseOverridden,
   extraLaborSellKrw,
-  factoryOtherCostBaseKrw,
   stoneRows,
   extraLaborItems,
-  expectedBaseLaborSellKrw,
-  expectedExtraLaborSellKrw,
+  shipmentBaseLaborKrw,
 }: ShipmentPricingEvidencePanelProps) {
-  const parsedExtraLaborItems = useMemo(() => parseExtraLaborItems(extraLaborItems), [extraLaborItems]);
+  const normalizedItems = useMemo(() => normalizeItems(extraLaborItems), [extraLaborItems]);
 
-  const normalizedRows = useMemo<StoneEvidenceRow[]>(() => {
-    return stoneRows.map((row) => {
-      const pickedQty = pickQty(row.qtyReceipt, row.qtyOrder, row.qtyMaster);
-      const unitCost = row.unitCostReceipt ?? null;
-      const appliedUnitCost = row.supply === "PROVIDED" ? 0 : unitCost;
-      const includedCost =
-        row.supply === "SELF" && pickedQty.qty !== null && appliedUnitCost !== null
-          ? pickedQty.qty * appliedUnitCost
-          : row.supply === "PROVIDED"
-            ? 0
-            : null;
-      const marginPerUnit = row.marginPerUnit ?? null;
-      const marginTotal =
-        marginPerUnit !== null && pickedQty.qty !== null ? pickedQty.qty * marginPerUnit : null;
-      const recognizedStoneMargin = row.supply === "SELF" ? marginTotal : null;
-      const qtyTimesUnitPlusMargin =
-        pickedQty.qty !== null && appliedUnitCost !== null && marginPerUnit !== null
-          ? pickedQty.qty * (appliedUnitCost + marginPerUnit)
-          : null;
-
-      const warnings: string[] = [];
-      if (row.supply === "SELF" && (unitCost === null || unitCost === 0)) warnings.push("자입 단가 0");
-      if (row.supply === "PROVIDED" && unitCost !== null && unitCost > 0) warnings.push("타입이라 단가 무시");
-      if (
-        row.qtyReceipt !== null &&
-        row.qtyReceipt !== undefined &&
-        row.qtyOrder !== null &&
-        row.qtyOrder !== undefined &&
-        row.qtyReceipt !== row.qtyOrder
-      ) {
-        warnings.push("수량 불일치");
+  const groupedItems = useMemo(() => {
+    const groups: Record<string, EvidenceItem[]> = {
+      COST_BASIS: [],
+      RULE_MARKUP: [],
+      MASTER_ADDON_MARGIN: [],
+      WARN: [],
+      OTHER: [],
+    };
+    normalizedItems.forEach((item) => {
+      const type = String(item.type ?? "").trim();
+      if (type in groups) {
+        groups[type].push(item);
+      } else {
+        groups.OTHER.push(item);
       }
-
-      return {
-        role: row.role,
-        roleLabel: roleLabelMap[row.role],
-        supply: row.supply,
-        qty: pickedQty.qty,
-        qtySource: pickedQty.source,
-        unitCost,
-        unitCostSource: unitCost !== null ? "receipt" : "none",
-        includedCost,
-        marginPerUnit,
-        marginTotal,
-        recognizedStoneMargin,
-        qtyTimesUnitPlusMargin,
-        warnings,
-      };
     });
-  }, [stoneRows]);
+    return groups;
+  }, [normalizedItems]);
 
-  const warningBadges = useMemo(() => {
-    const set = new Set<string>();
-    normalizedRows.forEach((row) => row.warnings.forEach((warning) => set.add(warning)));
-    if ((factoryBasicCostKrw ?? null) === 0 && (baseLaborSellKrw ?? 0) > 0) {
-      set.add("기본공임 원가 0");
-    }
-    return Array.from(set);
-  }, [normalizedRows, factoryBasicCostKrw, baseLaborSellKrw]);
-
-  const selfStoneCost = useMemo(
-    () => normalizedRows.reduce((sum, row) => sum + (row.includedCost ?? 0), 0),
-    [normalizedRows]
-  );
-  const stoneMarginTotal = useMemo(
-    () => normalizedRows.reduce((sum, row) => sum + (row.recognizedStoneMargin ?? 0), 0),
-    [normalizedRows]
-  );
-
-  const baseSell = baseLaborSellKrw ?? 0;
-  const baseCost = factoryBasicCostKrw ?? 0;
-  const baseMargin =
+  const computedBaseMargin =
     masterBaseSellKrw !== null &&
     masterBaseSellKrw !== undefined &&
     masterBaseCostKrw !== null &&
     masterBaseCostKrw !== undefined
       ? masterBaseSellKrw - masterBaseCostKrw
-      : masterBaseMarginKrw ?? null;
+      : (masterBaseMarginKrw ?? null);
 
-  const extraSell = extraLaborSellKrw ?? 0;
-  const otherCostBase = factoryOtherCostBaseKrw ?? 0;
-  const extraCost = otherCostBase + selfStoneCost;
-  const totalExtraMargin = extraSell - otherCostBase;
-  const beadEtcMargin = totalExtraMargin - stoneMarginTotal;
-
-  const isBaseMismatch =
-    expectedBaseLaborSellKrw !== null &&
-    expectedBaseLaborSellKrw !== undefined &&
-    Math.round(expectedBaseLaborSellKrw) !== Math.round(baseSell);
-  const isExtraMismatch =
-    expectedExtraLaborSellKrw !== null &&
-    expectedExtraLaborSellKrw !== undefined &&
-    Math.round(expectedExtraLaborSellKrw) !== Math.round(extraSell);
-  const hasMismatch = isBaseMismatch || isExtraMismatch;
+  const displayedBaseSell = baseLaborSellKrw ?? shipmentBaseLaborKrw ?? null;
 
   return (
-    <div className={className} style={{ minWidth: 0 }}>
-      <Card>
-        <CardHeader className="border-b border-[var(--panel-border)] bg-[var(--surface)] p-3">
-          <div className="flex min-w-0 items-start justify-between gap-2">
-            <div className="min-w-0">
-              <h3 className="text-xs font-semibold text-[var(--foreground)]">계산 근거</h3>
-              <p className="mt-0.5 text-[10px] text-[var(--muted)]">기본공임 + 보석/기타공임 근거</p>
-            </div>
-            <div className="flex flex-wrap justify-end gap-1">
-              {hasMismatch ? (
-                <Badge tone="danger" className="text-[10px] px-1.5 py-0">
-                  표시값 불일치(데이터 확인)
-                </Badge>
+    <div className={className}>
+      <div className="grid grid-cols-1 gap-3 min-w-0">
+        <Card>
+          <CardHeader className="py-2 px-3 border-b border-[var(--panel-border)]">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs font-semibold">기본공임 계산근거</span>
+              {isBaseOverridden ? (
+                <Badge tone="warning" className="text-[10px]">오버라이드</Badge>
               ) : null}
-              {warningBadges.map((warning) => (
-                <Badge key={warning} tone="warning" className="text-[10px] px-1.5 py-0">
-                  {warning}
-                </Badge>
-              ))}
             </div>
-          </div>
-        </CardHeader>
-
-        <CardBody className="space-y-2 p-3 min-w-0">
-          <div className="overflow-x-auto rounded-md border border-[var(--panel-border)] bg-[var(--panel)]">
-            <table className="min-w-[820px] text-xs w-full">
-              <thead className="bg-[var(--surface)] text-[var(--muted)]">
-                <tr>
-                  <th className="px-2 py-1.5 text-left font-semibold">구분</th>
-                  <th className="px-2 py-1.5 text-left font-semibold">판매가</th>
-                  <th className="px-2 py-1.5 text-left font-semibold">원가</th>
-                  <th className="px-2 py-1.5 text-left font-semibold">마진</th>
-                  <th className="px-2 py-1.5 text-left font-semibold">근거식</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr className="border-t border-[var(--panel-border)] align-top">
-                  <td className="px-2 py-1.5 font-semibold">기본공임</td>
-                  <td className="px-2 py-1.5 tabular-nums font-semibold">{formatKrw(baseSell)}</td>
-                  <td className="px-2 py-1.5 tabular-nums">{formatKrw(baseCost)}</td>
-                  <td className="px-2 py-1.5 tabular-nums">{formatKrw(baseMargin)}</td>
-                  <td className="px-2 py-1.5 tabular-nums text-[var(--muted)]">
-                    {formatKrw(baseSell)} = {formatKrw(baseCost)} + {formatKrw(baseMargin)}
-                  </td>
-                </tr>
-                <tr className="border-t border-[var(--panel-border)] align-top">
-                  <td className="px-2 py-1.5 font-semibold">보석/기타공임</td>
-                  <td className="px-2 py-1.5 tabular-nums font-semibold">{formatKrw(extraSell)}</td>
-                  <td className="px-2 py-1.5 tabular-nums">{formatKrw(otherCostBase)}</td>
-                  <td className="px-2 py-1.5 tabular-nums">{formatKrw(totalExtraMargin)}</td>
-                  <td className="px-2 py-1.5 tabular-nums text-[var(--muted)]">
-                    총마진 = {formatKrw(extraSell)} - {formatKrw(otherCostBase)} (석마진은 자입석만 반영)
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-
-          <details className="rounded-md border border-[var(--panel-border)] bg-[var(--surface)]">
-            <summary className="cursor-pointer list-none px-2 py-1.5 text-xs font-semibold text-[var(--foreground)]">
-              기본공임 계산근거
-            </summary>
-            <div className="space-y-2 border-t border-[var(--panel-border)] p-2 max-h-[320px] overflow-auto text-xs">
-              <div className="overflow-x-auto rounded-md border border-[var(--panel-border)] bg-[var(--panel)]">
-                <table className="min-w-[680px] text-xs w-full">
-                  <thead className="bg-[var(--surface)] text-[var(--muted)]">
-                    <tr>
-                      <th className="px-2 py-1.5 text-left font-semibold">항목</th>
-                      <th className="px-2 py-1.5 text-left font-semibold">금액</th>
-                      <th className="px-2 py-1.5 text-left font-semibold">출처</th>
-                      <th className="px-2 py-1.5 text-left font-semibold">설명</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr className="border-t border-[var(--panel-border)] align-top">
-                      <td className="px-2 py-1.5">공장 기본공임(원가)</td>
-                      <td className="px-2 py-1.5 tabular-nums font-semibold">{formatKrw(baseCost)}</td>
-                      <td className="px-2 py-1.5">
-                        <Badge tone={sourceToneMap[baseCostSource]} className="text-[10px] px-1 py-0">
-                          {sourceLabelMap[baseCostSource]}
-                        </Badge>
-                      </td>
-                      <td className="px-2 py-1.5 text-[var(--muted)]">영수증/매칭 기본공임 원가</td>
-                    </tr>
-                    <tr className="border-t border-[var(--panel-border)] align-top">
-                      <td className="px-2 py-1.5">마스터 기본공임 마진</td>
-                      <td className="px-2 py-1.5 tabular-nums font-semibold">{formatKrw(baseMargin)}</td>
-                      <td className="px-2 py-1.5">
-                        <div className="flex items-center gap-1">
-                          <Badge tone={sourceToneMap[baseMarginSource]} className="text-[10px] px-1 py-0">
-                            {sourceLabelMap[baseMarginSource]}
-                          </Badge>
-                          {isBaseOverridden ? (
-                            <Badge tone="warning" className="text-[10px] px-1 py-0">오버라이드</Badge>
-                          ) : null}
-                        </div>
-                      </td>
-                      <td className="px-2 py-1.5 tabular-nums text-[var(--muted)]">
-                        {formatKrw(masterBaseSellKrw ?? null)} - {formatKrw(masterBaseCostKrw ?? null)}
-                      </td>
-                    </tr>
-                    <tr className="border-t border-[var(--panel-border)] align-top">
-                      <td className="px-2 py-1.5">기본공임 판매가</td>
-                      <td className="px-2 py-1.5 tabular-nums font-semibold">{formatKrw(baseSell)}</td>
-                      <td className="px-2 py-1.5 text-[var(--muted)]">출고 표시값</td>
-                      <td className="px-2 py-1.5 text-[var(--muted)] tabular-nums">
-                        {formatKrw(baseCost)} + {formatKrw(baseMargin)}
-                      </td>
-                    </tr>
-                  </tbody>
-                </table>
+          </CardHeader>
+          <CardBody className="p-3">
+            <div className="overflow-x-auto">
+              <div className="min-w-[520px] rounded border border-[var(--panel-border)] bg-[var(--surface)] px-2 py-1 text-xs">
+                <div className="grid grid-cols-[1fr_auto_1fr_auto_1fr] items-center gap-x-2">
+                  <div className="min-w-0">
+                    <span className="text-[var(--muted)]">출고기본공임</span>
+                    <span className="ml-1 font-semibold tabular-nums">{formatKrw(displayedBaseSell)}</span>
+                  </div>
+                  <span className="text-[var(--muted)]">|</span>
+                  <div className="min-w-0">
+                    <span className="text-[var(--muted)]">공장기본공임원가({sourceLabel(baseCostSource)})</span>
+                    <span className="ml-1 font-semibold tabular-nums">{formatKrw(factoryBasicCostKrw)}</span>
+                  </div>
+                  <span className="text-[var(--muted)]">|</span>
+                  <div className="min-w-0">
+                    <span className="text-[var(--muted)]">마스터기본공임마진</span>
+                    <span className="ml-1 font-semibold tabular-nums">{formatKrw(computedBaseMargin)}</span>
+                  </div>
+                </div>
               </div>
             </div>
-          </details>
+          </CardBody>
+        </Card>
 
-          <details className="rounded-md border border-[var(--panel-border)] bg-[var(--surface)]">
-            <summary className="cursor-pointer list-none px-2 py-1.5 text-xs font-semibold text-[var(--foreground)]">
-              보석/기타공임 계산근거
-            </summary>
-            <div className="space-y-2 border-t border-[var(--panel-border)] p-2 max-h-[320px] overflow-auto text-xs">
-              <div className="grid grid-cols-1 gap-1 rounded-md border border-[var(--panel-border)] bg-[var(--panel)] p-2">
-                <div className="tabular-nums">총 기타공임 마진 = {formatKrw(extraSell)} - {formatKrw(otherCostBase)} = {formatKrw(totalExtraMargin)}</div>
-                <div className="tabular-nums">석마진(자입석만) = {formatKrw(stoneMarginTotal)} (타입석은 N/A)</div>
-                <div className="tabular-nums">bead/기타 마진 = {formatKrw(totalExtraMargin)} - {formatKrw(stoneMarginTotal)} = {formatKrw(beadEtcMargin)}</div>
-                <div className="tabular-nums text-[var(--muted)]">참고: 자입석 원가 포함액 = {formatKrw(selfStoneCost)} / 기타공임 원가총액 = {formatKrw(extraCost)}</div>
-              </div>
-
-              <div className="min-w-0 overflow-x-auto rounded-md border border-[var(--panel-border)]">
-                <table className="hidden min-w-[820px] text-xs md:table">
-                  <thead className="bg-[var(--panel)] text-[var(--muted)]">
-                    <tr>
-                      <th className="px-2 py-1.5 text-left font-semibold">역할</th>
-                      <th className="px-2 py-1.5 text-left font-semibold">자입/타입</th>
-                      <th className="px-2 py-1.5 text-left font-semibold">qty</th>
-                      <th className="px-2 py-1.5 text-left font-semibold">unit_cost</th>
-                      <th className="px-2 py-1.5 text-left font-semibold">원가 포함액</th>
-                      <th className="px-2 py-1.5 text-left font-semibold">마진/개</th>
-                      <th className="px-2 py-1.5 text-left font-semibold">마진합</th>
-                      <th className="px-2 py-1.5 text-left font-semibold">qty×(unit+마진)</th>
+        <Card>
+          <CardHeader className="py-2 px-3 border-b border-[var(--panel-border)]">
+            <span className="text-xs font-semibold">보석/기타공임 계산근거 (v3 evidence)</span>
+          </CardHeader>
+          <CardBody className="p-3 space-y-3 min-w-0">
+            <div className="overflow-x-auto rounded-md border border-[var(--panel-border)]">
+              <table className="min-w-[680px] w-full text-xs">
+                <thead className="bg-[var(--surface)] text-[var(--muted)]">
+                  <tr>
+                    <th className="px-2 py-1 text-left">보석</th>
+                    <th className="px-2 py-1 text-left">공급구분</th>
+                    <th className="px-2 py-1 text-left">수량(영수증/마스터)</th>
+                    <th className="px-2 py-1 text-left">단가(영수증)</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {stoneRows.map((stone) => (
+                    <tr key={stone.role} className="border-t border-[var(--panel-border)]">
+                      <td className="px-2 py-1">{stone.role}</td>
+                      <td className="px-2 py-1">{stoneSourceLabel(stone.supply)}</td>
+                      <td className="px-2 py-1 tabular-nums">
+                        {stone.qtyReceipt ?? "-"} / {stone.qtyMaster ?? "-"}
+                      </td>
+                      <td className="px-2 py-1 tabular-nums">{formatKrw(stone.unitCostReceipt ?? null)}</td>
                     </tr>
-                  </thead>
-                  <tbody>
-                    {normalizedRows.map((row) => (
-                      <tr key={row.role} className="border-t border-[var(--panel-border)] align-top">
-                        <td className="px-2 py-1.5">{row.roleLabel}</td>
-                        <td className="px-2 py-1.5">
-                          <Badge tone={row.supply === "SELF" ? "primary" : "neutral"} className="text-[10px] px-1 py-0">
-                            {row.supply ?? "-"}
-                          </Badge>
-                        </td>
-                        <td className="px-2 py-1.5 tabular-nums">
-                          {formatQty(row.qty)}
-                          <div className="mt-1">
-                            <Badge tone={sourceToneMap[row.qtySource]} className="text-[10px] px-1 py-0">
-                              {sourceLabelMap[row.qtySource]}
-                            </Badge>
-                          </div>
-                        </td>
-                        <td className="px-2 py-1.5 tabular-nums">
-                          {formatKrw(row.unitCost)}
-                          <div className="mt-1">
-                            <Badge tone={sourceToneMap[row.unitCostSource]} className="text-[10px] px-1 py-0">
-                              {sourceLabelMap[row.unitCostSource]}
-                            </Badge>
-                          </div>
-                        </td>
-                        <td className="px-2 py-1.5 tabular-nums">
-                          {formatKrw(row.includedCost)}
-                          {row.supply === "PROVIDED" ? (
-                            <div className="mt-1">
-                              <Badge tone="warning" className="text-[10px] px-1 py-0">단가 무시</Badge>
-                            </div>
-                          ) : null}
-                        </td>
-                        <td className="px-2 py-1.5 tabular-nums">{formatKrw(row.marginPerUnit)}</td>
-                        <td className="px-2 py-1.5 tabular-nums">
-                          {row.supply === "SELF" ? formatKrw(row.marginTotal) : "N/A"}
-                        </td>
-                        <td className="px-2 py-1.5 tabular-nums">{formatKrw(row.qtyTimesUnitPlusMargin)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-
-                <div className="space-y-2 p-2 md:hidden">
-                  {normalizedRows.map((row) => (
-                    <div key={`${row.role}-mobile`} className="rounded-md border border-[var(--panel-border)] bg-[var(--panel)] p-2">
-                      <div className="flex items-center justify-between">
-                        <span className="font-semibold">{row.roleLabel}</span>
-                        <Badge tone={row.supply === "SELF" ? "primary" : "neutral"} className="text-[10px] px-1 py-0">
-                          {row.supply ?? "-"}
-                        </Badge>
-                      </div>
-                      <div className="mt-1 grid grid-cols-2 gap-1">
-                        <div>qty: {formatQty(row.qty)}</div>
-                        <div>unit_cost: {formatKrw(row.unitCost)}</div>
-                        <div>원가포함: {formatKrw(row.includedCost)}</div>
-                        <div>마진합: {row.supply === "SELF" ? formatKrw(row.marginTotal) : "N/A"}</div>
-                      </div>
-                    </div>
                   ))}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="rounded-md border border-[var(--panel-border)] bg-[var(--surface)] p-2 space-y-2">
+              <div className="grid grid-cols-2 md:grid-cols-3 gap-1 text-[10px]">
+                {[
+                  { key: "COST_BASIS", title: "COST_BASIS" },
+                  { key: "RULE_MARKUP", title: "RULE_MARKUP" },
+                  { key: "MASTER_ADDON_MARGIN", title: "MASTER_ADDON_MARGIN" },
+                  { key: "WARN", title: "WARN" },
+                  { key: "OTHER", title: "OTHER" },
+                ].map((section) => (
+                  <div key={section.key} className="rounded border border-[var(--panel-border)] bg-[var(--panel)] px-2 py-1">
+                    <span className="font-semibold">{evidenceSectionLabel(section.title)}</span>
+                    <span className="ml-1 tabular-nums text-[var(--muted)]">{(groupedItems[section.key] ?? []).length}</span>
+                  </div>
+                ))}
+                <div className="rounded border border-[var(--panel-border)] bg-[var(--panel)] px-2 py-1 md:col-span-1 col-span-2">
+                  <span className="font-semibold">기타공임</span>
+                  <span className="ml-1 tabular-nums">{formatKrw(extraLaborSellKrw ?? null)}</span>
                 </div>
               </div>
 
-              <div className="space-y-2 rounded-md border border-[var(--panel-border)] bg-[var(--panel)] p-2">
-                <div className="text-xs font-semibold">extra_labor_items</div>
-                {parsedExtraLaborItems.length === 0 ? (
-                  <div className="text-xs text-[var(--muted)]">-</div>
-                ) : (
-                  parsedExtraLaborItems.map((item) => (
-                    <div key={item.id} className="rounded-md border border-[var(--panel-border)] bg-[var(--surface)] p-2">
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="font-medium">{item.label}</span>
-                        <span className="tabular-nums font-semibold">{formatKrw(item.amount)}</span>
-                      </div>
-                      {item.meta ? (
-                        <details className="mt-1">
-                          <summary className="cursor-pointer text-[10px] text-[var(--muted)]">meta 펼치기</summary>
-                          <div className="mt-1 grid grid-cols-2 gap-1 text-[10px] text-[var(--muted)]">
-                            {Object.entries(item.meta).map(([key, value]) => (
-                              <div key={`${item.id}-${key}`} className="truncate">
-                                {key}: {String(value)}
-                              </div>
-                            ))}
-                          </div>
-                        </details>
-                      ) : null}
-                    </div>
-                  ))
-                )}
+              <div className="space-y-1">
+                {[
+                  { key: "COST_BASIS", title: "COST_BASIS" },
+                  { key: "RULE_MARKUP", title: "RULE_MARKUP" },
+                  { key: "MASTER_ADDON_MARGIN", title: "MASTER_ADDON_MARGIN" },
+                  { key: "WARN", title: "WARN" },
+                  { key: "OTHER", title: "OTHER" },
+                ].map((section) => (
+                  <div key={`${section.key}-rows`} className="text-[10px] min-w-0">
+                    {(groupedItems[section.key] ?? []).map((item, idx) => {
+                      const ruleId =
+                        typeof item.rule_id === "string"
+                          ? item.rule_id
+                          : typeof item.meta === "object" && item.meta && "rule_id" in item.meta
+                            ? String((item.meta as Record<string, unknown>).rule_id ?? "")
+                            : "";
+                      return (
+                        <div key={`${section.key}-${idx}`} className="flex items-center gap-2 min-w-0">
+                          <span className="text-[var(--muted)] shrink-0">[{evidenceSectionLabel(section.title)}]</span>
+                          <span className="truncate">{evidenceItemLabel(item)}</span>
+                          <span className="tabular-nums shrink-0">{formatKrw(Number(item.amount ?? 0))}</span>
+                          {ruleId ? (
+                            <Button size="sm" variant="secondary" className="h-5 px-2 text-[10px] shrink-0" onClick={() => void copyText(ruleId)}>
+                              규칙복사
+                            </Button>
+                          ) : null}
+                        </div>
+                      );
+                    })}
+                  </div>
+                ))}
               </div>
             </div>
-          </details>
-
-          {hasMismatch ? (
-            <details className="rounded-md border border-[var(--danger)]/40 bg-[var(--danger)]/10 p-2 text-xs">
-              <summary className="cursor-pointer text-[var(--danger)] font-semibold">불일치 디버그 정보</summary>
-              <div className="mt-2 space-y-1 text-[var(--danger)] tabular-nums">
-                <div>expectedBaseLaborSell: {formatKrw(expectedBaseLaborSellKrw ?? null)}</div>
-                <div>displayedBaseLaborSell: {formatKrw(baseSell)}</div>
-                <div>expectedExtraLaborSell: {formatKrw(expectedExtraLaborSellKrw ?? null)}</div>
-                <div>displayedExtraLaborSell: {formatKrw(extraSell)}</div>
-              </div>
-            </details>
-          ) : null}
-        </CardBody>
-      </Card>
+          </CardBody>
+        </Card>
+      </div>
     </div>
   );
 }

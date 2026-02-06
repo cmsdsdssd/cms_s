@@ -15,6 +15,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { SearchSelect } from "@/components/ui/search-select";
 import { useRpcMutation } from "@/hooks/use-rpc-mutation";
 import { CONTRACTS } from "@/lib/contracts";
+import { getSchemaClient } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
 
 type ReceiptInboxRow = {
@@ -222,6 +223,14 @@ const STONE_FIELDS = [
 type StoneField = (typeof STONE_FIELDS)[number];
 
 type MetalUnit = "g" | "don";
+
+type FactoryBillingShape = "SETTING_ONLY" | "BUNDLED_PACKAGE" | "SPLIT";
+
+type OrderStoneSourceRow = {
+  center_stone_source?: string | null;
+  sub1_stone_source?: string | null;
+  sub2_stone_source?: string | null;
+};
 
 type FactoryMetalInput = {
   value: string;
@@ -443,6 +452,7 @@ function getDefaultRangeDateByMonths(offsetMonths: number) {
 
 export default function ReceiptLineWorkbench({ initialReceiptId }: { initialReceiptId?: string | null }) {
   const queryClient = useQueryClient();
+  const schemaClient = useMemo(() => getSchemaClient(), []);
 
   const [statusFilter, setStatusFilter] = useState(DEFAULT_STATUS_FILTER);
   const [vendorFilter, setVendorFilter] = useState("");
@@ -526,6 +536,8 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
   const [scoreOpenMap, setScoreOpenMap] = useState<Record<string, boolean>>({});
   const [selectedWeight, setSelectedWeight] = useState("");
   const [confirmNote, setConfirmNote] = useState("");
+  const [factoryBillingShape, setFactoryBillingShape] =
+    useState<FactoryBillingShape>("BUNDLED_PACKAGE");
   const [confirmResult, setConfirmResult] = useState<ConfirmResult | null>(null);
   const [customerNameMap, setCustomerNameMap] = useState<Record<string, string | null>>({});
   const [customerLookupState, setCustomerLookupState] = useState<Record<string, "idle" | "loading" | "done">>({});
@@ -727,6 +739,21 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
     enabled: Boolean(selectedReceiptId),
     staleTime: 20 * 1000,
     gcTime: 2 * 60 * 1000,
+  });
+
+  const selectedOrderStoneSourceQuery = useQuery({
+    queryKey: ["new-receipt-workbench", "order-stone-source", selectedCandidate?.order_line_id],
+    enabled: Boolean(schemaClient && selectedCandidate?.order_line_id),
+    queryFn: async () => {
+      if (!schemaClient || !selectedCandidate?.order_line_id) return null;
+      const { data, error } = await schemaClient
+        .from("cms_order_line")
+        .select("center_stone_source, sub1_stone_source, sub2_stone_source")
+        .eq("order_line_id", selectedCandidate.order_line_id)
+        .maybeSingle();
+      if (error) throw error;
+      return (data ?? null) as OrderStoneSourceRow | null;
+    },
   });
 
   const upsertSnapshot = useRpcMutation<{ ok?: boolean }>({
@@ -2213,10 +2240,21 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
       p_selected_factory_labor_basic_cost_krw: null,
       p_selected_factory_labor_other_cost_krw: null,
       p_selected_factory_total_cost_krw: null,
+      p_factory_billing_shape: hasFactoryStoneSource ? factoryBillingShape : null,
       p_actor_person_id: null,
       p_note: confirmNote || null,
     });
   }
+
+  const hasFactoryStoneSource = useMemo(() => {
+    const row = selectedOrderStoneSourceQuery.data;
+    if (!row) return false;
+    return (
+      row.center_stone_source === "FACTORY" ||
+      row.sub1_stone_source === "FACTORY" ||
+      row.sub2_stone_source === "FACTORY"
+    );
+  }, [selectedOrderStoneSourceQuery.data]);
 
   const busy =
     receiptsQuery.isLoading ||
@@ -3972,6 +4010,17 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                           placeholder="선택 중량(g)"
                           className="h-8 text-xs"
                         />
+                        {hasFactoryStoneSource ? (
+                          <Select
+                            value={factoryBillingShape}
+                            onChange={(e) => setFactoryBillingShape(e.target.value as FactoryBillingShape)}
+                            className="h-8 text-xs"
+                          >
+                            <option value="BUNDLED_PACKAGE">BUNDLED_PACKAGE</option>
+                            <option value="SETTING_ONLY">SETTING_ONLY</option>
+                            <option value="SPLIT">SPLIT</option>
+                          </Select>
+                        ) : null}
                         <Textarea
                           value={confirmNote}
                           onChange={(e) => setConfirmNote(e.target.value)}

@@ -14,6 +14,11 @@ type OrderUpsertPayload = {
   p_sub2_stone_source?: StoneSource | null;
 } & Record<string, unknown>;
 
+type LegacyOrderUpsertPayload = Omit<
+  OrderUpsertPayload,
+  "p_center_stone_source" | "p_sub1_stone_source" | "p_sub2_stone_source"
+>;
+
 type PlatingVariantRow = {
     plating_variant_id?: string | null;
     color_code?: string | null;
@@ -47,7 +52,7 @@ function normalizeStoneSources(payload: OrderUpsertPayload): string | null {
     const name = normalizeName(payload[nameKey]);
     const source = parseSourceInput(payload[sourceKey]);
     if (source === "INVALID") {
-      return `${sourceKey} must be one of SELF | PROVIDED | null`;
+      return `${sourceKey} must be one of SELF | PROVIDED | FACTORY | null`;
     }
     if (!name) {
       payload[sourceKey] = null;
@@ -64,6 +69,14 @@ function getSupabaseAdmin() {
     if (!url || !key) return null;
     return createClient(url, key);
 }
+
+const buildLegacyPayload = (payload: OrderUpsertPayload): LegacyOrderUpsertPayload => {
+  const next: LegacyOrderUpsertPayload = { ...payload };
+  delete next.p_center_stone_source;
+  delete next.p_sub1_stone_source;
+  delete next.p_sub2_stone_source;
+  return next;
+};
 
 
 export async function POST(request: Request) {
@@ -136,7 +149,14 @@ export async function POST(request: Request) {
     );
   }
 
-  const { data, error } = await supabase.rpc("cms_fn_upsert_order_line_v4", typedPayload);
+  let { data, error } = await supabase.rpc("cms_fn_upsert_order_line_v5", typedPayload);
+
+  if (error?.message?.includes("cms_e_order_match_state")) {
+    const legacyPayload = buildLegacyPayload(typedPayload);
+    const fallback = await supabase.rpc("cms_fn_upsert_order_line_v3", legacyPayload);
+    data = fallback.data;
+    error = fallback.error;
+  }
 
   if (error) {
     const err = error as { message: string; details?: string; hint?: string; code?: string };
