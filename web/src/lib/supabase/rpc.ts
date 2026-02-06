@@ -4,19 +4,33 @@ import { assertSupabaseConfig, getSchemaClient } from "@/lib/supabase/client";
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? "";
 
+const resolveRpcName = (fn: string) => {
+  const raw = (fn ?? "").trim();
+  const normalized = raw.replace(/^"|"$/g, "").toLowerCase();
+  if (
+    normalized === "cms_fn_update_repair_v2" ||
+    normalized === "public.cms_fn_update_repair_v2" ||
+    normalized.endsWith(".cms_fn_update_repair_v2")
+  ) {
+    return "cms_fn_update_repair_line_v2";
+  }
+  return raw;
+};
+
 export async function callRpc<T>(fn: string, params: Record<string, unknown>) {
   assertSupabaseConfig();
+  const resolvedFn = resolveRpcName(fn);
 
   // 1) ✅ 우선 supabase-js로 호출 (로그인 후 access_token 자동 반영)
   const schemaClient = getSchemaClient();
   if (schemaClient) {
-    const { data, error } = await schemaClient.rpc(fn as never, params as never);
+    const { data, error } = await schemaClient.rpc(resolvedFn as never, params as never);
     if (error) throw error;
     return data as T;
   }
 
   // 2) ✅ fallback: 기존과 완전히 동일한 anon fetch 방식
-  const url = `${supabaseUrl}/rest/v1/rpc/${fn}`;
+  const url = `${supabaseUrl}/rest/v1/rpc/${resolvedFn}`;
   const res = await fetch(url, {
     method: "POST",
     headers: {
@@ -37,7 +51,7 @@ export async function callRpc<T>(fn: string, params: Record<string, unknown>) {
       errorPayload = await res.text();
     }
     const details = typeof errorPayload === "string" ? errorPayload : JSON.stringify(errorPayload);
-    throw new Error(`RPC ${fn} failed (${res.status}) | ${details}`);
+    throw new Error(`RPC ${resolvedFn} failed (${res.status}) | ${details}`);
   }
 
   const text = await res.text();

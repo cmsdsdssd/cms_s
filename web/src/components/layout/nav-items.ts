@@ -35,12 +35,23 @@ export const navItems: NavItem[] = [
   {
     label: "업무 흐름",
     items: [
-      { label: "① 주문", href: "/orders_main", icon: ClipboardList },
-      { label: "② 영수증/매칭", href: "/new_receipt_line_workbench", icon: ClipboardList },
-      { label: "③ 출고", href: "/shipments_main", icon: PackageCheck },
-      { label: "④ 미수", href: "/ar", icon: CreditCard },
-      { label: "⑤ 미지급", href: "/ap", icon: Calculator },
-      { label: "⑥ AP 정합", href: "/ap/reconcile", icon: Calculator },
+      { label: "주문", href: "/orders_main", icon: ClipboardList },
+      { label: "영수증/매칭", href: "/new_receipt_line_workbench", icon: ClipboardList },
+      { label: "출고", href: "/shipments_main", icon: PackageCheck },
+    ],
+  },
+  {
+    label: "수리",
+    items: [
+      { label: "수리 관리", href: "/repairs", icon: Wrench },
+    ],
+  },
+  {
+    label: "미수",
+    items: [
+      { label: "손님미수", href: "/ar", icon: CreditCard },
+      { label: "공장미수", href: "/ap", icon: Calculator },
+      { label: "공장정합", href: "/ap/reconcile", icon: Calculator },
     ],
   },
   {
@@ -55,12 +66,6 @@ export const navItems: NavItem[] = [
     items: [
       { label: "거래처 관리", href: "/party", icon: Store },
       { label: "시세 관리", href: "/market", icon: TrendingUp },
-    ],
-  },
-  {
-    label: "기타",
-    items: [
-      { label: "수리 관리", href: "/repairs", icon: Wrench },
     ],
   },
 ];

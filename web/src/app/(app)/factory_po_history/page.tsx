@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
+import { Suspense, useCallback, useMemo, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { ActionBar } from "@/components/layout/action-bar";
@@ -83,7 +83,7 @@ const formatTimeKst = (value?: string | null) => {
   }).format(parsed);
 };
 
-export default function FactoryPoHistoryPage() {
+function FactoryPoHistoryPageContent() {
   const schemaClient = getSchemaClient();
   const router = useRouter();
   const pathname = usePathname();
@@ -427,5 +427,13 @@ export default function FactoryPoHistoryPage() {
         )}
       </Modal>
     </div>
+  );
+}
+
+export default function FactoryPoHistoryPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen bg-[var(--background)] px-6 py-6 text-sm text-[var(--muted)]">로딩 중...</div>}>
+      <FactoryPoHistoryPageContent />
+    </Suspense>
   );
 }

@@ -4,11 +4,11 @@ import { Suspense, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
+import { RefreshCw, Search } from "lucide-react";
 
-import { ActionBar } from "@/components/layout/action-bar";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Select, Textarea } from "@/components/ui/field";
+import { Input, Select, Textarea } from "@/components/ui/field";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useRpcMutation } from "@/hooks/use-rpc-mutation";
 import { CONTRACTS } from "@/lib/contracts";
@@ -61,6 +61,110 @@ const renderValue = (value: unknown) => {
   if (typeof value === "number") return new Intl.NumberFormat("ko-KR").format(value);
   if (typeof value === "string" && value.trim()) return value;
   return String(value);
+};
+
+const toSeverityLabel = (severity?: string | null) => {
+  switch (severity?.toUpperCase()) {
+    case "ERROR":
+      return "오류";
+    case "WARN":
+      return "경고";
+    default:
+      return severity ?? "-";
+  }
+};
+
+const toStatusLabel = (status?: string | null) => {
+  switch (status?.toUpperCase()) {
+    case "OPEN":
+      return "미해결";
+    case "ACKED":
+      return "확인완료";
+    case "RESOLVED":
+      return "해결완료";
+    case "IGNORED":
+      return "무시";
+    default:
+      return status ?? "-";
+  }
+};
+
+const toIssueFieldLabel = (key: string) => {
+  switch (key) {
+    case "summary":
+      return "요약";
+    case "issue_type":
+      return "이슈유형";
+    case "severity":
+      return "심각도";
+    case "status":
+      return "상태";
+    case "created_at":
+      return "생성시각";
+    case "vendor_name":
+      return "공장명";
+    case "vendor_party_id":
+      return "공장ID";
+    case "receipt_id":
+      return "영수증ID";
+    case "snapshot_version":
+      return "스냅샷버전";
+    case "calc_version":
+      return "계산버전";
+    case "issue_id":
+      return "이슈ID";
+    case "expected":
+      return "기준값";
+    case "actual":
+      return "실제값";
+    case "acutal":
+      return "실제값";
+    case "diff":
+      return "차이";
+    case "asset_code":
+      return "자산";
+    case "commodity_type":
+      return "자산유형";
+    case "qty":
+      return "수량";
+    case "amount":
+      return "금액";
+    case "vendor":
+      return "공장";
+    case "vendor_id":
+      return "공장ID";
+    case "vendor_code":
+      return "공장코드";
+    case "vendor_region":
+      return "공장권역";
+    case "vendor_mask_code":
+      return "공장마스크코드";
+    case "vendor_seq_no":
+      return "공장순번";
+    case "movement_code":
+      return "전표코드";
+    case "memo":
+      return "메모";
+    case "note":
+      return "비고";
+    default:
+      return key;
+  }
+};
+
+const toAssetLabel = (assetCode?: string | null) => {
+  switch (assetCode) {
+    case "XAU_G":
+      return "금(g)";
+    case "XAG_G":
+      return "은(g)";
+    case "KRW_LABOR":
+      return "공임(원)";
+    case "KRW_MATERIAL":
+      return "소재비(원)";
+    default:
+      return assetCode ?? "-";
+  }
 };
 
 // Normalize status filter (IGNORE → IGNORED)
@@ -120,6 +224,8 @@ function ApReconcileContent() {
   const [selectedIssueId, setSelectedIssueId] = useState<string | null>(null);
   const [ignoreNote, setIgnoreNote] = useState("");
   const [showAllFields, setShowAllFields] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [activeTab, setActiveTab] = useState<"issues" | "detail">("issues");
 
   // ── Vendors Query (Named View) ──
   const vendorsQuery = useQuery({
@@ -198,6 +304,34 @@ function ApReconcileContent() {
   });
 
   const issues = issuesQuery.data ?? [];
+  const vendors = vendorsQuery.data ?? [];
+
+  const filteredVendors = useMemo(() => {
+    const keyword = searchQuery.trim().toLowerCase();
+    if (!keyword) return vendors;
+    return vendors.filter((row) => {
+      const name = (row.vendor_name ?? "").toLowerCase();
+      const region = (row.vendor_region ?? "").toLowerCase();
+      return name.includes(keyword) || region.includes(keyword);
+    });
+  }, [searchQuery, vendors]);
+
+  const selectedVendor = useMemo(
+    () => vendors.find((row) => (row.vendor_party_id ?? "") === selectedVendorId) ?? null,
+    [vendors, selectedVendorId]
+  );
+
+  const vendorSummary = useMemo(() => {
+    return vendors.reduce<{ open: number; error: number; warn: number }>(
+      (acc, row) => {
+        acc.open += Number(row.open_count ?? 0);
+        acc.error += Number(row.error_count ?? 0);
+        acc.warn += Number(row.warn_count ?? 0);
+        return acc;
+      },
+      { open: 0, error: 0, warn: 0 }
+    );
+  }, [vendors]);
 
   // ── Handlers ──
   const handleAck = () => {
@@ -258,112 +392,195 @@ function ApReconcileContent() {
   }, [selectedIssue]);
 
   return (
-    <div className="mx-auto max-w-[1800px] space-y-6 px-4 pb-10 pt-4 md:px-6">
-      <ActionBar title="AP 정합 큐" subtitle="미지급 정합 이슈를 확인하고 처리합니다." />
-
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-12 items-start">
-        {/* Vendor List */}
-        <div className="lg:col-span-3 space-y-4">
-          <Card className="border-none shadow-sm ring-1 ring-black/5">
-            <CardHeader className="border-b border-[var(--panel-border)] bg-[var(--panel)]/50 px-4 py-3">
-              <div className="text-sm font-semibold">공장</div>
-            </CardHeader>
-            <CardBody className="max-h-[70vh] overflow-y-auto p-2">
-              {vendorsQuery.isLoading ? (
-                <div className="space-y-2 p-2">
-                  {Array.from({ length: 6 }).map((_, idx) => (
-                    <div
-                      key={`vendor-skel-${idx}`}
-                      className="rounded-lg border border-[var(--panel-border)] bg-[var(--panel)] p-3"
-                    >
-                      <Skeleton className="h-4 w-2/3" />
-                      <Skeleton className="mt-2 h-3 w-24" />
-                    </div>
-                  ))}
-                </div>
-              ) : (vendorsQuery.data ?? []).length === 0 ? (
-                <div className="flex h-32 items-center justify-center rounded-lg border border-dashed border-[var(--panel-border)] text-sm text-[var(--muted)]">
-                  조회 결과가 없습니다.
-                </div>
-              ) : (
-                <div className="space-y-1.5">
-                  {(vendorsQuery.data ?? []).map((row, idx) => {
-                    const vendorId = row.vendor_party_id ?? "";
-                    const isSelected = vendorId === selectedVendorId;
-                    const openCount = row.open_count ?? 0;
-                    const errorCount = row.error_count ?? 0;
-                    return (
-                      <button
-                        key={`${vendorId}-${idx}`}
-                        type="button"
-                        onClick={() => {
-                          setSelectedVendorId(vendorId);
-                          setSelectedIssueId(null);
-                        }}
-                        className={cn(
-                          "w-full rounded-lg border px-3 py-3 text-left transition-all",
-                          isSelected
-                            ? "border-[var(--primary)] bg-[var(--primary)]/5"
-                            : "border-transparent bg-[var(--panel)] hover:border-[var(--panel-border)]"
-                        )}
-                      >
-                        <div className="flex items-start justify-between gap-2">
-                          <div className="min-w-0">
-                            <div className="truncate text-sm font-semibold text-[var(--foreground)]">
-                              {(row.vendor_name ?? vendorId) || "-"}
-                            </div>
-                            {row.vendor_region && (
-                              <div className="text-xs text-[var(--muted)]">{row.vendor_region}</div>
-                            )}
-                          </div>
-                          <div className="flex flex-col items-end gap-1">
-                            {openCount > 0 && (
-                              <span className="text-xs px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400">
-                                {openCount}
-                              </span>
-                            )}
-                            {errorCount > 0 && (
-                              <span className="text-[10px] px-1 py-0.5 rounded bg-red-100 text-red-600 dark:bg-red-900/30 dark:text-red-400">
-                                ERR {errorCount}
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
-            </CardBody>
-          </Card>
+    <div className="flex h-[calc(100vh-4rem)] overflow-hidden bg-[var(--background)]" id="ap-reconcile.root">
+      <div className="w-80 flex-none border-r border-[var(--panel-border)] flex flex-col bg-[var(--panel)] z-20 shadow-xl">
+        <div className="p-4 border-b border-[var(--panel-border)] space-y-3 bg-[var(--panel)]">
+          <h2 className="text-lg font-bold flex items-center gap-2">
+            <Search className="w-5 h-5" />
+            공장 찾기
+          </h2>
+          <div className="relative">
+            <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-[var(--muted)]" />
+            <Input
+              placeholder="공장명/권역 검색..."
+              className="pl-9 bg-[var(--chip)] border-none"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+            />
+          </div>
         </div>
 
-        {/* Issues List */}
-        <div className="lg:col-span-5 space-y-4">
-          <Card className="border-none shadow-sm ring-1 ring-black/5">
-            <CardHeader className="border-b border-[var(--panel-border)] bg-[var(--panel)]/50 px-4 py-3">
-              <div className="flex items-center justify-between">
-                <div className="text-sm font-semibold">이슈</div>
-                <div className="flex items-center gap-2">
-                  <Select
-                    value={statusFilter}
-                    onChange={(e) => setStatusFilter(normalizeStatusFilter(e.target.value))}
-                  >
-                    <option value="OPEN,ACKED">OPEN/ACKED</option>
-                    <option value="OPEN">OPEN</option>
-                    <option value="ACKED">ACKED</option>
-                    <option value="RESOLVED">RESOLVED</option>
-                    <option value="IGNORED">IGNORED</option>
-                  </Select>
-                  <Select value={severityFilter} onChange={(e) => setSeverityFilter(e.target.value)}>
-                    <option value="ALL">ALL</option>
-                    <option value="ERROR">ERROR</option>
-                    <option value="WARN">WARN</option>
-                  </Select>
+        <div className="px-4 py-3 bg-[var(--chip)] border-b border-[var(--panel-border)] flex justify-between items-center text-xs">
+          <span className="text-[var(--muted)]">열린 정합 이슈</span>
+          <span className="font-bold text-[var(--foreground)]">{vendorSummary.open}</span>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-2 space-y-1.5">
+          {vendorsQuery.isLoading ? (
+            <div className="space-y-2 p-2">
+              {Array.from({ length: 6 }).map((_, idx) => (
+                <div
+                  key={`vendor-skel-${idx}`}
+                  className="rounded-lg border border-[var(--panel-border)] bg-[var(--panel)] p-3"
+                >
+                  <Skeleton className="h-4 w-2/3" />
+                  <Skeleton className="mt-2 h-3 w-24" />
                 </div>
+              ))}
+            </div>
+          ) : filteredVendors.length === 0 ? (
+            <div className="flex h-32 items-center justify-center rounded-lg border border-dashed border-[var(--panel-border)] text-sm text-[var(--muted)]">
+              조회 결과가 없습니다.
+            </div>
+          ) : (
+            filteredVendors.map((row, idx) => {
+              const vendorId = row.vendor_party_id ?? "";
+              const isSelected = vendorId === selectedVendorId;
+              const openCount = row.open_count ?? 0;
+              const errorCount = row.error_count ?? 0;
+              return (
+                <button
+                  key={`${vendorId}-${idx}`}
+                  type="button"
+                  onClick={() => {
+                    setSelectedVendorId(vendorId);
+                    setSelectedIssueId(null);
+                  }}
+                  className={cn(
+                    "w-full rounded-lg border px-3 py-3 text-left transition-all",
+                    isSelected
+                      ? "border-[var(--primary)] bg-[var(--chip)]"
+                      : "border-transparent bg-[var(--panel)] hover:border-[var(--panel-border)]"
+                  )}
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="truncate text-sm font-semibold text-[var(--foreground)]">
+                        {(row.vendor_name ?? vendorId) || "-"}
+                      </div>
+                      {row.vendor_region && (
+                        <div className="text-xs text-[var(--muted)]">{row.vendor_region}</div>
+                      )}
+                    </div>
+                    <div className="flex flex-col items-end gap-1">
+                      {openCount > 0 && (
+                        <span className="text-xs px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400">
+                          {openCount}
+                        </span>
+                      )}
+                      {errorCount > 0 && (
+                        <span className="text-[10px] px-1 py-0.5 rounded bg-red-100 text-red-600 dark:bg-red-900/30 dark:text-red-400">
+                          오류 {errorCount}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                </button>
+              );
+            })
+          )}
+        </div>
+      </div>
+
+      <div className="flex-1 flex flex-col min-w-0 bg-[var(--background)]">
+        <div className="shrink-0 border-b border-[var(--panel-border)] bg-[var(--panel)] p-6 shadow-sm z-10">
+          <div className="flex justify-between items-start mb-6">
+            <div>
+              <div className="flex items-center gap-3 mb-1">
+                <h1 className="text-2xl font-bold tracking-tight">{selectedVendor?.vendor_name ?? "AP 정합 큐"}</h1>
+                <span className="text-xs px-2 py-0.5 rounded-full bg-[var(--chip)] text-[var(--muted)] font-medium">
+                  reconcile
+                </span>
               </div>
-            </CardHeader>
-            <CardBody className="space-y-2 max-h-[60vh] overflow-y-auto">
+              <p className="text-sm text-[var(--muted)] flex items-center gap-2">
+                권역: {selectedVendor?.vendor_region ?? "-"}
+              </p>
+            </div>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                vendorsQuery.refetch();
+                issuesQuery.refetch();
+                issueLegsQuery.refetch();
+              }}
+            >
+              <RefreshCw className="w-4 h-4 mr-2" />
+              새로고침
+            </Button>
+          </div>
+
+          <div className="grid grid-cols-4 gap-4 p-4 rounded-xl bg-[var(--chip)] border border-[var(--panel-border)]">
+            <div>
+              <p className="text-xs font-medium text-[var(--muted)] mb-1">OPEN</p>
+              <p className="text-lg font-bold tabular-nums text-[var(--danger)]">{vendorSummary.open}</p>
+            </div>
+            <div>
+              <p className="text-xs font-medium text-[var(--muted)] mb-1">ERROR</p>
+              <p className="text-lg font-bold tabular-nums">{vendorSummary.error}</p>
+            </div>
+            <div>
+              <p className="text-xs font-medium text-[var(--muted)] mb-1">WARN</p>
+              <p className="text-lg font-bold tabular-nums">{vendorSummary.warn}</p>
+            </div>
+            <div>
+              <p className="text-xs font-medium text-[var(--muted)] mb-1">현재 이슈 수</p>
+              <p className="text-lg font-bold tabular-nums">{issues.length}</p>
+            </div>
+          </div>
+        </div>
+
+        <div className="flex border-b border-[var(--panel-border)] px-6 bg-[var(--panel)] sticky top-0">
+          <button
+            onClick={() => setActiveTab("issues")}
+            className={cn(
+              "px-4 py-3 text-sm font-medium border-b-2 transition-colors",
+              activeTab === "issues"
+                ? "border-[var(--primary)] text-[var(--primary)]"
+                : "border-transparent text-[var(--muted)] hover:text-[var(--foreground)]"
+            )}
+          >
+            이슈 목록
+          </button>
+          <button
+            onClick={() => setActiveTab("detail")}
+            className={cn(
+              "px-4 py-3 text-sm font-medium border-b-2 transition-colors",
+              activeTab === "detail"
+                ? "border-[var(--primary)] text-[var(--primary)]"
+                : "border-transparent text-[var(--muted)] hover:text-[var(--foreground)]"
+            )}
+          >
+            이슈 상세
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-6 space-y-4">
+          {activeTab === "issues" && (
+            <Card className="shadow-sm">
+              <CardHeader className="border-b border-[var(--panel-border)] px-4 py-3">
+                <div className="flex items-center justify-between">
+                  <div className="text-sm font-semibold">이슈</div>
+                  <div className="flex items-center gap-2">
+                    <Select
+                      value={statusFilter}
+                      onChange={(e) => setStatusFilter(normalizeStatusFilter(e.target.value))}
+                    >
+                      <option value="OPEN,ACKED">미해결/확인완료</option>
+                      <option value="OPEN">미해결</option>
+                      <option value="ACKED">확인완료</option>
+                      <option value="RESOLVED">해결완료</option>
+                      <option value="IGNORED">무시</option>
+                    </Select>
+                    <Select value={severityFilter} onChange={(e) => setSeverityFilter(e.target.value)}>
+                      <option value="ALL">전체</option>
+                      <option value="ERROR">오류</option>
+                      <option value="WARN">경고</option>
+                    </Select>
+                  </div>
+                </div>
+              </CardHeader>
+              <CardBody className="space-y-2 max-h-[60vh] overflow-y-auto">
               {issuesQuery.isLoading ? (
                 <Skeleton className="h-20 w-full" />
               ) : issues.length === 0 ? (
@@ -389,10 +606,10 @@ function ApReconcileContent() {
                       <div className="flex items-center justify-between gap-2">
                         <div className="flex items-center gap-2">
                           <span className={cn("text-[10px] px-1.5 py-0.5 rounded font-medium", getSeverityColor(row.severity))}>
-                            {row.severity ?? "-"}
+                            {toSeverityLabel(row.severity)}
                           </span>
                           <span className={cn("text-[10px] px-1.5 py-0.5 rounded", getStatusColor(row.status))}>
-                            {row.status ?? "-"}
+                            {toStatusLabel(row.status)}
                           </span>
                         </div>
                         <span className="text-[10px] text-[var(--muted)]">
@@ -418,15 +635,14 @@ function ApReconcileContent() {
               )}
             </CardBody>
           </Card>
-        </div>
+          )}
 
-        {/* Issue Detail */}
-        <div className="lg:col-span-4 space-y-4">
-          <Card className="border-none shadow-sm ring-1 ring-black/5">
-            <CardHeader className="border-b border-[var(--panel-border)] bg-[var(--panel)]/50 px-4 py-3">
-              <div className="text-sm font-semibold">이슈 상세</div>
-            </CardHeader>
-            <CardBody className="space-y-4">
+          {activeTab === "detail" && (
+            <Card className="shadow-sm">
+              <CardHeader className="border-b border-[var(--panel-border)] px-4 py-3">
+                <div className="text-sm font-semibold">이슈 상세</div>
+              </CardHeader>
+              <CardBody className="space-y-4">
               {!selectedIssue ? (
                 <div className="rounded-md border border-dashed border-[var(--panel-border)] p-4 text-sm text-[var(--muted)]">
                   이슈를 선택하세요.
@@ -437,10 +653,16 @@ function ApReconcileContent() {
                   <div className="space-y-2 text-xs">
                     {priorityEntries.map(([key, value]) => (
                       <div key={key} className="flex items-start justify-between gap-2">
-                        <span className="text-[var(--muted)] shrink-0">{key}</span>
-                        <span className="text-right break-words max-w-[200px]">
-                          {key === "created_at" ? formatDateTimeKst(value as string) : renderValue(value)}
-                        </span>
+                          <span className="text-[var(--muted)] shrink-0">{toIssueFieldLabel(key)}</span>
+                          <span className="text-right break-words max-w-[200px]">
+                          {key === "created_at"
+                            ? formatDateTimeKst(value as string)
+                            : key === "severity"
+                              ? toSeverityLabel(value as string)
+                              : key === "status"
+                                ? toStatusLabel(value as string)
+                                : renderValue(value)}
+                          </span>
                       </div>
                     ))}
                   </div>
@@ -459,9 +681,13 @@ function ApReconcileContent() {
                         <div className="mt-2 space-y-1 text-[11px] max-h-[200px] overflow-y-auto">
                           {restEntries.map(([key, value]) => (
                             <div key={key} className="flex items-start justify-between gap-2">
-                              <span className="text-[var(--muted)] shrink-0">{key}</span>
+                              <span className="text-[var(--muted)] shrink-0">{toIssueFieldLabel(key)}</span>
                               <span className="text-right break-all max-w-[180px] truncate">
-                                {renderValue(value)}
+                                {key === "severity"
+                                  ? toSeverityLabel(value as string)
+                                  : key === "status"
+                                    ? toStatusLabel(value as string)
+                                    : renderValue(value)}
                               </span>
                             </div>
                           ))}
@@ -473,7 +699,7 @@ function ApReconcileContent() {
                   {/* Action Buttons */}
                   <div className="space-y-3 border-t pt-3">
                     <Textarea
-                      placeholder="IGNORE/RESOLVE 메모"
+                      placeholder="무시/해결 메모"
                       value={ignoreNote}
                       onChange={(e) => setIgnoreNote(e.target.value)}
                       className="min-h-[60px]"
@@ -485,7 +711,7 @@ function ApReconcileContent() {
                         onClick={handleAck}
                         disabled={setIssueStatus.isPending}
                       >
-                        ACK
+                        확인
                       </Button>
                       <Button
                         variant="secondary"
@@ -493,7 +719,7 @@ function ApReconcileContent() {
                         onClick={handleIgnore}
                         disabled={setIssueStatus.isPending}
                       >
-                        IGNORE
+                        무시
                       </Button>
                       <Button
                         variant="secondary"
@@ -501,7 +727,7 @@ function ApReconcileContent() {
                         onClick={handleResolve}
                         disabled={setIssueStatus.isPending}
                       >
-                        RESOLVE
+                        해결
                       </Button>
                       <Button
                         size="sm"
@@ -515,7 +741,7 @@ function ApReconcileContent() {
 
                   {/* Leg Details */}
                   <div className="space-y-2 border-t pt-3">
-                    <div className="text-sm font-semibold">Leg 상세</div>
+                    <div className="text-sm font-semibold">레그 상세</div>
                     {issueLegsQuery.isLoading ? (
                       <Skeleton className="h-10 w-full" />
                     ) : (issueLegsQuery.data ?? []).length === 0 ? (
@@ -534,7 +760,7 @@ function ApReconcileContent() {
                           >
                             <div className="flex items-center justify-between mb-2">
                               <span className="px-1.5 py-0.5 rounded bg-[var(--chip)] font-medium">
-                                {String(assetCode)}
+                                {toAssetLabel(typeof assetCode === "string" ? assetCode : String(assetCode))}
                               </span>
                               <span className="font-semibold tabular-nums">
                                 {qty !== null ? renderValue(qty) : "-"}
@@ -546,7 +772,7 @@ function ApReconcileContent() {
                                 .slice(0, 3)
                                 .map(([key, value]) => (
                                   <div key={key} className="flex items-center justify-between gap-2">
-                                    <span>{key}</span>
+                                    <span>{toIssueFieldLabel(key)}</span>
                                     <span className="truncate max-w-[120px]">{renderValue(value)}</span>
                                   </div>
                                 ))}
@@ -558,8 +784,9 @@ function ApReconcileContent() {
                   </div>
                 </>
               )}
-            </CardBody>
-          </Card>
+              </CardBody>
+            </Card>
+          )}
         </div>
       </div>
     </div>

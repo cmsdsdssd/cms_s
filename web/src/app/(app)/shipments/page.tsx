@@ -14,8 +14,10 @@ import { Badge } from "@/components/ui/badge";
 import { Modal } from "@/components/ui/modal";
 import { SearchSelect } from "@/components/ui/search-select";
 import { NumberText } from "@/components/ui/number-text";
+import { ShipmentPricingEvidencePanel } from "@/components/shipments/ShipmentPricingEvidencePanel";
 
 import { CONTRACTS } from "@/lib/contracts";
+import { type StoneSource } from "@/lib/stone-source";
 import { readView } from "@/lib/supabase/read";
 import { getSchemaClient } from "@/lib/supabase/client";
 import { useRpcMutation } from "@/hooks/use-rpc-mutation";
@@ -86,10 +88,13 @@ type OrderLineDetailRow = {
   is_plated?: boolean | null;
   center_stone_name?: string | null;
   center_stone_qty?: number | null;
+  center_stone_source?: StoneSource | null;
   sub1_stone_name?: string | null;
   sub1_stone_qty?: number | null;
+  sub1_stone_source?: StoneSource | null;
   sub2_stone_name?: string | null;
   sub2_stone_qty?: number | null;
+  sub2_stone_source?: StoneSource | null;
   requested_due_date?: string | null;
   priority_code?: string | null;
   memo?: string | null;
@@ -140,6 +145,8 @@ type MasterLookupRow = {
   sub2_stone_name_default?: string | null;
   vendor_name?: string | null;
   material_price?: number | null;
+  labor_base_sell?: number | null;
+  labor_base_cost?: number | null;
   labor_basic?: number | null;
   labor_center?: number | null;
   labor_side1?: number | null;
@@ -270,6 +277,11 @@ const parseNumberInput = (value: string) => {
   return Number.isFinite(parsed) ? parsed : 0;
 };
 
+const normalizeStoneSource = (value: unknown): StoneSource | null => {
+  if (value === "SELF" || value === "PROVIDED") return value;
+  return null;
+};
+
 const formatDateTimeKst = (value?: string | null) => {
   if (!value) return "-";
   const parsed = new Date(value);
@@ -390,6 +402,7 @@ export default function ShipmentsPage() {
   // --- 입력값 ---
   const [weightG, setWeightG] = useState("");
   const [deductionWeightG, setDeductionWeightG] = useState("");
+  const [applyMasterDeductionWhenEmpty, setApplyMasterDeductionWhenEmpty] = useState(true);
   const [baseLabor, setBaseLabor] = useState("");
   const [otherLaborCost, setOtherLaborCost] = useState("");
   const [manualTotalAmountKrw, setManualTotalAmountKrw] = useState("");
@@ -397,6 +410,17 @@ export default function ShipmentsPage() {
   const [extraLaborItems, setExtraLaborItems] = useState<ExtraLaborItem[]>([]);
   const [useManualLabor, setUseManualLabor] = useState(false);
   const [manualLabor, setManualLabor] = useState("");
+
+  const resolveDeductionValue = (
+    deductionText: string,
+    masterDeduct: number,
+    useMasterFallback: boolean
+  ) => {
+    const trimmed = deductionText.trim();
+    if (trimmed !== "") return parseNumberInput(trimmed);
+    if (useMasterFallback) return masterDeduct;
+    return 0;
+  };
 
   // --- confirm modal ---
   const [confirmModalOpen, setConfirmModalOpen] = useState(false);
@@ -615,7 +639,7 @@ export default function ShipmentsPage() {
       const { data, error } = await schemaClient
         .from("cms_order_line")
         .select(
-          "order_line_id, model_name, model_name_raw, color, size, qty, is_plated, center_stone_name, center_stone_qty, sub1_stone_name, sub1_stone_qty, sub2_stone_name, sub2_stone_qty, requested_due_date, priority_code, memo, status, source_channel, material_code, match_state, created_at, updated_at"
+          "order_line_id, model_name, model_name_raw, color, size, qty, is_plated, center_stone_name, center_stone_qty, center_stone_source, sub1_stone_name, sub1_stone_qty, sub1_stone_source, sub2_stone_name, sub2_stone_qty, sub2_stone_source, requested_due_date, priority_code, memo, status, source_channel, material_code, match_state, created_at, updated_at"
         )
         .eq("order_line_id", orderLineId)
         .maybeSingle();
@@ -638,6 +662,11 @@ export default function ShipmentsPage() {
     },
   });
 
+  const hasReceiptDeduction = useMemo(() => {
+    const value = receiptMatchPrefillQuery.data?.receipt_deduction_weight_g;
+    return value !== null && value !== undefined;
+  }, [receiptMatchPrefillQuery.data?.receipt_deduction_weight_g]);
+
   useEffect(() => {
     if (prefillQuery.data) {
       console.log("[Prefill Data] Loaded:", prefillQuery.data);
@@ -657,6 +686,9 @@ export default function ShipmentsPage() {
     }
     if (data.receipt_deduction_weight_g !== null && data.receipt_deduction_weight_g !== undefined) {
       setDeductionWeightG(String(data.receipt_deduction_weight_g));
+      setApplyMasterDeductionWhenEmpty(false);
+    } else {
+      setApplyMasterDeductionWhenEmpty(true);
     }
     if (data.shipment_base_labor_krw !== null && data.shipment_base_labor_krw !== undefined) {
       setBaseLabor(String(data.shipment_base_labor_krw));
@@ -783,6 +815,7 @@ export default function ShipmentsPage() {
 
     setWeightG("");
     setDeductionWeightG("");
+    setApplyMasterDeductionWhenEmpty(true);
     setBaseLabor("");
     setOtherLaborCost("");
     setManualTotalAmountKrw("");
@@ -839,6 +872,9 @@ export default function ShipmentsPage() {
     }
     if (currentLine.deduction_weight_g !== null && currentLine.deduction_weight_g !== undefined) {
       setDeductionWeightG(String(currentLine.deduction_weight_g));
+      if (hasReceiptDeduction) setApplyMasterDeductionWhenEmpty(false);
+    } else if (!hasReceiptDeduction) {
+      setApplyMasterDeductionWhenEmpty(true);
     }
     if (currentLine.base_labor_krw !== null && currentLine.base_labor_krw !== undefined) {
       setBaseLabor(String(currentLine.base_labor_krw));
@@ -859,7 +895,7 @@ export default function ShipmentsPage() {
       setIsManualTotalOverride(false);
       setManualTotalAmountKrw("");
     }
-  }, [confirmModalOpen, currentLine]);
+  }, [confirmModalOpen, currentLine, hasReceiptDeduction]);
 
   const shipmentHeaderQuery = useQuery({
     queryKey: ["shipment-header", normalizedShipmentId, confirmModalOpen, isStorePickup],
@@ -966,9 +1002,10 @@ export default function ShipmentsPage() {
     }
     const baseValue = parseNumberInput(baseLabor);
     const laborValue = resolvedTotalLabor;
-    const deductionText = (deductionWeightG ?? "").trim();
+    const deductionText = deductionWeightG ?? "";
     const masterDeduct = Number(masterLookupQuery.data?.deduction_weight_default_g ?? 0);
-    const deductionValue = deductionText === "" ? masterDeduct : parseNumberInput(deductionText);
+    const useMasterDeductionFallback = !hasReceiptDeduction && applyMasterDeductionWhenEmpty;
+    const deductionValue = resolveDeductionValue(deductionText, masterDeduct, useMasterDeductionFallback);
     if (Number.isNaN(weightValue) || (allowZeroWeight ? weightValue < 0 : weightValue <= 0)) {
       toast.error("중량(g)을 올바르게 입력해주세요.");
       return;
@@ -1314,6 +1351,7 @@ export default function ShipmentsPage() {
     setDebouncedQuery("");
     setWeightG("");
     setDeductionWeightG("");
+    setApplyMasterDeductionWhenEmpty(true);
     setBaseLabor("");
     setExtraLaborItems([]);
     setManualTotalAmountKrw("");
@@ -1362,9 +1400,10 @@ export default function ShipmentsPage() {
 
     // ✅ 확정 직전, 현재 라인의 차감중량을 한번 더 저장 (모달에서 수정했을 수 있음)
     if (currentShipmentLineId) {
-      const dText = (deductionWeightG ?? "").trim();
+      const dText = deductionWeightG ?? "";
       const masterDeduct = Number(masterLookupQuery.data?.deduction_weight_default_g ?? 0);
-      const dValue = dText === "" ? masterDeduct : Number(dText);
+      const useMasterDeductionFallback = !hasReceiptDeduction && applyMasterDeductionWhenEmpty;
+      const dValue = resolveDeductionValue(dText, masterDeduct, useMasterDeductionFallback);
 
       if (!Number.isFinite(dValue) || Number.isNaN(dValue) || dValue < 0) {
         toast.error("차감중량(g)을 올바르게 입력해주세요.");
@@ -1494,10 +1533,13 @@ export default function ShipmentsPage() {
 
 
   const resolvedDeductionG = useMemo(() => {
-    const t = (deductionWeightG ?? "").trim();
-    if (t === "") return Number(master?.deduction_weight_default_g ?? 0);
-    return parseNumberInput(t);
-  }, [deductionWeightG, master?.deduction_weight_default_g]);
+    const useMasterDeductionFallback = !hasReceiptDeduction && applyMasterDeductionWhenEmpty;
+    return resolveDeductionValue(
+      deductionWeightG ?? "",
+      Number(master?.deduction_weight_default_g ?? 0),
+      useMasterDeductionFallback
+    );
+  }, [deductionWeightG, master?.deduction_weight_default_g, hasReceiptDeduction, applyMasterDeductionWhenEmpty]);
 
   const resolvedNetWeightG = useMemo(() => {
     const w = parseNumberInput(weightG);
@@ -1521,9 +1563,51 @@ export default function ShipmentsPage() {
   );
 
   const resolvedBaseLaborCost = useMemo(() => {
-    const value = receiptMatchPrefillQuery.data?.selected_factory_labor_basic_cost_krw;
+    const value =
+      receiptMatchPrefillQuery.data?.selected_factory_labor_basic_cost_krw ??
+      receiptMatchPrefillQuery.data?.shipment_base_labor_krw;
     return value === null || value === undefined ? null : Number(value);
   }, [receiptMatchPrefillQuery.data]);
+
+  const baseLaborCostSource = useMemo(() => {
+    if (receiptMatchPrefillQuery.data?.selected_factory_labor_basic_cost_krw !== null && receiptMatchPrefillQuery.data?.selected_factory_labor_basic_cost_krw !== undefined) {
+      return "receipt" as const;
+    }
+    if (receiptMatchPrefillQuery.data?.shipment_base_labor_krw !== null && receiptMatchPrefillQuery.data?.shipment_base_labor_krw !== undefined) {
+      return "match" as const;
+    }
+    return "none" as const;
+  }, [
+    receiptMatchPrefillQuery.data?.selected_factory_labor_basic_cost_krw,
+    receiptMatchPrefillQuery.data?.shipment_base_labor_krw,
+  ]);
+
+  const masterBaseSell = useMemo(() => {
+    const value =
+      masterLookupQuery.data?.labor_base_sell ??
+      masterLookupQuery.data?.labor_basic;
+    return value === null || value === undefined ? null : Number(value);
+  }, [masterLookupQuery.data?.labor_base_sell, masterLookupQuery.data?.labor_basic]);
+
+  const masterBaseCost = useMemo(() => {
+    const value = masterLookupQuery.data?.labor_base_cost;
+    return value === null || value === undefined ? null : Number(value);
+  }, [masterLookupQuery.data?.labor_base_cost]);
+
+  const masterBaseMargin = useMemo(() => {
+    if (masterBaseSell === null || masterBaseCost === null) return null;
+    return masterBaseSell - masterBaseCost;
+  }, [masterBaseSell, masterBaseCost]);
+
+  const baseMarginSource = useMemo(
+    () => (masterBaseMargin === null ? "none" as const : "master" as const),
+    [masterBaseMargin]
+  );
+
+  const isBaseOverridden = useMemo(() => {
+    if (masterBaseMargin === null || resolvedBaseLaborCost === null) return false;
+    return Math.round(resolvedBaseLaborCost + masterBaseMargin) !== Math.round(resolvedBaseLabor);
+  }, [masterBaseMargin, resolvedBaseLaborCost, resolvedBaseLabor]);
 
   const resolvedBaseLaborMargin = useMemo(() => {
     if (resolvedBaseLaborCost === null) return null;
@@ -1548,6 +1632,66 @@ export default function ShipmentsPage() {
       amount: parseNumberInput(item.amount),
     }));
   }, [extraLaborItems]);
+
+  const stoneEvidenceRows = useMemo(
+    () => [
+      {
+        role: "CENTER" as const,
+        supply: normalizeStoneSource(orderLineDetailQuery.data?.center_stone_source),
+        qtyReceipt: receiptMatchPrefillQuery.data?.stone_center_qty ?? null,
+        qtyOrder: orderLineDetailQuery.data?.center_stone_qty ?? null,
+        qtyMaster: masterLookupQuery.data?.center_qty_default ?? null,
+        unitCostReceipt: receiptMatchPrefillQuery.data?.stone_center_unit_cost_krw ?? null,
+        marginPerUnit: formatMargin(masterLookupQuery.data?.labor_center, masterLookupQuery.data?.labor_center_cost),
+      },
+      {
+        role: "SUB1" as const,
+        supply: normalizeStoneSource(orderLineDetailQuery.data?.sub1_stone_source),
+        qtyReceipt: receiptMatchPrefillQuery.data?.stone_sub1_qty ?? null,
+        qtyOrder: orderLineDetailQuery.data?.sub1_stone_qty ?? null,
+        qtyMaster: masterLookupQuery.data?.sub1_qty_default ?? null,
+        unitCostReceipt: receiptMatchPrefillQuery.data?.stone_sub1_unit_cost_krw ?? null,
+        marginPerUnit: formatMargin(masterLookupQuery.data?.labor_side1, masterLookupQuery.data?.labor_sub1_cost),
+      },
+      {
+        role: "SUB2" as const,
+        supply: normalizeStoneSource(orderLineDetailQuery.data?.sub2_stone_source),
+        qtyReceipt: receiptMatchPrefillQuery.data?.stone_sub2_qty ?? null,
+        qtyOrder: orderLineDetailQuery.data?.sub2_stone_qty ?? null,
+        qtyMaster: masterLookupQuery.data?.sub2_qty_default ?? null,
+        unitCostReceipt: receiptMatchPrefillQuery.data?.stone_sub2_unit_cost_krw ?? null,
+        marginPerUnit: formatMargin(masterLookupQuery.data?.labor_side2, masterLookupQuery.data?.labor_sub2_cost),
+      },
+    ],
+    [
+      orderLineDetailQuery.data?.center_stone_source,
+      orderLineDetailQuery.data?.center_stone_qty,
+      orderLineDetailQuery.data?.sub1_stone_source,
+      orderLineDetailQuery.data?.sub1_stone_qty,
+      orderLineDetailQuery.data?.sub2_stone_source,
+      orderLineDetailQuery.data?.sub2_stone_qty,
+      receiptMatchPrefillQuery.data?.stone_center_qty,
+      receiptMatchPrefillQuery.data?.stone_center_unit_cost_krw,
+      receiptMatchPrefillQuery.data?.stone_sub1_qty,
+      receiptMatchPrefillQuery.data?.stone_sub1_unit_cost_krw,
+      receiptMatchPrefillQuery.data?.stone_sub2_qty,
+      receiptMatchPrefillQuery.data?.stone_sub2_unit_cost_krw,
+      masterLookupQuery.data?.center_qty_default,
+      masterLookupQuery.data?.labor_center,
+      masterLookupQuery.data?.labor_center_cost,
+      masterLookupQuery.data?.sub1_qty_default,
+      masterLookupQuery.data?.labor_side1,
+      masterLookupQuery.data?.labor_sub1_cost,
+      masterLookupQuery.data?.sub2_qty_default,
+      masterLookupQuery.data?.labor_side2,
+      masterLookupQuery.data?.labor_sub2_cost,
+    ]
+  );
+
+  const evidenceExtraLaborItems = useMemo(
+    () => currentLine?.extra_labor_items ?? extraLaborPayload,
+    [currentLine?.extra_labor_items, extraLaborPayload]
+  );
 
   const masterLaborTotal =
     (master?.labor_basic ?? 0) +
@@ -1933,100 +2077,23 @@ export default function ShipmentsPage() {
                             )}
                           </div>
                         </div>
-                        <div className="rounded-lg border border-[var(--panel-border)] bg-[var(--panel)] p-3">
-                          <div className="text-xs font-semibold text-[var(--muted)] mb-3">매칭 정보 입력</div>
-                          <div className="grid grid-cols-2 gap-3 text-xs">
-                            <div className="space-y-1">
-                              <span className="text-[var(--muted)]">매칭 상태</span>
-                              <div className="font-medium">{receiptMatchPrefillQuery.data?.status ?? "-"}</div>
-                            </div>
-                            <div className="space-y-1">
-                              <span className="text-[var(--muted)]">매칭일</span>
-                              <div className="font-medium tabular-nums">
-                                {receiptMatchPrefillQuery.data?.confirmed_at
-                                  ? formatDateCompact(receiptMatchPrefillQuery.data.confirmed_at)
-                                  : "-"}
-                              </div>
-                            </div>
-                            <div className="space-y-1">
-                              <span className="text-[var(--muted)]">실측 중량(g)</span>
-                              <div className="font-medium">{receiptMatchPrefillQuery.data?.receipt_weight_g ?? "-"}</div>
-                            </div>
-                            <div className="space-y-1">
-                              <span className="text-[var(--muted)]">공제 중량(g)</span>
-                              <div className="font-medium">
-                                {receiptMatchPrefillQuery.data?.receipt_deduction_weight_g ?? "-"}
-                              </div>
-                            </div>
-                            <div className="space-y-1">
-                              <span className="text-[var(--muted)]">선택 중량(g)</span>
-                              <div className="font-medium">{receiptMatchPrefillQuery.data?.selected_weight_g ?? "-"}</div>
-                            </div>
-                            <div className="space-y-1">
-                              <span className="text-[var(--muted)]">선택 소재</span>
-                              <div className="font-medium">
-                                {receiptMatchPrefillQuery.data?.selected_material_code ?? "-"}
-                              </div>
-                            </div>
-                            <div className="space-y-1">
-                              <span className="text-[var(--muted)]">기본 공임(매칭)</span>
-                              <div className="font-medium">
-                                {receiptMatchPrefillQuery.data?.selected_factory_labor_basic_cost_krw ?? "-"}
-                              </div>
-                            </div>
-                            <div className="space-y-1">
-                              <span className="text-[var(--muted)]">추가 공임(매칭)</span>
-                              <div className="font-medium">
-                                {receiptMatchPrefillQuery.data?.selected_factory_labor_other_cost_krw ?? "-"}
-                              </div>
-                            </div>
-                            <div className="space-y-1">
-                              <span className="text-[var(--muted)]">합계 공임(매칭)</span>
-                              <div className="font-medium">
-                                {receiptMatchPrefillQuery.data?.selected_factory_total_cost_krw ?? "-"}
-                              </div>
-                            </div>
-                            <div className="space-y-1">
-                              <span className="text-[var(--muted)]">출고 기본 공임</span>
-                              <div className="font-medium">
-                                {receiptMatchPrefillQuery.data?.shipment_base_labor_krw ?? "-"}
-                              </div>
-                            </div>
-                            <div className="space-y-1">
-                              <span className="text-[var(--muted)]">출고 추가 공임</span>
-                              <div className="font-medium">
-                                {receiptMatchPrefillQuery.data?.shipment_extra_labor_krw ?? "-"}
-                              </div>
-                            </div>
-                            <div className="space-y-1">
-                              <span className="text-[var(--muted)]">중심석</span>
-                              <div className="font-medium">
-                                {orderLineDetailQuery.data?.center_stone_name ?? masterLookupQuery.data?.center_stone_name_default ?? "-"} · {formatOptionalNumber(receiptMatchPrefillQuery.data?.stone_center_qty ?? orderLineDetailQuery.data?.center_stone_qty)}
-                              </div>
-                              <div className="text-[10px] text-[var(--muted)]">
-                                원가 {formatOptionalNumber(receiptMatchPrefillQuery.data?.stone_center_unit_cost_krw)} · 마진 {formatOptionalNumber(formatMargin(masterLookupQuery.data?.labor_center, masterLookupQuery.data?.labor_center_cost))}
-                              </div>
-                            </div>
-                            <div className="space-y-1">
-                              <span className="text-[var(--muted)]">보조1석</span>
-                              <div className="font-medium">
-                                {orderLineDetailQuery.data?.sub1_stone_name ?? masterLookupQuery.data?.sub1_stone_name_default ?? "-"} · {formatOptionalNumber(receiptMatchPrefillQuery.data?.stone_sub1_qty ?? orderLineDetailQuery.data?.sub1_stone_qty)}
-                              </div>
-                              <div className="text-[10px] text-[var(--muted)]">
-                                원가 {formatOptionalNumber(receiptMatchPrefillQuery.data?.stone_sub1_unit_cost_krw)} · 마진 {formatOptionalNumber(formatMargin(masterLookupQuery.data?.labor_side1, masterLookupQuery.data?.labor_sub1_cost))}
-                              </div>
-                            </div>
-                            <div className="space-y-1">
-                              <span className="text-[var(--muted)]">보조2석</span>
-                              <div className="font-medium">
-                                {orderLineDetailQuery.data?.sub2_stone_name ?? masterLookupQuery.data?.sub2_stone_name_default ?? "-"} · {formatOptionalNumber(receiptMatchPrefillQuery.data?.stone_sub2_qty ?? orderLineDetailQuery.data?.sub2_stone_qty)}
-                              </div>
-                              <div className="text-[10px] text-[var(--muted)]">
-                                원가 {formatOptionalNumber(receiptMatchPrefillQuery.data?.stone_sub2_unit_cost_krw)} · 마진 {formatOptionalNumber(formatMargin(masterLookupQuery.data?.labor_side2, masterLookupQuery.data?.labor_sub2_cost))}
-                              </div>
-                            </div>
-                          </div>
-                        </div>
+                        <ShipmentPricingEvidencePanel
+                          className="min-w-0"
+                          baseLaborSellKrw={resolvedBaseLabor}
+                          factoryBasicCostKrw={resolvedBaseLaborCost}
+                          masterBaseSellKrw={masterBaseSell}
+                          masterBaseCostKrw={masterBaseCost}
+                          masterBaseMarginKrw={masterBaseMargin}
+                          baseCostSource={baseLaborCostSource}
+                          baseMarginSource={baseMarginSource}
+                          isBaseOverridden={isBaseOverridden}
+                          extraLaborSellKrw={resolvedExtraLaborTotal}
+                          factoryOtherCostBaseKrw={resolvedOtherLaborCost}
+                          stoneRows={stoneEvidenceRows}
+                          extraLaborItems={evidenceExtraLaborItems}
+                          expectedBaseLaborSellKrw={resolvedBaseLabor}
+                          expectedExtraLaborSellKrw={resolvedExtraLaborTotal}
+                        />
                         <div className="rounded-lg border border-[var(--panel-border)] bg-[var(--panel)] p-3">
                           <div className="text-xs font-semibold text-[var(--muted)] mb-2">비고</div>
                           <div className="text-sm font-semibold text-[var(--foreground)] whitespace-pre-wrap min-h-[48px]">
@@ -2043,6 +2110,7 @@ export default function ShipmentsPage() {
                   )}
                 </CardBody>
               </Card>
+
             </div>
 
             {/* Right Panel: Detail & Input */}
@@ -2304,6 +2372,23 @@ export default function ShipmentsPage() {
                               inputMode="decimal"
                               className="tabular-nums text-lg h-12"
                             />
+                            {hasReceiptDeduction ? (
+                              <div className="text-[11px] text-[var(--muted)]">
+                                영수증 차감중량 사용 중 (마스터 자동 차감 미적용)
+                              </div>
+                            ) : Number(master?.deduction_weight_default_g ?? 0) > 0 ? (
+                              <label className="flex items-center gap-2 text-[11px] text-[var(--muted)]">
+                                <input
+                                  type="checkbox"
+                                  checked={applyMasterDeductionWhenEmpty}
+                                  onChange={(e) => setApplyMasterDeductionWhenEmpty(e.target.checked)}
+                                  className="accent-[var(--primary)]"
+                                />
+                                차감중량 비었을 때 마스터 차감({master?.deduction_weight_default_g}) 적용
+                              </label>
+                            ) : (
+                              <div className="text-[11px] text-[var(--muted)]">마스터 차감중량 없음</div>
+                            )}
                           </div>
                           <div className="space-y-2">
                             <div className="flex items-center justify-between text-sm font-medium text-[var(--foreground)]">
@@ -2399,6 +2484,7 @@ export default function ShipmentsPage() {
                             setDebouncedQuery("");
                             setWeightG("");
                             setDeductionWeightG("");
+                            setApplyMasterDeductionWhenEmpty(true);
                             setBaseLabor("");
                             setOtherLaborCost("");
                             setExtraLaborItems([]);
@@ -2566,8 +2652,23 @@ export default function ShipmentsPage() {
                       onChange={(e) => setDeductionWeightG(e.target.value)}
                       inputMode="decimal"
                     />
-                    <span className="text-[10px] text-[var(--primary)]">(마스터: {master?.deduction_weight_default_g ?? "-"})</span>
+                    {hasReceiptDeduction ? (
+                      <span className="text-[10px] text-[var(--muted)]">영수증 차감 적용</span>
+                    ) : (
+                      <span className="text-[10px] text-[var(--primary)]">(마스터: {master?.deduction_weight_default_g ?? "-"})</span>
+                    )}
                   </div>
+                  {!hasReceiptDeduction && Number(master?.deduction_weight_default_g ?? 0) > 0 ? (
+                    <label className="mt-1 flex items-center gap-1 text-[10px] text-[var(--muted)]">
+                      <input
+                        type="checkbox"
+                        checked={applyMasterDeductionWhenEmpty}
+                        onChange={(e) => setApplyMasterDeductionWhenEmpty(e.target.checked)}
+                        className="accent-[var(--primary)]"
+                      />
+                      빈 값이면 마스터 차감 적용
+                    </label>
+                  ) : null}
                 </div>
                 <div>
                   <span className="text-xs text-[var(--primary)] block mb-1">기본공임 (원)+마진</span>

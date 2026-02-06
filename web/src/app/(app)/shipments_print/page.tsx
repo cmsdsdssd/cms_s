@@ -153,6 +153,26 @@ const getKstDateTime = () => {
   }).format(now);
 };
 
+const toKstPrintTimestamp = (value: Date) =>
+  new Intl.DateTimeFormat("sv-SE", {
+    timeZone: "Asia/Seoul",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  }).format(value).replace(" ", "-");
+
+const normalizePrintedAt = (raw: string) => {
+  const text = raw.trim();
+  if (/^\d{4}-\d{2}-\d{2}-\d{2}:\d{2}:\d{2}$/.test(text)) return text;
+  const parsed = new Date(text);
+  if (Number.isNaN(parsed.getTime())) return "";
+  return toKstPrintTimestamp(parsed);
+};
+
 const isValidYmd = (value: string) => /^\d{4}-\d{2}-\d{2}$/.test(value);
 
 const shiftYmd = (ymd: string, delta: number) =>
@@ -276,7 +296,12 @@ function ShipmentsPrintContent() {
   const filterPartyId = (searchParams.get("party_id") ?? "").trim();
 
   const dateParam = (searchParams.get("date") ?? "").trim();
+  const printedAtParam = (searchParams.get("printed_at") ?? "").trim();
   const today = useMemo(() => (isValidYmd(dateParam) ? dateParam : getKstYmd()), [dateParam]);
+  const printedAtLabel = useMemo(() => {
+    const normalized = normalizePrintedAt(printedAtParam);
+    return normalized || toKstPrintTimestamp(new Date());
+  }, [printedAtParam]);
   const todayStartIso = useMemo(() => getKstStartIso(today), [today]);
   const todayEndIso = useMemo(() => getKstNextStartIso(today), [today]);
   const todayStartMs = useMemo(() => new Date(todayStartIso).getTime(), [todayStartIso]);
@@ -756,7 +781,7 @@ function ShipmentsPrintContent() {
                       <div className="h-full border-r border-dashed border-neutral-300 pr-4">
                         <ReceiptPrintHalf
                           partyName={page.partyName}
-                          dateLabel={today}
+                          dateLabel={printedAtLabel}
                           lines={page.lines}
                           summaryRows={[
                             { label: "합계", value: page.totals },
@@ -770,7 +795,7 @@ function ShipmentsPrintContent() {
                       <div className="h-full pl-4">
                         <ReceiptPrintHalf
                           partyName={page.partyName}
-                          dateLabel={today}
+                          dateLabel={printedAtLabel}
                           lines={page.lines}
                           summaryRows={[
                             { label: "합계", value: page.totals },

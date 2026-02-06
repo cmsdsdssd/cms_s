@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/field";
 import { Badge } from "@/components/ui/badge";
 import { CONTRACTS } from "@/lib/contracts";
+import { isStoneSource, type StoneSource } from "@/lib/stone-source";
 import { getSchemaClient } from "@/lib/supabase/client";
 import { callRpc } from "@/lib/supabase/rpc";
 import { cn } from "@/lib/utils";
@@ -78,10 +79,13 @@ type OrderDetailRow = {
   qty?: number | null;
   center_stone_name?: string | null;
   center_stone_qty?: number | null;
+  center_stone_source?: StoneSource | null;
   sub1_stone_name?: string | null;
   sub1_stone_qty?: number | null;
+  sub1_stone_source?: StoneSource | null;
   sub2_stone_name?: string | null;
   sub2_stone_qty?: number | null;
+  sub2_stone_source?: StoneSource | null;
   is_plated?: boolean | null;
   plating_color_code?: string | null;
   memo?: string | null;
@@ -110,10 +114,13 @@ type OrderUpsertPayload = {
   p_order_line_id: string | null;
   p_center_stone_name: string | null;
   p_center_stone_qty: number | null | undefined;
+  p_center_stone_source: StoneSource | null;
   p_sub1_stone_name: string | null;
   p_sub1_stone_qty: number | null | undefined;
+  p_sub1_stone_source: StoneSource | null;
   p_sub2_stone_name: string | null;
   p_sub2_stone_qty: number | null | undefined;
+  p_sub2_stone_source: StoneSource | null;
   p_actor_person_id: string | null;
 };
 
@@ -136,10 +143,13 @@ type GridRow = {
   qty: string;
   center_stone: string;
   center_qty: string;
+  center_stone_source: StoneSource | "";
   sub1_stone: string;
   sub1_qty: string;
+  sub1_stone_source: StoneSource | "";
   sub2_stone: string;
   sub2_qty: string;
+  sub2_stone_source: StoneSource | "";
   // Plating now supports multiple: P, G, W, B
   plating_p: boolean;
   plating_g: boolean;
@@ -173,6 +183,12 @@ type SuggestField = "client" | "model";
 const PAGE_SIZE = 10;
 const INITIAL_PAGES = 1;
 const EMPTY_ROWS = PAGE_SIZE * INITIAL_PAGES;
+
+// Manual regression checklist (stone/source + workbench v2):
+// 1) Legacy order without stone source: open and save without error.
+// 2) New order with center stone PROVIDED: save, reload, and verify source persists.
+// 3) Workbench confirm calls v2 and creates shipment draft.
+// 4) missing_unit_cost_warn=true shows warning toast.
 
 const createRowId = () => {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
@@ -229,10 +245,13 @@ const createEmptyRow = (index: number): GridRow => ({
   qty: "1",
   center_stone: "",
   center_qty: "",
+  center_stone_source: "",
   sub1_stone: "",
   sub1_qty: "",
+  sub1_stone_source: "",
   sub2_stone: "",
   sub2_qty: "",
+  sub2_stone_source: "",
   plating_p: false,
   plating_g: false,
   plating_w: false,
@@ -252,6 +271,34 @@ const normalizeText = (value: string) => value.trim();
 const normalizeTextOrNull = (value: string) => {
   const trimmed = value.trim();
   return trimmed === "" ? null : trimmed;
+};
+const normalizeStoneSourceOrEmpty = (value: unknown): StoneSource | "" =>
+  isStoneSource(value) ? value : "";
+const resolveStoneSourceForPayload = (
+  stoneName: string | null,
+  source: StoneSource | ""
+): StoneSource | null => {
+  if (!stoneName) return null;
+  return source || "SELF";
+};
+const nextStonePatch = (
+  nameKey: "center_stone" | "sub1_stone" | "sub2_stone",
+  nextName: string,
+  currentSource: StoneSource | ""
+): Partial<GridRow> => {
+  const apply = (sourceValue: StoneSource | "") => {
+    if (nameKey === "center_stone") {
+      return { center_stone: nextName, center_stone_source: sourceValue };
+    }
+    if (nameKey === "sub1_stone") {
+      return { sub1_stone: nextName, sub1_stone_source: sourceValue };
+    }
+    return { sub2_stone: nextName, sub2_stone_source: sourceValue };
+  };
+  if (!nextName.trim()) {
+    return apply("");
+  }
+  return apply(currentSource || "SELF");
 };
 const normalizeSearchText = (value: string) => value.trim().toLowerCase();
 const getOrderedMatchPositions = (label: string, query: string): number[] | null => {
@@ -540,6 +587,9 @@ function OrdersPageContent() {
     const centerStoneQty = toNumber(row.center_qty);
     const sub1StoneQty = toNumber(row.sub1_qty);
     const sub2StoneQty = toNumber(row.sub2_qty);
+    const centerStoneSource = resolveStoneSourceForPayload(centerStoneName, row.center_stone_source);
+    const sub1StoneSource = resolveStoneSourceForPayload(sub1StoneName, row.sub1_stone_source);
+    const sub2StoneSource = resolveStoneSourceForPayload(sub2StoneName, row.sub2_stone_source);
 
     return {
       p_customer_party_id: row.client_id,
@@ -559,10 +609,13 @@ function OrdersPageContent() {
       p_order_line_id: row.order_line_id ?? null,
       p_center_stone_name: centerStoneName,
       p_center_stone_qty: centerStoneName ? centerStoneQty : null,
+      p_center_stone_source: centerStoneSource,
       p_sub1_stone_name: sub1StoneName,
       p_sub1_stone_qty: sub1StoneName ? sub1StoneQty : null,
+      p_sub1_stone_source: sub1StoneSource,
       p_sub2_stone_name: sub2StoneName,
       p_sub2_stone_qty: sub2StoneName ? sub2StoneQty : null,
+      p_sub2_stone_source: sub2StoneSource,
       p_actor_person_id: actorId || null,
     };
   }
@@ -675,10 +728,13 @@ function OrdersPageContent() {
           qty: String(order.qty ?? ""),
           center_stone: order.center_stone_name ?? "",
           center_qty: String(order.center_stone_qty ?? ""),
+          center_stone_source: normalizeStoneSourceOrEmpty(order.center_stone_source),
           sub1_stone: order.sub1_stone_name ?? "",
           sub1_qty: String(order.sub1_stone_qty ?? ""),
+          sub1_stone_source: normalizeStoneSourceOrEmpty(order.sub1_stone_source),
           sub2_stone: order.sub2_stone_name ?? "",
           sub2_qty: String(order.sub2_stone_qty ?? ""),
+          sub2_stone_source: normalizeStoneSourceOrEmpty(order.sub2_stone_source),
           plating_p,
           plating_g,
           plating_w,
@@ -729,6 +785,7 @@ function OrdersPageContent() {
           .from("cms_order_line")
           .select(
             "order_line_id, customer_party_id, matched_master_id, model_name, model_name_raw, suffix, color, material_code, size, qty, center_stone_name, center_stone_qty, sub1_stone_name, sub1_stone_qty, sub2_stone_name, sub2_stone_qty, is_plated, plating_color_code, memo, created_at, status"
+            + ", center_stone_source, sub1_stone_source, sub2_stone_source"
           )
           .order("created_at", { ascending: false });
 
@@ -844,10 +901,13 @@ function OrdersPageContent() {
             qty: String(order.qty ?? ""),
             center_stone: order.center_stone_name ?? "",
             center_qty: String(order.center_stone_qty ?? ""),
+            center_stone_source: normalizeStoneSourceOrEmpty(order.center_stone_source),
             sub1_stone: order.sub1_stone_name ?? "",
             sub1_qty: String(order.sub1_stone_qty ?? ""),
+            sub1_stone_source: normalizeStoneSourceOrEmpty(order.sub1_stone_source),
             sub2_stone: order.sub2_stone_name ?? "",
             sub2_qty: String(order.sub2_stone_qty ?? ""),
+            sub2_stone_source: normalizeStoneSourceOrEmpty(order.sub2_stone_source),
             plating_p,
             plating_g,
             plating_w,
@@ -1226,6 +1286,14 @@ function OrdersPageContent() {
   const validateRow = (row: GridRow): boolean => {
     let isValid = true;
     const platingStr = getPlatingString(row);
+    const validateStoneQty = (stoneName: string, qtyText: string, label: string) => {
+      if (!stoneName.trim()) return;
+      const qty = toNumber(qtyText);
+      if (qty === null || !Number.isInteger(qty) || qty <= 0) {
+        setRowError(row.id, { stones: `${label} 수량은 1 이상의 정수여야 합니다` });
+        isValid = false;
+      }
+    };
     if (!row.client_id && row.client_input.trim()) {
       setRowError(row.id, { client: "등록되지 않은 거래처입니다" });
       isValid = false;
@@ -1252,6 +1320,15 @@ function OrdersPageContent() {
         [row.id]: { ...prev[row.id], plating: undefined },
       }));
     }
+    if (!row.center_stone.trim() && !row.sub1_stone.trim() && !row.sub2_stone.trim()) {
+      setRowErrors((prev) => ({
+        ...prev,
+        [row.id]: { ...prev[row.id], stones: undefined },
+      }));
+    }
+    validateStoneQty(row.center_stone, row.center_qty, "중심석");
+    validateStoneQty(row.sub1_stone, row.sub1_qty, "보조1석");
+    validateStoneQty(row.sub2_stone, row.sub2_qty, "보조2석");
     return isValid;
   };
 
@@ -1387,7 +1464,8 @@ function OrdersPageContent() {
               {rows.slice((pageIndex - 1) * PAGE_SIZE, pageIndex * PAGE_SIZE).map((row, idx) => {
                 const errors = rowErrors[row.id] ?? {};
                 const realIdx = (pageIndex - 1) * PAGE_SIZE + idx + 1;
-                const hasStones = row.center_stone || row.sub1_stone || row.sub2_stone;
+                const hasStones =
+                  row.center_stone.trim() || row.sub1_stone.trim() || row.sub2_stone.trim();
 
                 return (
                   <div key={row.id} className="space-y-0.5">
@@ -1653,9 +1731,37 @@ function OrdersPageContent() {
                             list={`stone-options-${row.id}`}
                             className="flex-1 bg-[var(--background)] border border-[var(--border)] rounded-md px-2 py-1 text-xs focus:border-[var(--primary)] focus:ring-1 focus:ring-[var(--primary)] outline-none transition-all"
                             value={row.center_stone}
-                            onChange={(e) => updateRow(row.id, { center_stone: e.target.value })}
+                            onChange={(e) =>
+                              updateRow(
+                                row.id,
+                                nextStonePatch("center_stone", e.target.value, row.center_stone_source)
+                              )
+                            }
                             placeholder="선택/입력"
                           />
+                          <input
+                            type="number"
+                            min="0"
+                            step="1"
+                            className="w-16 bg-[var(--background)] border border-[var(--border)] rounded-md px-2 py-1 text-xs text-right tabular-nums focus:border-[var(--primary)] focus:ring-1 focus:ring-[var(--primary)] outline-none transition-all"
+                            value={row.center_qty}
+                            onChange={(e) => updateRow(row.id, { center_qty: e.target.value })}
+                            placeholder="수량"
+                          />
+                          <select
+                            className="w-20 bg-[var(--background)] border border-[var(--border)] rounded-md px-2 py-1 text-xs focus:border-[var(--primary)] focus:ring-1 focus:ring-[var(--primary)] outline-none transition-all disabled:opacity-50"
+                            value={row.center_stone.trim() ? row.center_stone_source || "SELF" : ""}
+                            disabled={!row.center_stone.trim()}
+                            onChange={(e) =>
+                              updateRow(row.id, {
+                                center_stone_source: normalizeStoneSourceOrEmpty(e.target.value),
+                              })
+                            }
+                          >
+                            <option value="">미정</option>
+                            <option value="SELF">자입</option>
+                            <option value="PROVIDED">타입</option>
+                          </select>
                         </div>
 
                         {/* Sub1 Stone */}
@@ -1665,9 +1771,34 @@ function OrdersPageContent() {
                             list={`stone-options-${row.id}`}
                             className="flex-1 bg-[var(--background)] border border-[var(--border)] rounded-md px-2 py-1 text-xs focus:border-[var(--primary)] focus:ring-1 focus:ring-[var(--primary)] outline-none transition-all"
                             value={row.sub1_stone}
-                            onChange={(e) => updateRow(row.id, { sub1_stone: e.target.value })}
+                            onChange={(e) =>
+                              updateRow(row.id, nextStonePatch("sub1_stone", e.target.value, row.sub1_stone_source))
+                            }
                             placeholder="선택/입력"
                           />
+                          <input
+                            type="number"
+                            min="0"
+                            step="1"
+                            className="w-16 bg-[var(--background)] border border-[var(--border)] rounded-md px-2 py-1 text-xs text-right tabular-nums focus:border-[var(--primary)] focus:ring-1 focus:ring-[var(--primary)] outline-none transition-all"
+                            value={row.sub1_qty}
+                            onChange={(e) => updateRow(row.id, { sub1_qty: e.target.value })}
+                            placeholder="수량"
+                          />
+                          <select
+                            className="w-20 bg-[var(--background)] border border-[var(--border)] rounded-md px-2 py-1 text-xs focus:border-[var(--primary)] focus:ring-1 focus:ring-[var(--primary)] outline-none transition-all disabled:opacity-50"
+                            value={row.sub1_stone.trim() ? row.sub1_stone_source || "SELF" : ""}
+                            disabled={!row.sub1_stone.trim()}
+                            onChange={(e) =>
+                              updateRow(row.id, {
+                                sub1_stone_source: normalizeStoneSourceOrEmpty(e.target.value),
+                              })
+                            }
+                          >
+                            <option value="">미정</option>
+                            <option value="SELF">자입</option>
+                            <option value="PROVIDED">타입</option>
+                          </select>
                         </div>
 
                         {/* Sub2 Stone */}
@@ -1677,10 +1808,39 @@ function OrdersPageContent() {
                             list={`stone-options-${row.id}`}
                             className="flex-1 bg-[var(--background)] border border-[var(--border)] rounded-md px-2 py-1 text-xs focus:border-[var(--primary)] focus:ring-1 focus:ring-[var(--primary)] outline-none transition-all"
                             value={row.sub2_stone}
-                            onChange={(e) => updateRow(row.id, { sub2_stone: e.target.value })}
+                            onChange={(e) =>
+                              updateRow(row.id, nextStonePatch("sub2_stone", e.target.value, row.sub2_stone_source))
+                            }
                             placeholder="선택/입력"
                           />
+                          <input
+                            type="number"
+                            min="0"
+                            step="1"
+                            className="w-16 bg-[var(--background)] border border-[var(--border)] rounded-md px-2 py-1 text-xs text-right tabular-nums focus:border-[var(--primary)] focus:ring-1 focus:ring-[var(--primary)] outline-none transition-all"
+                            value={row.sub2_qty}
+                            onChange={(e) => updateRow(row.id, { sub2_qty: e.target.value })}
+                            placeholder="수량"
+                          />
+                          <select
+                            className="w-20 bg-[var(--background)] border border-[var(--border)] rounded-md px-2 py-1 text-xs focus:border-[var(--primary)] focus:ring-1 focus:ring-[var(--primary)] outline-none transition-all disabled:opacity-50"
+                            value={row.sub2_stone.trim() ? row.sub2_stone_source || "SELF" : ""}
+                            disabled={!row.sub2_stone.trim()}
+                            onChange={(e) =>
+                              updateRow(row.id, {
+                                sub2_stone_source: normalizeStoneSourceOrEmpty(e.target.value),
+                              })
+                            }
+                          >
+                            <option value="">미정</option>
+                            <option value="SELF">자입</option>
+                            <option value="PROVIDED">타입</option>
+                          </select>
                         </div>
+
+                        {errors.stones ? (
+                          <span className="text-[10px] text-[var(--danger)]">{errors.stones}</span>
+                        ) : null}
 
                         {(() => {
                           const master = masterCache.current.get(row.model_input.toLowerCase());

@@ -3,8 +3,8 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
+import { RefreshCw, Search } from "lucide-react";
 
-import { ActionBar } from "@/components/layout/action-bar";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input, Textarea } from "@/components/ui/field";
@@ -12,6 +12,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useRpcMutation } from "@/hooks/use-rpc-mutation";
 import { CONTRACTS, isFnConfigured } from "@/lib/contracts";
 import { getSchemaClient } from "@/lib/supabase/client";
+import { cn } from "@/lib/utils";
 
 import { ApVendorList, type VendorItem } from "./_components/ApVendorList";
 import { ApPaymentAllocHistory } from "./_components/ApPaymentAllocHistory";
@@ -101,6 +102,21 @@ const toNumber = (value: string) => {
   return Number.isFinite(numeric) ? numeric : 0;
 };
 
+const toAssetLabel = (assetCode?: string | null) => {
+  switch (assetCode) {
+    case "XAU_G":
+      return "금(g)";
+    case "XAG_G":
+      return "은(g)";
+    case "KRW_LABOR":
+      return "공임(원)";
+    case "KRW_MATERIAL":
+      return "소재비(원)";
+    default:
+      return assetCode ?? "-";
+  }
+};
+
 const buildIdempotencyKey = (vendorId: string) => {
   const now = new Date();
   const token = now
@@ -117,6 +133,8 @@ const buildIdempotencyKey = (vendorId: string) => {
 export default function ApPage() {
   const schemaClient = getSchemaClient();
   const [selectedVendorId, setSelectedVendorId] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [activeTab, setActiveTab] = useState<"invoice" | "action" | "history">("invoice");
   const [paidAt, setPaidAt] = useState(toKstInputValue);
   const [note, setNote] = useState("");
   const [goldG, setGoldG] = useState("");
@@ -160,7 +178,15 @@ export default function ApPage() {
     );
   }, [positions]);
 
-  const effectiveVendorId = selectedVendorId ?? uniqueVendors[0]?.vendor_party_id ?? null;
+  const filteredVendors = useMemo(() => {
+    const keyword = searchQuery.trim().toLowerCase();
+    if (!keyword) return uniqueVendors;
+    return uniqueVendors.filter((vendor) =>
+      (vendor.vendor_name ?? "").toLowerCase().includes(keyword)
+    );
+  }, [searchQuery, uniqueVendors]);
+
+  const effectiveVendorId = selectedVendorId ?? filteredVendors[0]?.vendor_party_id ?? uniqueVendors[0]?.vendor_party_id ?? null;
   const selectedVendor = uniqueVendors.find((v) => v.vendor_party_id === effectiveVendorId) ?? null;
 
   // ── Asset positions for selected vendor ──
@@ -251,6 +277,21 @@ export default function ApPage() {
     hasPaymentValue &&
     !paymentMutation.isPending;
 
+  const summary = useMemo(() => {
+    const totals = positions.reduce<{ gold: number; silver: number; labor: number }>(
+      (acc, row) => {
+        const asset = row.asset_code;
+        const outstanding = Number(row.outstanding_qty ?? 0);
+        if (asset === "XAU_G") acc.gold += outstanding;
+        if (asset === "XAG_G") acc.silver += outstanding;
+        if (asset === "KRW_LABOR") acc.labor += outstanding;
+        return acc;
+      },
+      { gold: 0, silver: 0, labor: 0 }
+    );
+    return totals;
+  }, [positions]);
+
   const handlePaymentSubmit = (event: React.FormEvent) => {
     event.preventDefault();
     if (!canSubmitPayment || !effectiveVendorId) return;
@@ -277,132 +318,175 @@ export default function ApPage() {
 
   // ── Render ──
   return (
-    <div className="flex flex-col h-[calc(100vh-4rem)]" id="ap.root">
-      <ActionBar title="미지급(AP)" subtitle="공장 미지급 현황 조회 및 결제 처리" />
-
-      <div className="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-4 p-4 overflow-hidden">
-        {/* Left: Vendor List */}
-        <div className="lg:col-span-3 h-full overflow-hidden">
-          <Card className="h-full flex flex-col shadow-sm">
-            <CardHeader className="shrink-0 border-b border-[var(--panel-border)] px-3 py-2">
-              <span className="text-sm font-semibold">공장 목록</span>
-            </CardHeader>
-            <CardBody className="flex-1 overflow-hidden p-0">
-              <ApVendorList
-                vendors={uniqueVendors}
-                isLoading={positionsQuery.isLoading}
-                selectedVendorId={effectiveVendorId}
-                onSelectVendor={setSelectedVendorId}
-              />
-            </CardBody>
-          </Card>
+    <div className="flex h-[calc(100vh-4rem)] overflow-hidden bg-[var(--background)]" id="ap.root">
+      <div className="w-80 flex-none border-r border-[var(--panel-border)] flex flex-col bg-[var(--panel)] z-20 shadow-xl">
+        <div className="p-4 border-b border-[var(--panel-border)] space-y-3 bg-[var(--panel)]">
+          <h2 className="text-lg font-bold flex items-center gap-2">
+            <Search className="w-5 h-5" />
+            공장 찾기
+          </h2>
+          <div className="relative">
+            <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-[var(--muted)]" />
+            <Input
+              placeholder="공장명 검색..."
+              className="pl-9 bg-[var(--chip)] border-none"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+            />
+          </div>
         </div>
 
-        {/* Right: Details */}
-        <div className="lg:col-span-9 h-full overflow-y-auto space-y-4">
-          {/* Position Summary */}
-          <Card className="shadow-sm">
-            <CardHeader className="border-b border-[var(--panel-border)] px-4 py-3">
-              <div className="flex items-center justify-between">
-                <span className="text-sm font-semibold">
-                  {selectedVendor?.vendor_name ?? "공장 선택"}
-                </span>
-                {selectedVendor?.vendor_region && (
-                  <span className="text-xs text-[var(--muted)]">
-                    {selectedVendor.vendor_region}
-                  </span>
-                )}
-              </div>
-            </CardHeader>
-            <CardBody>
-              {positionsQuery.isLoading ? (
-                <div className="grid grid-cols-3 gap-3">
-                  <Skeleton className="h-16 w-full" />
-                  <Skeleton className="h-16 w-full" />
-                  <Skeleton className="h-16 w-full" />
-                </div>
-              ) : assetPositions.length === 0 ? (
-                <div className="text-sm text-[var(--muted)]">공장을 선택하세요.</div>
-              ) : (
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                  {assetPositions.map((asset) => (
-                    <div
-                      key={asset.asset}
-                      className="rounded-lg border border-[var(--panel-border)] bg-[var(--panel)] p-3"
-                    >
-                      <div className="text-xs text-[var(--muted)]">{asset.asset}</div>
-                      <div className="mt-1 text-sm font-semibold">
-                        {asset.asset === "KRW_LABOR"
-                          ? formatKrw(asset.outstanding)
-                          : formatGram(asset.outstanding)}
-                      </div>
-                      <div className="mt-1 text-[11px] text-[var(--muted)]">
-                        크레딧{" "}
-                        {asset.asset === "KRW_LABOR"
-                          ? formatKrw(asset.credit)
-                          : formatGram(asset.credit)}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </CardBody>
-          </Card>
+        <div className="px-4 py-3 bg-[var(--chip)] border-b border-[var(--panel-border)] flex justify-between items-center text-xs">
+          <span className="text-[var(--muted)]">전체 공장미수(공임)</span>
+          <span className="font-bold text-[var(--foreground)]">{formatKrw(summary.labor)}</span>
+        </div>
 
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            {/* FIFO Invoices */}
-            <Card className="shadow-sm">
-              <CardHeader className="border-b border-[var(--panel-border)] px-4 py-3">
-                <span className="text-sm font-semibold">인보이스 (FIFO)</span>
-              </CardHeader>
-              <CardBody className="max-h-[300px] overflow-y-auto space-y-2">
-                {invoiceQuery.isLoading ? (
-                  <Skeleton className="h-16 w-full" />
-                ) : (invoiceQuery.data ?? []).length === 0 ? (
-                  <div className="rounded-lg border border-dashed border-[var(--panel-border)] p-4 text-sm text-[var(--muted)]">
-                    FIFO 잔액이 없습니다.
+        <div className="flex-1 overflow-y-auto p-2">
+          <ApVendorList
+            vendors={filteredVendors}
+            isLoading={positionsQuery.isLoading}
+            selectedVendorId={effectiveVendorId}
+            onSelectVendor={setSelectedVendorId}
+          />
+        </div>
+      </div>
+
+      <div className="flex-1 flex flex-col min-w-0 bg-[var(--background)]">
+        {selectedVendor ? (
+          <>
+            <div className="shrink-0 border-b border-[var(--panel-border)] bg-[var(--panel)] p-6 shadow-sm z-10">
+              <div className="flex justify-between items-start mb-6">
+                <div>
+                  <div className="flex items-center gap-3 mb-1">
+                    <h1 className="text-2xl font-bold tracking-tight">{selectedVendor.vendor_name}</h1>
+                    <span className="text-xs px-2 py-0.5 rounded-full bg-[var(--chip)] text-[var(--muted)] font-medium">
+                      vendor
+                    </span>
                   </div>
-                ) : (
-                  (invoiceQuery.data ?? []).map((row, idx) => (
-                    <div
-                      key={`inv-${idx}`}
-                      className="rounded-lg border border-[var(--panel-border)] bg-[var(--panel)] p-3 text-xs"
-                    >
-                      <div className="flex items-center justify-between">
-                        <span className="text-[var(--muted)]">
-                          {formatDateTimeKst(row.occurred_at)}
-                        </span>
-                        <span className="font-medium px-1.5 py-0.5 rounded bg-[var(--chip)]">
-                          {row.asset_code ?? "-"}
-                        </span>
-                      </div>
-                      <div className="mt-2 flex items-center justify-between">
-                        <span className="text-[var(--muted)]">잔액</span>
-                        <span className="font-semibold">
-                          {row.asset_code === "KRW_LABOR"
-                            ? formatKrw(row.outstanding_qty)
-                            : formatGram(row.outstanding_qty)}
-                        </span>
-                      </div>
-                      {row.memo && (
-                        <div className="mt-1 text-[11px] text-[var(--muted)] truncate">
-                          {row.memo}
-                        </div>
-                      )}
-                    </div>
-                  ))
-                )}
-              </CardBody>
-            </Card>
+                  <p className="text-sm text-[var(--muted)] flex items-center gap-2">
+                    권역: {selectedVendor.vendor_region ?? "-"}
+                  </p>
+                </div>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => {
+                    positionsQuery.refetch();
+                    invoiceQuery.refetch();
+                    paymentAllocQuery.refetch();
+                    paymentUnallocatedQuery.refetch();
+                  }}
+                >
+                  <RefreshCw className="w-4 h-4 mr-2" />
+                  새로고침
+                </Button>
+              </div>
 
-            {/* Payment Form */}
-            <Card className="shadow-sm">
-              <CardHeader className="border-b border-[var(--panel-border)] px-4 py-3">
-                <span className="text-sm font-semibold">결제 입력</span>
-              </CardHeader>
-              <CardBody>
-                <form className="grid gap-4" onSubmit={handlePaymentSubmit}>
-                  <div className="space-y-1">
+              <div className="grid grid-cols-4 gap-4 p-4 rounded-xl bg-[var(--chip)] border border-[var(--panel-border)]">
+                <div>
+                  <p className="text-xs font-medium text-[var(--muted)] mb-1">공임 잔액</p>
+                  <p className="text-lg font-bold tabular-nums text-[var(--danger)]">{formatKrw(summary.labor)}</p>
+                </div>
+                <div>
+                  <p className="text-xs font-medium text-[var(--muted)] mb-1">금 잔액</p>
+                  <p className="text-lg font-bold tabular-nums">{formatGram(summary.gold)}</p>
+                </div>
+                <div>
+                  <p className="text-xs font-medium text-[var(--muted)] mb-1">은 잔액</p>
+                  <p className="text-lg font-bold tabular-nums">{formatGram(summary.silver)}</p>
+                </div>
+                <div>
+                  <p className="text-xs font-medium text-[var(--muted)] mb-1">자산 수</p>
+                  <p className="text-lg font-bold tabular-nums">{assetPositions.length}</p>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex border-b border-[var(--panel-border)] px-6 bg-[var(--panel)] sticky top-0">
+              <button
+                onClick={() => setActiveTab("invoice")}
+                className={cn(
+                  "px-4 py-3 text-sm font-medium border-b-2 transition-colors",
+                  activeTab === "invoice"
+                    ? "border-[var(--primary)] text-[var(--primary)]"
+                    : "border-transparent text-[var(--muted)] hover:text-[var(--foreground)]"
+                )}
+              >
+                미지급 잔액 (FIFO)
+              </button>
+              <button
+                onClick={() => setActiveTab("action")}
+                className={cn(
+                  "px-4 py-3 text-sm font-medium border-b-2 transition-colors",
+                  activeTab === "action"
+                    ? "border-[var(--primary)] text-[var(--primary)]"
+                    : "border-transparent text-[var(--muted)] hover:text-[var(--foreground)]"
+                )}
+              >
+                결제 처리
+              </button>
+              <button
+                onClick={() => setActiveTab("history")}
+                className={cn(
+                  "px-4 py-3 text-sm font-medium border-b-2 transition-colors",
+                  activeTab === "history"
+                    ? "border-[var(--primary)] text-[var(--primary)]"
+                    : "border-transparent text-[var(--muted)] hover:text-[var(--foreground)]"
+                )}
+              >
+                결제 배정/크레딧
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-6 space-y-4">
+              {activeTab === "invoice" && (
+                <Card className="shadow-sm">
+                  <CardHeader className="border-b border-[var(--panel-border)] px-4 py-3">
+                    <span className="text-sm font-semibold">인보이스 (FIFO)</span>
+                  </CardHeader>
+                  <CardBody className="max-h-[480px] overflow-y-auto space-y-2">
+                    {invoiceQuery.isLoading ? (
+                      <Skeleton className="h-16 w-full" />
+                    ) : (invoiceQuery.data ?? []).length === 0 ? (
+                      <div className="rounded-lg border border-dashed border-[var(--panel-border)] p-4 text-sm text-[var(--muted)]">
+                        FIFO 잔액이 없습니다.
+                      </div>
+                    ) : (
+                      (invoiceQuery.data ?? []).map((row, idx) => (
+                        <div
+                          key={`inv-${idx}`}
+                          className="rounded-lg border border-[var(--panel-border)] bg-[var(--panel)] p-3 text-xs"
+                        >
+                          <div className="flex items-center justify-between">
+                            <span className="text-[var(--muted)]">{formatDateTimeKst(row.occurred_at)}</span>
+                            <span className="font-medium px-1.5 py-0.5 rounded bg-[var(--chip)]">
+                              {toAssetLabel(row.asset_code)}
+                            </span>
+                          </div>
+                          <div className="mt-2 flex items-center justify-between">
+                            <span className="text-[var(--muted)]">잔액</span>
+                            <span className="font-semibold">
+                              {row.asset_code === "KRW_LABOR"
+                                ? formatKrw(row.outstanding_qty)
+                                : formatGram(row.outstanding_qty)}
+                            </span>
+                          </div>
+                          {row.memo && <div className="mt-1 text-[11px] text-[var(--muted)] truncate">{row.memo}</div>}
+                        </div>
+                      ))
+                    )}
+                  </CardBody>
+                </Card>
+              )}
+
+              {activeTab === "action" && (
+                <Card className="shadow-sm">
+                  <CardHeader className="border-b border-[var(--panel-border)] px-4 py-3">
+                    <span className="text-sm font-semibold">결제 입력</span>
+                  </CardHeader>
+                  <CardBody>
+                    <form className="grid gap-4" onSubmit={handlePaymentSubmit}>
+                      <div className="space-y-1">
                     <p className="text-xs font-medium text-[var(--muted)]">결제일시*</p>
                     <Input
                       type="datetime-local"
@@ -411,7 +495,7 @@ export default function ApPage() {
                     />
                   </div>
 
-                  <div className="grid grid-cols-2 gap-3">
+                      <div className="grid grid-cols-2 gap-3">
                     <div className="space-y-1">
                       <p className="text-xs text-[var(--muted)]">공임(원)</p>
                       <Input
@@ -454,7 +538,7 @@ export default function ApPage() {
                     </div>
                   </div>
 
-                  <div className="space-y-1">
+                      <div className="space-y-1">
                     <p className="text-xs text-[var(--muted)]">메모</p>
                     <Textarea
                       placeholder="메모 입력"
@@ -464,7 +548,7 @@ export default function ApPage() {
                     />
                   </div>
 
-                  <div className="flex items-center justify-between pt-2 border-t">
+                      <div className="flex items-center justify-between pt-2 border-t">
                     <div className="text-xs text-[var(--muted)]">
                       공임 {formatKrw(numericLabor)} · 금 {formatGram(numericGold)} · 은{" "}
                       {formatGram(numericSilver)}
@@ -472,39 +556,50 @@ export default function ApPage() {
                     <Button type="submit" disabled={!canSubmitPayment} size="sm">
                       저장
                     </Button>
-                  </div>
-                </form>
-              </CardBody>
-            </Card>
+                      </div>
+                    </form>
+                  </CardBody>
+                </Card>
+              )}
+
+              {activeTab === "history" && (
+                <>
+                  <Card className="shadow-sm">
+                    <CardHeader className="border-b border-[var(--panel-border)] px-4 py-3">
+                      <span className="text-sm font-semibold">결제 배정 내역</span>
+                    </CardHeader>
+                    <CardBody className="max-h-[360px] overflow-y-auto">
+                      <ApPaymentAllocHistory
+                        allocations={paymentAllocQuery.data ?? []}
+                        isLoading={paymentAllocQuery.isLoading}
+                      />
+                    </CardBody>
+                  </Card>
+
+                  <Card className="shadow-sm">
+                    <CardHeader className="border-b border-[var(--panel-border)] px-4 py-3">
+                      <span className="text-sm font-semibold">미배정 크레딧</span>
+                    </CardHeader>
+                    <CardBody className="max-h-[280px] overflow-y-auto">
+                      <ApUnallocatedCreditList
+                        unallocated={paymentUnallocatedQuery.data ?? []}
+                        isLoading={paymentUnallocatedQuery.isLoading}
+                      />
+                    </CardBody>
+                  </Card>
+                </>
+              )}
+            </div>
+          </>
+        ) : (
+          <div className="flex-1 flex items-center justify-center">
+            <div className="text-center">
+              <p className="font-medium text-[var(--foreground)]">공장을 선택해주세요</p>
+              <p className="text-sm mt-1 text-[var(--muted)]">좌측 목록에서 공장을 선택하여 상세 정보를 확인하세요.</p>
+            </div>
           </div>
-
-          {/* Payment Alloc History */}
-          <Card className="shadow-sm">
-            <CardHeader className="border-b border-[var(--panel-border)] px-4 py-3">
-              <span className="text-sm font-semibold">결제 배정 내역</span>
-            </CardHeader>
-            <CardBody className="max-h-[300px] overflow-y-auto">
-              <ApPaymentAllocHistory
-                allocations={paymentAllocQuery.data ?? []}
-                isLoading={paymentAllocQuery.isLoading}
-              />
-            </CardBody>
-          </Card>
-
-          {/* Unallocated Credit */}
-          <Card className="shadow-sm">
-            <CardHeader className="border-b border-[var(--panel-border)] px-4 py-3">
-              <span className="text-sm font-semibold">미배정 크레딧</span>
-            </CardHeader>
-            <CardBody className="max-h-[250px] overflow-y-auto">
-              <ApUnallocatedCreditList
-                unallocated={paymentUnallocatedQuery.data ?? []}
-                isLoading={paymentUnallocatedQuery.isLoading}
-              />
-            </CardBody>
-          </Card>
+        )}
         </div>
       </div>
-    </div>
   );
 }

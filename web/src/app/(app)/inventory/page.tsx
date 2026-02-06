@@ -4,18 +4,9 @@ import { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useForm } from "react-hook-form";
 import { toast } from "sonner";
-import { Package, PackageCheck, ClipboardList, Wrench } from "lucide-react";
-import {
-  UnifiedToolbar,
-  ToolbarSelect,
-  ToolbarInput,
-  ToolbarButton,
-} from "@/components/layout/unified-toolbar";
-import { SplitLayout } from "@/components/layout/split-layout";
-import { Card, CardBody, CardHeader } from "@/components/ui/card";
+import { Package, PackageCheck, ClipboardList, Wrench, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { ListCard } from "@/components/ui/list-card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useRpcMutation } from "@/hooks/use-rpc-mutation";
 import { CONTRACTS } from "@/lib/contracts";
@@ -610,522 +601,472 @@ export default function InventoryPage() {
 
   // ===================== RENDER =====================
   return (
-    <div className="min-h-[calc(100vh-4rem)] flex flex-col space-y-3" id="inventory.root">
-      {/* Unified Toolbar - Compact Header */}
-      <UnifiedToolbar title="재고관리">
-        {/* View Mode Toggle Pills */}
-        <div className="flex bg-[var(--panel)] p-0.5 rounded-md border border-[var(--panel-border)]">
-          <button
-            type="button"
-            onClick={() => setPositionMode("total")}
-            className={cn(
-              "px-2.5 py-1 text-xs font-medium rounded-sm transition-all",
-              positionMode === "total"
-                ? "bg-[var(--background)] text-[var(--foreground)] shadow-sm"
-                : "text-[var(--muted)] hover:text-[var(--foreground)]"
-            )}
-          >
-            전체
-          </button>
-          <button
-            type="button"
-            onClick={() => setPositionMode("byLocation")}
-            className={cn(
-              "px-2.5 py-1 text-xs font-medium rounded-sm transition-all",
-              positionMode === "byLocation"
-                ? "bg-[var(--background)] text-[var(--foreground)] shadow-sm"
-                : "text-[var(--muted)] hover:text-[var(--foreground)]"
-            )}
-          >
-            위치별
-          </button>
+    <div className="flex h-[calc(100vh-4rem)] overflow-hidden bg-[var(--background)]" id="inventory.root">
+      {/* LEFT SIDEBAR - Inventory List */}
+      <div className="w-80 flex-none border-r border-[var(--panel-border)] flex flex-col bg-[var(--panel)] z-20 shadow-xl">
+        {/* Header */}
+        <div className="p-4 border-b border-[var(--panel-border)] space-y-3 bg-[var(--panel)]">
+          <h2 className="text-lg font-bold flex items-center gap-2">
+            <Package className="w-5 h-5" />
+            재고 관리
+          </h2>
+          <div className="relative">
+            <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-[var(--muted)]" />
+            <input
+              placeholder="모델명 검색..."
+              className="w-full h-9 pl-9 pr-3 rounded-md bg-[var(--chip)] border-none text-sm placeholder-[var(--muted)] focus:outline-none focus:ring-1 focus:ring-[var(--primary)]"
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+            />
+          </div>
+          {/* View Mode Toggle */}
+          <div className="flex gap-1">
+            <button
+              onClick={() => setPositionMode("total")}
+              className={cn(
+                "flex-1 py-1.5 text-[11px] font-medium rounded-md transition-colors border",
+                positionMode === "total"
+                  ? "bg-[var(--primary)] text-white border-[var(--primary)]"
+                  : "bg-[var(--chip)] text-[var(--muted)] border-transparent hover:border-[var(--panel-border)]"
+              )}
+            >
+              전체
+            </button>
+            <button
+              onClick={() => setPositionMode("byLocation")}
+              className={cn(
+                "flex-1 py-1.5 text-[11px] font-medium rounded-md transition-colors border",
+                positionMode === "byLocation"
+                  ? "bg-[var(--primary)] text-white border-[var(--primary)]"
+                  : "bg-[var(--chip)] text-[var(--muted)] border-transparent hover:border-[var(--panel-border)]"
+              )}
+            >
+              위치별
+            </button>
+          </div>
+          {positionMode === "byLocation" && (
+            <select
+              value={selectedLocation}
+              onChange={(e) => setSelectedLocation(e.target.value)}
+              className="w-full h-8 text-xs rounded-md bg-[var(--chip)] border-none px-2"
+            >
+              <option value="">(전체 위치)</option>
+              <option value="__NULL__">미지정</option>
+              {LOCATION_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+          )}
         </div>
 
-        {/* Location Filter (when byLocation mode) */}
-        {positionMode === "byLocation" && (
-          <ToolbarSelect
-            value={selectedLocation}
-            onChange={(value) => setSelectedLocation(value)}
-            className="w-28"
-          >
-            <option value="">(전체 위치)</option>
-            <option value="__NULL__">미지정</option>
-            {LOCATION_OPTIONS.map((o) => (
-              <option key={o.value} value={o.value}>
-                {o.label}
-              </option>
-            ))}
-          </ToolbarSelect>
-        )}
+        {/* Stats Bar */}
+        <div className="px-4 py-2 bg-[var(--chip)] border-b border-[var(--panel-border)] flex justify-between items-center text-xs">
+          <span className="text-[var(--muted)]">총 {filteredPosition.length}개 모델</span>
+        </div>
 
-        <div className="w-px h-5 bg-[var(--hairline)] mx-1" />
+        {/* List */}
+        <div className="flex-1 overflow-y-auto">
+          {positionLoading ? (
+            <div className="p-3 space-y-2">
+              {[...Array(5)].map((_, i) => (
+                <Skeleton key={`position-skeleton-${i}`} className="h-12 w-full" />
+              ))}
+            </div>
+          ) : filteredPosition.length === 0 ? (
+            <div className="p-8 text-center text-[var(--muted)] text-sm">
+              조건에 맞는 재고가 없습니다
+            </div>
+          ) : (
+            <div className="p-2 space-y-1">
+              {filteredPosition.map((row) => {
+                const active = selectedMasterId === row.master_id;
+                return (
+                  <button
+                    key={`${row.master_id}-${row.location_code ?? "NA"}`}
+                    onClick={() => handleSelectPositionRow(row)}
+                    className={cn(
+                      "w-full text-left p-3 rounded-lg transition-all border",
+                      active
+                        ? "bg-[var(--primary)]/10 border-[var(--primary)]/30 shadow-sm"
+                        : "bg-transparent border-transparent hover:bg-[var(--chip)] hover:border-[var(--panel-border)]"
+                    )}
+                  >
+                    <div className="flex items-start justify-between gap-2 mb-1">
+                      <span className={cn("font-medium truncate text-sm", active && "text-[var(--primary)]")}>
+                        {row.model_name}
+                      </span>
+                      <span className="shrink-0 text-sm font-bold tabular-nums">
+                        {row.on_hand_qty.toLocaleString()}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between text-[11px] text-[var(--muted)]">
+                      <span>{positionMode === "byLocation" ? (row.location_code || "미지정") : ""}</span>
+                      <span>{formatKst(row.last_move_at)}</span>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </div>
 
-        {/* Search */}
-        <ToolbarInput
-          value={searchTerm}
-          onChange={setSearchTerm}
-          placeholder="모델 검색..."
-          className="w-32 md:w-48"
-        />
-      </UnifiedToolbar>
+      {/* RIGHT MAIN CONTENT */}
+      <div className="flex-1 flex flex-col min-w-0 bg-[var(--background)]">
+        {selectedMasterId ? (
+          <>
+            {/* Header */}
+            <div className="shrink-0 border-b border-[var(--panel-border)] bg-[var(--panel)] p-6 shadow-sm z-10">
+              <div className="flex justify-between items-start mb-4">
+                <div>
+                  <h1 className="text-2xl font-bold tracking-tight mb-1">
+                    {selectedMasterLabel || "모델 선택"}
+                  </h1>
+                  <p className="text-sm text-[var(--muted)]">
+                    재고 현황 및 입출고 관리
+                  </p>
+                </div>
+              </div>
 
-      {/* Content Area */}
-      <div className="flex-1 min-h-0 overflow-auto px-4">
-        <SplitLayout
-          className="h-full items-start"
-          left={
-            <div className="flex h-full min-h-0 flex-col gap-2" id="inventory.listPanel">
-              <Card className="flex-1 min-h-0">
-                <CardHeader className="flex items-center justify-between py-2">
-                  <div className="flex items-center gap-2">
-                    <Package className="h-4 w-4 text-[var(--muted)]" />
-                    <span className="text-sm font-semibold text-foreground">재고 리스트</span>
-                  </div>
-                  <span className="text-xs text-[var(--muted)] tabular-nums">
-                    {filteredPosition.length.toLocaleString()}건
-                  </span>
-                </CardHeader>
-                <CardBody className="p-0">
-                  <div className="h-full overflow-auto">
-                    {positionLoading ? (
-                      <div className="p-3 space-y-2">
-                        {[...Array(5)].map((_, i) => (
-                          <Skeleton key={`position-skeleton-${i}`} className="h-10 w-full" />
-                        ))}
+              {/* Quick Stats */}
+              <div className="grid grid-cols-4 gap-4 p-4 rounded-xl bg-[var(--chip)] border border-[var(--panel-border)]">
+                <div>
+                  <p className="text-xs font-medium text-[var(--muted)] mb-1">총 재고</p>
+                  <p className="text-2xl font-bold tabular-nums">
+                    {selectedPositionTotal !== null ? selectedPositionTotal.toLocaleString() : "-"}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-xs font-medium text-[var(--muted)] mb-1">최근 이동</p>
+                  <p className="text-lg font-bold">
+                    {filteredMoves.length > 0 ? `${filteredMoves.length}건` : "-"}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-xs font-medium text-[var(--muted)] mb-1">실사 세션</p>
+                  <p className="text-lg font-bold">{sessionsData.length}개</p>
+                </div>
+                <div>
+                  <p className="text-xs font-medium text-[var(--muted)] mb-1">위치</p>
+                  <p className="text-lg font-bold">{selectedPositionRows.length}곳</p>
+                </div>
+              </div>
+            </div>
+
+            {/* Tab Navigation */}
+            <div className="flex border-b border-[var(--panel-border)] px-6 bg-[var(--panel)] sticky top-0">
+              {([
+                { id: "position", label: "현황", icon: Package },
+                { id: "moves", label: "입출고", icon: PackageCheck },
+                { id: "stocktake", label: "실사", icon: ClipboardList },
+                { id: "actions", label: "빠른처리", icon: Wrench },
+              ] as const).map((item) => (
+                <button
+                  key={item.id}
+                  onClick={() => setMobileSection(item.id)}
+                  className={cn(
+                    "px-4 py-3 text-sm font-medium border-b-2 transition-colors flex items-center gap-2",
+                    mobileSection === item.id
+                      ? "border-[var(--primary)] text-[var(--primary)]"
+                      : "border-transparent text-[var(--muted)] hover:text-[var(--foreground)]"
+                  )}
+                >
+                  <item.icon className="w-4 h-4" />
+                  {item.label}
+                </button>
+              ))}
+            </div>
+
+            {/* Tab Content */}
+            <div className="flex-1 overflow-y-auto p-6">
+              <div className="max-w-4xl mx-auto space-y-6">
+                {/* Position Tab */}
+                {mobileSection === "position" && (
+                  <div className="bg-[var(--panel)] rounded-xl border border-[var(--panel-border)] p-5">
+                    <h3 className="text-sm font-bold mb-4 flex items-center gap-2">
+                      <Package className="w-4 h-4" />
+                      로케이션별 재고
+                    </h3>
+                    {positionMode !== "byLocation" ? (
+                      <div className="text-sm text-[var(--muted)] p-4 bg-[var(--chip)] rounded-lg text-center">
+                        위치별 보기 모드에서 상세 로케이션 현황을 확인할 수 있습니다
                       </div>
-                    ) : filteredPosition.length === 0 ? (
-                      <div className="h-full flex flex-col items-center justify-center text-[var(--muted)]">
-                        <p className="text-sm">조건에 맞는 재고가 없습니다</p>
-                        <p className="text-xs text-[var(--muted-weak)]">검색어나 필터를 조정해보세요</p>
+                    ) : selectedPositionRows.length === 0 ? (
+                      <div className="text-sm text-[var(--muted)] p-4 bg-[var(--chip)] rounded-lg text-center">
+                        해당 로케이션 데이터가 없습니다
                       </div>
                     ) : (
-                      <div className="space-y-0">
-                        {filteredPosition.map((row) => (
-                          <button
-                            key={`${row.master_id}-${row.location_code ?? "NA"}`}
-                            type="button"
-                            onClick={() => handleSelectPositionRow(row)}
-                            className="w-full text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]"
-                          >
-                            <ListCard
-                              title={row.model_name}
-                              subtitle={
-                                <span className="tabular-nums whitespace-nowrap">
-                                  재고 {row.on_hand_qty.toLocaleString()}
-                                </span>
-                              }
-                              meta={
-                                positionMode === "byLocation" ? (
-                                  <span className="text-xs text-[var(--muted-weak)]">
-                                    {row.location_code || "미지정"}
-                                  </span>
-                                ) : undefined
-                              }
-                              right={
-                                <span className="text-xs text-[var(--muted)] tabular-nums whitespace-nowrap">
-                                  {formatKst(row.last_move_at)}
-                                </span>
-                              }
-                              selected={selectedMasterId === row.master_id}
-                            />
-                          </button>
+                      <div className="divide-y divide-[var(--panel-border)] rounded-lg border border-[var(--panel-border)]">
+                        {selectedPositionRows.map((row) => (
+                          <div key={`${row.master_id}-${row.location_code ?? "NA"}`} className="flex items-center justify-between px-4 py-3">
+                            <span className="text-sm">{row.location_code || "미지정"}</span>
+                            <span className="text-lg font-bold tabular-nums">{row.on_hand_qty.toLocaleString()}</span>
+                          </div>
                         ))}
                       </div>
                     )}
                   </div>
-                </CardBody>
-              </Card>
-            </div>
-          }
-          right={
-            <div
-              className="flex h-full min-h-0 flex-col gap-2 overflow-auto pr-1"
-              id="inventory.detailPanel"
-            >
-              {/* Mobile Navigation */}
-              <div className="md:hidden">
-                <div className="flex items-center gap-1 rounded-lg border border-[var(--panel-border)] bg-[var(--panel)] p-1 shadow-sm">
-                  {([
-                    { id: "position", label: "현황" },
-                    { id: "moves", label: "입출고" },
-                    { id: "stocktake", label: "실사" },
-                    { id: "actions", label: "처리" },
-                  ] as const).map((item) => (
-                    <button
-                      key={item.id}
-                      type="button"
-                      onClick={() => setMobileSection(item.id)}
-                      className={cn(
-                        "flex-1 rounded-md px-3 py-1.5 text-xs font-semibold transition",
-                        mobileSection === item.id
-                          ? "bg-[var(--chip)] text-[var(--foreground)] shadow-sm"
-                          : "text-[var(--muted)]"
-                      )}
-                    >
-                      {item.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
+                )}
 
-              {/* Current Position Card */}
-              <Card className={cn("hidden md:block", mobileSection === "position" && "block")}>
-                <CardHeader className="flex items-center justify-between py-2">
-                  <div className="flex items-center gap-2">
-                    <Package className="h-4 w-4 text-[var(--muted)]" />
-                    <span className="text-sm font-semibold text-foreground">현재 재고</span>
-                  </div>
-                </CardHeader>
-                <CardBody className="space-y-3">
-                  {!selectedMasterId ? (
-                    <div className="text-sm text-[var(--muted)]">좌측에서 모델을 선택하세요</div>
-                  ) : (
-                    <>
-                      <div className="flex items-start justify-between gap-4">
-                        <div>
-                          <div className="text-xs text-[var(--muted)]">선택 모델</div>
-                          <div className="text-base font-semibold text-foreground">
-                            {selectedMasterLabel || "-"}
-                          </div>
-                        </div>
-                        <div className="text-right">
-                          <div className="text-xs text-[var(--muted)]">총 재고</div>
-                          <div className="text-2xl font-bold tabular-nums">
-                            {selectedPositionTotal !== null
-                              ? selectedPositionTotal.toLocaleString()
-                              : "-"}
-                          </div>
-                        </div>
+                {/* Moves Tab */}
+                {mobileSection === "moves" && (
+                  <div className="bg-[var(--panel)] rounded-xl border border-[var(--panel-border)] overflow-hidden">
+                    <div className="p-4 border-b border-[var(--panel-border)]">
+                      <h3 className="text-sm font-bold flex items-center gap-2">
+                        <PackageCheck className="w-4 h-4" />
+                        최근 입출고 ({filteredMoves.length}건)
+                      </h3>
+                    </div>
+                    {filteredMoves.length === 0 ? (
+                      <div className="p-8 text-center text-sm text-[var(--muted)]">
+                        최근 이동 데이터가 없습니다
                       </div>
-
-                      <div className="space-y-2">
-                        <div className="flex items-center justify-between text-xs font-semibold text-[var(--muted)]">
-                          <span>로케이션</span>
-                          {positionMode !== "byLocation" ? (
-                            <span className="font-normal">위치별 보기에서 확인</span>
-                          ) : null}
-                        </div>
-                        {positionMode !== "byLocation" ? null : selectedPositionRows.length === 0 ? (
-                          <div className="text-xs text-[var(--muted)]">해당 로케이션 데이터가 없습니다</div>
-                        ) : (
-                          <div className="divide-y divide-border/40 rounded-md border border-border/40">
-                            {selectedPositionRows.map((row) => (
-                              <div key={`${row.master_id}-${row.location_code ?? "NA"}`} className="flex items-center justify-between px-3 py-2 text-sm">
-                                <span className="text-[var(--muted)]">
-                                  {row.location_code || "미지정"}
-                                </span>
-                                <span className="tabular-nums font-semibold text-foreground">
-                                  {row.on_hand_qty.toLocaleString()}
-                                </span>
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    </>
-                  )}
-                </CardBody>
-              </Card>
-
-              {/* Moves Card */}
-              <Card className={cn("hidden md:block", mobileSection === "moves" && "block")}>
-                <CardHeader className="flex items-center justify-between py-2">
-                  <div className="flex items-center gap-2">
-                    <PackageCheck className="h-4 w-4 text-[var(--muted)]" />
-                    <span className="text-sm font-semibold text-foreground">최근 입출고</span>
-                  </div>
-                </CardHeader>
-                <CardBody className="p-0">
-                  {!selectedMasterId ? (
-                    <div className="p-4 text-sm text-[var(--muted)]">좌측에서 모델을 선택하세요</div>
-                  ) : filteredMoves.length === 0 ? (
-                    <div className="p-4 text-sm text-[var(--muted)]">최근 이동 데이터가 없습니다</div>
-                  ) : (
-                    <div className="overflow-auto">
+                    ) : (
                       <table className="w-full text-sm">
-                        <thead className="sticky top-0 bg-background z-10 text-xs font-medium text-[var(--muted)] uppercase tracking-wider border-b border-border/40">
+                        <thead className="bg-[var(--chip)] text-xs font-medium text-[var(--muted)] uppercase tracking-wider border-b border-[var(--panel-border)]">
                           <tr>
-                            <th className="px-3 py-2 text-left">시각</th>
-                            <th className="px-3 py-2 text-center">번호</th>
-                            <th className="px-3 py-2 text-left">모델명</th>
-                            <th className="px-3 py-2 text-center">타입</th>
-                            <th className="px-3 py-2 text-right">수량</th>
+                            <th className="px-4 py-3 text-left">시각</th>
+                            <th className="px-4 py-3 text-center">번호</th>
+                            <th className="px-4 py-3 text-left">모델명</th>
+                            <th className="px-4 py-3 text-center">타입</th>
+                            <th className="px-4 py-3 text-right">수량</th>
                           </tr>
                         </thead>
-                        <tbody className="divide-y divide-border/40">
+                        <tbody className="divide-y divide-[var(--panel-border)]">
                           {filteredMoves.map((move) => (
-                            <tr
-                              key={move.move_line_id || move.move_id}
-                              className="hover:bg-muted/30 transition-colors"
-                            >
-                              <td className="px-3 py-2 text-xs text-[var(--muted)] whitespace-nowrap tabular-nums">
-                                <div>{formatKst(move.occurred_at).split(" ")[0]}</div>
-                                <div className="text-[10px] opacity-70">
-                                  {formatKst(move.occurred_at).split(" ")[1]}
-                                </div>
+                            <tr key={move.move_line_id || move.move_id} className="hover:bg-[var(--chip)]/50">
+                              <td className="px-4 py-3 text-xs text-[var(--muted)] tabular-nums">
+                                {formatKst(move.occurred_at)}
                               </td>
-                              <td className="px-3 py-2 text-center text-xs text-[var(--muted)] tabular-nums">
-                                {move.move_no}
-                              </td>
-                              <td
-                                className="px-3 py-2 font-medium text-foreground truncate max-w-[140px]"
-                                title={move.master_model_name || move.item_name || ""}
-                              >
+                              <td className="px-4 py-3 text-center text-xs tabular-nums">{move.move_no}</td>
+                              <td className="px-4 py-3 font-medium truncate max-w-[160px]">
                                 {move.master_model_name || move.item_name}
                               </td>
-                              <td className="px-3 py-2 text-center">
+                              <td className="px-4 py-3 text-center">
                                 <Badge
-                                  tone={
-                                    move.move_type === "RECEIPT"
-                                      ? "primary"
-                                      : move.move_type === "ISSUE"
-                                        ? "warning"
-                                        : "neutral"
-                                  }
-                                  className="text-[10px] px-1.5 py-0 h-5 border-0"
+                                  tone={move.move_type === "RECEIPT" ? "primary" : move.move_type === "ISSUE" ? "warning" : "neutral"}
+                                  className="text-[10px] px-2"
                                 >
                                   {move.move_type}
                                 </Badge>
                               </td>
-                              <td
-                                className={cn(
-                                  "px-3 py-2 text-right tabular-nums font-semibold",
-                                  move.direction === "IN" ? "text-blue-600" : "text-orange-600"
-                                )}
-                              >
-                                {move.direction === "IN" ? "+" : "-"}
-                                {move.qty}
+                              <td className={cn(
+                                "px-4 py-3 text-right tabular-nums font-semibold",
+                                move.direction === "IN" ? "text-blue-600" : "text-orange-600"
+                              )}>
+                                {move.direction === "IN" ? "+" : "-"}{move.qty}
                               </td>
                             </tr>
                           ))}
                         </tbody>
                       </table>
-                    </div>
-                  )}
-                </CardBody>
-              </Card>
-
-              {/* Stocktake Card - Truncated for brevity */}
-              <Card className={cn("hidden md:block", mobileSection === "stocktake" && "block")}>
-                <CardHeader className="flex items-center justify-between py-2">
-                  <div className="flex items-center gap-2">
-                    <ClipboardList className="h-4 w-4 text-[var(--muted)]" />
-                    <span className="text-sm font-semibold text-foreground">실사</span>
+                    )}
                   </div>
-                </CardHeader>
-                <CardBody className="space-y-3 min-h-0">
-                  <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 min-h-0">
-                    {/* Session List */}
-                    <div className="rounded-md border border-border/40 overflow-hidden flex min-h-0 flex-col">
-                      <div className="p-2 border-b border-border/40 bg-muted/5 space-y-2">
-                        <div className="flex items-center justify-between">
-                          <h3 className="text-sm font-semibold text-foreground">실사 세션</h3>
-                        </div>
-                        <form onSubmit={sessionForm.handleSubmit(onCreateSession)} className="flex gap-1.5">
-                          <select
-                            {...sessionForm.register("location_code")}
-                            className="h-7 text-xs w-20 flex-shrink-0 rounded border border-[var(--panel-border)] bg-[var(--panel)]"
-                          >
-                            <option value="">위치</option>
-                            {LOCATION_OPTIONS.map((o) => (
-                              <option key={o.value} value={o.value}>
-                                {o.label}
-                              </option>
-                            ))}
-                          </select>
-                          <input
-                            {...sessionForm.register("session_code")}
-                            placeholder="예: 사무실 금고"
-                            className="h-7 text-xs flex-1 px-2 rounded border border-[var(--panel-border)] bg-[var(--panel)]"
-                          />
-                          <Button
-                            type="submit"
-                            size="sm"
-                            disabled={createSessionMutation.isPending}
-                            className="h-7 px-2 text-xs"
-                          >
-                            {createSessionMutation.isPending ? "..." : "추가"}
-                          </Button>
-                        </form>
-                        <input
-                          type="text"
-                          placeholder="세션 검색"
-                          value={sessionSearchQuery}
-                          onChange={(e) => setSessionSearchQuery(e.target.value)}
-                          className="h-7 text-xs w-full px-2 rounded border border-[var(--panel-border)] bg-[var(--panel)]"
-                        />
-                      </div>
-                      <div className="flex-1 min-h-0 overflow-auto p-1.5 space-y-1">
-                        {filteredSessions.map((session) => (
-                          <button
-                            key={session.session_id}
-                            onClick={() => setSelectedSessionId(session.session_id)}
-                            className={cn(
-                              "w-full text-left p-2 rounded border transition-all",
-                              selectedSessionId === session.session_id
-                                ? "border-primary/50 bg-primary/5"
-                                : "border-transparent hover:bg-muted/50"
-                            )}
-                          >
-                            <div className="flex items-center justify-between mb-0.5">
-                              <span className="text-sm font-medium">
-                                {session.session_code || `#${session.session_no}`}
-                              </span>
-                              <Badge
-                                tone={
-                                  session.status === "FINALIZED"
-                                    ? "active"
-                                    : session.status === "VOID"
-                                      ? "danger"
-                                      : "warning"
-                                }
-                                className="text-[10px] px-1.5 py-0 h-4 border-0"
-                              >
-                                {session.status}
-                              </Badge>
-                            </div>
-                            <div className="flex items-center justify-between text-xs text-[var(--muted)]">
-                              <span>{session.location_code || "미지정"}</span>
-                              <span className="tabular-nums">{session.line_count}라인</span>
-                            </div>
-                          </button>
-                        ))}
-                      </div>
-                    </div>
+                )}
 
-                    {/* Session Lines */}
-                    <div className="lg:col-span-2 rounded-md border border-border/40 overflow-hidden flex flex-col">
-                      <div className="p-2 border-b border-border/40 bg-muted/5">
-                        <div className="flex items-center justify-between">
-                          <h3 className="text-sm font-semibold text-foreground">
-                            {selectedSession ? selectedSession.session_code || `세션 #${selectedSession.session_no}` : "세션 라인"}
+                {/* Stocktake Tab */}
+                {mobileSection === "stocktake" && (
+                  <div className="space-y-6">
+                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                      {/* Session List */}
+                      <div className="bg-[var(--panel)] rounded-xl border border-[var(--panel-border)] overflow-hidden">
+                        <div className="p-4 border-b border-[var(--panel-border)] space-y-3">
+                          <h3 className="text-sm font-bold flex items-center gap-2">
+                            <ClipboardList className="w-4 h-4" />
+                            실사 세션
+                          </h3>
+                          <form onSubmit={sessionForm.handleSubmit(onCreateSession)} className="flex gap-2">
+                            <select
+                              {...sessionForm.register("location_code")}
+                              className="h-8 text-xs w-20 rounded-md bg-[var(--chip)] border-none"
+                            >
+                              <option value="">위치</option>
+                              {LOCATION_OPTIONS.map((o) => (
+                                <option key={o.value} value={o.value}>{o.label}</option>
+                              ))}
+                            </select>
+                            <input
+                              {...sessionForm.register("session_code")}
+                              placeholder="세션명"
+                              className="h-8 text-xs flex-1 px-2 rounded-md bg-[var(--chip)] border-none"
+                            />
+                            <Button type="submit" size="sm" disabled={createSessionMutation.isPending} className="h-8 px-3 text-xs">
+                              추가
+                            </Button>
+                          </form>
+                          <input
+                            type="text"
+                            placeholder="세션 검색..."
+                            value={sessionSearchQuery}
+                            onChange={(e) => setSessionSearchQuery(e.target.value)}
+                            className="h-8 text-xs w-full px-3 rounded-md bg-[var(--chip)] border-none"
+                          />
+                        </div>
+                        <div className="max-h-64 overflow-y-auto p-2 space-y-1">
+                          {filteredSessions.map((session) => (
+                            <button
+                              key={session.session_id}
+                              onClick={() => setSelectedSessionId(session.session_id)}
+                              className={cn(
+                                "w-full text-left p-3 rounded-lg border transition-all",
+                                selectedSessionId === session.session_id
+                                  ? "bg-[var(--primary)]/10 border-[var(--primary)]/30"
+                                  : "border-transparent hover:bg-[var(--chip)]"
+                              )}
+                            >
+                              <div className="flex items-center justify-between mb-1">
+                                <span className="text-sm font-medium">{session.session_code || `#${session.session_no}`}</span>
+                                <Badge
+                                  tone={session.status === "FINALIZED" ? "active" : session.status === "VOID" ? "danger" : "warning"}
+                                  className="text-[10px] px-1.5"
+                                >
+                                  {session.status}
+                                </Badge>
+                              </div>
+                              <div className="flex items-center justify-between text-xs text-[var(--muted)]">
+                                <span>{session.location_code || "미지정"}</span>
+                                <span className="tabular-nums">{session.line_count}라인</span>
+                              </div>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* Session Lines */}
+                      <div className="lg:col-span-2 bg-[var(--panel)] rounded-xl border border-[var(--panel-border)] overflow-hidden">
+                        <div className="p-4 border-b border-[var(--panel-border)] flex items-center justify-between">
+                          <h3 className="text-sm font-bold">
+                            {selectedSession ? (selectedSession.session_code || `세션 #${selectedSession.session_no}`) : "세션 라인"}
                           </h3>
                           {selectedSession && !isFinalized && (
-                            <div className="flex items-center gap-1">
-                              <Button size="sm" variant="secondary" onClick={onVoidSession} className="h-6 px-2 text-xs">
+                            <div className="flex items-center gap-2">
+                              <Button size="sm" variant="secondary" onClick={onVoidSession} className="h-7 px-2 text-xs">
                                 취소
                               </Button>
-                              <Button size="sm" onClick={onFinalize} className="h-6 px-2 text-xs">
+                              <Button size="sm" onClick={onFinalize} className="h-7 px-2 text-xs">
                                 확정
                               </Button>
                             </div>
                           )}
                         </div>
-                      </div>
-                      <div className="flex-1 overflow-auto">
-                        {selectedSessionId ? (
-                          <table className="w-full text-sm">
-                            <thead className="sticky top-0 bg-background z-10 text-xs font-medium text-[var(--muted)] border-b border-border/40">
-                              <tr>
-                                <th className="px-2 py-1.5 text-left">#</th>
-                                <th className="px-2 py-1.5 text-left">품목</th>
-                                <th className="px-2 py-1.5 text-right">실사</th>
-                                <th className="px-2 py-1.5 text-right">시스템</th>
-                                <th className="px-2 py-1.5 text-right">델타</th>
-                              </tr>
-                            </thead>
-                            <tbody className="divide-y divide-border/40">
-                              {sessionLinesData.map((line) => (
-                                <tr key={line.count_line_id} className={line.is_void ? "opacity-50" : ""}>
-                                  <td className="px-2 py-1.5 text-xs text-[var(--muted)]">{line.line_no}</td>
-                                  <td className="px-2 py-1.5">{line.item_name}</td>
-                                  <td className="px-2 py-1.5 text-right tabular-nums">{line.counted_qty}</td>
-                                  <td className="px-2 py-1.5 text-right tabular-nums text-[var(--muted)]">
-                                    {line.system_qty_asof ?? "-"}
-                                  </td>
-                                  <td className={cn(
-                                    "px-2 py-1.5 text-right tabular-nums font-semibold",
-                                    (line.delta_qty ?? 0) > 0 ? "text-blue-600" : (line.delta_qty ?? 0) < 0 ? "text-orange-600" : "text-[var(--muted)]"
-                                  )}>
-                                    {line.delta_qty && line.delta_qty > 0 ? "+" : ""}
-                                    {line.delta_qty ?? "-"}
-                                  </td>
+                        <div className="max-h-64 overflow-y-auto">
+                          {selectedSessionId ? (
+                            <table className="w-full text-sm">
+                              <thead className="bg-[var(--chip)] text-xs font-medium text-[var(--muted)] border-b border-[var(--panel-border)]">
+                                <tr>
+                                  <th className="px-3 py-2 text-left">#</th>
+                                  <th className="px-3 py-2 text-left">품목</th>
+                                  <th className="px-3 py-2 text-right">실사</th>
+                                  <th className="px-3 py-2 text-right">시스템</th>
+                                  <th className="px-3 py-2 text-right">델타</th>
                                 </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        ) : (
-                          <div className="p-4 text-center text-sm text-[var(--muted)]">
-                            세션을 선택하세요
-                          </div>
-                        )}
+                              </thead>
+                              <tbody className="divide-y divide-[var(--panel-border)]">
+                                {sessionLinesData.map((line) => (
+                                  <tr key={line.count_line_id} className={line.is_void ? "opacity-50" : ""}>
+                                    <td className="px-3 py-2 text-xs text-[var(--muted)]">{line.line_no}</td>
+                                    <td className="px-3 py-2">{line.item_name}</td>
+                                    <td className="px-3 py-2 text-right tabular-nums">{line.counted_qty}</td>
+                                    <td className="px-3 py-2 text-right tabular-nums text-[var(--muted)]">{line.system_qty_asof ?? "-"}</td>
+                                    <td className={cn(
+                                      "px-3 py-2 text-right tabular-nums font-semibold",
+                                      (line.delta_qty ?? 0) > 0 ? "text-blue-600" : (line.delta_qty ?? 0) < 0 ? "text-orange-600" : "text-[var(--muted)]"
+                                    )}>
+                                      {line.delta_qty && line.delta_qty > 0 ? "+" : ""}{line.delta_qty ?? "-"}
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          ) : (
+                            <div className="p-8 text-center text-sm text-[var(--muted)]">
+                              세션을 선택하세요
+                            </div>
+                          )}
+                        </div>
                       </div>
                     </div>
                   </div>
-                </CardBody>
-              </Card>
+                )}
 
-              {/* Quick Actions Card */}
-              <Card className={cn("hidden md:block", mobileSection === "actions" && "block")}>
-                <CardHeader className="flex items-center justify-between py-2">
-                  <div className="flex items-center gap-2">
-                    <Wrench className="h-4 w-4 text-[var(--muted)]" />
-                    <span className="text-sm font-semibold text-foreground">빠른 처리</span>
+                {/* Actions Tab */}
+                {mobileSection === "actions" && (
+                  <div className="bg-[var(--panel)] rounded-xl border border-[var(--panel-border)] p-5">
+                    <h3 className="text-sm font-bold mb-4 flex items-center gap-2">
+                      <Wrench className="w-4 h-4" />
+                      빠른 입출고 등록
+                    </h3>
+                    <form onSubmit={quickMoveForm.handleSubmit(onSubmitQuickMove)} className="space-y-4">
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                        <div>
+                          <label className="text-xs font-medium text-[var(--muted)] block mb-1.5">타입</label>
+                          <select
+                            {...quickMoveForm.register("move_type")}
+                            className="w-full h-9 text-sm rounded-md bg-[var(--chip)] border-none px-3"
+                          >
+                            <option value="RECEIPT">입고 (RECEIPT)</option>
+                            <option value="ISSUE">출고 (ISSUE)</option>
+                            <option value="ADJUST">조정 (ADJUST)</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label className="text-xs font-medium text-[var(--muted)] block mb-1.5">위치</label>
+                          <select
+                            {...quickMoveForm.register("location_code")}
+                            className="w-full h-9 text-sm rounded-md bg-[var(--chip)] border-none px-3"
+                          >
+                            <option value="">(선택)</option>
+                            {LOCATION_OPTIONS.map((o) => (
+                              <option key={o.value} value={o.value}>{o.label}</option>
+                            ))}
+                          </select>
+                        </div>
+                        <div>
+                          <label className="text-xs font-medium text-[var(--muted)] block mb-1.5">수량</label>
+                          <input
+                            type="number"
+                            {...quickMoveForm.register("qty", { valueAsNumber: true })}
+                            className="w-full h-9 text-sm rounded-md bg-[var(--chip)] border-none px-3"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-xs font-medium text-[var(--muted)] block mb-1.5">중량(g)</label>
+                          <input
+                            type="number"
+                            step="0.01"
+                            {...quickMoveForm.register("base_weight_g", { valueAsNumber: true })}
+                            className="w-full h-9 text-sm rounded-md bg-[var(--chip)] border-none px-3"
+                          />
+                        </div>
+                      </div>
+                      <div className="flex gap-3">
+                        <input
+                          type="text"
+                          {...quickMoveForm.register("model_name")}
+                          placeholder="품목명"
+                          className="flex-1 h-9 text-sm rounded-md bg-[var(--chip)] border-none px-3"
+                        />
+                        <Button type="submit" disabled={quickMoveMutation.isPending}>
+                          {quickMoveMutation.isPending ? "처리중..." : "등록"}
+                        </Button>
+                      </div>
+                    </form>
                   </div>
-                </CardHeader>
-                <CardBody className="space-y-3">
-                  <form onSubmit={quickMoveForm.handleSubmit(onSubmitQuickMove)} className="space-y-3">
-                    <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-                      <div>
-                        <label className="text-xs text-[var(--muted)] block mb-1">타입</label>
-                        <select
-                          {...quickMoveForm.register("move_type")}
-                          className="h-8 text-xs w-full rounded border border-[var(--panel-border)] bg-[var(--panel)] px-2"
-                        >
-                          <option value="RECEIPT">입고 (RECEIPT)</option>
-                          <option value="ISSUE">출고 (ISSUE)</option>
-                          <option value="ADJUST">조정 (ADJUST)</option>
-                        </select>
-                      </div>
-                      <div>
-                        <label className="text-xs text-[var(--muted)] block mb-1">위치</label>
-                        <select
-                          {...quickMoveForm.register("location_code")}
-                          className="h-8 text-xs w-full rounded border border-[var(--panel-border)] bg-[var(--panel)] px-2"
-                        >
-                          <option value="">(선택)</option>
-                          {LOCATION_OPTIONS.map((o) => (
-                            <option key={o.value} value={o.value}>
-                              {o.label}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                      <div>
-                        <label className="text-xs text-[var(--muted)] block mb-1">수량</label>
-                        <input
-                          type="number"
-                          {...quickMoveForm.register("qty", { valueAsNumber: true })}
-                          className="h-8 text-xs w-full rounded border border-[var(--panel-border)] bg-[var(--panel)] px-2"
-                        />
-                      </div>
-                      <div>
-                        <label className="text-xs text-[var(--muted)] block mb-1">중량(g)</label>
-                        <input
-                          type="number"
-                          step="0.01"
-                          {...quickMoveForm.register("base_weight_g", { valueAsNumber: true })}
-                          className="h-8 text-xs w-full rounded border border-[var(--panel-border)] bg-[var(--panel)] px-2"
-                        />
-                      </div>
-                    </div>
-                    <div className="flex gap-2">
-                      <input
-                        type="text"
-                        {...quickMoveForm.register("model_name")}
-                        placeholder="품목명"
-                        className="flex-1 h-8 text-xs rounded border border-[var(--panel-border)] bg-[var(--panel)] px-2"
-                      />
-                      <Button type="submit" size="sm" disabled={quickMoveMutation.isPending} className="h-8 px-3 text-xs">
-                        {quickMoveMutation.isPending ? "처리중..." : "등록"}
-                      </Button>
-                    </div>
-                  </form>
-                </CardBody>
-              </Card>
+                )}
+              </div>
             </div>
-          }
-        />
+          </>
+        ) : (
+          <div className="flex-1 flex items-center justify-center text-[var(--muted)]">
+            <div className="text-center">
+              <Package className="mx-auto mb-4 h-16 w-16 opacity-10" />
+              <p className="text-lg font-medium mb-1">모델을 선택하세요</p>
+              <p className="text-sm">왼쪽 목록에서 모델을 클릭하면 상세 정보가 표시됩니다.</p>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

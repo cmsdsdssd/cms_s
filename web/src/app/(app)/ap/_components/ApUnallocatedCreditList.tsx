@@ -42,6 +42,21 @@ const formatQty = (value?: number | null, asset?: string | null) => {
     return `${new Intl.NumberFormat("ko-KR", { maximumFractionDigits: 4 }).format(n)}g`;
 };
 
+const toAssetLabel = (assetCode?: string | null) => {
+    switch (assetCode) {
+        case "XAU_G":
+            return "금(g)";
+        case "XAG_G":
+            return "은(g)";
+        case "KRW_LABOR":
+            return "공임(원)";
+        case "KRW_MATERIAL":
+            return "소재비(원)";
+        default:
+            return assetCode ?? "-";
+    }
+};
+
 export function ApUnallocatedCreditList({
     unallocated,
     isLoading,
@@ -74,7 +89,7 @@ export function ApUnallocatedCreditList({
                     <div className="flex items-center justify-between">
                         <div className="flex items-center gap-2">
                             <span className="px-1.5 py-0.5 rounded bg-[var(--chip)] font-medium">
-                                {row.asset_code ?? "-"}
+                                {toAssetLabel(row.asset_code)}
                             </span>
                             <span className="text-[var(--muted)]">
                                 {formatDateTimeKst(row.paid_at)}

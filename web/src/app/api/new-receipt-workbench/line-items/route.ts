@@ -55,6 +55,8 @@ export async function GET(request: Request) {
       material_code: row.material_code ?? null,
       qty: row.qty ?? null,
       weight_g: row.factory_weight_g ?? null,
+      weight_raw_g: parseNumeric(lineJson?.weight_raw_g),
+      weight_deduct_g: parseNumeric(lineJson?.weight_deduct_g),
       labor_basic_cost_krw: row.factory_labor_basic_cost_krw ?? null,
       labor_other_cost_krw: row.factory_labor_other_cost_krw ?? null,
       total_amount_krw: row.factory_total_amount_krw ?? null,

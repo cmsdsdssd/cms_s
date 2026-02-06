@@ -427,7 +427,7 @@ export default function OrdersMainPage() {
   }, [ordersQuery.data, todayKey]);
 
   return (
-    <div className="space-y-3 font-sans text-slate-600" id="orders_main.root">
+    <div className="space-y-5" id="orders_main.root">
       {/* Factory Order Wizard Modal */}
       {showFactoryOrderWizard && (
         <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
@@ -468,7 +468,7 @@ export default function OrdersMainPage() {
       <UnifiedToolbar
         title="주문관리"
         actions={
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <Button
               variant="secondary"
               size="sm"
@@ -509,7 +509,7 @@ export default function OrdersMainPage() {
               }, 0);
             }
           }}
-          className="w-28"
+          className="w-32"
         >
           <option value="">(고객)</option>
           {customerOptions.map((option) => (
@@ -533,7 +533,7 @@ export default function OrdersMainPage() {
               }, 0);
             }
           }}
-          className="w-28"
+          className="w-32"
         >
           <option value="">(공장)</option>
           {vendorOptions.map((option) => (
@@ -557,7 +557,7 @@ export default function OrdersMainPage() {
               }, 0);
             }
           }}
-          className="w-28"
+          className="w-32"
         >
           <option value="">(날짜)</option>
           {dateOptions.map((date) => (
@@ -584,7 +584,7 @@ export default function OrdersMainPage() {
             }
           }}
           placeholder="모델 검색"
-          className="w-32 md:w-40"
+          className="w-40 md:w-52"
         />
 
         {/* Filter Count Badge */}
@@ -596,25 +596,31 @@ export default function OrdersMainPage() {
       </UnifiedToolbar>
 
       {/* Summary Cards */}
-      <div className="grid grid-cols-1 gap-3 md:grid-cols-3 px-4">
-        <Card className="p-3 flex flex-col gap-1 shadow-sm border-[var(--panel-border)]">
-          <span className="text-xs font-medium text-[var(--muted)]">오늘 주문</span>
-          <span className="text-xl font-bold text-blue-400">{todayOrderCount}</span>
+      <div className="grid grid-cols-1 gap-4 px-4 md:grid-cols-3">
+        <Card className="border-[var(--panel-border)] bg-[var(--panel)] shadow-sm">
+          <CardBody className="p-4">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">오늘 주문</p>
+            <p className="mt-1 text-2xl font-semibold text-[var(--foreground)] tabular-nums">{todayOrderCount}</p>
+          </CardBody>
         </Card>
-        <Card className="p-3 flex flex-col gap-1 shadow-sm border-[var(--panel-border)]">
-          <span className="text-xs font-medium text-[var(--muted)]">오늘 취소</span>
-          <span className="text-xl font-bold text-red-400">{todayCancelledCount}</span>
+        <Card className="border-[var(--panel-border)] bg-[var(--panel)] shadow-sm">
+          <CardBody className="p-4">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">오늘 취소</p>
+            <p className="mt-1 text-2xl font-semibold text-[var(--danger)] tabular-nums">{todayCancelledCount}</p>
+          </CardBody>
         </Card>
-        <Card className="p-3 flex flex-col gap-1 shadow-sm border-[var(--panel-border)]">
-          <span className="text-xs font-medium text-[var(--muted)]">필터 결과</span>
-          <span className="text-xl font-bold text-white">{filteredCount}</span>
+        <Card className="border-[var(--panel-border)] bg-[var(--panel)] shadow-sm">
+          <CardBody className="p-4">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">필터 결과</p>
+            <p className="mt-1 text-2xl font-semibold text-[var(--foreground)] tabular-nums">{filteredCount}</p>
+          </CardBody>
         </Card>
       </div>
 
-      <div className="grid grid-cols-1 gap-3 lg:grid-cols-[280px_1fr] px-4">
+      <div className="grid grid-cols-1 gap-4 px-4 lg:grid-cols-[300px_1fr]">
         {/* Filters Panel - Compact */}
-        <Card className="shadow-sm h-fit border-[var(--panel-border)]" id="orders_main.filters">
-          <CardHeader className="flex items-center justify-between py-3 px-3 border-b border-[var(--panel-border)]">
+        <Card className="h-fit border-[var(--panel-border)] bg-[var(--panel)] shadow-sm" id="orders_main.filters">
+          <CardHeader className="flex items-center justify-between border-b border-[var(--panel-border)] px-4 py-3">
             <div className="flex items-center gap-2">
               <h3 className="text-sm font-semibold">활성 필터</h3>
               {filters.length > 0 && (
@@ -625,7 +631,7 @@ export default function OrdersMainPage() {
             </div>
             <div className="flex items-center gap-2">
               <Select
-                className="h-8 text-sm w-24"
+                className="h-9 w-24 text-sm"
                 onChange={(event) => addFilter(event.target.value as FilterType)}
                 value=""
               >
@@ -637,16 +643,13 @@ export default function OrdersMainPage() {
                 <option value="date">날짜</option>
               </Select>
               {filters.length > 0 && (
-                <button
-                  onClick={() => setFilters([])}
-                  className="text-xs text-[var(--muted)] hover:text-red-500 px-2 py-1 rounded hover:bg-[var(--panel-hover)] transition-colors"
-                >
+                <Button size="sm" variant="ghost" onClick={() => setFilters([])}>
                   모두 지우기
-                </button>
+                </Button>
               )}
             </div>
           </CardHeader>
-          <CardBody className="grid gap-2 p-3 min-h-[120px]">
+          <CardBody className="grid min-h-[120px] gap-3 p-4">
             {filters.length === 0 ? (
               <div className="text-center py-6 text-xs text-[var(--muted)] bg-[var(--panel)] rounded-md border border-dashed border-[var(--panel-border)]">
                 필터가 없습니다
@@ -654,7 +657,7 @@ export default function OrdersMainPage() {
             ) : null}
             <div
               className={cn(
-                "flex items-center justify-between rounded-xl border border-[var(--panel-border)] p-3 shadow-sm",
+                "flex items-center justify-between rounded-xl border border-[var(--panel-border)] p-3",
                 includeCancelled ? "bg-emerald-500/10" : "bg-red-500/10"
               )}
             >
@@ -685,7 +688,7 @@ export default function OrdersMainPage() {
               <div
                 key={filter.id}
                 className={cn(
-                  "flex flex-col gap-2 rounded-xl border border-[var(--panel-border)] bg-[var(--panel)] p-3 shadow-sm transition-all hover:shadow-md",
+                  "flex flex-col gap-2 rounded-xl border border-[var(--panel-border)] bg-[var(--panel)] p-3",
                   filter.value ? "bg-emerald-500/10" : "bg-red-500/10"
                 )}
               >
@@ -753,14 +756,14 @@ export default function OrdersMainPage() {
         </Card>
 
         {/* List Panel */}
-        <Card className="shadow-sm border-[var(--panel-border)] flex flex-col min-h-[500px]" id="orders_main.list">
-          <CardHeader className="flex items-center justify-between border-b border-[var(--panel-border)] py-2 px-3">
+        <Card className="flex min-h-[500px] flex-col border-[var(--panel-border)] bg-[var(--panel)] shadow-sm" id="orders_main.list">
+          <CardHeader className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--panel-border)] px-4 py-3">
             <div className="flex items-center gap-2">
-              <h3 className="text-sm font-semibold">주문 리스트</h3>
+              <h3 className="text-sm font-semibold text-[var(--foreground)]">주문 리스트</h3>
               <span className="text-xs text-[var(--muted)]">{applyFilters.length}건</span>
             </div>
             <div className="flex items-center gap-3">
-              <div className="flex items-center gap-2 text-xs text-[var(--muted)]">
+              <div className="hidden items-center gap-2 text-xs text-[var(--muted)] xl:flex">
                 <span className="inline-flex items-center gap-1">
                   <span className="h-2 w-2 rounded-full bg-[var(--muted)]" />
                   주문취소
@@ -789,8 +792,8 @@ export default function OrdersMainPage() {
               </Link>
             </div>
           </CardHeader>
-          <CardBody className="p-3 flex-1 flex flex-col">
-            <div className="space-y-1 flex-1">
+          <CardBody className="flex flex-1 flex-col p-4">
+            <div className="flex-1 space-y-2">
               {isLoading ? (
                 <div className="space-y-3">
                   {Array.from({ length: 5 }).map((_, i) => (
@@ -810,7 +813,7 @@ export default function OrdersMainPage() {
                 </div>
               ) : (
                 <>
-                  <div className="sticky top-0 z-10 rounded-[12px] border border-[var(--panel-border)] bg-[var(--panel)] px-4 py-3 text-xs font-medium text-slate-500 border-b">
+                  <div className="sticky top-0 z-10 rounded-[12px] border border-[var(--panel-border)] bg-[var(--panel)] px-4 py-3 text-xs font-semibold text-[var(--muted)]">
                     <div className="grid grid-cols-1 gap-2 lg:grid-cols-[0.35fr_64px_1.3fr_2.03fr_0.6fr_0.6fr_0.6fr_0.6fr_0.6fr_0.6fr_0.8fr_1fr] items-center">
                       <div className="text-center">#</div>
                       <div className="text-center">모델사진</div>
@@ -858,9 +861,9 @@ export default function OrdersMainPage() {
                       <div
                         key={rowKey}
                         className={cn(
-                          "group relative rounded-[14px] border border-[var(--panel-border)] px-4 py-[0.13rem] bg-[var(--panel)] shadow-sm", // py 줄임
-                          "transition-all duration-200 hover:shadow-md hover:-translate-y-0.5 hover:border-[var(--primary)]/20",
-                          isEmpty ? "opacity-40 min-h-[70.5px]" : "cursor-default",
+                          "group relative rounded-[14px] border border-[var(--panel-border)] bg-[var(--background)] px-4 py-1.5",
+                          "transition-colors duration-150 hover:border-[var(--primary)]/25 hover:bg-[var(--panel)]",
+                          isEmpty ? "opacity-40 min-h-[56px]" : "cursor-default",
                           order?.status === "CANCELLED" ? "line-through decoration-[2px] decoration-[var(--muted)] text-[var(--muted)]" : "",
                           order?.status === "ORDER_PENDING" ? "bg-[var(--warning)]/10" : ""
                         )}
@@ -877,7 +880,7 @@ export default function OrdersMainPage() {
                               {order?.model_name && masterImageMap.get(order.model_name) ? (
                                 <div
                                   className={cn(
-                                    "absolute left-1/2 top-1/2 mt-5 h-15 w-15 -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-md border border-[var(--panel-border)] bg-[var(--panel)]",
+                                    "absolute left-1/2 top-[136%] h-18 w-18 -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-md border border-[var(--panel-border)] bg-[var(--panel)]",
                                     order?.status === "CANCELLED" ? "grayscale" : ""
                                   )}
                                 >
@@ -894,7 +897,7 @@ export default function OrdersMainPage() {
                               ) : (
                                 <div
                                   className={cn(
-                                    "absolute left-1/2 top-1/2 mt-5 h-15 w-15 -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-md border border-[var(--panel-border)] bg-[var(--panel)] flex items-center justify-center text-[10px] text-[var(--muted)]",
+                                    "absolute left-1/2 top-[56%] h-12 w-12 -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-md border border-[var(--panel-border)] bg-[var(--panel)] flex items-center justify-center text-[10px] text-[var(--muted)]",
                                     order?.status === "CANCELLED" ? "grayscale" : ""
                                   )}
                                 >
@@ -909,8 +912,8 @@ export default function OrdersMainPage() {
                           <div className="font-semibold text-[var(--foreground)] flex flex-col justify-center items-center text-center">
                             <span
                               className={cn(
-                                "text-sm font-semibold truncate px-2",
-                                order?.status === "CANCELLED" ? "text-slate-400" : "text-slate-700"
+                                "truncate px-2 text-sm font-semibold",
+                                order?.status === "CANCELLED" ? "text-[var(--muted)]" : "text-[var(--foreground)]"
                               )}
                             >
                               {order?.customer_name ?? ""}
@@ -922,8 +925,8 @@ export default function OrdersMainPage() {
                           <div className="font-semibold text-[var(--foreground)] flex flex-col h-full justify-center items-center text-center">
                             <span
                               className={cn(
-                                "text-sm font-medium truncate px-2",
-                                order?.status === "CANCELLED" ? "text-slate-400" : "text-slate-600"
+                                "truncate px-2 text-sm font-medium",
+                                order?.status === "CANCELLED" ? "text-[var(--muted)]" : "text-[var(--foreground)]"
                               )}
                             >
                               {order?.model_name ?? ""}
@@ -932,43 +935,43 @@ export default function OrdersMainPage() {
                           </div>
 
                           {/* 5. 소재 */}
-                          <div className="text-slate-500 flex flex-col justify-center">
+                          <div className="flex flex-col justify-center text-[var(--muted)]">
                             <span>{order ? materialLabel : ""}</span>
                             <span className="text-[10px] text-[var(--muted)] font-normal lg:hidden">소재</span>
                           </div>
 
                           {/* 6. 카테고리 */}
-                          <div className="text-slate-500 flex flex-col justify-center">
+                          <div className="flex flex-col justify-center text-[var(--muted)]">
                             <span>{getCategoryLabel(order?.suffix)}</span>
                             <span className="text-[10px] text-[var(--muted)] font-normal lg:hidden">카테고리</span>
                           </div>
 
                           {/* 7. 색상 */}
-                          <div className="text-slate-500 flex flex-col justify-center">
+                          <div className="flex flex-col justify-center text-[var(--muted)]">
                             <span>{order?.color ?? ""}</span>
                             <span className="text-[10px] text-[var(--muted)] font-normal lg:hidden">색상</span>
                           </div>
 
                           {/* 8. 사이즈 */}
-                          <div className="text-slate-500 flex flex-col justify-center">
+                          <div className="flex flex-col justify-center text-[var(--muted)]">
                             <span>{order?.size ?? ""}</span>
                             <span className="text-[10px] text-[var(--muted)] font-normal lg:hidden">사이즈</span>
                           </div>
 
                           {/* 9. 도금여부 */}
-                          <div className="text-slate-500 flex flex-col justify-center">
+                          <div className="flex flex-col justify-center text-[var(--muted)]">
                             <span>{order ? platingLabel : ""}</span>
                             <span className="text-[10px] text-[var(--muted)] font-normal lg:hidden">도금여부</span>
                           </div>
 
                           {/* 10. 도금색 */}
-                          <div className="text-slate-500 flex flex-col justify-center">
+                          <div className="flex flex-col justify-center text-[var(--muted)]">
                             <span>{order?.plating_color_code ?? ""}</span>
                             <span className="text-[10px] text-[var(--muted)] font-normal lg:hidden">도금색</span>
                           </div>
 
                           {/* 11. 석여부 */}
-                          <div className="text-slate-500 flex flex-col justify-center">
+                          <div className="flex flex-col justify-center text-[var(--muted)]">
                             <span>{order ? (hasStone ? "✓" : "-") : ""}</span>
                             <span className="text-[10px] text-[var(--muted)] font-normal lg:hidden">석여부</span>
                           </div>
@@ -982,7 +985,7 @@ export default function OrdersMainPage() {
                           {!isEmpty ? (
                             <div className="flex justify-end items-center">
                               <Link href={`/orders?edit_order_line_id=${order.order_line_id}`}>
-                                <Button size="sm" variant="secondary" className="opacity-0 group-hover:opacity-100 transition-opacity">
+                                <Button size="sm" variant="secondary" className="opacity-0 transition-opacity group-hover:opacity-100">
                                   수정
                                 </Button>
                               </Link>

@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 
@@ -85,6 +85,8 @@ type ReceiptLineItemRow = {
   material_code?: string | null;
   qty?: number | null;
   weight_g?: number | null;
+  weight_raw_g?: number | null;
+  weight_deduct_g?: number | null;
   labor_basic_cost_krw?: number | null;
   labor_other_cost_krw?: number | null;
   stone_center_qty?: number | null;
@@ -161,6 +163,8 @@ type ConfirmResult = {
   shipment_id?: string | null;
   shipment_line_id?: string | null;
   created_shipment_draft?: boolean | null;
+  missing_unit_cost_warn?: boolean | null;
+  weight_deviation_warn?: boolean | null;
 };
 
 type ConfirmedMatchRow = {
@@ -515,6 +519,7 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
   const suppressModelSuggestRef = useRef<{ lineId: string; value: string } | null>(null);
 
   const [activeTab, setActiveTab] = useState<"match" | "confirmed" | "reconcile" | "integrity">("match");
+  const [isMatchPanelExpanded, setIsMatchPanelExpanded] = useState(false);
   const [selectedUnlinked, setSelectedUnlinked] = useState<UnlinkedLineRow | null>(null);
   const [suggestions, setSuggestions] = useState<MatchCandidate[]>([]);
   const [selectedCandidate, setSelectedCandidate] = useState<MatchCandidate | null>(null);
@@ -534,6 +539,9 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
   const [matchClearReasonText, setMatchClearReasonText] = useState("");
   const [matchClearNote, setMatchClearNote] = useState("");
   const [matchClearError, setMatchClearError] = useState<string | null>(null);
+  const matchExpandRef = useRef<HTMLDivElement | null>(null);
+  const matchExpandHeightRef = useRef<number | null>(null);
+  const [matchPanelMinHeight, setMatchPanelMinHeight] = useState<number | null>(null);
 
   const debugSuggest = useMemo(() => {
     if (typeof window === "undefined") return false;
@@ -817,6 +825,9 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
     successMessage: "매칭 확정 + shipment draft 생성 완료",
     onSuccess: (result) => {
       setConfirmResult(result);
+      if (result?.missing_unit_cost_warn) {
+        toast.warning("자입 보석 단가가 0입니다(확인 필요)");
+      }
       queryClient.invalidateQueries({ queryKey: ["new-receipt-workbench", "unlinked", selectedReceiptId] });
       queryClient.invalidateQueries({ queryKey: ["new-receipt-workbench", "receipts"] });
       queryClient.invalidateQueries({ queryKey: ["new-receipt-workbench", "reconcile", selectedReceiptId] });
@@ -1073,8 +1084,8 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
         model_name: row.model_name ?? "",
         material_code: row.material_code ?? "",
         qty: toInputNumber(row.qty ?? 1),
-        weight_raw_g: toInputNumber(row.weight_g ?? null),
-        weight_deduct_g: "",
+        weight_raw_g: toInputNumber(row.weight_raw_g ?? row.weight_g ?? null),
+        weight_deduct_g: toInputNumber(row.weight_deduct_g ?? null),
         labor_basic_cost_krw: toInputNumber(row.labor_basic_cost_krw ?? null),
         labor_other_cost_krw: toInputNumber(row.labor_other_cost_krw ?? null),
         stone_center_qty: toInputNumber(row.stone_center_qty ?? 0),
@@ -2216,6 +2227,45 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
     factoryStatementUpsert.isPending ||
     isSuggesting;
 
+  const isMatchFocusMode = activeTab === "match" && isMatchPanelExpanded;
+  const isWorkbenchExpanded = isPreviewExpanded;
+
+  const setMatchPanelExpandedSafely = useCallback(
+    (value: boolean) => {
+      if (value) {
+        matchExpandHeightRef.current = matchExpandRef.current?.offsetHeight ?? null;
+        setMatchPanelMinHeight(matchExpandHeightRef.current);
+      } else {
+        setMatchPanelMinHeight(null);
+      }
+      setIsMatchPanelExpanded(value);
+    },
+    []
+  );
+
+  useLayoutEffect(() => {
+    if (!isMatchPanelExpanded) return;
+    if (matchPanelMinHeight !== null) return;
+    const height = matchExpandRef.current?.offsetHeight ?? null;
+    if (height !== null) setMatchPanelMinHeight(height);
+  }, [isMatchPanelExpanded, matchPanelMinHeight]);
+
+  useEffect(() => {
+    if (activeTab !== "match") setMatchPanelExpandedSafely(false);
+  }, [activeTab]);
+
+  useEffect(() => {
+    if (!isMatchPanelExpanded) return;
+    const handleOutside = (event: MouseEvent) => {
+      const target = event.target;
+      if (!(target instanceof Node)) return;
+      if (matchExpandRef.current?.contains(target)) return;
+      setMatchPanelExpandedSafely(false);
+    };
+    document.addEventListener("mousedown", handleOutside);
+    return () => document.removeEventListener("mousedown", handleOutside);
+  }, [isMatchPanelExpanded]);
+
   const reconcileStatus = useMemo(() => {
     if (!reconcileIssueCounts) {
       return { label: "미확인", tone: "neutral" as const };
@@ -2256,7 +2306,7 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
       </div>
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-12 items-start">
-        <div className={cn("space-y-4", isPreviewExpanded ? "lg:hidden" : "lg:col-span-3")}>
+        <div className={cn("space-y-4", isWorkbenchExpanded ? "lg:hidden" : "lg:col-span-3")}>
           <Card className="border-none shadow-sm ring-1 ring-black/5">
             <CardHeader className="border-b border-[var(--panel-border)] bg-[var(--panel)]/50 px-4 py-3">
               <div className="text-sm font-semibold">영수증 필터</div>
@@ -2403,8 +2453,15 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   <div className="text-sm font-semibold">라인 입력 (1행 요약 + 상세 펼침)</div>
-                  {isPreviewExpanded ? (
-                    <Button size="sm" variant="secondary" onClick={() => setIsPreviewExpanded(false)}>
+                  {isWorkbenchExpanded ? (
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      onClick={() => {
+                        setIsPreviewExpanded(false);
+                        setMatchPanelExpandedSafely(false);
+                      }}
+                    >
                       목록 열기
                     </Button>
                   ) : null}
@@ -3154,7 +3211,8 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                     </div>
                   </div>
 
-                  <Card className="border-none shadow-sm ring-1 ring-black/5">
+                  <div className="overflow-hidden transition-all duration-300 max-h-[1800px] opacity-100">
+                    <Card className="border-none shadow-sm ring-1 ring-black/5">
                     <CardHeader className="border-b border-[var(--panel-border)] bg-[var(--panel)]/50 px-4 py-3">
                       <div className="flex flex-wrap items-center justify-between gap-3">
                         <div className="flex items-center gap-3">
@@ -3254,14 +3312,15 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                         </div>
                       )}
                     </CardBody>
-                  </Card>
+                    </Card>
+                  </div>
                 </div>
               )}
             </CardBody>
           </Card>
         </div>
 
-        <div className={cn("space-y-4", isPreviewExpanded ? "lg:col-span-6" : "lg:col-span-3")}>
+        <div className={cn("space-y-4", isWorkbenchExpanded ? "lg:col-span-6" : "lg:col-span-3")}>
           <Card className="border-none shadow-sm ring-1 ring-black/5 lg:sticky lg:top-20 h-fit">
             <CardHeader className="border-b border-[var(--panel-border)] bg-[var(--panel)]/50 px-4 py-3">
               <div className="flex items-center justify-between">
@@ -3368,6 +3427,7 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
             </CardBody>
           </Card>
 
+          <div>
           <Card className="border-none shadow-sm ring-1 ring-black/5">
             <CardHeader className="border-b border-[var(--panel-border)] bg-[var(--panel)]/50 px-4 py-3">
               <div className="flex items-center justify-between">
@@ -3395,43 +3455,78 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
               ) : null}
             </CardBody>
           </Card>
+          </div>
 
-          <Card className="border-none shadow-sm ring-1 ring-black/5">
+          <Card className="border-none shadow-sm ring-1 ring-black/5 overflow-visible">
             <CardHeader className="border-b border-[var(--panel-border)] bg-[var(--panel)]/50 px-4 py-3">
-              <div className="flex items-center gap-2">
-                {[
-                  { key: "match", label: "매칭" },
-                  { key: "confirmed", label: "확정/출고대기" },
-                  { key: "reconcile", label: "정합성" },
-                  { key: "integrity", label: "링크오류" },
-                ].map((tab) => (
-                  <button
-                    key={tab.key}
-                    type="button"
-                    onClick={() => setActiveTab(tab.key as typeof activeTab)}
-                    className={cn(
-                      "rounded-full border px-3 py-1.5 text-xs",
-                      activeTab === tab.key
-                        ? "border-[var(--primary)] bg-[var(--chip)] text-[var(--primary)]"
-                        : "border-[var(--panel-border)] text-[var(--muted)]"
-                    )}
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  {[
+                    { key: "match", label: "매칭" },
+                    { key: "confirmed", label: "확정/출고대기" },
+                    { key: "reconcile", label: "정합성" },
+                    { key: "integrity", label: "링크오류" },
+                  ].map((tab) => (
+                    <button
+                      key={tab.key}
+                      type="button"
+                      onClick={() => setActiveTab(tab.key as typeof activeTab)}
+                      className={cn(
+                        "rounded-full border px-3 py-1.5 text-xs",
+                        activeTab === tab.key
+                          ? "border-[var(--primary)] bg-[var(--chip)] text-[var(--primary)]"
+                          : "border-[var(--panel-border)] text-[var(--muted)]"
+                      )}
+                    >
+                      {tab.label}
+                    </button>
+                  ))}
+                </div>
+                {activeTab === "match" ? (
+                  <Button
+                    size="sm"
+                    variant={isMatchPanelExpanded ? "primary" : "secondary"}
+                    onClick={() => setMatchPanelExpandedSafely(!isMatchPanelExpanded)}
                   >
-                    {tab.label}
-                  </button>
-                ))}
+                    {isMatchPanelExpanded ? "축소" : "확장"}
+                  </Button>
+                ) : null}
               </div>
             </CardHeader>
-            <CardBody className="p-4 space-y-4">
+            <CardBody className="p-4 space-y-4 relative overflow-visible">
               {activeTab === "match" && (
-                <div className="space-y-4">
+                <div style={{ minHeight: matchPanelMinHeight ?? undefined }}>
+                  <div
+                    ref={matchExpandRef}
+                    className={cn(
+                      "space-y-4 transition-all duration-300 lg:relative",
+                      isMatchFocusMode
+                        ? "lg:absolute lg:right-0 lg:top-0 lg:z-30 lg:w-[220%] rounded-lg border border-[var(--panel-border)] bg-[var(--panel)] p-3 shadow-[0_20px_60px_rgba(15,23,42,0.16)]"
+                        : ""
+                    )}
+                    onClick={() => {
+                      if (!isMatchPanelExpanded) setMatchPanelExpandedSafely(true);
+                    }}
+                    onMouseDown={(event) => {
+                      event.preventDefault();
+                    }}
+                  >
                   <div>
                     <div className="flex items-center justify-between">
-                      <div className="text-sm font-semibold">미매칭 라인</div>
+                      <div className="flex items-center gap-2">
+                        <div className="text-sm font-semibold">미매칭 라인</div>
+                        <span className="text-[10px] text-[var(--muted)]">(클릭 시 확장 · 외부 클릭 시 축소)</span>
+                      </div>
                       <Badge tone="neutral" className="h-5 px-2 text-[10px]">
                         {unlinkedQuery.data?.length ?? 0}건
                       </Badge>
                     </div>
-                    <div className="mt-2 max-h-48 overflow-y-auto space-y-1">
+                    <div
+                      className={cn(
+                        "mt-2 max-h-48 overflow-y-auto space-y-1 rounded-lg border border-[var(--panel-border)] bg-[var(--panel)] p-2 transition-all duration-300",
+                        isMatchFocusMode ? "lg:max-h-[520px]" : ""
+                      )}
+                    >
                       {unlinkedQuery.isLoading ? (
                         <Skeleton className="h-10 w-full" />
                       ) : (unlinkedQuery.data ?? []).length === 0 ? (
@@ -3913,6 +4008,7 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                         ) : null}
                       </div>
                     ) : null}
+                  </div>
                   </div>
                 </div>
               )}

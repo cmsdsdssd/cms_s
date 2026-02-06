@@ -43,7 +43,11 @@ export const CONTRACTS = {
     receiptLineUnlinked: "cms_v_receipt_line_unlinked_v1",
     receiptLineLinkIntegrity: "cms_v_receipt_line_link_integrity_v1",
     receiptLineReconcile: "cms_v_receipt_line_reconcile_v1",
+    // ✅ Repairs
     repairLineEnriched: "cms_v_repair_line_enriched_v1",
+    // NOTE: allow env override to match DB object names without code changes
+    repairWorkbench:
+      process.env.NEXT_PUBLIC_CMS_VIEW_REPAIR_WORKBENCH || "cms_v_repair_workbench_v1",
     shipmentCostApplyCandidates: "cms_v_shipment_cost_apply_candidates_v1",
 
     // ✅ AP (미지급) Views
@@ -164,16 +168,25 @@ export const CONTRACTS = {
     factoryPoCancel: "cms_fn_factory_po_cancel",
     receiptAttachToOrderLines: "cms_fn_receipt_attach_to_order_lines",
     markShipped: "cms_fn_mark_shipped",
+    // ✅ Repairs (v2 is additive; keep v1 for backward compatibility)
     repairCreate: "cms_fn_create_repair_v1",
+    repairCreateV2:
+      process.env.NEXT_PUBLIC_CMS_FN_REPAIR_CREATE_V2 || "cms_fn_create_repair_v2",
+    repairUpdateV2: "cms_fn_update_repair_line_v2",
     repairSetStatus: "cms_fn_set_repair_status_v1",
+    repairSetStatusV2:
+      process.env.NEXT_PUBLIC_CMS_FN_REPAIR_SET_STATUS_V2 || "cms_fn_set_repair_status_v2",
     repairSendToShipment: "cms_fn_send_repair_to_shipment_v1",
+    repairSendToShipmentV2:
+      process.env.NEXT_PUBLIC_CMS_FN_REPAIR_SEND_TO_SHIPMENT_V2 ||
+      "cms_fn_send_repair_to_shipment_v2",
     vendorBillCreate: "cms_fn_create_vendor_bill_v1",
     vendorBillApply: "cms_fn_apply_vendor_bill_to_shipments_v1",
     receiptUsageUpsert: "cms_fn_upsert_receipt_usage_alloc_v1",
     ensureApFromReceipt: "cms_fn_ensure_ap_from_receipt_v1",
     receiptPricingSnapshotUpsertV2: "cms_fn_upsert_receipt_pricing_snapshot_v2",
     receiptLineMatchSuggest: "cms_fn_receipt_line_match_suggest_v1",
-    receiptLineMatchConfirm: "cms_fn_receipt_line_match_confirm_v1",
+    receiptLineMatchConfirm: "cms_fn_receipt_line_match_confirm_v2",
     receiptLineDeleteV1: "cms_fn_receipt_line_delete_v1",
 
     // ✅ AP (미지급) RPCs

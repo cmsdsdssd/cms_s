@@ -2407,6 +2407,7 @@ export default function CatalogPage() {
                         type="number"
                         min={0}
                         readOnly
+                        autoFormat={false}
                         className="text-right font-bold bg-[var(--input-bg)] text-[var(--primary)] border-[var(--panel-border)]"
                         value={totalLaborSell}
                       />
@@ -2415,6 +2416,7 @@ export default function CatalogPage() {
                         type="number"
                         min={0}
                         readOnly
+                        autoFormat={false}
                         className="text-right font-bold bg-[var(--input-bg)] text-[var(--foreground)] border-[var(--panel-border)]"
                         value={totalLaborCost}
                       />

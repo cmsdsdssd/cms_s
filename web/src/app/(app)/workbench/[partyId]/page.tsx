@@ -108,6 +108,20 @@ const formatOptionalDateTime = (value?: string | null) => {
   return format(parsed, "MM/dd HH:mm", { locale: ko });
 };
 
+const getKstPrintTimestamp = () => {
+  const now = new Date();
+  return new Intl.DateTimeFormat("sv-SE", {
+    timeZone: "Asia/Seoul",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  }).format(now).replace(" ", "-");
+};
+
 // Order Line with Inline Shipment
 function OrderLineItem({ order, partyId, onExpand, isExpanded }: { 
   order: OrderItem; 
@@ -359,9 +373,10 @@ function WorkbenchContent() {
 
   const getStorePickupPrintUrl = () => {
     const dateParam = format(new Date(), "yyyy-MM-dd");
+    const printedAt = getKstPrintTimestamp();
     return `/shipments_print?mode=store_pickup&party_id=${encodeURIComponent(
       partyId
-    )}&date=${encodeURIComponent(dateParam)}`;
+    )}&date=${encodeURIComponent(dateParam)}&printed_at=${encodeURIComponent(printedAt)}`;
   };
 
   const handleConfirmStorePickup = async (shipmentId: string) => {

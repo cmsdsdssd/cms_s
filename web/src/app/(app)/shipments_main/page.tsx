@@ -74,6 +74,21 @@ const createPresetFilter = (type: FilterType, value: string): FilterRow => ({
   value,
 });
 
+const getKstPrintTimestamp = () => {
+  const now = new Date();
+  const text = new Intl.DateTimeFormat("sv-SE", {
+    timeZone: "Asia/Seoul",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  }).format(now);
+  return text.replace(" ", "-").replace(/\//g, "-").replace(/:/g, ":");
+};
+
 const STATUS_PRIORITY: Record<string, number> = {
   READY_TO_SHIP: 1,
   SENT_TO_VENDOR: 2,
@@ -531,11 +546,15 @@ export default function ShipmentsMainPage() {
                 + 출고 입력
               </ToolbarButton>
             </Link>
-            <Link href={`/shipments_print?date=${receiptDate}`}>
-              <ToolbarButton variant="secondary">
-                오늘 출고 영수증
-              </ToolbarButton>
-            </Link>
+            <ToolbarButton
+              variant="secondary"
+              onClick={() => {
+                const printedAt = getKstPrintTimestamp();
+                window.location.href = `/shipments_print?date=${encodeURIComponent(receiptDate)}&printed_at=${encodeURIComponent(printedAt)}`;
+              }}
+            >
+              오늘 출고 영수증
+            </ToolbarButton>
             <ToolbarButton variant="secondary" onClick={handleRefresh}>
               새로고침
             </ToolbarButton>
