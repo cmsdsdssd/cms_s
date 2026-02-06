@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useMemo, useCallback, useRef } from "react";
-import { useMutation, useQueryClient, useQuery } from "@tanstack/react-query";
+import { useQueryClient, useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -12,7 +12,7 @@ import { getSchemaClient } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
 import { 
   Printer, Send, X, CheckCircle2, ArrowRight, ArrowLeft, 
-  Building2, Factory, FileText 
+  Building2, Factory, FileText, ExternalLink
 } from "lucide-react";
 
 // Types
@@ -58,6 +58,8 @@ type FaxSendGroupResult = {
   group: FactoryGroup;
   poId: string;
   success: boolean;
+  pendingManualConfirm?: boolean;
+  providerMessageId?: string | null;
   warning?: string;
 };
 
@@ -72,8 +74,10 @@ interface FactoryGroup {
 
 type WizardStep = 'select' | 'preview' | 'confirm';
 
-const FAX_PROVIDERS = ['mock', 'twilio', 'sendpulse', 'custom', 'apiplex'] as const;
+const FAX_PROVIDERS = ['mock', 'twilio', 'sendpulse', 'custom', 'apiplex', 'uplus_print'] as const;
 type FaxProvider = typeof FAX_PROVIDERS[number];
+
+const UPLUS_SENT_URL = "https://webfax.uplus.co.kr/fax/sent";
 
 function isFaxProvider(value: string | null | undefined): value is FaxProvider {
   return !!value && (FAX_PROVIDERS as readonly string[]).includes(value);
@@ -135,6 +139,9 @@ export function FactoryOrderWizard({ orderLines, onClose, onSuccess }: FactoryOr
     count: number; 
     results?: FaxSendGroupResult[]
   } | null>(null);
+  const [sendFaxIds, setSendFaxIds] = useState<Record<string, string>>({});
+  const [confirmingPoIds, setConfirmingPoIds] = useState<Set<string>>(new Set());
+  const [cancelingPoIds, setCancelingPoIds] = useState<Set<string>>(new Set());
 
   // Fetch vendor fax configs from DB
   const faxConfigsQuery = useQuery<FaxConfigRow[]>({
@@ -237,7 +244,11 @@ export function FactoryOrderWizard({ orderLines, onClose, onSuccess }: FactoryOr
 
   // Select all factories
   const selectAll = useCallback(() => {
-    setSelectedPrefixes(new Set(factoryGroups.filter(g => g.faxNumber).map(g => g.prefix)));
+    setSelectedPrefixes(new Set(
+      factoryGroups
+        .filter((g) => !!g.faxNumber || g.faxProvider === "mock" || g.faxProvider === "uplus_print")
+        .map((g) => g.prefix),
+    ));
   }, [factoryGroups]);
 
   // Clear selection
@@ -246,10 +257,14 @@ export function FactoryOrderWizard({ orderLines, onClose, onSuccess }: FactoryOr
   }, []);
 
   // Generate fax HTML for a SPECIFIC factory group (NOT combined)
-  const generateFaxHtmlForGroup = useCallback((group: FactoryGroup): string => {
+  const generateFaxHtmlForGroup = useCallback((group: FactoryGroup, poId?: string): string => {
     const today = new Date().toLocaleDateString('ko-KR');
     const lines = group.lines;
     const isMock = group.faxProvider === "mock";
+    const poIdShort = poId ? poId.slice(0, 8) : null;
+    const documentTitle = poIdShort
+      ? `발주서 - ${group.prefix} - ${poIdShort}`
+      : `발주서 - ${group.prefix}`;
     
     const getMaskCode = (line: OrderLine) => line.customer_mask_code || '-';
     
@@ -297,7 +312,7 @@ export function FactoryOrderWizard({ orderLines, onClose, onSuccess }: FactoryOr
 <html>
 <head>
   <meta charset="UTF-8">
-  <title>발주서 - ${group.prefix}</title>
+  <title>${documentTitle}</title>
   <style>
      body { font-family: 'Malgun Gothic', sans-serif; margin: 20px; ${isMock ? "border: 4px solid #c0392b; padding: 16px;" : ""} }
     .header { text-align: center; margin-bottom: 20px; }
@@ -315,10 +330,12 @@ export function FactoryOrderWizard({ orderLines, onClose, onSuccess }: FactoryOr
  <body>
    ${mockBanner}
    <div class="header">
-    <h1>발 주 서</h1>
-    <p style="font-size: 12px; color: #666;">Order Date: ${today}</p>
-    <p style="font-size: 11px; color: #999;">Vendor: ${group.vendorName} (${group.prefix})</p>
-  </div>
+     <h1>발 주 서</h1>
+     <p style="font-size: 12px; color: #333; font-weight: 700;">${documentTitle}</p>
+     <p style="font-size: 12px; color: #666;">Order Date: ${today}</p>
+     <p style="font-size: 11px; color: #999;">Vendor: ${group.vendorName} (${group.prefix})</p>
+     ${poId ? `<p style="font-size: 11px; color: #666;">PO ID: ${poId}</p>` : ""}
+   </div>
   
   <div class="info">
     <div class="info-row">
@@ -368,6 +385,10 @@ export function FactoryOrderWizard({ orderLines, onClose, onSuccess }: FactoryOr
   // Handle print - Print ALL selected factories (separate pages)
   const handlePrint = useCallback(() => {
     if (selectedGroups.length === 0) return;
+    if (selectedGroups.some((group) => group.faxProvider === "uplus_print")) {
+      toast.warning("U+ 인쇄전송은 공장별로 따로 인쇄해야 합니다.");
+      return;
+    }
     
     // Generate combined HTML with page breaks between factories
     const pageBreak = '<div style="page-break-after: always;"></div>';
@@ -382,7 +403,11 @@ export function FactoryOrderWizard({ orderLines, onClose, onSuccess }: FactoryOr
   }, [selectedGroups, generateFaxHtmlForGroup]);
 
   const handleDownloadPreview = useCallback(async (group: FactoryGroup, pageIndex: number) => {
-    const html = generateFaxHtmlForGroup(group);
+    const poId = sendResult?.results?.find(
+      (result) =>
+        result.group.prefix === group.prefix && result.group.vendorPartyId === group.vendorPartyId,
+    )?.poId;
+    const html = generateFaxHtmlForGroup(group, poId);
     const previewWindow = window.open("", "_blank", "width=900,height=1300");
     if (!previewWindow) {
       toast.error("다운로드 실패", { description: "팝업 차단을 해제해주세요." });
@@ -425,52 +450,60 @@ export function FactoryOrderWizard({ orderLines, onClose, onSuccess }: FactoryOr
       toast.error("다운로드 실패", { description: message });
       previewWindow.close();
     }
-  }, []);
+  }, [generateFaxHtmlForGroup, sendResult?.results]);
 
   // Handle send fax - SEPARATE PO for each factory
   const handleSendFax = useCallback(async () => {
     if (selectedGroups.length === 0) return;
-    
+
     setIsSending(true);
-    
+
     try {
-      // Process EACH factory group SEPARATELY (each gets their own PO and fax)
       let totalSuccess = 0;
       const results: FaxSendGroupResult[] = [];
-      
+
       for (const group of selectedGroups) {
-        const lineIds = group.lines.map(l => l.order_line_id);
-        
+        const lineIds = group.lines.map((l) => l.order_line_id);
+
         toast.info(`${group.vendorName} 발주 생성 중...`);
-        
-        // 1. Create PO for THIS factory only
+
         const createResult = await callRpc<FactoryPoCreateResponse>(CONTRACTS.functions.factoryPoCreate, {
           p_order_line_ids: lineIds,
           p_actor_person_id: process.env.NEXT_PUBLIC_CMS_ACTOR_ID ?? null,
         });
-        
+
         if (!createResult?.ok) {
-          console.error('PO creation failed for', group.prefix, createResult);
+          console.error("PO creation failed for", group.prefix, createResult);
           toast.error(`${group.vendorName} 발주 생성 실패`);
           continue;
         }
-        
+
         const poId = createResult.pos?.[0]?.po_id;
         if (!poId) {
           toast.error(`${group.vendorName} PO ID 없음`);
           continue;
         }
-        
-        // 2. Generate SEPARATE fax HTML for THIS factory only
-        const html = generateFaxHtmlForGroup(group);
-        
+
+        const html = generateFaxHtmlForGroup(group, poId);
+
+        if (group.faxProvider === "uplus_print") {
+          results.push({
+            group,
+            poId,
+            success: false,
+            pendingManualConfirm: true,
+            providerMessageId: null,
+          });
+          toast.info(`${group.vendorName} 발주 생성 완료. U+ 인쇄전송 후 전송완료처리를 진행하세요.`);
+          continue;
+        }
+
         const isMock = group.faxProvider === "mock";
-        toast.info(`${group.vendorName} ${isMock ? 'MOCK' : ''} 팩스 전송 중 (${group.faxNumber || '번호 미설정'})...`);
-        
-        // 3. Send fax for THIS factory
-        const response = await fetch('/api/fax-send', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+        toast.info(`${group.vendorName} ${isMock ? "MOCK" : ""} 팩스 전송 중 (${group.faxNumber || "번호 미설정"})...`);
+
+        const response = await fetch("/api/fax-send", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             po_id: poId,
             vendor_prefix: group.prefix,
@@ -478,89 +511,209 @@ export function FactoryOrderWizard({ orderLines, onClose, onSuccess }: FactoryOr
             line_count: group.lines.length,
             html_content: html,
             fax_number: group.faxNumber,
-            provider: group.faxProvider || 'mock',
+            provider: group.faxProvider || "mock",
           }),
         });
 
-        // Check if response is JSON before parsing
-        const contentType = response.headers.get('content-type');
-        if (!contentType?.includes('application/json')) {
+        const contentType = response.headers.get("content-type");
+        if (!contentType?.includes("application/json")) {
           const text = await response.text();
-          console.error('Fax send failed - non-JSON response:', text.substring(0, 200));
+          console.error("Fax send failed - non-JSON response:", text.substring(0, 200));
           toast.error(`${group.vendorName} 팩스 전송 실패 (서버 오류: ${response.status})`);
-          // Cancel PO on fax failure to allow retry
           try {
-            console.log(`Attempting to cancel PO ${poId}...`);
-            const cancelResult = await callRpc(CONTRACTS.functions.factoryPoCancel, {
+            await callRpc(CONTRACTS.functions.factoryPoCancel, {
               p_po_id: poId,
               p_reason: `Fax failed: ${response.status}`,
               p_actor_person_id: process.env.NEXT_PUBLIC_CMS_ACTOR_ID ?? null,
             });
-            console.log(`PO ${poId} cancelled successfully:`, cancelResult);
             toast.info(`${group.vendorName} PO 취소 완료 (재발주 가능)`);
           } catch (cancelError) {
             console.error(`Failed to cancel PO ${poId}:`, cancelError);
-            toast.error(`${group.vendorName} PO 취소 실패 - 수동으로 PO ${poId.slice(0,8)}... 취소 필요`);
+            toast.error(`${group.vendorName} PO 취소 실패 - 수동으로 PO ${poId.slice(0, 8)}... 취소 필요`);
           }
-          results.push({group, poId, success: false});
+          results.push({ group, poId, success: false });
           continue;
         }
 
         if (!response.ok) {
           const error = await response.json();
-          console.error('Fax send failed:', error);
-          toast.error(`${group.vendorName} 팩스 전송 실패: ${error.error || 'Unknown error'}`);
-          // Cancel PO on fax failure to allow retry
+          console.error("Fax send failed:", error);
+          toast.error(`${group.vendorName} 팩스 전송 실패: ${error.error || "Unknown error"}`);
           try {
             await callRpc(CONTRACTS.functions.factoryPoCancel, {
               p_po_id: poId,
               p_reason: `Fax failed: ${error.error}`,
               p_actor_person_id: process.env.NEXT_PUBLIC_CMS_ACTOR_ID ?? null,
             });
-            console.log(`PO ${poId} cancelled after fax failure`);
           } catch (cancelError) {
             console.error(`Failed to cancel PO ${poId}:`, cancelError);
             toast.error(`${group.vendorName} PO 취소도 실패 - 수동 확인 필요`);
           }
-          results.push({group, poId, success: false});
+          results.push({ group, poId, success: false });
           continue;
         }
 
         const faxResult = await response.json();
         console.log(`Fax sent to ${group.vendorName}:`, faxResult);
-        
-        // Check for RPC errors (status not updated)
+
         if (faxResult.warning || faxResult.rpc_error) {
           console.error(`PO marked sent but status update failed for ${group.vendorName}:`, faxResult.rpc_error);
           toast.warning(`${group.vendorName} 팩스는 전송됐으나 상태 업데이트 실패. 수동 확인 필요.`);
-          results.push({group, poId, success: true, warning: faxResult.warning || faxResult.rpc_error});
+          results.push({ group, poId, success: true, warning: faxResult.warning || faxResult.rpc_error });
         } else {
           totalSuccess += group.lines.length;
-          results.push({group, poId, success: true});
-          toast.success(`${group.vendorName} ${isMock ? 'MOCK ' : ''}발주 및 팩스 전송 완료`);
+          results.push({ group, poId, success: true });
+          toast.success(`${group.vendorName} ${isMock ? "MOCK " : ""}발주 및 팩스 전송 완료`);
         }
       }
-      
+
       setSendResult({ success: true, count: totalSuccess, results });
-      setStep('confirm');
+      setSendFaxIds({});
+      setStep("confirm");
       queryClient.invalidateQueries({ queryKey: ["cms", "orders"] });
-      
-      const successCount = results.filter(r => r.success).length;
-      const failCount = results.length - successCount;
-      
-      if (failCount > 0) {
+
+      const successCount = results.filter((r) => r.success).length;
+      const pendingCount = results.filter((r) => r.pendingManualConfirm).length;
+      const failCount = results.length - successCount - pendingCount;
+
+      if (pendingCount > 0) {
+        toast.warning(`${successCount}개 자동완료, ${pendingCount}개 수동확정 대기, ${failCount}개 실패`);
+      } else if (failCount > 0) {
         toast.warning(`${successCount}개 공장 성공, ${failCount}개 실패`);
       } else {
         toast.success(`${successCount}개 공장 모두 발주 완료!`);
       }
-      
     } catch (error) {
-      console.error('Send fax error:', error);
+      console.error("Send fax error:", error);
       toast.error("팩스 전송 중 오류 발생");
     } finally {
       setIsSending(false);
     }
   }, [selectedGroups, generateFaxHtmlForGroup, queryClient]);
+
+  const findResultForGroup = useCallback((group: FactoryGroup) => {
+    return sendResult?.results?.find(
+      (result) =>
+        result.group.prefix === group.prefix && result.group.vendorPartyId === group.vendorPartyId,
+    );
+  }, [sendResult?.results]);
+
+  const handleUplusPrint = useCallback((group: FactoryGroup) => {
+    const result = findResultForGroup(group);
+    if (!result?.poId) {
+      toast.warning("먼저 발주 생성(팩스 전송 및 확정)을 진행해주세요.");
+      return;
+    }
+
+    const printWindow = window.open("", "_blank");
+    if (!printWindow) {
+      toast.error("팝업 차단을 해제해주세요.");
+      return;
+    }
+
+    const html = generateFaxHtmlForGroup(group, result.poId);
+    printWindow.document.write(html);
+    printWindow.document.close();
+    printWindow.focus();
+    printWindow.print();
+
+    toast.info("프린터에서 'U+Webfax'를 선택하고 U+ 팩스창에서 수신번호/제목 확인 후 전송하세요.");
+  }, [findResultForGroup, generateFaxHtmlForGroup]);
+
+  const handleManualConfirm = useCallback(async (result: FaxSendGroupResult) => {
+    const confirmed = window.confirm(
+      "U+에서 실제 전송을 완료했습니까? 완료처리하면 주문 상태가 SENT_TO_VENDOR로 확정됩니다.",
+    );
+    if (!confirmed) return;
+
+    const sendFaxId = sendFaxIds[result.poId]?.trim() || null;
+    setConfirmingPoIds((prev) => new Set(prev).add(result.poId));
+
+    try {
+      await callRpc(CONTRACTS.functions.factoryPoMarkSent, {
+        p_po_id: result.poId,
+        p_fax_result: {
+          provider: "uplus_print",
+          success: true,
+          provider_message_id: sendFaxId,
+          payload_url: null,
+          request: {
+            vendor_prefix: result.group.prefix,
+            vendor_name: result.group.vendorName,
+            fax_number: result.group.faxNumber ?? null,
+            mode: "print",
+          },
+          response: {
+            confirmed_by_user: true,
+            confirmed_at: new Date().toISOString(),
+            uplus_sent_url: UPLUS_SENT_URL,
+            sendFaxId,
+          },
+        },
+        p_actor_person_id: process.env.NEXT_PUBLIC_CMS_ACTOR_ID ?? null,
+      });
+
+      setSendResult((prev) => {
+        if (!prev?.results) return prev;
+        return {
+          ...prev,
+          count: prev.count + result.group.lines.length,
+          results: prev.results.map((item) => {
+            if (item.poId !== result.poId) return item;
+            return {
+              ...item,
+              success: true,
+              pendingManualConfirm: false,
+              providerMessageId: sendFaxId,
+            };
+          }),
+        };
+      });
+
+      queryClient.invalidateQueries({ queryKey: ["cms", "orders"] });
+      toast.success(`${result.group.vendorName} 전송완료처리 완료`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "전송완료처리 실패";
+      toast.error("전송완료처리 실패", { description: message });
+    } finally {
+      setConfirmingPoIds((prev) => {
+        const next = new Set(prev);
+        next.delete(result.poId);
+        return next;
+      });
+    }
+  }, [queryClient, sendFaxIds]);
+
+  const handleCancelPendingPo = useCallback(async (result: FaxSendGroupResult) => {
+    setCancelingPoIds((prev) => new Set(prev).add(result.poId));
+    try {
+      await callRpc(CONTRACTS.functions.factoryPoCancel, {
+        p_po_id: result.poId,
+        p_reason: "U+ 인쇄전송 대기 상태에서 사용자 취소",
+        p_actor_person_id: process.env.NEXT_PUBLIC_CMS_ACTOR_ID ?? null,
+      });
+      setSendResult((prev) => {
+        if (!prev?.results) return prev;
+        const nextResults = prev.results.filter((item) => item.poId !== result.poId);
+        return {
+          ...prev,
+          count: prev.count,
+          results: nextResults,
+        };
+      });
+      queryClient.invalidateQueries({ queryKey: ["cms", "orders"] });
+      toast.success(`${result.group.vendorName} 발주 취소 완료`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "발주 취소 실패";
+      toast.error("발주 취소 실패", { description: message });
+    } finally {
+      setCancelingPoIds((prev) => {
+        const next = new Set(prev);
+        next.delete(result.poId);
+        return next;
+      });
+    }
+  }, [queryClient]);
 
   // Render Step 1: Factory Selection
   const renderStepSelect = () => (
@@ -583,7 +736,7 @@ export function FactoryOrderWizard({ orderLines, onClose, onSuccess }: FactoryOr
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
         {factoryGroups.map((group) => {
           const isSelected = selectedPrefixes.has(group.prefix);
-          const hasFax = !!group.faxNumber || group.faxProvider === "mock";
+          const hasFax = !!group.faxNumber || group.faxProvider === "mock" || group.faxProvider === "uplus_print";
           const isMock = group.faxProvider === "mock";
           return (
             <div
@@ -625,7 +778,9 @@ export function FactoryOrderWizard({ orderLines, onClose, onSuccess }: FactoryOr
                     ) : hasFax ? (
                       <span className="text-green-600 flex items-center gap-1">
                         <span className="w-1.5 h-1.5 rounded-full bg-green-500" />
-                        팩스: {group.faxNumber} ({group.faxProvider || 'mock'})
+                        {group.faxProvider === "uplus_print"
+                          ? "U+ Webfax 인쇄 전송"
+                          : `팩스: ${group.faxNumber} (${group.faxProvider || 'mock'})`}
                       </span>
                     ) : (
                       <span className="text-amber-600 flex items-center gap-1">
@@ -672,12 +827,20 @@ export function FactoryOrderWizard({ orderLines, onClose, onSuccess }: FactoryOr
           팩스 미리보기
         </h3>
         <div className="flex items-center gap-2">
-          <Button variant="secondary" size="sm" onClick={handlePrint}>
-            <Printer className="w-4 h-4 mr-1" />
-            인쇄
-          </Button>
+          {!selectedGroups.some((group) => group.faxProvider === "uplus_print") && (
+            <Button variant="secondary" size="sm" onClick={handlePrint}>
+              <Printer className="w-4 h-4 mr-1" />
+              인쇄(전체)
+            </Button>
+          )}
         </div>
       </div>
+
+      {selectedGroups.some((group) => group.faxProvider === "uplus_print") && (
+        <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+          U+ 인쇄전송은 공장별로 따로 인쇄해야 합니다.
+        </div>
+      )}
 
       {/* Selected Factories Summary */}
       <div className="flex flex-wrap gap-2">
@@ -691,20 +854,26 @@ export function FactoryOrderWizard({ orderLines, onClose, onSuccess }: FactoryOr
       {/* Preview Document */}
       <div className="flex-1 bg-white text-black p-4 overflow-auto border rounded-lg shadow-inner">
         <div className="space-y-6">
-           {selectedGroups.map((group, idx) => (
-             <div key={group.prefix} className="border rounded-md overflow-hidden">
-               <div className="px-3 py-2 bg-gray-50 text-xs text-gray-600 flex items-center justify-between">
-                 <span>{group.vendorName} ({group.prefix})</span>
-                 <div className="flex items-center gap-2">
-                   <span>{group.lines.length}건</span>
-                   <Button size="sm" variant="secondary" onClick={() => handleDownloadPreview(group, idx)}>
-                     JPG 다운로드
-                   </Button>
-                 </div>
-               </div>
+            {selectedGroups.map((group, idx) => (
+              <div key={group.prefix} className="border rounded-md overflow-hidden">
+                <div className="px-3 py-2 bg-gray-50 text-xs text-gray-600 flex items-center justify-between">
+                  <span>{group.vendorName} ({group.prefix})</span>
+                  <div className="flex items-center gap-2">
+                    <span>{group.lines.length}건</span>
+                    {group.faxProvider === "uplus_print" && (
+                      <Button size="sm" variant="secondary" onClick={() => handleUplusPrint(group)}>
+                        <Printer className="w-3.5 h-3.5 mr-1" />
+                        U+ 인쇄전송
+                      </Button>
+                    )}
+                    <Button size="sm" variant="secondary" onClick={() => handleDownloadPreview(group, idx)}>
+                      JPG 다운로드
+                    </Button>
+                  </div>
+                </div>
                 <iframe
                   title={`fax-preview-${group.prefix}`}
-                  srcDoc={generateFaxHtmlForGroup(group)}
+                  srcDoc={generateFaxHtmlForGroup(group, findResultForGroup(group)?.poId)}
                   className="w-full h-[297mm] bg-white"
                   ref={(el) => {
                     previewRefs.current.set(group.prefix, el);
@@ -734,7 +903,7 @@ export function FactoryOrderWizard({ orderLines, onClose, onSuccess }: FactoryOr
           ) : (
             <>
               <Send className="w-4 h-4" />
-              팩스 전송 및 확정
+              발주 생성 + 전송 처리
             </>
           )}
         </Button>
@@ -746,7 +915,8 @@ export function FactoryOrderWizard({ orderLines, onClose, onSuccess }: FactoryOr
   const renderStepConfirm = () => {
     const results = sendResult?.results || [];
     const successResults = results.filter(r => r.success);
-    const failedResults = results.filter(r => !r.success);
+    const pendingResults = results.filter((r) => r.pendingManualConfirm);
+    const failedResults = results.filter(r => !r.success && !r.pendingManualConfirm);
     const hasMock = results.some(r => r.group.faxProvider === "mock");
     
     return (
@@ -758,10 +928,10 @@ export function FactoryOrderWizard({ orderLines, onClose, onSuccess }: FactoryOr
         <div className="text-center">
           <h3 className="text-xl font-bold mb-2">발주 완료</h3>
           <p className="text-muted">
-            총 {sendResult?.count || selectedLines.length}개 라인 처리됨
+            총 {sendResult?.count || selectedLines.length}개 라인 확정됨
           </p>
           <p className="text-sm text-muted mt-1">
-            {successResults.length}개 공장 성공, {failedResults.length}개 실패
+            {successResults.length}개 완료, {pendingResults.length}개 수동확정 대기, {failedResults.length}개 실패
           </p>
           {hasMock && (
             <p className="text-sm text-red-600 font-semibold mt-2">
@@ -771,16 +941,20 @@ export function FactoryOrderWizard({ orderLines, onClose, onSuccess }: FactoryOr
         </div>
 
         <div className="w-full max-w-lg space-y-2 max-h-60 overflow-auto">
-          {results.map((result, idx) => (
+          {results.map((result) => (
             <div key={result.group.prefix} className={cn(
               "flex items-center justify-between p-3 rounded-lg border",
-              result.success 
+              result.success
                 ? "bg-green-50 border-green-200" 
+                : result.pendingManualConfirm
+                  ? "bg-amber-50 border-amber-200"
                 : "bg-red-50 border-red-200"
             )}>
               <div className="flex items-center gap-2">
                 {result.success ? (
                   <CheckCircle2 className="w-4 h-4 text-green-600" />
+                ) : result.pendingManualConfirm ? (
+                  <Printer className="w-4 h-4 text-amber-600" />
                 ) : (
                   <X className="w-4 h-4 text-red-600" />
                 )}
@@ -793,7 +967,7 @@ export function FactoryOrderWizard({ orderLines, onClose, onSuccess }: FactoryOr
                 </div>
               </div>
               <div className="text-right">
-                <Badge tone={result.success ? "active" : "danger"}>
+                <Badge tone={result.success ? "active" : result.pendingManualConfirm ? "warning" : "danger"}>
                   {result.group.lines.length}건
                 </Badge>
                 <div className="text-xs text-muted mt-1">
@@ -803,6 +977,76 @@ export function FactoryOrderWizard({ orderLines, onClose, onSuccess }: FactoryOr
             </div>
           ))}
         </div>
+
+        {pendingResults.length > 0 && (
+          <div className="w-full max-w-lg space-y-3 rounded-lg border border-amber-300 bg-amber-50 p-4">
+            {pendingResults.map((result) => {
+              const poId8 = result.poId.slice(0, 8);
+              const sendFaxId = sendFaxIds[result.poId] ?? "";
+              const isConfirming = confirmingPoIds.has(result.poId);
+              const isCanceling = cancelingPoIds.has(result.poId);
+
+              return (
+                <div key={result.poId} className="rounded-md border border-amber-200 bg-white p-3 space-y-2">
+                  <div className="text-sm font-semibold">
+                    {result.group.vendorName} ({result.group.prefix}) · PO {poId8}
+                  </div>
+                  <div className="text-xs text-amber-900">
+                    제목에서 &#39;발주서 - {result.group.prefix} - {poId8}&#39;로 검색하면 빠릅니다.
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      onClick={() => window.open(UPLUS_SENT_URL, "_blank", "noopener,noreferrer")}
+                    >
+                      <ExternalLink className="w-3.5 h-3.5 mr-1" />
+                      U+ 보낸팩스함 열기
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      onClick={() => handleUplusPrint(result.group)}
+                    >
+                      <Printer className="w-3.5 h-3.5 mr-1" />
+                      U+ 인쇄전송
+                    </Button>
+                  </div>
+                  <div>
+                    <label className="text-xs text-muted block mb-1">sendFaxId (옵션)</label>
+                    <input
+                      className="w-full h-9 rounded-md border border-[var(--panel-border)] px-2 text-sm"
+                      inputMode="numeric"
+                      placeholder="예: 342656346"
+                      value={sendFaxId}
+                      onChange={(event) => {
+                        const numeric = event.target.value.replace(/\D/g, "");
+                        setSendFaxIds((prev) => ({ ...prev, [result.poId]: numeric }));
+                      }}
+                    />
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      size="sm"
+                      onClick={() => handleManualConfirm(result)}
+                      disabled={isConfirming || isCanceling}
+                    >
+                      {isConfirming ? "처리중..." : "전송완료처리"}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => handleCancelPendingPo(result)}
+                      disabled={isConfirming || isCanceling}
+                    >
+                      {isCanceling ? "취소중..." : "발주취소"}
+                    </Button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
 
         {failedResults.length > 0 && (
           <div className="text-center text-sm text-red-600">

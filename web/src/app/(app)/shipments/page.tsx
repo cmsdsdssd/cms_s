@@ -438,7 +438,7 @@ export default function ShipmentsPage() {
           amount?: number | string | null;
         };
         const type = String(record?.type ?? "").trim();
-  const label = String(record?.label ?? type ?? "기타").trim() || "기타";
+        const label = String(record?.label ?? type ?? "기타").trim() || "기타";
         const amount = record?.amount === null || record?.amount === undefined
           ? ""
           : String(record.amount);
@@ -488,25 +488,25 @@ export default function ShipmentsPage() {
     enabled: Boolean(schemaClient),
     queryFn: async () => {
       if (!schemaClient) throw new Error("Supabase env is missing");
-      
+
       let query = schemaClient
         .from("cms_v_unshipped_order_lines")
         .select("*")
         .order("status_sort_order", { ascending: true })
         .order("queue_sort_date", { ascending: true })
         .limit(500);
-      
+
       // 검색어가 있으면 모델명이나 고객명으로 필터링
       if (debouncedQuery) {
         query = query.or(`model_name.ilike.%${debouncedQuery}%,customer_name.ilike.%${debouncedQuery}%`);
       }
-      
+
       const { data, error } = await query;
       if (error) throw error;
-      
+
       console.log("[DEBUG] cms_v_unshipped_order_lines response:", data?.length, "rows");
       console.log("[DEBUG] Sample statuses:", data?.slice(0, 5).map((r: OrderLookupRow) => r.status));
-      
+
       return (data ?? []) as OrderLookupRow[];
     },
   });
@@ -695,7 +695,8 @@ export default function ShipmentsPage() {
         .eq("config_key", "DEFAULT")
         .maybeSingle();
       if (error) return 0;
-      return Number(data?.rule_rounding_unit_krw ?? 0);
+      const row = data as { rule_rounding_unit_krw?: number | null } | null;
+      return Number(row?.rule_rounding_unit_krw ?? 0);
     },
   });
 
@@ -745,7 +746,7 @@ export default function ShipmentsPage() {
     console.log("[DEBUG] includeStorePickup:", includeStorePickup);
     console.log("[DEBUG] storePickupLookupQuery.isLoading:", storePickupLookupQuery.isLoading);
     console.log("[DEBUG] storePickupLookupIds:", Array.from(storePickupLookupIds));
-    
+
     // storePickupLookupQuery가 로딩 완료된 후에만 store pickup 필터링 적용
     if (!includeStorePickup && !storePickupLookupQuery.isLoading) {
       const beforeCount = rows.length;
@@ -754,12 +755,12 @@ export default function ShipmentsPage() {
       rows = rows.filter((row) => !storePickupLookupIds.has(row.order_line_id ?? ""));
       console.log("[DEBUG] After store pickup filter:", rows.length, "/", beforeCount);
     }
-    
+
     if (!onlyReadyToShip) {
       console.log("[DEBUG] Returning all rows (onlyReadyToShip=false):", rows.length);
       return rows;
     }
-    
+
     const filtered = rows.filter((r) => isWorklistStatus(r.status));
     console.log("[DEBUG] After isWorklistStatus filter:", filtered.length);
     console.log("[DEBUG] PENDING_ORDER_STATUSES:", Array.from(PENDING_ORDER_STATUSES));
@@ -854,7 +855,7 @@ export default function ShipmentsPage() {
     if (currentLine.pricing_mode === "AMOUNT_ONLY" && currentLine.manual_total_amount_krw !== null && currentLine.manual_total_amount_krw !== undefined) {
       setIsManualTotalOverride(true);
       setManualTotalAmountKrw(String(currentLine.manual_total_amount_krw));
-    } else if (currentLine.pricing_mode === "RULE") {
+    } else {
       setIsManualTotalOverride(false);
       setManualTotalAmountKrw("");
     }
@@ -985,7 +986,7 @@ export default function ShipmentsPage() {
       return;
     }
     if (useManualLabor) {
-    const manualValue = parseNumberInput(manualLabor);
+      const manualValue = parseNumberInput(manualLabor);
       if (!Number.isFinite(manualValue) || manualValue < 0) {
         toast.error("직접 공임(원)을 올바르게 입력해주세요.");
         return;
@@ -1066,6 +1067,8 @@ export default function ShipmentsPage() {
         baseLaborOverride !== null ? baseLaborOverride : Number.isFinite(baseValue) ? baseValue : 0,
       p_extra_labor_krw: resolvedExtraLaborTotal,
       p_extra_labor_items: extraLaborPayload,
+      p_pricing_mode: isManualTotalOverride ? "AMOUNT_ONLY" : "RULE",
+      p_manual_total_amount_krw: isManualTotalOverride ? manualTotalValue : null,
     };
     if (weightValue > 0) {
       updatePayload.p_measured_weight_g = weightValue;
@@ -1397,6 +1400,8 @@ export default function ShipmentsPage() {
         p_base_labor_krw: baseLaborOverride !== null ? baseLaborOverride : resolvedBaseLabor,
         p_extra_labor_krw: resolvedExtraLaborTotal,
         p_extra_labor_items: extraLaborPayload,
+        p_pricing_mode: isManualTotalOverride ? "AMOUNT_ONLY" : "RULE",
+        p_manual_total_amount_krw: isManualTotalOverride ? manualTotalValue : null,
       };
       if (currentLineWeightText !== "") {
         const weightValue = Number(currentLineWeightText);
@@ -1587,29 +1592,29 @@ export default function ShipmentsPage() {
       {/* Sticky Header */}
       <div className="sticky top-0 z-20 bg-[var(--background)]/80 backdrop-blur-md border-b border-[var(--panel-border)] shadow-sm transition-all">
         <div className="px-4 sm:px-6 lg:px-8 py-4">
-            <ActionBar
-              title="출고 관리"
-              subtitle="주문 기반 출고 및 원가 확정"
-              actions={
-                <div className="flex items-center gap-2">
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    onClick={handleArResync}
-                    disabled={!canResyncAr}
-                  >
-                    {arInvoiceResyncMutation.isPending ? "재계산 중..." : "AR 재계산(999 포함)"}
+          <ActionBar
+            title="출고 관리"
+            subtitle="주문 기반 출고 및 원가 확정"
+            actions={
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={handleArResync}
+                  disabled={!canResyncAr}
+                >
+                  {arInvoiceResyncMutation.isPending ? "재계산 중..." : "AR 재계산(999 포함)"}
+                </Button>
+                <Link href="/ar">
+                  <Button variant="secondary" size="sm">
+                    AR 페이지로 이동
                   </Button>
-                  <Link href="/ar">
-                    <Button variant="secondary" size="sm">
-                      AR 페이지로 이동
-                    </Button>
-                  </Link>
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    onClick={() => {
-                      setLookupOpen(true);
+                </Link>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => {
+                    setLookupOpen(true);
                     setTimeout(() => lookupInputRef.current?.focus(), 0);
                   }}
                 >
@@ -2261,14 +2266,14 @@ export default function ShipmentsPage() {
                             총공임 직접입력
                           </label>
                           <div className="min-w-[220px]">
-                          <Input
-                            placeholder="0"
-                            value={manualLabor}
-                            onChange={(e) => setManualLabor(e.target.value)}
-                            inputMode="numeric"
-                            className="tabular-nums h-10"
-                            disabled={!useManualLabor}
-                          />
+                            <Input
+                              placeholder="0"
+                              value={manualLabor}
+                              onChange={(e) => setManualLabor(e.target.value)}
+                              inputMode="numeric"
+                              className="tabular-nums h-10"
+                              disabled={!useManualLabor}
+                            />
                           </div>
                           <span className="text-xs text-[var(--muted)]">
                             직접입력 시 기본+기타 합계 대신 이 값으로 저장됩니다.
@@ -2361,13 +2366,13 @@ export default function ShipmentsPage() {
                                   <div className="text-xs font-medium text-[var(--foreground)] min-w-[90px]">
                                     {item.label}
                                   </div>
-                                    <Input
-                                      placeholder="0"
-                                      value={item.amount}
-                                      onChange={(e) => handleExtraLaborAmountChange(item.id, e.target.value)}
-                                      inputMode="numeric"
-                                      className="tabular-nums h-9"
-                                    />
+                                  <Input
+                                    placeholder="0"
+                                    value={item.amount}
+                                    onChange={(e) => handleExtraLaborAmountChange(item.id, e.target.value)}
+                                    inputMode="numeric"
+                                    className="tabular-nums h-9"
+                                  />
                                   <Button
                                     variant="ghost"
                                     size="sm"
@@ -2473,20 +2478,20 @@ export default function ShipmentsPage() {
 
       {/* Confirm Modal - Preserved Logic */}
       <Modal open={confirmModalOpen} onClose={() => setConfirmModalOpen(false)} title="출고 확정" className="max-w-6xl">
-          <div className="space-y-6">
-            {isStorePickup ? (
-              <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-                <AlertCircle className="h-4 w-4 mt-0.5" />
-                <div>
-                  <div className="font-semibold">매장출고는 Shipments에서 확정되지 않습니다.</div>
-                  <div className="text-xs text-amber-700">
-                    Workbench(당일출고)에서 ‘선택 영수증 확정’으로 확정하세요.
-                  </div>
+        <div className="space-y-6">
+          {isStorePickup ? (
+            <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+              <AlertCircle className="h-4 w-4 mt-0.5" />
+              <div>
+                <div className="font-semibold">매장출고는 Shipments에서 확정되지 않습니다.</div>
+                <div className="text-xs text-amber-700">
+                  Workbench(당일출고)에서 ‘선택 영수증 확정’으로 확정하세요.
                 </div>
               </div>
-            ) : null}
-            {/* Summary Section */}
-            <div className="bg-[var(--primary)]/5 border border-[var(--primary)]/20 rounded-xl p-4 space-y-3">
+            </div>
+          ) : null}
+          {/* Summary Section */}
+          <div className="bg-[var(--primary)]/5 border border-[var(--primary)]/20 rounded-xl p-4 space-y-3">
             <div className="flex items-center justify-between">
               <div className="flex items-start gap-4">
                 {/* Master Photo in Confirm Modal - Using prefill data */}
@@ -2543,74 +2548,74 @@ export default function ShipmentsPage() {
               <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                 <div>
                   <span className="text-xs text-[var(--primary)] block mb-1">중량</span>
-                      <Input
-                        className="h-7 text-xs w-24 bg-[var(--input-bg)] tabular-nums"
-                        placeholder="0.00"
-                        value={weightG}
-                        onChange={(e) => setWeightG(e.target.value)}
-                        inputMode="decimal"
-                      />
+                  <Input
+                    className="h-7 text-xs w-24 bg-[var(--input-bg)] tabular-nums"
+                    placeholder="0.00"
+                    value={weightG}
+                    onChange={(e) => setWeightG(e.target.value)}
+                    inputMode="decimal"
+                  />
                 </div>
                 <div>
                   <span className="text-xs text-[var(--primary)] block mb-1">차감</span>
                   <div className="flex items-center gap-2">
-                      <Input
-                        className="h-7 text-xs w-20 bg-[var(--input-bg)] tabular-nums"
-                        placeholder="0.00"
-                        value={deductionWeightG}
-                        onChange={(e) => setDeductionWeightG(e.target.value)}
-                        inputMode="decimal"
-                      />
+                    <Input
+                      className="h-7 text-xs w-20 bg-[var(--input-bg)] tabular-nums"
+                      placeholder="0.00"
+                      value={deductionWeightG}
+                      onChange={(e) => setDeductionWeightG(e.target.value)}
+                      inputMode="decimal"
+                    />
                     <span className="text-[10px] text-[var(--primary)]">(마스터: {master?.deduction_weight_default_g ?? "-"})</span>
                   </div>
                 </div>
                 <div>
-                    <span className="text-xs text-[var(--primary)] block mb-1">기본공임 (원)+마진</span>
-                    <span className="text-[10px] text-[var(--muted)] block">마진 {renderNumber(resolvedBaseLaborMargin)}</span>
-                      <Input
-                        className="h-7 text-xs w-24 bg-[var(--input-bg)] tabular-nums"
-                        placeholder="0"
-                        value={baseLabor}
-                        onChange={(e) => setBaseLabor(e.target.value)}
-                        inputMode="numeric"
-                      />
+                  <span className="text-xs text-[var(--primary)] block mb-1">기본공임 (원)+마진</span>
+                  <span className="text-[10px] text-[var(--muted)] block">마진 {renderNumber(resolvedBaseLaborMargin)}</span>
+                  <Input
+                    className="h-7 text-xs w-24 bg-[var(--input-bg)] tabular-nums"
+                    placeholder="0"
+                    value={baseLabor}
+                    onChange={(e) => setBaseLabor(e.target.value)}
+                    inputMode="numeric"
+                  />
                 </div>
                 <div>
-                    <span className="text-xs text-[var(--primary)] block mb-1">기타공임 (원)+마진</span>
-                    <span className="text-[10px] text-[var(--muted)] block">마진 {renderNumber(resolvedExtraLaborMargin)}</span>
-                      <Input
-                        className="h-7 text-xs w-24 bg-[var(--input-bg)] tabular-nums"
-                        placeholder="0"
-                        value={String(resolvedExtraLaborTotal)}
-                        readOnly
-                        inputMode="numeric"
-                      />
+                  <span className="text-xs text-[var(--primary)] block mb-1">기타공임 (원)+마진</span>
+                  <span className="text-[10px] text-[var(--muted)] block">마진 {renderNumber(resolvedExtraLaborMargin)}</span>
+                  <Input
+                    className="h-7 text-xs w-24 bg-[var(--input-bg)] tabular-nums"
+                    placeholder="0"
+                    value={String(resolvedExtraLaborTotal)}
+                    readOnly
+                    inputMode="numeric"
+                  />
                 </div>
                 <div>
-                    <span className="text-xs text-[var(--primary)] block mb-1">총액 덮어쓰기 (AMOUNT_ONLY)</span>
-                    <div className="space-y-2">
-                      <label className="inline-flex items-center gap-2 text-[10px] text-[var(--muted)]">
-                        <input
-                          type="checkbox"
-                          checked={isManualTotalOverride}
-                          onChange={(event) => {
-                            const nextValue = event.target.checked;
-                            setIsManualTotalOverride(nextValue);
-                            if (!nextValue) setManualTotalAmountKrw("");
-                          }}
-                          className="h-3 w-3"
-                        />
-                        총액 덮어쓰기
-                      </label>
-                      <Input
-                        className="h-7 text-xs w-28 bg-[var(--input-bg)] tabular-nums"
-                        placeholder="0"
-                        value={manualTotalAmountKrw}
-                        onChange={(e) => setManualTotalAmountKrw(e.target.value)}
-                        inputMode="numeric"
-                        disabled={!isManualTotalOverride}
+                  <span className="text-xs text-[var(--primary)] block mb-1">총액 덮어쓰기 (AMOUNT_ONLY)</span>
+                  <div className="space-y-2">
+                    <label className="inline-flex items-center gap-2 text-[10px] text-[var(--muted)]">
+                      <input
+                        type="checkbox"
+                        checked={isManualTotalOverride}
+                        onChange={(event) => {
+                          const nextValue = event.target.checked;
+                          setIsManualTotalOverride(nextValue);
+                          if (!nextValue) setManualTotalAmountKrw("");
+                        }}
+                        className="h-3 w-3"
                       />
-                    </div>
+                      총액 덮어쓰기
+                    </label>
+                    <Input
+                      className="h-7 text-xs w-28 bg-[var(--input-bg)] tabular-nums"
+                      placeholder="0"
+                      value={manualTotalAmountKrw}
+                      onChange={(e) => setManualTotalAmountKrw(e.target.value)}
+                      inputMode="numeric"
+                      disabled={!isManualTotalOverride}
+                    />
+                  </div>
                 </div>
               </div>
 
@@ -2713,10 +2718,10 @@ export default function ShipmentsPage() {
                 </div>
               </div>
             </div>
-            </div>
+          </div>
 
-            {/* Cost Mode Selection */}
-            <div className="space-y-3">
+          {/* Cost Mode Selection */}
+          <div className="space-y-3">
             <div className="text-sm font-semibold flex items-center gap-2">
               <Hammer className="w-4 h-4" />
               원가 모드 선택

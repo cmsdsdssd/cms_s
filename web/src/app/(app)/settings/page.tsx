@@ -25,11 +25,11 @@ type VendorFaxConfig = {
   vendor_party_id: string;
   vendor_name: string;
   fax_number: string | null;
-  fax_provider: 'mock' | 'twilio' | 'sendpulse' | 'custom' | 'apiplex';
+  fax_provider: 'mock' | 'twilio' | 'sendpulse' | 'custom' | 'apiplex' | 'uplus_print';
   is_active: boolean;
 };
 
-const FAX_PROVIDERS = ['mock', 'twilio', 'sendpulse', 'custom', 'apiplex'] as const;
+const FAX_PROVIDERS = ['mock', 'twilio', 'sendpulse', 'custom', 'apiplex', 'uplus_print'] as const;
 type FaxProvider = typeof FAX_PROVIDERS[number];
 
 function toFaxProvider(value: string | null | undefined): FaxProvider {
@@ -435,7 +435,14 @@ export default function SettingsPage() {
                           <option value="sendpulse">SendPulse</option>
                           <option value="custom">Custom</option>
                           <option value="apiplex">API PLEX (국내 팩스)</option>
+                          <option value="uplus_print">U+ Webfax (인쇄 전송)</option>
                         </Select>
+                        {faxProvider === "uplus_print" && (
+                          <div className="mt-2 rounded-md border border-amber-300 bg-amber-50 px-2 py-1 text-[11px] leading-relaxed text-amber-900">
+                            <p>PC에 U+ 간편팩스 2.0 설치 + 프린터 목록에 &#39;U+Webfax&#39;가 있어야 함</p>
+                            <p>발주서 화면에서 인쇄 → 프린터 &#39;U+Webfax&#39; 선택 → U+ 팩스창에서 수신번호/제목 확인 후 전송</p>
+                          </div>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -453,6 +460,9 @@ export default function SettingsPage() {
             </p>
             <p>
               • 공장발주 시 설정된 팩스 번호로 자동 전송됩니다
+            </p>
+            <p className="mt-1">
+              • <strong>U+ Webfax (인쇄 전송):</strong> 자동 API 전송이 아닌 인쇄 방식이며, 전송 후 공장발주 화면에서 전송완료처리를 눌러 상태를 확정합니다
             </p>
           </div>
         </CardBody>

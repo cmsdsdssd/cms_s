@@ -61,48 +61,56 @@ interface TimelineViewProps {
   groupByDate?: boolean;
   onItemExpand?: (id: string) => void;
   onItemCollapse?: (id: string) => void;
+  showTypeBadge?: boolean;
   className?: string;
 }
 
 const typeConfig: Record<TimelineItemType, {
   icon: React.ElementType;
   label: string;
+  badgeLabel: string;
   color: string;
   bgColor: string;
 }> = {
   order: {
     icon: ClipboardList,
     label: "주문",
+    badgeLabel: "ORDER",
     color: "text-blue-600",
     bgColor: "bg-blue-50",
   },
   shipment: {
     icon: PackageCheck,
     label: "출고",
+    badgeLabel: "SHIPMENT",
     color: "text-green-600",
     bgColor: "bg-green-50",
   },
   payment: {
     icon: CreditCard,
     label: "수금",
+    badgeLabel: "PAYMENT",
     color: "text-purple-600",
     bgColor: "bg-purple-50",
   },
   return: {
     icon: RotateCcw,
     label: "반품",
+    badgeLabel: "RETURN",
     color: "text-red-600",
     bgColor: "bg-red-50",
   },
   repair: {
     icon: Wrench,
     label: "수리",
+    badgeLabel: "REPAIR",
     color: "text-orange-600",
     bgColor: "bg-orange-50",
   },
   inventory: {
     icon: Package,
     label: "재고",
+    badgeLabel: "INVENTORY",
     color: "text-amber-600",
     bgColor: "bg-amber-50",
   },
@@ -137,10 +145,12 @@ function TimelineItemCard({
   item,
   onExpand,
   onCollapse,
+  showTypeBadge,
 }: {
   item: TimelineItem;
   onExpand?: (id: string) => void;
   onCollapse?: (id: string) => void;
+  showTypeBadge?: boolean;
 }) {
   const [isExpanded, setIsExpanded] = useState(item.expanded || false);
   
@@ -184,6 +194,11 @@ function TimelineItemCard({
             <div>
               <div className="flex items-center gap-2">
                 <span className="font-semibold text-foreground">{item.title}</span>
+                {showTypeBadge && (
+                  <Badge tone="neutral" className="text-[10px] font-semibold tracking-wide">
+                    {typeInfo.badgeLabel}
+                  </Badge>
+                )}
                 <Badge 
                   tone={statusInfo.tone}
                   className="text-xs"
@@ -288,6 +303,7 @@ export function TimelineView({
   groupByDate = true,
   onItemExpand,
   onItemCollapse,
+  showTypeBadge = false,
   className,
 }: TimelineViewProps) {
   const sortedItems = [...items].sort((a, b) => b.date.getTime() - a.date.getTime());
@@ -326,6 +342,7 @@ export function TimelineView({
                     item={item}
                     onExpand={onItemExpand}
                     onCollapse={onItemCollapse}
+                    showTypeBadge={showTypeBadge}
                   />
                 ))}
               </div>
@@ -344,6 +361,7 @@ export function TimelineView({
           item={item}
           onExpand={onItemExpand}
           onCollapse={onItemCollapse}
+          showTypeBadge={showTypeBadge}
         />
       ))}
     </div>

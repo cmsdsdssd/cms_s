@@ -124,12 +124,19 @@ export default function DailyReceiptsPage() {
         .select(
           "shipment_line_id, shipment_id, model_name, qty, material_code, color, size, net_weight_g, labor_total_sell_krw, total_amount_sell_krw, gold_tick_krw_per_g, silver_tick_krw_per_g, shipment_header:cms_shipment_header(ship_date, confirmed_at, status, customer_party_id, is_store_pickup, customer:cms_party(name))"
         )
-        .and(
-          `shipment_header.status.eq.CONFIRMED,shipment_header.ship_date.eq.${today},or(shipment_header.is_store_pickup.is.null,shipment_header.is_store_pickup.eq.false)`
-        )
-        .order("shipment_header.confirmed_at", { ascending: true });
+        .not("shipment_header", "is", null)
+        .order("created_at", { ascending: true });
+      // Filter in JS since PostgREST nested filtering is limited
+      const filtered = (data ?? []).filter((row: ShipmentLineRow) => {
+        const header = row.shipment_header;
+        if (!header) return false;
+        if (header.status !== "CONFIRMED") return false;
+        if (header.ship_date !== today) return false;
+        if (header.is_store_pickup === true) return false;
+        return true;
+      });
       if (error) throw error;
-      return (data ?? []) as ShipmentLineRow[];
+      return filtered as ShipmentLineRow[];
     },
     enabled: Boolean(schemaClient),
   });
@@ -177,12 +184,18 @@ export default function DailyReceiptsPage() {
         .select(
           "shipment_line_id, material_code, net_weight_g, labor_total_sell_krw, total_amount_sell_krw, shipment_header:cms_shipment_header(ship_date, status, customer_party_id, is_store_pickup)"
         )
-        .eq("shipment_header.status", "CONFIRMED")
-        .lte("shipment_header.ship_date", today)
-        .in("shipment_header.customer_party_id", partyIds)
-        .and(`or(shipment_header.is_store_pickup.is.null,shipment_header.is_store_pickup.eq.false)`);
+        .in("shipment_header.customer_party_id", partyIds);
       if (error) throw error;
-      return (data ?? []) as ShipmentLineRow[];
+      // Filter in JS since PostgREST nested OR is unsupported
+      const filtered = (data ?? []).filter((row: ShipmentLineRow) => {
+        const header = row.shipment_header;
+        if (!header) return false;
+        if (header.status !== "CONFIRMED") return false;
+        if (header.ship_date && header.ship_date > today) return false;
+        if (header.is_store_pickup === true) return false;
+        return true;
+      });
+      return filtered as ShipmentLineRow[];
     },
     enabled: Boolean(schemaClient) && partyIds.length > 0,
   });

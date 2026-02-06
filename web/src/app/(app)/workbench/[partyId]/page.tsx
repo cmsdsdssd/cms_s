@@ -3,46 +3,28 @@
 import { useState, useEffect, Suspense } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { 
-  Plus, 
-  CreditCard, 
-  PackageCheck,
-  TrendingUp,
-  TrendingDown,
-  Building2,
-  Phone,
-  MapPin,
-  Calendar,
-  MoreHorizontal,
-  RefreshCw,
-  Filter
-} from "lucide-react";
+import { Plus, CreditCard, PackageCheck } from "lucide-react";
 import { toast } from "sonner";
 import { format } from "date-fns";
 import { ko } from "date-fns/locale";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
-import { Card, CardBody, CardHeader } from "@/components/ui/card";
+import { Card, CardBody } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Input } from "@/components/ui/field";
 import { GlobalPartySelector } from "@/components/party/global-party-selector";
-import { TimelineView, TimelineItem, TimelineFilter, TimelineEmpty } from "@/components/timeline/timeline-view";
+import { TimelineEmpty } from "@/components/timeline/timeline-view";
 import { InlineShipmentPanel } from "@/components/shipment/inline-shipment-panel";
 import { getSchemaClient } from "@/lib/supabase/client";
 import { callRpc } from "@/lib/supabase/rpc";
 import { CONTRACTS } from "@/lib/contracts";
 import Link from "next/link";
+import { PartyInfoCard } from "./_components/party-info-card";
+import { WorkbenchOverview } from "./_components/workbench-overview";
+import { WorkbenchActivity } from "./_components/workbench-activity";
+import { WorkbenchReturnsTab } from "./_components/workbench-returns-tab";
+import { WorkbenchRepairsTab } from "./_components/workbench-repairs-tab";
 
 // Types
-interface PartyDetail {
-  party_id: string;
-  name: string;
-  party_type?: string;
-  phone?: string;
-  region?: string;
-  note?: string;
-}
-
 interface OrderItem {
   order_line_id: string;
   model_name: string;
@@ -68,6 +50,7 @@ interface ShipmentItem {
   total_amount_sell_krw: number;
   status: string;
   confirmed_at?: string;
+  created_at?: string;
   ship_date?: string;
   purchase_cost_status?: string | null;
   purchase_receipt_id?: string | null;
@@ -95,16 +78,15 @@ interface StorePickupShipment {
   }> | null;
 }
 
-interface ARItem {
-  ar_ledger_id: string;
-  entry_type: string;
-  amount_krw: number;
-  occurred_at: string;
-  shipment_id?: string;
-  payment_id?: string;
-}
-
-type ViewType = "timeline" | "orders" | "shipments" | "payments" | "store_pickup";
+type ViewType =
+  | "overview"
+  | "activity"
+  | "orders"
+  | "shipments"
+  | "returns"
+  | "payments"
+  | "repairs"
+  | "store_pickup";
 type OrderFilterType = "all" | "pending" | "ready" | "completed";
 
 // Loading component
@@ -119,131 +101,12 @@ function WorkbenchLoading() {
   );
 }
 
-// Party Info Card
-function PartyInfoCard({ partyId }: { partyId: string }) {
-  const schemaClient = getSchemaClient();
-  
-  const { data: party } = useQuery({
-    queryKey: ["party-detail", partyId],
-    queryFn: async () => {
-      if (!schemaClient) return null;
-      const { data, error } = await schemaClient
-        .from("cms_party")
-        .select("party_id, name, party_type, phone, region, note")
-        .eq("party_id", partyId)
-        .single();
-      if (error) throw error;
-      return data as PartyDetail;
-    },
-    enabled: !!schemaClient && !!partyId,
-  });
-
-  const { data: balance } = useQuery({
-    queryKey: ["party-balance", partyId],
-    queryFn: async () => {
-      if (!schemaClient) return null;
-      const { data, error } = await schemaClient
-        .from(CONTRACTS.views.arBalanceByParty)
-        .select("balance_krw, last_shipment_at, last_payment_at, open_invoices_count")
-        .eq("party_id", partyId)
-        .single();
-      if (error) return null;
-      return data as { 
-        balance_krw: number; 
-        last_shipment_at?: string; 
-        last_payment_at?: string;
-        open_invoices_count?: number;
-      };
-    },
-    enabled: !!schemaClient && !!partyId,
-  });
-
-  if (!party) return null;
-
-  const balanceAmount = balance?.balance_krw || 0;
-  const hasReceivable = balanceAmount > 0;
-  const hasPrepayment = balanceAmount < 0;
-
-  return (
-    <Card className="border-primary/10">
-      <CardHeader className="pb-3">
-        <div className="flex items-start justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-12 h-12 rounded-xl bg-primary/10 flex items-center justify-center">
-              <Building2 className="w-6 h-6 text-primary" />
-            </div>
-            <div>
-              <h3 className="text-lg font-semibold">{party.name}</h3>
-              <div className="flex items-center gap-2 text-sm text-muted-foreground mt-1">
-                {party.party_type && (
-                  <Badge tone="neutral" className="text-xs">
-                    {party.party_type}
-                  </Badge>
-                )}
-                {party.phone && (
-                  <span className="flex items-center gap-1">
-                    <Phone className="w-3 h-3" />
-                    {party.phone}
-                  </span>
-                )}
-                {party.region && (
-                  <span className="flex items-center gap-1">
-                    <MapPin className="w-3 h-3" />
-                    {party.region}
-                  </span>
-                )}
-              </div>
-            </div>
-          </div>
-          
-          {/* Balance Display */}
-          <div className={cn(
-            "text-right px-4 py-2 rounded-lg",
-            hasReceivable ? "bg-orange-50" : hasPrepayment ? "bg-blue-50" : "bg-green-50"
-          )}>
-            <div className={cn(
-              "text-2xl font-bold",
-              hasReceivable ? "text-orange-600" : hasPrepayment ? "text-blue-600" : "text-green-600"
-            )}>
-              ₩{Math.abs(balanceAmount).toLocaleString()}
-            </div>
-            <div className={cn(
-              "text-xs font-medium",
-              hasReceivable ? "text-orange-500" : hasPrepayment ? "text-blue-500" : "text-green-500"
-            )}>
-              {hasReceivable ? "미수금" : hasPrepayment ? "선수금" : "정산완료"}
-            </div>
-          </div>
-        </div>
-      </CardHeader>
-      
-      <CardBody>
-        <div className="grid grid-cols-3 gap-4 text-sm">
-          <div className="bg-muted rounded-lg p-3">
-            <div className="text-muted-foreground text-xs mb-1">미수건수</div>
-            <div className="font-semibold">{balance?.open_invoices_count || 0}건</div>
-          </div>
-          <div className="bg-muted rounded-lg p-3">
-            <div className="text-muted-foreground text-xs mb-1">최근출고</div>
-            <div className="font-semibold">
-              {balance?.last_shipment_at 
-                ? format(new Date(balance.last_shipment_at), "MM/dd", { locale: ko })
-                : "-"}
-            </div>
-          </div>
-          <div className="bg-muted rounded-lg p-3">
-            <div className="text-muted-foreground text-xs mb-1">최근수금</div>
-            <div className="font-semibold">
-              {balance?.last_payment_at 
-                ? format(new Date(balance.last_payment_at), "MM/dd", { locale: ko })
-                : "-"}
-            </div>
-          </div>
-        </div>
-      </CardBody>
-    </Card>
-  );
-}
+const formatOptionalDateTime = (value?: string | null) => {
+  if (!value) return "-";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return "-";
+  return format(parsed, "MM/dd HH:mm", { locale: ko });
+};
 
 // Order Line with Inline Shipment
 function OrderLineItem({ order, partyId, onExpand, isExpanded }: { 
@@ -345,13 +208,28 @@ function WorkbenchContent() {
   
   const partyId = params.partyId as string;
   const actorId = (process.env.NEXT_PUBLIC_CMS_ACTOR_ID || "").trim();
-  const [activeTab, setActiveTab] = useState<ViewType>((searchParams.get("view") as ViewType) || "timeline");
+  const rawView = searchParams.get("view");
+  const normalizedView = rawView === "timeline" ? "activity" : rawView;
+  const [activeTab, setActiveTab] = useState<ViewType>((normalizedView as ViewType) || "overview");
   const [orderFilter, setOrderFilter] = useState<OrderFilterType>("all");
   const [expandedOrderId, setExpandedOrderId] = useState<string | null>(null);
   const [selectedStorePickups, setSelectedStorePickups] = useState<Set<string>>(new Set());
 
+  useEffect(() => {
+    if (!normalizedView) return;
+    const nextView = normalizedView as ViewType;
+    setActiveTab(nextView);
+  }, [normalizedView]);
+
+  const handleTabChange = (next: ViewType) => {
+    setActiveTab(next);
+    const params = new URLSearchParams(searchParams.toString());
+    params.set("view", next);
+    router.replace(`/workbench/${partyId}?${params.toString()}`);
+  };
+
   // Fetch orders
-  const { data: orders, isLoading: ordersLoading } = useQuery({
+  const { data: orders } = useQuery({
     queryKey: ["workbench-orders", partyId],
     queryFn: async () => {
       if (!schemaClient || !partyId) return [];
@@ -367,14 +245,14 @@ function WorkbenchContent() {
   });
 
   // Fetch shipments
-  const { data: shipments, isLoading: shipmentsLoading } = useQuery({
+  const { data: shipments } = useQuery({
     queryKey: ["workbench-shipments", partyId],
     queryFn: async () => {
       if (!schemaClient || !partyId) return [];
       const { data, error } = await schemaClient
         .from("cms_shipment_header")
         .select(
-          "shipment_id, status, confirmed_at, ship_date, cms_shipment_line!inner(shipment_line_id, order_line_id, model_name, qty, total_amount_sell_krw, purchase_cost_status, purchase_receipt_id, repair_line_id)"
+          "shipment_id, status, confirmed_at, created_at, ship_date, cms_shipment_line!inner(shipment_line_id, order_line_id, model_name, qty, total_amount_sell_krw, purchase_cost_status, purchase_receipt_id, repair_line_id)"
         )
         .eq("customer_party_id", partyId)
         .order("created_at", { ascending: false });
@@ -423,7 +301,7 @@ function WorkbenchContent() {
   });
 
   // Fetch payments
-  const { data: payments, isLoading: paymentsLoading } = useQuery({
+  const { data: payments } = useQuery({
     queryKey: ["workbench-payments", partyId],
     queryFn: async () => {
       if (!schemaClient || !partyId) return [];
@@ -438,62 +316,6 @@ function WorkbenchContent() {
     enabled: !!schemaClient && !!partyId,
   });
 
-  // Convert to timeline items
-  const timelineItems: TimelineItem[] = [
-    ...(orders?.map(order => ({
-      id: order.order_line_id,
-      type: "order" as const,
-      status: order.status === "CANCELLED" ? "cancelled" as const : 
-              order.status === "SHIPPED" ? "completed" as const : "pending" as const,
-      title: `주문 ${order.model_name}`,
-      subtitle: `${order.color} · ${order.qty}개`,
-      date: new Date(order.created_at),
-      qty: order.qty,
-      modelName: order.model_name,
-      color: order.color,
-      expanded: expandedOrderId === order.order_line_id,
-      actions: order.status !== "CANCELLED" && order.status !== "SHIPPED" ? [
-        {
-          label: "출고하기",
-          onClick: () => setExpandedOrderId(order.order_line_id),
-          variant: "default" as const,
-        },
-        {
-          label: "상세보기",
-          onClick: () => router.push(`/orders?edit_order_line_id=${order.order_line_id}`),
-          variant: "secondary" as const,
-        },
-      ] : [],
-    })) || []),
-    ...(shipments?.map(shipment => ({
-      id: shipment.shipment_id,
-      type: "shipment" as const,
-      status: shipment.status === "CONFIRMED" ? "completed" as const : "pending" as const,
-      title: `출고 ${shipment.model_name}`,
-      subtitle: `${shipment.qty}개 · ₩${shipment.total_amount_sell_krw.toLocaleString()}`,
-      date: new Date(shipment.confirmed_at || shipment.ship_date || new Date()),
-      amount: shipment.total_amount_sell_krw,
-      qty: shipment.qty,
-      modelName: shipment.model_name,
-      actions: [
-        {
-          label: "수금등록",
-          onClick: () => router.push(`/ar?party_id=${partyId}`),
-          variant: "default" as const,
-        },
-      ],
-    })) || []),
-    ...(payments?.map(payment => ({
-      id: payment.payment_id,
-      type: "payment" as const,
-      status: "completed" as const,
-      title: "수금",
-      subtitle: payment.memo || "",
-      date: new Date(payment.paid_at),
-      amount: payment.total_amount_krw,
-    })) || []),
-  ].sort((a, b) => b.date.getTime() - a.date.getTime());
-
   // Filter orders
   const filteredOrders = orders?.filter(order => {
     if (orderFilter === "all") return true;
@@ -505,7 +327,6 @@ function WorkbenchContent() {
 
   // Tab counts
   const tabCounts = {
-    timeline: timelineItems.length,
     orders: orders?.length || 0,
     shipments: shipments?.length || 0,
     payments: payments?.length || 0,
@@ -634,15 +455,18 @@ function WorkbenchContent() {
       {/* Tabs */}
       <div className="flex items-center gap-1 p-1 bg-muted rounded-lg overflow-x-auto">
         {[
-          { id: "timeline" as const, label: "전체 타임라인", count: tabCounts.timeline },
+          { id: "overview" as const, label: "Overview" },
+          { id: "activity" as const, label: "Activity" },
           { id: "orders" as const, label: "주문", count: tabCounts.orders },
           { id: "shipments" as const, label: "출고", count: tabCounts.shipments },
-          { id: "store_pickup" as const, label: "당일출고", count: tabCounts.store_pickup },
+          { id: "returns" as const, label: "반품" },
           { id: "payments" as const, label: "수금", count: tabCounts.payments },
+          { id: "repairs" as const, label: "수리" },
+          { id: "store_pickup" as const, label: "당일출고", count: tabCounts.store_pickup },
         ].map(({ id, label, count }) => (
           <button
             key={id}
-            onClick={() => setActiveTab(id)}
+            onClick={() => handleTabChange(id)}
             className={cn(
               "px-4 py-2 rounded-md text-sm font-medium whitespace-nowrap transition-colors",
               activeTab === id
@@ -651,7 +475,7 @@ function WorkbenchContent() {
             )}
           >
             {label}
-            {count > 0 && (
+            {count !== undefined && count > 0 && (
               <span className={cn(
                 "ml-1.5 text-xs px-1.5 py-0.5 rounded-full",
                 activeTab === id ? "bg-primary/10 text-primary" : "bg-muted-foreground/20"
@@ -665,20 +489,9 @@ function WorkbenchContent() {
 
       {/* Content */}
       <div className="min-h-[400px]">
-        {activeTab === "timeline" && (
-          <div>
-            {timelineItems.length > 0 ? (
-              <TimelineView 
-                items={timelineItems}
-                groupByDate={true}
-                onItemExpand={(id) => setExpandedOrderId(id)}
-                onItemCollapse={() => setExpandedOrderId(null)}
-              />
-            ) : (
-              <TimelineEmpty message="해당 거래처의 업무 내역이 없습니다" />
-            )}
-          </div>
-        )}
+        {activeTab === "overview" && <WorkbenchOverview partyId={partyId} />}
+
+        {activeTab === "activity" && <WorkbenchActivity partyId={partyId} />}
 
         {activeTab === "orders" && (
           <div className="space-y-4">
@@ -739,7 +552,7 @@ function WorkbenchContent() {
                       <div>
                         <div className="font-semibold">{shipment.model_name}</div>
                         <div className="text-sm text-muted-foreground">
-                          {shipment.qty}개 · {format(new Date(shipment.confirmed_at || new Date()), "MM/dd HH:mm", { locale: ko })}
+                          {shipment.qty}개 · {formatOptionalDateTime(shipment.confirmed_at || shipment.ship_date || shipment.created_at)}
                         </div>
                       </div>
                     </div>
@@ -841,7 +654,7 @@ function WorkbenchContent() {
                         <div>
                           <div className="font-semibold">{modelNames || "모델 없음"}{moreCount > 0 ? ` 외 ${moreCount}건` : ""}</div>
                           <div className="text-sm text-muted-foreground">
-                            {totalQty}개 · {format(new Date(shipment.created_at ?? new Date()), "MM/dd HH:mm", { locale: ko })}
+                            {totalQty}개 · {formatOptionalDateTime(shipment.created_at)}
                           </div>
                           {shipment.memo && (
                             <div className="text-xs text-muted-foreground">{shipment.memo}</div>
@@ -906,6 +719,13 @@ function WorkbenchContent() {
             )}
           </div>
         )}
+        {activeTab === "returns" && (
+          <WorkbenchReturnsTab partyId={partyId} />
+        )}
+
+        {activeTab === "repairs" && (
+          <WorkbenchRepairsTab partyId={partyId} />
+        )}
       </div>
     </div>
   );
@@ -914,7 +734,7 @@ function WorkbenchContent() {
 // Main Page Component
 export default function WorkbenchPage() {
   return (
-    <div className="container mx-auto py-6 px-4 max-w-6xl">
+    <div className="mx-auto max-w-[1800px] py-6 px-4 md:px-6">
       <Suspense fallback={<WorkbenchLoading />}>
         <WorkbenchContent />
       </Suspense>

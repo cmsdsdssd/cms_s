@@ -19,7 +19,7 @@ interface FaxSendRequest {
     line_count?: number;
     html_content: string;
     fax_number?: string;
-    provider?: 'mock' | 'twilio' | 'sendpulse' | 'custom' | 'apiplex';
+    provider?: 'mock' | 'twilio' | 'sendpulse' | 'custom' | 'apiplex' | 'uplus_print';
 }
 
 interface FaxSendResult {
@@ -48,6 +48,13 @@ export async function POST(request: Request) {
     try {
         const body: FaxSendRequest = await request.json();
         const { po_id, vendor_prefix, html_content, fax_number, provider = 'mock' } = body;
+
+        if (provider === 'uplus_print') {
+            return NextResponse.json(
+                { error: "uplus_print는 인쇄 전송 방식이므로 /api/fax-send 사용 금지" },
+                { status: 400 }
+            );
+        }
 
         if (!po_id || !html_content) {
             return NextResponse.json(

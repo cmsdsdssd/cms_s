@@ -76,11 +76,11 @@ export function InlineShipmentPanel({
 }: InlineShipmentPanelProps) {
   const queryClient = useQueryClient();
   const schemaClient = getSchemaClient();
-  
+
   const [shipmentId, setShipmentId] = useState<string | null>(null);
   const [step, setStep] = useState<"draft" | "pricing" | "confirm">("draft");
   const [isStorePickup, setIsStorePickup] = useState(false);
-  
+
   // Form states
   const [weight, setWeight] = useState<string>("");
   const [deduction, setDeduction] = useState<string>("");
@@ -155,7 +155,8 @@ export function InlineShipmentPanel({
         .eq("config_key", "DEFAULT")
         .maybeSingle();
       if (error) return 0;
-      return Number(data?.rule_rounding_unit_krw ?? 0);
+      const row = data as { rule_rounding_unit_krw?: number | null } | null;
+      return Number(row?.rule_rounding_unit_krw ?? 0);
     },
     enabled: Boolean(schemaClient),
   });
@@ -178,13 +179,15 @@ export function InlineShipmentPanel({
   useEffect(() => {
     const mode = shipmentLineQuery.data?.pricing_mode ?? null;
     const manualAmount = shipmentLineQuery.data?.manual_total_amount_krw ?? null;
-    if (mode === "AMOUNT_ONLY" && manualAmount !== null && manualAmount !== undefined) {
-      setIsManualTotalOverride(true);
-      setManualTotalAmount(String(manualAmount));
-    } else if (mode === "RULE") {
-      setIsManualTotalOverride(false);
-      setManualTotalAmount("");
-    }
+    queueMicrotask(() => {
+      if (mode === "AMOUNT_ONLY" && manualAmount !== null && manualAmount !== undefined) {
+        setIsManualTotalOverride(true);
+        setManualTotalAmount(String(manualAmount));
+      } else {
+        setIsManualTotalOverride(false);
+        setManualTotalAmount("");
+      }
+    });
   }, [shipmentLineQuery.data?.manual_total_amount_krw, shipmentLineQuery.data?.pricing_mode]);
 
   const defaultWeight = masterInfo?.weight_default_g
@@ -228,7 +231,7 @@ export function InlineShipmentPanel({
   const createShipmentMutation = useMutation({
     mutationFn: async () => {
       if (!schemaClient) throw new Error("No schema client");
-      
+
       // Create shipment from order
       const result = await callRpc<{ shipment_id: string }>(
         CONTRACTS.functions.shipmentUpsertFromOrder,
@@ -237,7 +240,7 @@ export function InlineShipmentPanel({
           p_customer_party_id: orderData.customerPartyId,
         }
       );
-      
+
       return result;
     },
     onSuccess: (data) => {
@@ -287,6 +290,8 @@ export function InlineShipmentPanel({
         p_deduction_weight_g: deductionNum / orderData.qty,
         p_base_labor_krw: laborTotalForSave,
         p_extra_labor_krw: 0,
+        p_pricing_mode: isManualTotalOverride ? "AMOUNT_ONLY" : "RULE",
+        p_manual_total_amount_krw: isManualTotalOverride ? manualTotalValue : null,
       };
       if (weightNum > 0) {
         updatePayload.p_measured_weight_g = weightNum / orderData.qty;
@@ -344,12 +349,12 @@ export function InlineShipmentPanel({
           description: `총액: ₩${data?.total_sell_krw?.toLocaleString()}`,
         });
       }
-      
+
       // Invalidate queries
       queryClient.invalidateQueries({ queryKey: ["order-worklist"] });
       queryClient.invalidateQueries({ queryKey: ["ar-balance"] });
       queryClient.invalidateQueries({ queryKey: ["inventory"] });
-      
+
       if (onComplete) {
         onComplete();
       }
@@ -401,7 +406,7 @@ export function InlineShipmentPanel({
             </p>
           </div>
         </div>
-        
+
         {onCancel && (
           <button
             onClick={onCancel}
@@ -419,7 +424,7 @@ export function InlineShipmentPanel({
             <p className="text-sm text-muted-foreground mb-4">
               주문 #{orderLineId.slice(0, 8)}에 대한 출고를 시작합니다
             </p>
-            <Button 
+            <Button
               onClick={handleStart}
               disabled={createShipmentMutation.isPending}
             >
@@ -432,129 +437,129 @@ export function InlineShipmentPanel({
           <div className="space-y-4">
             {/* Weight Section */}
             <>
-                <div className="space-y-3">
-                  <h5 className="text-sm font-medium flex items-center gap-2">
-                    <Weight className="w-4 h-4" />
-                    중량 정보
-                  </h5>
+              <div className="space-y-3">
+                <h5 className="text-sm font-medium flex items-center gap-2">
+                  <Weight className="w-4 h-4" />
+                  중량 정보
+                </h5>
 
-                  <div className="grid grid-cols-3 gap-3">
-                    <div>
-                      <label className="text-xs text-muted-foreground mb-1 block">
-                        총 중량 (g)
-                      </label>
-                      <Input
-                        type="number"
-                        step="0.01"
-                        value={resolvedWeight}
-                        onChange={(e) => {
-                          setHasEditedWeight(true);
-                          setWeight(e.target.value);
-                        }}
-                        placeholder="0.00"
-                      />
-                    </div>
-                    <div>
-                      <label className="text-xs text-muted-foreground mb-1 block">
-                        차감 중량 (g)
-                      </label>
-                      <Input
-                        type="number"
-                        step="0.01"
-                        value={resolvedDeduction}
-                        onChange={(e) => {
-                          setHasEditedDeduction(true);
-                          setDeduction(e.target.value);
-                        }}
-                        placeholder="0.00"
-                      />
-                    </div>
-                    <div>
-                      <label className="text-xs text-muted-foreground mb-1 block">
-                        순 중량 (g)
-                      </label>
-                      <div className="h-10 flex items-center px-3 bg-muted rounded-md text-sm font-medium">
-                        {netWeight.toFixed(2)}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Cost Section */}
-            <div className="space-y-3">
-              <h5 className="text-sm font-medium flex items-center gap-2">
-                <Coins className="w-4 h-4" />
-                금액 정보
-              </h5>
-
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="text-xs text-muted-foreground mb-1 block">
-                        도금 비용 (₩)
-                      </label>
-                      <Input
-                        type="number"
-                        value={platingCost}
-                        onChange={(e) => setPlatingCost(e.target.value)}
-                        placeholder="0"
-                      />
-                    </div>
-                    <div>
-                      <label className="text-xs text-muted-foreground mb-1 block">
-                        수리 비용 (₩)
-                      </label>
-                      <Input
-                        type="number"
-                        value={repairFee}
-                        onChange={(e) => setRepairFee(e.target.value)}
-                        placeholder="0"
-                      />
-                    </div>
-                  </div>
-
+                <div className="grid grid-cols-3 gap-3">
                   <div>
                     <label className="text-xs text-muted-foreground mb-1 block">
-                      공임 (₩) - 자동계산 또는 수동입력
+                      총 중량 (g)
                     </label>
                     <Input
                       type="number"
-                      value={resolvedLaborCost}
+                      step="0.01"
+                      value={resolvedWeight}
                       onChange={(e) => {
-                        setHasEditedLaborCost(true);
-                        setLaborCost(e.target.value);
+                        setHasEditedWeight(true);
+                        setWeight(e.target.value);
                       }}
+                      placeholder="0.00"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs text-muted-foreground mb-1 block">
+                      차감 중량 (g)
+                    </label>
+                    <Input
+                      type="number"
+                      step="0.01"
+                      value={resolvedDeduction}
+                      onChange={(e) => {
+                        setHasEditedDeduction(true);
+                        setDeduction(e.target.value);
+                      }}
+                      placeholder="0.00"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs text-muted-foreground mb-1 block">
+                      순 중량 (g)
+                    </label>
+                    <div className="h-10 flex items-center px-3 bg-muted rounded-md text-sm font-medium">
+                      {netWeight.toFixed(2)}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Cost Section */}
+              <div className="space-y-3">
+                <h5 className="text-sm font-medium flex items-center gap-2">
+                  <Coins className="w-4 h-4" />
+                  금액 정보
+                </h5>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-xs text-muted-foreground mb-1 block">
+                      도금 비용 (₩)
+                    </label>
+                    <Input
+                      type="number"
+                      value={platingCost}
+                      onChange={(e) => setPlatingCost(e.target.value)}
                       placeholder="0"
                     />
                   </div>
                   <div>
                     <label className="text-xs text-muted-foreground mb-1 block">
-                      총액 덮어쓰기 (AMOUNT_ONLY)
+                      수리 비용 (₩)
                     </label>
-                    <div className="space-y-2">
-                      <label className="inline-flex items-center gap-2 text-xs text-muted-foreground">
-                        <input
-                          type="checkbox"
-                          checked={isManualTotalOverride}
-                          onChange={(event) => {
-                            const nextValue = event.target.checked;
-                            setIsManualTotalOverride(nextValue);
-                            if (!nextValue) setManualTotalAmount("");
-                          }}
-                          className="h-3 w-3"
-                        />
-                        총액 덮어쓰기
-                      </label>
-                      <Input
-                        type="number"
-                        value={manualTotalAmount}
-                        onChange={(e) => setManualTotalAmount(e.target.value)}
-                        placeholder="0"
-                        disabled={!isManualTotalOverride}
-                      />
-                    </div>
+                    <Input
+                      type="number"
+                      value={repairFee}
+                      onChange={(e) => setRepairFee(e.target.value)}
+                      placeholder="0"
+                    />
                   </div>
                 </div>
-              </>
+
+                <div>
+                  <label className="text-xs text-muted-foreground mb-1 block">
+                    공임 (₩) - 자동계산 또는 수동입력
+                  </label>
+                  <Input
+                    type="number"
+                    value={resolvedLaborCost}
+                    onChange={(e) => {
+                      setHasEditedLaborCost(true);
+                      setLaborCost(e.target.value);
+                    }}
+                    placeholder="0"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-muted-foreground mb-1 block">
+                    총액 덮어쓰기 (AMOUNT_ONLY)
+                  </label>
+                  <div className="space-y-2">
+                    <label className="inline-flex items-center gap-2 text-xs text-muted-foreground">
+                      <input
+                        type="checkbox"
+                        checked={isManualTotalOverride}
+                        onChange={(event) => {
+                          const nextValue = event.target.checked;
+                          setIsManualTotalOverride(nextValue);
+                          if (!nextValue) setManualTotalAmount("");
+                        }}
+                        className="h-3 w-3"
+                      />
+                      총액 덮어쓰기
+                    </label>
+                    <Input
+                      type="number"
+                      value={manualTotalAmount}
+                      onChange={(e) => setManualTotalAmount(e.target.value)}
+                      placeholder="0"
+                      disabled={!isManualTotalOverride}
+                    />
+                  </div>
+                </div>
+              </div>
+            </>
 
             {/* Price Preview */}
             <div className="bg-muted rounded-lg p-3 space-y-2">

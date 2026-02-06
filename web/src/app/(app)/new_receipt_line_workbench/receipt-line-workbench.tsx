@@ -150,6 +150,9 @@ type MatchCandidate = {
   weight_max_g?: number | null;
   factory_po_id?: string | null;
   memo?: string | null;
+  stone_center_exists?: boolean | null;
+  stone_sub1_exists?: boolean | null;
+  stone_sub2_exists?: boolean | null;
   match_score?: number | null;
   score_detail_json?: Record<string, unknown> | null;
 };
@@ -1287,13 +1290,15 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
 
       if (receiptId) {
         toast.success("영수증 업로드 완료");
-        await receiptsQuery.refetch();
-        const refreshed = await receiptsQuery.refetch();
-        const rows = refreshed.data ?? [];
-        const found = rows.find((row) => row.receipt_id === receiptId);
-        if (found) {
-          setSelectedReceiptId(receiptId);
-        }
+        setStatusFilter(DEFAULT_STATUS_FILTER);
+        setVendorFilter("");
+        setUnlinkedOnly(false);
+        setFromDate(getDefaultRangeDateByMonths(DEFAULT_RANGE_MONTHS));
+        setToDate(getDefaultRangeDateByMonths(0));
+        setSelectedReceiptId(receiptId);
+        void fetchHeaderSnapshot(receiptId);
+        await queryClient.invalidateQueries({ queryKey: ["new-receipt-workbench", "receipts"] });
+        void receiptsQuery.refetch();
       } else {
         toast.error("업로드는 완료되었으나 영수증 ID를 받지 못했습니다");
       }
@@ -1965,13 +1970,17 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
         return;
       }
       const payload = json?.data ?? null;
-      const candidates = (Array.isArray(payload?.candidates)
+      const rawCandidates = (Array.isArray(payload?.candidates)
         ? payload.candidates
         : Array.isArray(payload)
           ? payload
           : Array.isArray(json?.candidates)
             ? json.candidates
-            : []) as MatchCandidate[];
+            : []) as Array<MatchCandidate & { match_reason?: Record<string, unknown> | null }>;
+      const candidates: MatchCandidate[] = rawCandidates.map((candidate) => ({
+        ...candidate,
+        score_detail_json: candidate.score_detail_json ?? candidate.match_reason ?? null,
+      }));
       if (payload?.already_confirmed) {
         toast.error("이미 매칭 확정된 라인입니다.");
         setSuggestions([]);
@@ -2075,6 +2084,7 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
         client_code?: string | null;
         model_no?: string | null;
         color?: string | null;
+        material_code?: string | null;
         status?: string | null;
         plating_status?: boolean | null;
         plating_color?: string | null;
@@ -2088,7 +2098,7 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
         model_name: row.model_no ?? null,
         size: null,
         color: row.color ?? null,
-        material_code: null,
+        material_code: row.material_code ?? null,
         status: row.status ?? null,
         is_plated: row.plating_status ?? null,
         plating_color_code: row.plating_color ?? null,
@@ -3597,7 +3607,6 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                                   <th className="px-2 py-2 text-left">사이즈</th>
                                   <th className="px-2 py-2 text-left">도금</th>
                                   <th className="px-2 py-2 text-left">도금색상</th>
-                                  <th className="px-2 py-2 text-left">비고</th>
                                   <th className="px-2 py-2 text-left">거래처코드</th>
                                   <th className="px-2 py-2 text-left">거래처명</th>
                                   <th className="px-2 py-2 text-left">중심</th>
@@ -3609,23 +3618,30 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                               </thead>
                               <tbody>
                                 {baseLine ? (
-                                  <tr className="border-t border-[var(--panel-border)] bg-[var(--surface)]/40 text-[var(--foreground)]">
-                                    <td className="px-2 py-2 font-semibold">기준</td>
-                                    <td className="px-2 py-2">{baseLine.modelName}</td>
-                                    <td className="px-2 py-2">{baseLine.material}</td>
-                                    <td className="px-2 py-2">{baseLine.color}</td>
-                                    <td className="px-2 py-2">{baseLine.size}</td>
-                                    <td className="px-2 py-2">{baseLine.plated}</td>
-                                    <td className="px-2 py-2">{baseLine.platingColor}</td>
-                                    <td className="px-2 py-2">{baseLine.memo}</td>
-                                    <td className="px-2 py-2">{baseLine.customerCode}</td>
-                                    <td className="px-2 py-2">{baseLine.customerName}</td>
-                                    <td className="px-2 py-2">{baseLine.stoneCenter}</td>
-                                    <td className="px-2 py-2">{baseLine.stoneSub1}</td>
-                                    <td className="px-2 py-2">{baseLine.stoneSub2}</td>
-                                    <td className="px-2 py-2 text-right">-</td>
-                                    <td className="px-2 py-2 text-right">-</td>
-                                  </tr>
+                                  <>
+                                    <tr className="border-t border-[var(--panel-border)] bg-[var(--surface)]/40 text-[var(--foreground)]">
+                                      <td className="px-2 py-2 font-semibold">기준</td>
+                                      <td className="px-2 py-2">{baseLine.modelName}</td>
+                                      <td className="px-2 py-2">{baseLine.material}</td>
+                                      <td className="px-2 py-2">{baseLine.color}</td>
+                                      <td className="px-2 py-2">{baseLine.size}</td>
+                                      <td className="px-2 py-2">{baseLine.plated}</td>
+                                      <td className="px-2 py-2">{baseLine.platingColor}</td>
+                                      <td className="px-2 py-2">{baseLine.customerCode}</td>
+                                      <td className="px-2 py-2">{baseLine.customerName}</td>
+                                      <td className="px-2 py-2">{baseLine.stoneCenter}</td>
+                                      <td className="px-2 py-2">{baseLine.stoneSub1}</td>
+                                      <td className="px-2 py-2">{baseLine.stoneSub2}</td>
+                                      <td className="px-2 py-2 text-right">-</td>
+                                      <td className="px-2 py-2 text-right">-</td>
+                                    </tr>
+                                    <tr className="border-t border-[var(--panel-border)] bg-[var(--surface)]/30">
+                                      <td className="px-2 py-1 text-[var(--muted)]"> </td>
+                                      <td className="px-2 py-1 text-[10px] text-[var(--muted)]" colSpan={13}>
+                                        비고: {baseLine.memo}
+                                      </td>
+                                    </tr>
+                                  </>
                                 ) : null}
                                 {suggestions.map((candidate, idx) => {
                                   const key = candidate.order_line_id ?? `candidate-${idx}`;
@@ -3636,6 +3652,21 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                                       : candidate.is_plated
                                         ? "Y"
                                         : "N";
+                                  const stonePresence =
+                                    candidate.score_detail_json &&
+                                    typeof candidate.score_detail_json.stone_presence === "object" &&
+                                    candidate.score_detail_json.stone_presence !== null
+                                      ? (candidate.score_detail_json.stone_presence as Record<string, unknown>)
+                                      : null;
+                                  const centerExists =
+                                    candidate.stone_center_exists ??
+                                    (typeof stonePresence?.center === "boolean" ? stonePresence.center : null);
+                                  const sub1Exists =
+                                    candidate.stone_sub1_exists ??
+                                    (typeof stonePresence?.sub1 === "boolean" ? stonePresence.sub1 : null);
+                                  const sub2Exists =
+                                    candidate.stone_sub2_exists ??
+                                    (typeof stonePresence?.sub2 === "boolean" ? stonePresence.sub2 : null);
                                   const row = {
                                     modelName: candidate.model_name ?? "-",
                                     material: candidate.material_code ?? "-",
@@ -3646,9 +3677,9 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                                     memo: candidate.memo ?? "-",
                                     customerCode: candidate.customer_mask_code ?? "-",
                                     customerName: candidate.customer_name ?? "-",
-                                    stoneCenter: "-",
-                                    stoneSub1: "-",
-                                    stoneSub2: "-",
+                                    stoneCenter: centerExists === null ? "-" : centerExists ? "✓" : "-",
+                                    stoneSub1: sub1Exists === null ? "-" : sub1Exists ? "✓" : "-",
+                                    stoneSub2: sub2Exists === null ? "-" : sub2Exists ? "✓" : "-",
                                   };
 
                                   return (
@@ -3661,7 +3692,6 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                                         <td className={cn("px-2 py-2", diffClass(row.size, baseLine?.size))}>{row.size}</td>
                                         <td className={cn("px-2 py-2", diffClass(row.plated, baseLine?.plated))}>{row.plated}</td>
                                         <td className={cn("px-2 py-2", diffClass(row.platingColor, baseLine?.platingColor))}>{row.platingColor}</td>
-                                        <td className={cn("px-2 py-2", diffClass(row.memo, baseLine?.memo))}>{row.memo}</td>
                                         <td className={cn("px-2 py-2", diffClass(row.customerCode, baseLine?.customerCode))}>{row.customerCode}</td>
                                         <td className={cn("px-2 py-2", diffClass(row.customerName, baseLine?.customerName))}>{row.customerName}</td>
                                         <td className={cn("px-2 py-2", diffClass(row.stoneCenter, baseLine?.stoneCenter))}>{row.stoneCenter}</td>
@@ -3692,6 +3722,12 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                                           </div>
                                         </td>
                                       </tr>
+                                      <tr className="border-t border-[var(--panel-border)] bg-[var(--surface)]/30">
+                                        <td className="px-2 py-1 text-[var(--muted)]"> </td>
+                                        <td className="px-2 py-1 text-[10px] text-[var(--muted)]" colSpan={13}>
+                                          비고: {row.memo}
+                                        </td>
+                                      </tr>
                                       <tr className="border-t border-[var(--panel-border)]">
                                         <td className="px-2 py-1 text-[var(--muted)]"> </td>
                                         <td className="px-2 py-1" colSpan={13}>
@@ -3703,9 +3739,112 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                                             {expanded ? "점수 상세 닫기" : "점수 상세 보기"}
                                           </button>
                                           {expanded ? (
-                                            <pre className="mt-2 max-h-40 overflow-auto rounded-md bg-[var(--surface)] p-2 text-[10px] text-[var(--muted)]">
-                                              {JSON.stringify(candidate.score_detail_json ?? {}, null, 2)}
-                                            </pre>
+                                            <div className="mt-2 text-[10px] text-[var(--muted)]">
+                                              {(() => {
+                                                const detail = (candidate.score_detail_json ?? {}) as Record<string, unknown>;
+                                                const modelDetail =
+                                                  detail.model_name && typeof detail.model_name === "object"
+                                                    ? (detail.model_name as Record<string, unknown>)
+                                                    : null;
+                                                const customerDetail =
+                                                  detail.customer_factory_code && typeof detail.customer_factory_code === "object"
+                                                    ? (detail.customer_factory_code as Record<string, unknown>)
+                                                    : null;
+                                                const memoDetail =
+                                                  detail.memo_match && typeof detail.memo_match === "object"
+                                                    ? (detail.memo_match as Record<string, unknown>)
+                                                    : null;
+                                                const scoreBreakdown =
+                                                  detail.score_breakdown && typeof detail.score_breakdown === "object"
+                                                    ? (detail.score_breakdown as Record<string, unknown>)
+                                                    : null;
+                                                const readScore = (value: unknown) =>
+                                                  typeof value === "number"
+                                                    ? value
+                                                    : typeof value === "string" && value.trim() !== "" && !Number.isNaN(Number(value))
+                                                      ? Number(value)
+                                                      : 0;
+
+                                                const scoreModel =
+                                                  scoreBreakdown !== null
+                                                    ? readScore(scoreBreakdown.model_name)
+                                                    : typeof modelDetail?.exact === "boolean"
+                                                      ? modelDetail.exact
+                                                        ? 60
+                                                        : 0
+                                                      : 0;
+                                                const scoreMaterial =
+                                                  scoreBreakdown !== null
+                                                    ? readScore(scoreBreakdown.material)
+                                                    : typeof detail.material_code_match === "boolean"
+                                                      ? detail.material_code_match
+                                                        ? 15
+                                                        : 0
+                                                      : 0;
+                                                const scoreColor =
+                                                  scoreBreakdown !== null
+                                                    ? readScore(scoreBreakdown.color)
+                                                    : typeof detail.color_match === "boolean"
+                                                      ? detail.color_match
+                                                        ? 10
+                                                        : 0
+                                                      : 0;
+                                                const scoreSize =
+                                                  scoreBreakdown !== null
+                                                    ? readScore(scoreBreakdown.size)
+                                                    : typeof detail.size_match === "boolean"
+                                                      ? detail.size_match
+                                                        ? 10
+                                                        : 0
+                                                      : 0;
+                                                const scoreMemo =
+                                                  scoreBreakdown !== null
+                                                    ? readScore(scoreBreakdown.memo)
+                                                    : typeof memoDetail?.exact === "boolean"
+                                                      ? memoDetail.exact
+                                                        ? 10
+                                                        : typeof memoDetail?.partial === "boolean" && memoDetail.partial
+                                                          ? 5
+                                                          : 0
+                                                      : 0;
+                                                const scoreCustomer =
+                                                  scoreBreakdown !== null
+                                                    ? readScore(scoreBreakdown.customer_factory_code)
+                                                    : typeof customerDetail?.match === "boolean"
+                                                      ? customerDetail.match
+                                                        ? 5
+                                                        : 0
+                                                      : 0;
+                                                const scoreTotal =
+                                                  scoreModel + scoreMaterial + scoreColor + scoreSize + scoreMemo + scoreCustomer;
+
+                                                return (
+                                                  <div className="flex flex-wrap items-center gap-x-5 gap-y-1">
+                                                    <span className="font-bold text-[var(--foreground)]">점수상세</span>
+                                                    <span>|</span>
+                                                    <span className="text-[var(--foreground)]">모델명</span>
+                                                    <span>{scoreModel}점</span>
+                                                    <span>|</span>
+                                                    <span className="text-[var(--foreground)]">소재</span>
+                                                    <span>{scoreMaterial}점</span>
+                                                    <span>|</span>
+                                                    <span className="text-[var(--foreground)]">색상</span>
+                                                    <span>{scoreColor}점</span>
+                                                    <span>|</span>
+                                                    <span className="text-[var(--foreground)]">사이즈</span>
+                                                    <span>{scoreSize}점</span>
+                                                    <span>|</span>
+                                                    <span className="text-[var(--foreground)]">비고</span>
+                                                    <span>{scoreMemo}점</span>
+                                                    <span>|</span>
+                                                    <span className="text-[var(--foreground)]">거래처코드</span>
+                                                    <span>{scoreCustomer}점</span>
+                                                    <span>|</span>
+                                                    <span className="font-semibold text-blue-600">합산 {scoreTotal}점</span>
+                                                  </div>
+                                                );
+                                              })()}
+                                            </div>
                                           ) : null}
                                         </td>
                                       </tr>

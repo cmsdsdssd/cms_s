@@ -15,8 +15,8 @@ interface Party {
   party_type?: string;
   phone?: string;
   region?: string;
-  balance_krw?: number;
-  last_tx_at?: string;
+  balance_krw?: number | null;
+  last_activity_at?: string | null;
 }
 
 interface GlobalPartySelectorProps {
@@ -86,7 +86,27 @@ export function GlobalPartySelector({
         .eq("is_active", true)
         .limit(10);
       if (error) throw error;
-      return data as Party[];
+      const parties = data as Party[];
+      if (parties.length === 0) return parties;
+
+      const partyIds = parties.map((party) => party.party_id);
+      const { data: positionData, error: positionError } = await schemaClient
+        .from(CONTRACTS.views.arPositionByParty)
+        .select("party_id, balance_krw, last_activity_at")
+        .in("party_id", partyIds);
+      if (positionError) return parties;
+
+      const positionRows = (positionData ?? []) as Array<{
+        party_id: string;
+        balance_krw?: number | null;
+        last_activity_at?: string | null;
+      }>;
+      const positionMap = new Map(positionRows.map((row) => [row.party_id, row]));
+      return parties.map((party) => ({
+        ...party,
+        balance_krw: positionMap.get(party.party_id)?.balance_krw,
+        last_activity_at: positionMap.get(party.party_id)?.last_activity_at,
+      }));
     },
     enabled: !!schemaClient && isOpen,
   });
@@ -140,11 +160,21 @@ export function GlobalPartySelector({
     }
   }, [onPartySelect]);
 
-  const formatBalance = (balance?: number) => {
+  const formatBalance = (balance?: number | null) => {
     if (balance === undefined || balance === null) return "";
     const sign = balance > 0 ? "미수" : balance < 0 ? "선수" : "";
     const absBalance = Math.abs(balance);
     return `${sign} ₩${absBalance.toLocaleString()}`;
+  };
+
+  const formatLastActivity = (value?: string) => {
+    if (!value) return "-";
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) return "-";
+    return new Intl.DateTimeFormat("ko-KR", {
+      month: "2-digit",
+      day: "2-digit",
+    }).format(parsed);
   };
 
   return (
@@ -280,9 +310,19 @@ export function GlobalPartySelector({
                         </span>
                       )}
                     </div>
-                    <div className="flex items-center gap-3 text-xs text-muted-foreground mt-1">
-                      {party.phone && <span>{party.phone}</span>}
-                      {party.region && <span>{party.region}</span>}
+                    <div className="flex items-center justify-between gap-3 text-xs text-muted-foreground mt-1">
+                      <div className="flex items-center gap-3">
+                        {party.phone && <span>{party.phone}</span>}
+                        {party.region && <span>{party.region}</span>}
+                      </div>
+                      <div className="flex items-center gap-2">
+                        {showBalance && party.balance_krw !== undefined && (
+                          <span className="font-semibold">{formatBalance(party.balance_krw)}</span>
+                        )}
+                        {party.last_activity_at && (
+                          <span className="text-[10px]">최근 {formatLastActivity(party.last_activity_at)}</span>
+                        )}
+                      </div>
                     </div>
                   </button>
                 ))}
