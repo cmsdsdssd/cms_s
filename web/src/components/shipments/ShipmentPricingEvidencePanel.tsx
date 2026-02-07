@@ -1,8 +1,9 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
 import { type StoneSource } from "@/lib/stone-source";
 
@@ -64,6 +65,18 @@ const stoneSourceLabel = (source: StoneSource | null) => {
   return "-";
 };
 
+const stoneRoleLabel = (role: StoneRole) => {
+  if (role === "CENTER") return "메인";
+  if (role === "SUB1") return "보조1";
+  return "보조2";
+};
+
+const deltaToneClass = (value: number) => {
+  if (value > 0) return "text-amber-700";
+  if (value < 0) return "text-sky-700";
+  return "text-[var(--muted)]";
+};
+
 function ThreeColumnEvidenceRow({
   total,
   receiptCost,
@@ -118,13 +131,12 @@ export function ShipmentPricingEvidencePanel({
   factoryOtherCostBaseKrw,
   stoneRows,
   shipmentBaseLaborKrw,
-  receiptStoneOtherCostKrw,
-  recommendedStoneSellKrw,
   finalStoneSellKrw,
   stoneAdjustmentKrw,
-  stoneQtyDeltaTotal,
-  isVariationMode,
 }: ShipmentPricingEvidencePanelProps) {
+  const [isEvidenceOpen, setIsEvidenceOpen] = useState(false);
+  const [isStoneDetailOpen, setIsStoneDetailOpen] = useState(false);
+
   const computedBaseMargin =
     masterBaseSellKrw !== null &&
     masterBaseSellKrw !== undefined &&
@@ -145,8 +157,6 @@ export function ShipmentPricingEvidencePanel({
     [stoneRows]
   );
 
-  const receiptExtraCostTotal = Math.max(factoryOtherCostBaseKrw ?? 0, 0) + Math.max(receiptStoneCostTotal, 0);
-
   const masterStoneSellTotal = useMemo(
     () => stoneRows.reduce((sum, row) => sum + Math.max(row.qtyMaster ?? 0, 0) * Math.max(row.unitSell ?? 0, 0), 0),
     [stoneRows]
@@ -157,20 +167,116 @@ export function ShipmentPricingEvidencePanel({
     [stoneRows]
   );
 
-  const masterExtraMarginTotal = useMemo(() => {
-    if (extraLaborSellKrw === null || extraLaborSellKrw === undefined) return null;
-    return extraLaborSellKrw - receiptExtraCostTotal;
-  }, [extraLaborSellKrw, receiptExtraCostTotal]);
-
-  const stoneDeltaFromRecommended =
-    finalStoneSellKrw === null || finalStoneSellKrw === undefined || recommendedStoneSellKrw === null || recommendedStoneSellKrw === undefined
-      ? null
-      : finalStoneSellKrw - recommendedStoneSellKrw;
+  const recommendedByReceiptQtyTotal = useMemo(
+    () => stoneRows.reduce((sum, row) => sum + Math.max(row.qtyReceipt ?? 0, 0) * Math.max(row.unitSell ?? 0, 0), 0),
+    [stoneRows]
+  );
 
   const stoneDeltaFromReceiptCost =
     finalStoneSellKrw === null || finalStoneSellKrw === undefined
       ? null
       : finalStoneSellKrw - receiptStoneCostTotal;
+
+  const baseCostMismatch =
+    factoryBasicCostKrw !== null &&
+    factoryBasicCostKrw !== undefined &&
+    masterBaseCostKrw !== null &&
+    masterBaseCostKrw !== undefined &&
+    Math.round(factoryBasicCostKrw) !== Math.round(masterBaseCostKrw);
+
+  const extraCostMismatch = Math.round(receiptStoneCostTotal) !== Math.round(masterStoneCostTotal);
+
+  const receiptSellMargin =
+    finalStoneSellKrw === null || finalStoneSellKrw === undefined
+      ? null
+      : finalStoneSellKrw - receiptStoneCostTotal;
+
+  const masterSellMargin = masterStoneSellTotal - masterStoneCostTotal;
+
+  const pricingJustificationRows = useMemo(
+    () =>
+      stoneRows.map((stone) => {
+        const qtyReceipt = Math.max(stone.qtyReceipt ?? 0, 0);
+        const qtyMaster = Math.max(stone.qtyMaster ?? 0, 0);
+        const unitSell = Math.max(stone.unitSell ?? 0, 0);
+        return {
+          role: stone.role,
+          supply: stone.supply,
+          qtyReceipt,
+          qtyMaster,
+          qtyDelta: qtyReceipt - qtyMaster,
+          unitSell,
+          sellByReceiptQty: qtyReceipt * unitSell,
+          sellByMasterQty: qtyMaster * unitSell,
+          expectedSellDelta: (qtyReceipt - qtyMaster) * unitSell,
+          actualSellDelta: qtyReceipt * unitSell - qtyMaster * unitSell,
+        };
+      }),
+    [stoneRows]
+  );
+
+  const costComparisonRows = useMemo(
+    () =>
+      stoneRows.map((stone) => {
+        const qtyReceipt = Math.max(stone.qtyReceipt ?? 0, 0);
+        const qtyMaster = Math.max(stone.qtyMaster ?? 0, 0);
+        const masterUnitCost = Math.max(stone.unitCostMaster ?? 0, 0);
+        const receiptUnitCost = Math.max(stone.unitCostReceipt ?? 0, 0);
+        const masterCostSubtotal = qtyMaster * masterUnitCost;
+        const receiptCostSubtotal = qtyReceipt * receiptUnitCost;
+        const unitEffect = (masterUnitCost - receiptUnitCost) * qtyMaster;
+        const qtyEffect = (qtyMaster - qtyReceipt) * receiptUnitCost;
+        return {
+          role: stone.role,
+          masterUnitCost,
+          receiptUnitCost,
+          unitDelta: masterUnitCost - receiptUnitCost,
+          qtyMaster,
+          qtyReceipt,
+          masterCostSubtotal,
+          receiptCostSubtotal,
+          costDelta: masterCostSubtotal - receiptCostSubtotal,
+          unitEffect,
+          qtyEffect,
+          expectedCostDelta: unitEffect + qtyEffect,
+        };
+      }),
+    [stoneRows]
+  );
+
+  const totalQtyDelta = useMemo(
+    () => pricingJustificationRows.reduce((sum, row) => sum + row.qtyDelta, 0),
+    [pricingJustificationRows]
+  );
+
+  const totalCostDelta = useMemo(
+    () => costComparisonRows.reduce((sum, row) => sum + row.costDelta, 0),
+    [costComparisonRows]
+  );
+
+  const totalExpectedCostDelta = useMemo(
+    () => costComparisonRows.reduce((sum, row) => sum + row.expectedCostDelta, 0),
+    [costComparisonRows]
+  );
+
+  const totalValidationError = totalCostDelta - totalExpectedCostDelta;
+
+  const extraCostJustifiedByQty =
+    Math.round(totalValidationError) === 0 &&
+    costComparisonRows.every((row) => row.unitEffect >= 0 || (row.qtyMaster === 0 && row.qtyReceipt === 0));
+
+  const baseJudgement = (masterBaseCostKrw ?? 0) < (factoryBasicCostKrw ?? 0) ? "경고" : "정상";
+  const extraJudgement = !extraCostMismatch
+    ? "정상"
+    : extraCostJustifiedByQty
+      ? "정상(개수차)"
+      : "경고";
+
+  const judgementTone = (value: string): "active" | "warning" | "danger" => {
+    if (value === "경고") return "danger";
+    if (value === "정상(개수차)") return "warning";
+    return "active";
+  };
 
   return (
     <div className={className}>
@@ -178,127 +284,229 @@ export function ShipmentPricingEvidencePanel({
         <Card>
           <CardHeader className="py-2 px-3 border-b border-[var(--panel-border)]">
             <div className="flex items-center justify-between gap-2">
-              <span className="text-xs font-semibold">기본공임 계산근거</span>
-              {isBaseOverridden ? (
-                <Badge tone="warning" className="text-[10px]">오버라이드</Badge>
-              ) : null}
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-semibold">기본공임 계산근거</span>
+                <Badge tone={judgementTone(baseJudgement)} className="text-[10px]">판정 {baseJudgement}</Badge>
+              </div>
+              {isBaseOverridden ? <Badge tone="warning" className="text-[10px]">오버라이드</Badge> : null}
             </div>
           </CardHeader>
           <CardBody className="p-3">
-            <ThreeColumnEvidenceRow
-              total={formatKrw(displayedBaseSell)}
-              receiptCost={formatKrw(factoryBasicCostKrw)}
-              masterSellCost={`${formatKrw(masterBaseSellKrw)} / ${formatKrw(masterBaseCostKrw)}`}
-              receiptSub={`소스: ${sourceLabel(baseCostSource)}`}
-              masterSub={`마스터마진: ${formatKrw(computedBaseMargin)}`}
-            />
+            <div className="rounded border border-[var(--panel-border)] bg-[var(--panel)] p-2 text-xs">
+              <table className="w-full table-fixed">
+                <tbody>
+                  <tr className="text-[var(--muted)]">
+                    <td className="px-2 py-1">총액</td>
+                    <td className="px-2 py-1">영수증원가/마진</td>
+                    <td className="px-2 py-1">마스터판매가/원가</td>
+                    <td className="px-2 py-1">원가차(마스터-영수증)</td>
+                    <td className="px-2 py-1">판정</td>
+                  </tr>
+                  <tr>
+                    <td className="px-2 py-1 font-semibold tabular-nums">{formatKrw(displayedBaseSell)}</td>
+                    <td className="px-2 py-1 font-semibold tabular-nums">{formatKrw(factoryBasicCostKrw)} / {formatKrw((displayedBaseSell ?? 0) - (factoryBasicCostKrw ?? 0))}</td>
+                    <td className="px-2 py-1 font-semibold tabular-nums text-[var(--muted)]">{formatKrw(masterBaseSellKrw)} / {formatKrw(masterBaseCostKrw)}</td>
+                    <td className={`px-2 py-1 font-semibold tabular-nums ${deltaToneClass((masterBaseCostKrw ?? 0) - (factoryBasicCostKrw ?? 0))}`}>
+                      {formatKrw((masterBaseCostKrw ?? 0) - (factoryBasicCostKrw ?? 0))}
+                    </td>
+                    <td className="px-2 py-1">
+                      {(masterBaseCostKrw ?? 0) < (factoryBasicCostKrw ?? 0) ? (
+                        <Badge tone="danger" className="text-[10px]">경고</Badge>
+                      ) : (
+                        <Badge tone="active" className="text-[10px]">정상</Badge>
+                      )}
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
           </CardBody>
         </Card>
 
         <Card>
           <CardHeader className="py-2 px-3 border-b border-[var(--panel-border)]">
-            <span className="text-xs font-semibold">보석/기타공임 계산근거 (v3 evidence)</span>
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-semibold">보석/기타공임 계산근거 (v3 evidence)</span>
+                <Badge tone={judgementTone(extraJudgement)} className="text-[10px]">판정 {extraJudgement}</Badge>
+              </div>
+              <Button size="sm" variant="secondary" onClick={() => setIsEvidenceOpen((prev) => !prev)}>
+                {isEvidenceOpen ? "닫기" : "열기"}
+              </Button>
+            </div>
           </CardHeader>
+          {isEvidenceOpen ? (
           <CardBody className="p-3 space-y-3 min-w-0">
             <ThreeColumnEvidenceRow
-              total={formatKrw(extraLaborSellKrw ?? null)}
-              receiptCost={formatKrw(receiptStoneCostTotal)}
+              total={formatKrw(finalStoneSellKrw ?? extraLaborSellKrw ?? null)}
+              receiptCost={`${formatKrw(finalStoneSellKrw ?? null)} / ${formatKrw(receiptStoneCostTotal)}`}
               masterSellCost={`${formatKrw(masterStoneSellTotal)} / ${formatKrw(masterStoneCostTotal)}`}
-              receiptSub="영수증 원가(각 스톤 개수 x 영수증단가)"
-              masterSub={`추천기준 마진(참고): ${formatKrw(masterExtraMarginTotal)}`}
+              receiptSub={`마진(판매가-영수증원가): ${formatKrw(receiptSellMargin)}`}
+              masterSub={`마진(마스터판매가-마스터원가): ${formatKrw(masterSellMargin)}`}
             />
 
+            <div className="rounded-md border border-[var(--panel-border)] bg-[var(--surface)] p-2 text-xs">
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
+                <div className="rounded border border-[var(--panel-border)] bg-[var(--panel)] p-2">
+                  <div className="text-[var(--muted)]">추천판매가(영수증개수x마스터판매단가)</div>
+                  <div className="font-semibold tabular-nums">{formatKrw(recommendedByReceiptQtyTotal)}</div>
+                </div>
+                <div className="rounded border border-[var(--panel-border)] bg-[var(--panel)] p-2">
+                  <div className="text-[var(--muted)]">최종판매가</div>
+                  <div className="font-semibold tabular-nums">{formatKrw(finalStoneSellKrw ?? null)}</div>
+                </div>
+                <div className="rounded border border-[var(--panel-border)] bg-[var(--panel)] p-2">
+                  <div className="text-[var(--muted)]">판매가 조정(±)</div>
+                  <div className="font-semibold tabular-nums">{formatKrw(stoneAdjustmentKrw ?? null)}</div>
+                </div>
+                <div className="rounded border border-[var(--panel-border)] bg-[var(--panel)] p-2">
+                  <div className="text-[var(--muted)]">최종마진(최종판매가-영수증원가)</div>
+                  <div className="font-semibold tabular-nums">{formatKrw(stoneDeltaFromReceiptCost)}</div>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end">
+              <Button size="sm" variant="secondary" onClick={() => setIsStoneDetailOpen((prev) => !prev)}>
+                {isStoneDetailOpen ? "세부 가격 닫기" : "세부 가격 열기"}
+              </Button>
+            </div>
+
+            {isStoneDetailOpen ? (
+            <>
+            <div className="rounded-md border border-[var(--panel-border)] bg-[var(--surface)] p-2">
+              <div className="text-[11px] font-semibold mb-2">판매가 정당성 (개수 영향)</div>
             <div className="rounded-md border border-[var(--panel-border)]">
               <table className="w-full text-xs table-fixed">
-                <colgroup>
-                  <col style={{ width: "8%" }} />
-                  <col style={{ width: "8%" }} />
-                  <col style={{ width: "12%" }} />
-                  <col style={{ width: "24%" }} />
-                  <col style={{ width: "48%" }} />
-                </colgroup>
                 <thead className="bg-[var(--surface)] text-[var(--muted)]">
                   <tr>
                     <th className="px-2 py-1 text-left">보석</th>
                     <th className="px-2 py-1 text-left">공급구분</th>
-                    <th className="px-2 py-1 text-left">수량(마스터/영수증)</th>
-                    <th className="px-2 py-1 text-left">소계(추천/마스터판매/원가/영수증)</th>
-                    <th className="px-2 py-1 text-left">단가(마스터판매/원가/영수증)</th>
+                    <th className="px-2 py-1 text-left">수량(영수증/마스터)</th>
+                    <th className="px-2 py-1 text-right">Δ개수(영수증-마스터)</th>
+                    <th className="px-2 py-1 text-right">마스터판매단가</th>
+                    <th className="px-2 py-1 text-right">판매가(영수증개수)</th>
+                    <th className="px-2 py-1 text-right">판매가(마스터개수)</th>
+                    <th className="px-2 py-1 text-right">판정</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {stoneRows.map((stone) => (
-                    <tr key={stone.role} className="border-t border-[var(--panel-border)]">
-                      <td className="px-2 py-1">{stone.role}</td>
-                      <td className="px-2 py-1">{stoneSourceLabel(stone.supply)}</td>
+                  {pricingJustificationRows.map((row) => (
+                    <tr key={row.role} className="border-t border-[var(--panel-border)]">
+                      <td className="px-2 py-1">{stoneRoleLabel(row.role)}</td>
+                      <td className="px-2 py-1">{stoneSourceLabel(row.supply)}</td>
                       <td className="px-2 py-1 tabular-nums">
-                        {stone.qtyMaster ?? "-"} / {stone.qtyReceipt ?? "-"}
+                        {row.qtyReceipt} / {row.qtyMaster}
                       </td>
-                      <td className="px-2 py-1 tabular-nums text-right whitespace-nowrap">
-                        <span className="font-extrabold text-[var(--foreground)]">{formatKrw(stone.subtotalSell ?? null)}</span>
-                        <span className="px-1 text-[var(--muted)]"> | </span>
-                        <span>{formatKrw((stone.qtyMaster ?? 0) * (stone.unitSell ?? 0))}</span>
-                        <span className="px-1 text-[var(--muted)]"> | </span>
-                        <span>{formatKrw((stone.qtyMaster ?? 0) * (stone.unitCostMaster ?? 0))}</span>
-                        <span className="px-1 text-[var(--muted)]"> | </span>
-                        <span>{formatKrw((stone.qtyReceipt ?? 0) * (stone.unitCostReceipt ?? 0))}</span>
-                      </td>
-                      <td className="px-2 py-1 tabular-nums text-right whitespace-nowrap">
-                        <span>{formatKrw(stone.unitSell ?? null)}</span>
-                        <span className="px-1 text-[var(--muted)]"> | </span>
-                        <span>{formatKrw(stone.unitCostMaster ?? null)}</span>
-                        <span className="px-1 text-[var(--muted)]"> | </span>
-                        <span>{formatKrw(stone.unitCostReceipt ?? null)}</span>
+                      <td className="px-2 py-1 tabular-nums text-right">{row.qtyDelta}</td>
+                      <td className="px-2 py-1 tabular-nums text-right">{formatKrw(row.unitSell)}</td>
+                      <td className="px-2 py-1 tabular-nums text-right font-semibold">{formatKrw(row.sellByReceiptQty)}</td>
+                      <td className="px-2 py-1 tabular-nums text-right">{formatKrw(row.sellByMasterQty)}</td>
+                      <td className="px-2 py-1 text-right">
+                        {row.qtyDelta === 0 ? (
+                          <Badge tone="active" className="text-[9px]">정상</Badge>
+                        ) : (
+                          <Badge tone="active" className="text-[9px]">정상(개수차)</Badge>
+                        )}
                       </td>
                     </tr>
                   ))}
+                  <tr className="border-t border-[var(--panel-border)] bg-[var(--panel)]">
+                    <td className="px-2 py-1 text-[var(--muted)]" colSpan={5}>합계</td>
+                    <td className="px-2 py-1 tabular-nums text-right font-semibold">{formatKrw(recommendedByReceiptQtyTotal)}</td>
+                    <td className="px-2 py-1 tabular-nums text-right">{formatKrw(masterStoneSellTotal)}</td>
+                    <td className="px-2 py-1 text-right">
+                      {pricingJustificationRows.some((row) => row.qtyDelta !== 0) ? (
+                        <Badge tone="active" className="text-[9px]">정상(개수차)</Badge>
+                      ) : (
+                        <Badge tone="active" className="text-[9px]">정상</Badge>
+                      )}
+                    </td>
+                  </tr>
                 </tbody>
               </table>
             </div>
-
-            <div className="rounded-md border border-[var(--panel-border)] bg-[var(--surface)] p-2 text-xs space-y-1">
-              <div className="flex items-center justify-between">
-                <span className="text-[var(--muted)]">출고영수증 원가(비교용)</span>
-                <span className="font-semibold tabular-nums">{formatKrw(receiptStoneCostTotal)}</span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-[var(--muted)]">마스터 판매가 합계(기준개수)</span>
-                <span className="font-semibold tabular-nums">{formatKrw(masterStoneSellTotal)}</span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-[var(--muted)]">마스터 원가 합계(기준개수)</span>
-                <span className="font-semibold tabular-nums">{formatKrw(masterStoneCostTotal)}</span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-[var(--muted)]">추천 알공임(마스터 기준)</span>
-                <span className="font-semibold tabular-nums">{formatKrw(recommendedStoneSellKrw ?? null)}</span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-[var(--muted)]">최종 알공임</span>
-                <span className="font-semibold tabular-nums">{formatKrw(finalStoneSellKrw ?? null)}</span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-[var(--muted)]">추천 대비 Δ</span>
-                <span className="font-semibold tabular-nums">{formatKrw(stoneDeltaFromRecommended)}</span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-[var(--muted)]">영수증 원가 대비 Δ</span>
-                <span className="font-semibold tabular-nums">{formatKrw(stoneDeltaFromReceiptCost)}</span>
-              </div>
-              {stoneAdjustmentKrw !== null && stoneAdjustmentKrw !== undefined ? (
-                <div className="flex items-center justify-between">
-                  <span className="text-[var(--muted)]">조정(±)</span>
-                  <span className="font-semibold tabular-nums">{formatKrw(stoneAdjustmentKrw)}</span>
-                </div>
-              ) : null}
-              {stoneQtyDeltaTotal !== null && stoneQtyDeltaTotal !== undefined && stoneQtyDeltaTotal !== 0 ? (
-                <div className="text-amber-700">
-                  마스터 개수와 영수증 개수가 다릅니다 (Δ {stoneQtyDeltaTotal}).
-                  {isVariationMode ? " 변형이므로 자동추천 비활성." : " 공장 오차/사이즈 차이 가능."}
-                </div>
-              ) : null}
             </div>
+
+            <div className="rounded-md border border-[var(--panel-border)] bg-[var(--surface)] p-2">
+              <div className="text-[11px] font-semibold mb-2">원가 차이 (마스터 vs 영수증)</div>
+            <div className="rounded-md border border-[var(--panel-border)] bg-[var(--panel)]">
+              <table className="w-full table-fixed text-[11px]">
+                <thead className="text-[var(--muted)] border-b border-[var(--panel-border)]">
+                  <tr>
+                    <th className="px-2 py-1 text-left">보석</th>
+                    <th className="px-2 py-1 text-right">개당단가차(마스터원가-영수증)</th>
+                    <th className="px-2 py-1 text-right">원가(마스터개수)</th>
+                    <th className="px-2 py-1 text-right">원가(영수증개수)</th>
+                    <th className="px-2 py-1 text-right">Δ원가(마스터-영수증)</th>
+                    <th className="px-2 py-1 text-right">검산오차</th>
+                    <th className="px-2 py-1 text-right">판정</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {costComparisonRows.map((row) => (
+                    <tr key={row.role} className="border-b border-[var(--panel-border)] last:border-b-0">
+                      <td className="px-2 py-1">{stoneRoleLabel(row.role)}</td>
+                      <td className={`px-2 py-1 text-right tabular-nums ${deltaToneClass(row.unitDelta)}`}>{formatKrw(row.unitDelta)}</td>
+                      <td className="px-2 py-1 text-right tabular-nums">{formatKrw(row.masterCostSubtotal)}</td>
+                      <td className="px-2 py-1 text-right tabular-nums">{formatKrw(row.receiptCostSubtotal)}</td>
+                      <td className={`px-2 py-1 text-right tabular-nums font-semibold ${deltaToneClass(row.costDelta)}`}>{formatKrw(row.costDelta)}</td>
+                      <td className={`px-2 py-1 text-right tabular-nums ${deltaToneClass(row.costDelta - row.expectedCostDelta)}`}>{formatKrw(row.costDelta - row.expectedCostDelta)}</td>
+                      <td className="px-2 py-1 text-right">
+                        {row.qtyMaster === 0 && row.qtyReceipt === 0 ? (
+                          <Badge tone="neutral" className="text-[9px]">데이터없음</Badge>
+                        ) : Math.round(row.costDelta - row.expectedCostDelta) === 0 ? (
+                          row.unitEffect < 0 ? (
+                            <Badge tone="danger" className="text-[9px]">원가상승 확인</Badge>
+                          ) : row.qtyEffect !== 0 ? (
+                            <Badge tone="active" className="text-[9px]">정상(개수차)</Badge>
+                          ) : (
+                            <Badge tone="active" className="text-[9px]">정상</Badge>
+                          )
+                        ) : (
+                          <Badge tone="warning" className="text-[9px]">확인필요</Badge>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                  <tr className="border-t border-[var(--panel-border)]">
+                    <td className="px-2 py-1 text-[var(--muted)]" colSpan={2}>합계</td>
+                    <td className="px-2 py-1 text-right tabular-nums">{formatKrw(masterStoneCostTotal)}</td>
+                    <td className="px-2 py-1 text-right tabular-nums">{formatKrw(receiptStoneCostTotal)}</td>
+                    <td className={`px-2 py-1 text-right tabular-nums font-semibold ${deltaToneClass(masterStoneCostTotal - receiptStoneCostTotal)}`}>{formatKrw(masterStoneCostTotal - receiptStoneCostTotal)}</td>
+                    <td className={`px-2 py-1 text-right tabular-nums ${deltaToneClass(totalValidationError)}`}>{formatKrw(totalValidationError)}</td>
+                    <td className="px-2 py-1 text-right">
+                      {costComparisonRows.length > 0 && costComparisonRows.every((row) => {
+                        if (row.qtyMaster === 0 && row.qtyReceipt === 0) return true;
+                        if (Math.round(row.costDelta - row.expectedCostDelta) !== 0) return false;
+                        return row.unitEffect >= 0;
+                      }) ? (
+                        costComparisonRows.some((row) => row.qtyEffect !== 0) ? (
+                          <Badge tone="active" className="text-[9px]">정상(개수차)</Badge>
+                        ) : (
+                          <Badge tone="active" className="text-[9px]">정상</Badge>
+                        )
+                      ) : totalCostDelta < 0 ? (
+                        <Badge tone="danger" className="text-[9px]">원가상승 확인</Badge>
+                      ) : Math.round(totalValidationError) === 0 ? (
+                        <Badge tone="active" className="text-[9px]">정상</Badge>
+                      ) : (
+                        <Badge tone="warning" className="text-[9px]">확인필요</Badge>
+                      )}
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            </div>
+            </>
+            ) : (
+              <div className="text-xs text-[var(--muted)]">세부 가격 표가 접혀 있습니다.</div>
+            )}
           </CardBody>
+          ) : (
+            <CardBody className="p-3 text-xs text-[var(--muted)]">계산근거가 접혀 있습니다.</CardBody>
+          )}
         </Card>
       </div>
     </div>

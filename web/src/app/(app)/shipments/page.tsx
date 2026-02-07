@@ -55,6 +55,7 @@ type OrderLineModelRow = {
   order_line_id?: string | null;
   model_name?: string | null;
   suffix?: string | null;
+  material_code?: string | null;
 };
 
 type OrderLookupModelRow = {
@@ -70,6 +71,7 @@ type ShipmentPrefillRow = {
   client_id?: string;
   client_name?: string;
   model_no?: string;
+  material_code?: string | null;
   color?: string;
   plating_status?: boolean | null;
   plating_color?: string | null;
@@ -410,11 +412,45 @@ export default function ShipmentsPage() {
   const [includeStorePickup, setIncludeStorePickup] = useState(false);
 
   const [selectedOrderLineId, setSelectedOrderLineId] = useState<string | null>(null);
+  const [prefillHydratedOrderLineId, setPrefillHydratedOrderLineId] = useState<string | null>(null);
+  const [longPendingDemoteIds, setLongPendingDemoteIds] = useState<Set<string>>(() => new Set());
+  const [longPendingLoaded, setLongPendingLoaded] = useState(false);
+  const [selectedOrderMaterialCode, setSelectedOrderMaterialCode] = useState<string | null>(null);
   const [selectedOrderStatus, setSelectedOrderStatus] = useState<string | null>(null);
   const [selectedOrderDates, setSelectedOrderDates] = useState<{
     orderDate?: string | null;
     inboundDate?: string | null;
   } | null>(null);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      const raw = window.localStorage.getItem("shipments.longPendingDemoteIds");
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          setLongPendingDemoteIds(new Set(parsed.map((v) => String(v))));
+        }
+      }
+    } catch {
+      // ignore
+    } finally {
+      setLongPendingLoaded(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (!longPendingLoaded) return;
+    try {
+      window.localStorage.setItem(
+        "shipments.longPendingDemoteIds",
+        JSON.stringify(Array.from(longPendingDemoteIds))
+      );
+    } catch {
+      // ignore
+    }
+  }, [longPendingDemoteIds, longPendingLoaded]);
 
   // --- prefill + master info ---
   const [prefill, setPrefill] = useState<ShipmentPrefillRow | null>(null);
@@ -430,6 +466,7 @@ export default function ShipmentsPage() {
   const [extraLaborItems, setExtraLaborItems] = useState<ExtraLaborItem[]>([]);
   const [useManualLabor, setUseManualLabor] = useState(false);
   const [manualLabor, setManualLabor] = useState("");
+  const [isVariationSectionOpen, setIsVariationSectionOpen] = useState(false);
   const [isVariationMode, setIsVariationMode] = useState(false);
   const [variationNote, setVariationNote] = useState("");
   const [vendorDeltaAmount, setVendorDeltaAmount] = useState("");
@@ -507,7 +544,11 @@ export default function ShipmentsPage() {
               : null,
         };
       })
-      .filter((item) => item.label);
+      .filter((item) => {
+        if (!item.label) return false;
+        const amount = parseNumberInput(item.amount);
+        return Number.isFinite(amount) && amount !== 0;
+      });
   };
 
   const extractStoneLaborAmount = (value: unknown): number => {
@@ -719,7 +760,7 @@ export default function ShipmentsPage() {
       if (!schemaClient) throw new Error("Supabase env is missing");
       const { data, error } = await schemaClient
         .from("cms_order_line")
-        .select("order_line_id, model_name, suffix")
+        .select("order_line_id, model_name, suffix, material_code")
         .in("order_line_id", lookupOrderLineIds);
       if (error) throw error;
       return (data ?? []) as OrderLineModelRow[];
@@ -727,12 +768,13 @@ export default function ShipmentsPage() {
   });
 
   const orderLineModelMap = useMemo(() => {
-    const map = new Map<string, { model_name?: string | null; suffix?: string | null }>();
+    const map = new Map<string, { model_name?: string | null; suffix?: string | null; material_code?: string | null }>();
     (orderLineModelQuery.data ?? []).forEach((row) => {
       if (!row.order_line_id) return;
       map.set(row.order_line_id, {
         model_name: row.model_name ?? null,
         suffix: row.suffix ?? null,
+        material_code: row.material_code ?? null,
       });
     });
     return map;
@@ -833,6 +875,25 @@ export default function ShipmentsPage() {
     },
   });
 
+  useEffect(() => {
+    if (!selectedOrderLineId) return;
+    if ((selectedOrderMaterialCode ?? "").trim()) return;
+
+    const fromModelMap = orderLineModelMap.get(String(selectedOrderLineId))?.material_code ?? null;
+    const fromDetail = orderLineDetailQuery.data?.material_code ?? null;
+    const fromReceipt = receiptMatchPrefillQuery.data?.selected_material_code ?? null;
+    const next = [fromModelMap, fromDetail, fromReceipt]
+      .map((v) => String(v ?? "").trim())
+      .find((v) => v.length > 0);
+    if (next) setSelectedOrderMaterialCode(next);
+  }, [
+    orderLineDetailQuery.data?.material_code,
+    orderLineModelMap,
+    receiptMatchPrefillQuery.data?.selected_material_code,
+    selectedOrderLineId,
+    selectedOrderMaterialCode,
+  ]);
+
   const hasReceiptDeduction = useMemo(() => {
     const value = receiptMatchPrefillQuery.data?.receipt_deduction_weight_g;
     return value !== null && value !== undefined;
@@ -849,7 +910,8 @@ export default function ShipmentsPage() {
   useEffect(() => {
     const data = receiptMatchPrefillQuery.data;
     if (!data) return;
-    if (weightG.trim() !== "" || baseLabor.trim() !== "" || extraLaborItems.length > 0) return;
+    if (!selectedOrderLineId) return;
+    if (prefillHydratedOrderLineId === selectedOrderLineId) return;
 
     const receiptWeight = data.receipt_weight_g ?? data.selected_weight_g;
     if (receiptWeight !== null && receiptWeight !== undefined) {
@@ -897,32 +959,25 @@ export default function ShipmentsPage() {
       setOtherLaborCost(String(etcOnly));
     }
 
-  }, [receiptMatchPrefillQuery.data, weightG, baseLabor, extraLaborItems.length]);
-
-  useEffect(() => {
-    const data = receiptMatchPrefillQuery.data;
-    if (!data) return;
-    const amount = String(extractStoneLaborAmount(data.shipment_extra_labor_items));
-    if (!amount || Number(amount) <= 0) return;
-    setExtraLaborItems((prev) => {
-      const next = [...prev];
-      const foundIndex = next.findIndex((item) => item.type === "STONE_LABOR");
-      if (foundIndex >= 0) {
-        if (next[foundIndex].amount === amount) return prev;
-        next[foundIndex] = { ...next[foundIndex], amount, label: "알공임" };
-        return next;
+    const normalizedItems = normalizeExtraLaborItems(data.shipment_extra_labor_items);
+    if (normalizedItems.length > 0) {
+      setExtraLaborItems(normalizedItems);
+    } else {
+      const amount = String(extractStoneLaborAmount(data.shipment_extra_labor_items));
+      if (amount && Number(amount) > 0) {
+        setExtraLaborItems([
+          {
+            id: `prefill-stone-labor-${selectedOrderLineId}`,
+            type: "STONE_LABOR",
+            label: "알공임",
+            amount,
+          },
+        ]);
       }
-      return [
-        ...next,
-        {
-          id: `prefill-stone-labor-${selectedOrderLineId ?? ""}`,
-          type: "STONE_LABOR",
-          label: "알공임",
-          amount,
-        },
-      ];
-    });
-  }, [receiptMatchPrefillQuery.data, selectedOrderLineId]);
+    }
+
+    setPrefillHydratedOrderLineId(selectedOrderLineId);
+  }, [prefillHydratedOrderLineId, receiptMatchPrefillQuery.data, selectedOrderLineId]);
 
   // ✅ 선택된 주문의 model_no로 마스터 정보 조회
   const masterLookupQuery = useQuery({
@@ -1026,28 +1081,45 @@ export default function ShipmentsPage() {
       console.log("[DEBUG] After store pickup filter:", rows.length, "/", beforeCount);
     }
 
+    const byOldestOrderDate = (list: OrderLookupRow[]) =>
+      [...list].sort((a, b) => {
+        const aId = String(a.order_line_id ?? "");
+        const bId = String(b.order_line_id ?? "");
+        const aDemoted = longPendingDemoteIds.has(aId);
+        const bDemoted = longPendingDemoteIds.has(bId);
+        if (aDemoted !== bDemoted) return aDemoted ? 1 : -1;
+
+        const aDate = Date.parse(String(a.sent_to_vendor_at ?? a.order_date ?? ""));
+        const bDate = Date.parse(String(b.sent_to_vendor_at ?? b.order_date ?? ""));
+        const aTs = Number.isFinite(aDate) ? aDate : Number.POSITIVE_INFINITY;
+        const bTs = Number.isFinite(bDate) ? bDate : Number.POSITIVE_INFINITY;
+        return aTs - bTs;
+      });
+
     if (!onlyReadyToShip) {
       console.log("[DEBUG] Returning all rows (onlyReadyToShip=false):", rows.length);
-      return rows;
+      return byOldestOrderDate(rows);
     }
 
     const filtered = rows.filter((r) => isWorklistStatus(r.status));
     console.log("[DEBUG] After isWorklistStatus filter:", filtered.length);
     console.log("[DEBUG] PENDING_ORDER_STATUSES:", Array.from(PENDING_ORDER_STATUSES));
     console.log("[DEBUG] All statuses in data:", [...new Set(rows.map(r => r.status))]);
-    return filtered;
-  }, [orderLookupQuery.data, includeStorePickup, storePickupLookupIds, onlyReadyToShip, storePickupLookupQuery.isLoading]);
+    return byOldestOrderDate(filtered);
+  }, [orderLookupQuery.data, includeStorePickup, storePickupLookupIds, onlyReadyToShip, storePickupLookupQuery.isLoading, longPendingDemoteIds]);
 
   const handleSelectOrder = (row: OrderLookupRow) => {
     const id = row.order_line_id;
     if (!id) return;
 
     setSelectedOrderLineId(String(id));
+    setPrefillHydratedOrderLineId(null);
     setSelectedOrderStatus(row.status ? String(row.status) : null);
     setSelectedOrderDates({
       orderDate: row.sent_to_vendor_at ?? row.order_date ?? null,
       inboundDate: row.inbound_at ?? null,
     });
+    setSelectedOrderMaterialCode(row.material_code ?? orderLineModelMap.get(String(id))?.material_code ?? null);
     setSearchQuery(`${row.model_name ?? row.model_no ?? ""} ${row.customer_name ?? row.client_name ?? ""}`.trim());
     setLookupOpen(false);
 
@@ -1654,6 +1726,8 @@ export default function ShipmentsPage() {
     setIsStorePickup((prev) => (keepStorePickup ? prev : false));
 
     setSelectedOrderLineId(null);
+    setPrefillHydratedOrderLineId(null);
+    setSelectedOrderMaterialCode(null);
     setSelectedOrderStatus(null);
     setPrefill(null);
     setSearchQuery("");
@@ -1989,6 +2063,38 @@ export default function ShipmentsPage() {
     [stoneRecommendation.recommended, resolvedStoneAdjustment]
   );
 
+  const effectiveStoneLabor = useMemo(() => {
+    if (stoneLaborAmount.trim() !== "") return resolvedStoneLabor;
+    if (isVariationMode) return 0;
+    return Math.max(0, stoneRecommendation.recommended);
+  }, [isVariationMode, resolvedStoneLabor, stoneLaborAmount, stoneRecommendation.recommended]);
+
+  const receiptStoneCostForMargin = useMemo(() => {
+    const centerQty = Number(receiptMatchPrefillQuery.data?.stone_center_qty ?? 0);
+    const sub1Qty = Number(receiptMatchPrefillQuery.data?.stone_sub1_qty ?? 0);
+    const sub2Qty = Number(receiptMatchPrefillQuery.data?.stone_sub2_qty ?? 0);
+    const centerUnit = Number(receiptMatchPrefillQuery.data?.stone_center_unit_cost_krw ?? 0);
+    const sub1Unit = Number(receiptMatchPrefillQuery.data?.stone_sub1_unit_cost_krw ?? 0);
+    const sub2Unit = Number(receiptMatchPrefillQuery.data?.stone_sub2_unit_cost_krw ?? 0);
+    return (
+      Math.max(0, centerQty) * Math.max(0, centerUnit) +
+      Math.max(0, sub1Qty) * Math.max(0, sub1Unit) +
+      Math.max(0, sub2Qty) * Math.max(0, sub2Unit)
+    );
+  }, [
+    receiptMatchPrefillQuery.data?.stone_center_qty,
+    receiptMatchPrefillQuery.data?.stone_center_unit_cost_krw,
+    receiptMatchPrefillQuery.data?.stone_sub1_qty,
+    receiptMatchPrefillQuery.data?.stone_sub1_unit_cost_krw,
+    receiptMatchPrefillQuery.data?.stone_sub2_qty,
+    receiptMatchPrefillQuery.data?.stone_sub2_unit_cost_krw,
+  ]);
+
+  const stoneMarginDisplay = useMemo(
+    () => finalStoneSell - receiptStoneCostForMargin,
+    [finalStoneSell, receiptStoneCostForMargin]
+  );
+
   const resolvedEtcLaborItemsTotal = useMemo(
     () => visibleExtraLaborItems.reduce((sum, item) => sum + parseNumberInput(item.amount), 0),
     [visibleExtraLaborItems]
@@ -2002,8 +2108,8 @@ export default function ShipmentsPage() {
   );
 
   const resolvedExtraLaborTotal = useMemo(
-    () => resolvedEtcLaborTotal + resolvedStoneLabor,
-    [resolvedEtcLaborTotal, resolvedStoneLabor]
+    () => resolvedEtcLaborTotal + effectiveStoneLabor,
+    [effectiveStoneLabor, resolvedEtcLaborTotal]
   );
 
   const resolvedBaseLaborCost = useMemo(() => {
@@ -2069,14 +2175,38 @@ export default function ShipmentsPage() {
   );
 
   const extraLaborPayload = useMemo(() => {
-    return extraLaborItems.map((item) => ({
+    const payload = extraLaborItems.map((item) => ({
       id: item.id,
       type: item.type,
       label: item.label,
       amount: parseNumberInput(item.amount),
       meta: item.meta ?? null,
     }));
-  }, [extraLaborItems]);
+
+    const hasStoneLabor = payload.some((item) => item.type === "STONE_LABOR");
+    if (!hasStoneLabor && !isVariationMode && stoneRecommendation.recommended > 0) {
+      payload.push({
+        id: "auto-stone-labor",
+        type: "STONE_LABOR",
+        label: "알공임",
+        amount: Math.max(0, stoneRecommendation.recommended),
+        meta: {
+          engine: "stone_sell_from_master_v1",
+          recommended: stoneRecommendation.recommended,
+          adjustment: parseNumberInput(stoneAdjustmentAmount),
+          adjustment_reason: stoneAdjustmentReason,
+        },
+      });
+    }
+
+    return payload;
+  }, [
+    extraLaborItems,
+    isVariationMode,
+    stoneAdjustmentAmount,
+    stoneAdjustmentReason,
+    stoneRecommendation.recommended,
+  ]);
 
   const stoneEvidenceRows = useMemo(
     () => [
@@ -2197,7 +2327,7 @@ export default function ShipmentsPage() {
     const existingStone = extraLaborItems.find((item) => item.type === "STONE_LABOR");
     if (existingStone && String(existingStone.amount ?? "").trim() !== "") return;
     applyRecommendedStoneLabor(false);
-  }, [extraLaborItems, isVariationMode, selectedOrderLineId]);
+  }, [extraLaborItems, isVariationMode, selectedOrderLineId, stoneRecommendation.recommended]);
 
   useEffect(() => {
     if (!selectedOrderLineId) return;
@@ -2439,6 +2569,8 @@ export default function ShipmentsPage() {
                         setOnlyReadyToShip(true);
                         setIncludeStorePickup(false);
                         setSelectedOrderLineId(null);
+                        setPrefillHydratedOrderLineId(null);
+                        setSelectedOrderMaterialCode(null);
                         setSelectedOrderStatus(null);
                         setSelectedOrderDates(null);
                         setLookupOpen(true);
@@ -2453,7 +2585,7 @@ export default function ShipmentsPage() {
                   {lookupOpen ? (
                     <div className="flex flex-col overflow-x-auto">
                       <div className="sticky top-0 z-10 grid min-w-[500px] grid-cols-[76px_120px_minmax(140px,1.2fr)_60px_50px_50px] gap-2 px-4 py-2 text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)] bg-[var(--surface)] border-b border-[var(--panel-border)]">
-                        <span>발주일</span>
+                        <span className="text-[var(--foreground)]">발주일(장기)</span>
                         <span>고객명</span>
                         <span>모델명</span>
                         <span>소재</span>
@@ -2479,6 +2611,7 @@ export default function ShipmentsPage() {
                           filteredLookupRows.map((row) => {
                             const id = row.order_line_id ?? "";
                             const isSelected = selectedOrderLineId === id;
+                            const isDemoted = longPendingDemoteIds.has(String(id));
                             const orderDate = row.sent_to_vendor_at ?? row.order_date ?? null;
                             const inboundDate = row.inbound_at ?? null;
                             const customerLabel = row.customer_name ?? row.client_name ?? "-";
@@ -2490,7 +2623,7 @@ export default function ShipmentsPage() {
                               .filter(Boolean)
                               .join("");
                             const modelLabel = modelRaw.replace(/\s+/g, " ").trim() || "-";
-                            const materialLabel = row.material_code ?? "-";
+                            const materialLabel = row.material_code ?? modelFallback?.material_code ?? "-";
                             const colorLabel = row.color ?? "-";
                             const sizeLabel = row.size ?? "-";
                             return (
@@ -2505,14 +2638,37 @@ export default function ShipmentsPage() {
                                     : "border-l-4 border-l-transparent"
                                 )}
                               >
-                                <div className="grid min-w-[500px] grid-cols-[76px_120px_minmax(140px,1.2fr)_60px_50px_50px] gap-2 items-center text-xs">
-                                  <span className="text-[var(--muted)] tabular-nums">
-                                    {formatDateCompact(orderDate)}
-                                    {formatDday(orderDate) ? (
-                                      <span className="ml-1 text-[10px] text-[var(--muted)]">
-                                        ({formatDday(orderDate)})
+                                  <div className="grid min-w-[500px] grid-cols-[76px_120px_minmax(140px,1.2fr)_60px_50px_50px] gap-2 items-center text-xs">
+                                  <span className="text-black dark:text-white tabular-nums font-bold">
+                                      {formatDateCompact(orderDate)}
+                                      <span className="ml-1 inline-flex items-center align-middle">
+                                        <input
+                                          type="checkbox"
+                                          checked={isDemoted}
+                                          onClick={(event) => {
+                                            event.stopPropagation();
+                                          }}
+                                          onChange={(event) => {
+                                            event.stopPropagation();
+                                            const checked = event.currentTarget.checked;
+                                            const key = String(id);
+                                            setLongPendingDemoteIds((prev) => {
+                                              const next = new Set(prev);
+                                              if (checked) next.add(key);
+                                              else next.delete(key);
+                                              return next;
+                                            });
+                                          }}
+                                          className="h-3.5 w-3.5 rounded border border-[var(--panel-border)] accent-blue-600 cursor-pointer"
+                                          aria-label="장기미출고"
+                                          title="장기미출고"
+                                        />
                                       </span>
-                                    ) : null}
+                                      {formatDday(orderDate) ? (
+                                        <span className="ml-1 text-[10px] text-[var(--muted)]">
+                                          ({formatDday(orderDate)})
+                                        </span>
+                                      ) : null}
                                   </span>
                                   <span className="truncate" title={customerLabel}>{customerLabel}</span>
                                   <div className="min-w-0 flex items-center">
@@ -2537,7 +2693,9 @@ export default function ShipmentsPage() {
                           <div>
                             <div className="text-xs font-semibold text-[var(--muted)] uppercase tracking-wider">선택된 주문</div>
                             <div className="text-base font-semibold text-[var(--foreground)]">
-                              {prefill?.client_name ?? "-"} · {prefill?.model_no ?? "-"}
+                              <span className="font-extrabold text-emerald-700">{prefill?.client_name ?? "-"}</span>
+                              <span className="mx-1 text-[var(--muted)]">·</span>
+                              <span className="font-extrabold text-amber-700">{prefill?.model_no ?? "-"}</span>
                             </div>
                           </div>
                           <Button
@@ -2577,16 +2735,22 @@ export default function ShipmentsPage() {
                               </div>
                             </div>
                             <div className="space-y-1">
-                              <span className="text-[var(--muted)]">카테고리</span>
-                              <div className="font-medium">{prefill?.category ?? "-"}</div>
-                            </div>
-                            <div className="space-y-1">
                               <span className="text-[var(--muted)]">거래처</span>
                               <div className="font-medium">{prefill?.client_name ?? "-"}</div>
                             </div>
                             <div className="space-y-1">
                               <span className="text-[var(--muted)]">모델명</span>
                               <div className="font-semibold">{prefill?.model_no ?? "-"}</div>
+                            </div>
+                            <div className="space-y-1">
+                              <span className="text-[var(--muted)]">소재</span>
+                              <div className="font-medium">
+                                {selectedOrderMaterialCode
+                                  ?? prefill?.material_code
+                                  ?? orderLineDetailQuery.data?.material_code
+                                  ?? receiptMatchPrefillQuery.data?.selected_material_code
+                                  ?? "-"}
+                              </div>
                             </div>
                             <div className="space-y-1">
                               <span className="text-[var(--muted)]">색상</span>
@@ -2597,9 +2761,11 @@ export default function ShipmentsPage() {
                               <div className="font-medium">{prefill?.size ?? "-"}</div>
                             </div>
                             <div className="space-y-1">
-                              <span className="text-[var(--muted)]">도금</span>
+                              <span className="text-[var(--muted)]">도금/도금색상</span>
                               <div className="font-medium">
-                                {prefill?.plating_status ? prefill.plating_color ?? "Y" : "N"}
+                                {prefill?.plating_status
+                                  ? `Y / ${prefill.plating_color ?? "-"}`
+                                  : "N / -"}
                               </div>
                             </div>
                             <div className="space-y-1 min-w-0">
@@ -2766,50 +2932,59 @@ export default function ShipmentsPage() {
                     </CardHeader>
                     <CardBody className="p-6 space-y-6">
                       <div className="space-y-4">
-                        <div className="rounded-lg border border-[var(--panel-border)] bg-[var(--surface)]/40 p-4 space-y-3">
-                          <div className="flex flex-wrap items-center gap-2">
-                            <label className="inline-flex items-center gap-2 text-sm font-semibold text-[var(--foreground)]">
-                              <input
-                                type="checkbox"
-                                checked={isVariationMode}
-                                onChange={(event) => setIsVariationMode(event.target.checked)}
-                                className="h-4 w-4 accent-[var(--brand)]"
-                              />
-                              변형 모드
-                            </label>
-                            {isVariationMode ? (
-                              <Badge tone="warning" className="text-[10px]">자동추천 비활성</Badge>
-                            ) : null}
-                            <Button size="sm" variant="secondary" onClick={() => applyRecommendedStoneLabor(true)}>
-                              추천 적용
+                        <div className="rounded-lg border border-[var(--panel-border)] bg-[var(--surface)]/40 p-2 space-y-1.5">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-[11px] font-semibold text-[var(--foreground)]">변형/알공임 설정</span>
+                            <Button size="sm" variant="secondary" onClick={() => setIsVariationSectionOpen((prev) => !prev)}>
+                              {isVariationSectionOpen ? "닫기" : "열기"}
                             </Button>
                           </div>
 
-                          <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
-                            <div className="rounded border border-[var(--panel-border)] bg-[var(--panel)] p-2">
+                          {isVariationSectionOpen ? (
+                            <>
+                              <div className="flex flex-wrap items-center gap-2">
+                                <label className="inline-flex items-center gap-2 text-xs font-semibold text-[var(--foreground)]">
+                                  <input
+                                    type="checkbox"
+                                    checked={isVariationMode}
+                                    onChange={(event) => setIsVariationMode(event.target.checked)}
+                                    className="h-4 w-4 accent-[var(--brand)]"
+                                  />
+                                  변형 모드
+                                </label>
+                                {isVariationMode ? (
+                                  <Badge tone="warning" className="text-[10px]">자동추천 비활성</Badge>
+                                ) : null}
+                                <Button size="sm" variant="secondary" onClick={() => applyRecommendedStoneLabor(true)}>
+                                  추천 적용
+                                </Button>
+                              </div>
+
+                          <div className="grid grid-cols-1 md:grid-cols-3 gap-2 text-[11px]">
+                            <div className="rounded border border-[var(--panel-border)] bg-[var(--panel)] p-1.5">
                               <div className="text-[var(--muted)]">추천 알공임(마스터 기준)</div>
-                              <div className="text-base font-semibold tabular-nums">{renderNumber(stoneRecommendation.recommended, "원")}</div>
+                              <div className="text-sm font-semibold tabular-nums">{renderNumber(stoneRecommendation.recommended, "원")}</div>
                             </div>
-                            <div className="rounded border border-[var(--panel-border)] bg-[var(--panel)] p-2">
+                            <div className="rounded border border-[var(--panel-border)] bg-[var(--panel)] p-1.5">
                               <div className="text-[var(--muted)]">조정(±)</div>
                               <Input
                                 value={stoneAdjustmentAmount}
                                 onChange={(e) => setStoneAdjustmentAmount(e.target.value)}
                                 inputMode="numeric"
-                                className="h-8 tabular-nums"
+                                className="h-7 tabular-nums text-xs"
                               />
                             </div>
-                            <div className="rounded border border-[var(--panel-border)] bg-[var(--panel)] p-2">
+                            <div className="rounded border border-[var(--panel-border)] bg-[var(--panel)] p-1.5">
                               <div className="text-[var(--muted)]">최종 알공임</div>
-                              <div className="text-base font-semibold tabular-nums">{renderNumber(finalStoneSell, "원")}</div>
+                              <div className="text-sm font-semibold tabular-nums">{renderNumber(finalStoneSell, "원")}</div>
                             </div>
                           </div>
 
-                          <div className="grid grid-cols-1 md:grid-cols-[180px_1fr_1fr] gap-3">
+                          <div className="grid grid-cols-1 md:grid-cols-[160px_1fr_1fr] gap-2">
                             <div className="space-y-1">
                               <label className="text-xs text-[var(--muted)]">조정 사유</label>
                               <select
-                                className="h-10 w-full rounded-md border border-[var(--panel-border)] bg-[var(--input-bg)] px-2 text-sm"
+                                className="h-8 w-full rounded-md border border-[var(--panel-border)] bg-[var(--input-bg)] px-2 text-xs"
                                 value={stoneAdjustmentReason}
                                 onChange={(e) =>
                                   setStoneAdjustmentReason(
@@ -2831,25 +3006,27 @@ export default function ShipmentsPage() {
                                 placeholder="조정 사유 메모"
                                 value={stoneAdjustmentNote}
                                 onChange={(e) => setStoneAdjustmentNote(e.target.value)}
-                                className="h-10"
+                                className="h-8 text-xs"
                               />
                             </div>
                           </div>
 
-                          {stoneRecommendation.deltaQtyTotal !== 0 ? (
-                            <div className="text-xs text-amber-700">
-                              마스터 개수 대비 영수증 개수 차이: {renderNumber(stoneRecommendation.deltaQtyTotal)}
-                              {isVariationMode
-                                ? " (변형이므로 자동추천 기본 비활성)"
-                                : " (공장 오차/사이즈 차이 가능, 조정(±) 권장)"}
-                            </div>
+                              {stoneRecommendation.deltaQtyTotal !== 0 ? (
+                                <div className="text-xs text-amber-700">
+                                  마스터 개수 대비 영수증 개수 차이: {renderNumber(stoneRecommendation.deltaQtyTotal)}
+                                  {isVariationMode
+                                    ? " (변형이므로 자동추천 기본 비활성)"
+                                    : " (공장 오차/사이즈 차이 가능, 조정(±) 권장)"}
+                                </div>
+                              ) : null}
+                            </>
                           ) : null}
                         </div>
 
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 rounded-lg border border-[var(--panel-border)] bg-[var(--surface)]/30 p-3">
                           <div className="space-y-1">
                             <span className="text-xs text-[var(--muted)]">총중량 (중량-차감중량)</span>
-                            <div className="text-base font-semibold">
+                            <div className="text-xl font-extrabold tracking-tight">
                               {resolvedNetWeightG === null ? "-" : renderNumber(Number(resolvedNetWeightG.toFixed(3)), "g")}
                             </div>
                           </div>
@@ -2857,41 +3034,36 @@ export default function ShipmentsPage() {
                             <span className="text-xs text-[var(--muted)]">
                               총공임 ({useManualLabor ? "직접입력" : "기본+기타"})
                             </span>
-                            <div className="text-base font-semibold">
+                            <div className="text-xl font-extrabold tracking-tight">
                               {renderNumber(resolvedTotalLabor, "원")}
                             </div>
                           </div>
-                        </div>
-
-                        <div className="flex flex-wrap items-center gap-3 rounded-lg border border-[var(--panel-border)] bg-[var(--surface)]/40 p-4">
-                          <label className="flex items-center gap-2 text-sm font-medium text-[var(--foreground)]">
-                            <input
-                              type="checkbox"
-                              checked={useManualLabor}
-                              onChange={(event) => {
-                                const checked = event.target.checked;
-                                setUseManualLabor(checked);
-                                if (checked && manualLabor.trim() === "") {
-                                  setManualLabor(String(resolvedBaseLabor + resolvedExtraLaborTotal));
-                                }
-                              }}
-                              className="h-4 w-4 accent-[var(--brand)]"
-                            />
-                            총공임 직접입력
-                          </label>
-                          <div className="min-w-[220px]">
+                          <div className="space-y-1">
+                            <label className="flex items-center gap-2 text-xs font-semibold text-[var(--foreground)]">
+                              <input
+                                type="checkbox"
+                                checked={useManualLabor}
+                                onChange={(event) => {
+                                  const checked = event.target.checked;
+                                  setUseManualLabor(checked);
+                                  if (checked && manualLabor.trim() === "") {
+                                    setManualLabor(String(resolvedBaseLabor + resolvedExtraLaborTotal));
+                                  }
+                                }}
+                                className="h-3.5 w-3.5 accent-[var(--brand)]"
+                              />
+                              총공임 직접입력
+                            </label>
                             <Input
                               placeholder="0"
                               value={manualLabor}
                               onChange={(e) => setManualLabor(e.target.value)}
                               inputMode="numeric"
-                              className="tabular-nums h-10"
+                              className="tabular-nums h-9"
                               disabled={!useManualLabor}
                             />
+                            <span className="text-[10px] text-[var(--muted)]">직접입력 시 기본+기타 합계 대신 사용</span>
                           </div>
-                          <span className="text-xs text-[var(--muted)]">
-                            직접입력 시 기본+기타 합계 대신 이 값으로 저장됩니다.
-                          </span>
                         </div>
 
               <div className="grid grid-cols-1 md:grid-cols-5 gap-6">
@@ -2965,7 +3137,7 @@ export default function ShipmentsPage() {
                           <div className="space-y-2">
                             <div className="flex items-center justify-between text-sm font-medium text-[var(--foreground)]">
                               <span>알공임</span>
-                              <span className="text-xs text-[var(--muted)]">별도입력</span>
+                              <span className="text-xs text-[var(--muted)]">마진 {renderNumber(stoneMarginDisplay)}</span>
                             </div>
                             <Input
                               placeholder="0"
@@ -3062,6 +3234,8 @@ export default function ShipmentsPage() {
                           variant="ghost"
                           onClick={() => {
                             setSelectedOrderLineId(null);
+                            setPrefillHydratedOrderLineId(null);
+                            setSelectedOrderMaterialCode(null);
                             setSelectedOrderStatus(null);
                             setPrefill(null);
                             setSearchQuery("");

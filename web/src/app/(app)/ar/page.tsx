@@ -1132,9 +1132,9 @@ export default function ArPage() {
                               ? "결제"
                               : row.entry_type;
                           const entryToneClass = isShipment
-                            ? "border-[var(--primary)] bg-[var(--chip)] text-[var(--primary)]"
+                            ? "border-red-500 bg-[var(--chip)] text-red-600 dark:border-red-400 dark:text-red-300"
                             : isPayment
-                              ? "border-red-500 bg-[var(--chip)] text-red-600 dark:border-red-400 dark:text-red-300"
+                              ? "border-[var(--primary)] bg-[var(--chip)] text-[var(--primary)]"
                               : "border-[var(--panel-border)] bg-[var(--panel)] text-[var(--foreground)]";
                           const displayTotalAmount = isShipment && unitOnly
                             ? shipmentLine?.total_amount_sell_krw ?? row.amount_krw
@@ -1177,7 +1177,18 @@ export default function ArPage() {
                                 )}
                               </td>
                               <td className="px-4 py-3 text-right">
-                                <AmountPill amount={displayTotalAmount} simple className="font-black" />
+                                <AmountPill
+                                  amount={displayTotalAmount}
+                                  simple
+                                  className={cn(
+                                    "font-black",
+                                    isShipment
+                                      ? "text-red-600 dark:text-red-300"
+                                      : isPayment
+                                        ? "text-[var(--primary)]"
+                                        : ""
+                                  )}
+                                />
                               </td>
                               <td className="px-4 py-3 text-right tabular-nums">
                                 {isPayment ? (
