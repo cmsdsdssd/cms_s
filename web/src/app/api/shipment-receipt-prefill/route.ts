@@ -59,6 +59,7 @@ export async function GET(request: Request) {
   let stoneSub1UnitCostKrw: number | null = null;
   let stoneSub2UnitCostKrw: number | null = null;
   let stoneLaborKrw: number | null = null;
+  let receiptLaborOtherCostKrw: number | null = null;
 
   if (data.receipt_id && data.receipt_line_uuid) {
     const { data: lineRow } = await supabase
@@ -78,6 +79,7 @@ export async function GET(request: Request) {
     stoneCenterUnitCostKrw = parseNumeric(lineJson?.stone_center_unit_cost_krw ?? null);
     stoneSub1UnitCostKrw = parseNumeric(lineJson?.stone_sub1_unit_cost_krw ?? null);
     stoneSub2UnitCostKrw = parseNumeric(lineJson?.stone_sub2_unit_cost_krw ?? null);
+    receiptLaborOtherCostKrw = parseNumeric(lineJson?.labor_other_cost_krw ?? null);
 
     const centerLabor = Math.max(stoneCenterQty ?? 0, 0) * Math.max(stoneCenterUnitCostKrw ?? 0, 0);
     const sub1Labor = Math.max(stoneSub1Qty ?? 0, 0) * Math.max(stoneSub1UnitCostKrw ?? 0, 0);
@@ -132,6 +134,7 @@ export async function GET(request: Request) {
       stone_sub1_unit_cost_krw: stoneSub1UnitCostKrw,
       stone_sub2_unit_cost_krw: stoneSub2UnitCostKrw,
       stone_labor_krw: stoneLaborKrw,
+      receipt_labor_other_cost_krw: receiptLaborOtherCostKrw,
     },
   });
 }

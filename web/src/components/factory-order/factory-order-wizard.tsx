@@ -7,6 +7,7 @@ import { Card, CardBody, CardHeader } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { CONTRACTS } from "@/lib/contracts";
+import { hasVariationTag } from "@/lib/variation-tag";
 import { callRpc } from "@/lib/supabase/rpc";
 import { getSchemaClient } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
@@ -287,7 +288,7 @@ export function FactoryOrderWizard({ orderLines, onClose, onSuccess }: FactoryOr
       <tr style="border-bottom: ${stoneParts.length > 0 ? "0" : "1px solid #ddd"};">
         <td style="padding: 6px; text-align: center; font-size: 10px;">${idx + 1}</td>
         <td style="padding: 6px; text-align: center; font-size: 10px;">${getMaskCode(line)}</td>
-        <td style="padding: 6px; font-size: 11px;">${line.model_name || '-'}</td>
+        <td style="padding: 6px; font-size: 11px;">${line.model_name || '-'}${hasVariationTag(line.memo) ? " (변형)" : ""}</td>
         <td style="padding: 6px; text-align: center; font-size: 10px;">${getMaterialLabel(line.material_code, line.is_plated)}</td>
         <td style="padding: 6px; text-align: center; font-size: 10px;">${getCategoryLabel(line.suffix)}</td>
         <td style="padding: 6px; text-align: center; font-size: 10px;">${line.color || '-'}</td>

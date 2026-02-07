@@ -4,7 +4,6 @@ import { useMemo } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
 import { type StoneSource } from "@/lib/stone-source";
 
 type StoneRole = "CENTER" | "SUB1" | "SUB2";
@@ -13,17 +12,14 @@ type EvidenceStoneRowInput = {
   role: StoneRole;
   supply: StoneSource | null;
   qtyReceipt?: number | null;
+  qtyUsed?: number | null;
+  qtySource?: "RECEIPT" | "ORDER" | null;
   qtyMaster?: number | null;
+  unitSell?: number | null;
+  unitCostMaster?: number | null;
+  subtotalSell?: number | null;
   unitCostReceipt?: number | null;
   marginPerUnit?: number | null;
-};
-
-type EvidenceItem = {
-  type?: string;
-  label?: string;
-  amount?: number | string | null;
-  meta?: Record<string, unknown> | null;
-  [key: string]: unknown;
 };
 
 type ShipmentPricingEvidencePanelProps = {
@@ -39,10 +35,15 @@ type ShipmentPricingEvidencePanelProps = {
   extraLaborSellKrw?: number | null;
   factoryOtherCostBaseKrw?: number | null;
   stoneRows: EvidenceStoneRowInput[];
-  extraLaborItems?: unknown;
   expectedBaseLaborSellKrw?: number | null;
   expectedExtraLaborSellKrw?: number | null;
   shipmentBaseLaborKrw?: number | null;
+  receiptStoneOtherCostKrw?: number | null;
+  recommendedStoneSellKrw?: number | null;
+  finalStoneSellKrw?: number | null;
+  stoneAdjustmentKrw?: number | null;
+  stoneQtyDeltaTotal?: number | null;
+  isVariationMode?: boolean;
 };
 
 const formatKrw = (value?: number | null) => {
@@ -63,37 +64,46 @@ const stoneSourceLabel = (source: StoneSource | null) => {
   return "-";
 };
 
-const evidenceSectionLabel = (key: string) => {
-  if (key === "COST_BASIS") return "원가 근거";
-  if (key === "RULE_MARKUP") return "규칙 마진";
-  if (key === "MASTER_ADDON_MARGIN") return "마스터 추가마진";
-  if (key === "WARN") return "주의";
-  if (key === "CENTER") return "중심공임";
-  if (key === "SUB1") return "보조1공임";
-  if (key === "SUB2") return "보조2공임";
-  if (key === "PLATING") return "도금";
-  if (key === "OTHER") return "기타";
-  return key;
-};
-
-const evidenceItemLabel = (item: EvidenceItem) => {
-  const label = String(item.label ?? "").trim();
-  if (label) return label;
-  return evidenceSectionLabel(String(item.type ?? "기타"));
-};
-
-const normalizeItems = (value: unknown): EvidenceItem[] => {
-  if (!Array.isArray(value)) return [];
-  return value.filter((item): item is EvidenceItem => typeof item === "object" && item !== null);
-};
-
-const copyText = async (value: string) => {
-  try {
-    await navigator.clipboard.writeText(value);
-  } catch {
-    // no-op
-  }
-};
+function ThreeColumnEvidenceRow({
+  total,
+  receiptCost,
+  masterSellCost,
+  receiptSub,
+  masterSub,
+}: {
+  total: string;
+  receiptCost: string;
+  masterSellCost: string;
+  receiptSub?: string;
+  masterSub?: string;
+}) {
+  return (
+    <div>
+      <table className="w-full text-xs rounded border border-[var(--panel-border)] bg-[var(--surface)]">
+        <thead className="text-[var(--muted)] bg-[var(--panel)]">
+          <tr>
+            <th className="px-3 py-2 text-left">총액</th>
+            <th className="px-3 py-2 text-left">영수증 원가</th>
+            <th className="px-3 py-2 text-left">마스터 판매가/원가</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr className="border-t border-[var(--panel-border)]">
+            <td className="px-3 py-2 font-semibold tabular-nums">{total}</td>
+            <td className="px-3 py-2">
+              <div className="font-semibold tabular-nums">{receiptCost}</div>
+              {receiptSub ? <div className="text-[10px] text-[var(--muted)]">{receiptSub}</div> : null}
+            </td>
+            <td className="px-3 py-2">
+              <div className="font-semibold tabular-nums">{masterSellCost}</div>
+              {masterSub ? <div className="text-[10px] text-[var(--muted)]">{masterSub}</div> : null}
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  );
+}
 
 export function ShipmentPricingEvidencePanel({
   className,
@@ -107,30 +117,14 @@ export function ShipmentPricingEvidencePanel({
   extraLaborSellKrw,
   factoryOtherCostBaseKrw,
   stoneRows,
-  extraLaborItems,
   shipmentBaseLaborKrw,
+  receiptStoneOtherCostKrw,
+  recommendedStoneSellKrw,
+  finalStoneSellKrw,
+  stoneAdjustmentKrw,
+  stoneQtyDeltaTotal,
+  isVariationMode,
 }: ShipmentPricingEvidencePanelProps) {
-  const normalizedItems = useMemo(() => normalizeItems(extraLaborItems), [extraLaborItems]);
-
-  const groupedItems = useMemo(() => {
-    const groups: Record<string, EvidenceItem[]> = {
-      COST_BASIS: [],
-      RULE_MARKUP: [],
-      MASTER_ADDON_MARGIN: [],
-      WARN: [],
-      OTHER: [],
-    };
-    normalizedItems.forEach((item) => {
-      const type = String(item.type ?? "").trim();
-      if (type in groups) {
-        groups[type].push(item);
-      } else {
-        groups.OTHER.push(item);
-      }
-    });
-    return groups;
-  }, [normalizedItems]);
-
   const computedBaseMargin =
     masterBaseSellKrw !== null &&
     masterBaseSellKrw !== undefined &&
@@ -153,10 +147,30 @@ export function ShipmentPricingEvidencePanel({
 
   const receiptExtraCostTotal = Math.max(factoryOtherCostBaseKrw ?? 0, 0) + Math.max(receiptStoneCostTotal, 0);
 
+  const masterStoneSellTotal = useMemo(
+    () => stoneRows.reduce((sum, row) => sum + Math.max(row.qtyMaster ?? 0, 0) * Math.max(row.unitSell ?? 0, 0), 0),
+    [stoneRows]
+  );
+
+  const masterStoneCostTotal = useMemo(
+    () => stoneRows.reduce((sum, row) => sum + Math.max(row.qtyMaster ?? 0, 0) * Math.max(row.unitCostMaster ?? 0, 0), 0),
+    [stoneRows]
+  );
+
   const masterExtraMarginTotal = useMemo(() => {
     if (extraLaborSellKrw === null || extraLaborSellKrw === undefined) return null;
     return extraLaborSellKrw - receiptExtraCostTotal;
   }, [extraLaborSellKrw, receiptExtraCostTotal]);
+
+  const stoneDeltaFromRecommended =
+    finalStoneSellKrw === null || finalStoneSellKrw === undefined || recommendedStoneSellKrw === null || recommendedStoneSellKrw === undefined
+      ? null
+      : finalStoneSellKrw - recommendedStoneSellKrw;
+
+  const stoneDeltaFromReceiptCost =
+    finalStoneSellKrw === null || finalStoneSellKrw === undefined
+      ? null
+      : finalStoneSellKrw - receiptStoneCostTotal;
 
   return (
     <div className={className}>
@@ -171,28 +185,13 @@ export function ShipmentPricingEvidencePanel({
             </div>
           </CardHeader>
           <CardBody className="p-3">
-            <div className="overflow-x-auto">
-              <div className="min-w-[520px] rounded border border-[var(--panel-border)] bg-[var(--surface)] px-2 py-1 text-xs">
-                <div className="grid grid-cols-[1fr_auto_1fr_auto_1fr] items-center gap-x-2">
-                  <div className="min-w-0">
-                    <span className="text-[var(--muted)]">총결과(출고기본공임)</span>
-                    <span className="ml-1 font-semibold tabular-nums">{formatKrw(displayedBaseSell)}</span>
-                  </div>
-                  <span className="text-[var(--muted)]">|</span>
-                  <div className="min-w-0">
-                    <span className="text-[var(--muted)]">영수증/매칭 원가({sourceLabel(baseCostSource)})</span>
-                    <span className="ml-1 font-semibold tabular-nums">{formatKrw(factoryBasicCostKrw)}</span>
-                  </div>
-                  <span className="text-[var(--muted)]">|</span>
-                  <div className="min-w-0">
-                    <span className="text-[var(--muted)]">마스터마진(기본공임 판매 - 기본공임 원가)</span>
-                    <span className="ml-1 font-semibold tabular-nums">
-                      {formatKrw(computedBaseMargin)} ({formatKrw(masterBaseSellKrw)} - {formatKrw(masterBaseCostKrw)})
-                    </span>
-                  </div>
-                </div>
-              </div>
-            </div>
+            <ThreeColumnEvidenceRow
+              total={formatKrw(displayedBaseSell)}
+              receiptCost={formatKrw(factoryBasicCostKrw)}
+              masterSellCost={`${formatKrw(masterBaseSellKrw)} / ${formatKrw(masterBaseCostKrw)}`}
+              receiptSub={`소스: ${sourceLabel(baseCostSource)}`}
+              masterSub={`마스터마진: ${formatKrw(computedBaseMargin)}`}
+            />
           </CardBody>
         </Card>
 
@@ -201,35 +200,30 @@ export function ShipmentPricingEvidencePanel({
             <span className="text-xs font-semibold">보석/기타공임 계산근거 (v3 evidence)</span>
           </CardHeader>
           <CardBody className="p-3 space-y-3 min-w-0">
-            <div className="overflow-x-auto">
-              <div className="min-w-[520px] rounded border border-[var(--panel-border)] bg-[var(--surface)] px-2 py-1 text-xs">
-                <div className="grid grid-cols-[1fr_auto_1fr_auto_1fr] items-center gap-x-2">
-                  <div className="min-w-0">
-                    <span className="text-[var(--muted)]">총결과(보석/기타공임)</span>
-                    <span className="ml-1 font-semibold tabular-nums">{formatKrw(extraLaborSellKrw ?? null)}</span>
-                  </div>
-                  <span className="text-[var(--muted)]">|</span>
-                  <div className="min-w-0">
-                    <span className="text-[var(--muted)]">영수증 원가(기타원가+알공임)</span>
-                    <span className="ml-1 font-semibold tabular-nums">{formatKrw(receiptExtraCostTotal)}</span>
-                  </div>
-                  <span className="text-[var(--muted)]">|</span>
-                  <div className="min-w-0">
-                    <span className="text-[var(--muted)]">마스터마진</span>
-                    <span className="ml-1 font-semibold tabular-nums">{formatKrw(masterExtraMarginTotal)}</span>
-                  </div>
-                </div>
-              </div>
-            </div>
+            <ThreeColumnEvidenceRow
+              total={formatKrw(extraLaborSellKrw ?? null)}
+              receiptCost={formatKrw(receiptStoneCostTotal)}
+              masterSellCost={`${formatKrw(masterStoneSellTotal)} / ${formatKrw(masterStoneCostTotal)}`}
+              receiptSub="영수증 원가(각 스톤 개수 x 영수증단가)"
+              masterSub={`추천기준 마진(참고): ${formatKrw(masterExtraMarginTotal)}`}
+            />
 
-            <div className="overflow-x-auto rounded-md border border-[var(--panel-border)]">
-              <table className="min-w-[680px] w-full text-xs">
+            <div className="rounded-md border border-[var(--panel-border)]">
+              <table className="w-full text-xs table-fixed">
+                <colgroup>
+                  <col style={{ width: "8%" }} />
+                  <col style={{ width: "8%" }} />
+                  <col style={{ width: "12%" }} />
+                  <col style={{ width: "24%" }} />
+                  <col style={{ width: "48%" }} />
+                </colgroup>
                 <thead className="bg-[var(--surface)] text-[var(--muted)]">
                   <tr>
                     <th className="px-2 py-1 text-left">보석</th>
                     <th className="px-2 py-1 text-left">공급구분</th>
-                    <th className="px-2 py-1 text-left">수량(영수증/마스터)</th>
-                    <th className="px-2 py-1 text-left">단가(영수증)</th>
+                    <th className="px-2 py-1 text-left">수량(마스터/영수증)</th>
+                    <th className="px-2 py-1 text-left">소계(추천/마스터판매/원가/영수증)</th>
+                    <th className="px-2 py-1 text-left">단가(마스터판매/원가/영수증)</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -238,67 +232,71 @@ export function ShipmentPricingEvidencePanel({
                       <td className="px-2 py-1">{stone.role}</td>
                       <td className="px-2 py-1">{stoneSourceLabel(stone.supply)}</td>
                       <td className="px-2 py-1 tabular-nums">
-                        {stone.qtyReceipt ?? "-"} / {stone.qtyMaster ?? "-"}
+                        {stone.qtyMaster ?? "-"} / {stone.qtyReceipt ?? "-"}
                       </td>
-                      <td className="px-2 py-1 tabular-nums">{formatKrw(stone.unitCostReceipt ?? null)}</td>
+                      <td className="px-2 py-1 tabular-nums text-right whitespace-nowrap">
+                        <span className="font-extrabold text-[var(--foreground)]">{formatKrw(stone.subtotalSell ?? null)}</span>
+                        <span className="px-1 text-[var(--muted)]"> | </span>
+                        <span>{formatKrw((stone.qtyMaster ?? 0) * (stone.unitSell ?? 0))}</span>
+                        <span className="px-1 text-[var(--muted)]"> | </span>
+                        <span>{formatKrw((stone.qtyMaster ?? 0) * (stone.unitCostMaster ?? 0))}</span>
+                        <span className="px-1 text-[var(--muted)]"> | </span>
+                        <span>{formatKrw((stone.qtyReceipt ?? 0) * (stone.unitCostReceipt ?? 0))}</span>
+                      </td>
+                      <td className="px-2 py-1 tabular-nums text-right whitespace-nowrap">
+                        <span>{formatKrw(stone.unitSell ?? null)}</span>
+                        <span className="px-1 text-[var(--muted)]"> | </span>
+                        <span>{formatKrw(stone.unitCostMaster ?? null)}</span>
+                        <span className="px-1 text-[var(--muted)]"> | </span>
+                        <span>{formatKrw(stone.unitCostReceipt ?? null)}</span>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
 
-            <div className="rounded-md border border-[var(--panel-border)] bg-[var(--surface)] p-2 space-y-2">
-              <div className="grid grid-cols-2 md:grid-cols-3 gap-1 text-[10px]">
-                {[
-                  { key: "COST_BASIS", title: "COST_BASIS" },
-                  { key: "RULE_MARKUP", title: "RULE_MARKUP" },
-                  { key: "MASTER_ADDON_MARGIN", title: "MASTER_ADDON_MARGIN" },
-                  { key: "WARN", title: "WARN" },
-                  { key: "OTHER", title: "OTHER" },
-                ].map((section) => (
-                  <div key={section.key} className="rounded border border-[var(--panel-border)] bg-[var(--panel)] px-2 py-1">
-                    <span className="font-semibold">{evidenceSectionLabel(section.title)}</span>
-                    <span className="ml-1 tabular-nums text-[var(--muted)]">{(groupedItems[section.key] ?? []).length}</span>
-                  </div>
-                ))}
-                <div className="rounded border border-[var(--panel-border)] bg-[var(--panel)] px-2 py-1 md:col-span-1 col-span-2">
-                  <span className="font-semibold">기타공임</span>
-                  <span className="ml-1 tabular-nums">{formatKrw(extraLaborSellKrw ?? null)}</span>
+            <div className="rounded-md border border-[var(--panel-border)] bg-[var(--surface)] p-2 text-xs space-y-1">
+              <div className="flex items-center justify-between">
+                <span className="text-[var(--muted)]">출고영수증 원가(비교용)</span>
+                <span className="font-semibold tabular-nums">{formatKrw(receiptStoneCostTotal)}</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-[var(--muted)]">마스터 판매가 합계(기준개수)</span>
+                <span className="font-semibold tabular-nums">{formatKrw(masterStoneSellTotal)}</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-[var(--muted)]">마스터 원가 합계(기준개수)</span>
+                <span className="font-semibold tabular-nums">{formatKrw(masterStoneCostTotal)}</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-[var(--muted)]">추천 알공임(마스터 기준)</span>
+                <span className="font-semibold tabular-nums">{formatKrw(recommendedStoneSellKrw ?? null)}</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-[var(--muted)]">최종 알공임</span>
+                <span className="font-semibold tabular-nums">{formatKrw(finalStoneSellKrw ?? null)}</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-[var(--muted)]">추천 대비 Δ</span>
+                <span className="font-semibold tabular-nums">{formatKrw(stoneDeltaFromRecommended)}</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-[var(--muted)]">영수증 원가 대비 Δ</span>
+                <span className="font-semibold tabular-nums">{formatKrw(stoneDeltaFromReceiptCost)}</span>
+              </div>
+              {stoneAdjustmentKrw !== null && stoneAdjustmentKrw !== undefined ? (
+                <div className="flex items-center justify-between">
+                  <span className="text-[var(--muted)]">조정(±)</span>
+                  <span className="font-semibold tabular-nums">{formatKrw(stoneAdjustmentKrw)}</span>
                 </div>
-              </div>
-
-              <div className="space-y-1">
-                {[
-                  { key: "COST_BASIS", title: "COST_BASIS" },
-                  { key: "RULE_MARKUP", title: "RULE_MARKUP" },
-                  { key: "MASTER_ADDON_MARGIN", title: "MASTER_ADDON_MARGIN" },
-                  { key: "WARN", title: "WARN" },
-                  { key: "OTHER", title: "OTHER" },
-                ].map((section) => (
-                  <div key={`${section.key}-rows`} className="text-[10px] min-w-0">
-                    {(groupedItems[section.key] ?? []).map((item, idx) => {
-                      const ruleId =
-                        typeof item.rule_id === "string"
-                          ? item.rule_id
-                          : typeof item.meta === "object" && item.meta && "rule_id" in item.meta
-                            ? String((item.meta as Record<string, unknown>).rule_id ?? "")
-                            : "";
-                      return (
-                        <div key={`${section.key}-${idx}`} className="flex items-center gap-2 min-w-0">
-                          <span className="text-[var(--muted)] shrink-0">[{evidenceSectionLabel(section.title)}]</span>
-                          <span className="truncate">{evidenceItemLabel(item)}</span>
-                          <span className="tabular-nums shrink-0">{formatKrw(Number(item.amount ?? 0))}</span>
-                          {ruleId ? (
-                            <Button size="sm" variant="secondary" className="h-5 px-2 text-[10px] shrink-0" onClick={() => void copyText(ruleId)}>
-                              규칙복사
-                            </Button>
-                          ) : null}
-                        </div>
-                      );
-                    })}
-                  </div>
-                ))}
-              </div>
+              ) : null}
+              {stoneQtyDeltaTotal !== null && stoneQtyDeltaTotal !== undefined && stoneQtyDeltaTotal !== 0 ? (
+                <div className="text-amber-700">
+                  마스터 개수와 영수증 개수가 다릅니다 (Δ {stoneQtyDeltaTotal}).
+                  {isVariationMode ? " 변형이므로 자동추천 비활성." : " 공장 오차/사이즈 차이 가능."}
+                </div>
+              ) : null}
             </div>
           </CardBody>
         </Card>

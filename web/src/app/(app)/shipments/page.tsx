@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -18,6 +18,7 @@ import { ShipmentPricingEvidencePanel } from "@/components/shipments/ShipmentPri
 
 import { CONTRACTS } from "@/lib/contracts";
 import { type StoneSource } from "@/lib/stone-source";
+import { hasVariationTag } from "@/lib/variation-tag";
 import { readView } from "@/lib/supabase/read";
 import { getSchemaClient } from "@/lib/supabase/client";
 import { useRpcMutation } from "@/hooks/use-rpc-mutation";
@@ -131,6 +132,7 @@ type ReceiptMatchPrefillRow = {
   stone_sub1_unit_cost_krw?: number | null;
   stone_sub2_unit_cost_krw?: number | null;
   stone_labor_krw?: number | null;
+  receipt_labor_other_cost_krw?: number | null;
 };
 
 type MasterLookupRow = {
@@ -244,6 +246,7 @@ const OTHER_LABOR_OPTIONS = [
   { label: "중심공임", value: "CENTER" },
   { label: "보조1공임", value: "SUB1" },
   { label: "보조2공임", value: "SUB2" },
+  { label: "기타공임 조정(±)", value: "ADJUSTMENT" },
   { label: "기타", value: "OTHER" },
 ];
 // ✅ 영수증 “연결” upsert
@@ -355,7 +358,13 @@ type ExtraLaborItem = {
   type: string;
   label: string;
   amount: string;
+  meta?: Record<string, unknown> | null;
 };
+type StoneAdjustmentReason = "FACTORY_MISTAKE" | "PRICE_UP" | "VARIANT" | "OTHER";
+
+const EXTRA_TYPE_VENDOR_DELTA = "VENDOR_DELTA";
+const EXTRA_TYPE_CUSTOM_VARIATION = "CUSTOM_VARIATION";
+const EXTRA_TYPE_ADJUSTMENT = "ADJUSTMENT";
 
 // Helper function to convert relative photo path to full Supabase Storage URL
 const getMasterPhotoUrl = (photoUrl: string | null | undefined): string | null => {
@@ -421,6 +430,15 @@ export default function ShipmentsPage() {
   const [extraLaborItems, setExtraLaborItems] = useState<ExtraLaborItem[]>([]);
   const [useManualLabor, setUseManualLabor] = useState(false);
   const [manualLabor, setManualLabor] = useState("");
+  const [isVariationMode, setIsVariationMode] = useState(false);
+  const [variationNote, setVariationNote] = useState("");
+  const [vendorDeltaAmount, setVendorDeltaAmount] = useState("");
+  const [vendorDeltaReason, setVendorDeltaReason] = useState<"ERROR" | "POLICY">("ERROR");
+  const [vendorDeltaNote, setVendorDeltaNote] = useState("");
+  const [stoneAdjustmentAmount, setStoneAdjustmentAmount] = useState("0");
+  const [stoneAdjustmentReason, setStoneAdjustmentReason] =
+    useState<StoneAdjustmentReason>("FACTORY_MISTAKE");
+  const [stoneAdjustmentNote, setStoneAdjustmentNote] = useState("");
 
   const resolveDeductionValue = (
     deductionText: string,
@@ -471,6 +489,7 @@ export default function ShipmentsPage() {
           type?: string;
           label?: string;
           amount?: number | string | null;
+          meta?: Record<string, unknown> | null;
         };
         const type = String(record?.type ?? "").trim();
         const label = String(record?.label ?? type ?? "기타").trim() || "기타";
@@ -482,6 +501,10 @@ export default function ShipmentsPage() {
           type,
           label,
           amount,
+          meta:
+            record?.meta && typeof record.meta === "object" && !Array.isArray(record.meta)
+              ? record.meta
+              : null,
         };
       })
       .filter((item) => item.label);
@@ -520,7 +543,16 @@ export default function ShipmentsPage() {
     const nextId = typeof crypto !== "undefined" && "randomUUID" in crypto
       ? crypto.randomUUID()
       : `extra-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-    setExtraLaborItems((prev) => [...prev, { id: nextId, type: value, label, amount: "" }]);
+    setExtraLaborItems((prev) => [
+      ...prev,
+      {
+        id: nextId,
+        type: value,
+        label,
+        amount: "",
+        meta: value === EXTRA_TYPE_ADJUSTMENT ? { reason: "OTHER", note: "" } : null,
+      },
+    ]);
   };
 
   const handleExtraLaborAmountChange = (id: string, amount: string) => {
@@ -529,30 +561,111 @@ export default function ShipmentsPage() {
     );
   };
 
-  const handleStoneLaborAmountChange = (amount: string) => {
-    setExtraLaborItems((prev) => {
-      const next = [...prev];
-      const foundIndex = next.findIndex((item) => item.type === "STONE_LABOR");
-      const normalized = amount.trim();
-      if (foundIndex >= 0) {
-        if (!normalized) {
-          next.splice(foundIndex, 1);
-          return next;
-        }
-        next[foundIndex] = { ...next[foundIndex], label: "알공임", amount };
-        return next;
-      }
-      if (!normalized) return prev;
-      const id = typeof crypto !== "undefined" && "randomUUID" in crypto
-        ? crypto.randomUUID()
-        : `stone-labor-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-      return [...next, { id, type: "STONE_LABOR", label: "알공임", amount }];
-    });
+  const handleExtraLaborMetaChange = (id: string, key: string, value: string) => {
+    setExtraLaborItems((prev) =>
+      prev.map((item) =>
+        item.id === id
+          ? {
+              ...item,
+              meta: {
+                ...(item.meta ?? {}),
+                [key]: value,
+              },
+            }
+          : item
+      )
+    );
   };
 
   const handleRemoveExtraLabor = (id: string) => {
     setExtraLaborItems((prev) => prev.filter((item) => item.id !== id));
   };
+
+  const upsertManagedExtraLaborItem = useCallback(
+    (type: string, label: string, amount: string, meta?: Record<string, unknown> | null) => {
+      setExtraLaborItems((prev) => {
+        const index = prev.findIndex((item) => item.type === type);
+
+        const normalized = amount.replaceAll(",", "").trim();
+        if (!normalized || Number(normalized) === 0) {
+          if (index < 0) return prev;
+          const next = [...prev];
+          next.splice(index, 1);
+          return next;
+        }
+
+        const nextItem: ExtraLaborItem = {
+          id:
+            index >= 0
+              ? prev[index].id
+              : typeof crypto !== "undefined" && "randomUUID" in crypto
+                ? crypto.randomUUID()
+                : `extra-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+          type,
+          label,
+          amount: normalized,
+          meta: meta ?? null,
+        };
+
+        if (index < 0) return [...prev, nextItem];
+        const current = prev[index];
+        const currentMeta = current.meta ?? null;
+        const nextMeta = nextItem.meta ?? null;
+        const sameMeta = JSON.stringify(currentMeta) === JSON.stringify(nextMeta);
+        if (
+          current.type === nextItem.type &&
+          current.label === nextItem.label &&
+          String(current.amount) === String(nextItem.amount) &&
+          sameMeta
+        ) {
+          return prev;
+        }
+        const next = [...prev];
+        next[index] = nextItem;
+        return next;
+      });
+    },
+    []
+  );
+
+  function applyRecommendedStoneLabor(forced: boolean) {
+    if (!selectedOrderLineId) return;
+    if (!forced && isVariationMode) return;
+    const existing = extraLaborItems.find((item) => item.type === "STONE_LABOR");
+    if (!forced && existing && String(existing.amount ?? "").trim() !== "") return;
+
+    const adjustment = parseNumberInput(stoneAdjustmentAmount);
+    const recommendedAmount = Math.max(0, stoneRecommendation.recommended);
+    upsertManagedExtraLaborItem("STONE_LABOR", "알공임", String(recommendedAmount), {
+      engine: "stone_sell_from_master_v1",
+      recommended: stoneRecommendation.recommended,
+      adjustment,
+      adjustment_reason: stoneAdjustmentReason,
+      adjustment_note: stoneAdjustmentNote.trim() || undefined,
+      qty_used: {
+        center: stoneRecommendation.roles.find((row) => row.role === "CENTER")?.qtyUsed ?? 0,
+        sub1: stoneRecommendation.roles.find((row) => row.role === "SUB1")?.qtyUsed ?? 0,
+        sub2: stoneRecommendation.roles.find((row) => row.role === "SUB2")?.qtyUsed ?? 0,
+      },
+      unit_sell: {
+        center: stoneRecommendation.roles.find((row) => row.role === "CENTER")?.unitSell ?? 0,
+        sub1: stoneRecommendation.roles.find((row) => row.role === "SUB1")?.unitSell ?? 0,
+        sub2: stoneRecommendation.roles.find((row) => row.role === "SUB2")?.unitSell ?? 0,
+      },
+      sources: {
+        qty_source: stoneRecommendation.roles.every((row) => row.qtySource === "RECEIPT")
+          ? "RECEIPT"
+          : stoneRecommendation.roles.some((row) => row.qtySource === "RECEIPT")
+            ? "MIXED"
+            : "ORDER",
+        supply_source: {
+          center: stoneRecommendation.roles.find((row) => row.role === "CENTER")?.supply ?? null,
+          sub1: stoneRecommendation.roles.find((row) => row.role === "SUB1")?.supply ?? null,
+          sub2: stoneRecommendation.roles.find((row) => row.role === "SUB2")?.supply ?? null,
+        },
+      },
+    });
+  }
 
   useEffect(() => {
     const handler = setTimeout(() => setDebouncedQuery(searchQuery.trim()), debounceMs);
@@ -789,25 +902,8 @@ export default function ShipmentsPage() {
   useEffect(() => {
     const data = receiptMatchPrefillQuery.data;
     if (!data) return;
-    const stoneLabor = (() => {
-      const direct = Number(data.stone_labor_krw ?? 0);
-      if (Number.isFinite(direct) && direct > 0) return direct;
-      const centerQty = Number(data.stone_center_qty ?? 0);
-      const sub1Qty = Number(data.stone_sub1_qty ?? 0);
-      const sub2Qty = Number(data.stone_sub2_qty ?? 0);
-      const centerUnit = Number(data.stone_center_unit_cost_krw ?? 0);
-      const sub1Unit = Number(data.stone_sub1_unit_cost_krw ?? 0);
-      const sub2Unit = Number(data.stone_sub2_unit_cost_krw ?? 0);
-      const byReceipt =
-        Math.max(centerQty, 0) * Math.max(centerUnit, 0) +
-        Math.max(sub1Qty, 0) * Math.max(sub1Unit, 0) +
-        Math.max(sub2Qty, 0) * Math.max(sub2Unit, 0);
-      if (byReceipt > 0) return byReceipt;
-      return extractStoneLaborAmount(data.shipment_extra_labor_items);
-    })();
-    if (!Number.isFinite(stoneLabor) || stoneLabor <= 0) return;
-
-    const amount = String(stoneLabor);
+    const amount = String(extractStoneLaborAmount(data.shipment_extra_labor_items));
+    if (!amount || Number(amount) <= 0) return;
     setExtraLaborItems((prev) => {
       const next = [...prev];
       const foundIndex = next.findIndex((item) => item.type === "STONE_LABOR");
@@ -1091,6 +1187,59 @@ export default function ShipmentsPage() {
     setIsStorePickup(true);
   }, [confirmModalOpen, shipmentHeaderQuery.data]);
 
+  const orderHasVariation = useMemo(
+    () =>
+      hasVariationTag(orderLineDetailQuery.data?.memo) ||
+      hasVariationTag(prefill?.note),
+    [orderLineDetailQuery.data?.memo, prefill?.note]
+  );
+
+  useEffect(() => {
+    if (!selectedOrderLineId) {
+      setIsVariationMode(false);
+      return;
+    }
+    if (orderHasVariation) {
+      setIsVariationMode(true);
+    }
+  }, [orderHasVariation, selectedOrderLineId]);
+
+  useEffect(() => {
+    const variationItem = extraLaborItems.find((item) => item.type === EXTRA_TYPE_CUSTOM_VARIATION);
+    const vendorDeltaItem = extraLaborItems.find((item) => item.type === EXTRA_TYPE_VENDOR_DELTA);
+
+    setVariationNote(String((variationItem?.meta as Record<string, unknown> | null)?.note ?? ""));
+    setVendorDeltaAmount(vendorDeltaItem ? String(vendorDeltaItem.amount ?? "") : "");
+    setVendorDeltaReason(
+      String((vendorDeltaItem?.meta as Record<string, unknown> | null)?.reason ?? "ERROR").toUpperCase() ===
+        "POLICY"
+        ? "POLICY"
+        : "ERROR"
+    );
+    setVendorDeltaNote(String((vendorDeltaItem?.meta as Record<string, unknown> | null)?.note ?? ""));
+  }, [extraLaborItems]);
+
+  useEffect(() => {
+    setStoneAdjustmentReason((prev) => (isVariationMode ? "VARIANT" : prev === "VARIANT" ? "FACTORY_MISTAKE" : prev));
+  }, [isVariationMode]);
+
+  useEffect(() => {
+    const stoneItem = extraLaborItems.find((item) => item.type === "STONE_LABOR");
+    if (!stoneItem) return;
+    const meta = (stoneItem.meta as Record<string, unknown> | null) ?? null;
+    const recommended = Number(meta?.recommended ?? 0);
+    const adjustment = Number(meta?.adjustment ?? Number(stoneItem.amount ?? 0) - recommended);
+    if (Number.isFinite(adjustment)) {
+      setStoneAdjustmentAmount(String(adjustment));
+    }
+    const reasonRaw = String(meta?.adjustment_reason ?? "").toUpperCase();
+    if (reasonRaw === "FACTORY_MISTAKE" || reasonRaw === "PRICE_UP" || reasonRaw === "VARIANT" || reasonRaw === "OTHER") {
+      setStoneAdjustmentReason(reasonRaw as StoneAdjustmentReason);
+    }
+    const note = String(meta?.adjustment_note ?? "");
+    if (note) setStoneAdjustmentNote(note);
+  }, [selectedOrderLineId]);
+
   const shipmentUpsertMutation = useRpcMutation<ShipmentUpsertResult>({
     fn: CONTRACTS.functions.shipmentUpsertFromOrder,
     successMessage: "출고 확정 준비",
@@ -1144,6 +1293,7 @@ export default function ShipmentsPage() {
     }
     const baseValue = parseNumberInput(baseLabor);
     const laborValue = resolvedTotalLabor;
+    const manualLaborBase = useManualLabor ? laborValue - resolvedExtraLaborTotal : null;
     const deductionText = deductionWeightG ?? "";
     const masterDeduct = Number(masterLookupQuery.data?.deduction_weight_default_g ?? 0);
     const useMasterDeductionFallback = !hasReceiptDeduction && applyMasterDeductionWhenEmpty;
@@ -1170,13 +1320,19 @@ export default function ShipmentsPage() {
         toast.error("직접 공임(원)을 올바르게 입력해주세요.");
         return;
       }
+      if (manualLaborBase !== null && manualLaborBase < 0) {
+        toast.error("직접 공임이 기타/알공임 합계보다 작습니다.");
+        return;
+      }
     }
     const invalidExtra = extraLaborItems.find((item) => {
       if (item.amount.trim() === "") return false;
       const normalized = item.amount.replaceAll(",", "").trim();
       if (!normalized) return false;
       const value = Number(normalized);
-      return !Number.isFinite(value) || value < 0;
+      if (!Number.isFinite(value)) return true;
+      if (item.type === EXTRA_TYPE_VENDOR_DELTA || item.type === EXTRA_TYPE_ADJUSTMENT) return false;
+      return value < 0;
     });
     if (invalidExtra) {
       toast.error("기타 공임 금액을 올바르게 입력해주세요.");
@@ -1188,7 +1344,12 @@ export default function ShipmentsPage() {
       p_weight_g: weightValue,
       p_deduction_weight_g: deductionValue,
       p_total_labor: laborValue,
-      p_base_labor_krw: Number.isFinite(baseValue) ? baseValue : 0,
+      p_base_labor_krw:
+        manualLaborBase !== null
+          ? manualLaborBase
+          : Number.isFinite(baseValue)
+            ? baseValue
+            : 0,
       p_extra_labor_krw: resolvedExtraLaborTotal,
       p_extra_labor_items: extraLaborPayload,
       p_actor_person_id: actorId,
@@ -1243,7 +1404,13 @@ export default function ShipmentsPage() {
       p_shipment_line_id: shipmentLineId,
       p_deduction_weight_g: deductionValue,
       p_base_labor_krw:
-        baseLaborOverride !== null ? baseLaborOverride : Number.isFinite(baseValue) ? baseValue : 0,
+        baseLaborOverride !== null
+          ? baseLaborOverride
+          : manualLaborBase !== null
+            ? manualLaborBase
+            : Number.isFinite(baseValue)
+              ? baseValue
+              : 0,
       p_extra_labor_krw: resolvedExtraLaborTotal,
       p_extra_labor_items: extraLaborPayload,
       p_pricing_mode: isManualTotalOverride ? "AMOUNT_ONLY" : "RULE",
@@ -1496,6 +1663,14 @@ export default function ShipmentsPage() {
     setApplyMasterDeductionWhenEmpty(true);
     setBaseLabor("");
     setExtraLaborItems([]);
+    setIsVariationMode(false);
+    setVariationNote("");
+    setVendorDeltaAmount("");
+    setVendorDeltaReason("ERROR");
+    setVendorDeltaNote("");
+    setStoneAdjustmentAmount("0");
+    setStoneAdjustmentReason("FACTORY_MISTAKE");
+    setStoneAdjustmentNote("");
     setManualTotalAmountKrw("");
     setCostMode("PROVISIONAL");
     setCostInputs({});
@@ -1563,6 +1738,7 @@ export default function ShipmentsPage() {
 
       const manualTotalValue = isManualTotalOverride ? parseNumberInput(manualTotalAmountKrw) : 0;
       const materialAmount = Number(currentLine?.material_amount_sell_krw ?? 0);
+      const manualLaborBase = useManualLabor ? resolvedTotalLabor - resolvedExtraLaborTotal : null;
       const baseLaborOverride = isManualTotalOverride && manualTotalValue > 0
         ? manualTotalValue - materialAmount - resolvedExtraLaborTotal
         : null;
@@ -1574,11 +1750,20 @@ export default function ShipmentsPage() {
         toast.error("총액이 재료비보다 작습니다.");
         return;
       }
+      if (baseLaborOverride === null && manualLaborBase !== null && manualLaborBase < 0) {
+        toast.error("직접 공임이 기타/알공임 합계보다 작습니다.");
+        return;
+      }
 
       const updatePayload: Record<string, unknown> = {
         p_shipment_line_id: String(currentShipmentLineId),
         p_deduction_weight_g: dValue,
-        p_base_labor_krw: baseLaborOverride !== null ? baseLaborOverride : resolvedBaseLabor,
+        p_base_labor_krw:
+          baseLaborOverride !== null
+            ? baseLaborOverride
+            : manualLaborBase !== null
+              ? manualLaborBase
+              : resolvedBaseLabor,
         p_extra_labor_krw: resolvedExtraLaborTotal,
         p_extra_labor_items: extraLaborPayload,
         p_pricing_mode: isManualTotalOverride ? "AMOUNT_ONLY" : "RULE",
@@ -1698,12 +1883,111 @@ export default function ShipmentsPage() {
     return found?.amount ?? "";
   }, [extraLaborItems]);
 
+  const adjustmentLaborAmount = useMemo(() => {
+    const found = extraLaborItems.find((item) => item.type === EXTRA_TYPE_ADJUSTMENT);
+    return found?.amount ?? "0";
+  }, [extraLaborItems]);
+
   const visibleExtraLaborItems = useMemo(
-    () => extraLaborItems.filter((item) => item.type !== "STONE_LABOR"),
+    () =>
+      extraLaborItems.filter(
+        (item) =>
+          item.type !== "STONE_LABOR" &&
+          item.type !== EXTRA_TYPE_VENDOR_DELTA &&
+          item.type !== EXTRA_TYPE_CUSTOM_VARIATION
+      ),
     [extraLaborItems]
   );
 
   const resolvedStoneLabor = useMemo(() => parseNumberInput(stoneLaborAmount), [stoneLaborAmount]);
+  const resolvedAdjustmentLabor = useMemo(
+    () => parseNumberInput(adjustmentLaborAmount),
+    [adjustmentLaborAmount]
+  );
+
+  const stoneRecommendation = useMemo(() => {
+    const orderQty = Math.max(0, Number(orderLineDetailQuery.data?.qty ?? 0));
+    const roles = [
+      {
+        role: "CENTER" as const,
+        receiptQty: receiptMatchPrefillQuery.data?.stone_center_qty,
+        orderQtyPerPiece: orderLineDetailQuery.data?.center_stone_qty,
+        supply: normalizeStoneSource(orderLineDetailQuery.data?.center_stone_source),
+        unitSell: Number(matchedMasterPricingQuery.data?.labor_center ?? masterLookupQuery.data?.labor_center ?? 0),
+      },
+      {
+        role: "SUB1" as const,
+        receiptQty: receiptMatchPrefillQuery.data?.stone_sub1_qty,
+        orderQtyPerPiece: orderLineDetailQuery.data?.sub1_stone_qty,
+        supply: normalizeStoneSource(orderLineDetailQuery.data?.sub1_stone_source),
+        unitSell: Number(matchedMasterPricingQuery.data?.labor_side1 ?? masterLookupQuery.data?.labor_side1 ?? 0),
+      },
+      {
+        role: "SUB2" as const,
+        receiptQty: receiptMatchPrefillQuery.data?.stone_sub2_qty,
+        orderQtyPerPiece: orderLineDetailQuery.data?.sub2_stone_qty,
+        supply: normalizeStoneSource(orderLineDetailQuery.data?.sub2_stone_source),
+        unitSell: Number(matchedMasterPricingQuery.data?.labor_side2 ?? masterLookupQuery.data?.labor_side2 ?? 0),
+      },
+    ].map((row) => {
+      const hasReceiptQty = row.receiptQty !== null && row.receiptQty !== undefined;
+      const qtyUsed = hasReceiptQty
+        ? Math.max(0, Number(row.receiptQty ?? 0))
+        : Math.max(0, Number(row.orderQtyPerPiece ?? 0)) * orderQty;
+      return {
+        role: row.role,
+        supply: row.supply,
+        unitSell: Math.max(0, Number.isFinite(row.unitSell) ? row.unitSell : 0),
+        qtyUsed,
+        qtySource: (hasReceiptQty ? "RECEIPT" : "ORDER") as "RECEIPT" | "ORDER",
+        subtotal: qtyUsed * Math.max(0, Number.isFinite(row.unitSell) ? row.unitSell : 0),
+      };
+    });
+
+    const recommended = roles.reduce((sum, row) => sum + row.subtotal, 0);
+    const receiptTotalQty = roles
+      .filter((row) => row.qtySource === "RECEIPT")
+      .reduce((sum, row) => sum + row.qtyUsed, 0);
+    const orderTotalQty =
+      Math.max(0, Number(orderLineDetailQuery.data?.center_stone_qty ?? 0)) * orderQty +
+      Math.max(0, Number(orderLineDetailQuery.data?.sub1_stone_qty ?? 0)) * orderQty +
+      Math.max(0, Number(orderLineDetailQuery.data?.sub2_stone_qty ?? 0)) * orderQty;
+
+    return {
+      roles,
+      recommended,
+      receiptTotalQty,
+      orderTotalQty,
+      deltaQtyTotal: receiptTotalQty - orderTotalQty,
+    };
+  }, [
+    masterLookupQuery.data?.labor_center,
+    masterLookupQuery.data?.labor_side1,
+    masterLookupQuery.data?.labor_side2,
+    matchedMasterPricingQuery.data?.labor_center,
+    matchedMasterPricingQuery.data?.labor_side1,
+    matchedMasterPricingQuery.data?.labor_side2,
+    orderLineDetailQuery.data?.center_stone_qty,
+    orderLineDetailQuery.data?.center_stone_source,
+    orderLineDetailQuery.data?.qty,
+    orderLineDetailQuery.data?.sub1_stone_qty,
+    orderLineDetailQuery.data?.sub1_stone_source,
+    orderLineDetailQuery.data?.sub2_stone_qty,
+    orderLineDetailQuery.data?.sub2_stone_source,
+    receiptMatchPrefillQuery.data?.stone_center_qty,
+    receiptMatchPrefillQuery.data?.stone_sub1_qty,
+    receiptMatchPrefillQuery.data?.stone_sub2_qty,
+  ]);
+
+  const resolvedStoneAdjustment = useMemo(
+    () => parseNumberInput(stoneAdjustmentAmount),
+    [stoneAdjustmentAmount]
+  );
+
+  const finalStoneSell = useMemo(
+    () => Math.max(0, stoneRecommendation.recommended + resolvedStoneAdjustment),
+    [stoneRecommendation.recommended, resolvedStoneAdjustment]
+  );
 
   const resolvedEtcLaborItemsTotal = useMemo(
     () => visibleExtraLaborItems.reduce((sum, item) => sum + parseNumberInput(item.amount), 0),
@@ -1790,6 +2074,7 @@ export default function ShipmentsPage() {
       type: item.type,
       label: item.label,
       amount: parseNumberInput(item.amount),
+      meta: item.meta ?? null,
     }));
   }, [extraLaborItems]);
 
@@ -1799,11 +2084,17 @@ export default function ShipmentsPage() {
         role: "CENTER" as const,
         supply: normalizeStoneSource(orderLineDetailQuery.data?.center_stone_source),
         qtyReceipt: receiptMatchPrefillQuery.data?.stone_center_qty ?? null,
+        qtyUsed: stoneRecommendation.roles.find((row) => row.role === "CENTER")?.qtyUsed ?? null,
+        qtySource: stoneRecommendation.roles.find((row) => row.role === "CENTER")?.qtySource ?? null,
         qtyOrder: orderLineDetailQuery.data?.center_stone_qty ?? null,
         qtyMaster:
           matchedMasterPricingQuery.data?.center_qty_default ??
           masterLookupQuery.data?.center_qty_default ??
           null,
+        unitSell: stoneRecommendation.roles.find((row) => row.role === "CENTER")?.unitSell ?? null,
+        unitCostMaster:
+          matchedMasterPricingQuery.data?.labor_center_cost ?? masterLookupQuery.data?.labor_center_cost ?? null,
+        subtotalSell: stoneRecommendation.roles.find((row) => row.role === "CENTER")?.subtotal ?? null,
         unitCostReceipt: receiptMatchPrefillQuery.data?.stone_center_unit_cost_krw ?? null,
         marginPerUnit: formatMargin(
           matchedMasterPricingQuery.data?.labor_center ?? masterLookupQuery.data?.labor_center,
@@ -1814,11 +2105,17 @@ export default function ShipmentsPage() {
         role: "SUB1" as const,
         supply: normalizeStoneSource(orderLineDetailQuery.data?.sub1_stone_source),
         qtyReceipt: receiptMatchPrefillQuery.data?.stone_sub1_qty ?? null,
+        qtyUsed: stoneRecommendation.roles.find((row) => row.role === "SUB1")?.qtyUsed ?? null,
+        qtySource: stoneRecommendation.roles.find((row) => row.role === "SUB1")?.qtySource ?? null,
         qtyOrder: orderLineDetailQuery.data?.sub1_stone_qty ?? null,
         qtyMaster:
           matchedMasterPricingQuery.data?.sub1_qty_default ??
           masterLookupQuery.data?.sub1_qty_default ??
           null,
+        unitSell: stoneRecommendation.roles.find((row) => row.role === "SUB1")?.unitSell ?? null,
+        unitCostMaster:
+          matchedMasterPricingQuery.data?.labor_sub1_cost ?? masterLookupQuery.data?.labor_sub1_cost ?? null,
+        subtotalSell: stoneRecommendation.roles.find((row) => row.role === "SUB1")?.subtotal ?? null,
         unitCostReceipt: receiptMatchPrefillQuery.data?.stone_sub1_unit_cost_krw ?? null,
         marginPerUnit: formatMargin(
           matchedMasterPricingQuery.data?.labor_side1 ?? masterLookupQuery.data?.labor_side1,
@@ -1829,11 +2126,17 @@ export default function ShipmentsPage() {
         role: "SUB2" as const,
         supply: normalizeStoneSource(orderLineDetailQuery.data?.sub2_stone_source),
         qtyReceipt: receiptMatchPrefillQuery.data?.stone_sub2_qty ?? null,
+        qtyUsed: stoneRecommendation.roles.find((row) => row.role === "SUB2")?.qtyUsed ?? null,
+        qtySource: stoneRecommendation.roles.find((row) => row.role === "SUB2")?.qtySource ?? null,
         qtyOrder: orderLineDetailQuery.data?.sub2_stone_qty ?? null,
         qtyMaster:
           matchedMasterPricingQuery.data?.sub2_qty_default ??
           masterLookupQuery.data?.sub2_qty_default ??
           null,
+        unitSell: stoneRecommendation.roles.find((row) => row.role === "SUB2")?.unitSell ?? null,
+        unitCostMaster:
+          matchedMasterPricingQuery.data?.labor_sub2_cost ?? masterLookupQuery.data?.labor_sub2_cost ?? null,
+        subtotalSell: stoneRecommendation.roles.find((row) => row.role === "SUB2")?.subtotal ?? null,
         unitCostReceipt: receiptMatchPrefillQuery.data?.stone_sub2_unit_cost_krw ?? null,
         marginPerUnit: formatMargin(
           matchedMasterPricingQuery.data?.labor_side2 ?? masterLookupQuery.data?.labor_side2,
@@ -1872,20 +2175,77 @@ export default function ShipmentsPage() {
       masterLookupQuery.data?.sub2_qty_default,
       masterLookupQuery.data?.labor_side2,
       masterLookupQuery.data?.labor_sub2_cost,
+      stoneRecommendation.roles,
     ]
   );
 
-  const evidenceExtraLaborItems = useMemo(
-    () =>
-      currentLine?.extra_labor_items ??
-      receiptMatchPrefillQuery.data?.shipment_extra_labor_items ??
-      extraLaborPayload,
-    [
-      currentLine?.extra_labor_items,
-      receiptMatchPrefillQuery.data?.shipment_extra_labor_items,
-      extraLaborPayload,
-    ]
-  );
+  useEffect(() => {
+    if (!selectedOrderLineId) return;
+    if (!isVariationMode) {
+      upsertManagedExtraLaborItem(EXTRA_TYPE_CUSTOM_VARIATION, "변형 조정", "0", null);
+      return;
+    }
+    const variationAmount =
+      extraLaborItems.find((item) => item.type === EXTRA_TYPE_CUSTOM_VARIATION)?.amount ?? "";
+    upsertManagedExtraLaborItem(EXTRA_TYPE_CUSTOM_VARIATION, "변형 조정", String(variationAmount), {
+      note: variationNote.trim() || undefined,
+    });
+  }, [isVariationMode, selectedOrderLineId, variationNote, extraLaborItems, upsertManagedExtraLaborItem]);
+
+  useEffect(() => {
+    if (!selectedOrderLineId || isVariationMode) return;
+    const existingStone = extraLaborItems.find((item) => item.type === "STONE_LABOR");
+    if (existingStone && String(existingStone.amount ?? "").trim() !== "") return;
+    applyRecommendedStoneLabor(false);
+  }, [extraLaborItems, isVariationMode, selectedOrderLineId]);
+
+  useEffect(() => {
+    if (!selectedOrderLineId) return;
+    const stoneItem = extraLaborItems.find((item) => item.type === "STONE_LABOR");
+    const engine = String((stoneItem?.meta as Record<string, unknown> | null)?.engine ?? "");
+    if (!stoneItem || engine !== "stone_sell_from_master_v1") return;
+    applyRecommendedStoneLabor(true);
+  }, [
+    extraLaborItems,
+    selectedOrderLineId,
+    stoneAdjustmentAmount,
+    stoneAdjustmentNote,
+    stoneAdjustmentReason,
+    stoneRecommendation.recommended,
+  ]);
+
+  useEffect(() => {
+    if (!selectedOrderLineId || isVariationMode) {
+      upsertManagedExtraLaborItem(EXTRA_TYPE_VENDOR_DELTA, "공장 차이(Δ)", "0", null);
+      return;
+    }
+    upsertManagedExtraLaborItem(EXTRA_TYPE_VENDOR_DELTA, "공장 차이(Δ)", vendorDeltaAmount, {
+      reason: vendorDeltaReason,
+      note: vendorDeltaNote.trim() || undefined,
+    });
+  }, [
+    isVariationMode,
+    selectedOrderLineId,
+    vendorDeltaAmount,
+    vendorDeltaReason,
+    vendorDeltaNote,
+    upsertManagedExtraLaborItem,
+  ]);
+
+  useEffect(() => {
+    if (!selectedOrderLineId) return;
+    upsertManagedExtraLaborItem(EXTRA_TYPE_ADJUSTMENT, "알공임 조정(±)", stoneAdjustmentAmount, {
+      reason: stoneAdjustmentReason,
+      note: stoneAdjustmentNote.trim() || undefined,
+      source: "STONE_LABOR",
+    });
+  }, [
+    selectedOrderLineId,
+    stoneAdjustmentAmount,
+    stoneAdjustmentNote,
+    stoneAdjustmentReason,
+    upsertManagedExtraLaborItem,
+  ]);
 
   const valuation = shipmentValuationQuery.data;
   const pricingLockedAt = valuation?.pricing_locked_at ?? shipmentHeaderQuery.data?.pricing_locked_at ?? null;
@@ -2372,10 +2732,19 @@ export default function ShipmentsPage() {
                         extraLaborSellKrw={resolvedExtraLaborTotal}
                         factoryOtherCostBaseKrw={resolvedOtherLaborCost}
                         stoneRows={stoneEvidenceRows}
-                        extraLaborItems={evidenceExtraLaborItems}
                         expectedBaseLaborSellKrw={resolvedBaseLabor}
                         expectedExtraLaborSellKrw={resolvedExtraLaborTotal}
                         shipmentBaseLaborKrw={receiptMatchPrefillQuery.data?.shipment_base_labor_krw ?? null}
+                        receiptStoneOtherCostKrw={
+                          receiptMatchPrefillQuery.data?.selected_factory_labor_other_cost_krw ??
+                          receiptMatchPrefillQuery.data?.receipt_labor_other_cost_krw ??
+                          null
+                        }
+                        recommendedStoneSellKrw={stoneRecommendation.recommended}
+                        finalStoneSellKrw={finalStoneSell}
+                        stoneAdjustmentKrw={resolvedStoneAdjustment}
+                        stoneQtyDeltaTotal={stoneRecommendation.deltaQtyTotal}
+                        isVariationMode={isVariationMode}
                       />
                     </CardBody>
                   </Card>
@@ -2383,13 +2752,100 @@ export default function ShipmentsPage() {
                   {/* Input Form */}
                   <Card className="border-[var(--panel-border)] shadow-md">
                     <CardHeader className="border-b border-[var(--panel-border)] py-4">
-                      <h3 className="text-base font-semibold flex items-center gap-2">
-                        <Scale className="w-4 h-4" />
-                        출고 정보 입력
-                      </h3>
+                      <div className="flex items-center justify-between gap-2">
+                        <h3 className="text-base font-semibold flex items-center gap-2">
+                          <Scale className="w-4 h-4" />
+                          출고 정보 입력
+                        </h3>
+                        {orderHasVariation ? (
+                          <Badge tone="warning" className="text-xs">
+                            변형 주문
+                          </Badge>
+                        ) : null}
+                      </div>
                     </CardHeader>
                     <CardBody className="p-6 space-y-6">
                       <div className="space-y-4">
+                        <div className="rounded-lg border border-[var(--panel-border)] bg-[var(--surface)]/40 p-4 space-y-3">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <label className="inline-flex items-center gap-2 text-sm font-semibold text-[var(--foreground)]">
+                              <input
+                                type="checkbox"
+                                checked={isVariationMode}
+                                onChange={(event) => setIsVariationMode(event.target.checked)}
+                                className="h-4 w-4 accent-[var(--brand)]"
+                              />
+                              변형 모드
+                            </label>
+                            {isVariationMode ? (
+                              <Badge tone="warning" className="text-[10px]">자동추천 비활성</Badge>
+                            ) : null}
+                            <Button size="sm" variant="secondary" onClick={() => applyRecommendedStoneLabor(true)}>
+                              추천 적용
+                            </Button>
+                          </div>
+
+                          <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
+                            <div className="rounded border border-[var(--panel-border)] bg-[var(--panel)] p-2">
+                              <div className="text-[var(--muted)]">추천 알공임(마스터 기준)</div>
+                              <div className="text-base font-semibold tabular-nums">{renderNumber(stoneRecommendation.recommended, "원")}</div>
+                            </div>
+                            <div className="rounded border border-[var(--panel-border)] bg-[var(--panel)] p-2">
+                              <div className="text-[var(--muted)]">조정(±)</div>
+                              <Input
+                                value={stoneAdjustmentAmount}
+                                onChange={(e) => setStoneAdjustmentAmount(e.target.value)}
+                                inputMode="numeric"
+                                className="h-8 tabular-nums"
+                              />
+                            </div>
+                            <div className="rounded border border-[var(--panel-border)] bg-[var(--panel)] p-2">
+                              <div className="text-[var(--muted)]">최종 알공임</div>
+                              <div className="text-base font-semibold tabular-nums">{renderNumber(finalStoneSell, "원")}</div>
+                            </div>
+                          </div>
+
+                          <div className="grid grid-cols-1 md:grid-cols-[180px_1fr_1fr] gap-3">
+                            <div className="space-y-1">
+                              <label className="text-xs text-[var(--muted)]">조정 사유</label>
+                              <select
+                                className="h-10 w-full rounded-md border border-[var(--panel-border)] bg-[var(--input-bg)] px-2 text-sm"
+                                value={stoneAdjustmentReason}
+                                onChange={(e) =>
+                                  setStoneAdjustmentReason(
+                                    ["FACTORY_MISTAKE", "PRICE_UP", "VARIANT", "OTHER"].includes(e.target.value)
+                                      ? (e.target.value as StoneAdjustmentReason)
+                                      : "OTHER"
+                                  )
+                                }
+                              >
+                                <option value="FACTORY_MISTAKE">공장 오차/실수</option>
+                                <option value="PRICE_UP">단가 인상</option>
+                                <option value="VARIANT">변형</option>
+                                <option value="OTHER">기타</option>
+                              </select>
+                            </div>
+                            <div className="space-y-1 md:col-span-2">
+                              <label className="text-xs text-[var(--muted)]">조정 메모</label>
+                              <Input
+                                placeholder="조정 사유 메모"
+                                value={stoneAdjustmentNote}
+                                onChange={(e) => setStoneAdjustmentNote(e.target.value)}
+                                className="h-10"
+                              />
+                            </div>
+                          </div>
+
+                          {stoneRecommendation.deltaQtyTotal !== 0 ? (
+                            <div className="text-xs text-amber-700">
+                              마스터 개수 대비 영수증 개수 차이: {renderNumber(stoneRecommendation.deltaQtyTotal)}
+                              {isVariationMode
+                                ? " (변형이므로 자동추천 기본 비활성)"
+                                : " (공장 오차/사이즈 차이 가능, 조정(±) 권장)"}
+                            </div>
+                          ) : null}
+                        </div>
+
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                           <div className="space-y-1">
                             <span className="text-xs text-[var(--muted)]">총중량 (중량-차감중량)</span>
@@ -2513,8 +2969,13 @@ export default function ShipmentsPage() {
                             </div>
                             <Input
                               placeholder="0"
-                              value={stoneLaborAmount}
-                              onChange={(e) => handleStoneLaborAmountChange(e.target.value)}
+                              value={String(finalStoneSell)}
+                              onChange={(e) => {
+                                const nextFinal = parseNumberInput(e.target.value);
+                                const nextAdjustment = nextFinal - stoneRecommendation.recommended;
+                                setStoneAdjustmentAmount(String(nextAdjustment));
+                                applyRecommendedStoneLabor(true);
+                              }}
                               inputMode="numeric"
                               className="tabular-nums text-lg h-12"
                             />
@@ -2561,6 +3022,26 @@ export default function ShipmentsPage() {
                                     inputMode="numeric"
                                     className="tabular-nums h-9"
                                   />
+                                  {item.type === EXTRA_TYPE_ADJUSTMENT ? (
+                                    <>
+                                      <select
+                                        className="h-9 rounded-md border border-[var(--panel-border)] bg-[var(--input-bg)] px-2 text-xs"
+                                        value={String((item.meta as Record<string, unknown> | null)?.reason ?? "OTHER")}
+                                        onChange={(e) => handleExtraLaborMetaChange(item.id, "reason", e.target.value)}
+                                      >
+                                        <option value="FACTORY_MISTAKE">공장 오차/실수</option>
+                                        <option value="PRICE_UP">단가 인상</option>
+                                        <option value="VARIANT">변형</option>
+                                        <option value="OTHER">기타</option>
+                                      </select>
+                                      <Input
+                                        placeholder="메모"
+                                        value={String((item.meta as Record<string, unknown> | null)?.note ?? "")}
+                                        onChange={(e) => handleExtraLaborMetaChange(item.id, "note", e.target.value)}
+                                        className="h-9"
+                                      />
+                                    </>
+                                  ) : null}
                                   <Button
                                     variant="ghost"
                                     size="sm"
@@ -2801,8 +3282,13 @@ export default function ShipmentsPage() {
                   <Input
                     className="h-7 text-xs w-24 bg-[var(--input-bg)] tabular-nums"
                     placeholder="0"
-                    value={stoneLaborAmount}
-                    onChange={(e) => handleStoneLaborAmountChange(e.target.value)}
+                    value={String(finalStoneSell)}
+                    onChange={(e) => {
+                      const nextFinal = parseNumberInput(e.target.value);
+                      const nextAdjustment = nextFinal - stoneRecommendation.recommended;
+                      setStoneAdjustmentAmount(String(nextAdjustment));
+                      applyRecommendedStoneLabor(true);
+                    }}
                     inputMode="numeric"
                   />
                 </div>

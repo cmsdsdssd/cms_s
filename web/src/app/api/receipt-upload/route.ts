@@ -30,6 +30,9 @@ export async function POST(request: Request) {
     try {
         const form = await request.formData();
         const file = (form.get("file0") ?? form.get("file")) as File | null;
+        const forceNewReceipt = ["1", "true", "yes"].includes(
+            String(form.get("force_new_receipt") ?? "").trim().toLowerCase()
+        );
 
         if (!file) {
             return NextResponse.json({ error: "file missing" }, { status: 400 });
@@ -55,7 +58,9 @@ export async function POST(request: Request) {
                         ? "png"
                         : "webp";
 
-        const filePath = `${new Date().toISOString().slice(0, 10).replaceAll("-", "")}/${hash}.${ext}`;
+        const dateFolder = new Date().toISOString().slice(0, 10).replaceAll("-", "");
+        const uniqueSuffix = forceNewReceipt ? `_${crypto.randomUUID().replaceAll("-", "")}` : "";
+        const filePath = `${dateFolder}/${hash}${uniqueSuffix}.${ext}`;
 
         const { error: uploadErr } = await supabase.storage
             .from(bucket)
@@ -76,7 +81,7 @@ export async function POST(request: Request) {
         const { data: receipt_id, error: rpcErr } = await supabase.rpc("cms_fn_upsert_receipt_inbox_v1", {
             p_file_bucket: bucket,
             p_file_path: filePath,
-            p_file_sha256: hash,
+            p_file_sha256: forceNewReceipt ? null : hash,
             p_file_size_bytes: file.size,
             p_mime_type: file.type,
             p_source: "SCANNER",
@@ -85,7 +90,10 @@ export async function POST(request: Request) {
             p_total_amount_krw: null,
             p_status: "UPLOADED",
             p_memo: null,
-            p_meta: {},
+            p_meta: {
+                file_sha256: hash,
+                force_new_receipt: forceNewReceipt,
+            },
         });
 
         if (rpcErr) {

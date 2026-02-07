@@ -238,6 +238,63 @@ type OrderStoneSourceRow = {
   sub2_stone_source?: string | null;
 };
 
+type StoneSource = "SELF" | "PROVIDED" | "FACTORY";
+
+type StoneRole = "center" | "sub1" | "sub2";
+
+type MasterPricingRow = {
+  master_item_id?: string | null;
+  labor_base_sell?: number | null;
+  labor_base_cost?: number | null;
+  labor_center_sell?: number | null;
+  labor_center_cost?: number | null;
+  labor_sub1_sell?: number | null;
+  labor_sub1_cost?: number | null;
+  labor_sub2_sell?: number | null;
+  labor_sub2_cost?: number | null;
+  labor_bead_sell?: number | null;
+  labor_bead_cost?: number | null;
+  setting_addon_margin_krw_per_piece?: number | null;
+  stone_addon_margin_krw_per_piece?: number | null;
+  weight_default_g?: number | null;
+  deduction_weight_default_g?: number | null;
+};
+
+type StoneAllocation = {
+  center: number;
+  sub1: number;
+  sub2: number;
+  total: number;
+};
+
+function allocateStoneCounts(params: {
+  total: number;
+  centerFixed: number | null;
+  dC: number;
+  d1: number;
+  d2: number;
+}): StoneAllocation {
+  const total = Math.max(0, Math.floor(params.total));
+  const center = Math.min(Math.max(0, Math.floor(params.centerFixed ?? 0)), total);
+  const remaining = Math.max(0, total - center);
+  let sub1 = 0;
+  let sub2 = 0;
+
+  if (remaining > 0) {
+    const ratioTotal = Math.max(0, params.d1) + Math.max(0, params.d2);
+    if (ratioTotal <= 0) {
+      sub1 = remaining;
+      sub2 = 0;
+    } else {
+      sub1 = Math.round((remaining * Math.max(0, params.d1)) / ratioTotal);
+      sub1 = Math.max(0, Math.min(sub1, remaining));
+      sub2 = remaining - sub1;
+    }
+  }
+
+  return { center, sub1, sub2, total: center + sub1 + sub2 };
+}
+
 type FactoryMetalInput = {
   value: string;
   unit: MetalUnit;
@@ -285,6 +342,23 @@ function formatStoneSourceLabel(source?: string | null) {
   if (source === "PROVIDED") return "타입";
   if (source === "FACTORY") return "공입";
   return "";
+}
+
+function normalizeStoneSource(source?: string | null): StoneSource | null {
+  if (source === "SELF" || source === "PROVIDED" || source === "FACTORY") return source;
+  return null;
+}
+
+function parseNonNegativeInt(value: string) {
+  const n = parseNumber(value);
+  if (n === null || !Number.isFinite(n)) return null;
+  return Math.max(0, Math.floor(n));
+}
+
+function roleLabel(role: StoneRole) {
+  if (role === "center") return "메인";
+  if (role === "sub1") return "보조1";
+  return "보조2";
 }
 
 function formatStoneQtyCell(qty: number | null | undefined, exists: boolean | null | undefined) {
@@ -560,6 +634,9 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
   const [scoreOpenMap, setScoreOpenMap] = useState<Record<string, boolean>>({});
   const [selectedWeight, setSelectedWeight] = useState("");
   const [confirmNote, setConfirmNote] = useState("");
+  const [totalStoneCountInput, setTotalStoneCountInput] = useState("");
+  const [centerStoneCountInput, setCenterStoneCountInput] = useState("");
+  const [lineTotalStoneInputs, setLineTotalStoneInputs] = useState<Record<string, string>>({});
   const [factoryBillingShape, setFactoryBillingShape] =
     useState<FactoryBillingShape>("BUNDLED_PACKAGE");
   const [confirmResult, setConfirmResult] = useState<ConfirmResult | null>(null);
@@ -777,6 +854,22 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
         .maybeSingle();
       if (error) throw error;
       return (data ?? null) as OrderStoneSourceRow | null;
+    },
+  });
+
+  const selectedMasterPricingQuery = useQuery({
+    queryKey: ["new-receipt-workbench", "master-pricing", selectedCandidate?.order_line_id],
+    enabled: Boolean(selectedCandidate?.order_line_id),
+    queryFn: async () => {
+      if (!selectedCandidate?.order_line_id) return null;
+      const params = new URLSearchParams();
+      params.set("order_line_id", selectedCandidate.order_line_id);
+      const res = await fetch(`/api/new-receipt-workbench/master-pricing?${params.toString()}`, {
+        cache: "no-store",
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json?.error ?? "마스터 원가 조회 실패");
+      return (json?.data ?? null) as MasterPricingRow | null;
     },
   });
 
@@ -1244,6 +1337,8 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
     setConfirmResult(null);
     setSelectedWeight("");
     setConfirmNote("");
+    setTotalStoneCountInput("");
+    setCenterStoneCountInput("");
     setLineLimit(50);
     setUnlinkedLimit(50);
     setExpandedLineId(null);
@@ -1334,6 +1429,7 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
     try {
       const form = new FormData();
       form.append("file", file);
+      form.append("force_new_receipt", "1");
 
       const res = await fetch("/api/receipt-upload", {
         method: "POST",
@@ -2243,6 +2339,188 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
     }
   }, [selectedUnlinked, unlinkedQuery.data]);
 
+  const selectedLineItem = useMemo(() => {
+    if (!selectedUnlinked) return null;
+    const selectedUuid = getReceiptLineUuid(selectedUnlinked);
+    if (!selectedUuid) return null;
+    return lineItems.find((item) => (item.receipt_line_uuid ?? "") === selectedUuid) ?? null;
+  }, [lineItems, selectedUnlinked]);
+
+  useEffect(() => {
+    if (!selectedLineItem) {
+      setTotalStoneCountInput("");
+      setCenterStoneCountInput("");
+      return;
+    }
+    const center = parseNumber(selectedLineItem.stone_center_qty) ?? 0;
+    const sub1 = parseNumber(selectedLineItem.stone_sub1_qty) ?? 0;
+    const sub2 = parseNumber(selectedLineItem.stone_sub2_qty) ?? 0;
+    setCenterStoneCountInput(String(Math.max(0, Math.floor(center))));
+    setTotalStoneCountInput(String(Math.max(0, Math.floor(center + sub1 + sub2))));
+  }, [selectedLineItem?.line_uuid]);
+
+  const selectedStoneSources = useMemo(() => {
+    const fromOrder = selectedOrderStoneSourceQuery.data;
+    const fromCandidate = selectedCandidate;
+    return {
+      center: normalizeStoneSource(fromOrder?.center_stone_source ?? fromCandidate?.center_stone_source ?? null),
+      sub1: normalizeStoneSource(fromOrder?.sub1_stone_source ?? fromCandidate?.sub1_stone_source ?? null),
+      sub2: normalizeStoneSource(fromOrder?.sub2_stone_source ?? fromCandidate?.sub2_stone_source ?? null),
+    };
+  }, [selectedCandidate, selectedOrderStoneSourceQuery.data]);
+
+  const mixedStoneSources = useMemo(() => {
+    const unique = new Set(
+      [selectedStoneSources.center, selectedStoneSources.sub1, selectedStoneSources.sub2].filter(
+        (value): value is StoneSource => value !== null
+      )
+    );
+    return unique.size > 1;
+  }, [selectedStoneSources.center, selectedStoneSources.sub1, selectedStoneSources.sub2]);
+
+  const selfUnitCostWarningRoles = useMemo(() => {
+    if (!selectedLineItem) return [] as StoneRole[];
+    const centerQty = parseNumber(selectedLineItem.stone_center_qty) ?? 0;
+    const sub1Qty = parseNumber(selectedLineItem.stone_sub1_qty) ?? 0;
+    const sub2Qty = parseNumber(selectedLineItem.stone_sub2_qty) ?? 0;
+    const centerUnit = parseNumber(selectedLineItem.stone_center_unit_cost_krw) ?? 0;
+    const sub1Unit = parseNumber(selectedLineItem.stone_sub1_unit_cost_krw) ?? 0;
+    const sub2Unit = parseNumber(selectedLineItem.stone_sub2_unit_cost_krw) ?? 0;
+    const roles: StoneRole[] = [];
+    if (selectedStoneSources.center === "SELF" && centerQty > 0 && centerUnit <= 0) roles.push("center");
+    if (selectedStoneSources.sub1 === "SELF" && sub1Qty > 0 && sub1Unit <= 0) roles.push("sub1");
+    if (selectedStoneSources.sub2 === "SELF" && sub2Qty > 0 && sub2Unit <= 0) roles.push("sub2");
+    return roles;
+  }, [selectedLineItem, selectedStoneSources.center, selectedStoneSources.sub1, selectedStoneSources.sub2]);
+
+  const pricingPreview = useMemo(() => {
+    if (!selectedLineItem) return null;
+    const master = selectedMasterPricingQuery.data;
+    if (!master) return null;
+
+    const qty = parseNumber(selectedLineItem.qty) ?? 1;
+    const basicCost = parseNumber(selectedLineItem.labor_basic_cost_krw) ?? 0;
+    const settingFeeCostTotal = parseNumber(selectedLineItem.labor_other_cost_krw) ?? 0;
+    const centerQty = parseNumber(selectedLineItem.stone_center_qty) ?? 0;
+    const sub1Qty = parseNumber(selectedLineItem.stone_sub1_qty) ?? 0;
+    const sub2Qty = parseNumber(selectedLineItem.stone_sub2_qty) ?? 0;
+    const centerUnit = parseNumber(selectedLineItem.stone_center_unit_cost_krw) ?? 0;
+    const sub1Unit = parseNumber(selectedLineItem.stone_sub1_unit_cost_krw) ?? 0;
+    const sub2Unit = parseNumber(selectedLineItem.stone_sub2_unit_cost_krw) ?? 0;
+
+    const baseDiff = (master.labor_base_sell ?? 0) - (master.labor_base_cost ?? 0);
+    const baseSell = basicCost + baseDiff;
+
+    const selfStoneCostTotal =
+      (selectedStoneSources.center === "SELF" ? centerQty * centerUnit : 0) +
+      (selectedStoneSources.sub1 === "SELF" ? sub1Qty * sub1Unit : 0) +
+      (selectedStoneSources.sub2 === "SELF" ? sub2Qty * sub2Unit : 0);
+
+    const extraCostTotal = settingFeeCostTotal + selfStoneCostTotal;
+
+    const stoneMarginTotal =
+      centerQty * ((master.labor_center_sell ?? 0) - (master.labor_center_cost ?? 0)) +
+      sub1Qty * ((master.labor_sub1_sell ?? 0) - (master.labor_sub1_cost ?? 0)) +
+      sub2Qty * ((master.labor_sub2_sell ?? 0) - (master.labor_sub2_cost ?? 0));
+    const beadMarginTotal = ((master.labor_bead_sell ?? 0) - (master.labor_bead_cost ?? 0)) * qty;
+    const addonMarginTotal =
+      ((master.setting_addon_margin_krw_per_piece ?? 0) +
+        (master.stone_addon_margin_krw_per_piece ?? 0)) *
+      qty;
+    const extraSell = extraCostTotal + stoneMarginTotal + beadMarginTotal + addonMarginTotal;
+
+    const factoryCostTotal = basicCost + settingFeeCostTotal + selfStoneCostTotal;
+    const recommendedTotal = baseSell + extraSell;
+
+    return {
+      basicCost,
+      settingFeeCostTotal,
+      selfStoneCostTotal,
+      factoryCostTotal,
+      baseSell,
+      extraSell,
+      recommendedTotal,
+      diff: recommendedTotal - factoryCostTotal,
+    };
+  }, [selectedLineItem, selectedMasterPricingQuery.data, selectedStoneSources.center, selectedStoneSources.sub1, selectedStoneSources.sub2]);
+
+  const allocationPreview = useMemo(() => {
+    if (!selectedCandidate) return null;
+    const total = parseNonNegativeInt(totalStoneCountInput);
+    if (total === null) return null;
+
+    const centerInput = parseNonNegativeInt(centerStoneCountInput);
+    const selectedCenter = selectedLineItem ? parseNonNegativeInt(selectedLineItem.stone_center_qty) : null;
+    const centerFixed = centerInput !== null ? centerInput : selectedCenter;
+    const dC = Math.max(0, Number(selectedCandidate.stone_center_qty ?? 0));
+    const d1 = Math.max(0, Number(selectedCandidate.stone_sub1_qty ?? 0));
+    const d2 = Math.max(0, Number(selectedCandidate.stone_sub2_qty ?? 0));
+
+    return allocateStoneCounts({ total, centerFixed, dC, d1, d2 });
+  }, [centerStoneCountInput, selectedCandidate, selectedLineItem, totalStoneCountInput]);
+
+  function applyAllocationToSelectedLine(allocation: StoneAllocation) {
+    if (!selectedLineItem) {
+      toast.error("라인 입력 영역에서 해당 영수증 라인을 찾지 못했습니다.");
+      return;
+    }
+    setLineItemsDirty(true);
+    setLineItems((prev) =>
+      prev.map((item) =>
+        item.line_uuid === selectedLineItem.line_uuid
+          ? {
+              ...item,
+              stone_center_qty: String(allocation.center),
+              stone_sub1_qty: String(allocation.sub1),
+              stone_sub2_qty: String(allocation.sub2),
+              total_amount_krw: "",
+            }
+          : item
+      )
+    );
+    toast.success("자동 배분을 적용했습니다.");
+  }
+
+  function applyAllocationToLineByTotal(lineUuid: string, totalText: string) {
+    if (!selectedCandidate) {
+      toast.error("매칭 후보를 먼저 선택하세요.");
+      return;
+    }
+    const total = parseNonNegativeInt(totalText);
+    if (total === null) {
+      toast.error("총 알수를 올바르게 입력하세요.");
+      return;
+    }
+    const target = lineItems.find((item) => item.line_uuid === lineUuid);
+    if (!target) {
+      toast.error("라인을 찾지 못했습니다.");
+      return;
+    }
+    const centerFixed = parseNonNegativeInt(target.stone_center_qty);
+    const allocation = allocateStoneCounts({
+      total,
+      centerFixed,
+      dC: Math.max(0, Number(selectedCandidate.stone_center_qty ?? 0)),
+      d1: Math.max(0, Number(selectedCandidate.stone_sub1_qty ?? 0)),
+      d2: Math.max(0, Number(selectedCandidate.stone_sub2_qty ?? 0)),
+    });
+    setLineItemsDirty(true);
+    setLineItems((prev) =>
+      prev.map((item) =>
+        item.line_uuid === lineUuid
+          ? {
+              ...item,
+              stone_center_qty: String(allocation.center),
+              stone_sub1_qty: String(allocation.sub1),
+              stone_sub2_qty: String(allocation.sub2),
+              total_amount_krw: "",
+            }
+          : item
+      )
+    );
+    toast.success("라인 자동 배분을 적용했습니다.");
+  }
+
   function isWeightInRange() {
     if (!selectedCandidate) return false;
     const weight = parseNumber(selectedWeight);
@@ -2259,6 +2537,11 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
       triggerHeaderSaveNudge();
       toast.error("먼저 헤더 저장을 진행해 주세요.");
       return;
+    }
+    if (lineItemsDirty) {
+      const saved = await saveLines();
+      if (!saved) return;
+      await Promise.all([lineItemsQuery.refetch(), unlinkedQuery.refetch()]);
     }
     const receiptLineUuid = getReceiptLineUuid(selectedUnlinked);
     const orderLineId = selectedCandidate.order_line_id;
@@ -2280,6 +2563,16 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
       return;
     }
 
+    let note = confirmNote.trim();
+    if (selfUnitCostWarningRoles.length > 0) {
+      const warningText = `[주의] SELF 단가 확인 필요: ${selfUnitCostWarningRoles.map((role) => roleLabel(role)).join(", ")}`;
+      toast.warning("SELF 공급인데 단가가 0인 항목이 있습니다.");
+      if (!note.includes(warningText)) {
+        note = note ? `${note}\n${warningText}` : warningText;
+        setConfirmNote(note);
+      }
+    }
+
     await matchConfirm.mutateAsync({
       p_receipt_id: selectedReceiptId,
       p_receipt_line_uuid: receiptLineUuid,
@@ -2291,19 +2584,17 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
       p_selected_factory_total_cost_krw: null,
       p_factory_billing_shape: hasFactoryStoneSource ? factoryBillingShape : null,
       p_actor_person_id: null,
-      p_note: confirmNote || null,
+      p_note: note || null,
     });
   }
 
   const hasFactoryStoneSource = useMemo(() => {
-    const row = selectedOrderStoneSourceQuery.data;
-    if (!row) return false;
     return (
-      row.center_stone_source === "FACTORY" ||
-      row.sub1_stone_source === "FACTORY" ||
-      row.sub2_stone_source === "FACTORY"
+      selectedStoneSources.center === "FACTORY" ||
+      selectedStoneSources.sub1 === "FACTORY" ||
+      selectedStoneSources.sub2 === "FACTORY"
     );
-  }, [selectedOrderStoneSourceQuery.data]);
+  }, [selectedStoneSources.center, selectedStoneSources.sub1, selectedStoneSources.sub2]);
 
   const busy =
     receiptsQuery.isLoading ||
@@ -3026,7 +3317,7 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                                         />
                                       </div>
                                       <div className="space-y-1">
-                                        <label className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)]">알공임</label>
+                                        <label className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)]">자입원석 합계(개수×단가)</label>
                                         <Input
                                           type="text"
                                           inputMode="numeric"
@@ -3036,7 +3327,7 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                                         />
                                       </div>
                                       <div className="space-y-1">
-                                        <label className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)]">기타공임</label>
+                                        <label className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)]">중/보(세팅/알공임 총액)</label>
                                         <Input
                                           type="text"
                                           inputMode="numeric"
@@ -3212,6 +3503,42 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                                         />
                                       </div>
                                     </div>
+                                    <div className="mt-2 rounded-md border border-[var(--panel-border)] bg-[var(--surface)]/50 p-2">
+                                      <div className="flex flex-wrap items-center gap-2">
+                                        <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)]">
+                                          총 알수 -&gt; 자동배분
+                                        </span>
+                                        <Input
+                                          inputMode="numeric"
+                                          placeholder="총 알수"
+                                          value={lineTotalStoneInputs[item.line_uuid] ?? ""}
+                                          onChange={(e) =>
+                                            setLineTotalStoneInputs((prev) => ({
+                                              ...prev,
+                                              [item.line_uuid]: e.target.value,
+                                            }))
+                                          }
+                                          className="h-7 w-24 text-[11px] text-right"
+                                          disabled={inputDisabled}
+                                          data-line-id={item.line_uuid}
+                                        />
+                                        <Button
+                                          type="button"
+                                          size="sm"
+                                          variant="secondary"
+                                          disabled={inputDisabled}
+                                          onClick={() =>
+                                            applyAllocationToLineByTotal(
+                                              item.line_uuid,
+                                              lineTotalStoneInputs[item.line_uuid] ?? ""
+                                            )
+                                          }
+                                          data-line-id={item.line_uuid}
+                                        >
+                                          마스터 비율로 자동배분
+                                        </Button>
+                                      </div>
+                                    </div>
                                     <div className="mt-3 space-y-2">
                                       {isLocked ? (
                                         <div className="rounded-md border border-[var(--panel-border)] bg-[var(--surface)]/60 p-2 text-[11px] text-[var(--muted)]">
@@ -3279,13 +3606,13 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                       </div>
                     </div>
                     <div className="rounded-lg border border-[var(--panel-border)] bg-[var(--surface)]/60 px-3 py-2">
-                      알공임
+                      자입원석 합계
                       <div className="mt-0.5 font-semibold text-[var(--foreground)]">
                         <NumberText value={lineTotals.stoneLabor} />
                       </div>
                     </div>
                     <div className="rounded-lg border border-[var(--panel-border)] bg-[var(--surface)]/60 px-3 py-2">
-                      공임(기타)
+                      중/보(세팅/알공임)
                       <div className="mt-0.5 font-semibold text-[var(--foreground)]">
                         <NumberText value={lineTotals.laborOther} />
                       </div>
@@ -4093,6 +4420,116 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                         <div className="text-[var(--muted)]">
                           허용 범위: {formatNumber(selectedCandidate.weight_min_g)} ~ {formatNumber(selectedCandidate.weight_max_g)}g
                         </div>
+                        <div className="rounded-md border border-[var(--panel-border)] bg-[var(--panel)]/60 p-2">
+                          <div className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)]">역할별 공급</div>
+                          <div className="mt-2 flex flex-wrap items-center gap-2">
+                            <Badge tone="neutral" className="h-5 px-2 text-[10px]">
+                              메인 {formatStoneSourceLabel(selectedStoneSources.center) || "-"}
+                            </Badge>
+                            <Badge tone="neutral" className="h-5 px-2 text-[10px]">
+                              보조1 {formatStoneSourceLabel(selectedStoneSources.sub1) || "-"}
+                            </Badge>
+                            <Badge tone="neutral" className="h-5 px-2 text-[10px]">
+                              보조2 {formatStoneSourceLabel(selectedStoneSources.sub2) || "-"}
+                            </Badge>
+                            {mixedStoneSources ? (
+                              <Badge tone="warning" className="h-5 px-2 text-[10px]">
+                                혼재 공급
+                              </Badge>
+                            ) : null}
+                          </div>
+                        </div>
+
+                        <div className="rounded-md border border-[var(--panel-border)] bg-[var(--panel)]/60 p-2">
+                          <div className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)]">
+                            총 알수 자동배분
+                          </div>
+                          <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-2">
+                            <Input
+                              type="number"
+                              min={0}
+                              value={totalStoneCountInput}
+                              onChange={(e) => setTotalStoneCountInput(e.target.value)}
+                              placeholder="총 알수"
+                              className="h-8 text-xs"
+                            />
+                            <Input
+                              type="number"
+                              min={0}
+                              value={centerStoneCountInput}
+                              onChange={(e) => setCenterStoneCountInput(e.target.value)}
+                              placeholder="메인 개수(선택)"
+                              className="h-8 text-xs"
+                            />
+                          </div>
+                          <div className="mt-2 flex flex-wrap items-center gap-2">
+                            <Button
+                              size="sm"
+                              variant="secondary"
+                              onClick={() => {
+                                if (!allocationPreview) {
+                                  toast.error("총 알수를 입력하세요.");
+                                  return;
+                                }
+                                applyAllocationToSelectedLine(allocationPreview);
+                              }}
+                              disabled={!selectedLineItem}
+                            >
+                              자동배분 적용
+                            </Button>
+                            {allocationPreview ? (
+                              <span className="text-[10px] text-[var(--muted)]">
+                                결과: {allocationPreview.center} / {allocationPreview.sub1} / {allocationPreview.sub2} (합계 {allocationPreview.total})
+                              </span>
+                            ) : (
+                              <span className="text-[10px] text-[var(--muted)]">총 알수를 입력하면 배분 결과가 표시됩니다.</span>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="rounded-md border border-[var(--panel-border)] bg-[var(--panel)]/60 p-2">
+                          <div className="flex items-center justify-between">
+                            <div className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)]">
+                              공장원가 vs 추천가
+                            </div>
+                            <span className="text-[10px] text-[var(--muted)]">(v4 기준 프리뷰)</span>
+                          </div>
+                          {!selectedLineItem ? (
+                            <div className="mt-2 text-[10px] text-[var(--muted)]">라인 입력에서 선택 라인을 찾을 수 없습니다.</div>
+                          ) : selectedMasterPricingQuery.isLoading ? (
+                            <div className="mt-2 text-[10px] text-[var(--muted)]">마스터 원가를 조회 중입니다.</div>
+                          ) : !pricingPreview ? (
+                            <div className="mt-2 text-[10px] text-[var(--muted)]">마스터 원가 정보가 없어 프리뷰를 계산할 수 없습니다.</div>
+                          ) : (
+                            <div className="mt-2 space-y-1 text-[11px]">
+                              <div className="flex items-center justify-between">
+                                <span className="text-[var(--muted)]">공장원가 (기본+중/보+자입원석)</span>
+                                <span className="font-semibold text-[var(--foreground)]">{formatNumber(pricingPreview.factoryCostTotal)}</span>
+                              </div>
+                              <div className="flex items-center justify-between">
+                                <span className="text-[var(--muted)]">추천가 (기본 sell + extra sell)</span>
+                                <span className="font-semibold text-[var(--foreground)]">{formatNumber(pricingPreview.recommendedTotal)}</span>
+                              </div>
+                              <div className="flex items-center justify-between">
+                                <span className="text-[var(--muted)]">차이 (추천-원가)</span>
+                                <span className="font-semibold text-[var(--foreground)]">{formatNumber(pricingPreview.diff)}</span>
+                              </div>
+                              <div className="mt-1 flex flex-wrap items-center gap-2">
+                                {selfUnitCostWarningRoles.length > 0 ? (
+                                  <Badge tone="warning" className="h-5 px-2 text-[10px]">
+                                    SELF 단가 0: {selfUnitCostWarningRoles.map((role) => roleLabel(role)).join(", ")}
+                                  </Badge>
+                                ) : null}
+                                {mixedStoneSources ? (
+                                  <Badge tone="warning" className="h-5 px-2 text-[10px]">
+                                    역할별 공급 혼재
+                                  </Badge>
+                                ) : null}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+
                         <Input
                           type="number"
                           value={selectedWeight}
@@ -4127,6 +4564,9 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                               </Button>
                               {weightInvalid ? (
                                 <div className="text-[var(--danger)]">허용 범위를 확인하세요.</div>
+                              ) : null}
+                              {selfUnitCostWarningRoles.length > 0 ? (
+                                <div className="text-amber-700">SELF 공급인데 단가가 0인 항목이 있습니다. (확정은 가능)</div>
                               ) : null}
                             </>
                           );

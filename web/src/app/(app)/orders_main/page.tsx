@@ -16,6 +16,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useQuery } from "@tanstack/react-query";
 import { getSchemaClient } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
+import { hasVariationTag, removeVariationTag } from "@/lib/variation-tag";
 import { Building2 } from "lucide-react";
 
 // Lazy load Factory Order Wizard
@@ -923,16 +924,21 @@ export default function OrdersMainPage() {
 
                           {/* 4. 모델명 - 중앙 정렬 적용 */}
                           <div className="font-semibold text-[var(--foreground)] flex flex-col h-full justify-center items-center text-center">
-                            <span
-                              className={cn(
-                                "truncate px-2 text-sm font-medium",
-                                order?.status === "CANCELLED" ? "text-[var(--muted)]" : "text-[var(--foreground)]"
-                              )}
-                            >
-                              {order?.model_name ?? ""}
-                            </span>
-                            <span className="text-[10px] text-[var(--muted)] font-normal lg:hidden">모델명</span>
-                          </div>
+                              <span
+                                className={cn(
+                                  "truncate px-2 text-sm font-medium",
+                                  order?.status === "CANCELLED" ? "text-[var(--muted)]" : "text-[var(--foreground)]"
+                                )}
+                              >
+                                {order?.model_name ?? ""}
+                              </span>
+                              {hasVariationTag(order?.memo) ? (
+                                <Badge tone="warning" className="h-4 px-1 text-[9px]">
+                                  변형
+                                </Badge>
+                              ) : null}
+                              <span className="text-[10px] text-[var(--muted)] font-normal lg:hidden">모델명</span>
+                            </div>
 
                           {/* 5. 소재 */}
                           <div className="flex flex-col justify-center text-[var(--muted)]">
@@ -978,7 +984,7 @@ export default function OrdersMainPage() {
 
                           {/* 12. 비고 */}
                           <div className="text-[var(--muted)] truncate flex flex-col justify-center">
-                            <span>{order?.memo ?? ""}</span>
+                            <span>{removeVariationTag(order?.memo ?? "")}</span>
                             <span className="text-[10px] text-[var(--muted)] font-normal lg:hidden">비고</span>
                           </div>
 

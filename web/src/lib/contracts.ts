@@ -186,7 +186,10 @@ export const CONTRACTS = {
     ensureApFromReceipt: "cms_fn_ensure_ap_from_receipt_v1",
     receiptPricingSnapshotUpsertV2: "cms_fn_upsert_receipt_pricing_snapshot_v2",
     receiptLineMatchSuggest: "cms_fn_receipt_line_match_suggest_v1",
-    receiptLineMatchConfirm: "cms_fn_receipt_line_match_confirm_v3",
+    receiptLineMatchConfirm:
+      process.env.NEXT_PUBLIC_CMS_FN_RECEIPT_MATCH_CONFIRM ||
+      process.env.NEXT_PUBLIC_CMS_FN_RECEIPT_LINE_MATCH_CONFIRM ||
+      "cms_fn_receipt_line_match_confirm_v3",
     receiptLineDeleteV1: "cms_fn_receipt_line_delete_v1",
 
     // ✅ AP (미지급) RPCs

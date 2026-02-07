@@ -11,6 +11,7 @@ import { Input } from "@/components/ui/field";
 import { Badge } from "@/components/ui/badge";
 import { CONTRACTS } from "@/lib/contracts";
 import { isStoneSource, type StoneSource } from "@/lib/stone-source";
+import { hasVariationTag, toggleVariationTag } from "@/lib/variation-tag";
 import { getSchemaClient } from "@/lib/supabase/client";
 import { callRpc } from "@/lib/supabase/rpc";
 import { cn } from "@/lib/utils";
@@ -1570,7 +1571,8 @@ function OrdersPageContent() {
 
                       {/* Model Input */}
                       <div className="relative">
-                        <input
+                        <div className="flex items-center gap-1">
+                          <input
                           className={cn(
                             "w-full bg-transparent border-b border-transparent focus:border-[var(--primary)] focus:bg-[var(--background)] rounded-sm px-1.5 py-1 text-sm font-medium transition-all outline-none",
                             errors.model ? "border-[var(--danger)]/50 bg-[var(--danger)]/5" : "hover:border-[var(--border)] group-hover:bg-[var(--background)]/50"
@@ -1595,6 +1597,12 @@ function OrdersPageContent() {
                           }}
                           placeholder="모델..."
                         />
+                          {hasVariationTag(row.memo) ? (
+                            <Badge tone="warning" className="h-4 px-1 text-[9px] shrink-0">
+                              변형
+                            </Badge>
+                          ) : null}
+                        </div>
                         {isSuggestOpen(row.id, "model") && (modelSuggestions[row.id] ?? []).length > 0 ? (
                           <div className="absolute left-0 top-full z-[100] mt-1 max-h-60 w-[280px] overflow-y-auto rounded-lg border border-[var(--border)] bg-white shadow-2xl p-1 animate-in fade-in zoom-in-95 duration-100 ring-1 ring-black/5">
                             {(modelSuggestions[row.id] ?? []).map((master) => (
@@ -1727,12 +1735,27 @@ function OrdersPageContent() {
                       </button>
 
                       {/* Memo Input (Large) */}
-                      <input
-                        className="w-full bg-transparent border-b border-transparent focus:border-[var(--primary)] focus:bg-[var(--background)] rounded-sm px-2 py-1 text-sm transition-all outline-none hover:border-[var(--border)] group-hover:bg-[var(--background)]/50"
-                        value={row.memo}
-                        onChange={(e) => updateRow(row.id, { memo: e.target.value })}
-                        placeholder="비고 입력..."
-                      />
+                      <div className="flex items-center gap-2">
+                        <label className="inline-flex items-center gap-1 text-[10px] text-[var(--muted)] shrink-0">
+                          <input
+                            type="checkbox"
+                            checked={hasVariationTag(row.memo)}
+                            onChange={(e) =>
+                              updateRow(row.id, {
+                                memo: toggleVariationTag(row.memo, e.target.checked),
+                              })
+                            }
+                            className="h-3 w-3 accent-[var(--primary)]"
+                          />
+                          변형
+                        </label>
+                        <input
+                          className="w-full bg-transparent border-b border-transparent focus:border-[var(--primary)] focus:bg-[var(--background)] rounded-sm px-2 py-1 text-sm transition-all outline-none hover:border-[var(--border)] group-hover:bg-[var(--background)]/50"
+                          value={row.memo}
+                          onChange={(e) => updateRow(row.id, { memo: e.target.value })}
+                          placeholder="비고 입력..."
+                        />
+                      </div>
 
                       {/* Delete Button */}
                       <button

@@ -15,6 +15,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { getSchemaClient } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
+import { hasVariationTag, removeVariationTag } from "@/lib/variation-tag";
 import { Truck, Package, CheckCircle2, Clock, ArrowRight } from "lucide-react";
 import { toast } from "sonner";
 
@@ -908,6 +909,11 @@ export default function ShipmentsMainPage() {
                           <div className="flex items-center gap-2">
                             <StatusBadge status={row.status || ""} displayStatus={row.display_status} />
                             <span className="truncate font-semibold">{row.model_name || "-"}</span>
+                            {hasVariationTag(row.memo) ? (
+                              <Badge tone="warning" className="h-4 px-1 text-[9px] shrink-0">
+                                변형
+                              </Badge>
+                            ) : null}
                           </div>
                         </span>
                         <span>{"-"}</span>
@@ -919,7 +925,7 @@ export default function ShipmentsMainPage() {
                         </div>
                         <span className="truncate">{row.size || "-"}</span>
                         <span>{"-"}</span>
-                        <span className="truncate text-[var(--muted)]">{row.memo || "-"}</span>
+                        <span className="truncate text-[var(--muted)]">{removeVariationTag(row.memo || "") || "-"}</span>
                         <span>{row.is_plated ? "Y" : "N"}</span>
                       </div>
                     </div>
