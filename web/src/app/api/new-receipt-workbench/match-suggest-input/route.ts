@@ -21,6 +21,12 @@ type InputCandidate = {
   material_code: string | null;
   is_plated: boolean | null;
   plating_color_code: string | null;
+  stone_center_qty: number | null;
+  stone_sub1_qty: number | null;
+  stone_sub2_qty: number | null;
+  center_stone_source: string | null;
+  sub1_stone_source: string | null;
+  sub2_stone_source: string | null;
   status: string | null;
   memo: string | null;
 };
@@ -93,8 +99,61 @@ export async function POST(request: Request) {
     status: row.status ?? null,
     is_plated: row.plating_status ?? null,
     plating_color_code: row.plating_color ?? null,
+    stone_center_qty: null,
+    stone_sub1_qty: null,
+    stone_sub2_qty: null,
+    center_stone_source: null,
+    sub1_stone_source: null,
+    sub2_stone_source: null,
     memo: null,
   }));
+
+  const orderLineIds = candidates
+    .map((candidate) => candidate.order_line_id)
+    .filter((id): id is string => Boolean(id));
+
+  if (orderLineIds.length > 0) {
+    const { data: orderLines, error: orderLineError } = await supabase
+      .from("cms_order_line")
+      .select(
+        "order_line_id, center_stone_qty, sub1_stone_qty, sub2_stone_qty, center_stone_source, sub1_stone_source, sub2_stone_source, is_plated, plating_color_code"
+      )
+      .in("order_line_id", orderLineIds);
+
+    if (orderLineError) {
+      return NextResponse.json({ error: orderLineError.message ?? "주문 라인 상세 조회 실패" }, { status: 500 });
+    }
+
+    const orderLineMap = new Map(
+      (orderLines ?? []).map((row) => [
+        row.order_line_id,
+        {
+          stone_center_qty: row.center_stone_qty ?? null,
+          stone_sub1_qty: row.sub1_stone_qty ?? null,
+          stone_sub2_qty: row.sub2_stone_qty ?? null,
+          center_stone_source: row.center_stone_source ?? null,
+          sub1_stone_source: row.sub1_stone_source ?? null,
+          sub2_stone_source: row.sub2_stone_source ?? null,
+          is_plated: row.is_plated ?? null,
+          plating_color_code: row.plating_color_code ?? null,
+        },
+      ])
+    );
+
+    candidates.forEach((candidate) => {
+      if (!candidate.order_line_id) return;
+      const detail = orderLineMap.get(candidate.order_line_id);
+      if (!detail) return;
+      candidate.stone_center_qty = detail.stone_center_qty;
+      candidate.stone_sub1_qty = detail.stone_sub1_qty;
+      candidate.stone_sub2_qty = detail.stone_sub2_qty;
+      candidate.center_stone_source = detail.center_stone_source;
+      candidate.sub1_stone_source = detail.sub1_stone_source;
+      candidate.sub2_stone_source = detail.sub2_stone_source;
+      candidate.is_plated = detail.is_plated;
+      candidate.plating_color_code = detail.plating_color_code;
+    });
+  }
 
   return NextResponse.json({ data: { candidates } });
 }

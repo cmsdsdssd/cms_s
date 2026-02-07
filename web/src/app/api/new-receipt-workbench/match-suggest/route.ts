@@ -41,5 +41,58 @@ export async function POST(request: Request) {
     );
   }
 
+  const payload = data as { candidates?: Array<Record<string, unknown>> } | Array<Record<string, unknown>> | null;
+  const candidates = Array.isArray(payload)
+    ? payload
+    : Array.isArray(payload?.candidates)
+      ? payload.candidates
+      : [];
+
+  const orderLineIds = candidates
+    .map((candidate) => (typeof candidate.order_line_id === "string" ? candidate.order_line_id : null))
+    .filter((id): id is string => Boolean(id));
+
+  if (orderLineIds.length === 0) {
+    return NextResponse.json({ data });
+  }
+
+  const { data: orderLines, error: orderLineError } = await supabase
+    .from("cms_order_line")
+    .select(
+      "order_line_id, center_stone_qty, sub1_stone_qty, sub2_stone_qty, center_stone_source, sub1_stone_source, sub2_stone_source, is_plated, plating_color_code"
+    )
+    .in("order_line_id", orderLineIds);
+
+  if (orderLineError) {
+    return NextResponse.json({ error: orderLineError.message ?? "주문 라인 상세 조회 실패" }, { status: 500 });
+  }
+
+  const orderLineMap = new Map((orderLines ?? []).map((row) => [row.order_line_id, row]));
+  const enrichedCandidates = candidates.map((candidate) => {
+    const orderLineId = typeof candidate.order_line_id === "string" ? candidate.order_line_id : null;
+    if (!orderLineId) return candidate;
+    const detail = orderLineMap.get(orderLineId);
+    if (!detail) return candidate;
+    return {
+      ...candidate,
+      stone_center_qty: candidate.stone_center_qty ?? detail.center_stone_qty ?? null,
+      stone_sub1_qty: candidate.stone_sub1_qty ?? detail.sub1_stone_qty ?? null,
+      stone_sub2_qty: candidate.stone_sub2_qty ?? detail.sub2_stone_qty ?? null,
+      center_stone_source: candidate.center_stone_source ?? detail.center_stone_source ?? null,
+      sub1_stone_source: candidate.sub1_stone_source ?? detail.sub1_stone_source ?? null,
+      sub2_stone_source: candidate.sub2_stone_source ?? detail.sub2_stone_source ?? null,
+      is_plated: candidate.is_plated ?? detail.is_plated ?? null,
+      plating_color_code: candidate.plating_color_code ?? detail.plating_color_code ?? null,
+    };
+  });
+
+  if (Array.isArray(payload)) {
+    return NextResponse.json({ data: enrichedCandidates });
+  }
+
+  if (payload && typeof payload === "object") {
+    return NextResponse.json({ data: { ...payload, candidates: enrichedCandidates } });
+  }
+
   return NextResponse.json({ data });
 }

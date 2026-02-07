@@ -64,6 +64,8 @@ type CatalogDetail = {
   platingCost: number;
   laborProfileMode: string;
   laborBandCode: string;
+  settingAddonMarginKrwPerPiece: number;
+  stoneAddonMarginKrwPerPiece: number;
   note: string;
   releaseDate: string;
   modifiedDate: string;
@@ -217,6 +219,8 @@ export default function CatalogPage() {
   const [platingCost, setPlatingCost] = useState(0);
   const [laborProfileMode, setLaborProfileMode] = useState("MANUAL");
   const [laborBandCode, setLaborBandCode] = useState("");
+  const [settingAddonMarginKrwPerPiece, setSettingAddonMarginKrwPerPiece] = useState(0);
+  const [stoneAddonMarginKrwPerPiece, setStoneAddonMarginKrwPerPiece] = useState(0);
   const [note, setNote] = useState("");
   const [releaseDate, setReleaseDate] = useState("");
   const [modifiedDate, setModifiedDate] = useState("");
@@ -573,6 +577,8 @@ export default function CatalogPage() {
         platingCost: 0,
         laborProfileMode: "MANUAL",
         laborBandCode: "",
+        settingAddonMarginKrwPerPiece: 0,
+        stoneAddonMarginKrwPerPiece: 0,
         note: "",
         releaseDate: selectedItem.date,
         modifiedDate: "",
@@ -618,6 +624,8 @@ export default function CatalogPage() {
       platingCost: Number(row.plating_price_cost_default ?? 0),
       laborProfileMode: String(row.labor_profile_mode ?? "MANUAL"),
       laborBandCode: String(row.labor_band_code ?? ""),
+      settingAddonMarginKrwPerPiece: Number(row.setting_addon_margin_krw_per_piece ?? 0),
+      stoneAddonMarginKrwPerPiece: Number(row.stone_addon_margin_krw_per_piece ?? 0),
       note: String(row.note ?? ""),
       releaseDate: String(row.created_at ?? "").slice(0, 10),
       modifiedDate: String(row.updated_at ?? "").slice(0, 10),
@@ -935,6 +943,8 @@ export default function CatalogPage() {
     setPlatingCost(0);
     setLaborProfileMode("MANUAL");
     setLaborBandCode("");
+    setSettingAddonMarginKrwPerPiece(0);
+    setStoneAddonMarginKrwPerPiece(0);
     setNote("");
     setReleaseDate(today);
     setModifiedDate("");
@@ -986,6 +996,8 @@ export default function CatalogPage() {
     setPlatingCost(detail?.platingCost ?? 0);
     setLaborProfileMode(detail?.laborProfileMode ?? "MANUAL");
     setLaborBandCode(detail?.laborBandCode ?? "");
+    setSettingAddonMarginKrwPerPiece(detail?.settingAddonMarginKrwPerPiece ?? 0);
+    setStoneAddonMarginKrwPerPiece(detail?.stoneAddonMarginKrwPerPiece ?? 0);
     setNote(detail?.note ?? "");
     setReleaseDate(detail?.releaseDate ?? selectedItem.date);
     setModifiedDate(today);
@@ -1062,6 +1074,8 @@ export default function CatalogPage() {
       plating_price_cost_default: platingCost,
       labor_profile_mode: normalizedLaborProfileMode,
       labor_band_code: normalizedLaborBandCode,
+      setting_addon_margin_krw_per_piece: settingAddonMarginKrwPerPiece,
+      stone_addon_margin_krw_per_piece: stoneAddonMarginKrwPerPiece,
       vendor_party_id: isUuid(vendorId) ? vendorId : null,
       note,
       image_path: imagePath || null,
@@ -2396,6 +2410,34 @@ export default function CatalogPage() {
                           setPlatingCost(toNumber(e.target.value))
                         }
                       />
+
+                      <div className="text-center font-medium text-[var(--muted)]">
+                        세팅 부가마진(개당)
+                      </div>
+                      <Input
+                        type="number"
+                        min={0}
+                        value={settingAddonMarginKrwPerPiece}
+                        onChange={(e) =>
+                          setSettingAddonMarginKrwPerPiece(toNumber(e.target.value))
+                        }
+                      />
+                      <div className="text-center text-[var(--muted)]">-</div>
+                      <div className="text-center text-[var(--muted)]">룰 외 추가</div>
+
+                      <div className="text-center font-medium text-[var(--muted)]">
+                        원석 부가마진(개당)
+                      </div>
+                      <Input
+                        type="number"
+                        min={0}
+                        value={stoneAddonMarginKrwPerPiece}
+                        onChange={(e) =>
+                          setStoneAddonMarginKrwPerPiece(toNumber(e.target.value))
+                        }
+                      />
+                      <div className="text-center text-[var(--muted)]">-</div>
+                      <div className="text-center text-[var(--muted)]">룰 외 추가</div>
 
                       <div className="col-span-4 h-px bg-dashed border-t border-[var(--panel-border)] my-2" />
 

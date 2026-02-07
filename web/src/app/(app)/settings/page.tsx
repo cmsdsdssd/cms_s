@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
@@ -32,6 +32,9 @@ type VendorFaxConfig = {
 const FAX_PROVIDERS = ['mock', 'twilio', 'sendpulse', 'custom', 'apiplex', 'uplus_print'] as const;
 type FaxProvider = typeof FAX_PROVIDERS[number];
 
+const RULE_COMPONENT_OPTIONS: PricingRuleComponent[] = ["SETTING", "STONE", "PACKAGE"];
+const RULE_SCOPE_OPTIONS: PricingRuleScope[] = ["ANY", "SELF", "PROVIDED", "FACTORY"];
+
 function toFaxProvider(value: string | null | undefined): FaxProvider {
   return FAX_PROVIDERS.includes(value as FaxProvider) ? (value as FaxProvider) : "mock";
 }
@@ -45,6 +48,24 @@ type VendorFaxConfigRow = {
     fax_provider: string | null;
     is_active: boolean | null;
   }[];
+};
+
+type PricingRuleComponent = "SETTING" | "STONE" | "PACKAGE";
+type PricingRuleScope = "ANY" | "SELF" | "PROVIDED" | "FACTORY";
+
+type PricingRuleRow = {
+  rule_id: string;
+  component: PricingRuleComponent;
+  scope: PricingRuleScope;
+  vendor_party_id: string | null;
+  min_cost_krw: number;
+  max_cost_krw: number | null;
+  markup_kind: string;
+  markup_value_krw: number;
+  priority: number;
+  is_active: boolean;
+  note: string | null;
+  updated_at?: string | null;
 };
 
 export default function SettingsPage() {
@@ -254,6 +275,152 @@ export default function SettingsPage() {
     }));
   };
 
+  const pricingRulesQuery = useQuery({
+    queryKey: ["cms_pricing_rules"],
+    queryFn: async (): Promise<PricingRuleRow[]> => {
+      const response = await fetch("/api/pricing-rules", { cache: "no-store" });
+      const json = (await response.json()) as { data?: PricingRuleRow[]; error?: string };
+      if (!response.ok) throw new Error(json.error ?? "룰 조회 실패");
+      return json.data ?? [];
+    },
+  });
+
+  const [editingRuleId, setEditingRuleId] = useState<string | null>(null);
+  const [ruleComponent, setRuleComponent] = useState<PricingRuleComponent>("SETTING");
+  const [ruleScope, setRuleScope] = useState<PricingRuleScope>("ANY");
+  const [ruleVendorPartyId, setRuleVendorPartyId] = useState("");
+  const [ruleMinCost, setRuleMinCost] = useState("0");
+  const [ruleMaxCost, setRuleMaxCost] = useState("");
+  const [ruleMarkupValue, setRuleMarkupValue] = useState("0");
+  const [rulePriority, setRulePriority] = useState("100");
+  const [ruleIsActive, setRuleIsActive] = useState(true);
+  const [ruleNote, setRuleNote] = useState("");
+  const [ruleDeleteId, setRuleDeleteId] = useState<string | null>(null);
+
+  const [testComponent, setTestComponent] = useState<PricingRuleComponent>("SETTING");
+  const [testScope, setTestScope] = useState<PricingRuleScope>("ANY");
+  const [testVendorPartyId, setTestVendorPartyId] = useState("");
+  const [testCostBasis, setTestCostBasis] = useState("0");
+  const [testResult, setTestResult] = useState<{ picked_rule_id?: string | null; markup_krw?: number | null } | null>(null);
+
+  const resetRuleForm = () => {
+    setEditingRuleId(null);
+    setRuleComponent("SETTING");
+    setRuleScope("ANY");
+    setRuleVendorPartyId("");
+    setRuleMinCost("0");
+    setRuleMaxCost("");
+    setRuleMarkupValue("0");
+    setRulePriority("100");
+    setRuleIsActive(true);
+    setRuleNote("");
+  };
+
+  const saveRuleMutation = useMutation({
+    mutationFn: async () => {
+      const minCost = Number(ruleMinCost);
+      const maxCost = ruleMaxCost.trim() === "" ? null : Number(ruleMaxCost);
+      const markupValue = Number(ruleMarkupValue);
+      const priority = Number(rulePriority);
+
+      if (!Number.isFinite(minCost) || minCost < 0) throw new Error("최소 원가는 0 이상 숫자여야 합니다.");
+      if (maxCost !== null && (!Number.isFinite(maxCost) || maxCost < minCost)) throw new Error("최대 원가는 최소 원가 이상이어야 합니다.");
+      if (!Number.isFinite(markupValue) || markupValue < 0) throw new Error("마크업은 0 이상 숫자여야 합니다.");
+      if (!Number.isInteger(priority)) throw new Error("우선순위는 정수여야 합니다.");
+
+      const response = await fetch("/api/pricing-rules", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          rule_id: editingRuleId,
+          component: ruleComponent,
+          scope: ruleScope,
+          vendor_party_id: ruleVendorPartyId || null,
+          min_cost_krw: minCost,
+          max_cost_krw: maxCost,
+          markup_value_krw: markupValue,
+          priority,
+          is_active: ruleIsActive,
+          note: ruleNote || null,
+        }),
+      });
+      const json = (await response.json()) as { error?: string };
+      if (!response.ok) throw new Error(json.error ?? "저장 실패");
+    },
+    onSuccess: () => {
+      toast.success("룰 저장 완료");
+      queryClient.invalidateQueries({ queryKey: ["cms_pricing_rules"] });
+      resetRuleForm();
+    },
+    onError: (error) => {
+      toast.error("저장 실패", {
+        description: error instanceof Error ? error.message : "룰 저장 중 오류가 발생했습니다.",
+      });
+    },
+  });
+
+  const deleteRuleMutation = useMutation({
+    mutationFn: async (ruleId: string) => {
+      const response = await fetch(`/api/pricing-rules?rule_id=${encodeURIComponent(ruleId)}`, {
+        method: "DELETE",
+      });
+      const json = (await response.json()) as { error?: string };
+      if (!response.ok) throw new Error(json.error ?? "삭제 실패");
+    },
+    onSuccess: () => {
+      toast.success("룰 삭제 완료");
+      queryClient.invalidateQueries({ queryKey: ["cms_pricing_rules"] });
+      setRuleDeleteId(null);
+      if (editingRuleId === ruleDeleteId) resetRuleForm();
+    },
+    onError: (error) => {
+      toast.error("삭제 실패", {
+        description: error instanceof Error ? error.message : "룰 삭제 중 오류가 발생했습니다.",
+      });
+    },
+  });
+
+  const runRuleTestMutation = useMutation({
+    mutationFn: async () => {
+      const costBasis = Number(testCostBasis);
+      if (!Number.isFinite(costBasis) || costBasis < 0) throw new Error("원가 기준은 0 이상 숫자여야 합니다.");
+
+      const response = await fetch("/api/pricing-rule-pick", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          component: testComponent,
+          scope: testScope,
+          vendor_party_id: testVendorPartyId || null,
+          cost_basis_krw: costBasis,
+        }),
+      });
+
+      const json = (await response.json()) as {
+        data?: { picked_rule_id?: string | null; markup_krw?: number | null };
+        error?: string;
+      };
+      if (!response.ok) throw new Error(json.error ?? "룰 테스트 실패");
+
+      const data = json.data;
+      const row = (data ?? {}) as { picked_rule_id?: string | null; markup_krw?: number | null };
+      setTestResult({
+        picked_rule_id: row.picked_rule_id ?? null,
+        markup_krw: row.markup_krw ?? null,
+      });
+    },
+    onError: (error) => {
+      toast.error("룰 테스트 실패", {
+        description: error instanceof Error ? error.message : "룰 테스트 중 오류가 발생했습니다.",
+      });
+    },
+  });
+
+  const vendorChoices = useMemo(
+    () => (vendorsQuery.data ?? []).map((vendor) => ({ value: vendor.vendor_party_id, label: vendor.vendor_name })),
+    [vendorsQuery.data]
+  );
+
   return (
     // [변경됨] space-y-6 대신 Grid 시스템 적용 (큰 화면에서 2열 배치)
     <div className="grid grid-cols-1 gap-6 lg:grid-cols-2 items-start">
@@ -345,6 +512,182 @@ export default function SettingsPage() {
             </Button>
             <div className="text-xs text-[var(--muted)]">
               현재 값: {Number.isFinite(currentRoundingUnit) ? currentRoundingUnit.toLocaleString() : "-"}
+            </div>
+          </div>
+        </CardBody>
+      </Card>
+
+      <Card className="lg:col-span-2">
+        <CardHeader>
+          <div>
+            <div className="text-sm font-semibold">가격 룰(글로벌)</div>
+            <div className="text-xs text-[var(--muted)]">물림/원석/패키지 구간별 마크업 룰 관리</div>
+          </div>
+        </CardHeader>
+        <CardBody className="space-y-4">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <div className="rounded-lg border border-[var(--panel-border)] bg-[var(--panel)] p-3 space-y-3">
+              <div className="text-xs font-semibold">룰 생성/수정</div>
+              <div className="grid grid-cols-2 gap-2">
+                <label className="space-y-1">
+                  <div className="text-xs text-[var(--muted)]">Component</div>
+                  <Select value={ruleComponent} onChange={(e) => setRuleComponent(e.target.value as PricingRuleComponent)}>
+                    {RULE_COMPONENT_OPTIONS.map((option) => (
+                      <option key={option} value={option}>{option}</option>
+                    ))}
+                  </Select>
+                </label>
+                <label className="space-y-1">
+                  <div className="text-xs text-[var(--muted)]">Scope</div>
+                  <Select value={ruleScope} onChange={(e) => setRuleScope(e.target.value as PricingRuleScope)}>
+                    {RULE_SCOPE_OPTIONS.map((option) => (
+                      <option key={option} value={option}>{option}</option>
+                    ))}
+                  </Select>
+                </label>
+                <label className="space-y-1 col-span-2">
+                  <div className="text-xs text-[var(--muted)]">Vendor (선택)</div>
+                  <Select value={ruleVendorPartyId} onChange={(e) => setRuleVendorPartyId(e.target.value)}>
+                    <option value="">전체 공장</option>
+                    {vendorChoices.map((vendor) => (
+                      <option key={vendor.value} value={vendor.value}>{vendor.label}</option>
+                    ))}
+                  </Select>
+                </label>
+                <label className="space-y-1">
+                  <div className="text-xs text-[var(--muted)]">최소 원가</div>
+                  <Input value={ruleMinCost} onChange={(e) => setRuleMinCost(e.target.value)} />
+                </label>
+                <label className="space-y-1">
+                  <div className="text-xs text-[var(--muted)]">최대 원가(옵션)</div>
+                  <Input value={ruleMaxCost} onChange={(e) => setRuleMaxCost(e.target.value)} />
+                </label>
+                <label className="space-y-1">
+                  <div className="text-xs text-[var(--muted)]">마크업(원)</div>
+                  <Input value={ruleMarkupValue} onChange={(e) => setRuleMarkupValue(e.target.value)} />
+                </label>
+                <label className="space-y-1">
+                  <div className="text-xs text-[var(--muted)]">우선순위</div>
+                  <Input value={rulePriority} onChange={(e) => setRulePriority(e.target.value)} />
+                </label>
+                <label className="space-y-1 col-span-2">
+                  <div className="text-xs text-[var(--muted)]">노트</div>
+                  <Input value={ruleNote} onChange={(e) => setRuleNote(e.target.value)} />
+                </label>
+                <label className="inline-flex items-center gap-2 text-xs col-span-2">
+                  <input type="checkbox" checked={ruleIsActive} onChange={(e) => setRuleIsActive(e.target.checked)} className="h-4 w-4" />
+                  활성화
+                </label>
+              </div>
+              <div className="flex items-center gap-2">
+                <Button onClick={() => saveRuleMutation.mutate()} disabled={saveRuleMutation.isPending}>
+                  {editingRuleId ? "수정 저장" : "룰 저장"}
+                </Button>
+                {editingRuleId ? (
+                  <Button variant="secondary" onClick={resetRuleForm}>취소</Button>
+                ) : null}
+              </div>
+            </div>
+
+            <div className="rounded-lg border border-[var(--panel-border)] bg-[var(--panel)] p-3 space-y-3 min-w-0">
+              <div className="text-xs font-semibold">룰 목록</div>
+              <div className="overflow-x-auto">
+                <table className="min-w-[760px] w-full text-xs">
+                  <thead className="text-[var(--muted)]">
+                    <tr>
+                      <th className="text-left py-1">Active</th>
+                      <th className="text-left py-1">Component</th>
+                      <th className="text-left py-1">Scope</th>
+                      <th className="text-left py-1">Vendor</th>
+                      <th className="text-left py-1">Range</th>
+                      <th className="text-left py-1">Markup</th>
+                      <th className="text-left py-1">Priority</th>
+                      <th className="text-left py-1">Updated</th>
+                      <th className="text-left py-1">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(pricingRulesQuery.data ?? []).map((rule) => {
+                      const vendorName = vendorChoices.find((vendor) => vendor.value === rule.vendor_party_id)?.label ?? "전체";
+                      const isDeleteArmed = ruleDeleteId === rule.rule_id;
+                      return (
+                        <tr key={rule.rule_id} className="border-t border-[var(--panel-border)]">
+                          <td className="py-1">{rule.is_active ? "Y" : "N"}</td>
+                          <td className="py-1">{rule.component}</td>
+                          <td className="py-1">{rule.scope}</td>
+                          <td className="py-1 truncate max-w-[120px]" title={vendorName}>{vendorName}</td>
+                          <td className="py-1">{Number(rule.min_cost_krw).toLocaleString()} ~ {rule.max_cost_krw === null ? "∞" : Number(rule.max_cost_krw).toLocaleString()}</td>
+                          <td className="py-1">+{Number(rule.markup_value_krw).toLocaleString()}</td>
+                          <td className="py-1">{rule.priority}</td>
+                          <td className="py-1">{rule.updated_at ? new Date(rule.updated_at).toLocaleString() : "-"}</td>
+                          <td className="py-1">
+                            <div className="flex items-center gap-1">
+                              <Button
+                                size="sm"
+                                variant="secondary"
+                                onClick={() => {
+                                  setEditingRuleId(rule.rule_id);
+                                  setRuleComponent(rule.component);
+                                  setRuleScope(rule.scope);
+                                  setRuleVendorPartyId(rule.vendor_party_id ?? "");
+                                  setRuleMinCost(String(rule.min_cost_krw));
+                                  setRuleMaxCost(rule.max_cost_krw === null ? "" : String(rule.max_cost_krw));
+                                  setRuleMarkupValue(String(rule.markup_value_krw));
+                                  setRulePriority(String(rule.priority));
+                                  setRuleIsActive(Boolean(rule.is_active));
+                                  setRuleNote(rule.note ?? "");
+                                }}
+                              >
+                                Edit
+                              </Button>
+                              {!isDeleteArmed ? (
+                                <Button size="sm" variant="secondary" onClick={() => setRuleDeleteId(rule.rule_id)}>Delete</Button>
+                              ) : (
+                                <Button
+                                  size="sm"
+                                  variant="secondary"
+                                  onClick={() => deleteRuleMutation.mutate(rule.rule_id)}
+                                  disabled={deleteRuleMutation.isPending}
+                                  className="text-[var(--danger)]"
+                                >
+                                  Confirm
+                                </Button>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          <div className="rounded-lg border border-[var(--panel-border)] bg-[var(--surface)] p-3 space-y-3">
+            <div className="text-xs font-semibold">룰 테스트</div>
+            <div className="grid grid-cols-1 md:grid-cols-5 gap-2">
+              <Select value={testComponent} onChange={(e) => setTestComponent(e.target.value as PricingRuleComponent)}>
+                {RULE_COMPONENT_OPTIONS.map((option) => (
+                  <option key={option} value={option}>{option}</option>
+                ))}
+              </Select>
+              <Select value={testScope} onChange={(e) => setTestScope(e.target.value as PricingRuleScope)}>
+                {RULE_SCOPE_OPTIONS.map((option) => (
+                  <option key={option} value={option}>{option}</option>
+                ))}
+              </Select>
+              <Select value={testVendorPartyId} onChange={(e) => setTestVendorPartyId(e.target.value)}>
+                <option value="">전체 공장</option>
+                {vendorChoices.map((vendor) => (
+                  <option key={vendor.value} value={vendor.value}>{vendor.label}</option>
+                ))}
+              </Select>
+              <Input value={testCostBasis} onChange={(e) => setTestCostBasis(e.target.value)} placeholder="원가 기준" />
+              <Button onClick={() => runRuleTestMutation.mutate()} disabled={runRuleTestMutation.isPending}>테스트 실행</Button>
+            </div>
+            <div className="text-xs text-[var(--muted)]">
+              picked_rule_id: {testResult?.picked_rule_id ?? "-"} / markup_krw: {testResult?.markup_krw ?? "-"}
             </div>
           </div>
         </CardBody>

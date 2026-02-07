@@ -78,6 +78,12 @@ export async function POST(request: Request) {
   const laborSub2Cost = typeof body.labor_sub2_cost === "number" ? body.labor_sub2_cost : undefined;
   const laborProfileMode = typeof body.labor_profile_mode === "string" ? body.labor_profile_mode : undefined;
   const laborBandCode = typeof body.labor_band_code === "string" ? body.labor_band_code : undefined;
+  const settingAddonMargin = typeof body.setting_addon_margin_krw_per_piece === "number"
+    ? body.setting_addon_margin_krw_per_piece
+    : undefined;
+  const stoneAddonMargin = typeof body.stone_addon_margin_krw_per_piece === "number"
+    ? body.stone_addon_margin_krw_per_piece
+    : undefined;
 
   if (masterId) {
     const updatePayload: Record<string, unknown> = {
@@ -95,6 +101,12 @@ export async function POST(request: Request) {
     if (laborSub2Cost !== undefined) updatePayload.labor_sub2_cost = laborSub2Cost;
     if (laborProfileMode !== undefined) updatePayload.labor_profile_mode = laborProfileMode;
     if (laborBandCode !== undefined) updatePayload.labor_band_code = laborBandCode;
+    if (settingAddonMargin !== undefined) {
+      updatePayload.setting_addon_margin_krw_per_piece = Math.max(settingAddonMargin, 0);
+    }
+    if (stoneAddonMargin !== undefined) {
+      updatePayload.stone_addon_margin_krw_per_piece = Math.max(stoneAddonMargin, 0);
+    }
 
     const { error: updateError } = await supabase
       .from("cms_master_item")

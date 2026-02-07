@@ -58,6 +58,7 @@ export async function GET(request: Request) {
   let stoneCenterUnitCostKrw: number | null = null;
   let stoneSub1UnitCostKrw: number | null = null;
   let stoneSub2UnitCostKrw: number | null = null;
+  let stoneLaborKrw: number | null = null;
 
   if (data.receipt_id && data.receipt_line_uuid) {
     const { data: lineRow } = await supabase
@@ -77,6 +78,12 @@ export async function GET(request: Request) {
     stoneCenterUnitCostKrw = parseNumeric(lineJson?.stone_center_unit_cost_krw ?? null);
     stoneSub1UnitCostKrw = parseNumeric(lineJson?.stone_sub1_unit_cost_krw ?? null);
     stoneSub2UnitCostKrw = parseNumeric(lineJson?.stone_sub2_unit_cost_krw ?? null);
+
+    const centerLabor = Math.max(stoneCenterQty ?? 0, 0) * Math.max(stoneCenterUnitCostKrw ?? 0, 0);
+    const sub1Labor = Math.max(stoneSub1Qty ?? 0, 0) * Math.max(stoneSub1UnitCostKrw ?? 0, 0);
+    const sub2Labor = Math.max(stoneSub2Qty ?? 0, 0) * Math.max(stoneSub2UnitCostKrw ?? 0, 0);
+    const sumLabor = centerLabor + sub1Labor + sub2Labor;
+    stoneLaborKrw = sumLabor > 0 ? sumLabor : null;
 
     if (typeof raw === "number") {
       receiptWeightG = raw;
@@ -124,6 +131,7 @@ export async function GET(request: Request) {
       stone_center_unit_cost_krw: stoneCenterUnitCostKrw,
       stone_sub1_unit_cost_krw: stoneSub1UnitCostKrw,
       stone_sub2_unit_cost_krw: stoneSub2UnitCostKrw,
+      stone_labor_krw: stoneLaborKrw,
     },
   });
 }

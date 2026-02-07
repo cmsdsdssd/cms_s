@@ -19,6 +19,13 @@ type LegacyOrderUpsertPayload = Omit<
   "p_center_stone_source" | "p_sub1_stone_source" | "p_sub2_stone_source"
 >;
 
+type RpcError = {
+  message: string;
+  details?: string;
+  hint?: string;
+  code?: string;
+};
+
 type PlatingVariantRow = {
     plating_variant_id?: string | null;
     color_code?: string | null;
@@ -58,7 +65,7 @@ function normalizeStoneSources(payload: OrderUpsertPayload): string | null {
       payload[sourceKey] = null;
       continue;
     }
-    payload[sourceKey] = source ?? "SELF";
+    payload[sourceKey] = source ?? "FACTORY";
   }
   return null;
 }
@@ -76,6 +83,60 @@ const buildLegacyPayload = (payload: OrderUpsertPayload): LegacyOrderUpsertPaylo
   delete next.p_sub1_stone_source;
   delete next.p_sub2_stone_source;
   return next;
+};
+
+const UUID_REGEX =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+const isUuid = (value: unknown): value is string =>
+  typeof value === "string" && UUID_REGEX.test(value.trim());
+
+const extractOrderLineId = (data: unknown, payload: OrderUpsertPayload): string | null => {
+  if (isUuid(data)) return data;
+  if (isRecord(data) && isUuid(data.order_line_id)) return data.order_line_id;
+  if (isUuid(payload.p_order_line_id)) return payload.p_order_line_id;
+  return null;
+};
+
+const shouldSyncSources = (payload: OrderUpsertPayload) =>
+  payload.p_center_stone_source !== undefined ||
+  payload.p_sub1_stone_source !== undefined ||
+  payload.p_sub2_stone_source !== undefined;
+
+const syncStoneSourcesAfterLegacyUpsert = async (
+  orderLineId: string,
+  payload: OrderUpsertPayload
+): Promise<RpcError | null> => {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY ?? "";
+  if (!url || !key) {
+    return { message: "Supabase env missing for source sync" };
+  }
+
+  const updatePayload: Record<string, StoneSource | null> = {
+    center_stone_source: payload.p_center_stone_source ?? null,
+    sub1_stone_source: payload.p_sub1_stone_source ?? null,
+    sub2_stone_source: payload.p_sub2_stone_source ?? null,
+  };
+
+  const response = await fetch(`${url}/rest/v1/cms_order_line?order_line_id=eq.${orderLineId}`, {
+    method: "PATCH",
+    headers: {
+      apikey: key,
+      Authorization: `Bearer ${key}`,
+      "Content-Type": "application/json",
+      Prefer: "return=minimal",
+    },
+    body: JSON.stringify(updatePayload),
+  });
+
+  if (response.ok) return null;
+
+  const text = await response.text();
+  return {
+    message: text || `HTTP ${response.status}`,
+    code: String(response.status),
+  };
 };
 
 
@@ -149,17 +210,48 @@ export async function POST(request: Request) {
     );
   }
 
-  let { data, error } = await supabase.rpc("cms_fn_upsert_order_line_v5", typedPayload);
+  let { data, error } = await supabase.rpc("cms_fn_upsert_order_line_v6", typedPayload);
 
-  if (error?.message?.includes("cms_e_order_match_state")) {
+  const isFunctionNotFound =
+    error?.code === "42883" ||
+    error?.message?.includes("does not exist") ||
+    error?.message?.includes("No function matches");
+
+  let usedLegacyFallback = false;
+  if (error && isFunctionNotFound) {
     const legacyPayload = buildLegacyPayload(typedPayload);
     const fallback = await supabase.rpc("cms_fn_upsert_order_line_v3", legacyPayload);
     data = fallback.data;
     error = fallback.error;
+    usedLegacyFallback = !fallback.error;
+  }
+
+  if (!error && usedLegacyFallback && shouldSyncSources(typedPayload)) {
+    const orderLineId = extractOrderLineId(data, typedPayload);
+    if (!orderLineId) {
+      return NextResponse.json(
+        { error: "v3 fallback succeeded but order_line_id could not be resolved for stone source sync" },
+        { status: 400 }
+      );
+    }
+
+    const syncError = await syncStoneSourcesAfterLegacyUpsert(orderLineId, typedPayload);
+    if (syncError) {
+      return NextResponse.json(
+        {
+          error: "v3 fallback succeeded but stone source sync failed",
+          details: syncError.details,
+          hint: syncError.hint,
+          code: syncError.code,
+          sourceSyncMessage: syncError.message,
+        },
+        { status: 400 }
+      );
+    }
   }
 
   if (error) {
-    const err = error as { message: string; details?: string; hint?: string; code?: string };
+    const err = error as RpcError;
     return NextResponse.json(
       {
         error: err.message,

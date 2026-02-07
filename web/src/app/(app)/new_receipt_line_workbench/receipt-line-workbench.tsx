@@ -156,6 +156,12 @@ type MatchCandidate = {
   stone_center_exists?: boolean | null;
   stone_sub1_exists?: boolean | null;
   stone_sub2_exists?: boolean | null;
+  stone_center_qty?: number | null;
+  stone_sub1_qty?: number | null;
+  stone_sub2_qty?: number | null;
+  center_stone_source?: string | null;
+  sub1_stone_source?: string | null;
+  sub2_stone_source?: string | null;
   match_score?: number | null;
   score_detail_json?: Record<string, unknown> | null;
 };
@@ -266,6 +272,23 @@ function formatYmd(iso?: string | null) {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "-";
   return d.toLocaleDateString("ko-KR");
+}
+
+function formatStoneQty(value?: number | null) {
+  const n = Number(value ?? 0);
+  if (!Number.isFinite(n) || n <= 0) return "-";
+  return formatNumber(n);
+}
+
+function formatStoneSourceLabel(source?: string | null) {
+  if (source === "SELF") return "자입";
+  if (source === "PROVIDED") return "타입";
+  if (source === "FACTORY") return "공입";
+  return "";
+}
+
+function formatStoneQtyCell(qty: number | null | undefined, exists: boolean | null | undefined) {
+  return qty !== null && qty !== undefined ? formatStoneQty(qty) : exists ? "✓" : "-";
 }
 
 function normalizeVendorToken(label: string) {
@@ -436,6 +459,7 @@ const DEFAULT_STATUS_FILTER = "ALL";
 const AUTO_FIELD_CLASS = "bg-[var(--panel)]/70";
 const DEFAULT_RANGE_MONTHS = -3;
 const DON_TO_G = 3.75;
+const SUGGESTION_LIMIT = 5;
 
 const FACTORY_ROWS: Array<Pick<FactoryRowInput, "rowCode" | "label">> = [
   { rowCode: "RECENT_PAYMENT", label: "최근결제" },
@@ -1996,7 +2020,7 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
         body: JSON.stringify({
           receipt_id: selectedReceiptId,
           receipt_line_uuid: receiptLineUuid,
-          limit: 8,
+          limit: SUGGESTION_LIMIT,
         }),
       });
       const json = await res.json();
@@ -2038,7 +2062,7 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
             body: JSON.stringify({
               model_name: payload.model_name,
               customer_factory_code: payload.customer_factory_code,
-              limit: 8,
+              limit: SUGGESTION_LIMIT,
             }),
           });
           const jsonFallback = await resFallback.json();
@@ -2055,6 +2079,12 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
             status?: string | null;
             is_plated?: boolean | null;
             plating_color_code?: string | null;
+            stone_center_qty?: number | null;
+            stone_sub1_qty?: number | null;
+            stone_sub2_qty?: number | null;
+            center_stone_source?: string | null;
+            sub1_stone_source?: string | null;
+            sub2_stone_source?: string | null;
             memo?: string | null;
           }>;
           return rows.map((row) => ({
@@ -2069,6 +2099,12 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
             status: row.status ?? null,
             is_plated: row.is_plated ?? null,
             plating_color_code: row.plating_color_code ?? null,
+            stone_center_qty: row.stone_center_qty ?? null,
+            stone_sub1_qty: row.stone_sub1_qty ?? null,
+            stone_sub2_qty: row.stone_sub2_qty ?? null,
+            center_stone_source: row.center_stone_source ?? null,
+            sub1_stone_source: row.sub1_stone_source ?? null,
+            sub2_stone_source: row.sub2_stone_source ?? null,
             memo: row.memo ?? null,
             match_score: null,
             score_detail_json: null,
@@ -2084,7 +2120,7 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
       if (nextCandidates.length === 0) {
         toast.error("매칭 후보가 없습니다.");
       }
-      setSuggestions(nextCandidates);
+      setSuggestions(nextCandidates.slice(0, SUGGESTION_LIMIT));
       setSelectedCandidate(null);
       setConfirmResult(null);
     } finally {
@@ -2121,11 +2157,18 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
         client_name?: string | null;
         client_code?: string | null;
         model_no?: string | null;
+        size?: string | null;
         color?: string | null;
         material_code?: string | null;
         status?: string | null;
         plating_status?: boolean | null;
         plating_color?: string | null;
+        stone_center_qty?: number | null;
+        stone_sub1_qty?: number | null;
+        stone_sub2_qty?: number | null;
+        center_stone_source?: string | null;
+        sub1_stone_source?: string | null;
+        sub2_stone_source?: string | null;
       }>;
       const candidates: MatchCandidate[] = rows.map((row) => ({
         order_no: row.order_no ?? null,
@@ -2134,17 +2177,23 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
         customer_mask_code: row.client_code ?? null,
         customer_name: row.client_name ?? null,
         model_name: row.model_no ?? null,
-        size: null,
+        size: row.size ?? null,
         color: row.color ?? null,
         material_code: row.material_code ?? null,
         status: row.status ?? null,
         is_plated: row.plating_status ?? null,
         plating_color_code: row.plating_color ?? null,
+        stone_center_qty: row.stone_center_qty ?? null,
+        stone_sub1_qty: row.stone_sub1_qty ?? null,
+        stone_sub2_qty: row.stone_sub2_qty ?? null,
+        center_stone_source: row.center_stone_source ?? null,
+        sub1_stone_source: row.sub1_stone_source ?? null,
+        sub2_stone_source: row.sub2_stone_source ?? null,
         memo: null,
         match_score: null,
         score_detail_json: null,
       }));
-      setSuggestions(candidates);
+      setSuggestions(candidates.slice(0, SUGGESTION_LIMIT));
       setSelectedCandidate(null);
       setConfirmResult(null);
     } finally {
@@ -3665,7 +3714,7 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                             <div className="grid grid-cols-[160px_1fr]">
                               <span className="font-semibold text-[var(--foreground)]">중심/보조1/보조2</span>
                               <span>
-                                {formatNumber(selectedUnlinked.stone_center_qty)}&nbsp;&nbsp;&nbsp;{formatNumber(selectedUnlinked.stone_sub1_qty)}&nbsp;&nbsp;&nbsp;{formatNumber(selectedUnlinked.stone_sub2_qty)}
+                                {formatStoneQty(selectedUnlinked.stone_center_qty)}&nbsp;&nbsp;&nbsp;{formatStoneQty(selectedUnlinked.stone_sub1_qty)}&nbsp;&nbsp;&nbsp;{formatStoneQty(selectedUnlinked.stone_sub2_qty)}
                               </span>
                             </div>
                           </div>
@@ -3712,14 +3761,14 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                               material: selectedUnlinked.material_code ?? "-",
                               color: selectedUnlinked.color ?? "-",
                               size: selectedUnlinked.size ?? "-",
-                              plated: "N",
+                              plated: "-",
                               platingColor: "-",
                               memo: selectedUnlinked.remark ?? "-",
                               customerCode: baseCustomerCode || "-",
                               customerName: baseCustomerName,
-                              stoneCenter: formatNumber(selectedUnlinked.stone_center_qty),
-                              stoneSub1: formatNumber(selectedUnlinked.stone_sub1_qty),
-                              stoneSub2: formatNumber(selectedUnlinked.stone_sub2_qty),
+                              stoneCenter: formatStoneQty(selectedUnlinked.stone_center_qty),
+                              stoneSub1: formatStoneQty(selectedUnlinked.stone_sub1_qty),
+                              stoneSub2: formatStoneQty(selectedUnlinked.stone_sub2_qty),
                             }
                             : null;
 
@@ -3758,7 +3807,11 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                                       <td className="px-2 py-2">{baseLine.material}</td>
                                       <td className="px-2 py-2">{baseLine.color}</td>
                                       <td className="px-2 py-2">{baseLine.size}</td>
-                                      <td className="px-2 py-2">{baseLine.plated}</td>
+                                      <td className="px-2 py-2">
+                                        <span className="inline-flex h-5 min-w-5 items-center justify-center rounded border border-[var(--panel-border)] px-1 text-[10px] text-[var(--muted)]">
+                                          -
+                                        </span>
+                                      </td>
                                       <td className="px-2 py-2">{baseLine.platingColor}</td>
                                       <td className="px-2 py-2">{baseLine.customerCode}</td>
                                       <td className="px-2 py-2">{baseLine.customerName}</td>
@@ -3784,7 +3837,7 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                                       ? "-"
                                       : candidate.is_plated
                                         ? "Y"
-                                        : "N";
+                                        : "-";
                                   const stonePresence =
                                     candidate.score_detail_json &&
                                     typeof candidate.score_detail_json.stone_presence === "object" &&
@@ -3810,9 +3863,12 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                                     memo: candidate.memo ?? "-",
                                     customerCode: candidate.customer_mask_code ?? "-",
                                     customerName: candidate.customer_name ?? "-",
-                                    stoneCenter: centerExists === null ? "-" : centerExists ? "✓" : "-",
-                                    stoneSub1: sub1Exists === null ? "-" : sub1Exists ? "✓" : "-",
-                                    stoneSub2: sub2Exists === null ? "-" : sub2Exists ? "✓" : "-",
+                                    stoneCenter: formatStoneQtyCell(candidate.stone_center_qty, centerExists),
+                                    stoneSub1: formatStoneQtyCell(candidate.stone_sub1_qty, sub1Exists),
+                                    stoneSub2: formatStoneQtyCell(candidate.stone_sub2_qty, sub2Exists),
+                                    stoneCenterSource: formatStoneSourceLabel(candidate.center_stone_source),
+                                    stoneSub1Source: formatStoneSourceLabel(candidate.sub1_stone_source),
+                                    stoneSub2Source: formatStoneSourceLabel(candidate.sub2_stone_source),
                                   };
 
                                   return (
@@ -3823,13 +3879,47 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                                         <td className={cn("px-2 py-2", diffClass(row.material, baseLine?.material))}>{row.material}</td>
                                         <td className={cn("px-2 py-2", diffClass(row.color, baseLine?.color))}>{row.color}</td>
                                         <td className={cn("px-2 py-2", diffClass(row.size, baseLine?.size))}>{row.size}</td>
-                                        <td className={cn("px-2 py-2", diffClass(row.plated, baseLine?.plated))}>{row.plated}</td>
+                                        <td className={cn("px-2 py-2", diffClass(row.plated, baseLine?.plated))}>
+                                          {row.plated === "Y" ? (
+                                            <span
+                                              className="inline-flex h-5 min-w-5 items-center justify-center rounded border border-emerald-300 bg-emerald-500/15 px-1 text-[10px] font-semibold text-emerald-700"
+                                              title="도금"
+                                            >
+                                              ●
+                                            </span>
+                                          ) : (
+                                            <span className="inline-flex h-5 min-w-5 items-center justify-center rounded border border-[var(--panel-border)] px-1 text-[10px] text-[var(--muted)]">
+                                              -
+                                            </span>
+                                          )}
+                                        </td>
                                         <td className={cn("px-2 py-2", diffClass(row.platingColor, baseLine?.platingColor))}>{row.platingColor}</td>
                                         <td className={cn("px-2 py-2", diffClass(row.customerCode, baseLine?.customerCode))}>{row.customerCode}</td>
                                         <td className={cn("px-2 py-2", diffClass(row.customerName, baseLine?.customerName))}>{row.customerName}</td>
-                                        <td className={cn("px-2 py-2", diffClass(row.stoneCenter, baseLine?.stoneCenter))}>{row.stoneCenter}</td>
-                                        <td className={cn("px-2 py-2", diffClass(row.stoneSub1, baseLine?.stoneSub1))}>{row.stoneSub1}</td>
-                                        <td className={cn("px-2 py-2", diffClass(row.stoneSub2, baseLine?.stoneSub2))}>{row.stoneSub2}</td>
+                                        <td className={cn("px-2 py-2", diffClass(row.stoneCenter, baseLine?.stoneCenter))}>
+                                          <span>{row.stoneCenter}</span>
+                                          {row.stoneCenterSource && row.stoneCenter !== "-" ? (
+                                            <span className="ml-1 inline-flex items-center rounded border border-[var(--panel-border)] bg-[var(--panel)]/70 px-1 text-[10px] text-[var(--muted)]">
+                                              {row.stoneCenterSource}
+                                            </span>
+                                          ) : null}
+                                        </td>
+                                        <td className={cn("px-2 py-2", diffClass(row.stoneSub1, baseLine?.stoneSub1))}>
+                                          <span>{row.stoneSub1}</span>
+                                          {row.stoneSub1Source && row.stoneSub1 !== "-" ? (
+                                            <span className="ml-1 inline-flex items-center rounded border border-[var(--panel-border)] bg-[var(--panel)]/70 px-1 text-[10px] text-[var(--muted)]">
+                                              {row.stoneSub1Source}
+                                            </span>
+                                          ) : null}
+                                        </td>
+                                        <td className={cn("px-2 py-2", diffClass(row.stoneSub2, baseLine?.stoneSub2))}>
+                                          <span>{row.stoneSub2}</span>
+                                          {row.stoneSub2Source && row.stoneSub2 !== "-" ? (
+                                            <span className="ml-1 inline-flex items-center rounded border border-[var(--panel-border)] bg-[var(--panel)]/70 px-1 text-[10px] text-[var(--muted)]">
+                                              {row.stoneSub2Source}
+                                            </span>
+                                          ) : null}
+                                        </td>
                                         <td className="px-2 py-2 text-right">
                                           <Badge tone="warning" className="h-6 px-2 text-[10px] font-bold">
                                             점수 {formatNumber(candidate.match_score)}

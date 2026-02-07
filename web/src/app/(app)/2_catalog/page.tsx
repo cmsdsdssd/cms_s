@@ -49,6 +49,8 @@ type CatalogItem = {
   laborTotalCost?: number;
   platingSell?: number;
   platingCost?: number;
+  settingAddonMarginKrwPerPiece?: number;
+  stoneAddonMarginKrwPerPiece?: number;
   note?: string;
 };
 
@@ -1003,6 +1005,28 @@ function ProductFormModal({
               placeholder="0"
             />
           </div>
+          <div>
+            <label className="text-xs text-[var(--muted)] mb-1 block">세팅 부가마진(개당, 원)</label>
+            <Input
+              type="number"
+              value={formData.settingAddonMarginKrwPerPiece || ""}
+              onChange={(e) =>
+                setFormData({ ...formData, settingAddonMarginKrwPerPiece: parseInt(e.target.value) || 0 })
+              }
+              placeholder="0"
+            />
+          </div>
+          <div>
+            <label className="text-xs text-[var(--muted)] mb-1 block">원석 부가마진(개당, 원)</label>
+            <Input
+              type="number"
+              value={formData.stoneAddonMarginKrwPerPiece || ""}
+              onChange={(e) =>
+                setFormData({ ...formData, stoneAddonMarginKrwPerPiece: parseInt(e.target.value) || 0 })
+              }
+              placeholder="0"
+            />
+          </div>
         </div>
 
         {/* Vendor */}
@@ -1308,6 +1332,8 @@ export default function Catalog2Page() {
           laborTotalCost: (row.labor_total_cost as number) || (row.labor_base_cost as number) || 0,
           platingSell: row.plating_price_sell_default as number,
           platingCost: row.plating_price_cost_default as number,
+          settingAddonMarginKrwPerPiece: row.setting_addon_margin_krw_per_piece as number,
+          stoneAddonMarginKrwPerPiece: row.stone_addon_margin_krw_per_piece as number,
           note: String(row.note || ""),
         }));
         setItems(mapped);
@@ -1504,6 +1530,8 @@ export default function Catalog2Page() {
         labor_total_cost: laborTotalCost,
         plating_price_sell_default: data.platingSell,
         plating_price_cost_default: data.platingCost,
+        setting_addon_margin_krw_per_piece: data.settingAddonMarginKrwPerPiece || 0,
+        stone_addon_margin_krw_per_piece: data.stoneAddonMarginKrwPerPiece || 0,
         vendor_party_id: data.vendor,
         note: data.note,
         image_url: data.imageUrl,

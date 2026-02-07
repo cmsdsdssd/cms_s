@@ -105,6 +105,7 @@ export function ShipmentPricingEvidencePanel({
   baseCostSource,
   isBaseOverridden,
   extraLaborSellKrw,
+  factoryOtherCostBaseKrw,
   stoneRows,
   extraLaborItems,
   shipmentBaseLaborKrw,
@@ -140,6 +141,23 @@ export function ShipmentPricingEvidencePanel({
 
   const displayedBaseSell = baseLaborSellKrw ?? shipmentBaseLaborKrw ?? null;
 
+  const receiptStoneCostTotal = useMemo(
+    () =>
+      stoneRows.reduce((sum, row) => {
+        const qty = row.qtyReceipt ?? 0;
+        const unit = row.unitCostReceipt ?? 0;
+        return sum + Math.max(qty, 0) * Math.max(unit, 0);
+      }, 0),
+    [stoneRows]
+  );
+
+  const receiptExtraCostTotal = Math.max(factoryOtherCostBaseKrw ?? 0, 0) + Math.max(receiptStoneCostTotal, 0);
+
+  const masterExtraMarginTotal = useMemo(() => {
+    if (extraLaborSellKrw === null || extraLaborSellKrw === undefined) return null;
+    return extraLaborSellKrw - receiptExtraCostTotal;
+  }, [extraLaborSellKrw, receiptExtraCostTotal]);
+
   return (
     <div className={className}>
       <div className="grid grid-cols-1 gap-3 min-w-0">
@@ -157,18 +175,20 @@ export function ShipmentPricingEvidencePanel({
               <div className="min-w-[520px] rounded border border-[var(--panel-border)] bg-[var(--surface)] px-2 py-1 text-xs">
                 <div className="grid grid-cols-[1fr_auto_1fr_auto_1fr] items-center gap-x-2">
                   <div className="min-w-0">
-                    <span className="text-[var(--muted)]">출고기본공임</span>
+                    <span className="text-[var(--muted)]">총결과(출고기본공임)</span>
                     <span className="ml-1 font-semibold tabular-nums">{formatKrw(displayedBaseSell)}</span>
                   </div>
                   <span className="text-[var(--muted)]">|</span>
                   <div className="min-w-0">
-                    <span className="text-[var(--muted)]">공장기본공임원가({sourceLabel(baseCostSource)})</span>
+                    <span className="text-[var(--muted)]">영수증/매칭 원가({sourceLabel(baseCostSource)})</span>
                     <span className="ml-1 font-semibold tabular-nums">{formatKrw(factoryBasicCostKrw)}</span>
                   </div>
                   <span className="text-[var(--muted)]">|</span>
                   <div className="min-w-0">
-                    <span className="text-[var(--muted)]">마스터기본공임마진</span>
-                    <span className="ml-1 font-semibold tabular-nums">{formatKrw(computedBaseMargin)}</span>
+                    <span className="text-[var(--muted)]">마스터마진(기본공임 판매 - 기본공임 원가)</span>
+                    <span className="ml-1 font-semibold tabular-nums">
+                      {formatKrw(computedBaseMargin)} ({formatKrw(masterBaseSellKrw)} - {formatKrw(masterBaseCostKrw)})
+                    </span>
                   </div>
                 </div>
               </div>
@@ -181,6 +201,27 @@ export function ShipmentPricingEvidencePanel({
             <span className="text-xs font-semibold">보석/기타공임 계산근거 (v3 evidence)</span>
           </CardHeader>
           <CardBody className="p-3 space-y-3 min-w-0">
+            <div className="overflow-x-auto">
+              <div className="min-w-[520px] rounded border border-[var(--panel-border)] bg-[var(--surface)] px-2 py-1 text-xs">
+                <div className="grid grid-cols-[1fr_auto_1fr_auto_1fr] items-center gap-x-2">
+                  <div className="min-w-0">
+                    <span className="text-[var(--muted)]">총결과(보석/기타공임)</span>
+                    <span className="ml-1 font-semibold tabular-nums">{formatKrw(extraLaborSellKrw ?? null)}</span>
+                  </div>
+                  <span className="text-[var(--muted)]">|</span>
+                  <div className="min-w-0">
+                    <span className="text-[var(--muted)]">영수증 원가(기타원가+알공임)</span>
+                    <span className="ml-1 font-semibold tabular-nums">{formatKrw(receiptExtraCostTotal)}</span>
+                  </div>
+                  <span className="text-[var(--muted)]">|</span>
+                  <div className="min-w-0">
+                    <span className="text-[var(--muted)]">마스터마진</span>
+                    <span className="ml-1 font-semibold tabular-nums">{formatKrw(masterExtraMarginTotal)}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
             <div className="overflow-x-auto rounded-md border border-[var(--panel-border)]">
               <table className="min-w-[680px] w-full text-xs">
                 <thead className="bg-[var(--surface)] text-[var(--muted)]">

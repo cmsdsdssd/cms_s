@@ -130,6 +130,7 @@ type ReceiptMatchPrefillRow = {
   stone_center_unit_cost_krw?: number | null;
   stone_sub1_unit_cost_krw?: number | null;
   stone_sub2_unit_cost_krw?: number | null;
+  stone_labor_krw?: number | null;
 };
 
 type MasterLookupRow = {
@@ -486,6 +487,32 @@ export default function ShipmentsPage() {
       .filter((item) => item.label);
   };
 
+  const extractStoneLaborAmount = (value: unknown): number => {
+    if (!Array.isArray(value)) return 0;
+    const found = value.find((item) => {
+      if (!item || typeof item !== "object") return false;
+      const record = item as { type?: unknown; label?: unknown };
+      const type = String(record.type ?? "").trim().toUpperCase();
+      const label = String(record.label ?? "").trim();
+      return type === "STONE_LABOR" || label.includes("알공임");
+    }) as { amount?: unknown } | undefined;
+    if (!found) return 0;
+    return parseNumberInput(String(found.amount ?? "0"));
+  };
+
+  const extractEtcLaborAmount = (value: unknown): number => {
+    if (!Array.isArray(value)) return 0;
+    return value.reduce((sum, item) => {
+      if (!item || typeof item !== "object") return sum;
+      const record = item as { type?: unknown; label?: unknown; amount?: unknown };
+      const type = String(record.type ?? "").trim().toUpperCase();
+      const label = String(record.label ?? "").trim();
+      const isStone = type === "STONE_LABOR" || label.includes("알공임");
+      if (isStone) return sum;
+      return sum + parseNumberInput(String(record.amount ?? "0"));
+    }, 0);
+  };
+
   const handleAddExtraLabor = (value: string | null) => {
     if (!value) return;
     const option = OTHER_LABOR_OPTIONS.find((item) => item.value === value);
@@ -500,6 +527,27 @@ export default function ShipmentsPage() {
     setExtraLaborItems((prev) =>
       prev.map((item) => (item.id === id ? { ...item, amount } : item))
     );
+  };
+
+  const handleStoneLaborAmountChange = (amount: string) => {
+    setExtraLaborItems((prev) => {
+      const next = [...prev];
+      const foundIndex = next.findIndex((item) => item.type === "STONE_LABOR");
+      const normalized = amount.trim();
+      if (foundIndex >= 0) {
+        if (!normalized) {
+          next.splice(foundIndex, 1);
+          return next;
+        }
+        next[foundIndex] = { ...next[foundIndex], label: "알공임", amount };
+        return next;
+      }
+      if (!normalized) return prev;
+      const id = typeof crypto !== "undefined" && "randomUUID" in crypto
+        ? crypto.randomUUID()
+        : `stone-labor-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+      return [...next, { id, type: "STONE_LABOR", label: "알공임", amount }];
+    });
   };
 
   const handleRemoveExtraLabor = (id: string) => {
@@ -706,12 +754,79 @@ export default function ShipmentsPage() {
       setBaseLabor(String(data.selected_factory_labor_basic_cost_krw));
     }
 
-    if (data.shipment_extra_labor_krw !== null && data.shipment_extra_labor_krw !== undefined) {
-      setOtherLaborCost(String(data.shipment_extra_labor_krw ?? ""));
+    const normalizedStoneLabor = (() => {
+      const direct = Number(data.stone_labor_krw ?? 0);
+      if (Number.isFinite(direct) && direct > 0) return direct;
+      const centerQty = Number(data.stone_center_qty ?? 0);
+      const sub1Qty = Number(data.stone_sub1_qty ?? 0);
+      const sub2Qty = Number(data.stone_sub2_qty ?? 0);
+      const centerUnit = Number(data.stone_center_unit_cost_krw ?? 0);
+      const sub1Unit = Number(data.stone_sub1_unit_cost_krw ?? 0);
+      const sub2Unit = Number(data.stone_sub2_unit_cost_krw ?? 0);
+      const byReceipt =
+        Math.max(centerQty, 0) * Math.max(centerUnit, 0) +
+        Math.max(sub1Qty, 0) * Math.max(sub1Unit, 0) +
+        Math.max(sub2Qty, 0) * Math.max(sub2Unit, 0);
+      if (byReceipt > 0) return byReceipt;
+      return extractStoneLaborAmount(data.shipment_extra_labor_items);
+    })();
+
+    const etcFromItems = extractEtcLaborAmount(data.shipment_extra_labor_items);
+    if (etcFromItems > 0) {
+      setOtherLaborCost(String(etcFromItems));
+    } else if (data.shipment_extra_labor_krw !== null && data.shipment_extra_labor_krw !== undefined) {
+      const shipmentExtraTotal = Number(data.shipment_extra_labor_krw ?? 0);
+      const etcOnly = Math.max(shipmentExtraTotal - normalizedStoneLabor, 0);
+      setOtherLaborCost(String(etcOnly));
     } else if (data.selected_factory_labor_other_cost_krw !== null && data.selected_factory_labor_other_cost_krw !== undefined) {
-      setOtherLaborCost(String(data.selected_factory_labor_other_cost_krw ?? ""));
+      const receiptOther = Number(data.selected_factory_labor_other_cost_krw ?? 0);
+      const etcOnly = Math.max(receiptOther - normalizedStoneLabor, 0);
+      setOtherLaborCost(String(etcOnly));
     }
+
   }, [receiptMatchPrefillQuery.data, weightG, baseLabor, extraLaborItems.length]);
+
+  useEffect(() => {
+    const data = receiptMatchPrefillQuery.data;
+    if (!data) return;
+    const stoneLabor = (() => {
+      const direct = Number(data.stone_labor_krw ?? 0);
+      if (Number.isFinite(direct) && direct > 0) return direct;
+      const centerQty = Number(data.stone_center_qty ?? 0);
+      const sub1Qty = Number(data.stone_sub1_qty ?? 0);
+      const sub2Qty = Number(data.stone_sub2_qty ?? 0);
+      const centerUnit = Number(data.stone_center_unit_cost_krw ?? 0);
+      const sub1Unit = Number(data.stone_sub1_unit_cost_krw ?? 0);
+      const sub2Unit = Number(data.stone_sub2_unit_cost_krw ?? 0);
+      const byReceipt =
+        Math.max(centerQty, 0) * Math.max(centerUnit, 0) +
+        Math.max(sub1Qty, 0) * Math.max(sub1Unit, 0) +
+        Math.max(sub2Qty, 0) * Math.max(sub2Unit, 0);
+      if (byReceipt > 0) return byReceipt;
+      return extractStoneLaborAmount(data.shipment_extra_labor_items);
+    })();
+    if (!Number.isFinite(stoneLabor) || stoneLabor <= 0) return;
+
+    const amount = String(stoneLabor);
+    setExtraLaborItems((prev) => {
+      const next = [...prev];
+      const foundIndex = next.findIndex((item) => item.type === "STONE_LABOR");
+      if (foundIndex >= 0) {
+        if (next[foundIndex].amount === amount) return prev;
+        next[foundIndex] = { ...next[foundIndex], amount, label: "알공임" };
+        return next;
+      }
+      return [
+        ...next,
+        {
+          id: `prefill-stone-labor-${selectedOrderLineId ?? ""}`,
+          type: "STONE_LABOR",
+          label: "알공임",
+          amount,
+        },
+      ];
+    });
+  }, [receiptMatchPrefillQuery.data, selectedOrderLineId]);
 
   // ✅ 선택된 주문의 model_no로 마스터 정보 조회
   const masterLookupQuery = useQuery({
@@ -1578,15 +1693,33 @@ export default function ShipmentsPage() {
 
   const resolvedManualLabor = useMemo(() => parseNumberInput(manualLabor), [manualLabor]);
 
-  const resolvedExtraLabor = useMemo(() => {
-    return extraLaborItems.reduce((sum, item) => sum + parseNumberInput(item.amount), 0);
+  const stoneLaborAmount = useMemo(() => {
+    const found = extraLaborItems.find((item) => item.type === "STONE_LABOR");
+    return found?.amount ?? "";
   }, [extraLaborItems]);
+
+  const visibleExtraLaborItems = useMemo(
+    () => extraLaborItems.filter((item) => item.type !== "STONE_LABOR"),
+    [extraLaborItems]
+  );
+
+  const resolvedStoneLabor = useMemo(() => parseNumberInput(stoneLaborAmount), [stoneLaborAmount]);
+
+  const resolvedEtcLaborItemsTotal = useMemo(
+    () => visibleExtraLaborItems.reduce((sum, item) => sum + parseNumberInput(item.amount), 0),
+    [visibleExtraLaborItems]
+  );
 
   const resolvedOtherLaborCost = useMemo(() => parseNumberInput(otherLaborCost), [otherLaborCost]);
 
+  const resolvedEtcLaborTotal = useMemo(
+    () => resolvedEtcLaborItemsTotal + resolvedOtherLaborCost,
+    [resolvedEtcLaborItemsTotal, resolvedOtherLaborCost]
+  );
+
   const resolvedExtraLaborTotal = useMemo(
-    () => resolvedExtraLabor + resolvedOtherLaborCost,
-    [resolvedExtraLabor, resolvedOtherLaborCost]
+    () => resolvedEtcLaborTotal + resolvedStoneLabor,
+    [resolvedEtcLaborTotal, resolvedStoneLabor]
   );
 
   const resolvedBaseLaborCost = useMemo(() => {
@@ -1645,11 +1778,6 @@ export default function ShipmentsPage() {
     if (resolvedBaseLaborCost === null) return null;
     return resolvedBaseLabor - resolvedBaseLaborCost;
   }, [resolvedBaseLabor, resolvedBaseLaborCost]);
-
-  const resolvedExtraLaborMargin = useMemo(
-    () => resolvedExtraLaborTotal - resolvedOtherLaborCost,
-    [resolvedExtraLaborTotal, resolvedOtherLaborCost]
-  );
 
   const resolvedTotalLabor = useMemo(
     () => (useManualLabor ? resolvedManualLabor : resolvedBaseLabor + resolvedExtraLaborTotal),
@@ -2310,7 +2438,7 @@ export default function ShipmentsPage() {
                           </span>
                         </div>
 
-                        <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+              <div className="grid grid-cols-1 md:grid-cols-5 gap-6">
                           <div className="space-y-2">
                             <label className="text-sm font-medium text-[var(--foreground)]">중량 (g)</label>
                             <Input
@@ -2368,12 +2496,25 @@ export default function ShipmentsPage() {
                           <div className="space-y-2">
                             <div className="flex items-center justify-between text-sm font-medium text-[var(--foreground)]">
                               <span>기타공임 (원)+마진</span>
-                              <span className="text-xs text-[var(--muted)]">마진 {renderNumber(resolvedExtraLaborMargin)}</span>
+                              <span className="text-xs text-[var(--muted)]">마진 {renderNumber(resolvedEtcLaborTotal - resolvedOtherLaborCost)}</span>
                             </div>
                             <Input
                               placeholder="0"
-                              value={resolvedExtraLaborTotal.toLocaleString()}
+                              value={resolvedEtcLaborTotal.toLocaleString()}
                               readOnly
+                              inputMode="numeric"
+                              className="tabular-nums text-lg h-12"
+                            />
+                          </div>
+                          <div className="space-y-2">
+                            <div className="flex items-center justify-between text-sm font-medium text-[var(--foreground)]">
+                              <span>알공임</span>
+                              <span className="text-xs text-[var(--muted)]">별도입력</span>
+                            </div>
+                            <Input
+                              placeholder="0"
+                              value={stoneLaborAmount}
+                              onChange={(e) => handleStoneLaborAmountChange(e.target.value)}
                               inputMode="numeric"
                               className="tabular-nums text-lg h-12"
                             />
@@ -2405,10 +2546,10 @@ export default function ShipmentsPage() {
                             </div>
                           </div>
                           <div className="space-y-2">
-                            {extraLaborItems.length === 0 ? (
+                            {visibleExtraLaborItems.length === 0 ? (
                               <div className="text-xs text-[var(--muted)]">추가된 내역이 없습니다.</div>
                             ) : (
-                              extraLaborItems.map((item) => (
+                              visibleExtraLaborItems.map((item) => (
                                 <div key={item.id} className="flex items-center gap-2">
                                   <div className="text-xs font-medium text-[var(--foreground)] min-w-[90px]">
                                     {item.label}
@@ -2593,11 +2734,11 @@ export default function ShipmentsPage() {
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <div className="grid grid-cols-2 md:grid-cols-6 gap-3">
                 <div>
                   <span className="text-xs text-[var(--primary)] block mb-1">중량</span>
                   <Input
-                    className="h-7 text-xs w-24 bg-[var(--input-bg)] tabular-nums"
+                    className="h-7 text-xs w-16 bg-[var(--input-bg)] tabular-nums"
                     placeholder="0.00"
                     value={weightG}
                     onChange={(e) => setWeightG(e.target.value)}
@@ -2608,7 +2749,7 @@ export default function ShipmentsPage() {
                   <span className="text-xs text-[var(--primary)] block mb-1">차감</span>
                   <div className="flex items-center gap-2">
                     <Input
-                      className="h-7 text-xs w-20 bg-[var(--input-bg)] tabular-nums"
+                      className="h-7 text-xs w-16 bg-[var(--input-bg)] tabular-nums"
                       placeholder="0.00"
                       value={deductionWeightG}
                       onChange={(e) => setDeductionWeightG(e.target.value)}
@@ -2645,12 +2786,23 @@ export default function ShipmentsPage() {
                 </div>
                 <div>
                   <span className="text-xs text-[var(--primary)] block mb-1">기타공임 (원)+마진</span>
-                  <span className="text-[10px] text-[var(--muted)] block">마진 {renderNumber(resolvedExtraLaborMargin)}</span>
+                  <span className="text-[10px] text-[var(--muted)] block">마진 {renderNumber(resolvedEtcLaborTotal - resolvedOtherLaborCost)}</span>
                   <Input
                     className="h-7 text-xs w-24 bg-[var(--input-bg)] tabular-nums"
                     placeholder="0"
-                    value={String(resolvedExtraLaborTotal)}
+                    value={String(resolvedEtcLaborTotal)}
                     readOnly
+                    inputMode="numeric"
+                  />
+                </div>
+                <div>
+                  <span className="text-xs text-[var(--primary)] block mb-1">알공임</span>
+                  <span className="text-[10px] text-[var(--muted)] block">별도입력</span>
+                  <Input
+                    className="h-7 text-xs w-24 bg-[var(--input-bg)] tabular-nums"
+                    placeholder="0"
+                    value={stoneLaborAmount}
+                    onChange={(e) => handleStoneLaborAmountChange(e.target.value)}
                     inputMode="numeric"
                   />
                 </div>
@@ -2713,10 +2865,10 @@ export default function ShipmentsPage() {
                   </div>
                 </div>
                 <div className="space-y-1">
-                  {extraLaborItems.length === 0 ? (
+                  {visibleExtraLaborItems.length === 0 ? (
                     <div className="text-[10px] text-[var(--muted)]">추가된 내역이 없습니다.</div>
                   ) : (
-                    extraLaborItems.map((item) => (
+                    visibleExtraLaborItems.map((item) => (
                       <div key={item.id} className="flex items-center gap-2">
                         <span className="text-[10px] text-[var(--primary)] min-w-[80px]">
                           {item.label}

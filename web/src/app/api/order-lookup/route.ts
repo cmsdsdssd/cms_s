@@ -38,5 +38,41 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: error.message ?? "조회 실패" }, { status: 500 });
   }
 
-  return NextResponse.json({ data: data ?? [] });
+  const rows = (data ?? []) as Array<Record<string, unknown>>;
+  const orderLineIds = rows
+    .map((row) => (typeof row.order_line_id === "string" ? row.order_line_id : null))
+    .filter((id): id is string => Boolean(id));
+
+  if (orderLineIds.length > 0) {
+    const { data: orderLines, error: orderLineError } = await supabase
+      .schema("public")
+      .from("cms_order_line")
+      .select(
+        "order_line_id, size, center_stone_qty, sub1_stone_qty, sub2_stone_qty, center_stone_source, sub1_stone_source, sub2_stone_source, is_plated, plating_color_code"
+      )
+      .in("order_line_id", orderLineIds);
+
+    if (orderLineError) {
+      return NextResponse.json({ error: orderLineError.message ?? "주문 라인 상세 조회 실패" }, { status: 500 });
+    }
+
+    const orderLineMap = new Map((orderLines ?? []).map((row) => [row.order_line_id, row]));
+    rows.forEach((row) => {
+      const orderLineId = typeof row.order_line_id === "string" ? row.order_line_id : null;
+      if (!orderLineId) return;
+      const detail = orderLineMap.get(orderLineId);
+      if (!detail) return;
+      row.size = detail.size ?? null;
+      row.stone_center_qty = detail.center_stone_qty ?? null;
+      row.stone_sub1_qty = detail.sub1_stone_qty ?? null;
+      row.stone_sub2_qty = detail.sub2_stone_qty ?? null;
+      row.center_stone_source = detail.center_stone_source ?? null;
+      row.sub1_stone_source = detail.sub1_stone_source ?? null;
+      row.sub2_stone_source = detail.sub2_stone_source ?? null;
+      row.plating_status = detail.is_plated ?? null;
+      row.plating_color = detail.plating_color_code ?? null;
+    });
+  }
+
+  return NextResponse.json({ data: rows });
 }
