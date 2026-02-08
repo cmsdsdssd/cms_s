@@ -21,6 +21,7 @@ export type ReceiptLineItem = {
   repair_fee_krw?: number | null;
   gold_tick_krw_per_g?: number | null;
   silver_tick_krw_per_g?: number | null;
+  silver_adjust_factor?: number | null;
   is_unit_pricing?: boolean | null;
   is_return?: boolean | null;
   is_repair?: boolean | null;
@@ -54,16 +55,26 @@ type ReceiptPrintHalfProps = {
   dateLabel: string;
   lines: ReceiptLineItem[];
   summaryRows: ReceiptSummaryRow[];
-  goldPriceRange?: { min: number; max: number } | null;
-  silverPriceRange?: { min: number; max: number } | null;
-  goldPrice?: number | null;
-  silverPrice?: number | null;
 };
 
-const formatPriceRange = (range: { min: number; max: number } | null) => {
-  if (!range) return "-";
-  if (Math.abs(range.min - range.max) < 0.0001) return formatKrw(range.min);
-  return `${formatKrw(range.min)}~${formatKrw(range.max)}`;
+const buildAppliedPriceText = (lines: ReceiptLineItem[], kind: "gold" | "silver") => {
+  const notes: string[] = [];
+  lines.forEach((line, index) => {
+    if (line.is_unit_pricing) return;
+    const netWeight = Number(line.net_weight_g ?? 0);
+    if (Math.abs(netWeight) <= 0.000001) return;
+    const code = (line.material_code ?? "").trim();
+    const isSilverMaterial = code === "925" || code === "999";
+    const isGoldMaterial = code === "14" || code === "18" || code === "24";
+    if (kind === "gold" && !isGoldMaterial) return;
+    if (kind === "silver" && !isSilverMaterial) return;
+    const price = kind === "gold" ? line.gold_tick_krw_per_g : line.silver_tick_krw_per_g;
+    if (price === null || price === undefined) return;
+    notes.push(`${index + 1}번 ${formatKrw(price)}/g`);
+  });
+
+  if (notes.length === 0) return null;
+  return notes.join(", ");
 };
 
 export const ReceiptPrintHalf = ({
@@ -71,30 +82,20 @@ export const ReceiptPrintHalf = ({
   dateLabel,
   lines,
   summaryRows,
-  goldPriceRange,
-  silverPriceRange,
-  goldPrice,
-  silverPrice,
 }: ReceiptPrintHalfProps) => {
   const paddedLines = useMemo(() => {
     const next = [...lines];
     while (next.length < 15) next.push({});
     return next;
   }, [lines]);
-  const totalSummary = useMemo(
-    () => summaryRows.find((row) => row.label === "합계") ?? summaryRows[0] ?? null,
-    [summaryRows]
-  );
-  const normalizedGoldRange = useMemo(
-    () => goldPriceRange ?? (goldPrice === null || goldPrice === undefined ? null : { min: goldPrice, max: goldPrice }),
-    [goldPriceRange, goldPrice]
-  );
-  const normalizedSilverRange = useMemo(
-    () =>
-      silverPriceRange ??
-      (silverPrice === null || silverPrice === undefined ? null : { min: silverPrice, max: silverPrice }),
-    [silverPriceRange, silverPrice]
-  );
+  const appliedGoldPriceText = useMemo(() => buildAppliedPriceText(lines, "gold"), [lines]);
+  const appliedSilverPriceText = useMemo(() => buildAppliedPriceText(lines, "silver"), [lines]);
+  const appliedPriceParts = useMemo(() => {
+    const parts: string[] = [];
+    if (appliedGoldPriceText) parts.push(`순금시세 ${appliedGoldPriceText}`);
+    if (appliedSilverPriceText) parts.push(`순은시세 ${appliedSilverPriceText}`);
+    return parts;
+  }, [appliedGoldPriceText, appliedSilverPriceText]);
 
   return (
     <div className="flex h-full flex-col gap-4 text-[11px] text-black">
@@ -214,12 +215,7 @@ export const ReceiptPrintHalf = ({
 
       <div className="mt-auto space-y-2 border-t border-neutral-300 pt-2">
         <div className="space-y-1 text-[10px] text-neutral-700">
-          <div>
-            환산 중량(합계): 순금 {formatWeight(totalSummary?.value.gold ?? 0)} · 순은 {formatWeight(totalSummary?.value.silver ?? 0)}
-          </div>
-          <div>
-            적용 시세: 순금시세 {formatPriceRange(normalizedGoldRange)}/g · 순은시세 {formatPriceRange(normalizedSilverRange)}/g
-          </div>
+          {appliedPriceParts.length > 0 && <div>적용 시세: {appliedPriceParts.join(" · ")}</div>}
         </div>
         <div className="text-xs font-semibold">미수 내역 (요약)</div>
         <table className="w-full border-collapse text-[11px]">

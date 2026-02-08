@@ -1812,7 +1812,7 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
         const laborBasic = parseNumber(item.labor_basic_cost_krw) ?? 0;
         const laborOther = parseNumber(item.labor_other_cost_krw) ?? 0;
         const stoneFactory = calcStoneFactoryCost(item);
-        const totalLine = parseNumber(item.total_amount_krw) ?? laborBasic + laborOther + stoneFactory;
+        const totalLine = parseNumber(item.total_amount_krw) ?? laborBasic + laborOther;
         return {
           qty: acc.qty + qty,
           weight: acc.weight + weight * qty,
@@ -1928,8 +1928,7 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
       const qty = parseNumber(item.qty) ?? 1;
       const laborBasic = parseNumber(item.labor_basic_cost_krw) ?? 0;
       const laborOther = parseNumber(item.labor_other_cost_krw) ?? 0;
-      const stoneFactoryCost = calcStoneFactoryCost(item);
-      const totalAmount = parseNumber(item.total_amount_krw) ?? laborBasic + laborOther + stoneFactoryCost;
+      const totalAmount = parseNumber(item.total_amount_krw) ?? laborBasic + laborOther;
       const weightTotal = calcWeightTotal(item.weight_raw_g, item.weight_deduct_g);
 
       return {
@@ -2942,8 +2941,8 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                           const laborBasic = parseNumber(item.labor_basic_cost_krw) ?? 0;
                           const laborOther = parseNumber(item.labor_other_cost_krw) ?? 0;
                           const stoneFactoryCost = calcStoneFactoryCost(item);
-                          const factoryTotalCost = laborBasic + laborOther + stoneFactoryCost;
-                          const totalAmount = parseNumber(item.total_amount_krw) ?? factoryTotalCost;
+                          const autoCalculatedTotal = laborBasic + laborOther;
+                          const totalAmount = parseNumber(item.total_amount_krw) ?? autoCalculatedTotal;
                           const isExpanded = expandedLineId === item.line_uuid;
                           const seqValue = parseNumber(item.vendor_seq_no);
                           const isSeqDuplicate = seqValue !== null && duplicateSeqSet.has(seqValue);
@@ -3014,7 +3013,7 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                                 </td>
                                 <td className="px-2 py-1">
                                   <div className={cn("flex h-9 items-center justify-end text-[11px]", AUTO_FIELD_CLASS)}>
-                                    {formatNumber(factoryTotalCost)}
+                                    {formatNumber(autoCalculatedTotal)}
                                   </div>
                                 </td>
                                 <td className="px-2 py-1">
@@ -3341,7 +3340,7 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                                         />
                                       </div>
                                       <div className="space-y-1">
-                                        <label className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)]">자입원석 합계(개수×단가)</label>
+                                        <label className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)]">원석단가 입력합(참고)</label>
                                         <Input
                                           type="text"
                                           inputMode="numeric"
@@ -3370,6 +3369,49 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                                           data-line-id={item.line_uuid}
                                           className="h-8 text-[11px] text-right"
                                         />
+                                      </div>
+                                    </div>
+                                    <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
+                                      <div className="space-y-1">
+                                        <label className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)]">
+                                          공장청구총액(저장/AP)
+                                        </label>
+                                        <Input
+                                          type="text"
+                                          inputMode="numeric"
+                                          value={item.total_amount_krw}
+                                          disabled={inputDisabled}
+                                          onChange={(e) =>
+                                            updateLineNumber(item.line_uuid, "total_amount_krw", e.target.value, {
+                                              format: false,
+                                            })
+                                          }
+                                          autoFormat={false}
+                                          onBlur={(e) => {
+                                            const nextId = getLineIdFromTarget(e.relatedTarget);
+                                            if (nextId !== item.line_uuid) setExpandedLineId(null);
+                                          }}
+                                          data-line-id={item.line_uuid}
+                                          className="h-8 text-[11px] text-right"
+                                        />
+                                      </div>
+                                      <div className="space-y-1">
+                                        <label className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)]">
+                                          자동계산(기본+중/보)
+                                        </label>
+                                        <Input
+                                          type="text"
+                                          inputMode="numeric"
+                                          value={autoCalculatedTotal}
+                                          readOnly
+                                          className={`h-8 text-[11px] text-right ${AUTO_FIELD_CLASS}`}
+                                        />
+                                      </div>
+                                      <div className="text-[10px] text-[var(--muted)] md:col-span-2">
+                                        비우면 기본공임+중/보 합(자동계산값)으로 저장된다
+                                      </div>
+                                      <div className="text-[10px] text-[var(--muted)] md:col-span-2">
+                                        원석단가 입력합은 총액에 자동 포함하지 않는다
                                       </div>
                                     </div>
                                     <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-[46px_110px_46px_110px_46px_110px_110px_172px]">
@@ -3521,7 +3563,7 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                                         <label className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)]">총공임</label>
                                         <Input
                                           inputMode="numeric"
-                                          value={factoryTotalCost}
+                                          value={autoCalculatedTotal}
                                           readOnly
                                           className={`h-8 text-[11px] text-right ${AUTO_FIELD_CLASS}`}
                                         />
@@ -3559,7 +3601,7 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                                           }
                                           data-line-id={item.line_uuid}
                                         >
-                                          마스터 비율로 자동배분
+                                          후보 비율로 자동배분
                                         </Button>
                                       </div>
                                     </div>
@@ -3630,7 +3672,7 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                       </div>
                     </div>
                     <div className="rounded-lg border border-[var(--panel-border)] bg-[var(--surface)]/60 px-3 py-2">
-                      자입원석 합계
+                      원석단가 입력합(참고)
                       <div className="mt-0.5 font-semibold text-[var(--foreground)]">
                         <NumberText value={lineTotals.stoneLabor} />
                       </div>
@@ -4546,7 +4588,7 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                             ) : (
                               <div className="mt-2 space-y-1 text-[11px]">
                                 <div className="flex items-center justify-between">
-                                  <span className="text-[var(--muted)]">공장원가 (기본+중/보+자입원석)</span>
+                                  <span className="text-[var(--muted)]">공장원가 (기본+중/보+원석단가 입력합(참고))</span>
                                   <span className="font-semibold text-[var(--foreground)]">{formatNumber(pricingPreview.factoryCostTotal)}</span>
                                 </div>
                                 <div className="flex items-center justify-between">

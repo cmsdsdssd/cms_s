@@ -53,6 +53,7 @@ type LedgerRow = {
 type ShipmentLineRow = {
   shipment_line_id?: string;
   shipment_id?: string;
+  repair_line_id?: string | null;
   qty?: number | null;
   material_code?: string | null;
   net_weight_g?: number | null;
@@ -240,10 +241,9 @@ const splitDateTimeKst = (value?: string | null) => {
 
 const getMaterialCodeToneClass = (materialCode?: string | null) => {
   const code = (materialCode ?? "").trim();
-  if (!code) return "text-[var(--muted)]";
-  if (code === "14" || code === "18" || code === "24") return "text-amber-500 dark:text-amber-300";
-  if (code === "00") return "text-amber-700 dark:text-amber-400";
-  return "text-emerald-600 dark:text-emerald-400";
+  if (code === "14" || code === "18" || code === "24") return "text-yellow-600 dark:text-yellow-300";
+  if (code === "925" || code === "999") return "text-emerald-600 dark:text-emerald-400";
+  return "text-amber-700 dark:text-amber-300";
 };
 
 const toKstInputValue = () => {
@@ -518,7 +518,7 @@ export default function ArPage() {
       const { data, error } = await schemaClient
         .from("cms_shipment_line")
         .select(
-          "shipment_line_id, shipment_id, qty, material_code, net_weight_g, total_amount_sell_krw, material_amount_sell_krw, labor_total_sell_krw, model_name, suffix, color, size, created_at, shipment_header:cms_shipment_header(ship_date, status, customer_party_id)"
+          "shipment_line_id, shipment_id, repair_line_id, qty, material_code, net_weight_g, total_amount_sell_krw, material_amount_sell_krw, labor_total_sell_krw, model_name, suffix, color, size, created_at, shipment_header:cms_shipment_header(ship_date, status, customer_party_id)"
         )
         .eq("shipment_header.customer_party_id", effectiveSelectedPartyId)
         .eq("shipment_header.status", "CONFIRMED")
@@ -1077,15 +1077,15 @@ export default function ArPage() {
               {activeTab === 'ledger' && (
                 <Card className="min-h-[500px] shadow-sm">
                   <div className="overflow-x-auto">
-                    <table className="w-full text-left text-xs">
+                    <table className="w-full text-left text-xs table-fixed">
                       <thead className="bg-[var(--chip)] text-[var(--muted)] font-medium border-b border-[var(--panel-border)]">
                         <tr>
-                          <th className="px-4 py-3 whitespace-nowrap w-44">날짜</th>
-                          <th className="px-4 py-3 whitespace-nowrap w-20">구분</th>
-                          <th className="px-4 py-3 whitespace-nowrap min-w-[200px]">내용</th>
-                          <th className="px-4 py-3 whitespace-nowrap text-right">총금액</th>
-                          <th className="px-4 py-3 whitespace-nowrap text-right">소재가격(판매/결제)</th>
-                          <th className="px-4 py-3 whitespace-nowrap text-right">총공임</th>
+                          <th className="px-4 py-3 whitespace-nowrap w-[140px]">날짜</th>
+                          <th className="px-4 py-3 whitespace-nowrap w-[80px]">구분</th>
+                          <th className="px-4 py-3 whitespace-nowrap w-[240px]">내용</th>
+                          <th className="px-4 py-3 whitespace-nowrap text-right w-[120px]">총금액</th>
+                          <th className="px-4 py-3 whitespace-nowrap text-right font-bold w-[280px]">소재가격(판매/결제)</th>
+                          <th className="px-4 py-3 whitespace-nowrap text-right w-[100px]">총공임</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-[var(--panel-border)]">
@@ -1104,9 +1104,15 @@ export default function ArPage() {
                             .filter(Boolean)
                             .join(" /");
                           const modelName = (shipmentLine?.model_name ?? "").trim();
+                          const isRepairLine = Boolean(shipmentLine?.repair_line_id);
+                          const memoText = (row.memo ?? "").trim();
                           const modelMeta = [shipmentLine?.suffix, shipmentLine?.color, shipmentLine?.size]
                             .filter(Boolean)
                             .join(" /");
+                          const shipmentContentText = isRepairLine
+                            ? `[수리] | ${modelName || shipmentLabel || "-"} | ${memoText || "-"}`
+                            : `${modelName || shipmentLabel || row.memo || "-"}${modelName && modelMeta ? ` / ${modelMeta}` : ""}`;
+                          const returnContentText = `[${isRepairLine ? "수리" : "반품"}] | ${modelName || shipmentLabel || "-"} | ${memoText || "-"}`;
                           const invoice = row.shipment_line_id
                             ? invoiceByShipmentLineId.get(row.shipment_line_id)
                             : undefined;
@@ -1119,10 +1125,6 @@ export default function ArPage() {
                           const convertedWeight = Number(invoice?.commodity_due_g ?? 0);
                           const originalWeight = Number(shipmentLine?.net_weight_g ?? 0);
                           const materialCode = (invoice?.material_code ?? shipmentLine?.material_code ?? "").trim();
-                          const paymentWeightLabel = [
-                            (paymentMaterial?.goldG ?? 0) > 0 ? `금 ${formatGram(paymentMaterial?.goldG ?? 0)}` : null,
-                            (paymentMaterial?.silverG ?? 0) > 0 ? `은 ${formatGram(paymentMaterial?.silverG ?? 0)}` : null,
-                          ].filter(Boolean).join(" / ");
                           const paymentMaterialKrwLabel = formatKrwDashZero(paymentMaterial?.materialKrw ?? 0);
                           const paymentLaborKrwLabel = formatKrwDashZero(paymentMaterial?.laborKrw ?? 0);
                           const materialSellKrwLabel = formatKrwDashZero(shipmentLine?.material_amount_sell_krw ?? null);
@@ -1175,12 +1177,11 @@ export default function ArPage() {
                               </td>
                               <td className="px-4 py-3 text-[var(--foreground)]">
                                 {isShipment ? (
-                                  <span>
-                                    <span className="font-extrabold">{modelName || shipmentLabel || row.memo}</span>
-                                    {modelName && modelMeta ? <span className="font-normal"> / {modelMeta}</span> : null}
-                                  </span>
+                                  <span className="block truncate whitespace-nowrap">{shipmentContentText}</span>
+                                ) : isReturn ? (
+                                  <span className="block truncate whitespace-nowrap">{returnContentText}</span>
                                 ) : (
-                                  <span>{row.memo}</span>
+                                  <span className="block truncate whitespace-nowrap">{row.memo || "-"}</span>
                                 )}
                               </td>
                               <td className="px-4 py-3 text-right">
@@ -1199,17 +1200,40 @@ export default function ArPage() {
                                   )}
                                 />
                               </td>
-                              <td className="px-4 py-3 text-right tabular-nums">
+                              <td className="px-4 py-3 text-right tabular-nums font-bold w-[280px] max-w-[280px]">
                                 {isPayment ? (
                                   paymentMaterialKrwLabel === "-" ? "-" : (
-                                    <span>
-                                      {paymentMaterialKrwLabel}
-                                    </span>
+                                    <div className="flex flex-col items-end">
+                                      <span className="truncate whitespace-nowrap">{paymentMaterialKrwLabel}</span>
+                                      {(paymentMaterial?.goldG || paymentMaterial?.silverG) && (
+                                        <span className="text-[10px] text-[var(--foreground)] font-normal">
+                                          <span className="text-[var(--muted)]">(</span>
+                                          {paymentMaterial.goldG ? (
+                                            <>
+                                              <span className="text-[var(--muted)]">금</span> {formatGram(paymentMaterial.goldG)}
+                                            </>
+                                          ) : null}
+                                          {paymentMaterial.goldG && paymentMaterial.silverG ? " " : ""}
+                                          {paymentMaterial.silverG ? (
+                                            <>
+                                              <span className="text-[var(--muted)]">은</span> {formatGram(paymentMaterial.silverG)}
+                                            </>
+                                          ) : null}
+                                          <span className="text-[var(--muted)]">)</span>
+                                        </span>
+                                      )}
+                                    </div>
                                   )
                                 ) : (
-                                  materialSellKrwLabel === "-" ? "-" : (
-                                    <span>
-                                      {materialSellKrwLabel}
+                                  unitOnly || materialSellKrwLabel === "-" ? "-" : (
+                                    <span className="inline-flex max-w-full items-center justify-end gap-1 overflow-hidden whitespace-nowrap leading-tight">
+                                      <span className="shrink-0">{materialSellKrwLabel}</span>
+                                      <span className="truncate text-[var(--foreground)]">
+                                        <span className={getMaterialCodeToneClass(materialCode)}>(</span>
+                                        <span className={getMaterialCodeToneClass(materialCode)}>{materialCode || "-"}</span>
+                                        <span>, {formatGram(originalWeight)}, {formatGram(convertedWeight)}</span>
+                                        <span className={getMaterialCodeToneClass(materialCode)}>)</span>
+                                      </span>
                                     </span>
                                   )
                                 )}
@@ -1869,6 +1893,7 @@ function LineCalculation({
   rowAmount: number;
   valuation?: ShipmentValuationRow | null;
 }) {
+  // 1. Fetch Line Info
   const lineQuery = useQuery({
     queryKey: ["cms", "shipment_line_modal", shipmentLineId],
     queryFn: async () => {
@@ -1888,35 +1913,62 @@ function LineCalculation({
     enabled: Boolean(shipmentLineId),
   });
 
-  if (lineQuery.isLoading) return <div className="text-xs text-[var(--muted)]">세부 내역 로딩 중...</div>;
+  // 2. Fetch Invoice Info (Authoritative Converted Weight)
+  const invoiceQuery = useQuery({
+    queryKey: ["cms", "ar_invoice_modal", shipmentLineId],
+    queryFn: async () => {
+      const { data, error } = await schemaClient
+        .from(CONTRACTS.views.arInvoicePosition)
+        .select("commodity_due_g, commodity_price_snapshot_krw_per_g")
+        .eq("shipment_line_id", shipmentLineId)
+        .maybeSingle();
+      if (error) throw error;
+      return (data ?? null) as { commodity_due_g?: number | null; commodity_price_snapshot_krw_per_g?: number | null } | null;
+    },
+    enabled: Boolean(shipmentLineId),
+  });
+
+  if (lineQuery.isLoading || invoiceQuery.isLoading) return <div className="text-xs text-[var(--muted)]">세부 내역 로딩 중...</div>;
   const line = lineQuery.data;
+  const invoice = invoiceQuery.data;
+
   if (!line) return null;
 
   const mat = (line.material_code ?? "").toUpperCase();
   const isSilver = mat.startsWith("925") || mat.startsWith("999");
 
-  // Logic:
-  // If silver, factor comes from valuation snapshot if available, else line or 1.0.
-  // If gold, factor depends on purity (14K -> 0.6435, 18K -> 0.825).
-  let factor = 1.0;
+  // Logic: Use authoritative weight from Invoice if available, else calc
+  let purity = 1.0;
+  let loss = 1.0;
+
   if (isSilver) {
-    factor = valuation?.silver_adjust_factor_snapshot ?? line.silver_adjust_factor ?? 1.0;
+    purity = mat.includes("925") ? 0.925 : 1.0;
+    loss = valuation?.silver_adjust_factor_snapshot ?? line.silver_adjust_factor ?? 1.0;
   } else {
-    // Gold purity factor
-    if (mat.includes("14K")) factor = 0.6435; // 0.585 * 1.1
-    else if (mat.includes("18K")) factor = 0.825; // 0.75 * 1.1
-    else if (mat.includes("24K") || mat.includes("PURE")) factor = 1.0;
+    if (mat.includes("14K")) {
+      purity = 0.6435;
+      loss = 1.0;
+    } else if (mat.includes("18K")) {
+      purity = 0.825;
+      loss = 1.0;
+    } else if (mat.includes("24K") || mat.includes("PURE")) {
+      purity = 1.0;
+      loss = 1.0;
+    }
   }
 
-  const pricePerG = isSilver ? (line.silver_tick_krw_per_g ?? 0) : (line.gold_tick_krw_per_g ?? 0);
-
   const rawWeight = line.net_weight_g ?? 0;
-  const convertedWeight = rawWeight * factor;
 
-  const labor = line.labor_total_sell_krw ?? 0;
+  // Authoritative data from Invoice
+  const invoiceWeight = invoice?.commodity_due_g ? Number(invoice.commodity_due_g) : null;
+  const invoicePrice = invoice?.commodity_price_snapshot_krw_per_g ? Number(invoice.commodity_price_snapshot_krw_per_g) : null;
+
+  // Use invoice weight if available, else fallback to manual calc
+  const convertedWeight = invoiceWeight ?? (rawWeight * purity * loss);
+  const pricePerG = invoicePrice ?? (isSilver ? (line.silver_tick_krw_per_g ?? 0) : (line.gold_tick_krw_per_g ?? 0));
+
   const materialAmt = line.material_amount_sell_krw ?? 0;
-
-  const displayFactor = Number.isInteger(factor) ? factor.toString() : factor.toFixed(3);
+  const labor = line.labor_total_sell_krw ?? 0;
 
   return (
     <div className="bg-[var(--surface)] p-3 rounded-md border border-[var(--panel-border)] text-sm space-y-1">
@@ -1927,11 +1979,15 @@ function LineCalculation({
         </span>
       </div>
 
-      {/* Compact Layout: Raw Weight * Factor = Converted Weight */}
+      {/* Formula: 원중량 * 함량 * 해리 = 순금 환산 중량 */}
       <div className="flex justify-between items-center text-[var(--muted)] text-xs">
-        <span>원중량 {rawWeight}g × {isSilver ? "보정" : "함량"}({displayFactor})</span>
+        <div className="flex flex-col">
+          <span>
+            {rawWeight}g(원중량) × {purity}(함량) × {loss}(해리)
+          </span>
+        </div>
         <span className="font-medium text-[var(--foreground)]">
-          = 환산 {Number.isInteger(convertedWeight) ? convertedWeight : convertedWeight.toFixed(2)}g
+          = {formatGram(convertedWeight)} (환산)
         </span>
       </div>
 
@@ -1939,7 +1995,7 @@ function LineCalculation({
 
       {/* Price calculation */}
       <div className="flex justify-between items-center text-[var(--muted)]">
-        <span>환산중량 × 시세 ({formatKrw(pricePerG)})</span>
+        <span>환산중량 {formatGram(convertedWeight)} × 시세 ({formatKrw(pricePerG)})</span>
         <span>{formatKrw(materialAmt)}</span>
       </div>
       <div className="flex justify-between items-center text-[var(--muted)]">
@@ -1951,6 +2007,13 @@ function LineCalculation({
         <span>= 합계</span>
         <span>{formatKrw(rowAmount)}</span>
       </div>
+
+      {/* Warning if calc mismatch (only if invoice exists) */}
+      {invoiceWeight && Math.abs(invoiceWeight - (rawWeight * purity * loss)) > 0.05 && (
+        <div className="text-[10px] text-[var(--warn)] mt-1">
+          * 시스템 환산 중량({formatGram(invoiceWeight)})과 계산상 중량({formatGram(rawWeight * purity * loss)})에 차이가 있습니다. (시스템 값 적용)
+        </div>
+      )}
     </div>
   );
 }

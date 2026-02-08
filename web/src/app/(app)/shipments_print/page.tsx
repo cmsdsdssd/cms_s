@@ -37,6 +37,7 @@ type ShipmentHeaderRow = {
     total_amount_sell_krw?: number | null;
     gold_tick_krw_per_g?: number | null;
     silver_tick_krw_per_g?: number | null;
+    silver_adjust_factor?: number | null;
   }> | null;
 };
 
@@ -60,6 +61,7 @@ type ReturnLineRow = {
     total_amount_sell_krw?: number | null;
     gold_tick_krw_per_g?: number | null;
     silver_tick_krw_per_g?: number | null;
+    silver_adjust_factor?: number | null;
     shipment_header?: {
       customer_party_id?: string | null;
       is_store_pickup?: boolean | null;
@@ -103,8 +105,6 @@ type PartyReceiptPage = {
   todaySales: Amounts;
   todayReturns: Amounts;
   previous: Amounts;
-  goldPriceRange: { min: number; max: number } | null;
-  silverPriceRange: { min: number; max: number } | null;
 };
 
 const hasReturnAmounts = (amounts: Amounts) => {
@@ -244,7 +244,6 @@ const hasRepairMaterialReceivable = (line: ReceiptLine) => {
   return materialAmount > 0 && netWeight > 0;
 };
 
-
 const toLineAmounts = (line: ReceiptLine): Amounts => {
   if (line.is_repair && !hasRepairMaterialReceivable(line)) {
     const repairLabor = Number(line.repair_fee_krw ?? 0);
@@ -261,13 +260,24 @@ const toLineAmounts = (line: ReceiptLine): Amounts => {
   if (bucket.kind === "none") {
     return { gold: 0, silver: 0, labor: 0, total: 0 };
   }
-  const weighted = netWeight * bucket.factor;
+  const silverAdjustFactor = Number(line.silver_adjust_factor ?? 1.2);
+  const silverWeightFactor = (line.material_code ?? "").trim() === "925" ? silverAdjustFactor : 1;
+  const weighted = netWeight * bucket.factor * (bucket.kind === "silver" ? silverWeightFactor : 1);
   return {
     gold: bucket.kind === "gold" ? weighted : 0,
     silver: bucket.kind === "silver" ? weighted : 0,
     labor,
     total,
   };
+};
+
+const toLineAmountsArAligned = (line: ReceiptLine): Amounts => {
+  if (line.is_repair) {
+    const repairLabor = Number(line.repair_fee_krw ?? 0);
+    const total = Number(line.total_amount_sell_krw ?? 0);
+    return { gold: 0, silver: 0, labor: repairLabor, total };
+  }
+  return toLineAmounts(line);
 };
 
 
@@ -279,30 +289,16 @@ const chunkLines = (lines: ReceiptLine[], size: number) => {
   return chunks.length > 0 ? chunks : [[]];
 };
 
-const getTickPriceRanges = (lines: ReceiptLine[]) => {
-  const toRange = (values: number[]) => {
-    if (values.length === 0) return null;
-    return { min: Math.min(...values), max: Math.max(...values) };
-  };
-  const goldValues = lines
-    .map((line) => line.gold_tick_krw_per_g)
-    .filter((value): value is number => value !== null && value !== undefined);
-  const silverValues = lines
-    .map((line) => line.silver_tick_krw_per_g)
-    .filter((value): value is number => value !== null && value !== undefined);
-  return {
-    goldPriceRange: toRange(goldValues),
-    silverPriceRange: toRange(silverValues),
-  };
-};
-
-const sumLineAmountsByParty = (lines: ReceiptLine[]) => {
+const sumLineAmountsByParty = (
+  lines: ReceiptLine[],
+  toAmounts: (line: ReceiptLine) => Amounts = toLineAmounts
+) => {
   const map = new Map<string, Amounts>();
   lines.forEach((line) => {
     const partyId = line.shipment_header?.customer_party_id ?? "";
     if (!partyId) return;
     const current = map.get(partyId) ?? { ...zeroAmounts };
-    map.set(partyId, addAmounts(current, toLineAmounts(line)));
+    map.set(partyId, addAmounts(current, toAmounts(line)));
   });
   return map;
 };
@@ -361,7 +357,7 @@ function ShipmentsPrintContent() {
       let query = schemaClient
         .from("cms_shipment_header")
         .select(
-          "shipment_id, ship_date, confirmed_at, is_store_pickup, memo, customer_party_id, customer:cms_party(name), cms_shipment_line(shipment_line_id, repair_line_id, model_name, qty, material_code, net_weight_g, color, size, labor_total_sell_krw, material_amount_sell_krw, repair_fee_krw, total_amount_sell_krw, gold_tick_krw_per_g, silver_tick_krw_per_g)"
+          "shipment_id, ship_date, confirmed_at, is_store_pickup, memo, customer_party_id, customer:cms_party(name), cms_shipment_line(shipment_line_id, repair_line_id, model_name, qty, material_code, net_weight_g, color, size, labor_total_sell_krw, material_amount_sell_krw, repair_fee_krw, total_amount_sell_krw, gold_tick_krw_per_g, silver_tick_krw_per_g, silver_adjust_factor)"
         )
         .eq("status", "CONFIRMED");
 
@@ -394,7 +390,7 @@ function ShipmentsPrintContent() {
       let query = schemaClient
         .from("cms_return_line")
         .select(
-          "return_line_id, occurred_at, return_qty, final_return_amount_krw, cms_shipment_line!inner(shipment_line_id, repair_line_id, model_name, qty, material_code, net_weight_g, color, size, labor_total_sell_krw, material_amount_sell_krw, repair_fee_krw, total_amount_sell_krw, gold_tick_krw_per_g, silver_tick_krw_per_g, shipment_header:cms_shipment_header(customer_party_id, is_store_pickup, customer:cms_party(name)))"
+          "return_line_id, occurred_at, return_qty, final_return_amount_krw, cms_shipment_line!inner(shipment_line_id, repair_line_id, model_name, qty, material_code, net_weight_g, color, size, labor_total_sell_krw, material_amount_sell_krw, repair_fee_krw, total_amount_sell_krw, gold_tick_krw_per_g, silver_tick_krw_per_g, silver_adjust_factor, shipment_header:cms_shipment_header(customer_party_id, is_store_pickup, customer:cms_party(name)))"
         )
         .gte("occurred_at", todayStartIso)
         .lt("occurred_at", todayEndIso)
@@ -509,6 +505,7 @@ function ShipmentsPrintContent() {
           total_amount_sell_krw: line.total_amount_sell_krw ?? null,
           gold_tick_krw_per_g: line.gold_tick_krw_per_g ?? null,
           silver_tick_krw_per_g: line.silver_tick_krw_per_g ?? null,
+          silver_adjust_factor: line.silver_adjust_factor ?? null,
           shipment_header: header,
         }));
       });
@@ -551,6 +548,7 @@ function ShipmentsPrintContent() {
               : -Math.abs(Number(overrideTotal)),
           gold_tick_krw_per_g: source?.gold_tick_krw_per_g ?? null,
           silver_tick_krw_per_g: source?.silver_tick_krw_per_g ?? null,
+          silver_adjust_factor: source?.silver_adjust_factor ?? null,
           shipment_header: {
             ship_date: null,
             status: "RETURNED",
@@ -616,6 +614,14 @@ function ShipmentsPrintContent() {
   const todayByParty = useMemo(() => sumLineAmountsByParty(todayLines), [todayLines]);
   const todaySalesByParty = useMemo(() => sumLineAmountsByParty(todaySalesLines), [todaySalesLines]);
   const todayReturnsByParty = useMemo(() => sumLineAmountsByParty(todayReturnLines), [todayReturnLines]);
+  const todaySalesArByParty = useMemo(
+    () => sumLineAmountsByParty(todaySalesLines, toLineAmountsArAligned),
+    [todaySalesLines]
+  );
+  const todayReturnsArByParty = useMemo(
+    () => sumLineAmountsByParty(todayReturnLines, toLineAmountsArAligned),
+    [todayReturnLines]
+  );
 
   const receiptPages = useMemo(() => {
     const result: PartyReceiptPage[] = [];
@@ -626,21 +632,22 @@ function ShipmentsPrintContent() {
       const todaySales = todaySalesByParty.get(group.partyId) ?? { ...zeroAmounts };
       const todayReturns = todayReturnsByParty.get(group.partyId) ?? { ...zeroAmounts };
       const todayNet = addAmounts(todaySales, todayReturns);
+      const todaySalesAr = todaySalesArByParty.get(group.partyId) ?? { ...zeroAmounts };
+      const todayReturnsAr = todayReturnsArByParty.get(group.partyId) ?? { ...zeroAmounts };
+      const todayNetAr = addAmounts(todaySalesAr, todayReturnsAr);
 
-      const previousSummary = subtractAmounts(totals, todayNet);
-      const { goldPriceRange, silverPriceRange } = getTickPriceRanges(group.lines);
+      const previousSummary = subtractAmounts(totals, todayNetAr);
+      const totalsSummary = addAmounts(previousSummary, todayNet);
       chunks.forEach((chunk) => {
         result.push({
           partyId: group.partyId,
           partyName: group.partyName,
           lines: chunk,
-          totals,
+          totals: totalsSummary,
           today: todayNet,
           todaySales,
           todayReturns,
           previous: previousSummary,
-          goldPriceRange,
-          silverPriceRange,
         });
       });
     });
@@ -655,13 +662,18 @@ function ShipmentsPrintContent() {
         todaySales: { ...zeroAmounts },
         todayReturns: { ...zeroAmounts },
         previous: { ...zeroAmounts },
-        goldPriceRange: null,
-        silverPriceRange: null,
       });
     }
 
     return result;
-  }, [partyGroups, arTotalsMap, todaySalesByParty, todayReturnsByParty]);
+  }, [
+    partyGroups,
+    arTotalsMap,
+    todaySalesByParty,
+    todayReturnsByParty,
+    todaySalesArByParty,
+    todayReturnsArByParty,
+  ]);
 
   const visiblePages = useMemo(() => {
     if (!activePartyId) return receiptPages;
@@ -888,8 +900,6 @@ function ShipmentsPrintContent() {
                         dateLabel={printedAtLabel}
                         lines={page.lines}
                         summaryRows={buildSummaryRows(page)}
-                        goldPriceRange={page.goldPriceRange}
-                        silverPriceRange={page.silverPriceRange}
                       />
                     </div>
                     <div className="h-full pl-4">
@@ -898,8 +908,6 @@ function ShipmentsPrintContent() {
                         dateLabel={printedAtLabel}
                         lines={page.lines}
                         summaryRows={buildSummaryRows(page)}
-                        goldPriceRange={page.goldPriceRange}
-                        silverPriceRange={page.silverPriceRange}
                       />
                     </div>
                   </div>
