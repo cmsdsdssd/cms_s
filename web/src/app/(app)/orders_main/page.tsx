@@ -15,9 +15,39 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useQuery } from "@tanstack/react-query";
 import { getSchemaClient } from "@/lib/supabase/client";
+import { CONTRACTS } from "@/lib/contracts";
+import { callRpc } from "@/lib/supabase/rpc";
 import { cn } from "@/lib/utils";
 import { hasVariationTag, removeVariationTag } from "@/lib/variation-tag";
 import { Building2 } from "lucide-react";
+
+const INVENTORY_TAG = "/재고/";
+const LEGACY_INVENTORY_TAG = "[재고]";
+
+const hasInventoryTag = (memo?: string | null) => {
+  const value = String(memo ?? "");
+  return value.includes(INVENTORY_TAG) || value.includes(LEGACY_INVENTORY_TAG);
+};
+
+const toggleInventoryTag = (memo: string | null | undefined, on: boolean) => {
+  const value = String(memo ?? "");
+  if (on) {
+    if (hasInventoryTag(value)) return value;
+    const trimmed = value.trim();
+    return trimmed ? `${trimmed} ${INVENTORY_TAG}` : INVENTORY_TAG;
+  }
+  return value
+    .replaceAll(INVENTORY_TAG, "")
+    .replaceAll(LEGACY_INVENTORY_TAG, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+};
+
+type InventoryPositionByLocationRow = {
+  model_name?: string | null;
+  location_code?: string | null;
+  on_hand_qty?: number | null;
+};
 
 // Lazy load Factory Order Wizard
 const FactoryOrderWizard = lazy(() => import("@/components/factory-order/factory-order-wizard"));
@@ -154,6 +184,14 @@ export default function OrdersMainPage() {
   const [currentPage, setCurrentPage] = useState(1);
   const [includeCancelled, setIncludeCancelled] = useState(false);
   const [previewImageUrl, setPreviewImageUrl] = useState<string | null>(null);
+  const [bulkIssueLoading, setBulkIssueLoading] = useState(false);
+  const [inventoryTagSavingIds, setInventoryTagSavingIds] = useState<Set<string>>(new Set());
+  const [inventoryMatchModalOpen, setInventoryMatchModalOpen] = useState(false);
+  const [inventoryMatchCandidates, setInventoryMatchCandidates] = useState<
+    Record<string, Array<{ locationCode: string; onHandQty: number }>>
+  >({});
+  const [inventoryMatchSelection, setInventoryMatchSelection] = useState<Record<string, string>>({});
+  const actorId = process.env.NEXT_PUBLIC_CMS_ACTOR_ID ?? null;
 
   const ordersQuery = useQuery({
     queryKey: ["cms", "orders", "main"],
@@ -354,9 +392,143 @@ export default function OrdersMainPage() {
       const isPending = order.status === "ORDER_PENDING";
       const noPo = !order.factory_po_id;
       const hasVendor = !!order.vendor_guess_id;
-      return isPending && noPo && hasVendor;
+      const isInventoryChecked = hasInventoryTag(order.memo);
+      return isPending && noPo && hasVendor && !isInventoryChecked;
     });
   }, [applyFilters]);
+
+  const inventoryTargets = useMemo(
+    () =>
+      applyFilters.filter(
+        (order) => order.status === "ORDER_PENDING" && Boolean(order.order_line_id) && hasInventoryTag(order.memo)
+      ),
+    [applyFilters]
+  );
+
+  const toggleInventoryInOrder = async (order: OrderRow, checked: boolean) => {
+    const orderLineId = String(order.order_line_id ?? "");
+    if (!orderLineId || !schemaClient) return;
+
+    setInventoryTagSavingIds((prev) => {
+      const next = new Set(prev);
+      next.add(orderLineId);
+      return next;
+    });
+
+    const nextMemo = toggleInventoryTag(order.memo, checked);
+    const { error } = await schemaClient
+      .from("cms_order_line" as never)
+      .update({ memo: nextMemo } as never)
+      .eq("order_line_id", orderLineId);
+
+    setInventoryTagSavingIds((prev) => {
+      const next = new Set(prev);
+      next.delete(orderLineId);
+      return next;
+    });
+
+    if (error) {
+      window.alert(`재고체크 저장 실패: ${error.message}`);
+      return;
+    }
+
+    await ordersQuery.refetch();
+  };
+
+  const markSelectedAsReadyToShip = async () => {
+    if (!schemaClient) {
+      window.alert("Supabase env is missing");
+      return;
+    }
+    if (inventoryTargets.length === 0) {
+      window.alert("orders_main에서 재고 체크된 ORDER_PENDING 주문이 없습니다.");
+      return;
+    }
+
+    const { data, error } = await schemaClient
+      .from(CONTRACTS.views.inventoryPositionByMasterLocation)
+      .select("model_name, location_code, on_hand_qty");
+    if (error) {
+      window.alert(`재고 조회 실패: ${error.message}`);
+      return;
+    }
+
+    const byModel = new Map<string, Array<{ locationCode: string; onHandQty: number }>>();
+    ((data ?? []) as InventoryPositionByLocationRow[]).forEach((row) => {
+      const model = String(row.model_name ?? "").trim().toLowerCase();
+      const locationCode = String(row.location_code ?? "").trim();
+      const onHandQty = Number(row.on_hand_qty ?? 0);
+      if (!model || !locationCode || onHandQty < 1) return;
+      const list = byModel.get(model) ?? [];
+      list.push({ locationCode, onHandQty });
+      byModel.set(model, list);
+    });
+
+    const nextCandidates: Record<string, Array<{ locationCode: string; onHandQty: number }>> = {};
+    const nextSelection: Record<string, string> = {};
+    for (const target of inventoryTargets) {
+      const orderLineId = String(target.order_line_id);
+      const model = String(target.model_name ?? "").trim().toLowerCase();
+      const candidates = byModel.get(model) ?? [];
+      if (candidates.length === 0) {
+        window.alert(`재고 부족: ${target.model_name ?? "(모델없음)"}`);
+        return;
+      }
+      nextCandidates[orderLineId] = candidates.sort((a, b) => b.onHandQty - a.onHandQty);
+      nextSelection[orderLineId] = nextCandidates[orderLineId][0].locationCode;
+    }
+
+    setInventoryMatchCandidates(nextCandidates);
+    setInventoryMatchSelection(nextSelection);
+    setInventoryMatchModalOpen(true);
+  };
+
+  const confirmInventoryIssueWithMatch = async () => {
+    const setStatusFn = CONTRACTS.functions.orderSetStatus;
+    if (!setStatusFn) {
+      window.alert("orderSetStatus RPC가 설정되지 않았습니다.");
+      return;
+    }
+    if (inventoryTargets.length === 0) {
+      window.alert("orders_main에서 재고 체크된 ORDER_PENDING 주문이 없습니다.");
+      return;
+    }
+
+    setBulkIssueLoading(true);
+    const succeeded: string[] = [];
+    const failed: string[] = [];
+    for (const target of inventoryTargets) {
+      const orderLineId = String(target.order_line_id);
+      const matchedLocation = inventoryMatchSelection[orderLineId];
+      if (!matchedLocation) {
+        failed.push(orderLineId);
+        continue;
+      }
+      try {
+        await callRpc(setStatusFn, {
+          p_order_line_id: orderLineId,
+          p_to_status: "READY_TO_SHIP",
+          p_actor_person_id: actorId,
+          p_reason: `재고출고(${matchedLocation})`,
+        });
+        succeeded.push(orderLineId);
+      } catch {
+        failed.push(orderLineId);
+      }
+    }
+    setBulkIssueLoading(false);
+    setInventoryMatchModalOpen(false);
+
+    if (succeeded.length > 0) {
+      await ordersQuery.refetch();
+    }
+
+    if (failed.length > 0) {
+      window.alert(`일부 실패: ${failed.length}건 (성공 ${succeeded.length}건)`);
+    } else {
+      window.alert(`재고출고 전환 완료: ${succeeded.length}건`);
+    }
+  };
 
   const editAllHref = useMemo(() => {
     const params = new URLSearchParams();
@@ -465,6 +637,61 @@ export default function OrdersMainPage() {
         </div>
       )}
 
+      {inventoryMatchModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/55 flex items-center justify-center p-4">
+          <div className="w-full max-w-2xl rounded-xl border border-[var(--panel-border)] bg-[var(--panel)] shadow-2xl">
+            <div className="px-4 py-3 border-b border-[var(--panel-border)] flex items-center justify-between">
+              <div className="text-sm font-semibold">재고 매칭 확정 (orders_main)</div>
+              <button
+                className="text-xs text-[var(--muted)] hover:text-[var(--foreground)]"
+                onClick={() => setInventoryMatchModalOpen(false)}
+                type="button"
+              >
+                닫기
+              </button>
+            </div>
+            <div className="p-4 space-y-3 max-h-[60vh] overflow-auto">
+              {inventoryTargets.map((target) => {
+                const orderLineId = String(target.order_line_id);
+                const model = String(target.model_name ?? "-");
+                const candidates = inventoryMatchCandidates[orderLineId] ?? [];
+                return (
+                  <div key={orderLineId} className="grid grid-cols-[1fr_220px] gap-3 items-center rounded-lg border border-[var(--panel-border)] bg-[var(--chip)] px-3 py-2">
+                    <div className="text-sm truncate">{model}</div>
+                    <select
+                      value={inventoryMatchSelection[orderLineId] ?? ""}
+                      onChange={(e) =>
+                        setInventoryMatchSelection((prev) => ({ ...prev, [orderLineId]: e.target.value }))
+                      }
+                      className="h-8 text-xs rounded-md bg-[var(--background)] border border-[var(--panel-border)] px-2"
+                    >
+                      {candidates.map((c) => (
+                        <option key={`${orderLineId}-${c.locationCode}`} value={c.locationCode}>
+                          {c.locationCode} (재고 {c.onHandQty})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                );
+              })}
+            </div>
+            <div className="px-4 py-3 border-t border-[var(--panel-border)] flex items-center justify-end gap-2">
+              <Button variant="secondary" size="sm" onClick={() => setInventoryMatchModalOpen(false)}>
+                취소
+              </Button>
+              <Button
+                variant="primary"
+                size="sm"
+                onClick={confirmInventoryIssueWithMatch}
+                disabled={bulkIssueLoading}
+              >
+                {bulkIssueLoading ? "처리중..." : "매칭확정 + 재고출고"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Unified Toolbar - Compact Header */}
       <UnifiedToolbar
         title="주문관리"
@@ -481,6 +708,14 @@ export default function OrdersMainPage() {
               <Badge tone="neutral" className="ml-1 text-[10px] h-4 px-1">
                 {pendingFilteredOrders.length}
               </Badge>
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={markSelectedAsReadyToShip}
+              disabled={bulkIssueLoading || inventoryTargets.length === 0}
+            >
+              {bulkIssueLoading ? "재고출고 처리중..." : `재고출고 (${inventoryTargets.length})`}
             </Button>
             <Link href="/orders">
               <ToolbarButton variant="primary">
@@ -862,7 +1097,7 @@ export default function OrdersMainPage() {
                       <div
                         key={rowKey}
                         className={cn(
-                          "group relative rounded-[14px] border border-[var(--panel-border)] bg-[var(--background)] px-4 py-1.5",
+                          "group relative rounded-[14px] border border-[var(--panel-border)] bg-[var(--background)] px-4 py-0.5",
                           "transition-colors duration-150 hover:border-[var(--primary)]/25 hover:bg-[var(--panel)]",
                           isEmpty ? "opacity-40 min-h-[56px]" : "cursor-default",
                           order?.status === "CANCELLED" ? "line-through decoration-[2px] decoration-[var(--muted)] text-[var(--muted)]" : "",
@@ -881,7 +1116,7 @@ export default function OrdersMainPage() {
                               {order?.model_name && masterImageMap.get(order.model_name) ? (
                                 <div
                                   className={cn(
-                                    "absolute left-1/2 top-[136%] h-18 w-18 -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-md border border-[var(--panel-border)] bg-[var(--panel)]",
+                                    "absolute left-1/2 top-[135%] h-16 w-16 -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-md border border-[var(--panel-border)] bg-[var(--panel)]",
                                     order?.status === "CANCELLED" ? "grayscale" : ""
                                   )}
                                 >
@@ -923,22 +1158,36 @@ export default function OrdersMainPage() {
                           </div>
 
                           {/* 4. 모델명 - 중앙 정렬 적용 */}
-                          <div className="font-semibold text-[var(--foreground)] flex flex-col h-full justify-center items-center text-center">
-                              <span
-                                className={cn(
-                                  "truncate px-2 text-sm font-medium",
-                                  order?.status === "CANCELLED" ? "text-[var(--muted)]" : "text-[var(--foreground)]"
-                                )}
-                              >
-                                {order?.model_name ?? ""}
-                              </span>
-                              {hasVariationTag(order?.memo) ? (
-                                <Badge tone="warning" className="h-4 px-1 text-[9px]">
-                                  변형
-                                </Badge>
-                              ) : null}
-                              <span className="text-[10px] text-[var(--muted)] font-normal lg:hidden">모델명</span>
-                            </div>
+                          <div className="font-semibold text-[var(--foreground)] flex items-center justify-center gap-1 text-center">
+                            <span
+                              className={cn(
+                                "truncate px-2 text-sm font-medium",
+                                order?.status === "CANCELLED" ? "text-[var(--muted)]" : "text-[var(--foreground)]"
+                              )}
+                            >
+                              {order?.model_name ?? ""}
+                            </span>
+                            {hasVariationTag(order?.memo) ? (
+                              <Badge tone="warning" className="h-4 px-1 text-[9px]">
+                                변형
+                              </Badge>
+                            ) : null}
+                            {order?.order_line_id ? (
+                              <label className="inline-flex items-center gap-1 rounded border border-[var(--panel-border)] bg-[var(--chip)] px-1 py-0.5 text-[9px] text-[var(--muted)]">
+                                <input
+                                  type="checkbox"
+                                  checked={hasInventoryTag(order.memo)}
+                                  onChange={(event) => void toggleInventoryInOrder(order, event.target.checked)}
+                                  disabled={
+                                    inventoryTagSavingIds.has(String(order.order_line_id)) ||
+                                    order.status !== "ORDER_PENDING"
+                                  }
+                                  className="h-3 w-3"
+                                />
+                                재고
+                              </label>
+                            ) : null}
+                          </div>
 
                           {/* 5. 소재 */}
                           <div className="flex flex-col justify-center text-[var(--muted)]">

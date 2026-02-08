@@ -24,11 +24,15 @@ export const CONTRACTS = {
     inventoryPositionByMaster: "cms_v_inventory_position_by_master_item_v1",
     inventoryPositionByMasterLocation: "cms_v_inventory_position_by_master_item_location_v1",
     inventoryLocationSummary: "cms_v_inventory_location_summary_v1",
+    inventoryLocationMaster: "cms_location",
+    inventoryLocationBins: "cms_location_bin",
     inventoryMoveWorklist: "cms_v_inventory_move_worklist_v1",
     inventoryMoveLinesEnriched: "cms_v_inventory_move_lines_enriched_v1",
     inventoryCountSessions: "cms_v_inventory_count_sessions_v1",
     inventoryCountLinesEnriched: "cms_v_inventory_count_lines_enriched_v1",
     inventoryStocktakeVariance: "cms_v_inventory_stocktake_variance_v1",
+    inventoryHealthSummary: "cms_v_inventory_health_summary_v1",
+    inventoryHealthIssues: "cms_v_inventory_health_issues_v1",
     partMasterWithPosition: "cms_v_part_master_with_position_v1",
     partMoveLines: "cms_v_part_move_lines_v1",
     partUnlinkedWorklist: "cms_v_part_unlinked_worklist_v1",
@@ -98,6 +102,8 @@ export const CONTRACTS = {
     })(),
     shipmentSetStorePickup:
       process.env.NEXT_PUBLIC_RPC_SHIPMENT_SET_STORE_PICKUP || "cms_fn_set_shipment_store_pickup_v1",
+    shipmentSetSourceLocation:
+      process.env.NEXT_PUBLIC_RPC_SHIPMENT_SET_SOURCE_LOCATION || "cms_fn_set_shipment_source_location_v1",
     shipmentClearShipDate:
       process.env.NEXT_PUBLIC_RPC_SHIPMENT_CLEAR_SHIP_DATE || "cms_fn_clear_shipment_ship_date_v1",
     shipmentUnconfirm:

@@ -14,6 +14,7 @@ export function MarketTicker({ variant = "full" }: MarketTickerProps) {
     const [ksOriginal, setKsOriginal] = useState<number | null>(null);
     const [cs, setCs] = useState<number | null>(null);
     const [csOriginal, setCsOriginal] = useState<number | null>(null);
+    const [cnyAd, setCnyAd] = useState<number | null>(null);
     const [isOffline, setIsOffline] = useState(false);
 
     useEffect(() => {
@@ -36,6 +37,7 @@ export function MarketTicker({ variant = "full" }: MarketTickerProps) {
                         ksOriginal?: number;
                         cs?: number | null;
                         csOriginal?: number | null;
+                        cnyAd?: number | null;
                     };
                     error?: string;
                 };
@@ -45,6 +47,7 @@ export function MarketTicker({ variant = "full" }: MarketTickerProps) {
                     setKsOriginal(result.data.ksOriginal ?? result.data.silverOriginal ?? null);
                     setCs(result.data.cs ?? null);
                     setCsOriginal(result.data.csOriginal ?? null);
+                    setCnyAd(result.data.cnyAd ?? null);
                     setIsOffline(false);
                 } else {
                     setIsOffline(true);
@@ -99,8 +102,13 @@ export function MarketTicker({ variant = "full" }: MarketTickerProps) {
                 adjusted: csAdjusted,
                 display: csDisplay,
             },
+            cnyAd: {
+                title: `CNY ${formatPrice(cnyAd)} KRW`,
+                ariaLabel: `CNY KRW ${formatPrice(cnyAd)}`,
+                display: formatPrice(cnyAd),
+            },
         };
-    }, [kg, ks, ksOriginal, cs, csOriginal]);
+    }, [kg, ks, ksOriginal, cs, csOriginal, cnyAd]);
 
     const offlineBadge = isOffline ? (
         <span className="inline-flex items-center gap-1 rounded-full border border-[color:var(--hairline)] bg-[color:var(--panel)]/80 px-2 py-0.5 text-[10px] font-medium text-[var(--muted-weak)] shadow-[var(--shadow-subtle)]">
@@ -222,6 +230,38 @@ export function MarketTicker({ variant = "full" }: MarketTickerProps) {
                         (보정: {labels.cs.adjusted} /g)
                     </div>
                 ) : null}
+            </div>
+
+            {/* CNY */}
+            <div
+                className={
+                    isCompact
+                        ? "hidden min-w-0 items-baseline gap-2 text-[clamp(0.68rem,0.8vw,0.85rem)] font-semibold text-[var(--muted-strong)] xl:flex"
+                        : "flex flex-col gap-1"
+                }
+                aria-label={labels.cnyAd.ariaLabel}
+            >
+                <div
+                    className={
+                        isCompact
+                            ? "flex min-w-0 items-baseline gap-1.5"
+                            : "flex items-center gap-2 text-[var(--muted-strong)]"
+                    }
+                >
+                    <span className={isCompact ? "text-[clamp(0.6rem,0.7vw,0.75rem)] font-semibold tracking-[0.08em]" : "font-bold"}>
+                        CNY:
+                    </span>
+                    <span
+                        className={
+                            isCompact
+                                ? "min-w-0 max-w-[7.5rem] truncate tabular-nums"
+                                : "font-mono text-lg font-extrabold tabular-nums"
+                        }
+                        title={labels.cnyAd.title}
+                    >
+                        {labels.cnyAd.display}
+                    </span>
+                </div>
             </div>
 
             {isCompact ? (offlineBadge ? <div className="ml-auto shrink-0">{offlineBadge}</div> : null) : offlineBadge ? (

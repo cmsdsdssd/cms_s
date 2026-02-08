@@ -79,6 +79,13 @@ const FAX_PROVIDERS = ['mock', 'twilio', 'sendpulse', 'custom', 'apiplex', 'uplu
 type FaxProvider = typeof FAX_PROVIDERS[number];
 
 const UPLUS_SENT_URL = "https://webfax.uplus.co.kr/fax/sent";
+const INVENTORY_TAG = "/재고/";
+const LEGACY_INVENTORY_TAG = "[재고]";
+
+const hasInventoryTag = (memo?: string | null) => {
+  const value = String(memo ?? "");
+  return value.includes(INVENTORY_TAG) || value.includes(LEGACY_INVENTORY_TAG);
+};
 
 function isFaxProvider(value: string | null | undefined): value is FaxProvider {
   return !!value && (FAX_PROVIDERS as readonly string[]).includes(value);
@@ -176,12 +183,13 @@ export function FactoryOrderWizard({ orderLines, onClose, onSuccess }: FactoryOr
     return map;
   }, [faxConfigsQuery.data]);
 
-  // Filter eligible orders (ORDER_PENDING, no PO, has vendor)
+  // Filter eligible orders (ORDER_PENDING, no PO, has vendor, NOT inventory-checked)
   const eligibleOrders = useMemo(() => {
     return orderLines.filter(order => 
       order.status === 'ORDER_PENDING' && 
       !order.factory_po_id &&
-      order.vendor_guess_id
+      order.vendor_guess_id &&
+      !hasInventoryTag(order.memo)
     );
   }, [orderLines]);
 

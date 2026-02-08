@@ -137,6 +137,15 @@ export async function GET() {
         // ✅ CS도 Settings 값(cs_correction_factor)에 “연동”(원시세가 있으면 config로 재계산)
         const cs = csNoCorr === null ? csPriceRaw : csNoCorr * csFactor;
 
+        // 5) CNY/KRW (amount-based quote)
+        const { data: cnyRow } = await sb
+            .from("cms_v_market_tick_latest_by_symbol_ops_v1")
+            .select("price_krw_per_g")
+            .eq("symbol", "CNY_KRW_PER_1_ADJ")
+            .maybeSingle();
+
+        const cnyAd = toNum((cnyRow as { price_krw_per_g?: number | null } | null)?.price_krw_per_g);
+
         return NextResponse.json({
             data: {
                 // legacy (catalog/page.tsx 등에서 사용)
@@ -150,6 +159,7 @@ export async function GET() {
                 ksOriginal: silverBasePrice,
                 cs,
                 csOriginal: csNoCorr,
+                cnyAd,
                 // 디버깅/가시성용(원하면 유지, 싫으면 삭제 가능)
                 _config: { fxMarkup, csFactor, silverKrFactor },
             },

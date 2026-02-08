@@ -62,6 +62,12 @@ type PlatingColorRow = {
   display_name?: string | null;
 };
 
+type InventoryPositionByLocationRow = {
+  model_name?: string | null;
+  location_code?: string | null;
+  on_hand_qty?: number | null;
+};
+
 type VendorPrefixRow = {
   prefix?: string | null;
   vendor_party_id?: string | null;
@@ -95,6 +101,28 @@ type OrderDetailRow = {
 };
 
 const EDITABLE_STATUSES = new Set(["ORDER_PENDING"]);
+
+const INVENTORY_TAG = "/재고/";
+const LEGACY_INVENTORY_TAG = "[재고]";
+
+const hasInventoryTag = (memo?: string | null) => {
+  const value = String(memo ?? "");
+  return value.includes(INVENTORY_TAG) || value.includes(LEGACY_INVENTORY_TAG);
+};
+
+const toggleInventoryTag = (memo: string, on: boolean) => {
+  const value = String(memo ?? "");
+  if (on) {
+    if (hasInventoryTag(value)) return value;
+    const trimmed = value.trim();
+    return trimmed ? `${trimmed} ${INVENTORY_TAG}` : INVENTORY_TAG;
+  }
+  return value
+    .replaceAll(INVENTORY_TAG, "")
+    .replaceAll(LEGACY_INVENTORY_TAG, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+};
 
 
 type OrderUpsertPayload = {
@@ -184,6 +212,22 @@ type SuggestField = "client" | "model";
 const PAGE_SIZE = 10;
 const INITIAL_PAGES = 1;
 const EMPTY_ROWS = PAGE_SIZE * INITIAL_PAGES;
+
+const toKstDateKey = (value: string | Date) => {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Seoul",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(date);
+  const year = parts.find((p) => p.type === "year")?.value ?? "";
+  const month = parts.find((p) => p.type === "month")?.value ?? "";
+  const day = parts.find((p) => p.type === "day")?.value ?? "";
+  if (!year || !month || !day) return "";
+  return `${year}-${month}-${day}`;
+};
 
 // Manual regression checklist (stone/source + workbench v2):
 // 1) Legacy order without stone source: open and save without error.
@@ -512,6 +556,12 @@ function OrdersPageContent() {
     Array.from({ length: EMPTY_ROWS }, (_, idx) => createEmptyRow(idx))
   );
   const [rowStatusMap, setRowStatusMap] = useState<Record<string, string>>({});
+  const [inventoryIssueLoading, setInventoryIssueLoading] = useState(false);
+  const [inventoryMatchModalOpen, setInventoryMatchModalOpen] = useState(false);
+  const [inventoryMatchCandidates, setInventoryMatchCandidates] = useState<
+    Record<string, Array<{ locationCode: string; onHandQty: number }>>
+  >({});
+  const [inventoryMatchSelection, setInventoryMatchSelection] = useState<Record<string, string>>({});
   const [rowErrors, setRowErrors] = useState<Record<string, RowErrors>>({});
   const [headerClient, setHeaderClient] = useState<ClientSummary | null>(null);
   const [headerMode, setHeaderMode] = useState<"client" | "model" | null>("client");
@@ -840,7 +890,7 @@ function OrdersPageContent() {
           orders = orders.filter((order) => {
             const created = order.created_at ? new Date(order.created_at) : null;
             if (!created) return false;
-            const createdKey = created.toISOString().slice(0, 10);
+            const createdKey = toKstDateKey(created);
             return createdKey === filterDate;
           });
         }
@@ -1029,6 +1079,173 @@ function OrdersPageContent() {
       return false;
     }
   }
+
+  const inventoryTargets = useMemo(
+    () =>
+      rows.filter(
+        (row) =>
+          Boolean(row.order_line_id) &&
+          (rowStatusMap[row.id] ?? "").trim() === "ORDER_PENDING" &&
+          hasInventoryTag(row.memo)
+      ),
+    [rows, rowStatusMap]
+  );
+
+  const handleInventoryIssue = async () => {
+    if (inventoryTargets.length === 0) {
+      toast.error("체크된 ORDER_PENDING 주문이 없습니다.");
+      return;
+    }
+    if (!schemaClient) {
+      toast.error("재고 확인 실패", { description: "Supabase env is missing" });
+      return;
+    }
+
+    const { data, error } = await schemaClient
+      .from(CONTRACTS.views.inventoryPositionByMasterLocation)
+      .select("model_name, location_code, on_hand_qty");
+    if (error) {
+      toast.error("재고 조회 실패", { description: error.message });
+      return;
+    }
+
+    const byModel = new Map<string, Array<{ locationCode: string; onHandQty: number }>>();
+    ((data ?? []) as InventoryPositionByLocationRow[]).forEach((row) => {
+      const model = String(row.model_name ?? "").trim().toLowerCase();
+      const locationCode = String(row.location_code ?? "").trim();
+      const onHandQty = Number(row.on_hand_qty ?? 0);
+      if (!model || !locationCode || onHandQty < 1) return;
+      const list = byModel.get(model) ?? [];
+      list.push({ locationCode, onHandQty });
+      byModel.set(model, list);
+    });
+
+    const nextCandidates: Record<string, Array<{ locationCode: string; onHandQty: number }>> = {};
+    const nextSelection: Record<string, string> = {};
+    for (const target of inventoryTargets) {
+      const orderLineId = String(target.order_line_id);
+      const model = String(target.model_input ?? target.model_name ?? "").trim().toLowerCase();
+      const candidates = byModel.get(model) ?? [];
+      if (candidates.length === 0) {
+        toast.error("재고매칭 필요", {
+          description: `${target.model_input ?? target.model_name ?? "(모델없음)"} 재고가 없습니다.`,
+        });
+        return;
+      }
+      nextCandidates[orderLineId] = candidates.sort((a, b) => b.onHandQty - a.onHandQty);
+      nextSelection[orderLineId] = nextCandidates[orderLineId][0].locationCode;
+    }
+
+    setInventoryMatchCandidates(nextCandidates);
+    setInventoryMatchSelection(nextSelection);
+    setInventoryMatchModalOpen(true);
+  };
+
+  const confirmInventoryIssueWithMatch = async () => {
+    const setStatusFn = CONTRACTS.functions.orderSetStatus;
+    if (!setStatusFn) {
+      toast.error("재고출고 실패", { description: "orderSetStatus RPC가 설정되지 않았습니다." });
+      return;
+    }
+    if (!actorId) {
+      toast.error("재고출고 실패", { description: "NEXT_PUBLIC_CMS_ACTOR_ID를 확인하세요." });
+      return;
+    }
+    if (inventoryTargets.length === 0) {
+      toast.error("체크된 ORDER_PENDING 주문이 없습니다.");
+      return;
+    }
+
+    setInventoryIssueLoading(true);
+    let okCount = 0;
+    let failCount = 0;
+    for (const target of inventoryTargets) {
+      const orderLineId = String(target.order_line_id);
+      const matchedLocation = inventoryMatchSelection[orderLineId];
+      if (!matchedLocation) {
+        failCount += 1;
+        continue;
+      }
+      try {
+        await callRpc(setStatusFn, {
+          p_order_line_id: orderLineId,
+          p_to_status: "READY_TO_SHIP",
+          p_actor_person_id: actorId,
+          p_reason: `재고출고(${matchedLocation})`,
+        });
+        okCount += 1;
+      } catch {
+        failCount += 1;
+      }
+    }
+    setInventoryIssueLoading(false);
+    setInventoryMatchModalOpen(false);
+
+    if (okCount > 0) {
+      if (editAll && schemaClient) {
+        const { data } = await schemaClient
+          .from("cms_order_line")
+          .select(
+            "order_line_id, customer_party_id, matched_master_id, model_name, model_name_raw, suffix, color, material_code, size, qty, center_stone_name, center_stone_qty, sub1_stone_name, sub1_stone_qty, sub2_stone_name, sub2_stone_qty, is_plated, plating_color_code, memo, created_at, status"
+          )
+          .order("created_at", { ascending: false });
+        const orders = (data ?? []) as OrderDetailRow[];
+        const nextRows = orders.map((order, index) => ({
+          id: `bulk-${order.order_line_id ?? index}`,
+          order_line_id: order.order_line_id ?? null,
+          client_input: "",
+          client_id: order.customer_party_id ?? null,
+          client_name: null,
+          model_input: order.model_name_raw ?? order.model_name ?? "",
+          model_name: order.model_name ?? null,
+          suffix: order.suffix ?? "",
+          color_p: Boolean(order.color?.includes("P")),
+          color_g: Boolean(order.color?.includes("G")),
+          color_w: Boolean(order.color?.includes("W")),
+          color_x: !order.color,
+          material_code: order.material_code ?? "",
+          size: String(order.size ?? ""),
+          qty: String(order.qty ?? ""),
+          center_stone: order.center_stone_name ?? "",
+          center_qty: String(order.center_stone_qty ?? ""),
+          center_stone_source: normalizeStoneSourceOrEmpty(order.center_stone_source),
+          sub1_stone: order.sub1_stone_name ?? "",
+          sub1_qty: String(order.sub1_stone_qty ?? ""),
+          sub1_stone_source: normalizeStoneSourceOrEmpty(order.sub1_stone_source),
+          sub2_stone: order.sub2_stone_name ?? "",
+          sub2_qty: String(order.sub2_stone_qty ?? ""),
+          sub2_stone_source: normalizeStoneSourceOrEmpty(order.sub2_stone_source),
+          plating_p: Boolean(order.plating_color_code?.includes("P")),
+          plating_g: Boolean(order.plating_color_code?.includes("G")),
+          plating_w: Boolean(order.plating_color_code?.includes("W")),
+          plating_b: Boolean(order.plating_color_code?.includes("B")),
+          memo: order.memo ?? "",
+          show_stones: !!(order.center_stone_name || order.sub1_stone_name || order.sub2_stone_name),
+          master_item_id: order.matched_master_id ?? null,
+          photo_url: null,
+          material_price: null,
+          labor_basic: null,
+          labor_center: null,
+          labor_side1: null,
+          labor_side2: null,
+        }));
+        setRows(nextRows);
+        const nextStatusMap: Record<string, string> = {};
+        nextRows.forEach((row) => {
+          if (!row.order_line_id) return;
+          const source = orders.find((o) => o.order_line_id === row.order_line_id);
+          if (source?.status) nextStatusMap[row.id] = source.status;
+        });
+        setRowStatusMap(nextStatusMap);
+      }
+    }
+
+    if (failCount > 0) {
+      toast.error(`재고출고 일부 실패 (성공 ${okCount} / 실패 ${failCount})`);
+      return;
+    }
+    toast.success(`재고출고 완료 (${okCount}건)`);
+  };
 
   const formatRpcError = (error: unknown) => {
     const e = error as
@@ -1437,6 +1654,61 @@ function OrdersPageContent() {
     <>
       {initLoading && <LoadingOverlay />}
 
+      {inventoryMatchModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/55 flex items-center justify-center p-4">
+          <div className="w-full max-w-2xl rounded-xl border border-[var(--panel-border)] bg-[var(--panel)] shadow-2xl">
+            <div className="px-4 py-3 border-b border-[var(--panel-border)] flex items-center justify-between">
+              <div className="text-sm font-semibold">재고 매칭 확정</div>
+              <button
+                className="text-xs text-[var(--muted)] hover:text-[var(--foreground)]"
+                onClick={() => setInventoryMatchModalOpen(false)}
+                type="button"
+              >
+                닫기
+              </button>
+            </div>
+            <div className="p-4 space-y-3 max-h-[60vh] overflow-auto">
+              {inventoryTargets.map((target) => {
+                const orderLineId = String(target.order_line_id);
+                const model = String(target.model_input ?? target.model_name ?? "-");
+                const candidates = inventoryMatchCandidates[orderLineId] ?? [];
+                return (
+                  <div key={orderLineId} className="grid grid-cols-[1fr_220px] gap-3 items-center rounded-lg border border-[var(--panel-border)] bg-[var(--chip)] px-3 py-2">
+                    <div className="text-sm truncate">{model}</div>
+                    <select
+                      value={inventoryMatchSelection[orderLineId] ?? ""}
+                      onChange={(e) =>
+                        setInventoryMatchSelection((prev) => ({ ...prev, [orderLineId]: e.target.value }))
+                      }
+                      className="h-8 text-xs rounded-md bg-[var(--background)] border border-[var(--panel-border)] px-2"
+                    >
+                      {candidates.map((c) => (
+                        <option key={`${orderLineId}-${c.locationCode}`} value={c.locationCode}>
+                          {c.locationCode} (재고 {c.onHandQty})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                );
+              })}
+            </div>
+            <div className="px-4 py-3 border-t border-[var(--panel-border)] flex items-center justify-end gap-2">
+              <Button variant="secondary" size="sm" onClick={() => setInventoryMatchModalOpen(false)}>
+                취소
+              </Button>
+              <Button
+                variant="primary"
+                size="sm"
+                onClick={confirmInventoryIssueWithMatch}
+                disabled={inventoryIssueLoading}
+              >
+                {inventoryIssueLoading ? "처리중..." : "매칭확정 + 재고출고"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="min-h-screen bg-[var(--background)] pb-20">
 
         {/* High-grade Sticky Header */}
@@ -1459,6 +1731,15 @@ function OrdersPageContent() {
             </div>
 
             <div className="flex items-center gap-2">
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={handleInventoryIssue}
+                disabled={inventoryIssueLoading || inventoryTargets.length === 0}
+                className="h-8 text-xs"
+              >
+                {inventoryIssueLoading ? "재고출고 처리중..." : `재고출고 (${inventoryTargets.length})`}
+              </Button>
               <Link href="/orders_main">
                 <Button variant="secondary" size="sm" className="h-8 text-xs gap-1.5 shadow-sm hover:bg-[var(--panel-hover)] border-[var(--panel-border)]">
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 12H5" /><path d="M12 19l-7-7 7-7" /></svg>
@@ -1474,8 +1755,9 @@ function OrdersPageContent() {
           {/* Left Column: Compact Order Grid - Card Wrapper */}
           <div className="space-y-1 min-w-0 order-2 lg:col-span-2 xl:col-span-1 bg-[var(--panel)] rounded-xl border border-[var(--panel-border)] shadow-sm overflow-visible flex flex-col h-fit min-h-0">
             {/* Header Row */}
-            <div className="bg-[var(--surface-1)] border-b border-[var(--panel-border)] grid grid-cols-[40px_160px_200px_90px_110px_70px_60px_140px_30px_1fr_40px] gap-2 px-3 py-2 text-[11px] font-semibold text-[var(--muted-foreground)] uppercase tracking-wider items-center select-none rounded-t-xl">
+            <div className="bg-[var(--surface-1)] border-b border-[var(--panel-border)] grid grid-cols-[40px_84px_160px_200px_90px_110px_70px_42px_140px_30px_1fr_40px] gap-2 px-3 py-2 text-[11px] font-semibold text-[var(--muted-foreground)] uppercase tracking-wider items-center select-none rounded-t-xl">
               <span className="text-center">No.</span>
+              <span className="text-center">옵션</span>
               <span>거래처</span>
               <span>모델</span>
               <span className="text-center">소재</span>
@@ -1503,7 +1785,7 @@ function OrdersPageContent() {
                     {/* Main Row */}
                     <div
                       className={cn(
-                        "grid grid-cols-[40px_160px_200px_90px_110px_70px_60px_140px_30px_1fr_40px] gap-2 px-3 py-1.5 items-center text-xs rounded-lg border transition-all duration-200 group relative",
+                        "grid grid-cols-[40px_84px_160px_200px_90px_110px_70px_42px_140px_30px_1fr_40px] gap-2 px-3 py-1.5 items-center text-xs rounded-lg border transition-all duration-200 group relative",
                         row.order_line_id ? "bg-emerald-500/5 border-emerald-500/20" : "bg-[var(--surface-1)]/50 border-transparent hover:border-[var(--panel-border)] hover:bg-[var(--panel-hover)] hover:shadow-sm",
                         (errors.client || errors.model) ? "bg-[var(--danger)]/5 border-[var(--danger)]/30" : ""
                       )}
@@ -1516,6 +1798,36 @@ function OrdersPageContent() {
                     >
                       {/* Row Number */}
                       <span className="text-[10px] font-mono text-[var(--muted)] text-center opacity-50">{realIdx}</span>
+
+                      {/* Flags */}
+                      <div className="flex items-center gap-1 min-w-0 justify-center">
+                        <label className="inline-flex items-center gap-1 text-[10px] text-[var(--muted)] shrink-0 whitespace-nowrap">
+                          <input
+                            type="checkbox"
+                            checked={hasVariationTag(row.memo)}
+                            onChange={(e) =>
+                              updateRow(row.id, {
+                                memo: toggleVariationTag(row.memo, e.target.checked),
+                              })
+                            }
+                            className="h-3 w-3 accent-[var(--primary)]"
+                          />
+                          변형
+                        </label>
+                        <label className="inline-flex items-center gap-1 text-[10px] text-[var(--muted)] shrink-0 whitespace-nowrap">
+                          <input
+                            type="checkbox"
+                            checked={hasInventoryTag(row.memo)}
+                            onChange={(e) =>
+                              updateRow(row.id, {
+                                memo: toggleInventoryTag(row.memo, e.target.checked),
+                              })
+                            }
+                            className="h-3 w-3 accent-[var(--primary)]"
+                          />
+                          재고
+                        </label>
+                      </div>
 
                       {/* Client Input */}
                       <div className="relative">
@@ -1735,22 +2047,9 @@ function OrdersPageContent() {
                       </button>
 
                       {/* Memo Input (Large) */}
-                      <div className="flex items-center gap-2">
-                        <label className="inline-flex items-center gap-1 text-[10px] text-[var(--muted)] shrink-0">
-                          <input
-                            type="checkbox"
-                            checked={hasVariationTag(row.memo)}
-                            onChange={(e) =>
-                              updateRow(row.id, {
-                                memo: toggleVariationTag(row.memo, e.target.checked),
-                              })
-                            }
-                            className="h-3 w-3 accent-[var(--primary)]"
-                          />
-                          변형
-                        </label>
+                      <div className="flex items-center gap-1 min-w-0">
                         <input
-                          className="w-full bg-transparent border-b border-transparent focus:border-[var(--primary)] focus:bg-[var(--background)] rounded-sm px-2 py-1 text-sm transition-all outline-none hover:border-[var(--border)] group-hover:bg-[var(--background)]/50"
+                          className="w-full min-w-0 bg-transparent border-b border-transparent focus:border-[var(--primary)] focus:bg-[var(--background)] rounded-sm px-2 py-1 text-sm transition-all outline-none hover:border-[var(--border)] group-hover:bg-[var(--background)]/50"
                           value={row.memo}
                           onChange={(e) => updateRow(row.id, { memo: e.target.value })}
                           placeholder="비고 입력..."

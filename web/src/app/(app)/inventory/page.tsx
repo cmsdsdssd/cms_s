@@ -1,10 +1,10 @@
-"use client";
+﻿"use client";
 
 import { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useForm } from "react-hook-form";
 import { toast } from "sonner";
-import { Package, PackageCheck, ClipboardList, Wrench, Search } from "lucide-react";
+import { Package, PackageCheck, ClipboardList, Wrench, Search, History, ArrowLeftRight, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -27,6 +27,16 @@ type PositionRow = {
   model_name: string;
   on_hand_qty: number;
   last_move_at?: string | null;
+  image_path?: string | null;
+  material_code?: string | null;
+  weight_g?: number | null;
+  deduction_weight_g?: number | null;
+  color?: string | null;
+  size?: string | null;
+  center_qty?: number | null;
+  sub1_qty?: number | null;
+  sub2_qty?: number | null;
+  memo?: string | null;
 };
 
 type MoveRow = {
@@ -46,6 +56,7 @@ type MoveRow = {
   item_name?: string | null;
   direction?: string | null;
   qty?: number | null;
+  location_code?: string | null;
 };
 
 type SessionRow = {
@@ -104,19 +115,40 @@ type MasterItem = {
   labor_sub1_cost?: number;
   labor_sub2_cost?: number;
   color?: string;
+  size?: string;
   symbol?: string;
   photo_url?: string;
   image_path?: string;
 };
 
+type LocationRow = {
+  location_code?: string | null;
+  location_name?: string | null;
+};
+
+type LocationBinRow = {
+  bin_code?: string | null;
+  location_code?: string | null;
+  bin_name?: string | null;
+};
+
+type MasterImageLookupRow = {
+  master_id?: string | null;
+  model_name?: string | null;
+  image_path?: string | null;
+};
+
 type QuickMoveForm = {
-  move_type: "RECEIPT" | "ISSUE" | "ADJUST";
+  move_type: "RECEIPT" | "ISSUE" | "ADJUST" | "RETURN";
   location_code: string;
+  bin_code?: string;
   model_name: string;
   master_id?: string;
   session_id?: string;
   qty: number;
   material_code?: string;
+  color?: string;
+  size?: string;
   category_code?: string;
   base_weight_g?: number;
   deduction_weight_g?: number;
@@ -169,7 +201,13 @@ const getImageUrl = (path?: string | null): string | null => {
   }
   const bucketName =
     process.env.NEXT_PUBLIC_SUPABASE_BUCKET || process.env.SUPABASE_BUCKET || "master_images";
-  const cleanPath = path.startsWith(`${bucketName}/`) ? path.slice(bucketName.length + 1) : path;
+  const trimmed = path.startsWith("/") ? path.slice(1) : path;
+  const storagePrefix = `storage/v1/object/public/${bucketName}/`;
+  const cleanPath = trimmed.startsWith(storagePrefix)
+    ? trimmed.slice(storagePrefix.length)
+    : trimmed.startsWith(`${bucketName}/`)
+      ? trimmed.slice(bucketName.length + 1)
+      : trimmed;
   return `${supabaseUrl}/storage/v1/object/public/${bucketName}/${cleanPath}`;
 };
 
@@ -190,11 +228,170 @@ export default function InventoryPage() {
   const [masterSearchQuery, setMasterSearchQuery] = useState("");
   const [masterSearchContext, setMasterSearchContext] = useState<"quick" | "count" | null>(null);
 
+  // ===================== GALLERY DETAIL MODAL STATE =====================
+  const [galleryDetailItem, setGalleryDetailItem] = useState<PositionRow | null>(null);
+  const [galleryTab, setGalleryTab] = useState<"info" | "stock" | "moves">("info");
+
+  // ===================== GALLERY MODAL DATA =====================
+  const { data: galleryStockList = [] } = useQuery({
+    queryKey: ["inventory", "gallery", "stock", galleryDetailItem?.master_id],
+    queryFn: async () => {
+      if (!galleryDetailItem?.master_id) return [];
+      const client = getSchemaClient();
+      if (!client) throw new Error("No client");
+
+      const { data, error } = await client
+        .from(CONTRACTS.views.inventoryPositionByMasterLocation)
+        .select("*")
+        .eq("master_id", galleryDetailItem.master_id)
+        .order("on_hand_qty", { ascending: false });
+
+      if (error) throw error;
+      return (data as PositionRow[]) ?? [];
+    },
+    enabled: !!galleryDetailItem?.master_id && galleryTab === "stock",
+  });
+
+  const { data: galleryMoveHistory = [] } = useQuery({
+    queryKey: ["inventory", "gallery", "moves", galleryDetailItem?.master_id],
+    queryFn: async () => {
+      if (!galleryDetailItem?.master_id) return [];
+      const client = getSchemaClient();
+      if (!client) throw new Error("No client");
+
+      const { data, error } = await client
+        .from(CONTRACTS.views.inventoryMoveLinesEnriched)
+        .select("*")
+        .eq("master_id", galleryDetailItem.master_id)
+        .order("occurred_at", { ascending: false })
+        .limit(50);
+
+      if (error) throw error;
+      return (data as MoveRow[]) ?? [];
+    },
+    enabled: !!galleryDetailItem?.master_id && galleryTab === "moves",
+  });
+
+  const galleryMoveForm = useForm<QuickMoveForm>({
+    defaultValues: {
+      move_type: "ADJUST",
+      location_code: "",
+      model_name: "",
+      qty: 0,
+      memo: "",
+    },
+  });
+
+  // Reset tab and form when opening different item
+  useEffect(() => {
+    if (galleryDetailItem) {
+      setGalleryTab("info");
+      galleryMoveForm.reset({
+        move_type: "ADJUST",
+        location_code: galleryDetailItem.location_code || "",
+        model_name: galleryDetailItem.model_name,
+        master_id: galleryDetailItem.master_id,
+        qty: 0,
+        memo: "",
+        material_code: galleryDetailItem.material_code || undefined,
+        base_weight_g: galleryDetailItem.weight_g || undefined,
+        deduction_weight_g: galleryDetailItem.deduction_weight_g || 0,
+        center_qty: galleryDetailItem.center_qty || undefined,
+        sub1_qty: galleryDetailItem.sub1_qty || undefined,
+        sub2_qty: galleryDetailItem.sub2_qty || undefined,
+        color: galleryDetailItem.color || undefined,
+        size: galleryDetailItem.size || undefined,
+      });
+    }
+  }, [galleryDetailItem, galleryMoveForm]);
+
+  const onSubmitGalleryMove = (values: QuickMoveForm) => {
+    if (values.base_weight_g === null || values.base_weight_g === undefined) {
+      toast.error("기본 중량을 입력해주세요");
+      return;
+    }
+    if (values.deduction_weight_g === null || values.deduction_weight_g === undefined) {
+      toast.error("차감 중량을 입력해주세요");
+      return;
+    }
+
+    if (!values.model_name || values.qty <= 0) {
+      toast.error("품목명과 수량을 입력해주세요");
+      return;
+    }
+
+    const resolvedLocation = values.location_code || null;
+
+    if (!resolvedLocation) {
+      toast.error("위치를 선택해주세요");
+      return;
+    }
+
+    quickMoveMutation.mutate({
+      p_move_type: values.move_type,
+      p_item_name: values.model_name,
+      p_qty: values.qty,
+      p_occurred_at: new Date().toISOString(),
+      p_party_id: null,
+      p_location_code: resolvedLocation,
+      p_master_id: values.master_id || null,
+      p_variant_hint: values.material_code || null,
+      p_unit: "EA",
+      p_source: "MANUAL",
+      p_memo: values.memo || null,
+      p_meta: {},
+      p_idempotency_key: null,
+      p_actor_person_id: null,
+      p_note: "From Gallery Detail",
+      p_correlation_id: crypto.randomUUID(),
+    });
+  };
+
+  const galleryStockTotal = useMemo(() => {
+    return galleryStockList.reduce((sum, row) => sum + row.on_hand_qty, 0);
+  }, [galleryStockList]);
+
   // ===================== POSITION TAB STATE =====================
   const [positionMode, setPositionMode] = useState<"total" | "byLocation">("total");
   const [selectedLocation, setSelectedLocation] = useState<string>("");
 
   // ===================== POSITION TAB DATA =====================
+  const [isQuickInputOpen, setIsQuickInputOpen] = useState(false);
+
+  const { data: locationList = [] } = useQuery({
+    queryKey: ["locations"],
+    queryFn: async () => {
+      const client = getSchemaClient();
+      if (!client) throw new Error("No client");
+      const { data, error } = await client
+        .from(CONTRACTS.views.inventoryLocationMaster)
+        .select("*")
+        .order("location_code");
+      if (error) throw error;
+      return (data as LocationRow[]) || [];
+    },
+    staleTime: 1000 * 60 * 5,
+  });
+
+  const { data: locationBinList = [] } = useQuery({
+    queryKey: ["location-bins"],
+    queryFn: async () => {
+      const client = getSchemaClient();
+      if (!client) throw new Error("No client");
+      const { data, error } = await client
+        .from(CONTRACTS.views.inventoryLocationBins)
+        .select("bin_code, location_code, bin_name")
+        .eq("is_active", true)
+        .order("location_code", { ascending: true })
+        .order("bin_code", { ascending: true });
+      if (error) throw error;
+      return (data as LocationBinRow[]) || [];
+    },
+    staleTime: 1000 * 60 * 5,
+  });
+
+
+
   const { data: positionData = [], isLoading: positionLoading } = useQuery({
     queryKey: ["inventory", "position", positionMode, selectedLocation],
     queryFn: async () => {
@@ -223,6 +420,58 @@ export default function InventoryPage() {
     if (!query) return positionData;
     return positionData.filter((row) => (row.model_name || "").toLowerCase().includes(query));
   }, [positionData, searchTerm]);
+
+  const positionMasterIds = useMemo(
+    () => Array.from(new Set(positionData.map((row) => row.master_id).filter(Boolean))),
+    [positionData]
+  );
+
+  const { data: masterImageRows = [] } = useQuery({
+    queryKey: ["inventory", "master-images", positionMasterIds],
+    queryFn: async () => {
+      if (positionMasterIds.length === 0) return [];
+      const client = getSchemaClient();
+      if (!client) throw new Error("No client");
+      const { data, error } = await client
+        .from(CONTRACTS.views.masterItems)
+        .select("master_id, model_name, image_path")
+        .in("master_id", positionMasterIds);
+      if (error) throw error;
+      return (data as MasterImageLookupRow[]) ?? [];
+    },
+    enabled: positionMasterIds.length > 0,
+  });
+
+  const imageUrlByMasterId = useMemo(() => {
+    const map = new Map<string, string>();
+    masterImageRows.forEach((row) => {
+      const masterId = String(row.master_id ?? "");
+      if (!masterId) return;
+      const imageUrl = getImageUrl(row.image_path);
+      if (imageUrl) map.set(masterId, imageUrl);
+    });
+    return map;
+  }, [masterImageRows]);
+
+  const imageUrlByModelName = useMemo(() => {
+    const map = new Map<string, string>();
+    masterImageRows.forEach((row) => {
+      const modelName = String(row.model_name ?? "").trim().toLowerCase();
+      if (!modelName) return;
+      const imageUrl = getImageUrl(row.image_path);
+      if (imageUrl) map.set(modelName, imageUrl);
+    });
+    return map;
+  }, [masterImageRows]);
+
+  const galleryDetailImageUrl = useMemo(() => {
+    if (!galleryDetailItem) return null;
+    return (
+      imageUrlByMasterId.get(galleryDetailItem.master_id) ||
+      imageUrlByModelName.get((galleryDetailItem.model_name ?? "").trim().toLowerCase()) ||
+      getImageUrl(galleryDetailItem.image_path)
+    );
+  }, [galleryDetailItem, imageUrlByMasterId, imageUrlByModelName]);
 
   const selectedPositionRows = useMemo(() => {
     if (!selectedMasterId) return [];
@@ -340,14 +589,17 @@ export default function InventoryPage() {
     defaultValues: {
       move_type: "RECEIPT",
       location_code: "",
+      bin_code: "",
       model_name: "",
       master_id: undefined,
       session_id: undefined,
       qty: 0,
       material_code: undefined,
+      color: undefined,
+      size: undefined,
       category_code: undefined,
       base_weight_g: undefined,
-      deduction_weight_g: undefined,
+      deduction_weight_g: 0,
       center_qty: undefined,
       sub1_qty: undefined,
       sub2_qty: undefined,
@@ -358,6 +610,18 @@ export default function InventoryPage() {
       memo: "",
     },
   });
+
+  const quickLocationCode = quickMoveForm.watch("location_code") || "";
+  const quickBinOptions = useMemo(
+    () =>
+      locationBinList
+        .filter((row) => String(row.location_code ?? "") === quickLocationCode)
+        .map((row) => ({
+          value: String(row.bin_code ?? ""),
+          label: `${row.bin_name ?? row.bin_code} (${row.bin_code})`,
+        })),
+    [locationBinList, quickLocationCode]
+  );
 
   const quickMoveMutation = useRpcMutation<string>({
     fn: CONTRACTS.functions.quickInventoryMove,
@@ -372,10 +636,6 @@ export default function InventoryPage() {
   const onSubmitQuickMove = (values: QuickMoveForm) => {
     if (values.base_weight_g === null || values.base_weight_g === undefined) {
       toast.error("기본 중량을 입력해주세요");
-      return;
-    }
-    if (values.deduction_weight_g === null || values.deduction_weight_g === undefined) {
-      toast.error("차감 중량을 입력해주세요");
       return;
     }
 
@@ -403,12 +663,21 @@ export default function InventoryPage() {
       p_occurred_at: new Date().toISOString(),
       p_party_id: null,
       p_location_code: resolvedLocation,
+      p_bin_code: values.bin_code || null,
       p_master_id: values.master_id || null,
-      p_variant_hint: values.material_code || null,
+      p_variant_hint: [values.material_code, values.color, values.size].filter(Boolean).join("/") || null,
       p_unit: "EA",
       p_source: "MANUAL",
       p_memo: values.memo || null,
-      p_meta: values.session_id ? { session_id: values.session_id } : {},
+      p_meta: {
+        ...(values.session_id ? { session_id: values.session_id } : {}),
+        material_code: values.material_code || null,
+        color: values.color || null,
+        size: values.size || null,
+        base_weight_g: values.base_weight_g,
+        deduction_weight_g: values.deduction_weight_g ?? 0,
+        net_weight_g: Math.max(0, Number(values.base_weight_g ?? 0) - Number(values.deduction_weight_g ?? 0)),
+      },
       p_idempotency_key: null,
       p_actor_person_id: null,
       p_note: values.session_id ? `Linked to session` : null,
@@ -420,6 +689,11 @@ export default function InventoryPage() {
     setSelectedQuickMaster(master);
     quickMoveForm.setValue("model_name", master.model_name);
     quickMoveForm.setValue("master_id", master.master_id);
+    quickMoveForm.setValue("material_code", master.material_code_default || "");
+    quickMoveForm.setValue("color", master.color || "");
+    quickMoveForm.setValue("size", master.size || master.symbol || "");
+    quickMoveForm.setValue("base_weight_g", master.weight_default_g ?? undefined);
+    quickMoveForm.setValue("deduction_weight_g", master.deduction_weight_default_g ?? 0);
     setMasterSearchContext(null);
     setMasterSearchQuery("");
   };
@@ -713,361 +987,624 @@ export default function InventoryPage() {
         </div>
       </div>
 
-      {/* RIGHT MAIN CONTENT */}
-      <div className="flex-1 flex flex-col min-w-0 bg-[var(--background)]">
-        {selectedMasterId ? (
-          <>
-            {/* Header */}
-            <div className="shrink-0 border-b border-[var(--panel-border)] bg-[var(--panel)] p-6 shadow-sm z-10">
-              <div className="flex justify-between items-start mb-4">
-                <div>
-                  <h1 className="text-2xl font-bold tracking-tight mb-1">
-                    {selectedMasterLabel || "모델 선택"}
-                  </h1>
-                  <p className="text-sm text-[var(--muted)]">
-                    재고 현황 및 입출고 관리
-                  </p>
-                </div>
-              </div>
-
-              {/* Quick Stats */}
-              <div className="grid grid-cols-4 gap-4 p-4 rounded-xl bg-[var(--chip)] border border-[var(--panel-border)]">
-                <div>
-                  <p className="text-xs font-medium text-[var(--muted)] mb-1">총 재고</p>
-                  <p className="text-2xl font-bold tabular-nums">
-                    {selectedPositionTotal !== null ? selectedPositionTotal.toLocaleString() : "-"}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-xs font-medium text-[var(--muted)] mb-1">최근 이동</p>
-                  <p className="text-lg font-bold">
-                    {filteredMoves.length > 0 ? `${filteredMoves.length}건` : "-"}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-xs font-medium text-[var(--muted)] mb-1">실사 세션</p>
-                  <p className="text-lg font-bold">{sessionsData.length}개</p>
-                </div>
-                <div>
-                  <p className="text-xs font-medium text-[var(--muted)] mb-1">위치</p>
-                  <p className="text-lg font-bold">{selectedPositionRows.length}곳</p>
-                </div>
-              </div>
+      {/* RIGHT MAIN CONTENT - 5 Column Gallery View */}
+      <div className="flex-1 flex flex-col min-w-0 bg-[var(--background)] overflow-hidden">
+        {/* Header */}
+        <div className="shrink-0 border-b border-[var(--panel-border)] bg-[var(--panel)] p-4 shadow-sm z-10">
+          <div className="flex justify-between items-center">
+            <div>
+              <h1 className="text-xl font-bold tracking-tight">재고 갤러리</h1>
+              <p className="text-xs text-[var(--muted)]">
+                총 {filteredPosition.length}개 모델 · 클릭하여 상세 보기
+              </p>
             </div>
-
-            {/* Tab Navigation */}
-            <div className="flex border-b border-[var(--panel-border)] px-6 bg-[var(--panel)] sticky top-0">
-              {([
-                { id: "position", label: "현황", icon: Package },
-                { id: "moves", label: "입출고", icon: PackageCheck },
-                { id: "stocktake", label: "실사", icon: ClipboardList },
-                { id: "actions", label: "빠른처리", icon: Wrench },
-              ] as const).map((item) => (
-                <button
-                  key={item.id}
-                  onClick={() => setMobileSection(item.id)}
-                  className={cn(
-                    "px-4 py-3 text-sm font-medium border-b-2 transition-colors flex items-center gap-2",
-                    mobileSection === item.id
-                      ? "border-[var(--primary)] text-[var(--primary)]"
-                      : "border-transparent text-[var(--muted)] hover:text-[var(--foreground)]"
-                  )}
-                >
-                  <item.icon className="w-4 h-4" />
-                  {item.label}
-                </button>
-              ))}
-            </div>
-
-            {/* Tab Content */}
-            <div className="flex-1 overflow-y-auto p-6">
-              <div className="max-w-4xl mx-auto space-y-6">
-                {/* Position Tab */}
-                {mobileSection === "position" && (
-                  <div className="bg-[var(--panel)] rounded-xl border border-[var(--panel-border)] p-5">
-                    <h3 className="text-sm font-bold mb-4 flex items-center gap-2">
-                      <Package className="w-4 h-4" />
-                      로케이션별 재고
-                    </h3>
-                    {positionMode !== "byLocation" ? (
-                      <div className="text-sm text-[var(--muted)] p-4 bg-[var(--chip)] rounded-lg text-center">
-                        위치별 보기 모드에서 상세 로케이션 현황을 확인할 수 있습니다
-                      </div>
-                    ) : selectedPositionRows.length === 0 ? (
-                      <div className="text-sm text-[var(--muted)] p-4 bg-[var(--chip)] rounded-lg text-center">
-                        해당 로케이션 데이터가 없습니다
-                      </div>
-                    ) : (
-                      <div className="divide-y divide-[var(--panel-border)] rounded-lg border border-[var(--panel-border)]">
-                        {selectedPositionRows.map((row) => (
-                          <div key={`${row.master_id}-${row.location_code ?? "NA"}`} className="flex items-center justify-between px-4 py-3">
-                            <span className="text-sm">{row.location_code || "미지정"}</span>
-                            <span className="text-lg font-bold tabular-nums">{row.on_hand_qty.toLocaleString()}</span>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {/* Moves Tab */}
-                {mobileSection === "moves" && (
-                  <div className="bg-[var(--panel)] rounded-xl border border-[var(--panel-border)] overflow-hidden">
-                    <div className="p-4 border-b border-[var(--panel-border)]">
-                      <h3 className="text-sm font-bold flex items-center gap-2">
-                        <PackageCheck className="w-4 h-4" />
-                        최근 입출고 ({filteredMoves.length}건)
-                      </h3>
-                    </div>
-                    {filteredMoves.length === 0 ? (
-                      <div className="p-8 text-center text-sm text-[var(--muted)]">
-                        최근 이동 데이터가 없습니다
-                      </div>
-                    ) : (
-                      <table className="w-full text-sm">
-                        <thead className="bg-[var(--chip)] text-xs font-medium text-[var(--muted)] uppercase tracking-wider border-b border-[var(--panel-border)]">
-                          <tr>
-                            <th className="px-4 py-3 text-left">시각</th>
-                            <th className="px-4 py-3 text-center">번호</th>
-                            <th className="px-4 py-3 text-left">모델명</th>
-                            <th className="px-4 py-3 text-center">타입</th>
-                            <th className="px-4 py-3 text-right">수량</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-[var(--panel-border)]">
-                          {filteredMoves.map((move) => (
-                            <tr key={move.move_line_id || move.move_id} className="hover:bg-[var(--chip)]/50">
-                              <td className="px-4 py-3 text-xs text-[var(--muted)] tabular-nums">
-                                {formatKst(move.occurred_at)}
-                              </td>
-                              <td className="px-4 py-3 text-center text-xs tabular-nums">{move.move_no}</td>
-                              <td className="px-4 py-3 font-medium truncate max-w-[160px]">
-                                {move.master_model_name || move.item_name}
-                              </td>
-                              <td className="px-4 py-3 text-center">
-                                <Badge
-                                  tone={move.move_type === "RECEIPT" ? "primary" : move.move_type === "ISSUE" ? "warning" : "neutral"}
-                                  className="text-[10px] px-2"
-                                >
-                                  {move.move_type}
-                                </Badge>
-                              </td>
-                              <td className={cn(
-                                "px-4 py-3 text-right tabular-nums font-semibold",
-                                move.direction === "IN" ? "text-blue-600" : "text-orange-600"
-                              )}>
-                                {move.direction === "IN" ? "+" : "-"}{move.qty}
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    )}
-                  </div>
-                )}
-
-                {/* Stocktake Tab */}
-                {mobileSection === "stocktake" && (
-                  <div className="space-y-6">
-                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-                      {/* Session List */}
-                      <div className="bg-[var(--panel)] rounded-xl border border-[var(--panel-border)] overflow-hidden">
-                        <div className="p-4 border-b border-[var(--panel-border)] space-y-3">
-                          <h3 className="text-sm font-bold flex items-center gap-2">
-                            <ClipboardList className="w-4 h-4" />
-                            실사 세션
-                          </h3>
-                          <form onSubmit={sessionForm.handleSubmit(onCreateSession)} className="flex gap-2">
-                            <select
-                              {...sessionForm.register("location_code")}
-                              className="h-8 text-xs w-20 rounded-md bg-[var(--chip)] border-none"
-                            >
-                              <option value="">위치</option>
-                              {LOCATION_OPTIONS.map((o) => (
-                                <option key={o.value} value={o.value}>{o.label}</option>
-                              ))}
-                            </select>
-                            <input
-                              {...sessionForm.register("session_code")}
-                              placeholder="세션명"
-                              className="h-8 text-xs flex-1 px-2 rounded-md bg-[var(--chip)] border-none"
-                            />
-                            <Button type="submit" size="sm" disabled={createSessionMutation.isPending} className="h-8 px-3 text-xs">
-                              추가
-                            </Button>
-                          </form>
-                          <input
-                            type="text"
-                            placeholder="세션 검색..."
-                            value={sessionSearchQuery}
-                            onChange={(e) => setSessionSearchQuery(e.target.value)}
-                            className="h-8 text-xs w-full px-3 rounded-md bg-[var(--chip)] border-none"
-                          />
-                        </div>
-                        <div className="max-h-64 overflow-y-auto p-2 space-y-1">
-                          {filteredSessions.map((session) => (
-                            <button
-                              key={session.session_id}
-                              onClick={() => setSelectedSessionId(session.session_id)}
-                              className={cn(
-                                "w-full text-left p-3 rounded-lg border transition-all",
-                                selectedSessionId === session.session_id
-                                  ? "bg-[var(--primary)]/10 border-[var(--primary)]/30"
-                                  : "border-transparent hover:bg-[var(--chip)]"
-                              )}
-                            >
-                              <div className="flex items-center justify-between mb-1">
-                                <span className="text-sm font-medium">{session.session_code || `#${session.session_no}`}</span>
-                                <Badge
-                                  tone={session.status === "FINALIZED" ? "active" : session.status === "VOID" ? "danger" : "warning"}
-                                  className="text-[10px] px-1.5"
-                                >
-                                  {session.status}
-                                </Badge>
-                              </div>
-                              <div className="flex items-center justify-between text-xs text-[var(--muted)]">
-                                <span>{session.location_code || "미지정"}</span>
-                                <span className="tabular-nums">{session.line_count}라인</span>
-                              </div>
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-
-                      {/* Session Lines */}
-                      <div className="lg:col-span-2 bg-[var(--panel)] rounded-xl border border-[var(--panel-border)] overflow-hidden">
-                        <div className="p-4 border-b border-[var(--panel-border)] flex items-center justify-between">
-                          <h3 className="text-sm font-bold">
-                            {selectedSession ? (selectedSession.session_code || `세션 #${selectedSession.session_no}`) : "세션 라인"}
-                          </h3>
-                          {selectedSession && !isFinalized && (
-                            <div className="flex items-center gap-2">
-                              <Button size="sm" variant="secondary" onClick={onVoidSession} className="h-7 px-2 text-xs">
-                                취소
-                              </Button>
-                              <Button size="sm" onClick={onFinalize} className="h-7 px-2 text-xs">
-                                확정
-                              </Button>
-                            </div>
-                          )}
-                        </div>
-                        <div className="max-h-64 overflow-y-auto">
-                          {selectedSessionId ? (
-                            <table className="w-full text-sm">
-                              <thead className="bg-[var(--chip)] text-xs font-medium text-[var(--muted)] border-b border-[var(--panel-border)]">
-                                <tr>
-                                  <th className="px-3 py-2 text-left">#</th>
-                                  <th className="px-3 py-2 text-left">품목</th>
-                                  <th className="px-3 py-2 text-right">실사</th>
-                                  <th className="px-3 py-2 text-right">시스템</th>
-                                  <th className="px-3 py-2 text-right">델타</th>
-                                </tr>
-                              </thead>
-                              <tbody className="divide-y divide-[var(--panel-border)]">
-                                {sessionLinesData.map((line) => (
-                                  <tr key={line.count_line_id} className={line.is_void ? "opacity-50" : ""}>
-                                    <td className="px-3 py-2 text-xs text-[var(--muted)]">{line.line_no}</td>
-                                    <td className="px-3 py-2">{line.item_name}</td>
-                                    <td className="px-3 py-2 text-right tabular-nums">{line.counted_qty}</td>
-                                    <td className="px-3 py-2 text-right tabular-nums text-[var(--muted)]">{line.system_qty_asof ?? "-"}</td>
-                                    <td className={cn(
-                                      "px-3 py-2 text-right tabular-nums font-semibold",
-                                      (line.delta_qty ?? 0) > 0 ? "text-blue-600" : (line.delta_qty ?? 0) < 0 ? "text-orange-600" : "text-[var(--muted)]"
-                                    )}>
-                                      {line.delta_qty && line.delta_qty > 0 ? "+" : ""}{line.delta_qty ?? "-"}
-                                    </td>
-                                  </tr>
-                                ))}
-                              </tbody>
-                            </table>
-                          ) : (
-                            <div className="p-8 text-center text-sm text-[var(--muted)]">
-                              세션을 선택하세요
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {/* Actions Tab */}
-                {mobileSection === "actions" && (
-                  <div className="bg-[var(--panel)] rounded-xl border border-[var(--panel-border)] p-5">
-                    <h3 className="text-sm font-bold mb-4 flex items-center gap-2">
-                      <Wrench className="w-4 h-4" />
-                      빠른 입출고 등록
-                    </h3>
-                    <form onSubmit={quickMoveForm.handleSubmit(onSubmitQuickMove)} className="space-y-4">
-                      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                        <div>
-                          <label className="text-xs font-medium text-[var(--muted)] block mb-1.5">타입</label>
-                          <select
-                            {...quickMoveForm.register("move_type")}
-                            className="w-full h-9 text-sm rounded-md bg-[var(--chip)] border-none px-3"
-                          >
-                            <option value="RECEIPT">입고 (RECEIPT)</option>
-                            <option value="ISSUE">출고 (ISSUE)</option>
-                            <option value="ADJUST">조정 (ADJUST)</option>
-                          </select>
-                        </div>
-                        <div>
-                          <label className="text-xs font-medium text-[var(--muted)] block mb-1.5">위치</label>
-                          <select
-                            {...quickMoveForm.register("location_code")}
-                            className="w-full h-9 text-sm rounded-md bg-[var(--chip)] border-none px-3"
-                          >
-                            <option value="">(선택)</option>
-                            {LOCATION_OPTIONS.map((o) => (
-                              <option key={o.value} value={o.value}>{o.label}</option>
-                            ))}
-                          </select>
-                        </div>
-                        <div>
-                          <label className="text-xs font-medium text-[var(--muted)] block mb-1.5">수량</label>
-                          <input
-                            type="number"
-                            {...quickMoveForm.register("qty", { valueAsNumber: true })}
-                            className="w-full h-9 text-sm rounded-md bg-[var(--chip)] border-none px-3"
-                          />
-                        </div>
-                        <div>
-                          <label className="text-xs font-medium text-[var(--muted)] block mb-1.5">중량(g)</label>
-                          <input
-                            type="number"
-                            step="0.01"
-                            {...quickMoveForm.register("base_weight_g", { valueAsNumber: true })}
-                            className="w-full h-9 text-sm rounded-md bg-[var(--chip)] border-none px-3"
-                          />
-                        </div>
-                      </div>
-                      <div className="flex gap-3">
-                        <input
-                          type="text"
-                          {...quickMoveForm.register("model_name")}
-                          placeholder="품목명"
-                          className="flex-1 h-9 text-sm rounded-md bg-[var(--chip)] border-none px-3"
-                        />
-                        <Button type="submit" disabled={quickMoveMutation.isPending}>
-                          {quickMoveMutation.isPending ? "처리중..." : "등록"}
-                        </Button>
-                      </div>
-                    </form>
-                  </div>
-                )}
-              </div>
-            </div>
-          </>
-        ) : (
-          <div className="flex-1 flex items-center justify-center text-[var(--muted)]">
-            <div className="text-center">
-              <Package className="mx-auto mb-4 h-16 w-16 opacity-10" />
-              <p className="text-lg font-medium mb-1">모델을 선택하세요</p>
-              <p className="text-sm">왼쪽 목록에서 모델을 클릭하면 상세 정보가 표시됩니다.</p>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8 gap-1"
+                onClick={() => {
+                  setIsQuickInputOpen(true);
+                  setMasterSearchContext("quick");
+                  setMasterSearchQuery("");
+                  setSelectedQuickMaster(null);
+                  quickMoveForm.reset();
+                }}
+              >
+                <Plus className="w-3.5 h-3.5" />
+                재고 등록
+              </Button>
+              <span className="text-xs px-2 py-1 rounded-full bg-[var(--chip)] text-[var(--muted)]">{positionMode === "total" ? "전체" : selectedLocation || "전체 위치"}</span>
             </div>
           </div>
-        )}
+        </div>
+
+        {/* Gallery Grid */}
+        <div className="flex-1 overflow-y-auto p-4">
+          {positionLoading ? (
+            <div className="grid grid-cols-5 gap-4">
+              {[...Array(15)].map((_, i) => (
+                <div key={`skeleton-${i}`} className="space-y-2">
+                  <Skeleton className="aspect-square w-full rounded-lg" />
+                  <Skeleton className="h-4 w-3/4" />
+                  <Skeleton className="h-3 w-1/2" />
+                </div>
+              ))}
+            </div>
+          ) : filteredPosition.length === 0 ? (
+            <div className="flex-1 flex items-center justify-center h-full">
+              <div className="text-center py-20">
+                <Package className="mx-auto mb-4 h-16 w-16 opacity-10" />
+                <p className="text-lg font-medium mb-1 text-[var(--muted)]">재고가 없습니다</p>
+                <p className="text-sm text-[var(--muted)]">검색 조건을 변경해 보세요.</p>
+              </div>
+            </div>
+          ) : (
+            <div className="grid grid-cols-5 gap-4">
+              {filteredPosition.map((row) => {
+                const imageUrl =
+                  imageUrlByMasterId.get(row.master_id) ||
+                  imageUrlByModelName.get((row.model_name ?? "").trim().toLowerCase()) ||
+                  getImageUrl(row.image_path);
+                return (
+                  <button
+                    key={`${row.master_id}-${row.location_code ?? "NA"}`}
+                    onClick={() => setGalleryDetailItem(row)}
+                    className="group text-left rounded-xl border border-[var(--panel-border)] bg-[var(--panel)] overflow-hidden transition-all hover:shadow-lg hover:border-[var(--primary)]/50 hover:scale-[1.02]"
+                  >
+                    {/* 1:1 Image */}
+                    <div className="aspect-square bg-[var(--chip)] relative overflow-hidden">
+                      {imageUrl ? (
+                        <img
+                          src={imageUrl}
+                          alt={row.model_name}
+                          className="w-full h-full object-cover transition-transform group-hover:scale-105"
+                          loading="lazy"
+                        />
+                      ) : (
+                        <div className="w-full h-full flex items-center justify-center">
+                          <Package className="w-12 h-12 text-[var(--muted)] opacity-30" />
+                        </div>
+                      )}
+                      {/* Qty Badge */}
+                      <div className="absolute top-2 right-2 bg-black/70 text-white text-xs font-bold px-2 py-1 rounded-full tabular-nums">
+                        {row.on_hand_qty.toLocaleString()}
+                      </div>
+                    </div>
+                    {/* Info Card */}
+                    <div className="p-3">
+                      <p className="text-sm font-medium truncate">{row.model_name}</p>
+                      <p className="text-xs text-[var(--muted)] truncate">
+                        {positionMode === "byLocation" ? row.location_code || "미지정" : `${row.on_hand_qty}개`}
+                      </p>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
       </div>
+
+
+      {/* Gallery Detail Modal */}
+      {galleryDetailItem && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm" onClick={() => setGalleryDetailItem(null)}>
+          <div
+            className="bg-[var(--panel)] rounded-2xl shadow-2xl max-w-2xl w-full mx-4 max-h-[90vh] flex flex-col overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Modal Header */}
+            <div className="flex items-center justify-between p-4 border-b border-[var(--panel-border)] shrink-0">
+              <h2 className="text-lg font-bold truncate">{galleryDetailItem.model_name}</h2>
+              <button
+                onClick={() => setGalleryDetailItem(null)}
+                className="p-2 rounded-lg hover:bg-[var(--chip)] transition-colors"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+
+            {/* Tabs */}
+            <div className="flex border-b border-[var(--panel-border)] px-4 bg-[var(--panel)] shrink-0">
+              <button
+                onClick={() => setGalleryTab("info")}
+                className={cn(
+                  "px-4 py-3 text-sm font-medium border-b-2 transition-colors flex items-center gap-2",
+                  galleryTab === "info"
+                    ? "border-[var(--primary)] text-[var(--primary)]"
+                    : "border-transparent text-[var(--muted)] hover:text-[var(--foreground)]"
+                )}
+              >
+                <ClipboardList className="w-4 h-4" />
+                기본정보
+              </button>
+              <button
+                onClick={() => setGalleryTab("stock")}
+                className={cn(
+                  "px-4 py-3 text-sm font-medium border-b-2 transition-colors flex items-center gap-2",
+                  galleryTab === "stock"
+                    ? "border-[var(--primary)] text-[var(--primary)]"
+                    : "border-transparent text-[var(--muted)] hover:text-[var(--foreground)]"
+                )}
+              >
+                <Package className="w-4 h-4" />
+                재고목록
+              </button>
+              <button
+                onClick={() => setGalleryTab("moves")}
+                className={cn(
+                  "px-4 py-3 text-sm font-medium border-b-2 transition-colors flex items-center gap-2",
+                  galleryTab === "moves"
+                    ? "border-[var(--primary)] text-[var(--primary)]"
+                    : "border-transparent text-[var(--muted)] hover:text-[var(--foreground)]"
+                )}
+              >
+                <History className="w-4 h-4" />
+                입출고내역
+              </button>
+            </div>
+
+            {/* Modal Content */}
+            <div className="flex-1 overflow-y-auto p-6">
+              {galleryTab === "info" && (
+                <div className="grid grid-cols-2 gap-6">
+                  {/* Image */}
+                  <div className="aspect-square bg-[var(--chip)] rounded-xl overflow-hidden">
+                    {galleryDetailImageUrl ? (
+                      <img
+                        src={galleryDetailImageUrl}
+                        alt={galleryDetailItem.model_name}
+                        className="w-full h-full object-cover"
+                      />
+                    ) : (
+                      <div className="w-full h-full flex items-center justify-center">
+                        <Package className="w-20 h-20 text-[var(--muted)] opacity-30" />
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Details */}
+                  <div className="space-y-4">
+                    <div>
+                      <p className="text-xs font-medium text-[var(--muted)] mb-1">모델명</p>
+                      <p className="text-lg font-bold">{galleryDetailItem.model_name}</p>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <p className="text-xs font-medium text-[var(--muted)] mb-1">재고 수량</p>
+                        <p className="text-2xl font-bold tabular-nums">{galleryDetailItem.on_hand_qty.toLocaleString()}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs font-medium text-[var(--muted)] mb-1">위치</p>
+                        <p className="text-lg font-semibold">{galleryDetailItem.location_code || "전체"}</p>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <p className="text-xs font-medium text-[var(--muted)] mb-1">소재</p>
+                        <p className="font-medium">{galleryDetailItem.material_code || "-"}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs font-medium text-[var(--muted)] mb-1">중량 (원중량 - 차감)</p>
+                        <p className="font-medium tabular-nums">
+                          {galleryDetailItem.weight_g ?? "-"}g - {galleryDetailItem.deduction_weight_g ?? 0}g
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <p className="text-xs font-medium text-[var(--muted)] mb-1">색상</p>
+                        <p className="font-medium">{galleryDetailItem.color || "-"}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs font-medium text-[var(--muted)] mb-1">사이즈</p>
+                        <p className="font-medium">{galleryDetailItem.size || "-"}</p>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-3 gap-3 p-3 bg-[var(--chip)] rounded-lg">
+                      <div className="text-center">
+                        <p className="text-[10px] font-medium text-[var(--muted)] mb-0.5">메인</p>
+                        <p className="text-lg font-bold tabular-nums">{galleryDetailItem.center_qty ?? "-"}</p>
+                      </div>
+                      <div className="text-center border-x border-[var(--panel-border)]">
+                        <p className="text-[10px] font-medium text-[var(--muted)] mb-0.5">보조1</p>
+                        <p className="text-lg font-bold tabular-nums">{galleryDetailItem.sub1_qty ?? "-"}</p>
+                      </div>
+                      <div className="text-center">
+                        <p className="text-[10px] font-medium text-[var(--muted)] mb-0.5">보조2</p>
+                        <p className="text-lg font-bold tabular-nums">{galleryDetailItem.sub2_qty ?? "-"}</p>
+                      </div>
+                    </div>
+
+                    {galleryDetailItem.memo && (
+                      <div>
+                        <p className="text-xs font-medium text-[var(--muted)] mb-1">비고</p>
+                        <p className="text-sm p-3 bg-[var(--chip)] rounded-lg">{galleryDetailItem.memo}</p>
+                      </div>
+                    )}
+
+                    <div className="text-xs text-[var(--muted)]">
+                      최근 이동: {formatKst(galleryDetailItem.last_move_at)}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {galleryTab === "stock" && (
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between p-4 bg-[var(--chip)] rounded-lg">
+                    <span className="text-sm font-medium text-[var(--muted)]">총 재고</span>
+                    <span className="text-xl font-bold tabular-nums">{galleryStockTotal.toLocaleString()} units</span>
+                  </div>
+                  <div className="border border-[var(--panel-border)] rounded-lg overflow-hidden">
+                    <table className="w-full text-sm">
+                      <thead className="bg-[var(--chip)] text-xs font-medium text-[var(--muted)] uppercase">
+                        <tr>
+                          <th className="px-4 py-2 text-left">위치</th>
+                          <th className="px-4 py-2 text-right">수량</th>
+                          <th className="px-4 py-2 text-right">중량</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-[var(--panel-border)] bg-[var(--panel)]">
+                        {galleryStockList.map((row, idx) => (
+                          <tr key={idx}>
+                            <td className="px-4 py-2 font-medium">{row.location_code || "미지정"}</td>
+                            <td className="px-4 py-2 text-right tabular-nums">{row.on_hand_qty.toLocaleString()}</td>
+                            <td className="px-4 py-2 text-right tabular-nums text-[var(--muted)]">
+                              {(row.weight_g ?? 0) > 0 ? `${row.weight_g}g` : "-"}
+                            </td>
+                          </tr>
+                        ))}
+                        {galleryStockList.length === 0 && (
+                          <tr><td colSpan={3} className="px-4 py-8 text-center text-[var(--muted)]">데이터가 없습니다</td></tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              {galleryTab === "moves" && (
+                <div className="space-y-6">
+                  {/* Record Move Form */}
+                  <div className="bg-[var(--chip)] p-4 rounded-xl border border-[var(--panel-border)] space-y-3">
+                    <p className="text-sm font-bold flex items-center gap-2">
+                      <ArrowLeftRight className="w-4 h-4" />
+                      재고 조정 (Record Move)
+                    </p>
+                    <div className="grid grid-cols-2 gap-2">
+                      <select
+                        className="w-full h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                        {...galleryMoveForm.register("move_type")}
+                      >
+                        <option value="ADJUST">조정 (ADJUST)</option>
+                        <option value="RECEIPT">입고 (RECEIPT)</option>
+                        <option value="ISSUE">출고 (ISSUE)</option>
+                        <option value="RETURN">반품 (RETURN)</option>
+                      </select>
+                      <input
+                        type="text"
+                        placeholder="위치 (예: MAIN)"
+                        className="w-full h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                        {...galleryMoveForm.register("location_code")}
+                      />
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <input
+                        type="number"
+                        placeholder="수량"
+                        className="w-full h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                        {...galleryMoveForm.register("qty", { valueAsNumber: true })}
+                      />
+                      <input
+                        type="text"
+                        placeholder="메모"
+                        className="w-full h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                        {...galleryMoveForm.register("memo")}
+                      />
+                    </div>
+                    <Button
+                      size="sm"
+                      className="w-full"
+                      onClick={galleryMoveForm.handleSubmit(onSubmitGalleryMove)}
+                      disabled={quickMoveMutation.isPending}
+                    >
+                      {quickMoveMutation.isPending ? "처리중..." : "기록하기"}
+                    </Button>
+                  </div>
+
+                  {/* Move History List */}
+                  <div className="space-y-2">
+                    <p className="text-xs font-medium text-[var(--muted)]">최근 내역</p>
+                    <div className="border border-[var(--panel-border)] rounded-lg overflow-hidden divide-y divide-[var(--panel-border)]">
+                      {galleryMoveHistory.map((move) => (
+                        <div key={move.move_line_id} className="p-3 text-sm flex justify-between items-center bg-[var(--panel)]">
+                          <div>
+                            <div className="flex items-center gap-2 mb-1">
+                              <Badge tone="neutral" className="text-[10px] h-5 px-1.5">{move.move_type}</Badge>
+                              <span className="font-medium text-[var(--foreground)]">{move.location_code ?? "-"}</span>
+                            </div>
+                            <p className="text-xs text-[var(--muted)]">{formatKst(move.occurred_at)}</p>
+                          </div>
+                          <div className={cn("text-right font-bold tabular-nums", (move.qty ?? 0) > 0 ? "text-blue-500" : "text-red-500")}>
+                            {(move.qty ?? 0) > 0 ? "+" : ""}{move.qty?.toLocaleString()}
+                          </div>
+                        </div>
+                      ))}
+                      {galleryMoveHistory.length === 0 && (
+                        <div className="p-4 text-center text-[var(--muted)] text-sm">기록이 없습니다</div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+      {/* Quick Input Modal */}
+      {isQuickInputOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm" onClick={() => { setIsQuickInputOpen(false); setMasterSearchContext(null); }}>
+          <div
+            className="bg-[var(--panel)] rounded-2xl shadow-2xl max-w-lg w-full mx-4 max-h-[90vh] flex flex-col overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div className="flex items-center justify-between p-4 border-b border-[var(--panel-border)] shrink-0">
+              <h2 className="text-lg font-bold flex items-center gap-2">
+                <Plus className="w-5 h-5" />
+                재고 등록 (Quick Input)
+              </h2>
+              <button
+                onClick={() => { setIsQuickInputOpen(false); setMasterSearchContext(null); }}
+                className="p-2 rounded-lg hover:bg-[var(--chip)] transition-colors"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+
+            {/* Content */}
+            <div className="p-6 overflow-y-auto">
+              {!selectedQuickMaster ? (
+                <div className="space-y-4">
+                  <div className="relative">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[var(--muted)]" />
+                    <input
+                      type="text"
+                      placeholder="모델명 또는 공급사 검색..."
+                      className="w-full h-10 rounded-md border border-input bg-background pl-9 pr-3 py-2 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                      value={masterSearchQuery}
+                      onChange={(e) => setMasterSearchQuery(e.target.value)}
+                      autoFocus
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    {masterSearchResults.map((master) => (
+                      <button
+                        key={master.master_id}
+                        onClick={() => handleMasterSelect(master)}
+                        className="w-full text-left p-3 rounded-lg border border-[var(--panel-border)] hover:bg-[var(--chip)] transition-colors flex items-center gap-3"
+                      >
+                        <div className="w-10 h-10 bg-[var(--background)] rounded-md overflow-hidden flex items-center justify-center border border-[var(--panel-border)]">
+                          {getImageUrl(master.image_path) ? (
+                            <img src={getImageUrl(master.image_path)!} alt={master.model_name} className="w-full h-full object-cover" />
+                          ) : (
+                            <Package className="w-5 h-5 text-[var(--muted)] opacity-50" />
+                          )}
+                        </div>
+                        <div>
+                          <p className="font-bold text-sm">{master.model_name}</p>
+                          <p className="text-xs text-[var(--muted)]">{master.vendor_name || "공급사 미지정"}</p>
+                        </div>
+                      </button>
+                    ))}
+                    {masterSearchQuery && masterSearchResults.length === 0 && (
+                      <div className="text-center p-8 text-[var(--muted)] text-sm">
+                        검색 결과가 없습니다.
+                      </div>
+                    )}
+                    {!masterSearchQuery && (
+                      <div className="text-center p-8 text-[var(--muted)] text-sm">
+                        모델명을 검색하세요.
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between p-3 bg-[var(--chip)] rounded-lg">
+                    <div className="flex items-center gap-3">
+                      <div className="w-12 h-12 bg-[var(--background)] rounded-md overflow-hidden flex items-center justify-center border border-[var(--panel-border)]">
+                        {getImageUrl(selectedQuickMaster.image_path) ? (
+                          <img src={getImageUrl(selectedQuickMaster.image_path)!} alt={selectedQuickMaster.model_name} className="w-full h-full object-cover" />
+                        ) : (
+                          <Package className="w-6 h-6 text-[var(--muted)] opacity-50" />
+                        )}
+                      </div>
+                      <div>
+                        <p className="font-bold text-base">{selectedQuickMaster.model_name}</p>
+                        <p className="text-xs text-[var(--muted)]">{selectedQuickMaster.vendor_name}</p>
+                      </div>
+                    </div>
+                    <Button variant="ghost" size="sm" onClick={() => setSelectedQuickMaster(null)}>변경</Button>
+                  </div>
+
+                  {/* Read-only Properties */}
+                  <div className="grid grid-cols-3 gap-2 p-3 border border-[var(--panel-border)] rounded-lg bg-[var(--background)]">
+                    <div>
+                      <label className="text-[10px] font-bold text-[var(--muted)] uppercase tracking-wider block mb-1">소재 (Material)</label>
+                      <p className="text-sm font-medium">{selectedQuickMaster.material_code_default || "-"}</p>
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-bold text-[var(--muted)] uppercase tracking-wider block mb-1">색상 (Color)</label>
+                      <p className="text-sm font-medium">{selectedQuickMaster.color || "-"}</p>
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-bold text-[var(--muted)] uppercase tracking-wider block mb-1">사이즈 (Size)</label>
+                      <p className="text-sm font-medium">{selectedQuickMaster.size || selectedQuickMaster.symbol || "-"}</p>
+                    </div>
+                  </div>
+                  <p className="text-[11px] text-[var(--muted)]">마스터 기본값을 참고해 아래 입력값을 수정해서 등록할 수 있습니다.</p>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="col-span-2">
+                      <label className="text-xs font-medium text-[var(--muted)] mb-1 block">구분</label>
+                      <select
+                        className="w-full h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                        {...quickMoveForm.register("move_type")}
+                      >
+                        <option value="RECEIPT">입고 (RECEIPT)</option>
+                        <option value="ISSUE">출고 (ISSUE)</option>
+                        <option value="ADJUST">조정 (ADJUST)</option>
+                        <option value="RETURN">반품 (RETURN)</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="text-xs font-medium text-[var(--muted)] mb-1 block">중량(g)</label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        placeholder="기본 중량"
+                        className="w-full h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                        {...quickMoveForm.register("base_weight_g", { valueAsNumber: true })}
+                      />
+                    </div>
+                    <div>
+                      <label className="text-xs font-medium text-[var(--muted)] mb-1 block">차감중량(g)</label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        placeholder="차감 중량"
+                        className="w-full h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                        {...quickMoveForm.register("deduction_weight_g", { valueAsNumber: true })}
+                      />
+                    </div>
+                    <div>
+                      <label className="text-xs font-medium text-[var(--muted)] mb-1 block">수량</label>
+                      <input
+                        type="number"
+                        placeholder="수량"
+                        className="w-full h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                        {...quickMoveForm.register("qty", { valueAsNumber: true })}
+                      />
+                    </div>
+                    <div>
+                      <label className="text-xs font-medium text-[var(--muted)] mb-1 block">총중량(g)</label>
+                      <input
+                        type="text"
+                        readOnly
+                        value={Math.max(0, Number(quickMoveForm.watch("base_weight_g") ?? 0) - Number(quickMoveForm.watch("deduction_weight_g") ?? 0)).toFixed(2)}
+                        className="w-full h-9 rounded-md border border-input bg-[var(--chip)] px-3 py-1 text-sm text-right tabular-nums"
+                      />
+                    </div>
+
+                    <div className="col-span-2">
+                      <label className="text-xs font-medium text-[var(--muted)] mb-1 block">위치 (Location)</label>
+                      <select
+                        className="w-full h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                        {...quickMoveForm.register("location_code")}
+                      >
+                        <option value="">위치 선택</option>
+                        {locationList.map((loc) => (
+                          <option key={loc.location_code} value={loc.location_code}>
+                            {loc.location_name || loc.location_code} ({loc.location_code})
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div className="col-span-2">
+                      <label className="text-xs font-medium text-[var(--muted)] mb-1 block">세부 위치 (bin)</label>
+                      <select
+                        className="w-full h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                        {...quickMoveForm.register("bin_code")}
+                      >
+                        <option value="">bin 선택 (선택)</option>
+                        {quickBinOptions.map((bin) => (
+                          <option key={bin.value} value={bin.value}>{bin.label}</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="text-xs font-medium text-[var(--muted)] mb-1 block">소재</label>
+                      <input
+                        type="text"
+                        placeholder="예: 14, 925"
+                        className="w-full h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                        {...quickMoveForm.register("material_code")}
+                      />
+                    </div>
+                    <div>
+                      <label className="text-xs font-medium text-[var(--muted)] mb-1 block">색상</label>
+                      <input
+                        type="text"
+                        placeholder="예: Y, WG"
+                        className="w-full h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                        {...quickMoveForm.register("color")}
+                      />
+                    </div>
+                    <div>
+                      <label className="text-xs font-medium text-[var(--muted)] mb-1 block">사이즈</label>
+                      <input
+                        type="text"
+                        placeholder="예: 12, 45cm"
+                        className="w-full h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                        {...quickMoveForm.register("size")}
+                      />
+                    </div>
+
+                    <div className="col-span-2">
+                      <label className="text-xs font-medium text-[var(--muted)] mb-1 block">비고 (Memo)</label>
+                      <input
+                        type="text"
+                        placeholder="메모 입력"
+                        className="w-full h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                        {...quickMoveForm.register("memo")}
+                      />
+                    </div>
+                    <div className="col-span-2">
+                      <label className="text-xs font-medium text-[var(--muted)] mb-1 block">추가 메모</label>
+                      <input
+                        type="text"
+                        placeholder="추가 메모 입력"
+                        className="w-full h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                        onBlur={(e) => {
+                          const current = quickMoveForm.getValues("memo") || "";
+                          if (e.target.value) {
+                            const newVal = current ? `${current} / ${e.target.value}` : e.target.value;
+                            quickMoveForm.setValue("memo", newVal);
+                            e.target.value = ""; // Clear after appending
+                          }
+                        }}
+                      />
+                      <p className="text-[10px] text-[var(--muted)] mt-1">* 입력 후 포커스를 이동하면 비고에 자동 추가됩니다.</p>
+                    </div>
+                  </div>
+
+                  <Button
+                    className="w-full"
+                    onClick={quickMoveForm.handleSubmit(onSubmitQuickMove)}
+                    disabled={quickMoveMutation.isPending}
+                  >
+                    {quickMoveMutation.isPending ? "처리중..." : "등록하기"}
+                  </Button>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

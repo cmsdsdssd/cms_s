@@ -55,6 +55,10 @@ type ReceiptPrintHalfProps = {
   dateLabel: string;
   lines: ReceiptLineItem[];
   summaryRows: ReceiptSummaryRow[];
+  goldPriceRange?: { min: number; max: number } | null;
+  silverPriceRange?: { min: number; max: number } | null;
+  goldPrice?: number | null;
+  silverPrice?: number | null;
 };
 
 const buildAppliedPriceText = (lines: ReceiptLineItem[], kind: "gold" | "silver") => {

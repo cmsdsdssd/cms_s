@@ -211,7 +211,6 @@ export default function CatalogPage() {
   const [vendorPrefixMap, setVendorPrefixMap] = useState<Record<string, string>>({});
   const [masterRowsById, setMasterRowsById] = useState<Record<string, Record<string, unknown>>>({});
   const [categoryCode, setCategoryCode] = useState("");
-  const [categoryTouched, setCategoryTouched] = useState(false);
   const [materialCode, setMaterialCode] = useState("");
   const [weightDefault, setWeightDefault] = useState("");
   const [deductionWeight, setDeductionWeight] = useState("");
@@ -244,9 +243,15 @@ export default function CatalogPage() {
   const [laborCenterCost, setLaborCenterCost] = useState(0);
   const [laborSub1Cost, setLaborSub1Cost] = useState(0);
   const [laborSub2Cost, setLaborSub2Cost] = useState(0);
+  const [laborBaseCostCny, setLaborBaseCostCny] = useState("");
+  const [laborCenterCostCny, setLaborCenterCostCny] = useState("");
+  const [laborSub1CostCny, setLaborSub1CostCny] = useState("");
+  const [laborSub2CostCny, setLaborSub2CostCny] = useState("");
+  const [platingCostCny, setPlatingCostCny] = useState("");
   const [previewImage, setPreviewImage] = useState<string | null>(null);
   const [goldPrice, setGoldPrice] = useState(0);
   const [silverModifiedPrice, setSilverModifiedPrice] = useState(0);
+  const [cnyAdRate, setCnyAdRate] = useState(0);
   const [isUnitPricing, setIsUnitPricing] = useState(false);
 
   const [showBomPanel, setShowBomPanel] = useState(false);
@@ -275,6 +280,7 @@ export default function CatalogPage() {
         if (result.data) {
           setGoldPrice(result.data.gold);
           setSilverModifiedPrice(result.data.silver);
+          setCnyAdRate(Number(result.data.cnyAd ?? 0));
         }
       } catch (error) {
         console.error("Failed to fetch market ticks:", error);
@@ -772,6 +778,31 @@ export default function CatalogPage() {
 
   const canToggleUnitPricing = Boolean(isEditMode && selectedItemId);
   const unitPricingDisabledReason = canToggleUnitPricing ? "" : "저장 후 설정 가능";
+  const isAccessoryCategory = categoryCode === "ACCESSORY";
+
+  const toKrwFromCny = (cny: number) => {
+    if (cnyAdRate <= 0) return 0;
+    return Math.round(cny * cnyAdRate);
+  };
+
+  const toCnyFromKrw = (krw: number) => {
+    if (cnyAdRate <= 0) return "";
+    return (krw / cnyAdRate).toFixed(2);
+  };
+
+  const updateKrwFromCnyInput = (
+    raw: string,
+    setCny: (next: string) => void,
+    setKrw: (next: number) => void
+  ) => {
+    setCny(raw);
+    const cny = Number(raw);
+    if (!Number.isFinite(cny) || cny < 0) {
+      setKrw(0);
+      return;
+    }
+    setKrw(toKrwFromCny(cny));
+  };
 
   const notifyWriteDisabled = () => {
     if (bomToastRef.current) return;
@@ -918,7 +949,6 @@ export default function CatalogPage() {
 
   const resetForm = () => {
     setMasterId(crypto.randomUUID());
-    setCategoryTouched(false);
     setModelName("");
     setVendorId("");
     setCategoryCode("");
@@ -939,8 +969,13 @@ export default function CatalogPage() {
     setLaborCenterCost(0);
     setLaborSub1Cost(0);
     setLaborSub2Cost(0);
+    setLaborBaseCostCny("");
+    setLaborCenterCostCny("");
+    setLaborSub1CostCny("");
+    setLaborSub2CostCny("");
     setPlatingSell(0);
     setPlatingCost(0);
+    setPlatingCostCny("");
     setLaborProfileMode("MANUAL");
     setLaborBandCode("");
     setSettingAddonMarginKrwPerPiece(0);
@@ -973,7 +1008,6 @@ export default function CatalogPage() {
         ? vendorCandidate
         : vendorOptions.find((option) => option.label === vendorCandidate)?.value ?? ""
     );
-    setCategoryTouched(true);
     setCategoryCode(detail?.categoryCode ?? "");
     setMaterialCode(detail?.materialCode ?? materialCodeFromLabel(selectedItem.material));
     setWeightDefault(row?.weight_default_g ? String(row.weight_default_g) : "");
@@ -992,8 +1026,13 @@ export default function CatalogPage() {
     setLaborCenterCost(detail?.laborCenterCost ?? 0);
     setLaborSub1Cost(detail?.laborSub1Cost ?? 0);
     setLaborSub2Cost(detail?.laborSub2Cost ?? 0);
+    setLaborBaseCostCny(toCnyFromKrw(detail?.laborBaseCost ?? 0));
+    setLaborCenterCostCny(toCnyFromKrw(detail?.laborCenterCost ?? 0));
+    setLaborSub1CostCny(toCnyFromKrw(detail?.laborSub1Cost ?? 0));
+    setLaborSub2CostCny(toCnyFromKrw(detail?.laborSub2Cost ?? 0));
     setPlatingSell(detail?.platingSell ?? 0);
     setPlatingCost(detail?.platingCost ?? 0);
+    setPlatingCostCny(toCnyFromKrw(detail?.platingCost ?? 0));
     setLaborProfileMode(detail?.laborProfileMode ?? "MANUAL");
     setLaborBandCode(detail?.laborBandCode ?? "");
     setSettingAddonMarginKrwPerPiece(detail?.settingAddonMarginKrwPerPiece ?? 0);
@@ -2111,7 +2150,7 @@ export default function CatalogPage() {
                           onBlur={() => {
                             const derived =
                               deriveCategoryCodeFromModelName(modelName);
-                            if (!categoryTouched && derived) {
+                            if (derived) {
                               setCategoryCode(derived);
                             }
                             applyVendorFromModelName(modelName);
@@ -2150,7 +2189,6 @@ export default function CatalogPage() {
                         <Select
                           value={categoryCode}
                           onChange={(event) => {
-                            setCategoryTouched(true);
                             setCategoryCode(event.target.value);
                           }}
                         >
@@ -2238,6 +2276,11 @@ export default function CatalogPage() {
                         </span>
                       </div>
                     </div>
+                    {isAccessoryCategory ? (
+                      <div className="mb-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-[11px] text-red-900">
+                        CNY 환율 적용: 1 CNY = {cnyAdRate > 0 ? new Intl.NumberFormat("ko-KR", { maximumFractionDigits: 2 }).format(cnyAdRate) : "-"} KRW
+                      </div>
+                    ) : null}
 
                     <div className="grid grid-cols-[0.8fr_1fr_0.6fr_1fr] gap-x-2 gap-y-3 items-center text-xs">
                       <div className="text-center font-semibold text-[var(--muted)]">
@@ -2250,7 +2293,7 @@ export default function CatalogPage() {
                         수량 (Qty)
                       </div>
                       <div className="text-center font-semibold text-[var(--muted)]">
-                        원가 (Cost)
+                        원가 (Cost){isAccessoryCategory ? " KRW/CNY" : ""}
                       </div>
 
                       {/* Base */}
@@ -2266,14 +2309,29 @@ export default function CatalogPage() {
                         }
                       />
                       <div className="text-center text-[var(--muted)]">-</div>
-                      <Input
-                        type="number"
-                        min={0}
-                        value={laborBaseCost}
-                        onChange={(e) =>
-                          setLaborBaseCost(toNumber(e.target.value))
-                        }
-                      />
+                      {isAccessoryCategory ? (
+                        <div className="grid grid-cols-2 gap-1">
+                          <Input type="number" min={0} value={laborBaseCost} readOnly className="text-right" />
+                          <Input
+                            type="number"
+                            min={0}
+                            step="0.01"
+                            value={laborBaseCostCny}
+                            onChange={(e) =>
+                              updateKrwFromCnyInput(e.target.value, setLaborBaseCostCny, setLaborBaseCost)
+                            }
+                            className="border-red-300 focus-visible:ring-red-300"
+                            placeholder="CNY"
+                          />
+                        </div>
+                      ) : (
+                        <Input
+                          type="number"
+                          min={0}
+                          value={laborBaseCost}
+                          onChange={(e) => setLaborBaseCost(toNumber(e.target.value))}
+                        />
+                      )}
 
                       <div className="col-span-4 h-px bg-dashed border-t border-[var(--panel-border)]/70" />
 
@@ -2304,14 +2362,29 @@ export default function CatalogPage() {
                         value={centerQty}
                         onChange={(e) => setCenterQty(toNumber(e.target.value))}
                       />
-                      <Input
-                        type="number"
-                        min={0}
-                        value={laborCenterCost}
-                        onChange={(e) =>
-                          setLaborCenterCost(toNumber(e.target.value))
-                        }
-                      />
+                      {isAccessoryCategory ? (
+                        <div className="grid grid-cols-2 gap-1">
+                          <Input type="number" min={0} value={laborCenterCost} readOnly className="text-right" />
+                          <Input
+                            type="number"
+                            min={0}
+                            step="0.01"
+                            value={laborCenterCostCny}
+                            onChange={(e) =>
+                              updateKrwFromCnyInput(e.target.value, setLaborCenterCostCny, setLaborCenterCost)
+                            }
+                            className="border-red-300 focus-visible:ring-red-300"
+                            placeholder="CNY"
+                          />
+                        </div>
+                      ) : (
+                        <Input
+                          type="number"
+                          min={0}
+                          value={laborCenterCost}
+                          onChange={(e) => setLaborCenterCost(toNumber(e.target.value))}
+                        />
+                      )}
                       <div className="col-span-4 h-px bg-dashed border-t border-[var(--panel-border)]/70" />
 
                       {/* Sub1 */}
@@ -2341,14 +2414,29 @@ export default function CatalogPage() {
                         value={sub1Qty}
                         onChange={(e) => setSub1Qty(toNumber(e.target.value))}
                       />
-                      <Input
-                        type="number"
-                        min={0}
-                        value={laborSub1Cost}
-                        onChange={(e) =>
-                          setLaborSub1Cost(toNumber(e.target.value))
-                        }
-                      />
+                      {isAccessoryCategory ? (
+                        <div className="grid grid-cols-2 gap-1">
+                          <Input type="number" min={0} value={laborSub1Cost} readOnly className="text-right" />
+                          <Input
+                            type="number"
+                            min={0}
+                            step="0.01"
+                            value={laborSub1CostCny}
+                            onChange={(e) =>
+                              updateKrwFromCnyInput(e.target.value, setLaborSub1CostCny, setLaborSub1Cost)
+                            }
+                            className="border-red-300 focus-visible:ring-red-300"
+                            placeholder="CNY"
+                          />
+                        </div>
+                      ) : (
+                        <Input
+                          type="number"
+                          min={0}
+                          value={laborSub1Cost}
+                          onChange={(e) => setLaborSub1Cost(toNumber(e.target.value))}
+                        />
+                      )}
                       <div className="col-span-4 h-px bg-dashed border-t border-[var(--panel-border)]/70" />
 
                       {/* Sub2 */}
@@ -2378,14 +2466,29 @@ export default function CatalogPage() {
                         value={sub2Qty}
                         onChange={(e) => setSub2Qty(toNumber(e.target.value))}
                       />
-                      <Input
-                        type="number"
-                        min={0}
-                        value={laborSub2Cost}
-                        onChange={(e) =>
-                          setLaborSub2Cost(toNumber(e.target.value))
-                        }
-                      />
+                      {isAccessoryCategory ? (
+                        <div className="grid grid-cols-2 gap-1">
+                          <Input type="number" min={0} value={laborSub2Cost} readOnly className="text-right" />
+                          <Input
+                            type="number"
+                            min={0}
+                            step="0.01"
+                            value={laborSub2CostCny}
+                            onChange={(e) =>
+                              updateKrwFromCnyInput(e.target.value, setLaborSub2CostCny, setLaborSub2Cost)
+                            }
+                            className="border-red-300 focus-visible:ring-red-300"
+                            placeholder="CNY"
+                          />
+                        </div>
+                      ) : (
+                        <Input
+                          type="number"
+                          min={0}
+                          value={laborSub2Cost}
+                          onChange={(e) => setLaborSub2Cost(toNumber(e.target.value))}
+                        />
+                      )}
 
                       <div className="col-span-4 h-px bg-dashed border-t border-[var(--panel-border)] my-2" />
 
@@ -2402,14 +2505,29 @@ export default function CatalogPage() {
                         }
                       />
                       <div className="text-center text-[var(--muted)]">-</div>
-                      <Input
-                        type="number"
-                        min={0}
-                        value={platingCost}
-                        onChange={(e) =>
-                          setPlatingCost(toNumber(e.target.value))
-                        }
-                      />
+                      {isAccessoryCategory ? (
+                        <div className="grid grid-cols-2 gap-1">
+                          <Input type="number" min={0} value={platingCost} readOnly className="text-right" />
+                          <Input
+                            type="number"
+                            min={0}
+                            step="0.01"
+                            value={platingCostCny}
+                            onChange={(e) =>
+                              updateKrwFromCnyInput(e.target.value, setPlatingCostCny, setPlatingCost)
+                            }
+                            className="border-red-300 focus-visible:ring-red-300"
+                            placeholder="CNY"
+                          />
+                        </div>
+                      ) : (
+                        <Input
+                          type="number"
+                          min={0}
+                          value={platingCost}
+                          onChange={(e) => setPlatingCost(toNumber(e.target.value))}
+                        />
+                      )}
 
                       <div className="text-center font-medium text-[var(--muted)]">
                         세팅 부가마진(개당)

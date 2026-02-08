@@ -187,6 +187,16 @@ type ShipmentHeaderRow = {
   pricing_source?: string | null;
   confirmed_at?: string | null;
   status?: string | null;
+  source_location_code?: string | null;
+  source_bin_code?: string | null;
+};
+
+type LocationBinRow = {
+  bin_code?: string | null;
+  location_code?: string | null;
+  bin_name?: string | null;
+  sort_order?: number | null;
+  is_active?: boolean | null;
 };
 
 type StorePickupLookupRow = {
@@ -494,6 +504,7 @@ export default function ShipmentsPage() {
   const [currentShipmentLineId, setCurrentShipmentLineId] = useState<string | null>(null);
   const [showAllLines, setShowAllLines] = useState(false);
   const [isStorePickup, setIsStorePickup] = useState(false);
+  const [sourceBinCode, setSourceBinCode] = useState<string>("");
 
   // ✅ A안: RECEIPT 모드 제거 (임시/수기만 유지)
   const [costMode, setCostMode] = useState<"PROVISIONAL" | "MANUAL">("PROVISIONAL");
@@ -1218,7 +1229,7 @@ export default function ShipmentsPage() {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       let query = (sb as any)
         .from("cms_shipment_header")
-        .select("is_store_pickup, pricing_locked_at, pricing_source, confirmed_at, status")
+        .select("is_store_pickup, pricing_locked_at, pricing_source, confirmed_at, status, source_location_code, source_bin_code")
         .eq("shipment_id", shipmentId);
 
       if (isStorePickup) {
@@ -1231,6 +1242,42 @@ export default function ShipmentsPage() {
       return (data ?? null) as ShipmentHeaderRow | null;
     },
   });
+
+  const locationBinQuery = useQuery({
+    queryKey: ["shipment-location-bin"],
+    queryFn: async () => {
+      const sb = getSchemaClient();
+      if (!sb) return [] as LocationBinRow[];
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data, error } = await (sb as any)
+        .from(CONTRACTS.views.inventoryLocationBins)
+        .select("bin_code, location_code, bin_name, sort_order, is_active")
+        .eq("is_active", true)
+        .order("sort_order", { ascending: true })
+        .order("bin_code", { ascending: true });
+      if (error) throw error;
+      return (data ?? []) as LocationBinRow[];
+    },
+  });
+
+  const effectiveSourceLocationCode = isStorePickup ? "STORE" : "OFFICE";
+
+  const sourceBinOptions = useMemo(
+    () =>
+      (locationBinQuery.data ?? [])
+        .filter((row) => String(row.location_code ?? "") === effectiveSourceLocationCode)
+        .map((row) => ({
+          value: String(row.bin_code ?? ""),
+          label: `${row.bin_name ?? row.bin_code} (${row.bin_code})`,
+        })),
+    [locationBinQuery.data, effectiveSourceLocationCode]
+  );
+
+  useEffect(() => {
+    if (!sourceBinCode) return;
+    if (sourceBinOptions.some((option) => option.value === sourceBinCode)) return;
+    setSourceBinCode("");
+  }, [sourceBinCode, sourceBinOptions]);
 
   const shipmentValuationQuery = useQuery({
     queryKey: ["shipment-valuation", normalizedShipmentId, confirmModalOpen],
@@ -1255,8 +1302,9 @@ export default function ShipmentsPage() {
   useEffect(() => {
     if (!confirmModalOpen) return;
     const header = shipmentHeaderQuery.data;
-    if (!header?.is_store_pickup) return;
-    setIsStorePickup(true);
+    if (!header) return;
+    setIsStorePickup(Boolean(header.is_store_pickup));
+    setSourceBinCode(String(header.source_bin_code ?? ""));
   }, [confirmModalOpen, shipmentHeaderQuery.data]);
 
   const orderHasVariation = useMemo(
@@ -1326,6 +1374,10 @@ export default function ShipmentsPage() {
     successMessage: "매장출고 지정 완료",
   });
 
+  const shipmentSetSourceLocationMutation = useRpcMutation<unknown>({
+    fn: CONTRACTS.functions.shipmentSetSourceLocation,
+  });
+
   const arInvoiceResyncMutation = useRpcMutation<ArResyncResult>({
     fn: CONTRACTS.functions.arInvoiceResyncFromShipment,
     onSuccess: (result) => {
@@ -1344,6 +1396,8 @@ export default function ShipmentsPage() {
 
   const handleSaveShipment = async () => {
     const shouldStorePickup = isStorePickup;
+    const resolvedSourceLocation = shouldStorePickup ? "STORE" : "OFFICE";
+    const resolvedSourceBin = sourceBinCode.trim();
     if (!actorId) {
       toast.error("ACTOR_ID 설정이 필요합니다.", {
         description: "NEXT_PUBLIC_CMS_ACTOR_ID를 확인하세요.",
@@ -1354,7 +1408,6 @@ export default function ShipmentsPage() {
       toast.error("주문(출고대기)을 먼저 선택해주세요.");
       return;
     }
-
     const materialCode =
       (receiptMatchPrefillQuery.data?.selected_material_code ?? masterLookupQuery.data?.material_code_default ?? "").trim();
     const allowZeroWeight = materialCode === "00";
@@ -1495,6 +1548,13 @@ export default function ShipmentsPage() {
     await shipmentLineUpdateMutation.mutateAsync(updatePayload);
 
     if (shouldStorePickup) {
+      await shipmentSetSourceLocationMutation.mutateAsync({
+        p_shipment_id: shipmentId,
+        p_source_location_code: "STORE",
+        p_source_bin_code: resolvedSourceBin || null,
+        p_actor_person_id: actorId,
+        p_note: "set source location from shipments save",
+      });
       await shipmentSetStorePickupMutation.mutateAsync({
         p_shipment_id: shipmentId,
         p_is_store_pickup: true,
@@ -1507,6 +1567,14 @@ export default function ShipmentsPage() {
       resetShipmentForm({ keepStorePickup: true });
       return;
     }
+
+    await shipmentSetSourceLocationMutation.mutateAsync({
+      p_shipment_id: shipmentId,
+      p_source_location_code: resolvedSourceLocation,
+      p_source_bin_code: resolvedSourceBin || null,
+      p_actor_person_id: actorId,
+      p_note: "set source location from shipments save",
+    });
 
     await confirmMutation.mutateAsync({
       p_shipment_id: shipmentId,
@@ -1724,6 +1792,7 @@ export default function ShipmentsPage() {
     setCurrentShipmentLineId(null);
     setShowAllLines(false);
     setIsStorePickup((prev) => (keepStorePickup ? prev : false));
+    setSourceBinCode("");
 
     setSelectedOrderLineId(null);
     setPrefillHydratedOrderLineId(null);
@@ -1772,6 +1841,8 @@ export default function ShipmentsPage() {
 
   const handleFinalConfirm = async () => {
     const shouldStorePickup = isStorePickup;
+    const resolvedSourceLocation = shouldStorePickup ? "STORE" : "OFFICE";
+    const resolvedSourceBin = sourceBinCode.trim();
     if (!actorId) {
       toast.error("ACTOR_ID 설정이 필요합니다.", {
         description: "NEXT_PUBLIC_CMS_ACTOR_ID를 확인하세요.",
@@ -1780,7 +1851,6 @@ export default function ShipmentsPage() {
     }
     const shipmentId = normalizeId(currentShipmentId);
     if (!shipmentId) return;
-
     const currentLines = currentLinesQuery.data ?? [];
     const currentLine = currentShipmentLineId
       ? currentLines.find((line) => String(line.shipment_line_id) === String(currentShipmentLineId))
@@ -1881,6 +1951,13 @@ export default function ShipmentsPage() {
     }
 
     if (shouldStorePickup) {
+      await shipmentSetSourceLocationMutation.mutateAsync({
+        p_shipment_id: shipmentId,
+        p_source_location_code: "STORE",
+        p_source_bin_code: resolvedSourceBin || null,
+        p_actor_person_id: actorId,
+        p_note: "set source location from shipments confirm",
+      });
       await shipmentSetStorePickupMutation.mutateAsync({
         p_shipment_id: shipmentId,
         p_is_store_pickup: true,
@@ -1893,6 +1970,14 @@ export default function ShipmentsPage() {
       resetShipmentForm({ keepStorePickup: true });
       return;
     }
+
+    await shipmentSetSourceLocationMutation.mutateAsync({
+      p_shipment_id: shipmentId,
+      p_source_location_code: resolvedSourceLocation,
+      p_source_bin_code: resolvedSourceBin || null,
+      p_actor_person_id: actorId,
+      p_note: "set source location from shipments confirm",
+    });
 
 
     // ✅ MANUAL 모드일 때만 현재 화면에 보이는 라인(기본: 지금 출고한 라인)만 전송
@@ -2380,7 +2465,10 @@ export default function ShipmentsPage() {
   const valuation = shipmentValuationQuery.data;
   const pricingLockedAt = valuation?.pricing_locked_at ?? shipmentHeaderQuery.data?.pricing_locked_at ?? null;
   const pricingSource = valuation?.pricing_source ?? shipmentHeaderQuery.data?.pricing_source ?? null;
-  const isConfirming = confirmMutation.isPending || shipmentSetStorePickupMutation.isPending;
+  const isConfirming =
+    confirmMutation.isPending ||
+    shipmentSetStorePickupMutation.isPending ||
+    shipmentSetSourceLocationMutation.isPending;
   const shipmentIdForResync = normalizeId(currentShipmentId);
   const isShipmentConfirmed =
     Boolean(shipmentHeaderQuery.data?.confirmed_at) || shipmentHeaderQuery.data?.status === "CONFIRMED";
@@ -3247,6 +3335,7 @@ export default function ShipmentsPage() {
                             setOtherLaborCost("");
                             setExtraLaborItems([]);
                             setIsStorePickup(false);
+                            setSourceBinCode("");
                           }}
                           className="text-[var(--muted)] hover:text-[var(--foreground)]"
                         >
@@ -3257,11 +3346,27 @@ export default function ShipmentsPage() {
                             <input
                               type="checkbox"
                               checked={isStorePickup}
-                              onChange={(event) => setIsStorePickup(event.target.checked)}
+                              onChange={(event) => {
+                                const checked = event.target.checked;
+                                setIsStorePickup(checked);
+                              }}
                               className="h-4 w-4"
                             />
                             매장출고
                           </label>
+                          <div className="h-9 min-w-[180px] text-sm rounded-md bg-[var(--chip)] border-none px-3 flex items-center">
+                            출고 위치: {effectiveSourceLocationCode}
+                          </div>
+                          <select
+                            value={sourceBinCode}
+                            onChange={(event) => setSourceBinCode(event.target.value)}
+                            className="h-9 min-w-[180px] text-sm rounded-md bg-[var(--chip)] border-none px-3"
+                          >
+                            <option value="">출고 bin(선택)</option>
+                            {sourceBinOptions.map((o) => (
+                              <option key={o.value} value={o.value}>{o.label}</option>
+                            ))}
+                          </select>
                           <Button
                             variant="primary"
                             size="lg"
@@ -3560,11 +3665,40 @@ export default function ShipmentsPage() {
                 <input
                   type="checkbox"
                   checked={isStorePickup}
-                  onChange={(event) => setIsStorePickup(event.target.checked)}
+                  onChange={(event) => {
+                    const checked = event.target.checked;
+                    setIsStorePickup(checked);
+                  }}
                   className="h-4 w-4"
                 />
                 매장출고 (확정은 Workbench에서 진행)
               </label>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div>
+                  <span className="text-xs text-[var(--primary)] block mb-1">출고 위치</span>
+                  <select
+                    value={effectiveSourceLocationCode}
+                    disabled
+                    className="h-8 w-full rounded-md bg-[var(--input-bg)] px-2 text-xs"
+                  >
+                    <option value={effectiveSourceLocationCode}>{effectiveSourceLocationCode}</option>
+                  </select>
+                </div>
+                <div>
+                  <span className="text-xs text-[var(--primary)] block mb-1">출고 bin(선택)</span>
+                  <select
+                    value={sourceBinCode}
+                    onChange={(event) => setSourceBinCode(event.target.value)}
+                    className="h-8 w-full rounded-md bg-[var(--input-bg)] px-2 text-xs"
+                  >
+                    <option value="">선택</option>
+                    {sourceBinOptions.map((o) => (
+                      <option key={o.value} value={o.value}>{o.label}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
 
               <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                 <div>
