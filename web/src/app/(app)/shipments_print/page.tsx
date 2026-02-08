@@ -94,6 +94,7 @@ type PartyReceiptPage = {
 
 type ShipmentRow = {
   shipmentId: string;
+  customerPartyId: string; // ✅ 추가
   customerName: string;
   shipDate: string | null;
   confirmedAt: string | null;
@@ -103,6 +104,7 @@ type ShipmentRow = {
   totalAmount: number;
   models: string[];
 };
+
 
 const formatKrw = (value?: number | null) => {
   if (value === null || value === undefined) return "-";
@@ -417,6 +419,7 @@ function ShipmentsPrintContent() {
 
         return {
           shipmentId: row.shipment_id ?? "",
+          customerPartyId: row.customer_party_id ?? "", // ✅ 추가
           customerName: row.customer?.name ?? "-",
           shipDate: row.ship_date ?? null,
           confirmedAt: row.confirmed_at ?? null,
@@ -429,6 +432,10 @@ function ShipmentsPrintContent() {
       })
       .filter((row) => Boolean(row.shipmentId));
   }, [shipmentsQuery.data]);
+  const resetTargets = useMemo(() => {
+    if (!activePartyId) return shipments;
+    return shipments.filter((s) => s.customerPartyId === activePartyId);
+  }, [shipments, activePartyId]);
 
   const todayLines = useMemo<ReceiptLine[]>(() => {
     return (shipmentsQuery.data ?? [])
@@ -761,56 +768,90 @@ function ShipmentsPrintContent() {
             </CardBody>
           </Card>
 
-          <div className="receipt-print-root">
-            {shipmentsQuery.isLoading ? (
-              <div className="text-sm text-[var(--muted)]">로딩 중...</div>
-            ) : visiblePages.length === 0 ? (
-              <div className="text-sm text-[var(--muted)]">미리볼 거래처를 선택하세요.</div>
-            ) : (
-              <div className="space-y-6">
-                {visiblePages.map((page, index) => (
-                  <div
-                    key={`${page.partyId}-${index}`}
-                    className={cn(
-                      "receipt-print-page mx-auto bg-white p-4 text-black shadow-sm",
-                      "border border-neutral-200"
-                    )}
-                    style={{ width: "100%", height: "194mm" }}
-                  >
-                    <div className="grid h-full grid-cols-2 gap-4">
-                      <div className="h-full border-r border-dashed border-neutral-300 pr-4">
-                        <ReceiptPrintHalf
-                          partyName={page.partyName}
-                          dateLabel={printedAtLabel}
-                          lines={page.lines}
-                          summaryRows={[
-                            { label: "합계", value: page.totals },
-                            { label: "이전 미수", value: page.previous },
-                            { label: "당일 미수", value: page.today },
-                          ]}
-                          goldPrice={page.goldPrice}
-                          silverPrice={page.silverPrice}
-                        />
+          <div className="space-y-4">
+            <Card className="border-[var(--panel-border)]">
+              <CardHeader className="border-b border-[var(--panel-border)] py-3">
+                <div className="text-sm font-semibold">출고 초기화</div>
+                <div className="text-xs text-[var(--muted)]">
+                  선택된 거래처(또는 전체)의 확정된 출고를 초기화합니다. (미수/결제상계/반품 자동 롤백)
+                </div>
+              </CardHeader>
+              <CardBody className="p-0">
+                {shipmentsQuery.isLoading ? (
+                  <div className="p-4 text-sm text-[var(--muted)]">로딩 중...</div>
+                ) : resetTargets.length === 0 ? (
+                  <div className="p-4 text-sm text-[var(--muted)]">초기화할 출고가 없습니다.</div>
+                ) : (
+                  <div className="divide-y divide-[var(--panel-border)]">
+                    {resetTargets.slice(0, 30).map((s) => (
+                      <div key={s.shipmentId} className="flex items-center justify-between px-4 py-3">
+                        <div className="min-w-0">
+                          <div className="text-sm font-semibold truncate">{s.customerName}</div>
+                          <div className="text-xs text-[var(--muted)] tabular-nums">
+                            {s.totalQty}건 · {formatKrw(s.totalAmount)} · {formatDateTimeKst(s.confirmedAt)}
+                          </div>
+                        </div>
+                        <Button variant="secondary" onClick={() => handleOpenReason(s.shipmentId)}>
+                          초기화
+                        </Button>
                       </div>
-                      <div className="h-full pl-4">
-                        <ReceiptPrintHalf
-                          partyName={page.partyName}
-                          dateLabel={printedAtLabel}
-                          lines={page.lines}
-                          summaryRows={[
-                            { label: "합계", value: page.totals },
-                            { label: "이전 미수", value: page.previous },
-                            { label: "당일 미수", value: page.today },
-                          ]}
-                          goldPrice={page.goldPrice}
-                          silverPrice={page.silverPrice}
-                        />
+                    ))}
+                  </div>
+                )}
+              </CardBody>
+            </Card>
+
+            <div className="receipt-print-root">
+              {shipmentsQuery.isLoading ? (
+                <div className="text-sm text-[var(--muted)]">로딩 중...</div>
+              ) : visiblePages.length === 0 ? (
+                <div className="text-sm text-[var(--muted)]">미리볼 거래처를 선택하세요.</div>
+              ) : (
+                <div className="space-y-6">
+                  {visiblePages.map((page, index) => (
+                    <div
+                      key={`${page.partyId}-${index}`}
+                      className={cn(
+                        "receipt-print-page mx-auto bg-white p-4 text-black shadow-sm",
+                        "border border-neutral-200"
+                      )}
+                      style={{ width: "100%", height: "194mm" }}
+                    >
+                      <div className="grid h-full grid-cols-2 gap-4">
+                        <div className="h-full border-r border-dashed border-neutral-300 pr-4">
+                          <ReceiptPrintHalf
+                            partyName={page.partyName}
+                            dateLabel={printedAtLabel}
+                            lines={page.lines}
+                            summaryRows={[
+                              { label: "합계", value: page.totals },
+                              { label: "이전 미수", value: page.previous },
+                              { label: "당일 미수", value: page.today },
+                            ]}
+                            goldPrice={page.goldPrice}
+                            silverPrice={page.silverPrice}
+                          />
+                        </div>
+                        <div className="h-full pl-4">
+                          <ReceiptPrintHalf
+                            partyName={page.partyName}
+                            dateLabel={printedAtLabel}
+                            lines={page.lines}
+                            summaryRows={[
+                              { label: "합계", value: page.totals },
+                              { label: "이전 미수", value: page.previous },
+                              { label: "당일 미수", value: page.today },
+                            ]}
+                            goldPrice={page.goldPrice}
+                            silverPrice={page.silverPrice}
+                          />
+                        </div>
                       </div>
                     </div>
-                  </div>
-                ))}
-              </div>
-            )}
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         </div>
       </div>
