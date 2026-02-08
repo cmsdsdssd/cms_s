@@ -1,8 +1,6 @@
 "use client";
 
-"use client";
-
-import { useMemo, useState, useEffect, Suspense, useCallback } from "react";
+import { useMemo, useState, Suspense, useCallback } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { ActionBar } from "@/components/layout/action-bar";
@@ -26,6 +24,7 @@ type ShipmentHeaderRow = {
   customer?: { name?: string | null } | null;
   cms_shipment_line?: Array<{
     shipment_line_id?: string | null;
+    repair_line_id?: string | null;
     model_name?: string | null;
     qty?: number | null;
     material_code?: string | null;
@@ -33,10 +32,40 @@ type ShipmentHeaderRow = {
     color?: string | null;
     size?: string | null;
     labor_total_sell_krw?: number | null;
+    material_amount_sell_krw?: number | null;
+    repair_fee_krw?: number | null;
     total_amount_sell_krw?: number | null;
     gold_tick_krw_per_g?: number | null;
     silver_tick_krw_per_g?: number | null;
   }> | null;
+};
+
+type ReturnLineRow = {
+  return_line_id?: string | null;
+  occurred_at?: string | null;
+  return_qty?: number | null;
+  final_return_amount_krw?: number | null;
+  cms_shipment_line?: {
+    shipment_line_id?: string | null;
+    repair_line_id?: string | null;
+    model_name?: string | null;
+    qty?: number | null;
+    material_code?: string | null;
+    net_weight_g?: number | null;
+    color?: string | null;
+    size?: string | null;
+    labor_total_sell_krw?: number | null;
+    material_amount_sell_krw?: number | null;
+    repair_fee_krw?: number | null;
+    total_amount_sell_krw?: number | null;
+    gold_tick_krw_per_g?: number | null;
+    silver_tick_krw_per_g?: number | null;
+    shipment_header?: {
+      customer_party_id?: string | null;
+      is_store_pickup?: boolean | null;
+      customer?: { name?: string | null } | null;
+    } | null;
+  } | null;
 };
 
 type ReceiptLine = ReceiptLineItem & {
@@ -59,22 +88,6 @@ type ArPositionRow = {
   silver_outstanding_g?: number | null;
 };
 
-type ArInvoicePositionRow = {
-  party_id?: string | null;
-  occurred_at?: string | null;
-  commodity_type?: "gold" | "silver" | null;
-  commodity_outstanding_g?: number | null;
-  labor_cash_outstanding_krw?: number | null;
-  total_cash_outstanding_krw?: number | null;
-  shipment_line?: {
-    shipment_header?: {
-      ship_date?: string | null;
-      confirmed_at?: string | null;
-      is_store_pickup?: boolean | null;
-    } | null;
-  } | null;
-};
-
 type MasterItemRow = {
   model_name?: string | null;
   is_unit_pricing?: boolean | null;
@@ -90,8 +103,31 @@ type PartyReceiptPage = {
   todaySales: Amounts;
   todayReturns: Amounts;
   previous: Amounts;
-  goldPrice: number | null;
-  silverPrice: number | null;
+  goldPriceRange: { min: number; max: number } | null;
+  silverPriceRange: { min: number; max: number } | null;
+};
+
+const hasReturnAmounts = (amounts: Amounts) => {
+  const epsilon = 0.000001;
+  return (
+    Math.abs(amounts.gold) > epsilon ||
+    Math.abs(amounts.silver) > epsilon ||
+    Math.abs(amounts.labor) > epsilon ||
+    Math.abs(amounts.total) > epsilon
+  );
+};
+
+const buildSummaryRows = (page: PartyReceiptPage) => {
+  const rows = [
+    { label: "합계", value: page.totals },
+    { label: "이전 미수", value: page.previous },
+    { label: "당일 출고", value: page.todaySales },
+  ];
+  if (hasReturnAmounts(page.todayReturns)) {
+    rows.push({ label: "당일 반품", value: page.todayReturns });
+    rows.push({ label: "당일 순증감", value: page.today });
+  }
+  return rows;
 };
 
 type ShipmentRow = {
@@ -143,20 +179,6 @@ const getKstNextStartIso = (ymd: string) => {
   return new Date(start.getTime() + 24 * 60 * 60 * 1000).toISOString();
 };
 
-const getKstDateTime = () => {
-  const now = new Date();
-  return new Intl.DateTimeFormat("sv-SE", {
-    timeZone: "Asia/Seoul",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: false,
-  }).format(now);
-};
-
 const toKstPrintTimestamp = (value: Date) =>
   new Intl.DateTimeFormat("sv-SE", {
     timeZone: "Asia/Seoul",
@@ -204,40 +226,6 @@ const subtractAmounts = (base: Amounts, sub: Amounts) => ({
   total: base.total - sub.total,
 });
 
-const toArAmounts = (row: ArInvoicePositionRow): Amounts => {
-  const commodity = Number(row.commodity_outstanding_g ?? 0);
-  const labor = Number(row.labor_cash_outstanding_krw ?? 0);
-  const total = Number(row.total_cash_outstanding_krw ?? 0);
-  return {
-    gold: row.commodity_type === "gold" ? commodity : 0,
-    silver: row.commodity_type === "silver" ? commodity : 0,
-    labor,
-    total,
-  };
-};
-
-const getArBucket = (
-  shipDate: string | null,
-  confirmedAtMs: number,
-  occurredAtMs: number,
-  today: string,
-  todayStartMs: number,
-  todayEndMs: number
-) => {
-  const eventMs = Number.isFinite(occurredAtMs) ? occurredAtMs : confirmedAtMs;
-  if (Number.isFinite(eventMs)) {
-    if (eventMs >= todayStartMs && eventMs < todayEndMs) return "today" as const;
-    if (eventMs < todayStartMs) return "previous" as const;
-    return "future" as const;
-  }
-  if (shipDate) {
-    if (shipDate === today) return "today" as const;
-    if (shipDate < today) return "previous" as const;
-    return "future" as const;
-  }
-  return "unknown" as const;
-};
-
 const getMaterialBucket = (code?: string | null) => {
   const material = (code ?? "").trim();
   if (!material || material === "00") return { kind: "none" as const, factor: 0 };
@@ -249,8 +237,20 @@ const getMaterialBucket = (code?: string | null) => {
   return { kind: "none" as const, factor: 0 };
 };
 
+const hasRepairMaterialReceivable = (line: ReceiptLine) => {
+  if (!line.is_repair) return true;
+  const materialAmount = Number(line.material_amount_sell_krw ?? 0);
+  const netWeight = Number(line.net_weight_g ?? 0);
+  return materialAmount > 0 && netWeight > 0;
+};
+
 
 const toLineAmounts = (line: ReceiptLine): Amounts => {
+  if (line.is_repair && !hasRepairMaterialReceivable(line)) {
+    const repairLabor = Number(line.repair_fee_krw ?? 0);
+    const total = Number(line.total_amount_sell_krw ?? 0);
+    return { gold: 0, silver: 0, labor: repairLabor, total };
+  }
   const netWeight = Number(line.net_weight_g ?? 0);
   const labor = Number(line.labor_total_sell_krw ?? 0);
   const total = Number(line.total_amount_sell_krw ?? 0);
@@ -279,10 +279,32 @@ const chunkLines = (lines: ReceiptLine[], size: number) => {
   return chunks.length > 0 ? chunks : [[]];
 };
 
-const getTickPrices = (lines: ReceiptLine[]) => {
-  const goldPrice = lines.find((line) => line.gold_tick_krw_per_g != null)?.gold_tick_krw_per_g ?? null;
-  const silverPrice = lines.find((line) => line.silver_tick_krw_per_g != null)?.silver_tick_krw_per_g ?? null;
-  return { goldPrice, silverPrice };
+const getTickPriceRanges = (lines: ReceiptLine[]) => {
+  const toRange = (values: number[]) => {
+    if (values.length === 0) return null;
+    return { min: Math.min(...values), max: Math.max(...values) };
+  };
+  const goldValues = lines
+    .map((line) => line.gold_tick_krw_per_g)
+    .filter((value): value is number => value !== null && value !== undefined);
+  const silverValues = lines
+    .map((line) => line.silver_tick_krw_per_g)
+    .filter((value): value is number => value !== null && value !== undefined);
+  return {
+    goldPriceRange: toRange(goldValues),
+    silverPriceRange: toRange(silverValues),
+  };
+};
+
+const sumLineAmountsByParty = (lines: ReceiptLine[]) => {
+  const map = new Map<string, Amounts>();
+  lines.forEach((line) => {
+    const partyId = line.shipment_header?.customer_party_id ?? "";
+    if (!partyId) return;
+    const current = map.get(partyId) ?? { ...zeroAmounts };
+    map.set(partyId, addAmounts(current, toLineAmounts(line)));
+  });
+  return map;
 };
 
 function ShipmentsPrintContent() {
@@ -293,7 +315,6 @@ function ShipmentsPrintContent() {
   const [reasonModalOpen, setReasonModalOpen] = useState(false);
   const [reasonText, setReasonText] = useState("");
   const [targetShipmentId, setTargetShipmentId] = useState<string | null>(null);
-  const [activePartyId, setActivePartyId] = useState<string | null>(null);
 
   const mode = searchParams.get("mode") ?? "";
   const isStorePickupMode = mode === "store_pickup";
@@ -304,13 +325,12 @@ function ShipmentsPrintContent() {
   const today = useMemo(() => (isValidYmd(dateParam) ? dateParam : getKstYmd()), [dateParam]);
   const printedAtLabel = useMemo(() => {
     const normalized = normalizePrintedAt(printedAtParam);
-    return normalized || toKstPrintTimestamp(new Date());
-  }, [printedAtParam]);
+    if (normalized) return normalized;
+    return `${today}-00:00:00`;
+  }, [printedAtParam, today]);
+  const activePartyId = filterPartyId || null;
   const todayStartIso = useMemo(() => getKstStartIso(today), [today]);
   const todayEndIso = useMemo(() => getKstNextStartIso(today), [today]);
-  const todayStartMs = useMemo(() => new Date(todayStartIso).getTime(), [todayStartIso]);
-  const todayEndMs = useMemo(() => new Date(todayEndIso).getTime(), [todayEndIso]);
-  const [nowLabel, setNowLabel] = useState("");
 
   const updateQuery = useCallback(
     (next: { date?: string; mode?: "store_pickup" | ""; partyId?: string | null }) => {
@@ -334,10 +354,6 @@ function ShipmentsPrintContent() {
     [searchParams, router, pathname]
   );
 
-  useEffect(() => {
-    setNowLabel(getKstDateTime());
-  }, []);
-
   const shipmentsQuery = useQuery({
     queryKey: ["shipments-print", today, mode, filterPartyId],
     queryFn: async () => {
@@ -345,7 +361,7 @@ function ShipmentsPrintContent() {
       let query = schemaClient
         .from("cms_shipment_header")
         .select(
-          "shipment_id, ship_date, confirmed_at, is_store_pickup, memo, customer_party_id, customer:cms_party(name), cms_shipment_line(shipment_line_id, model_name, qty, material_code, net_weight_g, color, size, labor_total_sell_krw, total_amount_sell_krw, gold_tick_krw_per_g, silver_tick_krw_per_g)"
+          "shipment_id, ship_date, confirmed_at, is_store_pickup, memo, customer_party_id, customer:cms_party(name), cms_shipment_line(shipment_line_id, repair_line_id, model_name, qty, material_code, net_weight_g, color, size, labor_total_sell_krw, material_amount_sell_krw, repair_fee_krw, total_amount_sell_krw, gold_tick_krw_per_g, silver_tick_krw_per_g)"
         )
         .eq("status", "CONFIRMED");
 
@@ -371,6 +387,29 @@ function ShipmentsPrintContent() {
     enabled: Boolean(schemaClient),
   });
 
+  const returnsQuery = useQuery({
+    queryKey: ["shipments-print-returns", today, mode, filterPartyId],
+    queryFn: async () => {
+      if (!schemaClient) throw new Error("Supabase env is missing");
+      let query = schemaClient
+        .from("cms_return_line")
+        .select(
+          "return_line_id, occurred_at, return_qty, final_return_amount_krw, cms_shipment_line!inner(shipment_line_id, repair_line_id, model_name, qty, material_code, net_weight_g, color, size, labor_total_sell_krw, material_amount_sell_krw, repair_fee_krw, total_amount_sell_krw, gold_tick_krw_per_g, silver_tick_krw_per_g, shipment_header:cms_shipment_header(customer_party_id, is_store_pickup, customer:cms_party(name)))"
+        )
+        .gte("occurred_at", todayStartIso)
+        .lt("occurred_at", todayEndIso)
+        .order("occurred_at", { ascending: true });
+
+      if (filterPartyId) {
+        query = query.eq("cms_shipment_line.shipment_header.customer_party_id", filterPartyId);
+      }
+      const { data, error } = await query;
+      if (error) throw error;
+      return (data ?? []) as ReturnLineRow[];
+    },
+    enabled: Boolean(schemaClient),
+  });
+
   const modelNames = useMemo(() => {
     const names = new Set<string>();
     (shipmentsQuery.data ?? []).forEach((row) => {
@@ -379,8 +418,12 @@ function ShipmentsPrintContent() {
         if (name) names.add(name);
       });
     });
+    (returnsQuery.data ?? []).forEach((row) => {
+      const name = (row.cms_shipment_line?.model_name ?? "").trim();
+      if (name) names.add(name);
+    });
     return Array.from(names);
-  }, [shipmentsQuery.data]);
+  }, [shipmentsQuery.data, returnsQuery.data]);
 
   const masterItemsQuery = useQuery({
     queryKey: ["shipments-print-master-items", modelNames.join("|")],
@@ -433,13 +476,13 @@ function ShipmentsPrintContent() {
         };
       })
       .filter((row) => Boolean(row.shipmentId));
-  }, [shipmentsQuery.data]);
+  }, [shipmentsQuery.data, isStorePickupMode]);
   const resetTargets = useMemo(() => {
     if (!activePartyId) return shipments;
     return shipments.filter((s) => s.customerPartyId === activePartyId);
   }, [shipments, activePartyId]);
 
-  const todayLines = useMemo<ReceiptLine[]>(() => {
+  const todaySalesLines = useMemo<ReceiptLine[]>(() => {
     return (shipmentsQuery.data ?? [])
       .filter((row) => (isStorePickupMode ? row.is_store_pickup : !row.is_store_pickup))
       .flatMap((row) => {
@@ -450,24 +493,79 @@ function ShipmentsPrintContent() {
           is_store_pickup: row.is_store_pickup ?? null,
           customer: row.customer ?? null,
         };
-        return (row.cms_shipment_line ?? [])
-          .map((line) => ({
-            is_unit_pricing: unitPricingMap.get((line.model_name ?? "").trim()) ?? false,
-            shipment_line_id: line.shipment_line_id ?? undefined,
-            model_name: line.model_name ?? null,
-            qty: line.qty ?? null,
-            material_code: line.material_code ?? null,
-            net_weight_g: line.net_weight_g ?? null,
-            color: line.color ?? null,
-            size: line.size ?? null,
-            labor_total_sell_krw: line.labor_total_sell_krw ?? null,
-            total_amount_sell_krw: line.total_amount_sell_krw ?? null,
-            gold_tick_krw_per_g: line.gold_tick_krw_per_g ?? null,
-            silver_tick_krw_per_g: line.silver_tick_krw_per_g ?? null,
-            shipment_header: header,
-          }));
+        return (row.cms_shipment_line ?? []).map((line) => ({
+          is_unit_pricing: unitPricingMap.get((line.model_name ?? "").trim()) ?? false,
+          is_repair: Boolean(line.repair_line_id),
+          shipment_line_id: line.shipment_line_id ?? undefined,
+          model_name: line.model_name ?? null,
+          qty: line.qty ?? null,
+          material_code: line.material_code ?? null,
+          net_weight_g: line.net_weight_g ?? null,
+          color: line.color ?? null,
+          size: line.size ?? null,
+          labor_total_sell_krw: line.labor_total_sell_krw ?? null,
+          material_amount_sell_krw: line.material_amount_sell_krw ?? null,
+          repair_fee_krw: line.repair_fee_krw ?? null,
+          total_amount_sell_krw: line.total_amount_sell_krw ?? null,
+          gold_tick_krw_per_g: line.gold_tick_krw_per_g ?? null,
+          silver_tick_krw_per_g: line.silver_tick_krw_per_g ?? null,
+          shipment_header: header,
+        }));
       });
   }, [shipmentsQuery.data, isStorePickupMode, unitPricingMap]);
+
+  const todayReturnLines = useMemo<ReceiptLine[]>(() => {
+    return (returnsQuery.data ?? [])
+      .filter((row) => {
+        const isStorePickup = Boolean(row.cms_shipment_line?.shipment_header?.is_store_pickup);
+        return isStorePickupMode ? isStorePickup : !isStorePickup;
+      })
+      .map((row) => {
+        const source = row.cms_shipment_line;
+        const modelName = (source?.model_name ?? "").trim();
+        const isUnitPricing = unitPricingMap.get(modelName) ?? false;
+        const returnQty = Math.max(Number(row.return_qty ?? 0), 0);
+        const netWeight = Number(source?.net_weight_g ?? 0);
+        const labor = Number(source?.labor_total_sell_krw ?? 0);
+        const material = Number(source?.material_amount_sell_krw ?? 0);
+        const repairFee = Number(source?.repair_fee_krw ?? 0);
+        const total = Number(source?.total_amount_sell_krw ?? 0);
+        const overrideTotal = row.final_return_amount_krw;
+        return {
+          is_return: true,
+          is_repair: Boolean(source?.repair_line_id),
+          is_unit_pricing: isUnitPricing,
+          shipment_line_id: row.return_line_id ?? source?.shipment_line_id ?? undefined,
+          model_name: source?.model_name ?? null,
+          qty: returnQty,
+          material_code: source?.material_code ?? null,
+          net_weight_g: isUnitPricing ? 0 : -Math.abs(netWeight * returnQty),
+          color: source?.color ?? null,
+          size: source?.size ?? null,
+          labor_total_sell_krw: isUnitPricing ? 0 : -Math.abs(labor * returnQty),
+          material_amount_sell_krw: isUnitPricing ? 0 : -Math.abs(material * returnQty),
+          repair_fee_krw: isUnitPricing ? 0 : -Math.abs(repairFee * returnQty),
+          total_amount_sell_krw:
+            overrideTotal === null || overrideTotal === undefined
+              ? -Math.abs(total * returnQty)
+              : -Math.abs(Number(overrideTotal)),
+          gold_tick_krw_per_g: source?.gold_tick_krw_per_g ?? null,
+          silver_tick_krw_per_g: source?.silver_tick_krw_per_g ?? null,
+          shipment_header: {
+            ship_date: null,
+            status: "RETURNED",
+            customer_party_id: source?.shipment_header?.customer_party_id ?? null,
+            is_store_pickup: source?.shipment_header?.is_store_pickup ?? null,
+            customer: source?.shipment_header?.customer ?? null,
+          },
+        };
+      })
+      .filter((line) => (line.shipment_header?.customer_party_id ?? "").length > 0 && Number(line.qty ?? 0) > 0);
+  }, [returnsQuery.data, isStorePickupMode, unitPricingMap]);
+
+  const todayLines = useMemo<ReceiptLine[]>(() => {
+    return [...todaySalesLines, ...todayReturnLines];
+  }, [todaySalesLines, todayReturnLines]);
 
   const partyGroups = useMemo(() => {
     const map = new Map<string, { partyId: string; partyName: string; lines: ReceiptLine[] }>();
@@ -484,14 +582,6 @@ function ShipmentsPrintContent() {
 
   const partyIds = useMemo(() => partyGroups.map((group) => group.partyId), [partyGroups]);
 
-  useEffect(() => {
-    if (filterPartyId) {
-      setActivePartyId(filterPartyId);
-      return;
-    }
-    setActivePartyId(null);
-  }, [filterPartyId]);
-
   const arPositionsQuery = useQuery({
     queryKey: ["shipments-print-ar", partyIds.join(",")],
     queryFn: async () => {
@@ -503,23 +593,6 @@ function ShipmentsPrintContent() {
         .in("party_id", partyIds);
       if (error) throw error;
       return (data ?? []) as ArPositionRow[];
-    },
-    enabled: Boolean(schemaClient) && partyIds.length > 0,
-  });
-
-  const arInvoicePositionsQuery = useQuery({
-    queryKey: ["shipments-print-ar-invoice", today, mode, filterPartyId, partyIds.join(",")],
-    queryFn: async () => {
-      if (!schemaClient) throw new Error("Supabase env is missing");
-      if (partyIds.length === 0) return [] as ArInvoicePositionRow[];
-      const { data, error } = await schemaClient
-        .from("cms_v_ar_invoice_position_v1")
-        .select(
-          "party_id, occurred_at, commodity_type, commodity_outstanding_g, labor_cash_outstanding_krw, total_cash_outstanding_krw, shipment_line:cms_shipment_line(shipment_line_id, shipment_header:cms_shipment_header(ship_date, confirmed_at, is_store_pickup))"
-        )
-        .in("party_id", partyIds);
-      if (error) throw error;
-      return (data ?? []) as ArInvoicePositionRow[];
     },
     enabled: Boolean(schemaClient) && partyIds.length > 0,
   });
@@ -540,52 +613,9 @@ function ShipmentsPrintContent() {
   }, [arPositionsQuery.data]);
 
 
-  const todayByParty = useMemo(() => {
-    const map = new Map<string, Amounts>();
-    todayLines.forEach((line) => {
-      const partyId = line.shipment_header?.customer_party_id ?? "";
-      if (!partyId) return;
-      const current = map.get(partyId) ?? { ...zeroAmounts };
-      map.set(partyId, addAmounts(current, toLineAmounts(line)));
-    });
-    return map;
-  }, [todayLines]);
-
-  const arTodayStatsMap = useMemo(() => {
-    const salesMap = new Map<string, Amounts>();
-    const returnsMap = new Map<string, Amounts>();
-
-    (arInvoicePositionsQuery.data ?? []).forEach((row) => {
-      const partyId = row.party_id ?? "";
-      if (!partyId) return;
-      const header = row.shipment_line?.shipment_header ?? null;
-      const isStorePickup = header?.is_store_pickup ?? null;
-      if (isStorePickupMode ? !isStorePickup : isStorePickup) return;
-
-      const shipDate = header?.ship_date ?? null;
-      const confirmedAt = header?.confirmed_at ?? null;
-      const occurredAt = row.occurred_at ?? null;
-      const confirmedAtMs = confirmedAt ? new Date(confirmedAt).getTime() : NaN;
-      const occurredAtMs = occurredAt ? new Date(occurredAt).getTime() : NaN;
-      const bucket = getArBucket(shipDate, confirmedAtMs, occurredAtMs, today, todayStartMs, todayEndMs);
-
-      if (bucket !== "today") return;
-
-      const amounts = toArAmounts(row);
-      // Heuristic: if total amount is negative, it's a return. 
-      // Note: A single row might be a mix, but usually AR rows are distinct.
-      // If it's a return, amounts should be negative.
-      // We sum them up into respective buckets.
-      if (amounts.total < 0) {
-        const current = returnsMap.get(partyId) ?? { ...zeroAmounts };
-        returnsMap.set(partyId, addAmounts(current, amounts));
-      } else {
-        const current = salesMap.get(partyId) ?? { ...zeroAmounts };
-        salesMap.set(partyId, addAmounts(current, amounts));
-      }
-    });
-    return { salesMap, returnsMap };
-  }, [arInvoicePositionsQuery.data, isStorePickupMode, today, todayStartMs, todayEndMs]);
+  const todayByParty = useMemo(() => sumLineAmountsByParty(todayLines), [todayLines]);
+  const todaySalesByParty = useMemo(() => sumLineAmountsByParty(todaySalesLines), [todaySalesLines]);
+  const todayReturnsByParty = useMemo(() => sumLineAmountsByParty(todayReturnLines), [todayReturnLines]);
 
   const receiptPages = useMemo(() => {
     const result: PartyReceiptPage[] = [];
@@ -593,24 +623,24 @@ function ShipmentsPrintContent() {
       const chunks = chunkLines(group.lines, 15);
       const totals = arTotalsMap.get(group.partyId) ?? { ...zeroAmounts };
 
-      const todaySales = arTodayStatsMap.salesMap.get(group.partyId) ?? { ...zeroAmounts };
-      const todayReturns = arTodayStatsMap.returnsMap.get(group.partyId) ?? { ...zeroAmounts };
+      const todaySales = todaySalesByParty.get(group.partyId) ?? { ...zeroAmounts };
+      const todayReturns = todayReturnsByParty.get(group.partyId) ?? { ...zeroAmounts };
       const todayNet = addAmounts(todaySales, todayReturns);
 
       const previousSummary = subtractAmounts(totals, todayNet);
-      const { goldPrice, silverPrice } = getTickPrices(group.lines);
+      const { goldPriceRange, silverPriceRange } = getTickPriceRanges(group.lines);
       chunks.forEach((chunk) => {
         result.push({
           partyId: group.partyId,
           partyName: group.partyName,
           lines: chunk,
           totals,
-          today: todayNet, // Keep for legacy or net calculation if needed
-          todaySales,      // New
-          todayReturns,    // New
+          today: todayNet,
+          todaySales,
+          todayReturns,
           previous: previousSummary,
-          goldPrice,
-          silverPrice,
+          goldPriceRange,
+          silverPriceRange,
         });
       });
     });
@@ -625,13 +655,13 @@ function ShipmentsPrintContent() {
         todaySales: { ...zeroAmounts },
         todayReturns: { ...zeroAmounts },
         previous: { ...zeroAmounts },
-        goldPrice: null,
-        silverPrice: null,
+        goldPriceRange: null,
+        silverPriceRange: null,
       });
     }
 
     return result;
-  }, [partyGroups, arTotalsMap, arTodayStatsMap]);
+  }, [partyGroups, arTotalsMap, todaySalesByParty, todayReturnsByParty]);
 
   const visiblePages = useMemo(() => {
     if (!activePartyId) return receiptPages;
@@ -674,10 +704,10 @@ function ShipmentsPrintContent() {
 
   return (
     <div className="min-h-screen bg-[var(--background)]">
-      <div className="receipt-print-actions px-6 py-4 border-b border-[var(--panel-border)] bg-[var(--background)]/80 backdrop-blur">
+      <div className="receipt-print-actions no-print px-6 py-4 border-b border-[var(--panel-border)] bg-[var(--background)]/80 backdrop-blur">
         <ActionBar
           title={isStorePickupMode ? "출고 영수증(매장출고)" : "출고 영수증(통상)"}
-          subtitle={`기준일: ${today} · ${nowLabel} · ${isStorePickupMode ? "매장출고만" : "매장출고 제외"} · 출고확정됨`}
+          subtitle={`기준일: ${today} · ${isStorePickupMode ? "매장출고만" : "매장출고 제외"} · 출고확정됨`}
           actions={
             <div className="flex flex-wrap items-center gap-2">
               <div className="flex items-center gap-1">
@@ -710,7 +740,13 @@ function ShipmentsPrintContent() {
                 </Button>
               </div>
               <div className="flex items-center gap-2">
-                <Button variant="secondary" onClick={() => shipmentsQuery.refetch()}>
+                <Button
+                  variant="secondary"
+                  onClick={() => {
+                    shipmentsQuery.refetch();
+                    returnsQuery.refetch();
+                  }}
+                >
                   새로고침
                 </Button>
                 <Button variant="primary" onClick={() => window.print()}>
@@ -722,8 +758,8 @@ function ShipmentsPrintContent() {
         />
       </div>
 
-      <div className="px-6 py-6 space-y-6">
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div className="shipments-print-stage px-6 py-6 space-y-6">
+        <div className="no-print grid grid-cols-1 md:grid-cols-3 gap-4">
           <Card className="border-[var(--panel-border)]">
             <CardBody className="p-4">
               <div className="text-xs text-[var(--muted)]">출고 건수</div>
@@ -744,7 +780,7 @@ function ShipmentsPrintContent() {
           </Card>
         </div>
 
-        <div className="grid grid-cols-1 gap-4 lg:grid-cols-[280px_1fr]">
+        <div className="no-print shipments-print-main grid grid-cols-1 gap-4 lg:grid-cols-[280px_1fr]">
           <Card className="border-[var(--panel-border)] h-fit">
             <CardHeader className="border-b border-[var(--panel-border)] py-3">
               <div className="text-sm font-semibold">거래처 선택</div>
@@ -826,59 +862,51 @@ function ShipmentsPrintContent() {
                 )}
               </CardBody>
             </Card>
-
-            <div className="receipt-print-root">
-              {shipmentsQuery.isLoading ? (
-                <div className="text-sm text-[var(--muted)]">로딩 중...</div>
-              ) : visiblePages.length === 0 ? (
-                <div className="text-sm text-[var(--muted)]">미리볼 거래처를 선택하세요.</div>
-              ) : (
-                <div className="space-y-6">
-                  {visiblePages.map((page, index) => (
-                    <div
-                      key={`${page.partyId}-${index}`}
-                      className={cn(
-                        "receipt-print-page mx-auto bg-white p-4 text-black shadow-sm",
-                        "border border-neutral-200"
-                      )}
-                      style={{ width: "100%", height: "194mm" }}
-                    >
-                      <div className="grid h-full grid-cols-2 gap-4">
-                        <div className="h-full border-r border-dashed border-neutral-300 pr-4">
-                          <ReceiptPrintHalf
-                            partyName={page.partyName}
-                            dateLabel={printedAtLabel}
-                            lines={page.lines}
-                            summaryRows={[
-                              { label: "합계", value: page.totals },
-                              { label: "이전 미수", value: page.previous },
-                              { label: "당일 미수", value: page.today },
-                            ]}
-                            goldPrice={page.goldPrice}
-                            silverPrice={page.silverPrice}
-                          />
-                        </div>
-                        <div className="h-full pl-4">
-                          <ReceiptPrintHalf
-                            partyName={page.partyName}
-                            dateLabel={printedAtLabel}
-                            lines={page.lines}
-                            summaryRows={[
-                              { label: "합계", value: page.totals },
-                              { label: "이전 미수", value: page.previous },
-                              { label: "당일 미수", value: page.today },
-                            ]}
-                            goldPrice={page.goldPrice}
-                            silverPrice={page.silverPrice}
-                          />
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
           </div>
+        </div>
+
+        <div className="receipt-print-root shipments-print-root print-only space-y-6">
+          {shipmentsQuery.isLoading || returnsQuery.isLoading ? (
+            <div className="no-print text-sm text-[var(--muted)]">로딩 중...</div>
+          ) : visiblePages.length === 0 ? (
+            <div className="no-print text-sm text-[var(--muted)]">미리볼 거래처를 선택하세요.</div>
+          ) : (
+            <div className="space-y-6">
+              {visiblePages.map((page, index) => (
+                <div
+                  key={`${page.partyId}-${index}`}
+                  className={cn(
+                    "receipt-print-page print-sheet shipments-print-sheet mx-auto bg-white p-[10mm] text-black shadow-sm",
+                    "border border-neutral-200"
+                  )}
+                  style={{ width: "297mm", height: "210mm" }}
+                >
+                  <div className="grid h-full grid-cols-2 gap-4">
+                    <div className="h-full border-r border-dashed border-neutral-300 pr-4">
+                      <ReceiptPrintHalf
+                        partyName={page.partyName}
+                        dateLabel={printedAtLabel}
+                        lines={page.lines}
+                        summaryRows={buildSummaryRows(page)}
+                        goldPriceRange={page.goldPriceRange}
+                        silverPriceRange={page.silverPriceRange}
+                      />
+                    </div>
+                    <div className="h-full pl-4">
+                      <ReceiptPrintHalf
+                        partyName={page.partyName}
+                        dateLabel={printedAtLabel}
+                        lines={page.lines}
+                        summaryRows={buildSummaryRows(page)}
+                        goldPriceRange={page.goldPriceRange}
+                        silverPriceRange={page.silverPriceRange}
+                      />
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       </div>
 

@@ -7,9 +7,10 @@ type Body = {
   shipment_id?: string;
   repair_line_id?: string;
   material_code?: string | null;
+  added_weight_g?: number | null;
 };
 
-const REPAIR_MATERIAL_CODES = new Set(["14", "18", "24", "925", "00"]);
+const REPAIR_MATERIAL_CODES = new Set(["14", "18", "24", "925", "999", "00"]);
 
 function getSupabaseAdmin() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
@@ -43,6 +44,8 @@ export async function POST(request: Request) {
   }
 
   const materialCode = resolveMaterialCode(body?.material_code ?? null);
+  const addedWeight = Number(body?.added_weight_g ?? NaN);
+  const hasAddedWeight = Number.isFinite(addedWeight) && addedWeight > 0;
 
   const { data: row, error: lineError } = await supabase
     .from("cms_shipment_line")
@@ -61,10 +64,25 @@ export async function POST(request: Request) {
   const nextCategory = (row.category_code ?? "").trim() || "ETC";
   const nextMaterial = (row.material_code ?? "").trim() || materialCode;
 
-  if (nextCategory !== (row.category_code ?? "") || nextMaterial !== (row.material_code ?? "")) {
+  if (nextCategory !== (row.category_code ?? "") || nextMaterial !== (row.material_code ?? "") || hasAddedWeight) {
+    const patch: {
+      category_code: string;
+      material_code: string;
+      measured_weight_g?: number;
+      deduction_weight_g?: number;
+      net_weight_g?: number;
+    } = {
+      category_code: nextCategory,
+      material_code: nextMaterial,
+    };
+    if (hasAddedWeight) {
+      patch.measured_weight_g = addedWeight;
+      patch.deduction_weight_g = 0;
+      patch.net_weight_g = addedWeight;
+    }
     const { error: updateError } = await supabase
       .from("cms_shipment_line")
-      .update({ category_code: nextCategory, material_code: nextMaterial })
+      .update(patch)
       .eq("shipment_line_id", row.shipment_line_id);
     if (updateError) {
       return NextResponse.json({ error: updateError.message ?? "shipment line update failed" }, { status: 500 });

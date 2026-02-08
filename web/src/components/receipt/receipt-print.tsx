@@ -17,9 +17,13 @@ export type ReceiptLineItem = {
   net_weight_g?: number | null;
   total_amount_sell_krw?: number | null;
   labor_total_sell_krw?: number | null;
+  material_amount_sell_krw?: number | null;
+  repair_fee_krw?: number | null;
   gold_tick_krw_per_g?: number | null;
   silver_tick_krw_per_g?: number | null;
   is_unit_pricing?: boolean | null;
+  is_return?: boolean | null;
+  is_repair?: boolean | null;
 };
 
 export type ReceiptSummaryRow = {
@@ -50,8 +54,16 @@ type ReceiptPrintHalfProps = {
   dateLabel: string;
   lines: ReceiptLineItem[];
   summaryRows: ReceiptSummaryRow[];
-  goldPrice: number | null;
-  silverPrice: number | null;
+  goldPriceRange?: { min: number; max: number } | null;
+  silverPriceRange?: { min: number; max: number } | null;
+  goldPrice?: number | null;
+  silverPrice?: number | null;
+};
+
+const formatPriceRange = (range: { min: number; max: number } | null) => {
+  if (!range) return "-";
+  if (Math.abs(range.min - range.max) < 0.0001) return formatKrw(range.min);
+  return `${formatKrw(range.min)}~${formatKrw(range.max)}`;
 };
 
 export const ReceiptPrintHalf = ({
@@ -59,6 +71,8 @@ export const ReceiptPrintHalf = ({
   dateLabel,
   lines,
   summaryRows,
+  goldPriceRange,
+  silverPriceRange,
   goldPrice,
   silverPrice,
 }: ReceiptPrintHalfProps) => {
@@ -67,6 +81,20 @@ export const ReceiptPrintHalf = ({
     while (next.length < 15) next.push({});
     return next;
   }, [lines]);
+  const totalSummary = useMemo(
+    () => summaryRows.find((row) => row.label === "합계") ?? summaryRows[0] ?? null,
+    [summaryRows]
+  );
+  const normalizedGoldRange = useMemo(
+    () => goldPriceRange ?? (goldPrice === null || goldPrice === undefined ? null : { min: goldPrice, max: goldPrice }),
+    [goldPriceRange, goldPrice]
+  );
+  const normalizedSilverRange = useMemo(
+    () =>
+      silverPriceRange ??
+      (silverPrice === null || silverPrice === undefined ? null : { min: silverPrice, max: silverPrice }),
+    [silverPriceRange, silverPrice]
+  );
 
   return (
     <div className="flex h-full flex-col gap-4 text-[11px] text-black">
@@ -78,9 +106,6 @@ export const ReceiptPrintHalf = ({
         <div className="text-right text-[10px] text-neutral-600">
           <div>{dateLabel}</div>
           <div className="font-medium text-black">{partyName}</div>
-          <div className="mt-1">
-            금시세 {goldPrice === null || goldPrice === undefined ? "-" : formatKrw(goldPrice)}/g · 은시세 {silverPrice === null || silverPrice === undefined ? "-" : formatKrw(silverPrice)}/g
-          </div>
         </div>
       </div>
 
@@ -103,20 +128,31 @@ export const ReceiptPrintHalf = ({
             {paddedLines.map((line, index) => {
               const isUnitPricing = Boolean(line.is_unit_pricing);
               const isSilver = line.material_code === "925" || line.material_code === "999";
+              const isReturn = Boolean(line.is_return) || (line.total_amount_sell_krw ?? 0) < 0;
+              const isRepair = Boolean(line.is_repair);
+              const isRepairWithMaterial =
+                isRepair && Number(line.material_amount_sell_krw ?? 0) > 0 && Number(line.net_weight_g ?? 0) > 0;
               const hasContent = Boolean(
                 line.model_name || line.material_code || line.color || line.size || line.net_weight_g
               );
+              const modelName = (line.model_name ?? "").toString();
+              const modelWithReturnPrefix = isReturn && modelName && !modelName.trim().startsWith("-")
+                ? `-${modelName}`
+                : modelName;
               const modelLabel = hasContent
-                ? `${index + 1}. ${(line.model_name ?? "").toString()}`.trim()
+                ? `${index + 1}. ${modelWithReturnPrefix}`.trim()
                 : "";
               return (
                 <tr key={line.shipment_line_id ?? `row-${index}`} className="border-b border-neutral-200">
                   <td className="py-1 pr-2 align-middle">
                     <div className="flex items-center gap-1">
-                      {hasContent && (line.total_amount_sell_krw ?? 0) < 0 && (
+                      {hasContent && isReturn && (
                         <span className="rounded bg-blue-100 px-1 text-[9px] font-bold text-blue-600">반품</span>
                       )}
-                      <span className={cn((line.total_amount_sell_krw ?? 0) < 0 && "line-through text-blue-600")}>
+                      {hasContent && isRepair && (
+                        <span className="rounded bg-amber-100 px-1 text-[9px] font-bold text-amber-700">수리</span>
+                      )}
+                      <span className={cn(isReturn && "text-blue-600")}>
                         {modelLabel}
                       </span>
                       {hasContent && isUnitPricing && (
@@ -124,23 +160,47 @@ export const ReceiptPrintHalf = ({
                       )}
                     </div>
                   </td>
-                  <td className={cn("py-1 text-left tabular-nums", (line.total_amount_sell_krw ?? 0) < 0 && "line-through text-blue-600")}>{line.material_code ?? ""}</td>
-                  <td className={cn("py-1 text-left tabular-nums", (line.total_amount_sell_krw ?? 0) < 0 && "line-through text-blue-600")}>{line.color ?? ""}</td>
-                  <td className={cn("py-1 text-left tabular-nums", (line.total_amount_sell_krw ?? 0) < 0 && "line-through text-blue-600")}>{line.size ?? ""}</td>
-                  <td className={cn("py-1 text-right tabular-nums", (line.total_amount_sell_krw ?? 0) < 0 && "line-through text-blue-600")}>
-                    {hasContent && isUnitPricing ? "-" : isSilver ? "" : formatWeightCell(line.net_weight_g)}
-                  </td>
-                  <td className={cn("py-1 text-right tabular-nums", (line.total_amount_sell_krw ?? 0) < 0 && "line-through text-blue-600")}>
-                    {hasContent && isUnitPricing ? "-" : isSilver ? formatWeightCell(line.net_weight_g) : ""}
-                  </td>
-                  <td className={cn("py-1 text-right tabular-nums", (line.total_amount_sell_krw ?? 0) < 0 && "line-through text-blue-600")}>
+                  <td className={cn("py-1 text-left tabular-nums", isReturn && "text-blue-600")}>{line.material_code ?? ""}</td>
+                  <td className={cn("py-1 text-left tabular-nums", isReturn && "text-blue-600")}>{line.color ?? ""}</td>
+                  <td className={cn("py-1 text-left tabular-nums", isReturn && "text-blue-600")}>{line.size ?? ""}</td>
+                  <td className={cn("py-1 text-right tabular-nums", isReturn && "text-blue-600")}>
                     {hasContent && isUnitPricing
                       ? "-"
-                      : line.labor_total_sell_krw === null || line.labor_total_sell_krw === undefined
-                        ? ""
-                        : formatKrw(line.labor_total_sell_krw)}
+                      : isRepair
+                        ? isRepairWithMaterial
+                          ? isSilver
+                            ? ""
+                            : formatWeightCell(line.net_weight_g)
+                          : "-"
+                        : isSilver
+                          ? ""
+                          : formatWeightCell(line.net_weight_g)}
                   </td>
-                  <td className={cn("py-1 text-right tabular-nums", (line.total_amount_sell_krw ?? 0) < 0 && "line-through text-blue-600")}>
+                  <td className={cn("py-1 text-right tabular-nums", isReturn && "text-blue-600")}>
+                    {hasContent && isUnitPricing
+                      ? "-"
+                      : isRepair
+                        ? isRepairWithMaterial
+                          ? isSilver
+                            ? formatWeightCell(line.net_weight_g)
+                            : ""
+                          : "-"
+                        : isSilver
+                          ? formatWeightCell(line.net_weight_g)
+                          : ""}
+                  </td>
+                  <td className={cn("py-1 text-right tabular-nums", isReturn && "text-blue-600")}>
+                    {hasContent && isUnitPricing
+                      ? "-"
+                      : isRepair
+                        ? line.repair_fee_krw === null || line.repair_fee_krw === undefined
+                          ? ""
+                          : formatKrw(line.repair_fee_krw)
+                        : line.labor_total_sell_krw === null || line.labor_total_sell_krw === undefined
+                          ? ""
+                          : formatKrw(line.labor_total_sell_krw)}
+                  </td>
+                  <td className={cn("py-1 text-right tabular-nums", isReturn && "text-blue-600")}>
                     {line.total_amount_sell_krw === null || line.total_amount_sell_krw === undefined
                       ? ""
                       : formatKrw(line.total_amount_sell_krw)}
@@ -153,6 +213,14 @@ export const ReceiptPrintHalf = ({
       </div>
 
       <div className="mt-auto space-y-2 border-t border-neutral-300 pt-2">
+        <div className="space-y-1 text-[10px] text-neutral-700">
+          <div>
+            환산 중량(합계): 순금 {formatWeight(totalSummary?.value.gold ?? 0)} · 순은 {formatWeight(totalSummary?.value.silver ?? 0)}
+          </div>
+          <div>
+            적용 시세: 순금시세 {formatPriceRange(normalizedGoldRange)}/g · 순은시세 {formatPriceRange(normalizedSilverRange)}/g
+          </div>
+        </div>
         <div className="text-xs font-semibold">미수 내역 (요약)</div>
         <table className="w-full border-collapse text-[11px]">
           <thead>

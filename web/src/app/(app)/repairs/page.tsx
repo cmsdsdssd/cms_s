@@ -142,6 +142,7 @@ const MATERIAL_OPTIONS = [
   { label: "18K", value: "18" },
   { label: "24K", value: "24" },
   { label: "925", value: "925" },
+  { label: "999", value: "999" },
   { label: "00(기타)", value: "00" },
 ];
 
@@ -219,7 +220,7 @@ const extractShipmentId = (result: { shipment_id?: string | null } | string | nu
 
 const resolveMaterialCodeForShipment = (value: string | null | undefined) => {
   const code = (value ?? "").trim();
-  if (code === "14" || code === "18" || code === "24" || code === "925" || code === "00") {
+  if (code === "14" || code === "18" || code === "24" || code === "925" || code === "999" || code === "00") {
     return code;
   }
   return "00";
@@ -300,6 +301,8 @@ export default function RepairsPage() {
   // ---- send modal
   const [sendExtraFee, setSendExtraFee] = useState<string>("");
   const [sendExtraFeeReason, setSendExtraFeeReason] = useState<string>("");
+  const [sendMaterialCode, setSendMaterialCode] = useState<string>("00");
+  const [sendAddedWeightG, setSendAddedWeightG] = useState<string>("");
   const [sendNote, setSendNote] = useState<string>("");
   const [sendMode, setSendMode] = useState<"NEW" | "EXISTING">("NEW");
   const [targetShipmentId, setTargetShipmentId] = useState<string>("");
@@ -609,6 +612,8 @@ export default function RepairsPage() {
     setSendOpen(false);
     setSendExtraFee("");
     setSendExtraFeeReason("");
+    setSendMaterialCode("00");
+    setSendAddedWeightG("");
     setSendNote("");
     setSendMode("NEW");
     setTargetShipmentId("");
@@ -625,7 +630,39 @@ export default function RepairsPage() {
     setTargetShipmentId("");
     setSendExtraFee(nextFee !== null && Number.isFinite(nextFee) ? String(nextFee) : "");
     setSendExtraFeeReason(draftReason || selectedReason);
+    setSendMaterialCode(resolveMaterialCodeForShipment(detailDraft?.materialCode ?? selectedRepair?.material_code));
+    setSendAddedWeightG("");
     setSendNote((detailDraft?.memo ?? selectedRepair?.memo ?? "").trim());
+  };
+
+  const applyRepairShipmentAdjustments = async (shipmentId: string) => {
+    if (!selectedRepair) return;
+    const addedWeight = parseNumberInput(sendAddedWeightG);
+    if (addedWeight !== null && addedWeight <= 0) {
+      throw new Error("추가 중량은 0보다 커야 합니다");
+    }
+    const materialCode = resolveMaterialCodeForShipment(sendMaterialCode || selectedRepair.material_code);
+    const body: {
+      shipment_id: string;
+      repair_line_id: string;
+      material_code: string;
+      added_weight_g?: number;
+    } = {
+      shipment_id: shipmentId,
+      repair_line_id: selectedRepair.repair_line_id,
+      material_code: materialCode,
+    };
+    if (addedWeight !== null) body.added_weight_g = addedWeight;
+
+    const prepRes = await fetch("/api/repairs-prepare-confirm", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!prepRes.ok) {
+      const json = (await prepRes.json().catch(() => null)) as { error?: string } | null;
+      throw new Error(`출고 라인 보정 실패: ${json?.error ?? `HTTP ${prepRes.status}`}`);
+    }
   };
 
   const handleCreateLineModelChange = (lineId: string, modelId: string) => {
@@ -797,14 +834,19 @@ export default function RepairsPage() {
       throw new Error("기존 출고를 선택하세요");
     }
 
-    await sendToShipmentMutation.mutateAsync({
-      p_repair_id: selectedRepair.repair_line_id,
-      p_target_shipment_id: useExisting ? targetShipmentId.trim() : null,
-      p_extra_fee_krw: extraFee,
-      p_extra_fee_reason: extraFee > 0 ? sendExtraFeeReason.trim() : null,
-      p_note: sendNote.trim() || null,
-      p_actor_person_id: actorId || null,
-    });
+    const shipmentId = extractShipmentId(
+      await sendToShipmentMutation.mutateAsync({
+        p_repair_id: selectedRepair.repair_line_id,
+        p_target_shipment_id: useExisting ? targetShipmentId.trim() : null,
+        p_extra_fee_krw: extraFee,
+        p_extra_fee_reason: extraFee > 0 ? sendExtraFeeReason.trim() : null,
+        p_note: sendNote.trim() || null,
+        p_actor_person_id: actorId || null,
+      })
+    );
+    if (shipmentId) {
+      await applyRepairShipmentAdjustments(shipmentId);
+    }
 
     closeSendModalAndReset();
   };
@@ -834,21 +876,7 @@ export default function RepairsPage() {
       throw new Error("전송은 완료됐지만 shipment_id를 받지 못했습니다. 출고 화면에서 직접 확정해주세요.");
     }
 
-    {
-      const prepRes = await fetch("/api/repairs-prepare-confirm", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          shipment_id: shipmentId,
-          repair_line_id: selectedRepair.repair_line_id,
-          material_code: resolveMaterialCodeForShipment(selectedRepair.material_code),
-        }),
-      });
-      if (!prepRes.ok) {
-        const json = (await prepRes.json().catch(() => null)) as { error?: string } | null;
-        throw new Error(`출고 라인 보정 실패: ${json?.error ?? `HTTP ${prepRes.status}`}`);
-      }
-    }
+    await applyRepairShipmentAdjustments(shipmentId);
 
     await confirmShipmentMutation.mutateAsync({
       p_shipment_id: shipmentId,
@@ -1681,7 +1709,21 @@ export default function RepairsPage() {
             ) : null}
           </div>
 
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
+            <div>
+              <p className="mb-1 text-xs font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">추가 소재</p>
+              <Select value={sendMaterialCode} onChange={(e) => setSendMaterialCode(e.target.value)}>
+                {MATERIAL_OPTIONS.map((m) => (
+                  <option key={m.value} value={m.value}>{m.label}</option>
+                ))}
+              </Select>
+              <p className="mt-1 text-xs text-[var(--muted)]">추가 중량 입력 시 이 소재 기준으로 금/은 미수가 계산됩니다.</p>
+            </div>
+            <div>
+              <p className="mb-1 text-xs font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">추가 중량(g)</p>
+              <Input type="number" inputMode="decimal" value={sendAddedWeightG} onChange={(e) => setSendAddedWeightG(e.target.value)} placeholder="비우면 없음" />
+              <p className="mt-1 text-xs text-[var(--muted)]">여기에 입력한 값이 출고 라인 순중량으로 반영됩니다.</p>
+            </div>
             <div>
               <p className="mb-1 text-xs font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">수리비(원)</p>
               <Input type="number" value={sendExtraFee} onChange={(e) => setSendExtraFee(e.target.value)} placeholder="0" />

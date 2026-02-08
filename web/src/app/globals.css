@@ -247,16 +247,36 @@ body {
 
 @page {
   size: A4 landscape;
-  margin: 8mm;
+  margin: 0;
+}
+
+.print-only {
+  display: block;
 }
 
 @media print {
   html,
   body {
     background: #ffffff;
+    overflow: visible !important;
   }
 
+  .no-print,
   .receipt-print-actions {
+    display: none !important;
+  }
+
+  .print-only {
+    display: block !important;
+  }
+
+  .shipments-print-stage {
+    margin: 0 !important;
+    padding: 0 !important;
+    width: 100% !important;
+  }
+
+  .shipments-print-stage > :not(.shipments-print-root) {
     display: none !important;
   }
 
@@ -274,34 +294,42 @@ body {
     break-after: auto;
   }
 
-  body * {
-    visibility: hidden;
-  }
-
-  .receipt-print-root,
-  .receipt-print-root * {
-    visibility: visible;
-  }
-
   .receipt-print-root {
-    position: absolute;
-    left: 0;
-    top: 0;
-    width: 100%;
+    position: static !important;
+    display: block !important;
+    width: 100% !important;
     margin: 0 !important;
     padding: 0 !important;
   }
 
   .receipt-print-page {
-    width: 100% !important;
-    min-height: 100% !important;
-    height: 100% !important;
-    margin: 0 !important;
+    width: calc(297mm - 8mm) !important;
+    height: calc(210mm - 8mm) !important;
+    margin: 0 auto !important;
     box-shadow: none !important;
     border: 0 !important;
+    break-inside: avoid;
+    page-break-inside: avoid;
   }
 
-  body {
-    overflow: hidden;
+  .shipments-print-root {
+    width: calc(297mm - 8mm);
+    margin: 0 auto !important;
+    padding: 0 !important;
   }
+
+  .shipments-print-sheet {
+    width: calc(297mm - 8mm) !important;
+    height: calc(210mm - 8mm) !important;
+    padding: 4mm !important;
+    box-sizing: border-box;
+    page-break-after: always;
+    break-after: page;
+  }
+
+  .shipments-print-sheet:last-child {
+    page-break-after: auto;
+    break-after: auto;
+  }
+
 }
