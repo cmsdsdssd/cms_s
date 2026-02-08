@@ -1094,157 +1094,159 @@ export default function RepairsPage() {
             {/* Detail Content - Scrollable */}
             <div className="flex-1 overflow-y-auto p-6">
               <div className="mx-auto w-full max-w-[1440px] space-y-6">
-                {/* Issue Description */}
-                <div className="bg-[var(--panel)] rounded-xl border border-[var(--panel-border)] p-5">
-                  <h3 className="text-sm font-bold mb-3 flex items-center gap-2">
-                    <span className="w-1.5 h-1.5 rounded-full bg-[var(--primary)]" />
-                    수리 요청사항
-                  </h3>
-                  <Textarea
-                    rows={4}
-                    className="bg-[var(--chip)] border-none"
-                    placeholder="수리 내용을 입력하세요..."
-                    value={detailDraft.issueDesc}
-                    onChange={(e) => setDetailDraft(prev => prev ? { ...prev, issueDesc: e.target.value } : prev)}
-                  />
-                </div>
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                  {/* Issue Description */}
+                  <div className="bg-[var(--panel)] rounded-xl border border-[var(--panel-border)] p-5">
+                    <h3 className="text-sm font-bold mb-3 flex items-center gap-2">
+                      <span className="w-1.5 h-1.5 rounded-full bg-[var(--primary)]" />
+                      수리 요청사항
+                    </h3>
+                    <Textarea
+                      rows={2}
+                      className="bg-[var(--chip)] border-none"
+                      placeholder="수리 내용을 입력하세요..."
+                      value={detailDraft.issueDesc}
+                      onChange={(e) => setDetailDraft(prev => prev ? { ...prev, issueDesc: e.target.value } : prev)}
+                    />
+                  </div>
 
-                {/* Form Fields */}
-                <div className="bg-[var(--panel)] rounded-xl border border-[var(--panel-border)] p-5">
-                  <h3 className="text-sm font-bold mb-4">상세 정보</h3>
-                  <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-                    <div>
-                      <label className="text-xs font-medium text-[var(--muted)] block mb-1.5">모델명</label>
-                      <Input
-                        value={detailDraft.modelText}
-                        onChange={(e) => setDetailDraft(prev => prev ? { ...prev, modelText: e.target.value } : prev)}
-                      />
-                    </div>
-                    <div>
-                      <label className="text-xs font-medium text-[var(--muted)] block mb-1.5">수량</label>
-                      <Input
-                        type="number"
-                        value={detailDraft.qty}
-                        onChange={(e) => setDetailDraft(prev => prev ? { ...prev, qty: e.target.value } : prev)}
-                      />
-                    </div>
-                    <div>
-                      <label className="text-xs font-medium text-[var(--muted)] block mb-1.5">소재</label>
-                      <Select
-                        value={detailDraft.materialCode}
-                        onChange={(e) => setDetailDraft(prev => prev ? { ...prev, materialCode: e.target.value } : prev)}
-                      >
-                        <option value="">-</option>
-                        {MATERIAL_OPTIONS.map((m) => (
-                          <option key={m.value} value={m.value}>{m.label}</option>
-                        ))}
-                      </Select>
-                    </div>
-                    <div>
-                      <label className="text-xs font-medium text-[var(--muted)] block mb-1.5">우선순위</label>
-                      <Select
-                        value={detailDraft.priorityCode}
-                        onChange={(e) => setDetailDraft(prev => prev ? { ...prev, priorityCode: e.target.value as any } : prev)}
-                      >
-                        {PRIORITY_OPTIONS.map((p) => (
-                          <option key={p.value} value={p.value}>{p.label}</option>
-                        ))}
-                      </Select>
-                    </div>
-                    <div>
-                      <label className="text-xs font-medium text-[var(--muted)] block mb-1.5">납기 요청일</label>
-                      <Input
-                        type="date"
-                        autoFormat={false}
-                        value={detailDraft.requestedDueDate}
-                        onChange={(e) => setDetailDraft(prev => prev ? { ...prev, requestedDueDate: e.target.value } : prev)}
-                      />
-                    </div>
-                    <div>
-                      <label className="text-xs font-medium text-[var(--muted)] block mb-1.5">접수중량(g)</label>
-                      <Input
-                        type="number"
-                        inputMode="decimal"
-                        value={detailDraft.weightReceivedG}
-                        onChange={(e) => setDetailDraft(prev => prev ? { ...prev, weightReceivedG: e.target.value } : prev)}
-                      />
-                    </div>
-                    <div>
-                      <label className="text-xs font-medium text-[var(--muted)] block mb-1.5">실측중량(g)</label>
-                      <Input
-                        type="number"
-                        inputMode="decimal"
-                        value={detailDraft.measuredWeightG}
-                        onChange={(e) => setDetailDraft(prev => prev ? { ...prev, measuredWeightG: e.target.value } : prev)}
-                      />
-                    </div>
-                    <div>
-                      <label className="text-xs font-medium text-[var(--muted)] block mb-1.5">도금</label>
-                      <div className="flex items-center gap-2">
-                        <input
-                          type="checkbox"
-                          checked={detailDraft.isPlated}
-                          onChange={(e) => setDetailDraft(prev => prev ? { ...prev, isPlated: e.target.checked } : prev)}
-                          className="rounded"
+                  {/* Form Fields */}
+                  <div className="bg-[var(--panel)] rounded-xl border border-[var(--panel-border)] p-5">
+                    <h3 className="text-sm font-bold mb-4">상세 정보</h3>
+                    <div className="grid grid-cols-2 gap-4 xl:grid-cols-4">
+                      <div>
+                        <label className="text-xs font-medium text-[var(--muted)] block mb-1.5">모델명</label>
+                        <Input
+                          value={detailDraft.modelText}
+                          onChange={(e) => setDetailDraft(prev => prev ? { ...prev, modelText: e.target.value } : prev)}
                         />
-                        <span className="text-sm">있음</span>
+                      </div>
+                      <div>
+                        <label className="text-xs font-medium text-[var(--muted)] block mb-1.5">수량</label>
+                        <Input
+                          type="number"
+                          value={detailDraft.qty}
+                          onChange={(e) => setDetailDraft(prev => prev ? { ...prev, qty: e.target.value } : prev)}
+                        />
+                      </div>
+                      <div>
+                        <label className="text-xs font-medium text-[var(--muted)] block mb-1.5">소재</label>
+                        <Select
+                          value={detailDraft.materialCode}
+                          onChange={(e) => setDetailDraft(prev => prev ? { ...prev, materialCode: e.target.value } : prev)}
+                        >
+                          <option value="">-</option>
+                          {MATERIAL_OPTIONS.map((m) => (
+                            <option key={m.value} value={m.value}>{m.label}</option>
+                          ))}
+                        </Select>
+                      </div>
+                      <div>
+                        <label className="text-xs font-medium text-[var(--muted)] block mb-1.5">우선순위</label>
+                        <Select
+                          value={detailDraft.priorityCode}
+                          onChange={(e) => setDetailDraft(prev => prev ? { ...prev, priorityCode: e.target.value as any } : prev)}
+                        >
+                          {PRIORITY_OPTIONS.map((p) => (
+                            <option key={p.value} value={p.value}>{p.label}</option>
+                          ))}
+                        </Select>
+                      </div>
+                      <div>
+                        <label className="text-xs font-medium text-[var(--muted)] block mb-1.5">납기 요청일</label>
+                        <Input
+                          type="date"
+                          autoFormat={false}
+                          value={detailDraft.requestedDueDate}
+                          onChange={(e) => setDetailDraft(prev => prev ? { ...prev, requestedDueDate: e.target.value } : prev)}
+                        />
+                      </div>
+                      <div>
+                        <label className="text-xs font-medium text-[var(--muted)] block mb-1.5">접수중량(g)</label>
+                        <Input
+                          type="number"
+                          inputMode="decimal"
+                          value={detailDraft.weightReceivedG}
+                          onChange={(e) => setDetailDraft(prev => prev ? { ...prev, weightReceivedG: e.target.value } : prev)}
+                        />
+                      </div>
+                      <div>
+                        <label className="text-xs font-medium text-[var(--muted)] block mb-1.5">실측중량(g)</label>
+                        <Input
+                          type="number"
+                          inputMode="decimal"
+                          value={detailDraft.measuredWeightG}
+                          onChange={(e) => setDetailDraft(prev => prev ? { ...prev, measuredWeightG: e.target.value } : prev)}
+                        />
+                      </div>
+                      <div>
+                        <label className="text-xs font-medium text-[var(--muted)] block mb-1.5">도금</label>
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="checkbox"
+                            checked={detailDraft.isPlated}
+                            onChange={(e) => setDetailDraft(prev => prev ? { ...prev, isPlated: e.target.checked } : prev)}
+                            className="rounded"
+                          />
+                          <span className="text-sm">있음</span>
+                        </div>
                       </div>
                     </div>
                   </div>
-                </div>
 
-                {/* Memo */}
-                <div className="bg-[var(--panel)] rounded-xl border border-[var(--panel-border)] p-5">
-                  <h3 className="text-sm font-bold mb-3">내부 메모</h3>
-                  <Textarea
-                    rows={2}
-                    className="bg-[var(--chip)] border-none"
-                    placeholder="내부 참고사항..."
-                    value={detailDraft.memo}
-                    onChange={(e) => setDetailDraft(prev => prev ? { ...prev, memo: e.target.value } : prev)}
-                  />
-                </div>
-
-                {/* Images */}
-                <div className="bg-[var(--panel)] rounded-xl border border-[var(--panel-border)] p-5">
-                  <div className="flex items-center justify-between mb-3">
-                    <h3 className="text-sm font-bold">첨부 사진</h3>
-                    <label className="text-xs text-[var(--primary)] hover:underline cursor-pointer font-medium">
-                      <input
-                        type="file"
-                        accept="image/*"
-                        multiple
-                        className="hidden"
-                        disabled={detailUploadBusy}
-                        onChange={(e) => {
-                          void handleUploadDetailImages(e.target.files);
-                          e.currentTarget.value = "";
-                        }}
-                      />
-                      + 사진 추가
-                    </label>
+                  {/* Memo */}
+                  <div className="bg-[var(--panel)] rounded-xl border border-[var(--panel-border)] p-5">
+                    <h3 className="text-sm font-bold mb-3">내부 메모</h3>
+                    <Textarea
+                      rows={2}
+                      className="bg-[var(--chip)] border-none"
+                      placeholder="내부 참고사항..."
+                      value={detailDraft.memo}
+                      onChange={(e) => setDetailDraft(prev => prev ? { ...prev, memo: e.target.value } : prev)}
+                    />
                   </div>
-                  {repairImagesQuery.isFetching ? (
-                    <div className="h-24 flex items-center justify-center text-xs text-[var(--muted)]">로딩 중...</div>
-                  ) : (repairImagesQuery.data ?? []).length === 0 ? (
-                    <div className="h-24 flex items-center justify-center border-2 border-dashed border-[var(--panel-border)] rounded-lg text-xs text-[var(--muted)]">
-                      등록된 사진이 없습니다
+
+                  {/* Images */}
+                  <div className="bg-[var(--panel)] rounded-xl border border-[var(--panel-border)] p-5">
+                    <div className="flex items-center justify-between mb-3">
+                      <h3 className="text-sm font-bold">첨부 사진</h3>
+                      <label className="text-xs text-[var(--primary)] hover:underline cursor-pointer font-medium">
+                        <input
+                          type="file"
+                          accept="image/*"
+                          multiple
+                          className="hidden"
+                          disabled={detailUploadBusy}
+                          onChange={(e) => {
+                            void handleUploadDetailImages(e.target.files);
+                            e.currentTarget.value = "";
+                          }}
+                        />
+                        + 사진 추가
+                      </label>
                     </div>
-                  ) : (
-                    <div className="grid grid-cols-4 gap-2">
-                      {(repairImagesQuery.data ?? []).map((img) => (
-                        <a
-                          key={img.path}
-                          href={img.signedUrl}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="aspect-square rounded-lg overflow-hidden border border-[var(--panel-border)] hover:opacity-80 transition-opacity"
-                        >
-                          <img src={img.signedUrl} className="w-full h-full object-cover" alt="" />
-                        </a>
-                      ))}
-                    </div>
-                  )}
+                    {repairImagesQuery.isFetching ? (
+                      <div className="h-24 flex items-center justify-center text-xs text-[var(--muted)]">로딩 중...</div>
+                    ) : (repairImagesQuery.data ?? []).length === 0 ? (
+                      <div className="h-24 flex items-center justify-center border-2 border-dashed border-[var(--panel-border)] rounded-lg text-xs text-[var(--muted)]">
+                        등록된 사진이 없습니다
+                      </div>
+                    ) : (
+                      <div className="grid grid-cols-4 gap-2">
+                        {(repairImagesQuery.data ?? []).map((img) => (
+                          <a
+                            key={img.path}
+                            href={img.signedUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="aspect-square rounded-lg overflow-hidden border border-[var(--panel-border)] hover:opacity-80 transition-opacity"
+                          >
+                            <img src={img.signedUrl} className="w-full h-full object-cover" alt="" />
+                          </a>
+                        ))}
+                      </div>
+                    )}
+                  </div>
                 </div>
 
                 {/* Fee Section */}
@@ -1283,7 +1285,7 @@ export default function RepairsPage() {
 
                 {/* Linked Shipment */}
                 {selectedRepair.linked_shipment_id && (
-                    <div className="flex items-center justify-between rounded-xl border border-blue-200 bg-blue-50 p-5">
+                  <div className="flex items-center justify-between rounded-xl border border-blue-200 bg-blue-50 p-5">
                     <div>
                       <h3 className="text-sm font-bold text-blue-800 mb-1">출고 연결됨</h3>
                       <p className="text-xs text-blue-600">

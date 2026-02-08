@@ -27,6 +27,7 @@ export async function POST(request: Request) {
   const { data, error } = await supabase
     .from("cms_party")
     .select("party_id, name, mask_code")
+    .eq("party_type", "customer")
     .ilike("mask_code", `%${query}%`)
     .order("mask_code", { ascending: true })
     .limit(limit);

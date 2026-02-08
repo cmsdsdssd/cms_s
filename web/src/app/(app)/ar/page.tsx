@@ -1189,7 +1189,7 @@ export default function ArPage() {
                                   simple
                                   className={cn(
                                     "font-black",
-                                    isSales
+                                    isShipment
                                       ? "text-red-600 dark:text-red-400"
                                       : isReturn
                                         ? "text-blue-600 dark:text-blue-400"
