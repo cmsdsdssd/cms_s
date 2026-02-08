@@ -1136,9 +1136,9 @@ export default function ArPage() {
                                 ? "반품"
                                 : row.entry_type;
                           const entryToneClass = isShipment
-                            ? "border-red-500 bg-red-50 text-red-700 font-bold dark:bg-red-950/20 dark:text-red-300"
+                            ? "border-[var(--primary)] bg-[var(--chip)] text-red-700 font-bold"
                             : isReturn
-                              ? "border-blue-500 bg-blue-50 text-blue-700 font-bold dark:bg-blue-950/20 dark:text-blue-300"
+                              ? "border-[var(--primary)] bg-[var(--chip)] text-blue-700 font-bold"
                               : isPayment
                                 ? "border-[var(--primary)] bg-[var(--chip)] text-[var(--primary)]"
                                 : "border-[var(--panel-border)] bg-[var(--panel)] text-[var(--foreground)]";

@@ -889,6 +889,12 @@ export default function RepairsPage() {
       p_force: false,
     });
 
+    await setStatusMutation.mutateAsync({
+      p_repair_id: selectedRepair.repair_line_id,
+      p_status: "SHIPPED",
+      p_actor_person_id: actorId || null,
+    });
+
     closeSendModalAndReset();
   };
 
