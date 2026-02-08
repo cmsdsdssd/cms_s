@@ -15,6 +15,7 @@ import { CONTRACTS, isFnConfigured } from "@/lib/contracts";
 import { callRpc } from "@/lib/supabase/rpc";
 import { getSchemaClient } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
+import { Modal } from "@/components/ui/modal";
 
 // ------------------------------------------------------------------
 // Types
@@ -1126,16 +1127,21 @@ export default function ArPage() {
                           const paymentLaborKrwLabel = formatKrwDashZero(paymentMaterial?.laborKrw ?? 0);
                           const materialSellKrwLabel = formatKrwDashZero(shipmentLine?.material_amount_sell_krw ?? null);
                           const laborSellKrwLabel = formatKrwDashZero(shipmentLine?.labor_total_sell_krw ?? null);
+                          const isReturn = row.entry_type === "RETURN";
                           const entryLabel = isShipment
                             ? "매출"
                             : isPayment
                               ? "결제"
-                              : row.entry_type;
+                              : isReturn
+                                ? "반품"
+                                : row.entry_type;
                           const entryToneClass = isShipment
-                            ? "border-red-500 bg-[var(--chip)] text-red-600 dark:border-red-400 dark:text-red-300"
-                            : isPayment
-                              ? "border-[var(--primary)] bg-[var(--chip)] text-[var(--primary)]"
-                              : "border-[var(--panel-border)] bg-[var(--panel)] text-[var(--foreground)]";
+                            ? "border-red-500 bg-red-50 text-red-700 font-bold dark:bg-red-950/20 dark:text-red-300"
+                            : isReturn
+                              ? "border-blue-500 bg-blue-50 text-blue-700 font-bold dark:bg-blue-950/20 dark:text-blue-300"
+                              : isPayment
+                                ? "border-[var(--primary)] bg-[var(--chip)] text-[var(--primary)]"
+                                : "border-[var(--panel-border)] bg-[var(--panel)] text-[var(--foreground)]";
                           const displayTotalAmount = isShipment && unitOnly
                             ? shipmentLine?.total_amount_sell_krw ?? row.amount_krw
                             : row.amount_krw;
@@ -1143,9 +1149,10 @@ export default function ArPage() {
                             <tr
                               key={row.ar_ledger_id}
                               className={cn(
-                                "hover:bg-[var(--panel-hover)] transition-colors",
+                                "hover:bg-[var(--panel-hover)] transition-colors cursor-pointer",
                                 isNewDateGroup && "border-t-2 border-[var(--panel-border)]"
                               )}
+                              onClick={() => setSelectedLedgerId(row.ar_ledger_id ?? null)}
                             >
                               <td className="px-4 py-3 tabular-nums">
                                 {(() => {
@@ -1173,7 +1180,7 @@ export default function ArPage() {
                                     {modelName && modelMeta ? <span className="font-normal"> / {modelMeta}</span> : null}
                                   </span>
                                 ) : (
-                                  row.memo
+                                  <span>{row.memo}</span>
                                 )}
                               </td>
                               <td className="px-4 py-3 text-right">
@@ -1182,38 +1189,29 @@ export default function ArPage() {
                                   simple
                                   className={cn(
                                     "font-black",
-                                    isShipment
-                                      ? "text-red-600 dark:text-red-300"
-                                      : isPayment
-                                        ? "text-[var(--primary)]"
-                                        : ""
+                                    isSales
+                                      ? "text-red-600 dark:text-red-400"
+                                      : isReturn
+                                        ? "text-blue-600 dark:text-blue-400"
+                                        : isPayment
+                                          ? "text-[var(--primary)]"
+                                          : ""
                                   )}
                                 />
                               </td>
                               <td className="px-4 py-3 text-right tabular-nums">
                                 {isPayment ? (
-                                  paymentMaterialKrwLabel === "-"
-                                    ? "-"
-                                    : (
-                                      <span>
-                                        {paymentMaterialKrwLabel} (
-                                        <span className="text-[var(--muted)]">{paymentWeightLabel || "중량 -"}</span>
-                                        )
-                                      </span>
-                                    )
-                                ) : unitOnly ? (
-                                  "-"
+                                  paymentMaterialKrwLabel === "-" ? "-" : (
+                                    <span>
+                                      {paymentMaterialKrwLabel}
+                                    </span>
+                                  )
                                 ) : (
-                                  materialSellKrwLabel === "-"
-                                    ? "-"
-                                    : (
-                                      <span>
-                                        {materialSellKrwLabel} (
-                                        <span className="text-[var(--muted)]">원중량 {formatGram(originalWeight)} / 환산중량 {formatGram(convertedWeight)} / </span>
-                                        <span className={cn("font-semibold", getMaterialCodeToneClass(materialCode))}>{materialCode || "-"}</span>
-                                        )
-                                      </span>
-                                    )
+                                  materialSellKrwLabel === "-" ? "-" : (
+                                    <span>
+                                      {materialSellKrwLabel}
+                                    </span>
+                                  )
                                 )}
                               </td>
                               <td className="px-4 py-3 text-right tabular-nums">
@@ -1288,7 +1286,7 @@ export default function ArPage() {
               )}
 
               {activeTab === 'action' && (
-                <div className="flex flex-col lg:flex-row gap-6 h-full">
+                <div className="flex flex-col lg:flex-row gap-6 min-h-full">
                   {/* Action Panel */}
                   <Card className="flex-1 shadow-sm border-2 border-[var(--panel-border)]">
                     <CardHeader className="border-b border-[var(--panel-border)] p-4">
@@ -1707,6 +1705,251 @@ export default function ArPage() {
             <p className="text-sm mt-1">좌측 목록에서 거래처를 선택하여 상세 정보를 확인하세요.</p>
           </div>
         )}
+      </div>
+
+
+      <DetailsModal
+        open={Boolean(selectedLedgerId)}
+        onClose={() => setSelectedLedgerId(null)}
+        ledgerId={selectedLedgerId ?? ""}
+        ledgerRows={ledgerQuery.data ?? []}
+        schemaClient={schemaClient}
+      />
+    </div >
+  );
+}
+
+function DetailsModal({
+  open,
+  onClose,
+  ledgerId,
+  ledgerRows,
+  schemaClient,
+}: {
+  open: boolean;
+  onClose: () => void;
+  ledgerId: string;
+  ledgerRows: LedgerRow[];
+  schemaClient: any;
+}) {
+  const row = ledgerRows.find((r) => r.ar_ledger_id === ledgerId);
+  const shipmentId = row?.shipment_id;
+
+  const valuationQuery = useQuery({
+    queryKey: ["cms", "shipment_valuation_modal", shipmentId],
+    queryFn: async () => {
+      if (!schemaClient || !shipmentId) return null;
+      const { data, error } = await schemaClient
+        .from("cms_shipment_valuation")
+        .select("*")
+        .eq("shipment_id", shipmentId)
+        .single();
+      if (error && error.code !== "PGRST116") throw error;
+      return (data ?? null) as ShipmentValuationRow | null;
+    },
+    enabled: open && Boolean(shipmentId),
+  });
+
+  const valuation = valuationQuery.data;
+
+  if (!row) return null;
+
+  const isShipment = row.entry_type === "SHIPMENT";
+  const isReturn = row.entry_type === "RETURN";
+  const isPayment = (row.entry_type ?? "").toUpperCase().includes("PAYMENT");
+  const title = isShipment ? "매출 상세" : isReturn ? "반품 상세" : isPayment ? "결제 상세" : "거래 내역 상세";
+
+  return (
+    <Modal open={open} onClose={onClose} title={title}>
+      <div className="space-y-6">
+        <div className="grid grid-cols-2 gap-4 text-sm">
+          <div>
+            <span className="block text-[var(--muted)] text-xs mb-1">발생일시</span>
+            <span className="font-medium">{formatTimeKst(row.occurred_at)}</span>
+          </div>
+          <div>
+            <span className="block text-[var(--muted)] text-xs mb-1">구분</span>
+            <span className="font-medium">{row.entry_type}</span>
+          </div>
+          <div className="col-span-2">
+            <span className="block text-[var(--muted)] text-xs mb-1">메모/내용</span>
+            <span className="font-medium">{row.memo || "-"}</span>
+          </div>
+          <div className="col-span-2">
+            <span className="block text-[var(--muted)] text-xs mb-1">금액</span>
+            <span className={cn(
+              "text-xl font-bold tabular-nums",
+              isShipment ? "text-red-600 dark:text-red-400" :
+                isReturn ? "text-blue-600 dark:text-blue-400" :
+                  isPayment ? "text-[var(--primary)]" : ""
+            )}>
+              {formatKrw(row.amount_krw)}
+            </span>
+          </div>
+        </div>
+
+        {shipmentId && row.shipment_line_id && (
+          <LineCalculation
+            schemaClient={schemaClient}
+            shipmentLineId={row.shipment_line_id}
+            rowAmount={row.amount_krw ?? 0}
+            valuation={valuation}
+          />
+        )}
+
+        {(isShipment || isReturn) && (
+          <div className="border-t border-[var(--panel-border)] pt-4">
+            <h4 className="font-semibold mb-3 flex items-center gap-2">
+              <span>적용 시세 정보</span>
+              {valuation?.pricing_locked_at && (
+                <span className="text-xs font-normal text-[var(--muted)]">
+                  ({formatTimeKst(valuation.pricing_locked_at)} 기준)
+                </span>
+              )}
+            </h4>
+
+            {valuationQuery.isLoading ? (
+              <div className="py-4 text-center text-xs text-[var(--muted)]">시세 정보 로딩 중...</div>
+            ) : valuation ? (
+              <div className="bg-[var(--chip)] rounded-lg p-4 grid grid-cols-2 gap-y-4 gap-x-8 text-sm">
+                <div>
+                  <span className="block text-[var(--muted)] text-xs mb-1">금 시세 (Gold)</span>
+                  <span className="font-bold tabular-nums text-[var(--foreground)]">
+                    {formatKrw(valuation.gold_krw_per_g_snapshot)} <span className="text-xs font-normal text-[var(--muted)]">/g</span>
+                  </span>
+                </div>
+                <div>
+                  <span className="block text-[var(--muted)] text-xs mb-1">은 시세 (Silver)</span>
+                  <span className="font-bold tabular-nums text-[var(--foreground)]">
+                    {formatKrw(valuation.silver_krw_per_g_snapshot)} <span className="text-xs font-normal text-[var(--muted)]">/g</span>
+                  </span>
+                </div>
+                <div>
+                  <span className="block text-[var(--muted)] text-xs mb-1">은 보정계수 (Factor)</span>
+                  <span className="font-bold tabular-nums text-[var(--foreground)]">
+                    {valuation.silver_adjust_factor_snapshot ?? "1.0"}x
+                  </span>
+                </div>
+                <div>
+                  <span className="block text-[var(--muted)] text-xs mb-1">자료 출처</span>
+                  <span className="font-medium text-[var(--foreground)]">
+                    {valuation.pricing_source ?? "-"}
+                  </span>
+                </div>
+              </div>
+            ) : (
+              <div className="py-4 text-center text-xs text-[var(--muted)]">
+                시세 스냅샷 정보가 없습니다. (수동 기입 등)
+              </div>
+            )}
+          </div>
+        )}
+
+        {isPayment && (
+          <div className="border-t border-[var(--panel-border)] pt-4">
+            <h4 className="font-semibold mb-2">결제 상세</h4>
+            <p className="text-sm text-[var(--muted)]">
+              결제 건은 별도의 시세 스냅샷이 존재하지 않으며, 입금 시점의 현금/금/은 수량을 기록합니다.
+            </p>
+          </div>
+        )}
+      </div>
+    </Modal>
+  );
+}
+
+function LineCalculation({
+  schemaClient,
+  shipmentLineId,
+  rowAmount,
+  valuation,
+}: {
+  schemaClient: any;
+  shipmentLineId: string;
+  rowAmount: number;
+  valuation?: ShipmentValuationRow | null;
+}) {
+  const lineQuery = useQuery({
+    queryKey: ["cms", "shipment_line_modal", shipmentLineId],
+    queryFn: async () => {
+      const { data, error } = await schemaClient
+        .from("cms_shipment_line")
+        .select("*")
+        .eq("shipment_line_id", shipmentLineId)
+        .single();
+      if (error) throw error;
+      return (data ?? null) as ShipmentLineRow & {
+        gold_tick_krw_per_g?: number | null;
+        silver_tick_krw_per_g?: number | null;
+        silver_adjust_factor?: number | null;
+        unit_price_krw?: number | null;
+      };
+    },
+    enabled: Boolean(shipmentLineId),
+  });
+
+  if (lineQuery.isLoading) return <div className="text-xs text-[var(--muted)]">세부 내역 로딩 중...</div>;
+  const line = lineQuery.data;
+  if (!line) return null;
+
+  const mat = (line.material_code ?? "").toUpperCase();
+  const isSilver = mat.startsWith("925") || mat.startsWith("999");
+
+  // Logic:
+  // If silver, factor comes from valuation snapshot if available, else line or 1.0.
+  // If gold, factor depends on purity (14K -> 0.6435, 18K -> 0.825).
+  let factor = 1.0;
+  if (isSilver) {
+    factor = valuation?.silver_adjust_factor_snapshot ?? line.silver_adjust_factor ?? 1.0;
+  } else {
+    // Gold purity factor
+    if (mat.includes("14K")) factor = 0.6435; // 0.585 * 1.1
+    else if (mat.includes("18K")) factor = 0.825; // 0.75 * 1.1
+    else if (mat.includes("24K") || mat.includes("PURE")) factor = 1.0;
+  }
+
+  const pricePerG = isSilver ? (line.silver_tick_krw_per_g ?? 0) : (line.gold_tick_krw_per_g ?? 0);
+
+  const rawWeight = line.net_weight_g ?? 0;
+  const convertedWeight = rawWeight * factor;
+
+  const labor = line.labor_total_sell_krw ?? 0;
+  const materialAmt = line.material_amount_sell_krw ?? 0;
+
+  const displayFactor = Number.isInteger(factor) ? factor.toString() : factor.toFixed(3);
+
+  return (
+    <div className="bg-[var(--surface)] p-3 rounded-md border border-[var(--panel-border)] text-sm space-y-1">
+      <div className="font-semibold text-[var(--foreground)] mb-2 flex items-center justify-between">
+        <span>계산 상세</span>
+        <span className="text-xs font-normal text-[var(--muted)]">
+          {mat} {isSilver ? "(은)" : "(금)"}
+        </span>
+      </div>
+
+      {/* Compact Layout: Raw Weight * Factor = Converted Weight */}
+      <div className="flex justify-between items-center text-[var(--muted)] text-xs">
+        <span>원중량 {rawWeight}g × {isSilver ? "보정" : "함량"}({displayFactor})</span>
+        <span className="font-medium text-[var(--foreground)]">
+          = 환산 {Number.isInteger(convertedWeight) ? convertedWeight : convertedWeight.toFixed(2)}g
+        </span>
+      </div>
+
+      <div className="my-1 border-t border-[var(--panel-border)] border-dashed" />
+
+      {/* Price calculation */}
+      <div className="flex justify-between items-center text-[var(--muted)]">
+        <span>환산중량 × 시세 ({formatKrw(pricePerG)})</span>
+        <span>{formatKrw(materialAmt)}</span>
+      </div>
+      <div className="flex justify-between items-center text-[var(--muted)]">
+        <span>+ 공임 합계</span>
+        <span>{formatKrw(labor)}</span>
+      </div>
+
+      <div className="border-t border-[var(--panel-border)] mt-2 pt-2 flex justify-between items-center font-bold text-[var(--foreground)]">
+        <span>= 합계</span>
+        <span>{formatKrw(rowAmount)}</span>
       </div>
     </div>
   );

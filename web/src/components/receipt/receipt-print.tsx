@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import { cn } from "@/lib/utils";
 
 export type ReceiptAmounts = {
   gold: number;
@@ -112,29 +113,34 @@ export const ReceiptPrintHalf = ({
                 <tr key={line.shipment_line_id ?? `row-${index}`} className="border-b border-neutral-200">
                   <td className="py-1 pr-2 align-middle">
                     <div className="flex items-center gap-1">
-                      <span>{modelLabel}</span>
+                      {hasContent && (line.total_amount_sell_krw ?? 0) < 0 && (
+                        <span className="rounded bg-blue-100 px-1 text-[9px] font-bold text-blue-600">반품</span>
+                      )}
+                      <span className={cn((line.total_amount_sell_krw ?? 0) < 0 && "line-through text-blue-600")}>
+                        {modelLabel}
+                      </span>
                       {hasContent && isUnitPricing && (
                         <span className="rounded border border-neutral-300 px-1 text-[9px] text-neutral-600">단가제</span>
                       )}
                     </div>
                   </td>
-                  <td className="py-1 text-left tabular-nums">{line.material_code ?? ""}</td>
-                  <td className="py-1 text-left tabular-nums">{line.color ?? ""}</td>
-                  <td className="py-1 text-left tabular-nums">{line.size ?? ""}</td>
-                  <td className="py-1 text-right tabular-nums">
+                  <td className={cn("py-1 text-left tabular-nums", (line.total_amount_sell_krw ?? 0) < 0 && "line-through text-blue-600")}>{line.material_code ?? ""}</td>
+                  <td className={cn("py-1 text-left tabular-nums", (line.total_amount_sell_krw ?? 0) < 0 && "line-through text-blue-600")}>{line.color ?? ""}</td>
+                  <td className={cn("py-1 text-left tabular-nums", (line.total_amount_sell_krw ?? 0) < 0 && "line-through text-blue-600")}>{line.size ?? ""}</td>
+                  <td className={cn("py-1 text-right tabular-nums", (line.total_amount_sell_krw ?? 0) < 0 && "line-through text-blue-600")}>
                     {hasContent && isUnitPricing ? "-" : isSilver ? "" : formatWeightCell(line.net_weight_g)}
                   </td>
-                  <td className="py-1 text-right tabular-nums">
+                  <td className={cn("py-1 text-right tabular-nums", (line.total_amount_sell_krw ?? 0) < 0 && "line-through text-blue-600")}>
                     {hasContent && isUnitPricing ? "-" : isSilver ? formatWeightCell(line.net_weight_g) : ""}
                   </td>
-                  <td className="py-1 text-right tabular-nums">
+                  <td className={cn("py-1 text-right tabular-nums", (line.total_amount_sell_krw ?? 0) < 0 && "line-through text-blue-600")}>
                     {hasContent && isUnitPricing
                       ? "-"
                       : line.labor_total_sell_krw === null || line.labor_total_sell_krw === undefined
                         ? ""
                         : formatKrw(line.labor_total_sell_krw)}
                   </td>
-                  <td className="py-1 text-right tabular-nums">
+                  <td className={cn("py-1 text-right tabular-nums", (line.total_amount_sell_krw ?? 0) < 0 && "line-through text-blue-600")}>
                     {line.total_amount_sell_krw === null || line.total_amount_sell_krw === undefined
                       ? ""
                       : formatKrw(line.total_amount_sell_krw)}
@@ -161,11 +167,21 @@ export const ReceiptPrintHalf = ({
           <tbody>
             {summaryRows.map((row) => (
               <tr key={row.label} className="border-b border-neutral-200">
-                <td className="py-1 font-medium">{row.label}</td>
-                <td className="py-1 text-right tabular-nums">{formatWeight(row.value.gold)}</td>
-                <td className="py-1 text-right tabular-nums">{formatWeight(row.value.silver)}</td>
-                <td className="py-1 text-right tabular-nums">{formatKrw(row.value.labor)}</td>
-                <td className="py-1 text-right tabular-nums">{formatKrw(row.value.total)}</td>
+                <td className="py-1 font-medium">
+                  {row.label === "당일 반품" ? <span className="text-blue-600">{row.label}</span> : row.label}
+                </td>
+                <td className={cn("py-1 text-right tabular-nums", row.label === "당일 반품" && "text-blue-600")}>
+                  {formatWeight(row.value.gold)}
+                </td>
+                <td className={cn("py-1 text-right tabular-nums", row.label === "당일 반품" && "text-blue-600")}>
+                  {formatWeight(row.value.silver)}
+                </td>
+                <td className={cn("py-1 text-right tabular-nums", row.label === "당일 반품" && "text-blue-600")}>
+                  {formatKrw(row.value.labor)}
+                </td>
+                <td className={cn("py-1 text-right tabular-nums", row.label === "당일 반품" && "text-blue-600")}>
+                  {formatKrw(row.value.total)}
+                </td>
               </tr>
             ))}
           </tbody>

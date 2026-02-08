@@ -87,6 +87,8 @@ type PartyReceiptPage = {
   lines: ReceiptLine[];
   totals: Amounts;
   today: Amounts;
+  todaySales: Amounts;
+  todayReturns: Amounts;
   previous: Amounts;
   goldPrice: number | null;
   silverPrice: number | null;
@@ -448,21 +450,22 @@ function ShipmentsPrintContent() {
           is_store_pickup: row.is_store_pickup ?? null,
           customer: row.customer ?? null,
         };
-        return (row.cms_shipment_line ?? []).map((line) => ({
-          is_unit_pricing: unitPricingMap.get((line.model_name ?? "").trim()) ?? false,
-          shipment_line_id: line.shipment_line_id ?? undefined,
-          model_name: line.model_name ?? null,
-          qty: line.qty ?? null,
-          material_code: line.material_code ?? null,
-          net_weight_g: line.net_weight_g ?? null,
-          color: line.color ?? null,
-          size: line.size ?? null,
-          labor_total_sell_krw: line.labor_total_sell_krw ?? null,
-          total_amount_sell_krw: line.total_amount_sell_krw ?? null,
-          gold_tick_krw_per_g: line.gold_tick_krw_per_g ?? null,
-          silver_tick_krw_per_g: line.silver_tick_krw_per_g ?? null,
-          shipment_header: header,
-        }));
+        return (row.cms_shipment_line ?? [])
+          .map((line) => ({
+            is_unit_pricing: unitPricingMap.get((line.model_name ?? "").trim()) ?? false,
+            shipment_line_id: line.shipment_line_id ?? undefined,
+            model_name: line.model_name ?? null,
+            qty: line.qty ?? null,
+            material_code: line.material_code ?? null,
+            net_weight_g: line.net_weight_g ?? null,
+            color: line.color ?? null,
+            size: line.size ?? null,
+            labor_total_sell_krw: line.labor_total_sell_krw ?? null,
+            total_amount_sell_krw: line.total_amount_sell_krw ?? null,
+            gold_tick_krw_per_g: line.gold_tick_krw_per_g ?? null,
+            silver_tick_krw_per_g: line.silver_tick_krw_per_g ?? null,
+            shipment_header: header,
+          }));
       });
   }, [shipmentsQuery.data, isStorePickupMode, unitPricingMap]);
 
@@ -548,25 +551,40 @@ function ShipmentsPrintContent() {
     return map;
   }, [todayLines]);
 
-  const arTodayMap = useMemo(() => {
-    const map = new Map<string, Amounts>();
+  const arTodayStatsMap = useMemo(() => {
+    const salesMap = new Map<string, Amounts>();
+    const returnsMap = new Map<string, Amounts>();
+
     (arInvoicePositionsQuery.data ?? []).forEach((row) => {
       const partyId = row.party_id ?? "";
       if (!partyId) return;
       const header = row.shipment_line?.shipment_header ?? null;
       const isStorePickup = header?.is_store_pickup ?? null;
       if (isStorePickupMode ? !isStorePickup : isStorePickup) return;
+
       const shipDate = header?.ship_date ?? null;
       const confirmedAt = header?.confirmed_at ?? null;
       const occurredAt = row.occurred_at ?? null;
       const confirmedAtMs = confirmedAt ? new Date(confirmedAt).getTime() : NaN;
       const occurredAtMs = occurredAt ? new Date(occurredAt).getTime() : NaN;
       const bucket = getArBucket(shipDate, confirmedAtMs, occurredAtMs, today, todayStartMs, todayEndMs);
+
       if (bucket !== "today") return;
-      const current = map.get(partyId) ?? { ...zeroAmounts };
-      map.set(partyId, addAmounts(current, toArAmounts(row)));
+
+      const amounts = toArAmounts(row);
+      // Heuristic: if total amount is negative, it's a return. 
+      // Note: A single row might be a mix, but usually AR rows are distinct.
+      // If it's a return, amounts should be negative.
+      // We sum them up into respective buckets.
+      if (amounts.total < 0) {
+        const current = returnsMap.get(partyId) ?? { ...zeroAmounts };
+        returnsMap.set(partyId, addAmounts(current, amounts));
+      } else {
+        const current = salesMap.get(partyId) ?? { ...zeroAmounts };
+        salesMap.set(partyId, addAmounts(current, amounts));
+      }
     });
-    return map;
+    return { salesMap, returnsMap };
   }, [arInvoicePositionsQuery.data, isStorePickupMode, today, todayStartMs, todayEndMs]);
 
   const receiptPages = useMemo(() => {
@@ -574,8 +592,12 @@ function ShipmentsPrintContent() {
     partyGroups.forEach((group) => {
       const chunks = chunkLines(group.lines, 15);
       const totals = arTotalsMap.get(group.partyId) ?? { ...zeroAmounts };
-      const todaySummary = arTodayMap.get(group.partyId) ?? { ...zeroAmounts };
-      const previousSummary = subtractAmounts(totals, todaySummary);
+
+      const todaySales = arTodayStatsMap.salesMap.get(group.partyId) ?? { ...zeroAmounts };
+      const todayReturns = arTodayStatsMap.returnsMap.get(group.partyId) ?? { ...zeroAmounts };
+      const todayNet = addAmounts(todaySales, todayReturns);
+
+      const previousSummary = subtractAmounts(totals, todayNet);
       const { goldPrice, silverPrice } = getTickPrices(group.lines);
       chunks.forEach((chunk) => {
         result.push({
@@ -583,7 +605,9 @@ function ShipmentsPrintContent() {
           partyName: group.partyName,
           lines: chunk,
           totals,
-          today: todaySummary,
+          today: todayNet, // Keep for legacy or net calculation if needed
+          todaySales,      // New
+          todayReturns,    // New
           previous: previousSummary,
           goldPrice,
           silverPrice,
@@ -598,6 +622,8 @@ function ShipmentsPrintContent() {
         lines: [],
         totals: { ...zeroAmounts },
         today: { ...zeroAmounts },
+        todaySales: { ...zeroAmounts },
+        todayReturns: { ...zeroAmounts },
         previous: { ...zeroAmounts },
         goldPrice: null,
         silverPrice: null,
@@ -605,7 +631,7 @@ function ShipmentsPrintContent() {
     }
 
     return result;
-  }, [partyGroups, arTotalsMap, arTodayMap]);
+  }, [partyGroups, arTotalsMap, arTodayStatsMap]);
 
   const visiblePages = useMemo(() => {
     if (!activePartyId) return receiptPages;

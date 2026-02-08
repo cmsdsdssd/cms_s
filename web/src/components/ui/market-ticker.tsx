@@ -70,8 +70,13 @@ export function MarketTicker({ variant = "full" }: MarketTickerProps) {
 
     const labels = useMemo(() => {
         const kgValue = `${formatPrice(kg)} /g`;
-        const ksValue = `${formatPrice(ks)} /g`;
-        const csValue = `${formatPrice(cs)} /g`;
+        // User requested RAW price (without 1.2 factor) for display
+        const ksDisplay = formatPrice(ksOriginal ?? ks);
+        const ksAdjusted = formatPrice(ks);
+
+        const csDisplay = formatPrice(csOriginal ?? cs);
+        const csAdjusted = formatPrice(cs);
+
         const ksOriginalValue = formatPrice(ksOriginal);
         const csOriginalValue = formatPrice(csOriginal);
 
@@ -81,14 +86,18 @@ export function MarketTicker({ variant = "full" }: MarketTickerProps) {
                 ariaLabel: `KG ${kgValue}`,
             },
             ks: {
-                title: `KS ${ksValue} · 원본 ${ksOriginalValue} /g`,
-                ariaLabel: `KS ${ksValue}, 원본 ${ksOriginalValue} /g`,
+                title: `KS 원본 ${ksDisplay} /g · 보정 ${ksAdjusted} /g`,
+                ariaLabel: `KS ${ksDisplay}, 보정 ${ksAdjusted} /g`,
                 original: ksOriginalValue,
+                adjusted: ksAdjusted,
+                display: ksDisplay,
             },
             cs: {
-                title: `CS ${csValue} · 보정전 ${csOriginalValue} /g`,
-                ariaLabel: `CS ${csValue}, 보정전 ${csOriginalValue} /g`,
+                title: `CS 원본 ${csDisplay} /g · 보정 ${csAdjusted} /g`,
+                ariaLabel: `CS ${csDisplay}, 보정 ${csAdjusted} /g`,
                 original: csOriginalValue,
+                adjusted: csAdjusted,
+                display: csDisplay,
             },
         };
     }, [kg, ks, ksOriginal, cs, csOriginal]);
@@ -168,12 +177,12 @@ export function MarketTicker({ variant = "full" }: MarketTickerProps) {
                         }
                         title={labels.ks.title}
                     >
-                        {formatPrice(ks)} /g
+                        {labels.ks.display} /g
                     </span>
                 </div>
                 {!isCompact ? (
                     <div className="text-xs font-normal text-[var(--muted)]">
-                        (원래 은시세: {labels.ks.original} /g)
+                        (보정: {labels.ks.adjusted} /g)
                     </div>
                 ) : null}
             </div>
@@ -205,12 +214,12 @@ export function MarketTicker({ variant = "full" }: MarketTickerProps) {
                         }
                         title={labels.cs.title}
                     >
-                        {formatPrice(cs)} /g
+                        {labels.cs.display} /g
                     </span>
                 </div>
                 {!isCompact ? (
                     <div className="text-xs font-normal text-[var(--muted)]">
-                        (보정전: {labels.cs.original} /g)
+                        (보정: {labels.cs.adjusted} /g)
                     </div>
                 ) : null}
             </div>

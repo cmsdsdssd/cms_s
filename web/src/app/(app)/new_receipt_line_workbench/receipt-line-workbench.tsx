@@ -2,11 +2,25 @@
 
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  ColumnDef,
+  ColumnFiltersState,
+  SortingState,
+  VisibilityState,
+  flexRender,
+  getCoreRowModel,
+  getFilteredRowModel,
+  getPaginationRowModel,
+  getSortedRowModel,
+  useReactTable,
+} from "@tanstack/react-table";
+import { format, differenceInDays } from "date-fns";
 import { toast } from "sonner";
 
 import { ActionBar } from "@/components/layout/action-bar";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Input, Select, Textarea } from "@/components/ui/field";
 import { Badge } from "@/components/ui/badge";
 import { NumberText } from "@/components/ui/number-text";
@@ -163,9 +177,19 @@ type MatchCandidate = {
   sub1_stone_source?: string | null;
   sub2_stone_source?: string | null;
   match_score?: number | null;
-  score_detail_json?: Record<string, unknown> | null;
+  score_detail_json?: Record<string, number> | null;
+  order_date?: string | null;
+  created_at?: string | null;
 };
 
+interface MatchProposalProps {
+  receiptId: string;
+  receiptLineUuid: string;
+  isOpen: boolean;
+  onClose: () => void;
+  targetLine: UnlinkedLineRow | null;
+  onConfirm: (lineId: string, candidate: MatchCandidate) => void;
+}
 type ConfirmResult = {
   shipment_id?: string | null;
   shipment_line_id?: string | null;
@@ -2469,12 +2493,12 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
       prev.map((item) =>
         item.line_uuid === selectedLineItem.line_uuid
           ? {
-              ...item,
-              stone_center_qty: String(allocation.center),
-              stone_sub1_qty: String(allocation.sub1),
-              stone_sub2_qty: String(allocation.sub2),
-              total_amount_krw: "",
-            }
+            ...item,
+            stone_center_qty: String(allocation.center),
+            stone_sub1_qty: String(allocation.sub1),
+            stone_sub2_qty: String(allocation.sub2),
+            total_amount_krw: "",
+          }
           : item
       )
     );
@@ -2509,12 +2533,12 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
       prev.map((item) =>
         item.line_uuid === lineUuid
           ? {
-              ...item,
-              stone_center_qty: String(allocation.center),
-              stone_sub1_qty: String(allocation.sub1),
-              stone_sub2_qty: String(allocation.sub2),
-              total_amount_krw: "",
-            }
+            ...item,
+            stone_center_qty: String(allocation.center),
+            stone_sub1_qty: String(allocation.sub1),
+            stone_sub2_qty: String(allocation.sub2),
+            total_amount_krw: "",
+          }
           : item
       )
     );
@@ -3058,8 +3082,8 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                                             className="h-7 text-[11px]"
                                           />
                                           {activeLineSuggest?.lineId === item.line_uuid &&
-                                          activeLineSuggest.field === "customer" &&
-                                          item.customer_factory_code.trim() ? (
+                                            activeLineSuggest.field === "customer" &&
+                                            item.customer_factory_code.trim() ? (
                                             <div
                                               className="absolute left-0 right-0 top-full mt-1 z-[9999] max-h-60 overflow-y-auto rounded-[12px] border border-[var(--panel-border)] bg-[var(--panel)] shadow-lg pointer-events-auto"
                                               onMouseDown={(e) => {
@@ -3128,8 +3152,8 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                                             className="h-7 text-[11px]"
                                           />
                                           {activeLineSuggest?.lineId === item.line_uuid &&
-                                          activeLineSuggest.field === "model" &&
-                                          item.model_name.trim() ? (
+                                            activeLineSuggest.field === "model" &&
+                                            item.model_name.trim() ? (
                                             <div
                                               className="absolute left-0 right-0 top-full mt-1 z-[9999] max-h-60 overflow-y-auto rounded-[12px] border border-[var(--panel-border)] bg-[var(--panel)] shadow-lg pointer-events-auto"
                                               onMouseDown={(e) => {
@@ -3179,17 +3203,17 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                                       </div>
                                       <div className="space-y-1">
                                         <label className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)]">소재</label>
-                                          <Select
-                                            value={item.material_code}
-                                            disabled={inputDisabled}
-                                            onChange={(e) => updateLineMaterial(item.line_uuid, e.target.value)}
-                                            onBlur={(e) => {
-                                              const nextId = getLineIdFromTarget(e.relatedTarget);
-                                              if (nextId !== item.line_uuid) setExpandedLineId(null);
-                                            }}
-                                            data-line-id={item.line_uuid}
-                                            className="h-7 px-2 py-1 text-[11px] leading-4"
-                                          >
+                                        <Select
+                                          value={item.material_code}
+                                          disabled={inputDisabled}
+                                          onChange={(e) => updateLineMaterial(item.line_uuid, e.target.value)}
+                                          onBlur={(e) => {
+                                            const nextId = getLineIdFromTarget(e.relatedTarget);
+                                            if (nextId !== item.line_uuid) setExpandedLineId(null);
+                                          }}
+                                          data-line-id={item.line_uuid}
+                                          className="h-7 px-2 py-1 text-[11px] leading-4"
+                                        >
                                           <option value="">선택</option>
                                           {MATERIAL_OPTIONS.map((code) => (
                                             <option key={code} value={code}>
@@ -3200,17 +3224,17 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                                       </div>
                                       <div className="space-y-1">
                                         <label className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)]">색상</label>
-                                          <Select
-                                            value={item.color}
-                                            disabled={inputDisabled}
-                                            onChange={(e) => updateLine(item.line_uuid, "color", e.target.value)}
-                                            onBlur={(e) => {
-                                              const nextId = getLineIdFromTarget(e.relatedTarget);
-                                              if (nextId !== item.line_uuid) setExpandedLineId(null);
-                                            }}
-                                            data-line-id={item.line_uuid}
-                                            className="h-7 px-2 py-1 text-[11px] leading-4"
-                                          >
+                                        <Select
+                                          value={item.color}
+                                          disabled={inputDisabled}
+                                          onChange={(e) => updateLine(item.line_uuid, "color", e.target.value)}
+                                          onBlur={(e) => {
+                                            const nextId = getLineIdFromTarget(e.relatedTarget);
+                                            if (nextId !== item.line_uuid) setExpandedLineId(null);
+                                          }}
+                                          data-line-id={item.line_uuid}
+                                          className="h-7 px-2 py-1 text-[11px] leading-4"
+                                        >
                                           <option value="">선택</option>
                                           <option value="P">P</option>
                                           <option value="W">W</option>
@@ -3627,105 +3651,105 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
 
                   <div className="overflow-hidden transition-all duration-300 max-h-[1800px] opacity-100">
                     <Card className="border-none shadow-sm ring-1 ring-black/5">
-                    <CardHeader className="border-b border-[var(--panel-border)] bg-[var(--panel)]/50 px-4 py-3">
-                      <div className="flex flex-wrap items-center justify-between gap-3">
-                        <div className="flex items-center gap-3">
-                          <div className="text-sm font-semibold">공장 영수증 하단 4행</div>
-                          <div className="flex items-center gap-2">
-                            <label className="text-xs font-semibold uppercase tracking-wider text-[var(--muted)]">기준일</label>
-                            <Input
-                              type="date"
-                              value={factoryRefDate}
-                              onChange={(e) => setFactoryRefDate(e.target.value)}
-                              className="h-8 text-sm"
-                            />
+                      <CardHeader className="border-b border-[var(--panel-border)] bg-[var(--panel)]/50 px-4 py-3">
+                        <div className="flex flex-wrap items-center justify-between gap-3">
+                          <div className="flex items-center gap-3">
+                            <div className="text-sm font-semibold">공장 영수증 하단 4행</div>
+                            <div className="flex items-center gap-2">
+                              <label className="text-xs font-semibold uppercase tracking-wider text-[var(--muted)]">기준일</label>
+                              <Input
+                                type="date"
+                                value={factoryRefDate}
+                                onChange={(e) => setFactoryRefDate(e.target.value)}
+                                className="h-8 text-sm"
+                              />
+                            </div>
                           </div>
+                          <Button
+                            size="sm"
+                            onClick={saveFactoryStatement}
+                            disabled={!selectedReceiptId || factoryStatementUpsert.isPending || headerNeedsSave}
+                          >
+                            저장
+                          </Button>
                         </div>
-                        <Button
-                          size="sm"
-                          onClick={saveFactoryStatement}
-                          disabled={!selectedReceiptId || factoryStatementUpsert.isPending || headerNeedsSave}
-                        >
-                          저장
-                        </Button>
-                      </div>
-                    </CardHeader>
-                    <CardBody className="space-y-4 p-4">
-                      {!selectedReceiptId ? (
-                        <div className="rounded-lg border border-dashed border-[var(--panel-border)] bg-[var(--surface)]/60 p-4 text-center text-sm text-[var(--muted)]">
-                          영수증을 선택하세요.
-                        </div>
-                      ) : (
-                        <div className="space-y-4">
-                          {factoryRows.map((row) => (
-                            <div key={row.rowCode} className="rounded-lg border border-[var(--panel-border)] bg-[var(--panel)] p-3">
-                              <div className="grid grid-cols-1 gap-2 md:grid-cols-[110px_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.2fr)] md:items-center">
-                                <div className="text-sm font-semibold text-[var(--foreground)]">{row.label}</div>
-                                <div className="space-y-0.5">
-                                  <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--muted)]">금</label>
-                                  <div className="flex items-center gap-2">
+                      </CardHeader>
+                      <CardBody className="space-y-4 p-4">
+                        {!selectedReceiptId ? (
+                          <div className="rounded-lg border border-dashed border-[var(--panel-border)] bg-[var(--surface)]/60 p-4 text-center text-sm text-[var(--muted)]">
+                            영수증을 선택하세요.
+                          </div>
+                        ) : (
+                          <div className="space-y-4">
+                            {factoryRows.map((row) => (
+                              <div key={row.rowCode} className="rounded-lg border border-[var(--panel-border)] bg-[var(--panel)] p-3">
+                                <div className="grid grid-cols-1 gap-2 md:grid-cols-[110px_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.2fr)] md:items-center">
+                                  <div className="text-sm font-semibold text-[var(--foreground)]">{row.label}</div>
+                                  <div className="space-y-0.5">
+                                    <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--muted)]">금</label>
+                                    <div className="flex items-center gap-2">
+                                      <Input
+                                        type="text"
+                                        inputMode="decimal"
+                                        value={row.gold.value}
+                                        onChange={(e) =>
+                                          updateFactoryMetal(row.rowCode, "gold", { value: e.target.value })
+                                        }
+                                        autoFormat={false}
+                                        className="h-7 text-sm text-right"
+                                      />
+                                      <span className="text-xs text-[var(--muted)]">g</span>
+                                    </div>
+                                  </div>
+                                  <div className="space-y-0.5">
+                                    <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--muted)]">은</label>
+                                    <div className="flex items-center gap-2">
+                                      <Input
+                                        type="text"
+                                        inputMode="decimal"
+                                        value={row.silver.value}
+                                        onChange={(e) =>
+                                          updateFactoryMetal(row.rowCode, "silver", { value: e.target.value })
+                                        }
+                                        autoFormat={false}
+                                        className="h-7 text-sm text-right"
+                                      />
+                                      <span className="text-xs text-[var(--muted)]">g</span>
+                                    </div>
+                                  </div>
+                                  <div className="space-y-0.5">
+                                    <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--muted)]">공임현금</label>
                                     <Input
                                       type="text"
-                                      inputMode="decimal"
-                                      value={row.gold.value}
-                                      onChange={(e) =>
-                                        updateFactoryMetal(row.rowCode, "gold", { value: e.target.value })
-                                      }
+                                      inputMode="numeric"
+                                      value={row.laborKrw}
+                                      onChange={(e) => updateFactoryRow(row.rowCode, { laborKrw: e.target.value })}
                                       autoFormat={false}
                                       className="h-7 text-sm text-right"
                                     />
-                                    <span className="text-xs text-[var(--muted)]">g</span>
                                   </div>
-                                </div>
-                                <div className="space-y-0.5">
-                                  <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--muted)]">은</label>
-                                  <div className="flex items-center gap-2">
+                                  <div className="space-y-0.5">
+                                    <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--muted)]">행 메모</label>
                                     <Input
-                                      type="text"
-                                      inputMode="decimal"
-                                      value={row.silver.value}
-                                      onChange={(e) =>
-                                        updateFactoryMetal(row.rowCode, "silver", { value: e.target.value })
-                                      }
-                                      autoFormat={false}
-                                      className="h-7 text-sm text-right"
+                                      placeholder="선택"
+                                      value={row.note}
+                                      onChange={(e) => updateFactoryRow(row.rowCode, { note: e.target.value })}
+                                      className="h-7 text-sm"
                                     />
-                                    <span className="text-xs text-[var(--muted)]">g</span>
                                   </div>
-                                </div>
-                                <div className="space-y-0.5">
-                                  <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--muted)]">공임현금</label>
-                                  <Input
-                                    type="text"
-                                    inputMode="numeric"
-                                    value={row.laborKrw}
-                                    onChange={(e) => updateFactoryRow(row.rowCode, { laborKrw: e.target.value })}
-                                    autoFormat={false}
-                                    className="h-7 text-sm text-right"
-                                  />
-                                </div>
-                                <div className="space-y-0.5">
-                                  <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--muted)]">행 메모</label>
-                                  <Input
-                                    placeholder="선택"
-                                    value={row.note}
-                                    onChange={(e) => updateFactoryRow(row.rowCode, { note: e.target.value })}
-                                    className="h-7 text-sm"
-                                  />
                                 </div>
                               </div>
-                            </div>
-                          ))}
-                          <Textarea
-                            placeholder="정산 메모 (선택)"
-                            value={factoryNote}
-                            onChange={(e) => setFactoryNote(e.target.value)}
-                            className="min-h-[90px] text-sm"
-                          />
-                          <div className="text-xs text-[var(--muted)]">g 입력은 자동으로 돈 기준(1 don = 3.75g)으로 기록됩니다.</div>
-                        </div>
-                      )}
-                    </CardBody>
+                            ))}
+                            <Textarea
+                              placeholder="정산 메모 (선택)"
+                              value={factoryNote}
+                              onChange={(e) => setFactoryNote(e.target.value)}
+                              className="min-h-[90px] text-sm"
+                            />
+                            <div className="text-xs text-[var(--muted)]">g 입력은 자동으로 돈 기준(1 don = 3.75g)으로 기록됩니다.</div>
+                          </div>
+                        )}
+                      </CardBody>
                     </Card>
                   </div>
                 </div>
@@ -3842,33 +3866,33 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
           </Card>
 
           <div>
-          <Card className="border-none shadow-sm ring-1 ring-black/5">
-            <CardHeader className="border-b border-[var(--panel-border)] bg-[var(--panel)]/50 px-4 py-3">
-              <div className="flex items-center justify-between">
-                <div className="text-sm font-semibold">정합 상태</div>
-                <Badge tone={reconcileStatus.tone} className="h-6 px-2 text-[10px]">
-                  {reconcileStatus.label}
-                </Badge>
-              </div>
-            </CardHeader>
-            <CardBody className="space-y-2 p-4">
-              <div className="text-xs text-[var(--muted)]">
-                오류 {reconcileIssueCounts?.error ?? "-"} · 경고 {reconcileIssueCounts?.warn ?? "-"}
-              </div>
-              <Button
-                variant="secondary"
-                size="sm"
-                onClick={() => {
-                  window.location.href = reconcileLink;
-                }}
-              >
-                정합 큐 열기
-              </Button>
-              {apSyncStatus === "error" && apSyncMessage ? (
-                <div className="text-[11px] text-[var(--danger)]">AP 동기화 실패: {apSyncMessage}</div>
-              ) : null}
-            </CardBody>
-          </Card>
+            <Card className="border-none shadow-sm ring-1 ring-black/5">
+              <CardHeader className="border-b border-[var(--panel-border)] bg-[var(--panel)]/50 px-4 py-3">
+                <div className="flex items-center justify-between">
+                  <div className="text-sm font-semibold">정합 상태</div>
+                  <Badge tone={reconcileStatus.tone} className="h-6 px-2 text-[10px]">
+                    {reconcileStatus.label}
+                  </Badge>
+                </div>
+              </CardHeader>
+              <CardBody className="space-y-2 p-4">
+                <div className="text-xs text-[var(--muted)]">
+                  오류 {reconcileIssueCounts?.error ?? "-"} · 경고 {reconcileIssueCounts?.warn ?? "-"}
+                </div>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => {
+                    window.location.href = reconcileLink;
+                  }}
+                >
+                  정합 큐 열기
+                </Button>
+                {apSyncStatus === "error" && apSyncMessage ? (
+                  <div className="text-[11px] text-[var(--danger)]">AP 동기화 실패: {apSyncMessage}</div>
+                ) : null}
+              </CardBody>
+            </Card>
           </div>
 
           <Card className="border-none shadow-sm ring-1 ring-black/5 overflow-visible">
@@ -3925,163 +3949,163 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                       event.preventDefault();
                     }}
                   >
-                  <div>
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <div className="text-sm font-semibold">미매칭 라인</div>
-                        <span className="text-[10px] text-[var(--muted)]">(클릭 시 확장 · 외부 클릭 시 축소)</span>
-                      </div>
-                      <Badge tone="neutral" className="h-5 px-2 text-[10px]">
-                        {unlinkedQuery.data?.length ?? 0}건
-                      </Badge>
-                    </div>
-                    <div
-                      className={cn(
-                        "mt-2 max-h-48 overflow-y-auto space-y-1 rounded-lg border border-[var(--panel-border)] bg-[var(--panel)] p-2 transition-all duration-300",
-                        isMatchFocusMode ? "lg:max-h-[520px]" : ""
-                      )}
-                    >
-                      {unlinkedQuery.isLoading ? (
-                        <Skeleton className="h-10 w-full" />
-                      ) : (unlinkedQuery.data ?? []).length === 0 ? (
-                        <div className="rounded-md border border-dashed border-[var(--panel-border)] p-3 text-xs text-[var(--muted)]">
-                          미매칭 라인이 없습니다.
+                    <div>
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <div className="text-sm font-semibold">미매칭 라인</div>
+                          <span className="text-[10px] text-[var(--muted)]">(클릭 시 확장 · 외부 클릭 시 축소)</span>
                         </div>
-                      ) : (
-                        (unlinkedQuery.data ?? []).map((line, idx) => {
-                          const uuid = getReceiptLineUuid(line) || `${idx}`;
-                          const isSelected = selectedUnlinked && getReceiptLineUuid(selectedUnlinked) === getReceiptLineUuid(line);
-                          const customerCode = line.customer_factory_code?.trim() ?? "";
+                        <Badge tone="neutral" className="h-5 px-2 text-[10px]">
+                          {unlinkedQuery.data?.length ?? 0}건
+                        </Badge>
+                      </div>
+                      <div
+                        className={cn(
+                          "mt-2 max-h-48 overflow-y-auto space-y-1 rounded-lg border border-[var(--panel-border)] bg-[var(--panel)] p-2 transition-all duration-300",
+                          isMatchFocusMode ? "lg:max-h-[520px]" : ""
+                        )}
+                      >
+                        {unlinkedQuery.isLoading ? (
+                          <Skeleton className="h-10 w-full" />
+                        ) : (unlinkedQuery.data ?? []).length === 0 ? (
+                          <div className="rounded-md border border-dashed border-[var(--panel-border)] p-3 text-xs text-[var(--muted)]">
+                            미매칭 라인이 없습니다.
+                          </div>
+                        ) : (
+                          (unlinkedQuery.data ?? []).map((line, idx) => {
+                            const uuid = getReceiptLineUuid(line) || `${idx}`;
+                            const isSelected = selectedUnlinked && getReceiptLineUuid(selectedUnlinked) === getReceiptLineUuid(line);
+                            const customerCode = line.customer_factory_code?.trim() ?? "";
+                            const customerName = customerCode
+                              ? customerNameMap[customerCode] ?? "매칭되는 고객 없음"
+                              : "-";
+                            const weightValue = line.factory_weight_g ?? line.weight_raw_g ?? null;
+                            const weightLabel =
+                              weightValue === null || weightValue === undefined ? "-" : `${formatNumber(weightValue)}g`;
+                            const deductLabel =
+                              line.weight_deduct_g === null || line.weight_deduct_g === undefined
+                                ? "-"
+                                : `${formatNumber(line.weight_deduct_g)}g`;
+                            return (
+                              <button
+                                key={uuid}
+                                type="button"
+                                onClick={() => {
+                                  setSelectedUnlinked(line);
+                                  setSelectedCandidate(null);
+                                  setSuggestions([]);
+                                  setConfirmResult(null);
+                                }}
+                                className={cn(
+                                  "w-full rounded-lg border px-3 py-2 text-left text-xs",
+                                  isSelected
+                                    ? "border-[var(--primary)] bg-[var(--primary)]/5"
+                                    : "border-[var(--panel-border)] bg-[var(--panel)]"
+                                )}
+                              >
+                                <div className="font-semibold text-[var(--foreground)]">
+                                  {formatNumber(line.vendor_seq_no)}&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{line.model_name ?? "-"}&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{line.material_code ?? "-"}&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{line.color ?? "-"}&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{line.size ?? "-"}
+                                </div>
+                                <div className="mt-1 text-[var(--muted)]">
+                                  {customerCode || "-"}&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{customerName}&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{weightLabel}&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{deductLabel}&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{formatNumber(line.stone_center_qty)}&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{formatNumber(line.stone_sub1_qty)}&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{formatNumber(line.stone_sub2_qty)}&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{line.remark ?? "-"}
+                                </div>
+                              </button>
+                            );
+                          })
+                        )}
+                      </div>
+                      <div className="mt-2">
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          onClick={() => setUnlinkedLimit((prev) => prev + 50)}
+                          disabled={unlinkedQuery.isFetching}
+                        >
+                          미매칭 더보기
+                        </Button>
+                      </div>
+                    </div>
+
+                    <div className="rounded-lg border border-[var(--panel-border)] bg-[var(--surface)]/60 p-3 text-xs">
+                      <div className="text-sm font-semibold">선택 라인</div>
+                      {selectedUnlinked ? (
+                        (() => {
+                          const customerCode = selectedUnlinked.customer_factory_code?.trim() ?? "";
                           const customerName = customerCode
                             ? customerNameMap[customerCode] ?? "매칭되는 고객 없음"
                             : "-";
-                          const weightValue = line.factory_weight_g ?? line.weight_raw_g ?? null;
+                          const weightValue = selectedUnlinked.factory_weight_g ?? selectedUnlinked.weight_raw_g ?? null;
                           const weightLabel =
                             weightValue === null || weightValue === undefined ? "-" : `${formatNumber(weightValue)}g`;
                           const deductLabel =
-                            line.weight_deduct_g === null || line.weight_deduct_g === undefined
+                            selectedUnlinked.weight_deduct_g === null || selectedUnlinked.weight_deduct_g === undefined
                               ? "-"
-                              : `${formatNumber(line.weight_deduct_g)}g`;
+                              : `${formatNumber(selectedUnlinked.weight_deduct_g)}g`;
+
                           return (
-                            <button
-                              key={uuid}
-                              type="button"
-                              onClick={() => {
-                                setSelectedUnlinked(line);
-                                setSelectedCandidate(null);
-                                setSuggestions([]);
-                                setConfirmResult(null);
-                              }}
-                              className={cn(
-                                "w-full rounded-lg border px-3 py-2 text-left text-xs",
-                                isSelected
-                                  ? "border-[var(--primary)] bg-[var(--primary)]/5"
-                                  : "border-[var(--panel-border)] bg-[var(--panel)]"
-                              )}
-                            >
-                              <div className="font-semibold text-[var(--foreground)]">
-                                {formatNumber(line.vendor_seq_no)}&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{line.model_name ?? "-"}&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{line.material_code ?? "-"}&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{line.color ?? "-"}&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{line.size ?? "-"}
+                            <div className="mt-2 space-y-1 text-xs text-[var(--muted)]">
+                              <div className="grid grid-cols-[160px_1fr]">
+                                <span className="font-semibold text-[var(--foreground)]">모델명</span>
+                                <span>{selectedUnlinked.model_name ?? "-"}</span>
                               </div>
-                              <div className="mt-1 text-[var(--muted)]">
-                                {customerCode || "-"}&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{customerName}&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{weightLabel}&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{deductLabel}&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{formatNumber(line.stone_center_qty)}&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{formatNumber(line.stone_sub1_qty)}&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{formatNumber(line.stone_sub2_qty)}&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{line.remark ?? "-"}
+                              <div className="grid grid-cols-[160px_1fr]">
+                                <span className="font-semibold text-[var(--foreground)]">소재/색상/사이즈</span>
+                                <span>
+                                  {selectedUnlinked.material_code ?? "-"}&nbsp;&nbsp;&nbsp;{selectedUnlinked.color ?? "-"}&nbsp;&nbsp;&nbsp;{selectedUnlinked.size ?? "-"}
+                                </span>
                               </div>
-                            </button>
+                              <div className="grid grid-cols-[160px_1fr]">
+                                <span className="font-semibold text-[var(--foreground)]">도금여부/도금색상/비고</span>
+                                <span>-&nbsp;&nbsp;&nbsp;-&nbsp;&nbsp;&nbsp;{selectedUnlinked.remark ?? "-"}</span>
+                              </div>
+                              <div className="grid grid-cols-[160px_1fr]">
+                                <span className="font-semibold text-[var(--foreground)]">거래처</span>
+                                <span>{customerCode || "-"}&nbsp;&nbsp;&nbsp;{customerName}</span>
+                              </div>
+                              <div className="grid grid-cols-[160px_1fr]">
+                                <span className="font-semibold text-[var(--foreground)]">중심/보조1/보조2</span>
+                                <span>
+                                  {formatStoneQty(selectedUnlinked.stone_center_qty)}&nbsp;&nbsp;&nbsp;{formatStoneQty(selectedUnlinked.stone_sub1_qty)}&nbsp;&nbsp;&nbsp;{formatStoneQty(selectedUnlinked.stone_sub2_qty)}
+                                </span>
+                              </div>
+                            </div>
                           );
-                        })
+                        })()
+                      ) : (
+                        <div className="mt-2 text-[var(--muted)]">라인을 선택하세요.</div>
                       )}
                     </div>
-                    <div className="mt-2">
-                      <Button
-                        size="sm"
-                        variant="secondary"
-                        onClick={() => setUnlinkedLimit((prev) => prev + 50)}
-                        disabled={unlinkedQuery.isFetching}
-                      >
-                        미매칭 더보기
-                      </Button>
-                    </div>
-                  </div>
 
-                  <div className="rounded-lg border border-[var(--panel-border)] bg-[var(--surface)]/60 p-3 text-xs">
-                    <div className="text-sm font-semibold">선택 라인</div>
-                    {selectedUnlinked ? (
-                      (() => {
-                        const customerCode = selectedUnlinked.customer_factory_code?.trim() ?? "";
-                        const customerName = customerCode
-                          ? customerNameMap[customerCode] ?? "매칭되는 고객 없음"
-                          : "-";
-                        const weightValue = selectedUnlinked.factory_weight_g ?? selectedUnlinked.weight_raw_g ?? null;
-                        const weightLabel =
-                          weightValue === null || weightValue === undefined ? "-" : `${formatNumber(weightValue)}g`;
-                        const deductLabel =
-                          selectedUnlinked.weight_deduct_g === null || selectedUnlinked.weight_deduct_g === undefined
-                            ? "-"
-                            : `${formatNumber(selectedUnlinked.weight_deduct_g)}g`;
-
-                        return (
-                          <div className="mt-2 space-y-1 text-xs text-[var(--muted)]">
-                            <div className="grid grid-cols-[160px_1fr]">
-                              <span className="font-semibold text-[var(--foreground)]">모델명</span>
-                              <span>{selectedUnlinked.model_name ?? "-"}</span>
-                            </div>
-                            <div className="grid grid-cols-[160px_1fr]">
-                              <span className="font-semibold text-[var(--foreground)]">소재/색상/사이즈</span>
-                              <span>
-                                {selectedUnlinked.material_code ?? "-"}&nbsp;&nbsp;&nbsp;{selectedUnlinked.color ?? "-"}&nbsp;&nbsp;&nbsp;{selectedUnlinked.size ?? "-"}
-                              </span>
-                            </div>
-                            <div className="grid grid-cols-[160px_1fr]">
-                              <span className="font-semibold text-[var(--foreground)]">도금여부/도금색상/비고</span>
-                              <span>-&nbsp;&nbsp;&nbsp;-&nbsp;&nbsp;&nbsp;{selectedUnlinked.remark ?? "-"}</span>
-                            </div>
-                            <div className="grid grid-cols-[160px_1fr]">
-                              <span className="font-semibold text-[var(--foreground)]">거래처</span>
-                              <span>{customerCode || "-"}&nbsp;&nbsp;&nbsp;{customerName}</span>
-                            </div>
-                            <div className="grid grid-cols-[160px_1fr]">
-                              <span className="font-semibold text-[var(--foreground)]">중심/보조1/보조2</span>
-                              <span>
-                                {formatStoneQty(selectedUnlinked.stone_center_qty)}&nbsp;&nbsp;&nbsp;{formatStoneQty(selectedUnlinked.stone_sub1_qty)}&nbsp;&nbsp;&nbsp;{formatStoneQty(selectedUnlinked.stone_sub2_qty)}
-                              </span>
-                            </div>
-                          </div>
-                        );
-                      })()
-                    ) : (
-                      <div className="mt-2 text-[var(--muted)]">라인을 선택하세요.</div>
-                    )}
-                  </div>
-
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    type="button"
-                    onClick={(event) => {
-                      event.preventDefault();
-                      event.stopPropagation();
-                      void handleSuggest();
-                    }}
-                    disabled={!selectedUnlinked || isSuggesting}
-                  >
-                    매칭 제안
-                  </Button>
-                  {debugSuggest && suggestDebugState ? (
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      type="button"
+                      onClick={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        void handleSuggest();
+                      }}
+                      disabled={!selectedUnlinked || isSuggesting}
+                    >
+                      매칭 제안
+                    </Button>
+                    {debugSuggest && suggestDebugState ? (
+                      <div className="text-[10px] text-[var(--muted)]">
+                        검색어: {suggestDebugState.query || "-"} · 결과: {suggestDebugState.count}
+                      </div>
+                    ) : null}
                     <div className="text-[10px] text-[var(--muted)]">
-                      검색어: {suggestDebugState.query || "-"} · 결과: {suggestDebugState.count}
+                      선택 라인: {selectedUnlinked?.receipt_line_uuid ?? "없음"}
                     </div>
-                  ) : null}
-                  <div className="text-[10px] text-[var(--muted)]">
-                    선택 라인: {selectedUnlinked?.receipt_line_uuid ?? "없음"}
-                  </div>
 
-                  {suggestions.length > 0 ? (
-                    <div className="space-y-2">
-                      <div className="text-sm font-semibold">추천 후보</div>
-                      {(() => {
-                        const baseCustomerCode = selectedUnlinked?.customer_factory_code?.trim() ?? "";
-                        const baseCustomerName = baseCustomerCode
-                          ? customerNameMap[baseCustomerCode] ?? "매칭되는 고객 없음"
-                          : "-";
+                    {suggestions.length > 0 ? (
+                      <div className="space-y-2">
+                        <div className="text-sm font-semibold">추천 후보</div>
+                        {(() => {
+                          const baseCustomerCode = selectedUnlinked?.customer_factory_code?.trim() ?? "";
+                          const baseCustomerName = baseCustomerCode
+                            ? customerNameMap[baseCustomerCode] ?? "매칭되는 고객 없음"
+                            : "-";
                           const baseLine = selectedUnlinked
                             ? {
                               modelName: selectedUnlinked.model_name ?? "-",
@@ -4099,495 +4123,514 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                             }
                             : null;
 
-                        const diffClass = (value: string, base?: string | null) =>
-                          baseLine && base !== undefined && base !== null && value !== base
-                            ? "bg-amber-500/10 text-[var(--foreground)]"
-                            : "";
+                          const diffClass = (value: string, base?: string | null) =>
+                            baseLine && base !== undefined && base !== null && value !== base
+                              ? "bg-amber-500/10 text-[var(--foreground)]"
+                              : "";
 
-                        return (
-                          <div className="overflow-x-auto rounded-lg border border-[var(--panel-border)] bg-[var(--panel)]">
-                            <table className="w-full text-xs">
-                              <thead className="bg-[var(--panel)]/70 text-[var(--muted)]">
-                                <tr>
-                                  <th className="px-2 py-2 text-left w-[56px]">구분</th>
-                                  <th className="px-2 py-2 text-left">모델명</th>
-                                  <th className="px-2 py-2 text-left">소재</th>
-                                  <th className="px-2 py-2 text-left">색상</th>
-                                  <th className="px-2 py-2 text-left">사이즈</th>
-                                  <th className="px-2 py-2 text-left">도금</th>
-                                  <th className="px-2 py-2 text-left">도금색상</th>
-                                  <th className="px-2 py-2 text-left">거래처코드</th>
-                                  <th className="px-2 py-2 text-left">거래처명</th>
-                                  <th className="px-2 py-2 text-left">중심</th>
-                                  <th className="px-2 py-2 text-left">보조1</th>
-                                  <th className="px-2 py-2 text-left">보조2</th>
-                                  <th className="px-2 py-2 text-right w-[96px]">점수</th>
-                                  <th className="px-2 py-2 text-right w-[140px]">선택</th>
-                                </tr>
-                              </thead>
-                              <tbody>
-                                {baseLine ? (
-                                  <>
-                                    <tr className="border-t border-[var(--panel-border)] bg-[var(--surface)]/40 text-[var(--foreground)]">
-                                      <td className="px-2 py-2 font-semibold">기준</td>
-                                      <td className="px-2 py-2">{baseLine.modelName}</td>
-                                      <td className="px-2 py-2">{baseLine.material}</td>
-                                      <td className="px-2 py-2">{baseLine.color}</td>
-                                      <td className="px-2 py-2">{baseLine.size}</td>
-                                      <td className="px-2 py-2">
-                                        <span className="inline-flex h-5 min-w-5 items-center justify-center rounded border border-[var(--panel-border)] px-1 text-[10px] text-[var(--muted)]">
-                                          -
-                                        </span>
-                                      </td>
-                                      <td className="px-2 py-2">{baseLine.platingColor}</td>
-                                      <td className="px-2 py-2">{baseLine.customerCode}</td>
-                                      <td className="px-2 py-2">{baseLine.customerName}</td>
-                                      <td className="px-2 py-2">{baseLine.stoneCenter}</td>
-                                      <td className="px-2 py-2">{baseLine.stoneSub1}</td>
-                                      <td className="px-2 py-2">{baseLine.stoneSub2}</td>
-                                      <td className="px-2 py-2 text-right">-</td>
-                                      <td className="px-2 py-2 text-right">-</td>
-                                    </tr>
-                                    <tr className="border-t border-[var(--panel-border)] bg-[var(--surface)]/30">
-                                      <td className="px-2 py-1 text-[var(--muted)]"> </td>
-                                      <td className="px-2 py-1 text-[10px] text-[var(--muted)]" colSpan={13}>
-                                        비고: {baseLine.memo}
-                                      </td>
-                                    </tr>
-                                  </>
-                                ) : null}
-                                {suggestions.map((candidate, idx) => {
-                                  const key = candidate.order_line_id ?? `candidate-${idx}`;
-                                  const expanded = scoreOpenMap[key] ?? false;
-                                  const platedLabel =
-                                    candidate.is_plated === null || candidate.is_plated === undefined
-                                      ? "-"
-                                      : candidate.is_plated
-                                        ? "Y"
-                                        : "-";
-                                  const stonePresence =
-                                    candidate.score_detail_json &&
-                                    typeof candidate.score_detail_json.stone_presence === "object" &&
-                                    candidate.score_detail_json.stone_presence !== null
-                                      ? (candidate.score_detail_json.stone_presence as Record<string, unknown>)
-                                      : null;
-                                  const centerExists =
-                                    candidate.stone_center_exists ??
-                                    (typeof stonePresence?.center === "boolean" ? stonePresence.center : null);
-                                  const sub1Exists =
-                                    candidate.stone_sub1_exists ??
-                                    (typeof stonePresence?.sub1 === "boolean" ? stonePresence.sub1 : null);
-                                  const sub2Exists =
-                                    candidate.stone_sub2_exists ??
-                                    (typeof stonePresence?.sub2 === "boolean" ? stonePresence.sub2 : null);
-                                  const row = {
-                                    modelName: candidate.model_name ?? "-",
-                                    material: candidate.material_code ?? "-",
-                                    color: candidate.color ?? "-",
-                                    size: candidate.size ?? "-",
-                                    plated: platedLabel,
-                                    platingColor: candidate.plating_color_code ?? "-",
-                                    memo: candidate.memo ?? "-",
-                                    customerCode: candidate.customer_mask_code ?? "-",
-                                    customerName: candidate.customer_name ?? "-",
-                                    stoneCenter: formatStoneQtyCell(candidate.stone_center_qty, centerExists),
-                                    stoneSub1: formatStoneQtyCell(candidate.stone_sub1_qty, sub1Exists),
-                                    stoneSub2: formatStoneQtyCell(candidate.stone_sub2_qty, sub2Exists),
-                                    stoneCenterSource: formatStoneSourceLabel(candidate.center_stone_source),
-                                    stoneSub1Source: formatStoneSourceLabel(candidate.sub1_stone_source),
-                                    stoneSub2Source: formatStoneSourceLabel(candidate.sub2_stone_source),
-                                  };
-
-                                  return (
-                                    <Fragment key={key}>
-                                      <tr className="border-t border-[var(--panel-border)]">
-                                        <td className="px-2 py-2 text-[var(--muted)]">후보</td>
-                                        <td className={cn("px-2 py-2", diffClass(row.modelName, baseLine?.modelName))}>{row.modelName}</td>
-                                        <td className={cn("px-2 py-2", diffClass(row.material, baseLine?.material))}>{row.material}</td>
-                                        <td className={cn("px-2 py-2", diffClass(row.color, baseLine?.color))}>{row.color}</td>
-                                        <td className={cn("px-2 py-2", diffClass(row.size, baseLine?.size))}>{row.size}</td>
-                                        <td className={cn("px-2 py-2", diffClass(row.plated, baseLine?.plated))}>
-                                          {row.plated === "Y" ? (
-                                            <span
-                                              className="inline-flex h-5 min-w-5 items-center justify-center rounded border border-emerald-300 bg-emerald-500/15 px-1 text-[10px] font-semibold text-emerald-700"
-                                              title="도금"
-                                            >
-                                              ●
-                                            </span>
-                                          ) : (
-                                            <span className="inline-flex h-5 min-w-5 items-center justify-center rounded border border-[var(--panel-border)] px-1 text-[10px] text-[var(--muted)]">
-                                              -
-                                            </span>
-                                          )}
+                          return (
+                            <div className="overflow-x-auto rounded-lg border border-[var(--panel-border)] bg-[var(--panel)]">
+                              <table className="w-full text-xs">
+                                <thead className="bg-[var(--panel)]/70 text-[var(--muted)]">
+                                  <tr>
+                                    <th className="px-2 py-2 text-left w-[56px]">구분</th>
+                                    <th className="px-2 py-2 text-left w-[100px]">날짜</th>
+                                    <th className="px-2 py-2 text-left">모델명</th>
+                                    <th className="px-2 py-2 text-left">소재</th>
+                                    <th className="px-2 py-2 text-left">색상</th>
+                                    <th className="px-2 py-2 text-left">사이즈</th>
+                                    <th className="px-2 py-2 text-left">도금</th>
+                                    <th className="px-2 py-2 text-left">도금색상</th>
+                                    <th className="px-2 py-2 text-left">거래처코드</th>
+                                    <th className="px-2 py-2 text-left">거래처명</th>
+                                    <th className="px-2 py-2 text-left">중심</th>
+                                    <th className="px-2 py-2 text-left">보조1</th>
+                                    <th className="px-2 py-2 text-left">보조2</th>
+                                    <th className="px-2 py-2 text-right w-[96px]">점수</th>
+                                    <th className="px-2 py-2 text-right w-[140px]">선택</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {baseLine ? (
+                                    <>
+                                      <tr className="border-t border-[var(--panel-border)] bg-[var(--surface)]/40 text-[var(--foreground)]">
+                                        <td className="px-2 py-2 font-semibold">기준</td>
+                                        <td className="px-2 py-2 text-xs text-[var(--muted)]">
+                                          {format(new Date(), "MM-dd")}
                                         </td>
-                                        <td className={cn("px-2 py-2", diffClass(row.platingColor, baseLine?.platingColor))}>{row.platingColor}</td>
-                                        <td className={cn("px-2 py-2", diffClass(row.customerCode, baseLine?.customerCode))}>{row.customerCode}</td>
-                                        <td className={cn("px-2 py-2", diffClass(row.customerName, baseLine?.customerName))}>{row.customerName}</td>
-                                        <td className={cn("px-2 py-2", diffClass(row.stoneCenter, baseLine?.stoneCenter))}>
-                                          <span>{row.stoneCenter}</span>
-                                          {row.stoneCenterSource && row.stoneCenter !== "-" ? (
-                                            <span className="ml-1 inline-flex items-center rounded border border-[var(--panel-border)] bg-[var(--panel)]/70 px-1 text-[10px] text-[var(--muted)]">
-                                              {row.stoneCenterSource}
-                                            </span>
-                                          ) : null}
+                                        <td className="px-2 py-2">{baseLine.modelName}</td>
+                                        <td className="px-2 py-2">{baseLine.material}</td>
+                                        <td className="px-2 py-2">{baseLine.color}</td>
+                                        <td className="px-2 py-2">{baseLine.size}</td>
+                                        <td className="px-2 py-2">
+                                          <span className="inline-flex h-5 min-w-5 items-center justify-center rounded border border-[var(--panel-border)] px-1 text-[10px] text-[var(--muted)]">
+                                            -
+                                          </span>
                                         </td>
-                                        <td className={cn("px-2 py-2", diffClass(row.stoneSub1, baseLine?.stoneSub1))}>
-                                          <span>{row.stoneSub1}</span>
-                                          {row.stoneSub1Source && row.stoneSub1 !== "-" ? (
-                                            <span className="ml-1 inline-flex items-center rounded border border-[var(--panel-border)] bg-[var(--panel)]/70 px-1 text-[10px] text-[var(--muted)]">
-                                              {row.stoneSub1Source}
-                                            </span>
-                                          ) : null}
-                                        </td>
-                                        <td className={cn("px-2 py-2", diffClass(row.stoneSub2, baseLine?.stoneSub2))}>
-                                          <span>{row.stoneSub2}</span>
-                                          {row.stoneSub2Source && row.stoneSub2 !== "-" ? (
-                                            <span className="ml-1 inline-flex items-center rounded border border-[var(--panel-border)] bg-[var(--panel)]/70 px-1 text-[10px] text-[var(--muted)]">
-                                              {row.stoneSub2Source}
-                                            </span>
-                                          ) : null}
-                                        </td>
-                                        <td className="px-2 py-2 text-right">
-                                          <Badge tone="warning" className="h-6 px-2 text-[10px] font-bold">
-                                            점수 {formatNumber(candidate.match_score)}
-                                          </Badge>
-                                        </td>
-                                        <td className="px-2 py-2 text-right">
-                                          <div className="flex items-center justify-end gap-2 whitespace-nowrap">
-                                            {selectedCandidate?.order_line_id === candidate.order_line_id ? (
-                                              <Badge tone="active" className="h-5 px-2 text-[10px]">
-                                                선택됨
-                                              </Badge>
-                                            ) : null}
-                                            <Button
-                                              size="sm"
-                                              variant={selectedCandidate?.order_line_id === candidate.order_line_id ? "primary" : "secondary"}
-                                              onClick={() => {
-                                                setSelectedCandidate(candidate);
-                                                setConfirmResult(null);
-                                              }}
-                                            >
-                                              선택
-                                            </Button>
-                                          </div>
-                                        </td>
+                                        <td className="px-2 py-2">{baseLine.platingColor}</td>
+                                        <td className="px-2 py-2">{baseLine.customerCode}</td>
+                                        <td className="px-2 py-2">{baseLine.customerName}</td>
+                                        <td className="px-2 py-2">{baseLine.stoneCenter}</td>
+                                        <td className="px-2 py-2">{baseLine.stoneSub1}</td>
+                                        <td className="px-2 py-2">{baseLine.stoneSub2}</td>
+                                        <td className="px-2 py-2 text-right">-</td>
+                                        <td className="px-2 py-2 text-right">-</td>
                                       </tr>
                                       <tr className="border-t border-[var(--panel-border)] bg-[var(--surface)]/30">
                                         <td className="px-2 py-1 text-[var(--muted)]"> </td>
-                                        <td className="px-2 py-1 text-[10px] text-[var(--muted)]" colSpan={13}>
-                                          비고: {row.memo}
+                                        <td className="px-2 py-1 text-[10px] text-[var(--muted)]" colSpan={14}>
+                                          비고: {baseLine.memo}
                                         </td>
                                       </tr>
-                                      <tr className="border-t border-[var(--panel-border)]">
-                                        <td className="px-2 py-1 text-[var(--muted)]"> </td>
-                                        <td className="px-2 py-1" colSpan={13}>
-                                          <button
-                                            type="button"
-                                            className="text-[var(--primary)]"
-                                            onClick={() => setScoreOpenMap((prev) => ({ ...prev, [key]: !expanded }))}
-                                          >
-                                            {expanded ? "점수 상세 닫기" : "점수 상세 보기"}
-                                          </button>
-                                          {expanded ? (
-                                            <div className="mt-2 text-[10px] text-[var(--muted)]">
-                                              {(() => {
-                                                const detail = (candidate.score_detail_json ?? {}) as Record<string, unknown>;
-                                                const modelDetail =
-                                                  detail.model_name && typeof detail.model_name === "object"
-                                                    ? (detail.model_name as Record<string, unknown>)
-                                                    : null;
-                                                const customerDetail =
-                                                  detail.customer_factory_code && typeof detail.customer_factory_code === "object"
-                                                    ? (detail.customer_factory_code as Record<string, unknown>)
-                                                    : null;
-                                                const memoDetail =
-                                                  detail.memo_match && typeof detail.memo_match === "object"
-                                                    ? (detail.memo_match as Record<string, unknown>)
-                                                    : null;
-                                                const scoreBreakdown =
-                                                  detail.score_breakdown && typeof detail.score_breakdown === "object"
-                                                    ? (detail.score_breakdown as Record<string, unknown>)
-                                                    : null;
-                                                const readScore = (value: unknown) =>
-                                                  typeof value === "number"
-                                                    ? value
-                                                    : typeof value === "string" && value.trim() !== "" && !Number.isNaN(Number(value))
-                                                      ? Number(value)
-                                                      : 0;
+                                    </>
+                                  ) : null}
+                                  {suggestions.map((candidate, idx) => {
+                                    const key = candidate.order_line_id ?? `candidate-${idx}`;
+                                    const expanded = scoreOpenMap[key] ?? false;
+                                    const platedLabel =
+                                      candidate.is_plated === null || candidate.is_plated === undefined
+                                        ? "-"
+                                        : candidate.is_plated
+                                          ? "Y"
+                                          : "-";
+                                    const stonePresence =
+                                      candidate.score_detail_json &&
+                                        typeof candidate.score_detail_json.stone_presence === "object" &&
+                                        candidate.score_detail_json.stone_presence !== null
+                                        ? (candidate.score_detail_json.stone_presence as Record<string, unknown>)
+                                        : null;
+                                    const centerExists =
+                                      candidate.stone_center_exists ??
+                                      (typeof stonePresence?.center === "boolean" ? stonePresence.center : null);
+                                    const sub1Exists =
+                                      candidate.stone_sub1_exists ??
+                                      (typeof stonePresence?.sub1 === "boolean" ? stonePresence.sub1 : null);
+                                    const sub2Exists =
+                                      candidate.stone_sub2_exists ??
+                                      (typeof stonePresence?.sub2 === "boolean" ? stonePresence.sub2 : null);
+                                    const row = {
+                                      modelName: candidate.model_name ?? "-",
+                                      material: candidate.material_code ?? "-",
+                                      color: candidate.color ?? "-",
+                                      size: candidate.size ?? "-",
+                                      plated: platedLabel,
+                                      platingColor: candidate.plating_color_code ?? "-",
+                                      memo: candidate.memo ?? "-",
+                                      customerCode: candidate.customer_mask_code ?? "-",
+                                      customerName: candidate.customer_name ?? "-",
+                                      stoneCenter: formatStoneQtyCell(candidate.stone_center_qty, centerExists),
+                                      stoneSub1: formatStoneQtyCell(candidate.stone_sub1_qty, sub1Exists),
+                                      stoneSub2: formatStoneQtyCell(candidate.stone_sub2_qty, sub2Exists),
+                                      stoneCenterSource: formatStoneSourceLabel(candidate.center_stone_source),
+                                      stoneSub1Source: formatStoneSourceLabel(candidate.sub1_stone_source),
+                                      stoneSub2Source: formatStoneSourceLabel(candidate.sub2_stone_source),
+                                    };
 
-                                                const scoreModel =
-                                                  scoreBreakdown !== null
-                                                    ? readScore(scoreBreakdown.model_name)
-                                                    : typeof modelDetail?.exact === "boolean"
-                                                      ? modelDetail.exact
-                                                        ? 60
-                                                        : 0
-                                                      : 0;
-                                                const scoreMaterial =
-                                                  scoreBreakdown !== null
-                                                    ? readScore(scoreBreakdown.material)
-                                                    : typeof detail.material_code_match === "boolean"
-                                                      ? detail.material_code_match
-                                                        ? 15
-                                                        : 0
-                                                      : 0;
-                                                const scoreColor =
-                                                  scoreBreakdown !== null
-                                                    ? readScore(scoreBreakdown.color)
-                                                    : typeof detail.color_match === "boolean"
-                                                      ? detail.color_match
-                                                        ? 10
-                                                        : 0
-                                                      : 0;
-                                                const scoreSize =
-                                                  scoreBreakdown !== null
-                                                    ? readScore(scoreBreakdown.size)
-                                                    : typeof detail.size_match === "boolean"
-                                                      ? detail.size_match
-                                                        ? 10
-                                                        : 0
-                                                      : 0;
-                                                const scoreMemo =
-                                                  scoreBreakdown !== null
-                                                    ? readScore(scoreBreakdown.memo)
-                                                    : typeof memoDetail?.exact === "boolean"
-                                                      ? memoDetail.exact
-                                                        ? 10
-                                                        : typeof memoDetail?.partial === "boolean" && memoDetail.partial
+                                    return (
+                                      <Fragment key={key}>
+                                        <tr className="border-t border-[var(--panel-border)]">
+                                          <td className="px-2 py-2 text-[var(--muted)]">후보</td>
+                                          <td className="px-2 py-2 text-xs">
+                                            <div className="flex flex-col">
+                                              <span className={cn(candidate.order_date ? "text-[var(--foreground)]" : "text-[var(--muted)]")}>
+                                                {candidate.order_date ? format(new Date(candidate.order_date), "MM-dd") : "-"}
+                                              </span>
+                                              {candidate.order_date && (
+                                                <span className="text-[10px] text-[var(--cyan)]">
+                                                  {(() => {
+                                                    const diff = differenceInDays(new Date(), new Date(candidate.order_date));
+                                                    return `(D${diff >= 0 ? "+" : ""}${diff})`;
+                                                  })()}
+                                                </span>
+                                              )}
+                                            </div>
+                                          </td>
+                                          <td className={cn("px-2 py-2", diffClass(row.modelName, baseLine?.modelName))}>{row.modelName}</td>
+                                          <td className={cn("px-2 py-2", diffClass(row.material, baseLine?.material))}>{row.material}</td>
+                                          <td className={cn("px-2 py-2", diffClass(row.color, baseLine?.color))}>{row.color}</td>
+                                          <td className={cn("px-2 py-2", diffClass(row.size, baseLine?.size))}>{row.size}</td>
+                                          <td className={cn("px-2 py-2", diffClass(row.plated, baseLine?.plated))}>
+                                            {row.plated === "Y" ? (
+                                              <span
+                                                className="inline-flex h-5 min-w-5 items-center justify-center rounded border border-emerald-300 bg-emerald-500/15 px-1 text-[10px] font-semibold text-emerald-700"
+                                                title="도금"
+                                              >
+                                                ●
+                                              </span>
+                                            ) : (
+                                              <span className="inline-flex h-5 min-w-5 items-center justify-center rounded border border-[var(--panel-border)] px-1 text-[10px] text-[var(--muted)]">
+                                                -
+                                              </span>
+                                            )}
+                                          </td>
+                                          <td className={cn("px-2 py-2", diffClass(row.platingColor, baseLine?.platingColor))}>{row.platingColor}</td>
+                                          <td className={cn("px-2 py-2", diffClass(row.customerCode, baseLine?.customerCode))}>{row.customerCode}</td>
+                                          <td className={cn("px-2 py-2", diffClass(row.customerName, baseLine?.customerName))}>{row.customerName}</td>
+                                          <td className={cn("px-2 py-2", diffClass(row.stoneCenter, baseLine?.stoneCenter))}>
+                                            <span>{row.stoneCenter}</span>
+                                            {row.stoneCenterSource && row.stoneCenter !== "-" ? (
+                                              <span className="ml-1 inline-flex items-center rounded border border-[var(--panel-border)] bg-[var(--panel)]/70 px-1 text-[10px] text-[var(--muted)]">
+                                                {row.stoneCenterSource}
+                                              </span>
+                                            ) : null}
+                                          </td>
+                                          <td className={cn("px-2 py-2", diffClass(row.stoneSub1, baseLine?.stoneSub1))}>
+                                            <span>{row.stoneSub1}</span>
+                                            {row.stoneSub1Source && row.stoneSub1 !== "-" ? (
+                                              <span className="ml-1 inline-flex items-center rounded border border-[var(--panel-border)] bg-[var(--panel)]/70 px-1 text-[10px] text-[var(--muted)]">
+                                                {row.stoneSub1Source}
+                                              </span>
+                                            ) : null}
+                                          </td>
+                                          <td className={cn("px-2 py-2", diffClass(row.stoneSub2, baseLine?.stoneSub2))}>
+                                            <span>{row.stoneSub2}</span>
+                                            {row.stoneSub2Source && row.stoneSub2 !== "-" ? (
+                                              <span className="ml-1 inline-flex items-center rounded border border-[var(--panel-border)] bg-[var(--panel)]/70 px-1 text-[10px] text-[var(--muted)]">
+                                                {row.stoneSub2Source}
+                                              </span>
+                                            ) : null}
+                                          </td>
+                                          <td className="px-2 py-2 text-right">
+                                            <Badge tone="warning" className="h-6 px-2 text-[10px] font-bold">
+                                              점수 {formatNumber(candidate.match_score)}
+                                            </Badge>
+                                          </td>
+                                          <td className="px-2 py-2 text-right">
+                                            <div className="flex items-center justify-end gap-2 whitespace-nowrap">
+                                              {selectedCandidate?.order_line_id === candidate.order_line_id ? (
+                                                <Badge tone="active" className="h-5 px-2 text-[10px]">
+                                                  선택됨
+                                                </Badge>
+                                              ) : null}
+                                              <Button
+                                                size="sm"
+                                                variant={selectedCandidate?.order_line_id === candidate.order_line_id ? "primary" : "secondary"}
+                                                onClick={() => {
+                                                  setSelectedCandidate(candidate);
+                                                  setConfirmResult(null);
+                                                }}
+                                              >
+                                                선택
+                                              </Button>
+                                            </div>
+                                          </td>
+                                        </tr>
+                                        <tr className="border-t border-[var(--panel-border)] bg-[var(--surface)]/30">
+                                          <td className="px-2 py-1 text-[var(--muted)]"> </td>
+                                          <td className="px-2 py-1 text-[10px] text-[var(--muted)]" colSpan={14}>
+                                            비고: {row.memo}
+                                          </td>
+                                        </tr>
+                                        <tr className="border-t border-[var(--panel-border)]">
+                                          <td className="px-2 py-1 text-[var(--muted)]"> </td>
+                                          <td className="px-2 py-1" colSpan={13}>
+                                            <button
+                                              type="button"
+                                              className="text-[var(--primary)]"
+                                              onClick={() => setScoreOpenMap((prev) => ({ ...prev, [key]: !expanded }))}
+                                            >
+                                              {expanded ? "점수 상세 닫기" : "점수 상세 보기"}
+                                            </button>
+                                            {expanded ? (
+                                              <div className="mt-2 text-[10px] text-[var(--muted)]">
+                                                {(() => {
+                                                  const detail = (candidate.score_detail_json ?? {}) as Record<string, unknown>;
+                                                  const modelDetail =
+                                                    detail.model_name && typeof detail.model_name === "object"
+                                                      ? (detail.model_name as Record<string, unknown>)
+                                                      : null;
+                                                  const customerDetail =
+                                                    detail.customer_factory_code && typeof detail.customer_factory_code === "object"
+                                                      ? (detail.customer_factory_code as Record<string, unknown>)
+                                                      : null;
+                                                  const memoDetail =
+                                                    detail.memo_match && typeof detail.memo_match === "object"
+                                                      ? (detail.memo_match as Record<string, unknown>)
+                                                      : null;
+                                                  const scoreBreakdown =
+                                                    detail.score_breakdown && typeof detail.score_breakdown === "object"
+                                                      ? (detail.score_breakdown as Record<string, unknown>)
+                                                      : null;
+                                                  const readScore = (value: unknown) =>
+                                                    typeof value === "number"
+                                                      ? value
+                                                      : typeof value === "string" && value.trim() !== "" && !Number.isNaN(Number(value))
+                                                        ? Number(value)
+                                                        : 0;
+
+                                                  const scoreModel =
+                                                    scoreBreakdown !== null
+                                                      ? readScore(scoreBreakdown.model_name)
+                                                      : typeof modelDetail?.exact === "boolean"
+                                                        ? modelDetail.exact
+                                                          ? 60
+                                                          : 0
+                                                        : 0;
+                                                  const scoreMaterial =
+                                                    scoreBreakdown !== null
+                                                      ? readScore(scoreBreakdown.material)
+                                                      : typeof detail.material_code_match === "boolean"
+                                                        ? detail.material_code_match
+                                                          ? 15
+                                                          : 0
+                                                        : 0;
+                                                  const scoreColor =
+                                                    scoreBreakdown !== null
+                                                      ? readScore(scoreBreakdown.color)
+                                                      : typeof detail.color_match === "boolean"
+                                                        ? detail.color_match
+                                                          ? 10
+                                                          : 0
+                                                        : 0;
+                                                  const scoreSize =
+                                                    scoreBreakdown !== null
+                                                      ? readScore(scoreBreakdown.size)
+                                                      : typeof detail.size_match === "boolean"
+                                                        ? detail.size_match
+                                                          ? 10
+                                                          : 0
+                                                        : 0;
+                                                  const scoreMemo =
+                                                    scoreBreakdown !== null
+                                                      ? readScore(scoreBreakdown.memo)
+                                                      : typeof memoDetail?.exact === "boolean"
+                                                        ? memoDetail.exact
+                                                          ? 10
+                                                          : typeof memoDetail?.partial === "boolean" && memoDetail.partial
+                                                            ? 5
+                                                            : 0
+                                                        : 0;
+                                                  const scoreCustomer =
+                                                    scoreBreakdown !== null
+                                                      ? readScore(scoreBreakdown.customer_factory_code)
+                                                      : typeof customerDetail?.match === "boolean"
+                                                        ? customerDetail.match
                                                           ? 5
                                                           : 0
-                                                      : 0;
-                                                const scoreCustomer =
-                                                  scoreBreakdown !== null
-                                                    ? readScore(scoreBreakdown.customer_factory_code)
-                                                    : typeof customerDetail?.match === "boolean"
-                                                      ? customerDetail.match
-                                                        ? 5
-                                                        : 0
-                                                      : 0;
-                                                const scoreTotal =
-                                                  scoreModel + scoreMaterial + scoreColor + scoreSize + scoreMemo + scoreCustomer;
+                                                        : 0;
+                                                  const scoreTotal =
+                                                    scoreModel + scoreMaterial + scoreColor + scoreSize + scoreMemo + scoreCustomer;
 
-                                                return (
-                                                  <div className="flex flex-wrap items-center gap-x-5 gap-y-1">
-                                                    <span className="font-bold text-[var(--foreground)]">점수상세</span>
-                                                    <span>|</span>
-                                                    <span className="text-[var(--foreground)]">모델명</span>
-                                                    <span>{scoreModel}점</span>
-                                                    <span>|</span>
-                                                    <span className="text-[var(--foreground)]">소재</span>
-                                                    <span>{scoreMaterial}점</span>
-                                                    <span>|</span>
-                                                    <span className="text-[var(--foreground)]">색상</span>
-                                                    <span>{scoreColor}점</span>
-                                                    <span>|</span>
-                                                    <span className="text-[var(--foreground)]">사이즈</span>
-                                                    <span>{scoreSize}점</span>
-                                                    <span>|</span>
-                                                    <span className="text-[var(--foreground)]">비고</span>
-                                                    <span>{scoreMemo}점</span>
-                                                    <span>|</span>
-                                                    <span className="text-[var(--foreground)]">거래처코드</span>
-                                                    <span>{scoreCustomer}점</span>
-                                                    <span>|</span>
-                                                    <span className="font-semibold text-blue-600">합산 {scoreTotal}점</span>
-                                                  </div>
-                                                );
-                                              })()}
-                                            </div>
-                                          ) : null}
-                                        </td>
-                                      </tr>
-                                    </Fragment>
-                                  );
-                                })}
-                              </tbody>
-                            </table>
-                          </div>
-                        );
-                      })()}
-                    </div>
-                  ) : !isSuggesting ? (
-                    <div className="text-xs text-[var(--muted)]">매칭 후보가 없습니다.</div>
-                  ) : null}
-
-                  <div className="rounded-lg border border-[var(--panel-border)] bg-[var(--surface)]/60 p-3 text-xs space-y-2">
-                    <div className="text-sm font-semibold">확정</div>
-                    {!selectedCandidate ? (
-                      <div className="text-[var(--muted)]">후보를 선택하세요.</div>
-                    ) : (
-                      <div className="space-y-2">
-                        <div className="text-[var(--muted)]">
-                          허용 범위: {formatNumber(selectedCandidate.weight_min_g)} ~ {formatNumber(selectedCandidate.weight_max_g)}g
-                        </div>
-                        <div className="rounded-md border border-[var(--panel-border)] bg-[var(--panel)]/60 p-2">
-                          <div className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)]">역할별 공급</div>
-                          <div className="mt-2 flex flex-wrap items-center gap-2">
-                            <Badge tone="neutral" className="h-5 px-2 text-[10px]">
-                              메인 {formatStoneSourceLabel(selectedStoneSources.center) || "-"}
-                            </Badge>
-                            <Badge tone="neutral" className="h-5 px-2 text-[10px]">
-                              보조1 {formatStoneSourceLabel(selectedStoneSources.sub1) || "-"}
-                            </Badge>
-                            <Badge tone="neutral" className="h-5 px-2 text-[10px]">
-                              보조2 {formatStoneSourceLabel(selectedStoneSources.sub2) || "-"}
-                            </Badge>
-                            {mixedStoneSources ? (
-                              <Badge tone="warning" className="h-5 px-2 text-[10px]">
-                                혼재 공급
-                              </Badge>
-                            ) : null}
-                          </div>
-                        </div>
-
-                        <div className="rounded-md border border-[var(--panel-border)] bg-[var(--panel)]/60 p-2">
-                          <div className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)]">
-                            총 알수 자동배분
-                          </div>
-                          <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-2">
-                            <Input
-                              type="number"
-                              min={0}
-                              value={totalStoneCountInput}
-                              onChange={(e) => setTotalStoneCountInput(e.target.value)}
-                              placeholder="총 알수"
-                              className="h-8 text-xs"
-                            />
-                            <Input
-                              type="number"
-                              min={0}
-                              value={centerStoneCountInput}
-                              onChange={(e) => setCenterStoneCountInput(e.target.value)}
-                              placeholder="메인 개수(선택)"
-                              className="h-8 text-xs"
-                            />
-                          </div>
-                          <div className="mt-2 flex flex-wrap items-center gap-2">
-                            <Button
-                              size="sm"
-                              variant="secondary"
-                              onClick={() => {
-                                if (!allocationPreview) {
-                                  toast.error("총 알수를 입력하세요.");
-                                  return;
-                                }
-                                applyAllocationToSelectedLine(allocationPreview);
-                              }}
-                              disabled={!selectedLineItem}
-                            >
-                              자동배분 적용
-                            </Button>
-                            {allocationPreview ? (
-                              <span className="text-[10px] text-[var(--muted)]">
-                                결과: {allocationPreview.center} / {allocationPreview.sub1} / {allocationPreview.sub2} (합계 {allocationPreview.total})
-                              </span>
-                            ) : (
-                              <span className="text-[10px] text-[var(--muted)]">총 알수를 입력하면 배분 결과가 표시됩니다.</span>
-                            )}
-                          </div>
-                        </div>
-
-                        <div className="rounded-md border border-[var(--panel-border)] bg-[var(--panel)]/60 p-2">
-                          <div className="flex items-center justify-between">
-                            <div className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)]">
-                              공장원가 vs 추천가
+                                                  return (
+                                                    <div className="flex flex-wrap items-center gap-x-5 gap-y-1">
+                                                      <span className="font-bold text-[var(--foreground)]">점수상세</span>
+                                                      <span>|</span>
+                                                      <span className="text-[var(--foreground)]">모델명</span>
+                                                      <span>{scoreModel}점</span>
+                                                      <span>|</span>
+                                                      <span className="text-[var(--foreground)]">소재</span>
+                                                      <span>{scoreMaterial}점</span>
+                                                      <span>|</span>
+                                                      <span className="text-[var(--foreground)]">색상</span>
+                                                      <span>{scoreColor}점</span>
+                                                      <span>|</span>
+                                                      <span className="text-[var(--foreground)]">사이즈</span>
+                                                      <span>{scoreSize}점</span>
+                                                      <span>|</span>
+                                                      <span className="text-[var(--foreground)]">비고</span>
+                                                      <span>{scoreMemo}점</span>
+                                                      <span>|</span>
+                                                      <span className="text-[var(--foreground)]">거래처코드</span>
+                                                      <span>{scoreCustomer}점</span>
+                                                      <span>|</span>
+                                                      <span className="font-semibold text-blue-600">합산 {scoreTotal}점</span>
+                                                    </div>
+                                                  );
+                                                })()}
+                                              </div>
+                                            ) : null}
+                                          </td>
+                                        </tr>
+                                      </Fragment>
+                                    );
+                                  })}
+                                </tbody>
+                              </table>
                             </div>
-                            <span className="text-[10px] text-[var(--muted)]">(v4 기준 프리뷰)</span>
-                          </div>
-                          {!selectedLineItem ? (
-                            <div className="mt-2 text-[10px] text-[var(--muted)]">라인 입력에서 선택 라인을 찾을 수 없습니다.</div>
-                          ) : selectedMasterPricingQuery.isLoading ? (
-                            <div className="mt-2 text-[10px] text-[var(--muted)]">마스터 원가를 조회 중입니다.</div>
-                          ) : !pricingPreview ? (
-                            <div className="mt-2 text-[10px] text-[var(--muted)]">마스터 원가 정보가 없어 프리뷰를 계산할 수 없습니다.</div>
-                          ) : (
-                            <div className="mt-2 space-y-1 text-[11px]">
-                              <div className="flex items-center justify-between">
-                                <span className="text-[var(--muted)]">공장원가 (기본+중/보+자입원석)</span>
-                                <span className="font-semibold text-[var(--foreground)]">{formatNumber(pricingPreview.factoryCostTotal)}</span>
-                              </div>
-                              <div className="flex items-center justify-between">
-                                <span className="text-[var(--muted)]">추천가 (기본 sell + extra sell)</span>
-                                <span className="font-semibold text-[var(--foreground)]">{formatNumber(pricingPreview.recommendedTotal)}</span>
-                              </div>
-                              <div className="flex items-center justify-between">
-                                <span className="text-[var(--muted)]">차이 (추천-원가)</span>
-                                <span className="font-semibold text-[var(--foreground)]">{formatNumber(pricingPreview.diff)}</span>
-                              </div>
-                              <div className="mt-1 flex flex-wrap items-center gap-2">
-                                {selfUnitCostWarningRoles.length > 0 ? (
-                                  <Badge tone="warning" className="h-5 px-2 text-[10px]">
-                                    SELF 단가 0: {selfUnitCostWarningRoles.map((role) => roleLabel(role)).join(", ")}
-                                  </Badge>
-                                ) : null}
-                                {mixedStoneSources ? (
-                                  <Badge tone="warning" className="h-5 px-2 text-[10px]">
-                                    역할별 공급 혼재
-                                  </Badge>
-                                ) : null}
-                              </div>
-                            </div>
-                          )}
-                        </div>
-
-                        <Input
-                          type="number"
-                          value={selectedWeight}
-                          onChange={(e) => setSelectedWeight(e.target.value)}
-                          placeholder="선택 중량(g)"
-                          className="h-8 text-xs"
-                        />
-                        {hasFactoryStoneSource ? (
-                          <Select
-                            value={factoryBillingShape}
-                            onChange={(e) => setFactoryBillingShape(e.target.value as FactoryBillingShape)}
-                            className="h-8 text-xs"
-                          >
-                            <option value="BUNDLED_PACKAGE">BUNDLED_PACKAGE</option>
-                            <option value="SETTING_ONLY">SETTING_ONLY</option>
-                            <option value="SPLIT">SPLIT</option>
-                          </Select>
-                        ) : null}
-                        <Textarea
-                          value={confirmNote}
-                          onChange={(e) => setConfirmNote(e.target.value)}
-                          placeholder="확정 메모 (선택)"
-                          className="min-h-[64px] text-xs"
-                        />
-                        {(() => {
-                          const weightValue = parseNumber(selectedWeight);
-                          const weightInvalid = weightValue !== null && !isWeightInRange();
-                          return (
-                            <>
-                              <Button size="sm" onClick={handleConfirm} disabled={weightInvalid || matchConfirm.isPending}>
-                                확정
-                              </Button>
-                              {weightInvalid ? (
-                                <div className="text-[var(--danger)]">허용 범위를 확인하세요.</div>
-                              ) : null}
-                              {selfUnitCostWarningRoles.length > 0 ? (
-                                <div className="text-amber-700">SELF 공급인데 단가가 0인 항목이 있습니다. (확정은 가능)</div>
-                              ) : null}
-                            </>
                           );
                         })()}
                       </div>
-                    )}
-
-                    {confirmResult?.shipment_id ? (
-                      <div className="rounded-md border border-[var(--panel-border)] bg-[var(--panel)] p-2 text-xs">
-                        <div>shipment_id: <span className="font-semibold text-[var(--foreground)]">{confirmResult.shipment_id}</span></div>
-                        {selectedCandidate?.customer_party_id ? (
-                          <a
-                            href={`/workbench/${selectedCandidate.customer_party_id}`}
-                            className="mt-2 inline-block text-[var(--primary)]"
-                          >
-                            거래처 작업대 열기
-                          </a>
-                        ) : null}
-                      </div>
+                    ) : !isSuggesting ? (
+                      <div className="text-xs text-[var(--muted)]">매칭 후보가 없습니다.</div>
                     ) : null}
-                  </div>
+
+                    <div className="rounded-lg border border-[var(--panel-border)] bg-[var(--surface)]/60 p-3 text-xs space-y-2">
+                      <div className="text-sm font-semibold">확정</div>
+                      {!selectedCandidate ? (
+                        <div className="text-[var(--muted)]">후보를 선택하세요.</div>
+                      ) : (
+                        <div className="space-y-2">
+                          <div className="text-[var(--muted)]">
+                            허용 범위: {formatNumber(selectedCandidate.weight_min_g)} ~ {formatNumber(selectedCandidate.weight_max_g)}g
+                          </div>
+                          <div className="rounded-md border border-[var(--panel-border)] bg-[var(--panel)]/60 p-2">
+                            <div className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)]">역할별 공급</div>
+                            <div className="mt-2 flex flex-wrap items-center gap-2">
+                              <Badge tone="neutral" className="h-5 px-2 text-[10px]">
+                                메인 {formatStoneSourceLabel(selectedStoneSources.center) || "-"}
+                              </Badge>
+                              <Badge tone="neutral" className="h-5 px-2 text-[10px]">
+                                보조1 {formatStoneSourceLabel(selectedStoneSources.sub1) || "-"}
+                              </Badge>
+                              <Badge tone="neutral" className="h-5 px-2 text-[10px]">
+                                보조2 {formatStoneSourceLabel(selectedStoneSources.sub2) || "-"}
+                              </Badge>
+                              {mixedStoneSources ? (
+                                <Badge tone="warning" className="h-5 px-2 text-[10px]">
+                                  혼재 공급
+                                </Badge>
+                              ) : null}
+                            </div>
+                          </div>
+
+                          <div className="rounded-md border border-[var(--panel-border)] bg-[var(--panel)]/60 p-2">
+                            <div className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)]">
+                              총 알수 자동배분
+                            </div>
+                            <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-2">
+                              <Input
+                                type="number"
+                                min={0}
+                                value={totalStoneCountInput}
+                                onChange={(e) => setTotalStoneCountInput(e.target.value)}
+                                placeholder="총 알수"
+                                className="h-8 text-xs"
+                              />
+                              <Input
+                                type="number"
+                                min={0}
+                                value={centerStoneCountInput}
+                                onChange={(e) => setCenterStoneCountInput(e.target.value)}
+                                placeholder="메인 개수(선택)"
+                                className="h-8 text-xs"
+                              />
+                            </div>
+                            <div className="mt-2 flex flex-wrap items-center gap-2">
+                              <Button
+                                size="sm"
+                                variant="secondary"
+                                onClick={() => {
+                                  if (!allocationPreview) {
+                                    toast.error("총 알수를 입력하세요.");
+                                    return;
+                                  }
+                                  applyAllocationToSelectedLine(allocationPreview);
+                                }}
+                                disabled={!selectedLineItem}
+                              >
+                                자동배분 적용
+                              </Button>
+                              {allocationPreview ? (
+                                <span className="text-[10px] text-[var(--muted)]">
+                                  결과: {allocationPreview.center} / {allocationPreview.sub1} / {allocationPreview.sub2} (합계 {allocationPreview.total})
+                                </span>
+                              ) : (
+                                <span className="text-[10px] text-[var(--muted)]">총 알수를 입력하면 배분 결과가 표시됩니다.</span>
+                              )}
+                            </div>
+                          </div>
+
+                          <div className="rounded-md border border-[var(--panel-border)] bg-[var(--panel)]/60 p-2">
+                            <div className="flex items-center justify-between">
+                              <div className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)]">
+                                공장원가 vs 추천가
+                              </div>
+                              <span className="text-[10px] text-[var(--muted)]">(v4 기준 프리뷰)</span>
+                            </div>
+                            {!selectedLineItem ? (
+                              <div className="mt-2 text-[10px] text-[var(--muted)]">라인 입력에서 선택 라인을 찾을 수 없습니다.</div>
+                            ) : selectedMasterPricingQuery.isLoading ? (
+                              <div className="mt-2 text-[10px] text-[var(--muted)]">마스터 원가를 조회 중입니다.</div>
+                            ) : !pricingPreview ? (
+                              <div className="mt-2 text-[10px] text-[var(--muted)]">마스터 원가 정보가 없어 프리뷰를 계산할 수 없습니다.</div>
+                            ) : (
+                              <div className="mt-2 space-y-1 text-[11px]">
+                                <div className="flex items-center justify-between">
+                                  <span className="text-[var(--muted)]">공장원가 (기본+중/보+자입원석)</span>
+                                  <span className="font-semibold text-[var(--foreground)]">{formatNumber(pricingPreview.factoryCostTotal)}</span>
+                                </div>
+                                <div className="flex items-center justify-between">
+                                  <span className="text-[var(--muted)]">추천가 (기본 sell + extra sell)</span>
+                                  <span className="font-semibold text-[var(--foreground)]">{formatNumber(pricingPreview.recommendedTotal)}</span>
+                                </div>
+                                <div className="flex items-center justify-between">
+                                  <span className="text-[var(--muted)]">차이 (추천-원가)</span>
+                                  <span className="font-semibold text-[var(--foreground)]">{formatNumber(pricingPreview.diff)}</span>
+                                </div>
+                                <div className="mt-1 flex flex-wrap items-center gap-2">
+                                  {selfUnitCostWarningRoles.length > 0 ? (
+                                    <Badge tone="warning" className="h-5 px-2 text-[10px]">
+                                      SELF 단가 0: {selfUnitCostWarningRoles.map((role) => roleLabel(role)).join(", ")}
+                                    </Badge>
+                                  ) : null}
+                                  {mixedStoneSources ? (
+                                    <Badge tone="warning" className="h-5 px-2 text-[10px]">
+                                      역할별 공급 혼재
+                                    </Badge>
+                                  ) : null}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+
+                          <Input
+                            type="number"
+                            value={selectedWeight}
+                            onChange={(e) => setSelectedWeight(e.target.value)}
+                            placeholder="선택 중량(g)"
+                            className="h-8 text-xs"
+                          />
+                          {hasFactoryStoneSource ? (
+                            <Select
+                              value={factoryBillingShape}
+                              onChange={(e) => setFactoryBillingShape(e.target.value as FactoryBillingShape)}
+                              className="h-8 text-xs"
+                            >
+                              <option value="BUNDLED_PACKAGE">BUNDLED_PACKAGE</option>
+                              <option value="SETTING_ONLY">SETTING_ONLY</option>
+                              <option value="SPLIT">SPLIT</option>
+                            </Select>
+                          ) : null}
+                          <Textarea
+                            value={confirmNote}
+                            onChange={(e) => setConfirmNote(e.target.value)}
+                            placeholder="확정 메모 (선택)"
+                            className="min-h-[64px] text-xs"
+                          />
+                          {(() => {
+                            const weightValue = parseNumber(selectedWeight);
+                            const weightInvalid = weightValue !== null && !isWeightInRange();
+                            return (
+                              <>
+                                <Button size="sm" onClick={handleConfirm} disabled={weightInvalid || matchConfirm.isPending}>
+                                  확정
+                                </Button>
+                                {weightInvalid ? (
+                                  <div className="text-[var(--danger)]">허용 범위를 확인하세요.</div>
+                                ) : null}
+                                {selfUnitCostWarningRoles.length > 0 ? (
+                                  <div className="text-amber-700">SELF 공급인데 단가가 0인 항목이 있습니다. (확정은 가능)</div>
+                                ) : null}
+                              </>
+                            );
+                          })()}
+                        </div>
+                      )}
+
+                      {confirmResult?.shipment_id ? (
+                        <div className="rounded-md border border-[var(--panel-border)] bg-[var(--panel)] p-2 text-xs">
+                          <div>shipment_id: <span className="font-semibold text-[var(--foreground)]">{confirmResult.shipment_id}</span></div>
+                          {selectedCandidate?.customer_party_id ? (
+                            <a
+                              href={`/workbench/${selectedCandidate.customer_party_id}`}
+                              className="mt-2 inline-block text-[var(--primary)]"
+                            >
+                              거래처 작업대 열기
+                            </a>
+                          ) : null}
+                        </div>
+                      ) : null}
+                    </div>
                   </div>
                 </div>
               )}
