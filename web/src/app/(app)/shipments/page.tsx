@@ -142,6 +142,7 @@ type ReceiptMatchPrefillRow = {
   stone_sub1_unit_cost_krw?: number | null;
   stone_sub2_unit_cost_krw?: number | null;
   stone_labor_krw?: number | null;
+  receipt_labor_basic_cost_krw?: number | null;
   receipt_labor_other_cost_krw?: number | null;
 };
 
@@ -939,7 +940,6 @@ export default function ShipmentsPage() {
     const data = receiptMatchPrefillQuery.data;
     if (!data) return;
     if (!selectedOrderLineId) return;
-    if (prefillHydratedOrderLineId === selectedOrderLineId) return;
 
     const receiptWeight = data.receipt_weight_g ?? data.selected_weight_g;
     if (receiptWeight !== null && receiptWeight !== undefined) {
@@ -951,10 +951,14 @@ export default function ShipmentsPage() {
     } else {
       setApplyMasterDeductionWhenEmpty(true);
     }
+    const receiptBaseCost =
+      data.selected_factory_labor_basic_cost_krw ??
+      data.receipt_labor_basic_cost_krw ??
+      null;
     if (data.shipment_base_labor_krw !== null && data.shipment_base_labor_krw !== undefined) {
       setBaseLabor(String(data.shipment_base_labor_krw));
-    } else if (data.selected_factory_labor_basic_cost_krw !== null && data.selected_factory_labor_basic_cost_krw !== undefined) {
-      setBaseLabor(String(data.selected_factory_labor_basic_cost_krw));
+    } else if (receiptBaseCost !== null && receiptBaseCost !== undefined) {
+      setBaseLabor(String(receiptBaseCost));
     }
 
     const normalizedStoneLabor = (() => {
@@ -983,8 +987,10 @@ export default function ShipmentsPage() {
       setOtherLaborCost(String(etcOnly));
     } else if (data.selected_factory_labor_other_cost_krw !== null && data.selected_factory_labor_other_cost_krw !== undefined) {
       const receiptOther = Number(data.selected_factory_labor_other_cost_krw ?? 0);
-      const etcOnly = Math.max(receiptOther - normalizedStoneLabor, 0);
-      setOtherLaborCost(String(etcOnly));
+      setOtherLaborCost(String(Math.max(receiptOther, 0)));
+    } else if (data.receipt_labor_other_cost_krw !== null && data.receipt_labor_other_cost_krw !== undefined) {
+      const receiptOther = Number(data.receipt_labor_other_cost_krw ?? 0);
+      setOtherLaborCost(String(Math.max(receiptOther, 0)));
     }
 
     const normalizedItems = normalizeExtraLaborItems(data.shipment_extra_labor_items);
@@ -1005,11 +1011,12 @@ export default function ShipmentsPage() {
     }
 
     setPrefillHydratedOrderLineId(selectedOrderLineId);
-  }, [prefillHydratedOrderLineId, receiptMatchPrefillQuery.data, selectedOrderLineId]);
+  }, [receiptMatchPrefillQuery.data, selectedOrderLineId]);
 
   useEffect(() => {
     if (!selectedOrderLineId) return;
     if (prefillHydratedOrderLineId === selectedOrderLineId) return;
+    if (!receiptMatchPrefillQuery.isFetched) return;
     if (receiptMatchPrefillQuery.data) return;
 
     const detail = orderLineDetailQuery.data;
@@ -1037,6 +1044,7 @@ export default function ShipmentsPage() {
     orderLineDetailQuery.data,
     prefillHydratedOrderLineId,
     receiptMatchPrefillQuery.data,
+    receiptMatchPrefillQuery.isFetched,
     selectedOrderLineId,
   ]);
 
@@ -1238,24 +1246,29 @@ export default function ShipmentsPage() {
     if (!confirmModalOpen) return;
     if (!currentLine) return;
 
-    if (currentLine.measured_weight_g !== null && currentLine.measured_weight_g !== undefined) {
+    const hasReceiptPrefillForSelected =
+      Boolean(receiptMatchPrefillQuery.data) &&
+      Boolean(selectedOrderLineId) &&
+      prefillHydratedOrderLineId === selectedOrderLineId;
+
+    if (!hasReceiptPrefillForSelected && currentLine.measured_weight_g !== null && currentLine.measured_weight_g !== undefined) {
       setWeightG(String(currentLine.measured_weight_g));
     }
-    if (currentLine.deduction_weight_g !== null && currentLine.deduction_weight_g !== undefined) {
+    if (!hasReceiptPrefillForSelected && currentLine.deduction_weight_g !== null && currentLine.deduction_weight_g !== undefined) {
       setDeductionWeightG(String(currentLine.deduction_weight_g));
       if (hasReceiptDeduction) setApplyMasterDeductionWhenEmpty(false);
-    } else if (!hasReceiptDeduction) {
+    } else if (!hasReceiptDeduction && !hasReceiptPrefillForSelected) {
       setApplyMasterDeductionWhenEmpty(true);
     }
-    if (currentLine.base_labor_krw !== null && currentLine.base_labor_krw !== undefined) {
+    if (!hasReceiptPrefillForSelected && currentLine.base_labor_krw !== null && currentLine.base_labor_krw !== undefined) {
       setBaseLabor(String(currentLine.base_labor_krw));
     }
     if (currentLine.manual_labor_krw !== null && currentLine.manual_labor_krw !== undefined) {
       setManualLabor(String(currentLine.manual_labor_krw));
     }
-    if (currentLine.extra_labor_items !== null && currentLine.extra_labor_items !== undefined) {
+    if (!hasReceiptPrefillForSelected && currentLine.extra_labor_items !== null && currentLine.extra_labor_items !== undefined) {
       setExtraLaborItems(normalizeExtraLaborItems(currentLine.extra_labor_items));
-    } else if (currentLine.extra_labor_krw !== null && currentLine.extra_labor_krw !== undefined) {
+    } else if (!hasReceiptPrefillForSelected && currentLine.extra_labor_krw !== null && currentLine.extra_labor_krw !== undefined) {
       setOtherLaborCost(String(currentLine.extra_labor_krw ?? ""));
     }
 
@@ -1266,7 +1279,14 @@ export default function ShipmentsPage() {
       setIsManualTotalOverride(false);
       setManualTotalAmountKrw("");
     }
-  }, [confirmModalOpen, currentLine, hasReceiptDeduction]);
+  }, [
+    confirmModalOpen,
+    currentLine,
+    hasReceiptDeduction,
+    prefillHydratedOrderLineId,
+    receiptMatchPrefillQuery.data,
+    selectedOrderLineId,
+  ]);
 
   const shipmentHeaderQuery = useQuery({
     queryKey: ["shipment-header", normalizedShipmentId, confirmModalOpen, isStorePickup],
@@ -2261,6 +2281,7 @@ export default function ShipmentsPage() {
   const resolvedBaseLaborCost = useMemo(() => {
     const value =
       receiptMatchPrefillQuery.data?.selected_factory_labor_basic_cost_krw ??
+      receiptMatchPrefillQuery.data?.receipt_labor_basic_cost_krw ??
       receiptMatchPrefillQuery.data?.shipment_base_labor_krw;
     return value === null || value === undefined ? null : Number(value);
   }, [receiptMatchPrefillQuery.data]);
@@ -2269,12 +2290,16 @@ export default function ShipmentsPage() {
     if (receiptMatchPrefillQuery.data?.selected_factory_labor_basic_cost_krw !== null && receiptMatchPrefillQuery.data?.selected_factory_labor_basic_cost_krw !== undefined) {
       return "receipt" as const;
     }
+    if (receiptMatchPrefillQuery.data?.receipt_labor_basic_cost_krw !== null && receiptMatchPrefillQuery.data?.receipt_labor_basic_cost_krw !== undefined) {
+      return "receipt" as const;
+    }
     if (receiptMatchPrefillQuery.data?.shipment_base_labor_krw !== null && receiptMatchPrefillQuery.data?.shipment_base_labor_krw !== undefined) {
       return "match" as const;
     }
     return "none" as const;
   }, [
     receiptMatchPrefillQuery.data?.selected_factory_labor_basic_cost_krw,
+    receiptMatchPrefillQuery.data?.receipt_labor_basic_cost_krw,
     receiptMatchPrefillQuery.data?.shipment_base_labor_krw,
   ]);
 
@@ -2367,6 +2392,35 @@ export default function ShipmentsPage() {
     if (resolvedBaseLaborCost === null) return null;
     return resolvedBaseLabor - resolvedBaseLaborCost;
   }, [resolvedBaseLabor, resolvedBaseLaborCost]);
+
+  useEffect(() => {
+    if (!selectedOrderLineId) return;
+    if (prefillHydratedOrderLineId !== selectedOrderLineId) return;
+    const data = receiptMatchPrefillQuery.data;
+    if (!data) return;
+    if (data.shipment_base_labor_krw !== null && data.shipment_base_labor_krw !== undefined) return;
+    if (masterBaseMargin === null || masterBaseMargin === undefined) return;
+
+    const receiptBaseCost =
+      data.selected_factory_labor_basic_cost_krw ??
+      data.receipt_labor_basic_cost_krw ??
+      null;
+    if (receiptBaseCost === null || receiptBaseCost === undefined) return;
+
+    const currentBaseLabor = parseNumberInput(baseLabor);
+    const isEmpty = (baseLabor ?? "").trim() === "";
+    const isReceiptCostOnly = Math.round(currentBaseLabor) === Math.round(Number(receiptBaseCost));
+    if (!isEmpty && !isReceiptCostOnly) return;
+
+    const nextBaseLabor = Number(receiptBaseCost) + Number(masterBaseMargin);
+    setBaseLabor(String(nextBaseLabor));
+  }, [
+    baseLabor,
+    masterBaseMargin,
+    prefillHydratedOrderLineId,
+    receiptMatchPrefillQuery.data,
+    selectedOrderLineId,
+  ]);
 
   const resolvedTotalLabor = useMemo(
     () => (useManualLabor ? resolvedManualLabor : resolvedBaseLabor + resolvedExtraLaborTotal),

@@ -89,6 +89,32 @@ const toStatusLabel = (status?: string | null) => {
   }
 };
 
+const toIssueTypeLabel = (issueType?: string | null) => {
+  switch (issueType) {
+    case "FACTORY_POST_NEQ_SYSTEM_ASOF":
+      return "공장 POST vs 시스템(as-of) 불일치";
+    case "RECENT_PAYMENT_INCONSISTENT":
+      return "공장 최근결제 vs 시스템 결제내역 불일치";
+    case "FACTORY_SALE_NEQ_INTERNAL_CALC":
+      return "당일 합계 vs 라인 계산 불일치";
+    default:
+      return issueType ?? "-";
+  }
+};
+
+const toIssueTypeDescription = (issueType?: string | null) => {
+  switch (issueType) {
+    case "FACTORY_POST_NEQ_SYSTEM_ASOF":
+      return "공장 POST(거래 후 미수)와 시스템 잔액(as-of)이 다릅니다.";
+    case "RECENT_PAYMENT_INCONSISTENT":
+      return "공장 최근결제와 시스템 결제내역이 다릅니다.";
+    case "FACTORY_SALE_NEQ_INTERNAL_CALC":
+      return "당일 합계와 라인 계산 결과가 다릅니다.";
+    default:
+      return "";
+  }
+};
+
 const toIssueFieldLabel = (key: string) => {
   switch (key) {
     case "summary":
@@ -491,10 +517,20 @@ function ApReconcileContent() {
                 <span className="text-xs px-2 py-0.5 rounded-full bg-[var(--chip)] text-[var(--muted)] font-medium">
                   reconcile
                 </span>
+                {(selectedVendor?.error_count ?? 0) > 0 && (
+                  <span className="text-xs px-2 py-0.5 rounded-full bg-red-100 text-red-700 font-semibold">
+                    AP 결제 차단
+                  </span>
+                )}
               </div>
               <p className="text-sm text-[var(--muted)] flex items-center gap-2">
                 권역: {selectedVendor?.vendor_region ?? "-"}
               </p>
+              {(selectedVendor?.error_count ?? 0) > 0 && (
+                <p className="mt-1 text-xs text-red-700">
+                  결제 차단됨: reconcile ERROR 해결 후 /ap에서 결제를 진행할 수 있습니다.
+                </p>
+              )}
             </div>
             <Button
               variant="ghost"
@@ -617,7 +653,10 @@ function ApReconcileContent() {
                         </span>
                       </div>
                       <div className="mt-2 text-sm font-medium truncate">
-                        {row.issue_type ?? "-"}
+                        {toIssueTypeLabel(row.issue_type)}
+                      </div>
+                      <div className="mt-1 text-[11px] text-[var(--muted)] line-clamp-2">
+                        {toIssueTypeDescription(row.issue_type)}
                       </div>
                       {row.summary && (
                         <div className="mt-1 text-xs text-[var(--muted)] line-clamp-2">
@@ -661,6 +700,8 @@ function ApReconcileContent() {
                               ? toSeverityLabel(value as string)
                               : key === "status"
                                 ? toStatusLabel(value as string)
+                                : key === "issue_type"
+                                  ? toIssueTypeLabel(value as string)
                                 : renderValue(value)}
                           </span>
                       </div>
@@ -683,13 +724,15 @@ function ApReconcileContent() {
                             <div key={key} className="flex items-start justify-between gap-2">
                               <span className="text-[var(--muted)] shrink-0">{toIssueFieldLabel(key)}</span>
                               <span className="text-right break-all max-w-[180px] truncate">
-                                {key === "severity"
-                                  ? toSeverityLabel(value as string)
-                                  : key === "status"
-                                    ? toStatusLabel(value as string)
-                                    : renderValue(value)}
-                              </span>
-                            </div>
+                                  {key === "severity"
+                                    ? toSeverityLabel(value as string)
+                                    : key === "status"
+                                      ? toStatusLabel(value as string)
+                                      : key === "issue_type"
+                                        ? toIssueTypeLabel(value as string)
+                                      : renderValue(value)}
+                               </span>
+                             </div>
                           ))}
                         </div>
                       )}
@@ -741,7 +784,7 @@ function ApReconcileContent() {
 
                   {/* Leg Details */}
                   <div className="space-y-2 border-t pt-3">
-                    <div className="text-sm font-semibold">레그 상세</div>
+                    <div className="text-sm font-semibold">레그 상세 (expected / actual / diff)</div>
                     {issueLegsQuery.isLoading ? (
                       <Skeleton className="h-10 w-full" />
                     ) : (issueLegsQuery.data ?? []).length === 0 ? (
@@ -749,37 +792,40 @@ function ApReconcileContent() {
                         상세 정보가 없습니다.
                       </div>
                     ) : (
-                      (issueLegsQuery.data ?? []).map((row, idx) => {
-                        const entries = Object.entries(row);
-                        const assetCode = row.asset_code ?? row.commodity_type ?? "-";
-                        const qty = row.qty ?? row.amount ?? row.diff ?? null;
-                        return (
-                          <div
-                            key={`issue-leg-${idx}`}
-                            className="rounded-lg border border-[var(--panel-border)] bg-[var(--panel)] p-3 text-xs"
-                          >
-                            <div className="flex items-center justify-between mb-2">
-                              <span className="px-1.5 py-0.5 rounded bg-[var(--chip)] font-medium">
-                                {toAssetLabel(typeof assetCode === "string" ? assetCode : String(assetCode))}
-                              </span>
-                              <span className="font-semibold tabular-nums">
-                                {qty !== null ? renderValue(qty) : "-"}
-                              </span>
-                            </div>
-                            <div className="space-y-1 text-[11px] text-[var(--muted)]">
-                              {entries
-                                .filter(([k]) => !["asset_code", "commodity_type", "qty", "amount", "diff", "issue_leg_id", "issue_id"].includes(k))
-                                .slice(0, 3)
-                                .map(([key, value]) => (
-                                  <div key={key} className="flex items-center justify-between gap-2">
-                                    <span>{toIssueFieldLabel(key)}</span>
-                                    <span className="truncate max-w-[120px]">{renderValue(value)}</span>
-                                  </div>
-                                ))}
-                            </div>
-                          </div>
-                        );
-                      })
+                      <div className="overflow-x-auto rounded-lg border border-[var(--panel-border)]">
+                        <table className="w-full min-w-[560px] text-xs">
+                          <thead className="bg-[var(--chip)] text-[var(--muted)]">
+                            <tr>
+                              <th className="px-3 py-2 text-left font-medium">자산</th>
+                              <th className="px-3 py-2 text-right font-medium">기준값(expected)</th>
+                              <th className="px-3 py-2 text-right font-medium">실제값(actual)</th>
+                              <th className="px-3 py-2 text-right font-medium">차이(diff)</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {(issueLegsQuery.data ?? []).map((row, idx) => {
+                              const assetCode =
+                                typeof row.asset_code === "string"
+                                  ? row.asset_code
+                                  : typeof row.commodity_type === "string"
+                                    ? row.commodity_type
+                                    : "-";
+                              const expected = row.expected ?? row.expected_qty ?? row.expected_amount ?? null;
+                              const actual = row.actual ?? row.acutal ?? row.actual_qty ?? row.actual_amount ?? null;
+                              const diff = row.diff ?? row.diff_qty ?? row.diff_amount ?? null;
+
+                              return (
+                                <tr key={`issue-leg-row-${idx}`} className="border-t border-[var(--panel-border)] bg-[var(--panel)]">
+                                  <td className="px-3 py-2 font-medium">{toAssetLabel(assetCode)}</td>
+                                  <td className="px-3 py-2 text-right tabular-nums">{renderValue(expected)}</td>
+                                  <td className="px-3 py-2 text-right tabular-nums">{renderValue(actual)}</td>
+                                  <td className="px-3 py-2 text-right tabular-nums">{renderValue(diff)}</td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
                     )}
                   </div>
                 </>

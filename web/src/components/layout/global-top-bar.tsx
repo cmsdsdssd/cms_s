@@ -114,8 +114,9 @@ export function GlobalTopBar({ onMobileMenuOpen, onWorkbenchOpen }: GlobalTopBar
         </div>
       </div>
 
-      {/* Center Market Ticker */}
-      <div className="flex-1 flex justify-center">
+      {/* Center Market Ticker - Moved to Left as requested */}
+      <div className="flex-1 flex justify-start pl-4 border-l border-[var(--hairline)] h-8 items-center ml-2">
+
         <div className="min-w-0 max-w-[52vw] sm:max-w-[60vw] lg:max-w-none">
           <MarketTicker variant="compact" />
         </div>

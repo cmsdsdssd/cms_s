@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useForm } from "react-hook-form";
 import { toast } from "sonner";
-import { Package, PackageCheck, ClipboardList, Wrench, Search, History, ArrowLeftRight, Plus } from "lucide-react";
+import { Package, PackageCheck, ClipboardList, Wrench, Search, History, ArrowLeftRight, Plus, ChevronDown } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -288,6 +288,7 @@ export default function InventoryPage() {
   // ===================== GALLERY DETAIL MODAL STATE =====================
   const [galleryDetailItem, setGalleryDetailItem] = useState<PositionRow | null>(null);
   const [galleryTab, setGalleryTab] = useState<"info" | "stock" | "moves">("info");
+  const [expandedStockItems, setExpandedStockItems] = useState<Set<number>>(new Set());
 
   // ===================== GALLERY MODAL DATA =====================
   const { data: galleryStockList = [] } = useQuery({
@@ -1310,7 +1311,7 @@ export default function InventoryPage() {
       {galleryDetailItem && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm" onClick={() => setGalleryDetailItem(null)}>
           <div
-            className="bg-[var(--panel)] rounded-2xl shadow-2xl max-w-2xl w-full mx-4 max-h-[90vh] flex flex-col overflow-hidden"
+            className="bg-[var(--panel)] rounded-2xl shadow-2xl max-w-4xl w-full mx-4 max-h-[90vh] flex flex-col overflow-hidden"
             onClick={(e) => e.stopPropagation()}
           >
             {/* Modal Header */}
@@ -1456,39 +1457,154 @@ export default function InventoryPage() {
                 </div>
               )}
 
+
               {galleryTab === "stock" && (
                 <div className="space-y-4">
                   <div className="flex items-center justify-between p-4 bg-[var(--chip)] rounded-lg">
                     <span className="text-sm font-medium text-[var(--muted)]">총 재고</span>
                     <span className="text-xl font-bold tabular-nums">{galleryStockTotal.toLocaleString()} units</span>
                   </div>
-                  <div className="border border-[var(--panel-border)] rounded-lg overflow-hidden">
-                    <table className="w-full text-sm">
-                      <thead className="bg-[var(--chip)] text-xs font-medium text-[var(--muted)] uppercase">
-                        <tr>
-                          <th className="px-4 py-2 text-left">위치</th>
-                          <th className="px-4 py-2 text-right">수량</th>
-                          <th className="px-4 py-2 text-right">중량</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-[var(--panel-border)] bg-[var(--panel)]">
-                        {galleryStockList.map((row, idx) => (
-                          <tr key={idx}>
-                            <td className="px-4 py-2 font-medium">{row.location_code || "미지정"}</td>
-                            <td className="px-4 py-2 text-right tabular-nums">{row.on_hand_qty.toLocaleString()}</td>
-                            <td className="px-4 py-2 text-right tabular-nums text-[var(--muted)]">
-                              {(row.weight_g ?? 0) > 0 ? `${row.weight_g}g` : "-"}
-                            </td>
-                          </tr>
-                        ))}
-                        {galleryStockList.length === 0 && (
-                          <tr><td colSpan={3} className="px-4 py-8 text-center text-[var(--muted)]">데이터가 없습니다</td></tr>
-                        )}
-                      </tbody>
-                    </table>
+
+                  <div className="space-y-3">
+                    {galleryStockList.map((row, idx) => {
+                      const isExpanded = galleryStockList.length === 1 || expandedStockItems.has(idx);
+                      const toggleExpand = () => {
+                        if (galleryStockList.length === 1) return; // Single item always expanded
+                        setExpandedStockItems(prev => {
+                          const newSet = new Set(prev);
+                          if (newSet.has(idx)) {
+                            newSet.delete(idx);
+                          } else {
+                            newSet.add(idx);
+                          }
+                          return newSet;
+                        });
+                      };
+
+                      return (
+                        <div
+                          key={idx}
+                          className="border border-[var(--panel-border)] rounded-lg overflow-hidden bg-[var(--panel)] transition-all"
+                        >
+                          {/* Collapsed View / Header */}
+                          <div
+                            className={cn(
+                              "p-4 flex items-center justify-between",
+                              galleryStockList.length > 1 && "cursor-pointer hover:bg-[var(--chip)]"
+                            )}
+                            onClick={toggleExpand}
+                          >
+                            <div className="flex items-center gap-3">
+                              {galleryStockList.length > 1 && (
+                                <ChevronDown
+                                  className={cn(
+                                    "w-5 h-5 text-[var(--muted)] transition-transform",
+                                    isExpanded && "rotate-180"
+                                  )}
+                                />
+                              )}
+                              <div>
+                                <p className="font-bold text-sm">{row.location_code || "미지정"}</p>
+                                <p className="text-xs text-[var(--muted)] tabular-nums">
+                                  수량: {row.on_hand_qty.toLocaleString()}
+                                </p>
+                              </div>
+                            </div>
+                            {!isExpanded && galleryStockList.length > 1 && (
+                              <span className="text-xs text-[var(--muted)]">클릭하여 펼치기</span>
+                            )}
+                          </div>
+
+                          {/* Expanded View */}
+                          {isExpanded && (
+                            <div className="p-4 pt-0 space-y-4 border-t border-[var(--panel-border)]">
+                              {/* Basic Info */}
+                              <div className="grid grid-cols-3 gap-3">
+                                <div>
+                                  <label className="text-[10px] font-bold text-[var(--muted)] uppercase block mb-1">
+                                    소재
+                                  </label>
+                                  <p className="text-sm font-medium">{row.material_code || "-"}</p>
+                                </div>
+                                <div>
+                                  <label className="text-[10px] font-bold text-[var(--muted)] uppercase block mb-1">
+                                    색상
+                                  </label>
+                                  <p className="text-sm font-medium">{row.color || "-"}</p>
+                                </div>
+                                <div>
+                                  <label className="text-[10px] font-bold text-[var(--muted)] uppercase block mb-1">
+                                    사이즈
+                                  </label>
+                                  <p className="text-sm font-medium">{row.size || "-"}</p>
+                                </div>
+                              </div>
+
+                              {/* Weights */}
+                              <div className="grid grid-cols-2 gap-3">
+                                <div>
+                                  <label className="text-[10px] font-bold text-[var(--muted)] uppercase block mb-1">
+                                    중량 (g)
+                                  </label>
+                                  <p className="text-sm font-medium tabular-nums">
+                                    {row.weight_g != null ? `${row.weight_g}g` : "-"}
+                                  </p>
+                                </div>
+                                <div>
+                                  <label className="text-[10px] font-bold text-[var(--muted)] uppercase block mb-1">
+                                    차감중량 (g)
+                                  </label>
+                                  <p className="text-sm font-medium tabular-nums">
+                                    {row.deduction_weight_g != null ? `${row.deduction_weight_g}g` : "-"}
+                                  </p>
+                                </div>
+                              </div>
+
+                              {/* Components */}
+                              <div className="grid grid-cols-3 gap-3 p-3 bg-[var(--chip)] rounded-lg">
+                                <div className="text-center">
+                                  <p className="text-[10px] font-bold text-[var(--muted)] uppercase mb-1">메인</p>
+                                  <p className="text-sm text-[var(--muted)] mb-1">-</p>
+                                  <p className="text-lg font-bold tabular-nums">{row.center_qty ?? "-"}</p>
+                                </div>
+                                <div className="text-center border-x border-[var(--panel-border)]">
+                                  <p className="text-[10px] font-bold text-[var(--muted)] uppercase mb-1">보조1</p>
+                                  <p className="text-sm text-[var(--muted)] mb-1">-</p>
+                                  <p className="text-lg font-bold tabular-nums">{row.sub1_qty ?? "-"}</p>
+                                </div>
+                                <div className="text-center">
+                                  <p className="text-[10px] font-bold text-[var(--muted)] uppercase mb-1">보조2</p>
+                                  <p className="text-sm text-[var(--muted)] mb-1">-</p>
+                                  <p className="text-lg font-bold tabular-nums">{row.sub2_qty ?? "-"}</p>
+                                </div>
+                              </div>
+
+                              {/* Memo */}
+                              {row.memo && (
+                                <div>
+                                  <label className="text-[10px] font-bold text-[var(--muted)] uppercase block mb-1">
+                                    비고
+                                  </label>
+                                  <p className="text-sm p-3 bg-[var(--background)] rounded-lg border border-[var(--panel-border)]">
+                                    {row.memo}
+                                  </p>
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+
+                    {galleryStockList.length === 0 && (
+                      <div className="p-8 text-center text-[var(--muted)] border border-[var(--panel-border)] rounded-lg">
+                        데이터가 없습니다
+                      </div>
+                    )}
                   </div>
                 </div>
               )}
+
 
               {galleryTab === "moves" && (
                 <div className="space-y-6">

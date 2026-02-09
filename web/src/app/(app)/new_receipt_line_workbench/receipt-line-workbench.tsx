@@ -341,6 +341,26 @@ type FactoryStatementResult = {
       warn?: number | null;
     } | null;
   } | null;
+  statement?: {
+    rows?: unknown;
+    note?: string | null;
+  } | null;
+};
+
+type PersistedFactoryStatement = {
+  rows: FactoryRowInput[];
+  note: string;
+  refDate: string;
+  updatedAt: string;
+};
+
+type FactoryStatementFetchResult = {
+  statement?: {
+    rows?: unknown;
+    note?: string | null;
+  } | null;
+  note?: string | null;
+  updated_at?: string | null;
 };
 
 function formatNumber(n?: number | null) {
@@ -565,6 +585,54 @@ const FACTORY_ROWS: Array<Pick<FactoryRowInput, "rowCode" | "label">> = [
   { rowCode: "SALE", label: "판매" },
   { rowCode: "POST_BALANCE", label: "거래후미수" },
 ];
+const FACTORY_STATEMENT_STORAGE_KEY_PREFIX = "new-receipt-workbench:factory-statement:";
+
+function createDefaultFactoryRows() {
+  return FACTORY_ROWS.map((row) => ({
+    rowCode: row.rowCode,
+    label: row.label,
+    refDate: "",
+    note: "",
+    gold: { value: "", unit: "g" as const },
+    silver: { value: "", unit: "g" as const },
+    laborKrw: "",
+  }));
+}
+
+function getFactoryStatementStorageKey(receiptId: string) {
+  return `${FACTORY_STATEMENT_STORAGE_KEY_PREFIX}${receiptId}`;
+}
+
+function normalizeFactoryRowsFromStatementRows(rows: unknown): FactoryRowInput[] | null {
+  if (!Array.isArray(rows)) return null;
+  const byCode = new Map<string, Record<string, unknown>>();
+  rows.forEach((row) => {
+    if (!row || typeof row !== "object") return;
+    const code = String((row as { row_code?: unknown }).row_code ?? "").trim();
+    if (!code) return;
+    byCode.set(code, row as Record<string, unknown>);
+  });
+
+  return FACTORY_ROWS.map((meta) => {
+    const row = byCode.get(meta.rowCode);
+    const legs = Array.isArray(row?.legs) ? (row?.legs as Array<Record<string, unknown>>) : [];
+    const getLegQty = (assetCode: string) => {
+      const leg = legs.find((item) => String(item?.asset_code ?? "") === assetCode);
+      const qty = parseNumber(String(leg?.qty ?? ""));
+      return qty === null ? "" : String(qty);
+    };
+
+    return {
+      rowCode: meta.rowCode,
+      label: meta.label,
+      refDate: String(row?.ref_date ?? "").slice(0, 10),
+      note: String(row?.note ?? ""),
+      gold: { value: getLegQty("XAU_G"), unit: "g" },
+      silver: { value: getLegQty("XAG_G"), unit: "g" },
+      laborKrw: getLegQty("KRW_LABOR"),
+    };
+  });
+}
 
 function getDefaultRangeDateByMonths(offsetMonths: number) {
   const d = new Date();
@@ -599,19 +667,10 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
   const [headerSaveNudge, setHeaderSaveNudge] = useState(false);
   const headerNudgeTimerRef = useRef<number | null>(null);
 
-  const [factoryRows, setFactoryRows] = useState<FactoryRowInput[]>(() =>
-    FACTORY_ROWS.map((row) => ({
-      rowCode: row.rowCode,
-      label: row.label,
-      refDate: "",
-      note: "",
-      gold: { value: "", unit: "g" },
-      silver: { value: "", unit: "g" },
-      laborKrw: "",
-    }))
-  );
+  const [factoryRows, setFactoryRows] = useState<FactoryRowInput[]>(() => createDefaultFactoryRows());
   const [factoryRefDate, setFactoryRefDate] = useState("");
   const [factoryNote, setFactoryNote] = useState("");
+  const [factoryStatementHydratedReceiptId, setFactoryStatementHydratedReceiptId] = useState<string | null>(null);
   const [reconcileIssueCounts, setReconcileIssueCounts] = useState<{ error: number; warn: number } | null>(null);
   const [apSyncStatus, setApSyncStatus] = useState<"idle" | "success" | "error">("idle");
   const [apSyncMessage, setApSyncMessage] = useState<string | null>(null);
@@ -866,6 +925,23 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
     gcTime: 2 * 60 * 1000,
   });
 
+  const factoryStatementQuery = useQuery({
+    queryKey: ["new-receipt-workbench", "factory-statement", selectedReceiptId],
+    queryFn: async () => {
+      if (!selectedReceiptId) return null as FactoryStatementFetchResult | null;
+      const res = await fetch(
+        `/api/new-receipt-workbench/factory-statement?receipt_id=${encodeURIComponent(selectedReceiptId)}`,
+        { cache: "no-store" }
+      );
+      const json = await res.json();
+      if (!res.ok) throw new Error(json?.error ?? "하단 4행 조회 실패");
+      return (json?.data ?? null) as FactoryStatementFetchResult | null;
+    },
+    enabled: Boolean(selectedReceiptId),
+    staleTime: 30 * 1000,
+    gcTime: 3 * 60 * 1000,
+  });
+
   const selectedOrderStoneSourceQuery = useQuery({
     queryKey: ["new-receipt-workbench", "order-stone-source", selectedCandidate?.order_line_id],
     enabled: Boolean(schemaClient && selectedCandidate?.order_line_id),
@@ -929,6 +1005,16 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
       if (counts) {
         setReconcileIssueCounts(counts);
       }
+      if (selectedReceiptId) {
+        const normalizedRows = normalizeFactoryRowsFromStatementRows(result?.statement?.rows);
+        if (normalizedRows && normalizedRows.length > 0) {
+          setFactoryRows(normalizedRows);
+          const nextNote = result?.statement?.note ?? factoryNote;
+          setFactoryNote(nextNote ?? "");
+          persistFactoryStatementSnapshot(selectedReceiptId, normalizedRows, nextNote ?? "");
+        }
+      }
+      queryClient.invalidateQueries({ queryKey: ["new-receipt-workbench", "factory-statement", selectedReceiptId] });
       queryClient.invalidateQueries({ queryKey: ["new-receipt-workbench", "reconcile", selectedReceiptId] });
     },
   });
@@ -1161,6 +1247,56 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
     [applyHeaderSnapshot, selectedReceiptId]
   );
 
+  const persistFactoryStatementSnapshot = useCallback(
+    (receiptId: string, rows: FactoryRowInput[], note: string) => {
+      if (typeof window === "undefined") return;
+      const refDate = rows.find((row) => row.refDate.trim().length > 0)?.refDate ?? "";
+      const payload: PersistedFactoryStatement = {
+        rows,
+        note,
+        refDate,
+        updatedAt: new Date().toISOString(),
+      };
+      window.localStorage.setItem(getFactoryStatementStorageKey(receiptId), JSON.stringify(payload));
+    },
+    []
+  );
+
+  const loadFactoryStatementSnapshot = useCallback(
+    (receiptId: string) => {
+      if (typeof window === "undefined") return false;
+      const raw = window.localStorage.getItem(getFactoryStatementStorageKey(receiptId));
+      if (!raw) return false;
+      try {
+        const parsed = JSON.parse(raw) as Partial<PersistedFactoryStatement> | null;
+        if (!parsed || !Array.isArray(parsed.rows)) return false;
+        const normalized = parsed.rows
+          .map((row) => {
+            if (!row) return null;
+            return {
+              rowCode: row.rowCode,
+              label: row.label,
+              refDate: row.refDate ?? "",
+              note: row.note ?? "",
+              gold: { value: row.gold?.value ?? "", unit: "g" as const },
+              silver: { value: row.silver?.value ?? "", unit: "g" as const },
+              laborKrw: row.laborKrw ?? "",
+            } as FactoryRowInput;
+          })
+          .filter((row): row is FactoryRowInput => Boolean(row));
+
+        if (normalized.length !== FACTORY_ROWS.length) return false;
+        setFactoryRows(normalized);
+        setFactoryNote(parsed.note ?? "");
+        if (parsed.refDate) setFactoryRefDate(parsed.refDate);
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    []
+  );
+
   useEffect(() => {
     if (!headerNeedsSave) {
       setHeaderSaveNudge(false);
@@ -1372,22 +1508,34 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
     setMatchClearReasonText("");
     setMatchClearNote("");
     setMatchClearError(null);
-    setFactoryRows(
-      FACTORY_ROWS.map((row) => ({
-        rowCode: row.rowCode,
-        label: row.label,
-        refDate: "",
-        note: "",
-        gold: { value: "", unit: "g" },
-        silver: { value: "", unit: "g" },
-        laborKrw: "",
-      }))
-    );
+    setFactoryRows(createDefaultFactoryRows());
     setFactoryNote("");
+    setFactoryStatementHydratedReceiptId(null);
     setReconcileIssueCounts(null);
     setApSyncStatus("idle");
     setApSyncMessage(null);
-  }, [selectedReceiptId]);
+
+    if (selectedReceiptId) {
+      void loadFactoryStatementSnapshot(selectedReceiptId);
+    }
+  }, [loadFactoryStatementSnapshot, selectedReceiptId]);
+
+  useEffect(() => {
+    if (!selectedReceiptId) return;
+    if (factoryStatementHydratedReceiptId === selectedReceiptId) return;
+    const serverRows = normalizeFactoryRowsFromStatementRows(factoryStatementQuery.data?.statement?.rows);
+    if (!serverRows || serverRows.length === 0) return;
+    setFactoryRows(serverRows);
+    const serverNote = factoryStatementQuery.data?.statement?.note ?? factoryStatementQuery.data?.note ?? "";
+    setFactoryNote(serverNote);
+    persistFactoryStatementSnapshot(selectedReceiptId, serverRows, serverNote);
+    setFactoryStatementHydratedReceiptId(selectedReceiptId);
+  }, [
+    factoryStatementHydratedReceiptId,
+    factoryStatementQuery.data,
+    persistFactoryStatementSnapshot,
+    selectedReceiptId,
+  ]);
 
   useEffect(() => {
     async function fetchPreview(receiptId: string) {
@@ -2032,6 +2180,7 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
       p_statement: { rows },
       p_note: factoryNote || null,
     });
+    persistFactoryStatementSnapshot(selectedReceiptId, factoryRows, factoryNote);
   }
 
   async function handleSuggest(lineOverride?: UnlinkedLineRow | null) {
@@ -3245,11 +3394,11 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                                         </Select>
                                       </div>
                                       <div className="space-y-1">
-                                        <label className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)]">비고</label>
+                                        <label className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)]">사이즈</label>
                                         <Input
-                                          value={item.remark}
+                                          value={item.size}
                                           disabled={inputDisabled}
-                                          onChange={(e) => updateLine(item.line_uuid, "remark", e.target.value)}
+                                          onChange={(e) => updateLine(item.line_uuid, "size", e.target.value)}
                                           onBlur={(e) => {
                                             const nextId = getLineIdFromTarget(e.relatedTarget);
                                             if (nextId !== item.line_uuid) setExpandedLineId(null);
@@ -3350,7 +3499,7 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                                         />
                                       </div>
                                       <div className="space-y-1">
-                                        <label className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)]">중/보(세팅/알공임 총액)</label>
+                                        <label className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)]">보석공임</label>
                                         <Input
                                           type="text"
                                           inputMode="numeric"
@@ -3371,7 +3520,7 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                                         />
                                       </div>
                                     </div>
-                                    <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
+                                    <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)]">
                                       <div className="space-y-1">
                                         <label className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)]">
                                           공장청구총액(저장/AP)
@@ -3397,7 +3546,7 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                                       </div>
                                       <div className="space-y-1">
                                         <label className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)]">
-                                          자동계산(기본+중/보)
+                                          자동계산(기본+보석공임)
                                         </label>
                                         <Input
                                           type="text"
@@ -3407,10 +3556,24 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                                           className={`h-8 text-[11px] text-right ${AUTO_FIELD_CLASS}`}
                                         />
                                       </div>
-                                      <div className="text-[10px] text-[var(--muted)] md:col-span-2">
-                                        비우면 기본공임+중/보 합(자동계산값)으로 저장된다
+                                      <div className="space-y-1">
+                                        <label className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)]">비고</label>
+                                        <Input
+                                          value={item.remark}
+                                          disabled={inputDisabled}
+                                          onChange={(e) => updateLine(item.line_uuid, "remark", e.target.value)}
+                                          onBlur={(e) => {
+                                            const nextId = getLineIdFromTarget(e.relatedTarget);
+                                            if (nextId !== item.line_uuid) setExpandedLineId(null);
+                                          }}
+                                          data-line-id={item.line_uuid}
+                                          className="h-8 text-[11px]"
+                                        />
                                       </div>
-                                      <div className="text-[10px] text-[var(--muted)] md:col-span-2">
+                                      <div className="text-[10px] text-[var(--muted)] md:col-span-3">
+                                        비우면 기본공임+보석공임 합(자동계산값)으로 저장된다
+                                      </div>
+                                      <div className="text-[10px] text-[var(--muted)] md:col-span-3">
                                         원석단가 입력합은 총액에 자동 포함하지 않는다
                                       </div>
                                     </div>
@@ -3678,7 +3841,7 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                       </div>
                     </div>
                     <div className="rounded-lg border border-[var(--panel-border)] bg-[var(--surface)]/60 px-3 py-2">
-                      중/보(세팅/알공임)
+                      보석공임
                       <div className="mt-0.5 font-semibold text-[var(--foreground)]">
                         <NumberText value={lineTotals.laborOther} />
                       </div>
@@ -4588,7 +4751,7 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                             ) : (
                               <div className="mt-2 space-y-1 text-[11px]">
                                 <div className="flex items-center justify-between">
-                                  <span className="text-[var(--muted)]">공장원가 (기본+중/보+원석단가 입력합(참고))</span>
+                              <span className="text-[var(--muted)]">공장원가 (기본+보석공임+원석단가 입력합(참고))</span>
                                   <span className="font-semibold text-[var(--foreground)]">{formatNumber(pricingPreview.factoryCostTotal)}</span>
                                 </div>
                                 <div className="flex items-center justify-between">

@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { cn } from "@/lib/utils";
+
 
 type MarketTickerVariant = "full" | "compact";
 
@@ -72,201 +74,138 @@ export function MarketTicker({ variant = "full" }: MarketTickerProps) {
     const isCompact = variant === "compact";
 
     const labels = useMemo(() => {
-        const kgValue = `${formatPrice(kg)} /g`;
-        // User requested RAW price (without 1.2 factor) for display
+        const kgValue = formatPrice(kg);
         const ksDisplay = formatPrice(ksOriginal ?? ks);
         const ksAdjusted = formatPrice(ks);
-
         const csDisplay = formatPrice(csOriginal ?? cs);
         const csAdjusted = formatPrice(cs);
 
-        const ksOriginalValue = formatPrice(ksOriginal);
-        const csOriginalValue = formatPrice(csOriginal);
-
         return {
             kg: {
-                title: `KG ${kgValue}`,
-                ariaLabel: `KG ${kgValue}`,
+                label: "한국금시세",
+                value: `${kgValue}`,
+                unit: "원/g",
+                color: "text-amber-600 dark:text-amber-400",
             },
             ks: {
-                title: `KS 원본 ${ksDisplay} /g · 보정 ${ksAdjusted} /g`,
-                ariaLabel: `KS ${ksDisplay}, 보정 ${ksAdjusted} /g`,
-                original: ksOriginalValue,
-                adjusted: ksAdjusted,
-                display: ksDisplay,
+                label: "한국은시세",
+                value: `${ksDisplay}`, // Use raw/original value
+                unit: "원/g",
+                color: "text-indigo-600 dark:text-indigo-400",
             },
             cs: {
-                title: `CS 원본 ${csDisplay} /g · 보정 ${csAdjusted} /g`,
-                ariaLabel: `CS ${csDisplay}, 보정 ${csAdjusted} /g`,
-                original: csOriginalValue,
-                adjusted: csAdjusted,
-                display: csDisplay,
+                label: "중국은시세",
+                value: `${csDisplay}`, // Use raw/original value
+                unit: "원/g",
+                color: "text-blue-600 dark:text-blue-400",
             },
             cnyAd: {
-                title: `CNY ${formatPrice(cnyAd)} KRW`,
-                ariaLabel: `CNY KRW ${formatPrice(cnyAd)}`,
-                display: formatPrice(cnyAd),
+                label: "위안화환율",
+                value: `${formatPrice(cnyAd)}`,
+                unit: "원",
+                color: "text-rose-600 dark:text-rose-400",
             },
         };
     }, [kg, ks, ksOriginal, cs, csOriginal, cnyAd]);
 
     const offlineBadge = isOffline ? (
-        <span className="inline-flex items-center gap-1 rounded-full border border-[color:var(--hairline)] bg-[color:var(--panel)]/80 px-2 py-0.5 text-[10px] font-medium text-[var(--muted-weak)] shadow-[var(--shadow-subtle)]">
-            <span className="h-1.5 w-1.5 rounded-full bg-[color:var(--danger)] opacity-70" aria-hidden />
-            offline
+        <span className="flex items-center gap-1.5 rounded-full bg-red-500/10 px-2 py-0.5 text-[10px] font-medium text-red-600 dark:text-red-400">
+            <span className="h-1.5 w-1.5 rounded-full bg-red-500 animate-pulse" />
+            LIVE OFF
         </span>
     ) : null;
 
+    if (isCompact) {
+        return (
+            <div
+                className="flex items-center gap-6 overflow-hidden py-1 px-1"
+                data-variant="compact"
+            >
+                {/* KG */}
+                <div className="flex items-baseline gap-2">
+                    <span className="text-xs font-medium text-[var(--muted)] tracking-tight">
+                        {labels.kg.label}
+                    </span>
+                    <span className={cn("text-sm font-bold tabular-nums tracking-tight", labels.kg.color)}>
+                        {labels.kg.value}
+                        <span className="text-[10px] font-normal text-[var(--muted-weak)] ml-0.5">{labels.kg.unit}</span>
+                    </span>
+                </div>
+
+                <div className="h-3 w-px bg-[var(--hairline)]" />
+
+                {/* KS */}
+                <div className="flex items-baseline gap-2">
+                    <span className="text-xs font-medium text-[var(--muted)] tracking-tight">
+                        {labels.ks.label}
+                    </span>
+                    <span className={cn("text-sm font-bold tabular-nums tracking-tight", labels.ks.color)}>
+                        {labels.ks.value}
+                        <span className="text-[10px] font-normal text-[var(--muted-weak)] ml-0.5">{labels.ks.unit}</span>
+                    </span>
+                </div>
+
+                {/* CS (Desktop only) */}
+                <div className="hidden lg:flex items-center gap-6">
+                    <div className="h-3 w-px bg-[var(--hairline)]" />
+
+                    <div className="flex items-baseline gap-2">
+                        <span className="text-xs font-medium text-[var(--muted)] tracking-tight">
+                            {labels.cs.label}
+                        </span>
+                        <span className={cn("text-sm font-bold tabular-nums tracking-tight", labels.cs.color)}>
+                            {labels.cs.value}
+                            <span className="text-[10px] font-normal text-[var(--muted-weak)] ml-0.5">{labels.cs.unit}</span>
+                        </span>
+                    </div>
+                </div>
+
+                {/* CNY (XL only) */}
+                <div className="hidden xl:flex items-center gap-6">
+                    <div className="h-3 w-px bg-[var(--hairline)]" />
+
+                    <div className="flex items-baseline gap-2">
+                        <span className="text-xs font-medium text-[var(--muted)] tracking-tight">
+                            {labels.cnyAd.label}
+                        </span>
+                        <span className={cn("text-sm font-bold tabular-nums tracking-tight", labels.cnyAd.color)}>
+                            {labels.cnyAd.value}
+                            <span className="text-[10px] font-normal text-[var(--muted-weak)] ml-0.5">{labels.cnyAd.unit}</span>
+                        </span>
+                    </div>
+                </div>
+
+                {offlineBadge && <div className="ml-auto">{offlineBadge}</div>}
+            </div>
+        );
+    }
+
+    // Full variant (e.g., dashboard)
     return (
-        <div
-            className={
-                isCompact
-                    ? "flex min-w-0 items-center gap-3 whitespace-nowrap rounded-full border border-[color:var(--hairline)] bg-[color:var(--panel)]/80 px-3 py-1.5 shadow-[var(--shadow-subtle)]"
-                    : "flex flex-wrap items-start justify-center gap-8 text-base font-bold"
-            }
-            data-variant={variant}
-        >
-            {/* KG */}
-            <div
-                className={
-                    isCompact
-                        ? "flex min-w-0 items-baseline gap-2 text-[clamp(0.68rem,0.8vw,0.85rem)] font-semibold text-[var(--primary)]"
-                        : "flex flex-col gap-1"
-                }
-                aria-label={labels.kg.ariaLabel}
-            >
-                <div
-                    className={
-                        isCompact
-                            ? "flex min-w-0 items-baseline gap-1.5"
-                            : "flex items-center gap-2 text-[var(--primary)]"
-                    }
-                >
-                    <span className={isCompact ? "text-[clamp(0.6rem,0.7vw,0.75rem)] font-semibold tracking-[0.08em]" : "font-bold"}>
-                        KG:
-                    </span>
-                    <span
-                        className={
-                            isCompact
-                                ? "min-w-0 max-w-[7.5rem] truncate tabular-nums"
-                                : "font-mono text-lg font-extrabold tabular-nums"
-                        }
-                        title={labels.kg.title}
-                    >
-                        {formatPrice(kg)} /g
-                    </span>
-                </div>
-            </div>
-
-            {/* KS */}
-            <div
-                className={
-                    isCompact
-                        ? "flex min-w-0 items-baseline gap-2 text-[clamp(0.68rem,0.8vw,0.85rem)] font-semibold text-[var(--muted-strong)]"
-                        : "flex flex-col gap-1"
-                }
-                aria-label={labels.ks.ariaLabel}
-            >
-                <div
-                    className={
-                        isCompact
-                            ? "flex min-w-0 items-baseline gap-1.5"
-                            : "flex items-center gap-2 text-[var(--muted-strong)]"
-                    }
-                >
-                    <span className={isCompact ? "text-[clamp(0.6rem,0.7vw,0.75rem)] font-semibold tracking-[0.08em]" : "font-bold"}>
-                        KS:
-                    </span>
-                    <span
-                        className={
-                            isCompact
-                                ? "min-w-0 max-w-[7.5rem] truncate tabular-nums"
-                                : "font-mono text-lg font-extrabold tabular-nums"
-                        }
-                        title={labels.ks.title}
-                    >
-                        {labels.ks.display} /g
-                    </span>
-                </div>
-                {!isCompact ? (
-                    <div className="text-xs font-normal text-[var(--muted)]">
-                        (보정: {labels.ks.adjusted} /g)
+        <div className="flex flex-wrap justify-center gap-8 py-4">
+            {/* ... similar premium styling for full variant ... */}
+            {/* I'll simplify full variant to match compact style but bigger */}
+            {Object.entries(labels).map(([key, data]) => (
+                <div key={key} className="flex flex-col items-center gap-1">
+                    <div className="text-xs font-medium text-[var(--muted)] uppercase tracking-wider">{data.label}</div>
+                    <div className={cn("text-2xl font-bold tabular-nums", data.color)}>
+                        {data.value}
+                        <span className="text-sm font-medium text-[var(--muted)] ml-1">{data.unit}</span>
                     </div>
-                ) : null}
-            </div>
-
-            {/* CS */}
-            <div
-                className={
-                    isCompact
-                        ? "hidden min-w-0 items-baseline gap-2 text-[clamp(0.68rem,0.8vw,0.85rem)] font-semibold text-[var(--muted-weak)] lg:flex"
-                        : "flex flex-col gap-1"
-                }
-                aria-label={labels.cs.ariaLabel}
-            >
-                <div
-                    className={
-                        isCompact
-                            ? "flex min-w-0 items-baseline gap-1.5"
-                            : "flex items-center gap-2 text-[var(--muted-weak)]"
-                    }
-                >
-                    <span className={isCompact ? "text-[clamp(0.6rem,0.7vw,0.75rem)] font-semibold tracking-[0.08em]" : "font-bold"}>
-                        CS:
-                    </span>
-                    <span
-                        className={
-                            isCompact
-                                ? "min-w-0 max-w-[7.5rem] truncate tabular-nums"
-                                : "font-mono text-lg font-extrabold tabular-nums"
-                        }
-                        title={labels.cs.title}
-                    >
-                        {labels.cs.display} /g
-                    </span>
+                    {(data as any).subValue && (
+                        <div className="text-xs text-[var(--muted-weak)]">{(data as any).subValue}</div>
+                    )}
                 </div>
-                {!isCompact ? (
-                    <div className="text-xs font-normal text-[var(--muted)]">
-                        (보정: {labels.cs.adjusted} /g)
-                    </div>
-                ) : null}
-            </div>
-
-            {/* CNY */}
-            <div
-                className={
-                    isCompact
-                        ? "hidden min-w-0 items-baseline gap-2 text-[clamp(0.68rem,0.8vw,0.85rem)] font-semibold text-[var(--muted-strong)] xl:flex"
-                        : "flex flex-col gap-1"
-                }
-                aria-label={labels.cnyAd.ariaLabel}
-            >
-                <div
-                    className={
-                        isCompact
-                            ? "flex min-w-0 items-baseline gap-1.5"
-                            : "flex items-center gap-2 text-[var(--muted-strong)]"
-                    }
-                >
-                    <span className={isCompact ? "text-[clamp(0.6rem,0.7vw,0.75rem)] font-semibold tracking-[0.08em]" : "font-bold"}>
-                        CNY:
-                    </span>
-                    <span
-                        className={
-                            isCompact
-                                ? "min-w-0 max-w-[7.5rem] truncate tabular-nums"
-                                : "font-mono text-lg font-extrabold tabular-nums"
-                        }
-                        title={labels.cnyAd.title}
-                    >
-                        {labels.cnyAd.display}
-                    </span>
-                </div>
-            </div>
-
-            {isCompact ? (offlineBadge ? <div className="ml-auto shrink-0">{offlineBadge}</div> : null) : offlineBadge ? (
-                <div className="flex w-full justify-center">{offlineBadge}</div>
-            ) : null}
+            ))}
+            {offlineBadge}
         </div>
     );
 }
+
+// Added utility for conditional classes locally if needed, but imported `cn` is available.
+// import { cn } from "@/lib/utils"; is missing in my replacement block?
+// I need to ensure `cn` is imported or use template literals.
+// The file has `import { useEffect... }`. I should check if `cn` is imported.
+// It is NOT imported in the original file. I need to add insertion of import or use template literals.
+// I'll add `import { cn } from "@/lib/utils";` at the top.
+

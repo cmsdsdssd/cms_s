@@ -110,18 +110,20 @@ const getKstNow = () => {
 };
 
 // ===================== COMPACT CHART COMPONENT =====================
-function CompactChart({ 
-    data, 
-    stats, 
+function CompactChart({
+    data,
+    stats,
     color,
     monthFilter,
     secondaryData,
-}: { 
-    data: DailyOhlc[]; 
+    secondaryColor = "#3b82f6", // Default Blue for secondary
+}: {
+    data: DailyOhlc[];
     stats: { min: number; max: number; last: number | null };
     color: string;
     monthFilter: number;
     secondaryData?: DailyOhlc[];
+    secondaryColor?: string;
 }) {
     const chartConfig = useMemo(() => ({
         width: 280,
@@ -131,33 +133,40 @@ function CompactChart({
         paddingTop: 8,
         paddingBottom: 16,
     }), []);
-    
+
     const { width, height, paddingLeft, paddingRight, paddingTop, paddingBottom } = chartConfig;
-    const range = stats.max - stats.min || 1;
-    
+
+    // Calculate combined stats for Y-axis scaling if secondary data exists
+    const combinedMin = Math.min(stats.min, ...(secondaryData?.map(d => d.low_krw_per_g) || []));
+    const combinedMax = Math.max(stats.max, ...(secondaryData?.map(d => d.high_krw_per_g) || []));
+    // Use stats if no secondary, or combine
+    const chartMin = secondaryData ? combinedMin : stats.min;
+    const chartMax = secondaryData ? combinedMax : stats.max;
+    const range = chartMax - chartMin || 1;
+
     const buildPoints = (chartData: DailyOhlc[]) => {
         if (chartData.length === 0) return "";
         return chartData
             .map((d, i) => {
                 const x = paddingLeft + (i / Math.max(1, chartData.length - 1)) * (width - paddingLeft - paddingRight);
-                const y = height - paddingBottom - ((d.close_krw_per_g - stats.min) / range) * (height - paddingTop - paddingBottom);
+                const y = height - paddingBottom - ((d.close_krw_per_g - chartMin) / range) * (height - paddingTop - paddingBottom);
                 return `${x},${y}`;
             })
             .join(" ");
     };
-    
+
     const ticks = useMemo(() => {
         const tickCount = 3;
         return Array.from({ length: tickCount }).map((_, index) => {
-            const value = stats.max - (range / (tickCount - 1)) * index;
-            const y = paddingTop + ((stats.max - value) / range) * (height - paddingTop - paddingBottom);
+            const value = chartMax - (range / (tickCount - 1)) * index;
+            const y = paddingTop + ((chartMax - value) / range) * (height - paddingTop - paddingBottom);
             return { value, y };
         });
-    }, [stats, range, height, paddingTop, paddingBottom]);
-    
-    const points = useMemo(() => buildPoints(data), [data]);
-    const secondaryPoints = useMemo(() => secondaryData ? buildPoints(secondaryData) : "", [secondaryData]);
-    
+    }, [chartMax, range, height, paddingTop, paddingBottom]);
+
+    const points = useMemo(() => buildPoints(data), [data, chartMin, range]);
+    const secondaryPoints = useMemo(() => secondaryData ? buildPoints(secondaryData) : "", [secondaryData, chartMin, range]);
+
     return (
         <svg
             className="w-full"
@@ -171,7 +180,7 @@ function CompactChart({
                     <stop offset="100%" stopColor={color} stopOpacity="0" />
                 </linearGradient>
             </defs>
-            
+
             {/* Grid lines */}
             {ticks.map((tick, index) => (
                 <line
@@ -185,7 +194,7 @@ function CompactChart({
                     opacity="0.3"
                 />
             ))}
-            
+
             {/* Area fill */}
             {data.length > 0 && (
                 <polygon
@@ -193,19 +202,18 @@ function CompactChart({
                     points={`${paddingLeft},${height - paddingBottom} ${points} ${width - paddingRight},${height - paddingBottom}`}
                 />
             )}
-            
+
             {/* Secondary line */}
             {secondaryData && secondaryData.length > 0 && (
                 <polyline
                     fill="none"
-                    stroke="#888"
-                    strokeWidth="1"
-                    strokeOpacity="0.4"
-                    strokeDasharray="4 2"
+                    stroke={secondaryColor}
+                    strokeWidth="1.5"
+                    strokeOpacity="0.8"
                     points={secondaryPoints}
                 />
             )}
-            
+
             {/* Main line */}
             {data.length > 0 && (
                 <polyline
@@ -240,7 +248,7 @@ function CompactPriceCard({
     return (
         <div className="flex items-center justify-between p-4 rounded-xl bg-[var(--panel)] border border-[var(--panel-border)]">
             <div className="flex items-center gap-3">
-                <div 
+                <div
                     className="w-2 h-2 rounded-full"
                     style={{ backgroundColor: color }}
                 />
@@ -441,13 +449,34 @@ export default function MarketPage() {
         return filteredOhlcData.filter((d) => d.symbol?.toUpperCase().includes("GOLD"));
     }, [filteredOhlcData]);
 
-    const silverChartData = useMemo(() => {
-        return filteredOhlcData.filter((d) => d.symbol?.toUpperCase().includes("SILVER"));
+    const silverCnyChartData = useMemo(() => {
+        return filteredOhlcData
+            .filter((d) => d.symbol?.toUpperCase().includes("SILVER_CN"))
+            .map(d => ({
+                ...d,
+                // Remove 1.2 multiplier for China Silver
+                close_krw_per_g: d.close_krw_per_g / 1.2,
+                high_krw_per_g: d.high_krw_per_g / 1.2,
+                low_krw_per_g: d.low_krw_per_g / 1.2,
+                open_krw_per_g: d.open_krw_per_g / 1.2,
+            }));
     }, [filteredOhlcData]);
 
-    const silverCnyChartData = useMemo(() => {
-        return filteredOhlcData.filter((d) => d.symbol?.toUpperCase().includes("SILVER_CNY"));
+    const silverChartData = useMemo(() => {
+        const koreaData = filteredOhlcData.filter((d) =>
+            d.symbol?.toUpperCase().includes("SILVER") &&
+            !d.symbol?.toUpperCase().includes("SILVER_CN")
+        );
+        // Divide by 1.2 for comparison consistency
+        return koreaData.map(d => ({
+            ...d,
+            close_krw_per_g: d.close_krw_per_g / 1.2,
+            high_krw_per_g: d.high_krw_per_g / 1.2,
+            low_krw_per_g: d.low_krw_per_g / 1.2,
+            open_krw_per_g: d.open_krw_per_g / 1.2,
+        }));
     }, [filteredOhlcData]);
+
 
     const getChartStats = (data: DailyOhlc[]) => {
         if (data.length === 0) {
@@ -479,11 +508,10 @@ export default function MarketPage() {
                             <button
                                 key={months}
                                 onClick={() => setMonthFilter(months)}
-                                className={`px-3 py-1.5 text-sm rounded-lg font-medium transition-colors ${
-                                    monthFilter === months
-                                        ? 'bg-[var(--primary)] text-white'
-                                        : 'bg-[var(--panel)] hover:bg-[var(--panel-hover)]'
-                                }`}
+                                className={`px-3 py-1.5 text-sm rounded-lg font-medium transition-colors ${monthFilter === months
+                                    ? 'bg-[var(--primary)] text-white'
+                                    : 'bg-[var(--panel)] hover:bg-[var(--panel-hover)]'
+                                    }`}
                             >
                                 {months}개월
                             </button>
@@ -549,6 +577,11 @@ export default function MarketPage() {
                                         <div className="w-2 h-2 rounded-full" style={{ background: '#9aa7b4' }} />
                                         <span className="font-semibold text-sm">Silver Trend</span>
                                         <span className="text-xs text-[var(--muted)]">{rangeLabel}</span>
+                                        {/* Legend for China Silver */}
+                                        <div className="flex items-center gap-1 ml-2">
+                                            <div className="w-3 h-0.5 bg-blue-500" />
+                                            <span className="text-xs text-[var(--muted)]">CNY (Raw)</span>
+                                        </div>
                                     </div>
                                     <div className="text-right">
                                         <div className="text-sm font-bold" style={{ color: '#9aa7b4' }}>
@@ -567,6 +600,7 @@ export default function MarketPage() {
                                     color="#9aa7b4"
                                     monthFilter={monthFilter}
                                     secondaryData={silverCnyChartData}
+                                    secondaryColor="#3b82f6" // Explicit Blue
                                 />
                             </CardBody>
                         </Card>
@@ -601,7 +635,7 @@ export default function MarketPage() {
                                                         <td className="px-3 py-2 text-right font-mono text-xs">
                                                             {formatKrw(tick.price_krw_per_g)}
                                                         </td>
-                                                        <td className="px-3 py-2 text-xs text-[var(--muted)]">{tick.source}</td>
+                                                        <td className="px-3 py-2 text-xs text-[var(--muted)]">한국</td>
                                                     </tr>
                                                 ))}
                                         </tbody>
@@ -635,9 +669,11 @@ export default function MarketPage() {
                                                     <tr key={tick.tick_id} className="hover:bg-[var(--panel-hover)]">
                                                         <td className="px-3 py-2 text-xs">{formatDateTimeKst(tick.observed_at)}</td>
                                                         <td className="px-3 py-2 text-right font-mono text-xs">
-                                                            {formatKrw(tick.price_krw_per_g)}
+                                                            {formatKrw(tick.price_krw_per_g / 1.2)}
                                                         </td>
-                                                        <td className="px-3 py-2 text-xs text-[var(--muted)]">{tick.source}</td>
+                                                        <td className="px-3 py-2 text-xs text-[var(--muted)]">
+                                                            {tick.symbol?.toUpperCase().includes("SILVER_CN") ? "중국" : "한국"}
+                                                        </td>
                                                     </tr>
                                                 ))}
                                         </tbody>

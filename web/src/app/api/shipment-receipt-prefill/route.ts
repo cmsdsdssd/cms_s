@@ -10,8 +10,11 @@ function getSupabaseAdmin() {
 
 const parseNumeric = (value: unknown) => {
   if (typeof value === "number" && Number.isFinite(value)) return value;
-  if (typeof value === "string" && value.trim() !== "" && Number.isFinite(Number(value))) {
-    return Number(value);
+  if (typeof value === "string" && value.trim() !== "") {
+    const normalized = value.replaceAll(",", "").trim();
+    if (normalized !== "" && Number.isFinite(Number(normalized))) {
+      return Number(normalized);
+    }
   }
   return null;
 };
@@ -59,19 +62,23 @@ export async function GET(request: Request) {
   let stoneSub1UnitCostKrw: number | null = null;
   let stoneSub2UnitCostKrw: number | null = null;
   let stoneLaborKrw: number | null = null;
+  let receiptLaborBasicCostKrw: number | null = null;
   let receiptLaborOtherCostKrw: number | null = null;
 
   if (data.receipt_id && data.receipt_line_uuid) {
     const { data: lineRow } = await supabase
       .from("cms_v_receipt_line_items_flat_v1")
-      .select("factory_weight_g, line_item_json")
+      .select("factory_weight_g, factory_labor_basic_cost_krw, line_item_json")
       .eq("receipt_id", data.receipt_id)
       .eq("receipt_line_uuid", data.receipt_line_uuid)
       .maybeSingle();
 
     const lineJson = (lineRow?.line_item_json ?? null) as Record<string, unknown> | null;
-    const raw = lineJson?.weight_raw_g ?? null;
-    const deduct = lineJson?.weight_deduct_g ?? null;
+    const raw = lineJson?.weight_raw_g ?? lineJson?.weight_g ?? null;
+    const deduct =
+      lineJson?.weight_deduct_g ??
+      lineJson?.deduction_weight_g ??
+      null;
 
     stoneCenterQty = parseNumeric(lineJson?.stone_center_qty ?? null);
     stoneSub1Qty = parseNumeric(lineJson?.stone_sub1_qty ?? null);
@@ -79,6 +86,9 @@ export async function GET(request: Request) {
     stoneCenterUnitCostKrw = parseNumeric(lineJson?.stone_center_unit_cost_krw ?? null);
     stoneSub1UnitCostKrw = parseNumeric(lineJson?.stone_sub1_unit_cost_krw ?? null);
     stoneSub2UnitCostKrw = parseNumeric(lineJson?.stone_sub2_unit_cost_krw ?? null);
+    receiptLaborBasicCostKrw =
+      parseNumeric(lineJson?.labor_basic_cost_krw ?? null) ??
+      parseNumeric(lineRow?.factory_labor_basic_cost_krw ?? null);
     receiptLaborOtherCostKrw = parseNumeric(lineJson?.labor_other_cost_krw ?? null);
 
     const centerLabor = Math.max(stoneCenterQty ?? 0, 0) * Math.max(stoneCenterUnitCostKrw ?? 0, 0);
@@ -87,19 +97,8 @@ export async function GET(request: Request) {
     const sumLabor = centerLabor + sub1Labor + sub2Labor;
     stoneLaborKrw = sumLabor > 0 ? sumLabor : null;
 
-    if (typeof raw === "number") {
-      receiptWeightG = raw;
-    } else if (typeof raw === "string" && raw.trim() !== "" && Number.isFinite(Number(raw))) {
-      receiptWeightG = Number(raw);
-    } else if (typeof lineRow?.factory_weight_g === "number") {
-      receiptWeightG = lineRow.factory_weight_g;
-    }
-
-    if (typeof deduct === "number") {
-      receiptDeductionWeightG = deduct;
-    } else if (typeof deduct === "string" && deduct.trim() !== "" && Number.isFinite(Number(deduct))) {
-      receiptDeductionWeightG = Number(deduct);
-    }
+    receiptWeightG = parseNumeric(raw) ?? parseNumeric(lineRow?.factory_weight_g ?? null);
+    receiptDeductionWeightG = parseNumeric(deduct);
   }
 
   if (data.shipment_line_id) {
@@ -134,6 +133,7 @@ export async function GET(request: Request) {
       stone_sub1_unit_cost_krw: stoneSub1UnitCostKrw,
       stone_sub2_unit_cost_krw: stoneSub2UnitCostKrw,
       stone_labor_krw: stoneLaborKrw,
+      receipt_labor_basic_cost_krw: receiptLaborBasicCostKrw,
       receipt_labor_other_cost_krw: receiptLaborOtherCostKrw,
     },
   });

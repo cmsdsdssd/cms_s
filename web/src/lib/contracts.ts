@@ -65,6 +65,11 @@ export const CONTRACTS = {
     apPositionByVendorNamed: "cms_v_ap_position_by_vendor_named_v1",
     apReconcileOpenByVendorNamed: "cms_v_ap_reconcile_open_by_vendor_named_v1",
     apReconcileIssueListNamed: "cms_v_ap_reconcile_issue_list_named_v1",
+    apFactoryLatestReceiptByVendor: "cms_v_ap_factory_latest_receipt_by_vendor_v1",
+    apFactoryPostBalanceByVendor: "cms_v_ap_factory_post_balance_by_vendor_v1",
+    apFactoryRecentPaymentByVendor: "cms_v_ap_factory_recent_payment_by_vendor_v1",
+    apPaymentHistoryByVendor: "cms_v_ap_payment_history_by_vendor_v1",
+    apBalanceByVendor: "cms_v_ap_balance_by_vendor_v1",
 
     // ✅ Factory Purchase Order (공장발주) Views
     unshippedOrderLines: "cms_v_unshipped_order_lines",
@@ -200,8 +205,11 @@ export const CONTRACTS = {
     receiptLineDeleteV1: "cms_fn_receipt_line_delete_v1",
 
     // ✅ AP (미지급) RPCs
-    factoryReceiptStatementUpsert: "cms_fn_upsert_factory_receipt_statement_v1",
-    apPayAndFifo: "cms_fn_ap2_pay_and_fifo_v1",
+    factoryReceiptStatementUpsert:
+      process.env.NEXT_PUBLIC_CMS_FN_FACTORY_RECEIPT_STATEMENT_UPSERT ||
+      "cms_fn_upsert_factory_receipt_statement_v2",
+    apPayAndFifo:
+      process.env.NEXT_PUBLIC_CMS_FN_AP_PAY_AND_FIFO || "cms_fn_ap2_pay_and_fifo_guarded_v1",
     apManualAlloc: "cms_fn_ap2_manual_alloc_v1",
     apReconcileSetIssueStatus: "cms_fn_ap_set_reconcile_issue_status_v2",
     apReconcileCreateAdjustment: "cms_fn_ap_create_adjustment_from_issue_v1",
