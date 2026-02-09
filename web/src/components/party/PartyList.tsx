@@ -69,7 +69,7 @@ export function PartyList({
   const canGoNext = totalPages ? page < totalPages : parties.length >= pageSize;
 
   return (
-    <div className="space-y-3" id="party.listPanel">
+    <div className="space-y-1 px-2" id="party.listPanel">
       {parties.map((party) => {
         const isCustomer = party.party_type === "customer";
         const badge = party.is_active
@@ -79,8 +79,8 @@ export function PartyList({
         const subtitle = `전화 ${party.phone ?? "-"}`;
         const meta = isCustomer
           ? `지역 ${party.region ?? "-"} · 잔액 ${formatSignedKrw(party.balance_krw)} · 최근 ${formatDateTimeKst(
-              party.last_activity_at
-            )}`
+            party.last_activity_at
+          )}`
           : `지역 ${party.region ?? "-"}`;
 
         return (

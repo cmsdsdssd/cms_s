@@ -1,0 +1,2 @@
+-- Migration file restored as empty placeholder to avoid "missing migration file" error.
+-- The actual fix is in 20260211000003_cms_0402_fix_vendor_prefix.sql

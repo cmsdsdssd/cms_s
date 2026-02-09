@@ -1,9 +1,12 @@
 "use client";
 
+"use client";
+
 import { Suspense, useEffect, useMemo, useState } from "react";
 import { useForm } from "react-hook-form";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRouter, useSearchParams } from "next/navigation";
+import { toast } from "sonner"; // for toast error
 import {
   UnifiedToolbar,
   ToolbarSelect,
@@ -13,6 +16,7 @@ import {
 import { SplitLayout } from "@/components/layout/split-layout";
 import { useRpcMutation } from "@/hooks/use-rpc-mutation";
 import { CONTRACTS, isFnConfigured } from "@/lib/contracts";
+import { getSchemaClient } from "@/lib/supabase/client";
 import { fetchParties, fetchPartyDetail } from "@/lib/api/cmsParty";
 import { PartyList } from "@/components/party/PartyList";
 import { PartyDetail } from "@/components/party/PartyDetail";
@@ -22,6 +26,8 @@ function PartyPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const queryClient = useQueryClient();
+  const supabase = useMemo(() => getSchemaClient(), []);
+
   const typeFilter = useMemo(() => {
     const type = searchParams.get("type");
     return type === "customer" || type === "vendor" ? type : "customer";
@@ -53,7 +59,7 @@ function PartyPageContent() {
     return () => clearTimeout(timer);
   }, [searchQuery]);
 
-  // List Query
+  // List Query (with higher pageSize for sidebar scroll)
   const { data: listData, isLoading: isListLoading, error: listError } = useQuery({
     queryKey: ["cms", "parties", typeFilter, activeOnly, debouncedSearch, regionFilter, page],
     queryFn: () =>
@@ -63,7 +69,7 @@ function PartyPageContent() {
         search: debouncedSearch,
         region: regionFilter || undefined,
         page,
-        pageSize: 50,
+        pageSize: 100, // Load more for scrolling list
       }),
   });
 
@@ -94,6 +100,8 @@ function PartyPageContent() {
         address: "",
         note: "",
         is_active: true,
+        mask_code: "",
+        prefix: "",
       });
     } else if (detailData) {
       form.reset({
@@ -104,6 +112,8 @@ function PartyPageContent() {
         address: detailData.address ?? "",
         note: detailData.note ?? "",
         is_active: detailData.is_active,
+        mask_code: detailData.mask_code ?? "",
+        prefix: detailData.prefixes?.[0]?.prefix ?? "",
       });
     }
   }, [effectiveSelectedPartyId, detailData, form, typeFilter]);
@@ -111,7 +121,22 @@ function PartyPageContent() {
   const mutation = useRpcMutation<string>({
     fn: CONTRACTS.functions.partyUpsert,
     successMessage: "저장 완료",
-    onSuccess: (partyId) => {
+    onSuccess: async (partyId, variables) => {
+      if (form.getValues("party_type") === "vendor") {
+        const prefix = form.getValues("prefix")?.trim();
+        if (prefix) {
+          const { error } = await supabase.rpc(CONTRACTS.functions.upsertVendorPrefix, {
+            p_vendor_party_id: partyId,
+            p_prefix: prefix,
+            p_note: "Created via Basic Info"
+          });
+
+          if (error) {
+            toast.error(`Prefix 저장 실패: ${error.message}`);
+          }
+        }
+      }
+
       queryClient.invalidateQueries({ queryKey: ["cms", "parties"] });
       queryClient.invalidateQueries({ queryKey: ["cms", "party", partyId] });
       if (selectedPartyId === "new") {
@@ -141,88 +166,101 @@ function PartyPageContent() {
   };
 
   return (
-    <div className="space-y-3" id="party.root">
-      {/* Unified Toolbar - Compact Header */}
-      <UnifiedToolbar
-        title="거래처관리"
-        actions={<ToolbarButton onClick={handleCreate}>+ 거래처 추가</ToolbarButton>}
-      >
-        <ToolbarSelect
-          value={typeFilter}
-          onChange={handleTypeChange}
-          className="w-24"
-        >
-          <option value="customer">고객</option>
-          <option value="vendor">공장</option>
-        </ToolbarSelect>
+    <div className="h-[calc(100vh-4rem)] flex flex-col md:flex-row overflow-hidden bg-[var(--background)]" id="party.root">
+      {/* Sidebar (List & Search) */}
+      <div className="w-full md:w-80 flex flex-col border-r border-[var(--panel-border)] bg-[var(--surface)] shrink-0">
+        <div className="p-4 border-b border-[var(--panel-border)] shrink-0 space-y-3">
+          <div className="flex items-center justify-between">
+            <h2 className="text-lg font-bold">거래처 관리</h2>
+            <ToolbarButton onClick={handleCreate} size="sm" variant="primary" className="h-8 text-xs">+ 추가</ToolbarButton>
+          </div>
 
-        <ToolbarInput
-          value={regionFilter}
-          onChange={(value) => {
-            setRegionFilter(value);
-            setPage(1);
-            setSelectedPartyId(null);
-            setActiveTab("basic");
-          }}
-          placeholder="지역"
-          className="w-20"
-        />
-
-        <ToolbarSelect
-          value={activeOnly ? "active" : "all"}
-          onChange={(value) => {
-            setActiveOnly(value === "active");
-            setPage(1);
-            setSelectedPartyId(null);
-            setActiveTab("basic");
-          }}
-          className="w-24"
-        >
-          <option value="active">활성만</option>
-          <option value="all">전체</option>
-        </ToolbarSelect>
-
-        <div className="w-px h-6 bg-[var(--hairline)] mx-1" />
-
-        <ToolbarInput
-          value={searchQuery}
-          onChange={setSearchQuery}
-          placeholder="이름 검색"
-          className="w-32 md:w-40"
-        />
-      </UnifiedToolbar>
-
-      {/* Content Area */}
-      <div className="px-4" id="party.body">
-        <SplitLayout
-          className="pt-1"
-          left={
-            <PartyList
-              parties={listData?.data ?? []}
-              isLoading={isListLoading}
-              error={listError as Error}
-              selectedPartyId={effectiveSelectedPartyId}
-              page={page}
-              totalCount={listData?.count}
-              onSelect={setSelectedPartyId}
-              onPageChange={setPage}
+          <div className="space-y-2">
+            <ToolbarInput
+              value={searchQuery}
+              onChange={setSearchQuery}
+              placeholder="이름 검색..."
+              className="w-full h-9"
             />
-          }
-          right={
-            <PartyDetail
-              key={effectiveSelectedPartyId || "none"}
-              selectedPartyId={effectiveSelectedPartyId}
-              detail={detailData}
-              isLoading={isDetailLoading}
-              activeTab={activeTab}
-              onTabChange={setActiveTab}
-              form={form}
-              canSave={canSave}
-              isSaving={mutation.isPending}
-              onSubmit={onSubmit}
-            />
-          }
-        />
+            <div className="flex gap-2">
+              <select
+                value={typeFilter}
+                onChange={(e) => handleTypeChange(e.target.value)}
+                className="flex-1 h-8 text-xs rounded-md border border-input bg-background px-2"
+              >
+                <option value="customer">고객 (Customer)</option>
+                <option value="vendor">공장 (Vendor)</option>
+              </select>
+              <select
+                value={regionFilter}
+                onChange={(e) => {
+                  setRegionFilter(e.target.value);
+                  setPage(1);
+                  setSelectedPartyId(null);
+                  setActiveTab("basic");
+                }}
+                className="w-20 h-8 text-xs rounded-md border border-input bg-background px-2"
+              >
+                <option value="">전체지역</option>
+                <option value="서울">서울</option>
+                <option value="부산">부산</option>
+                <option value="대구">대구</option>
+                <option value="인천">인천</option>
+                <option value="광주">광주</option>
+                <option value="대전">대전</option>
+                <option value="울산">울산</option>
+                <option value="세종">세종</option>
+                <option value="경기">경기</option>
+                <option value="강원">강원</option>
+                <option value="충북">충북</option>
+                <option value="충남">충남</option>
+                <option value="전북">전북</option>
+                <option value="전남">전남</option>
+                <option value="경북">경북</option>
+                <option value="경남">경남</option>
+                <option value="제주">제주</option>
+              </select>
+            </div>
+            <div className="flex items-center gap-2">
+              <label className="text-xs flex items-center gap-1 cursor-pointer">
+                <input type="checkbox" checked={activeOnly} onChange={(e) => setActiveOnly(e.target.checked)} className="rounded border-gray-300" />
+                <span>활성 거래처만 보기</span>
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-2">
+          <PartyList
+            parties={listData?.data ?? []}
+            isLoading={isListLoading}
+            error={listError as Error}
+            selectedPartyId={effectiveSelectedPartyId}
+            page={page}
+            totalCount={listData?.count}
+            onSelect={setSelectedPartyId}
+            onPageChange={setPage}
+            pageSize={100} // pass pageSize prop
+          />
+        </div>
+      </div>
+
+      {/* Main Content (Detail) */}
+      <div className="flex-1 flex flex-col min-w-0 bg-[var(--background)] overflow-hidden">
+        <div className="flex-1 overflow-y-auto p-4 md:p-6">
+          <PartyDetail
+            key={effectiveSelectedPartyId || "none"}
+            selectedPartyId={effectiveSelectedPartyId}
+            detail={detailData}
+            isLoading={isDetailLoading}
+            activeTab={activeTab}
+            onTabChange={setActiveTab}
+            form={form}
+            canSave={canSave}
+            isSaving={mutation.isPending}
+            onSubmit={onSubmit}
+          />
+        </div>
       </div>
     </div>
   );
@@ -230,7 +268,7 @@ function PartyPageContent() {
 
 export default function PartyPage() {
   return (
-    <Suspense fallback={null}>
+    <Suspense fallback={<div className="min-h-screen bg-[var(--background)] px-6 py-6 text-sm text-[var(--muted)]">로딩 중...</div>}>
       <PartyPageContent />
     </Suspense>
   );

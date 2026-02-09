@@ -16,7 +16,9 @@ export type PartyRow = {
   balance_krw?: number | null;
   receivable_krw?: number | null;
   credit_krw?: number | null;
+
   last_activity_at?: string | null;
+  mask_code?: string | null;
 };
 
 type ArPositionRow = {

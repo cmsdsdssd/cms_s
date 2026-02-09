@@ -105,6 +105,14 @@ type OrderLineDetailRow = {
   status?: string | null;
   source_channel?: string | null;
   material_code?: string | null;
+  selected_base_weight_g?: number | null;
+  selected_deduction_weight_g?: number | null;
+  selected_net_weight_g?: number | null;
+  selected_labor_base_sell_krw?: number | null;
+  selected_labor_other_sell_krw?: number | null;
+  selected_inventory_move_line_id?: string | null;
+  selected_inventory_location_code?: string | null;
+  selected_inventory_bin_code?: string | null;
   match_state?: string | null;
   created_at?: string | null;
   updated_at?: string | null;
@@ -705,11 +713,15 @@ export default function ShipmentsPage() {
         sub2: stoneRecommendation.roles.find((row) => row.role === "SUB2")?.unitSell ?? 0,
       },
       sources: {
-        qty_source: stoneRecommendation.roles.every((row) => row.qtySource === "RECEIPT")
-          ? "RECEIPT"
-          : stoneRecommendation.roles.some((row) => row.qtySource === "RECEIPT")
+        qty_source: stoneRecommendation.roles.every((row) => row.qtySource === "INVENTORY")
+          ? "INVENTORY"
+          : stoneRecommendation.roles.some((row) => row.qtySource === "INVENTORY")
             ? "MIXED"
-            : "ORDER",
+            : stoneRecommendation.roles.every((row) => row.qtySource === "RECEIPT")
+              ? "RECEIPT"
+              : stoneRecommendation.roles.some((row) => row.qtySource === "RECEIPT")
+                ? "MIXED"
+                : "ORDER",
         supply_source: {
           center: stoneRecommendation.roles.find((row) => row.role === "CENTER")?.supply ?? null,
           sub1: stoneRecommendation.roles.find((row) => row.role === "SUB1")?.supply ?? null,
@@ -863,7 +875,7 @@ export default function ShipmentsPage() {
       const { data, error } = await schemaClient
         .from("cms_order_line")
         .select(
-          "order_line_id, matched_master_id, model_name, model_name_raw, color, size, qty, is_plated, center_stone_name, center_stone_qty, center_stone_source, sub1_stone_name, sub1_stone_qty, sub1_stone_source, sub2_stone_name, sub2_stone_qty, sub2_stone_source, requested_due_date, priority_code, memo, status, source_channel, material_code, match_state, created_at, updated_at"
+          "order_line_id, matched_master_id, model_name, model_name_raw, color, size, qty, is_plated, center_stone_name, center_stone_qty, center_stone_source, sub1_stone_name, sub1_stone_qty, sub1_stone_source, sub2_stone_name, sub2_stone_qty, sub2_stone_source, requested_due_date, priority_code, memo, status, source_channel, material_code, selected_base_weight_g, selected_deduction_weight_g, selected_net_weight_g, selected_labor_base_sell_krw, selected_labor_other_sell_krw, selected_inventory_move_line_id, selected_inventory_location_code, selected_inventory_bin_code, match_state, created_at, updated_at"
         )
         .eq("order_line_id", orderLineId)
         .maybeSingle();
@@ -885,6 +897,11 @@ export default function ShipmentsPage() {
       return (json?.data ?? null) as ReceiptMatchPrefillRow | null;
     },
   });
+
+  const isInventoryIssueSource = useMemo(
+    () => Boolean(orderLineDetailQuery.data?.selected_inventory_move_line_id),
+    [orderLineDetailQuery.data?.selected_inventory_move_line_id]
+  );
 
   useEffect(() => {
     if (!selectedOrderLineId) return;
@@ -989,6 +1006,39 @@ export default function ShipmentsPage() {
 
     setPrefillHydratedOrderLineId(selectedOrderLineId);
   }, [prefillHydratedOrderLineId, receiptMatchPrefillQuery.data, selectedOrderLineId]);
+
+  useEffect(() => {
+    if (!selectedOrderLineId) return;
+    if (prefillHydratedOrderLineId === selectedOrderLineId) return;
+    if (receiptMatchPrefillQuery.data) return;
+
+    const detail = orderLineDetailQuery.data;
+    if (!detail) return;
+
+    if (detail.selected_base_weight_g !== null && detail.selected_base_weight_g !== undefined) {
+      setWeightG(String(detail.selected_base_weight_g));
+    }
+
+    if (detail.selected_deduction_weight_g !== null && detail.selected_deduction_weight_g !== undefined) {
+      setDeductionWeightG(String(detail.selected_deduction_weight_g));
+      setApplyMasterDeductionWhenEmpty(false);
+    }
+
+    if (detail.selected_labor_base_sell_krw !== null && detail.selected_labor_base_sell_krw !== undefined) {
+      setBaseLabor(String(detail.selected_labor_base_sell_krw));
+    }
+
+    if (detail.selected_labor_other_sell_krw !== null && detail.selected_labor_other_sell_krw !== undefined) {
+      setOtherLaborCost(String(detail.selected_labor_other_sell_krw));
+    }
+
+    setPrefillHydratedOrderLineId(selectedOrderLineId);
+  }, [
+    orderLineDetailQuery.data,
+    prefillHydratedOrderLineId,
+    receiptMatchPrefillQuery.data,
+    selectedOrderLineId,
+  ]);
 
   // ✅ 선택된 주문의 model_no로 마스터 정보 조회
   const masterLookupQuery = useQuery({
@@ -2070,6 +2120,7 @@ export default function ShipmentsPage() {
       {
         role: "CENTER" as const,
         receiptQty: receiptMatchPrefillQuery.data?.stone_center_qty,
+        inventoryQty: orderLineDetailQuery.data?.center_stone_qty,
         orderQtyPerPiece: orderLineDetailQuery.data?.center_stone_qty,
         supply: normalizeStoneSource(orderLineDetailQuery.data?.center_stone_source),
         unitSell: Number(matchedMasterPricingQuery.data?.labor_center ?? masterLookupQuery.data?.labor_center ?? 0),
@@ -2077,6 +2128,7 @@ export default function ShipmentsPage() {
       {
         role: "SUB1" as const,
         receiptQty: receiptMatchPrefillQuery.data?.stone_sub1_qty,
+        inventoryQty: orderLineDetailQuery.data?.sub1_stone_qty,
         orderQtyPerPiece: orderLineDetailQuery.data?.sub1_stone_qty,
         supply: normalizeStoneSource(orderLineDetailQuery.data?.sub1_stone_source),
         unitSell: Number(matchedMasterPricingQuery.data?.labor_side1 ?? masterLookupQuery.data?.labor_side1 ?? 0),
@@ -2084,13 +2136,18 @@ export default function ShipmentsPage() {
       {
         role: "SUB2" as const,
         receiptQty: receiptMatchPrefillQuery.data?.stone_sub2_qty,
+        inventoryQty: orderLineDetailQuery.data?.sub2_stone_qty,
         orderQtyPerPiece: orderLineDetailQuery.data?.sub2_stone_qty,
         supply: normalizeStoneSource(orderLineDetailQuery.data?.sub2_stone_source),
         unitSell: Number(matchedMasterPricingQuery.data?.labor_side2 ?? masterLookupQuery.data?.labor_side2 ?? 0),
       },
     ].map((row) => {
       const hasReceiptQty = row.receiptQty !== null && row.receiptQty !== undefined;
-      const qtyUsed = hasReceiptQty
+      const hasInventoryQty =
+        isInventoryIssueSource && row.inventoryQty !== null && row.inventoryQty !== undefined;
+      const qtyUsed = hasInventoryQty
+        ? Math.max(0, Number(row.inventoryQty ?? 0))
+        : hasReceiptQty
         ? Math.max(0, Number(row.receiptQty ?? 0))
         : Math.max(0, Number(row.orderQtyPerPiece ?? 0)) * orderQty;
       return {
@@ -2098,7 +2155,10 @@ export default function ShipmentsPage() {
         supply: row.supply,
         unitSell: Math.max(0, Number.isFinite(row.unitSell) ? row.unitSell : 0),
         qtyUsed,
-        qtySource: (hasReceiptQty ? "RECEIPT" : "ORDER") as "RECEIPT" | "ORDER",
+        qtySource: (hasInventoryQty ? "INVENTORY" : hasReceiptQty ? "RECEIPT" : "ORDER") as
+          | "INVENTORY"
+          | "RECEIPT"
+          | "ORDER",
         subtotal: qtyUsed * Math.max(0, Number.isFinite(row.unitSell) ? row.unitSell : 0),
       };
     });
@@ -2133,6 +2193,7 @@ export default function ShipmentsPage() {
     orderLineDetailQuery.data?.sub1_stone_source,
     orderLineDetailQuery.data?.sub2_stone_qty,
     orderLineDetailQuery.data?.sub2_stone_source,
+    isInventoryIssueSource,
     receiptMatchPrefillQuery.data?.stone_center_qty,
     receiptMatchPrefillQuery.data?.stone_sub1_qty,
     receiptMatchPrefillQuery.data?.stone_sub2_qty,
@@ -2234,6 +2295,59 @@ export default function ShipmentsPage() {
     return value === null || value === undefined ? null : Number(value);
   }, [matchedMasterPricingQuery.data?.labor_base_cost, masterLookupQuery.data?.labor_base_cost]);
 
+  const masterCenterSell = useMemo(() => {
+    const value = matchedMasterPricingQuery.data?.labor_center ?? masterLookupQuery.data?.labor_center;
+    return value === null || value === undefined ? null : Number(value);
+  }, [matchedMasterPricingQuery.data?.labor_center, masterLookupQuery.data?.labor_center]);
+
+  const masterSub1Sell = useMemo(() => {
+    const value = matchedMasterPricingQuery.data?.labor_side1 ?? masterLookupQuery.data?.labor_side1;
+    return value === null || value === undefined ? null : Number(value);
+  }, [matchedMasterPricingQuery.data?.labor_side1, masterLookupQuery.data?.labor_side1]);
+
+  const masterSub2Sell = useMemo(() => {
+    const value = matchedMasterPricingQuery.data?.labor_side2 ?? masterLookupQuery.data?.labor_side2;
+    return value === null || value === undefined ? null : Number(value);
+  }, [matchedMasterPricingQuery.data?.labor_side2, masterLookupQuery.data?.labor_side2]);
+
+  const masterCenterQtyDefault = useMemo(() => {
+    const value = matchedMasterPricingQuery.data?.center_qty_default ?? masterLookupQuery.data?.center_qty_default;
+    return value === null || value === undefined ? null : Number(value);
+  }, [matchedMasterPricingQuery.data?.center_qty_default, masterLookupQuery.data?.center_qty_default]);
+
+  const masterSub1QtyDefault = useMemo(() => {
+    const value = matchedMasterPricingQuery.data?.sub1_qty_default ?? masterLookupQuery.data?.sub1_qty_default;
+    return value === null || value === undefined ? null : Number(value);
+  }, [matchedMasterPricingQuery.data?.sub1_qty_default, masterLookupQuery.data?.sub1_qty_default]);
+
+  const masterSub2QtyDefault = useMemo(() => {
+    const value = matchedMasterPricingQuery.data?.sub2_qty_default ?? masterLookupQuery.data?.sub2_qty_default;
+    return value === null || value === undefined ? null : Number(value);
+  }, [matchedMasterPricingQuery.data?.sub2_qty_default, masterLookupQuery.data?.sub2_qty_default]);
+
+  const masterTotalLaborSell = useMemo(() => {
+    const hasAnySell =
+      masterBaseSell !== null ||
+      masterCenterSell !== null ||
+      masterSub1Sell !== null ||
+      masterSub2Sell !== null;
+    if (!hasAnySell) return null;
+    return (
+      (masterBaseSell ?? 0) +
+      (masterCenterSell ?? 0) * Math.max(masterCenterQtyDefault ?? 0, 0) +
+      (masterSub1Sell ?? 0) * Math.max(masterSub1QtyDefault ?? 0, 0) +
+      (masterSub2Sell ?? 0) * Math.max(masterSub2QtyDefault ?? 0, 0)
+    );
+  }, [
+    masterBaseSell,
+    masterCenterQtyDefault,
+    masterCenterSell,
+    masterSub1QtyDefault,
+    masterSub1Sell,
+    masterSub2QtyDefault,
+    masterSub2Sell,
+  ]);
+
   const masterBaseMargin = useMemo(() => {
     if (masterBaseSell === null || masterBaseCost === null) return null;
     return masterBaseSell - masterBaseCost;
@@ -2298,7 +2412,7 @@ export default function ShipmentsPage() {
       {
         role: "CENTER" as const,
         supply: normalizeStoneSource(orderLineDetailQuery.data?.center_stone_source),
-        qtyReceipt: receiptMatchPrefillQuery.data?.stone_center_qty ?? null,
+        qtyReceipt: stoneRecommendation.roles.find((row) => row.role === "CENTER")?.qtyUsed ?? null,
         qtyUsed: stoneRecommendation.roles.find((row) => row.role === "CENTER")?.qtyUsed ?? null,
         qtySource: stoneRecommendation.roles.find((row) => row.role === "CENTER")?.qtySource ?? null,
         qtyOrder: orderLineDetailQuery.data?.center_stone_qty ?? null,
@@ -2319,7 +2433,7 @@ export default function ShipmentsPage() {
       {
         role: "SUB1" as const,
         supply: normalizeStoneSource(orderLineDetailQuery.data?.sub1_stone_source),
-        qtyReceipt: receiptMatchPrefillQuery.data?.stone_sub1_qty ?? null,
+        qtyReceipt: stoneRecommendation.roles.find((row) => row.role === "SUB1")?.qtyUsed ?? null,
         qtyUsed: stoneRecommendation.roles.find((row) => row.role === "SUB1")?.qtyUsed ?? null,
         qtySource: stoneRecommendation.roles.find((row) => row.role === "SUB1")?.qtySource ?? null,
         qtyOrder: orderLineDetailQuery.data?.sub1_stone_qty ?? null,
@@ -2340,7 +2454,7 @@ export default function ShipmentsPage() {
       {
         role: "SUB2" as const,
         supply: normalizeStoneSource(orderLineDetailQuery.data?.sub2_stone_source),
-        qtyReceipt: receiptMatchPrefillQuery.data?.stone_sub2_qty ?? null,
+        qtyReceipt: stoneRecommendation.roles.find((row) => row.role === "SUB2")?.qtyUsed ?? null,
         qtyUsed: stoneRecommendation.roles.find((row) => row.role === "SUB2")?.qtyUsed ?? null,
         qtySource: stoneRecommendation.roles.find((row) => row.role === "SUB2")?.qtySource ?? null,
         qtyOrder: orderLineDetailQuery.data?.sub2_stone_qty ?? null,
@@ -2366,11 +2480,8 @@ export default function ShipmentsPage() {
       orderLineDetailQuery.data?.sub1_stone_qty,
       orderLineDetailQuery.data?.sub2_stone_source,
       orderLineDetailQuery.data?.sub2_stone_qty,
-      receiptMatchPrefillQuery.data?.stone_center_qty,
       receiptMatchPrefillQuery.data?.stone_center_unit_cost_krw,
-      receiptMatchPrefillQuery.data?.stone_sub1_qty,
       receiptMatchPrefillQuery.data?.stone_sub1_unit_cost_krw,
-      receiptMatchPrefillQuery.data?.stone_sub2_qty,
       receiptMatchPrefillQuery.data?.stone_sub2_unit_cost_krw,
       matchedMasterPricingQuery.data?.center_qty_default,
       matchedMasterPricingQuery.data?.labor_center,
@@ -2897,6 +3008,30 @@ export default function ShipmentsPage() {
                             )}
                           </div>
                         </div>
+                        <div className="rounded-lg border-2 border-amber-300 bg-amber-50 p-3">
+                          <div className="mb-2 flex items-center justify-between">
+                            <div className="text-xs font-semibold text-amber-900 uppercase tracking-wider">마스터 핵심값</div>
+                            <Badge tone="active" className="text-[10px]">CATALOG</Badge>
+                          </div>
+                          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                            <div className="rounded-md border border-amber-200 bg-white px-3 py-2">
+                              <div className="text-[11px] text-[var(--muted)]">마스터 중량(g)</div>
+                              <div className="text-sm font-semibold">{renderNumber(masterLookupQuery.data?.weight_default_g ?? null)}</div>
+                            </div>
+                            <div className="rounded-md border border-amber-200 bg-white px-3 py-2">
+                              <div className="text-[11px] text-[var(--muted)]">마스터 차감중량(g)</div>
+                              <div className="text-sm font-semibold">{renderNumber(masterLookupQuery.data?.deduction_weight_default_g ?? null)}</div>
+                            </div>
+                            <div className="rounded-md border border-amber-200 bg-white px-3 py-2">
+                              <div className="text-[11px] text-[var(--muted)]">기본공임(판매)</div>
+                              <div className="text-sm font-semibold">{renderNumber(masterBaseSell, "원")}</div>
+                            </div>
+                            <div className="rounded-md border border-amber-200 bg-white px-3 py-2">
+                              <div className="text-[11px] text-[var(--muted)]">합계공임(판매)</div>
+                              <div className="text-sm font-bold text-amber-900">{renderNumber(masterTotalLaborSell, "원")}</div>
+                            </div>
+                          </div>
+                        </div>
                         <div className="rounded-lg border border-[var(--panel-border)] bg-[var(--panel)] p-3">
                           <div className="text-xs font-semibold text-[var(--muted)] mb-2">비고</div>
                           <div className="text-sm font-semibold text-[var(--foreground)] whitespace-pre-wrap min-h-[48px]">
@@ -2986,6 +3121,7 @@ export default function ShipmentsPage() {
                         extraLaborSellKrw={resolvedExtraLaborTotal}
                         factoryOtherCostBaseKrw={resolvedOtherLaborCost}
                         stoneRows={stoneEvidenceRows}
+                        isInventorySource={isInventoryIssueSource}
                         expectedBaseLaborSellKrw={resolvedBaseLabor}
                         expectedExtraLaborSellKrw={resolvedExtraLaborTotal}
                         shipmentBaseLaborKrw={receiptMatchPrefillQuery.data?.shipment_base_labor_krw ?? null}

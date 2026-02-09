@@ -1,6 +1,8 @@
 import { useEffect } from "react";
 import type { UseFormReturn } from "react-hook-form";
+import { RefreshCw } from "lucide-react";
 import { ActionBar } from "@/components/layout/action-bar";
+import { Button } from "@/components/ui/button";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
 import { BasicInfoTab } from "@/components/party/tabs/BasicInfoTab";
 import { AddressesTab } from "@/components/party/tabs/AddressesTab";
@@ -91,8 +93,32 @@ export function PartyDetail({
     tabs.push({ key: "prefix", label: "Prefix Map" });
   }
 
+  // Header display
+  const displayName = selectedPartyId === "new" ? "새 거래처" : detail?.name || "로딩 중...";
+  const displayType = selectedPartyId === "new" ? (watchedPartyType === "customer" ? "고객" : "공장") : detail?.party_type === "customer" ? "고객" : "공장";
+
   return (
-    <div id="party.detailPanel">
+    <div id="party.detailPanel" className="pb-20">
+      {/* Header Section */}
+      <div className="mb-6">
+        <div className="flex justify-between items-start">
+          <div>
+            <div className="flex items-center gap-3 mb-1">
+              <h1 className="text-2xl font-bold tracking-tight">{displayName}</h1>
+              <span className="text-xs px-2 py-0.5 rounded-full bg-[var(--chip)] text-[var(--muted)] font-medium">
+                {displayType}
+              </span>
+            </div>
+            {detail && (
+              <p className="text-sm text-[var(--muted)] flex items-center gap-2">
+                마지막 활동: {formatDateTimeKst(detail.last_activity_at)}
+              </p>
+            )}
+          </div>
+          {/* Refresh or Actions could go here */}
+        </div>
+      </div>
+
       {isLoading && selectedPartyId !== "new" ? (
         <Card>
           <CardBody>
@@ -100,72 +126,71 @@ export function PartyDetail({
           </CardBody>
         </Card>
       ) : (
-        <div className="space-y-4">
-          {detail?.party_type === "customer" && (
-            <Card>
-              <CardHeader>
-                <ActionBar title="AR 요약" />
-              </CardHeader>
-              <CardBody>
-                <div className="grid gap-3 text-sm sm:grid-cols-4">
-                  <div>
-                    <p className="text-xs text-[var(--muted)]">잔액</p>
-                    <p className="text-base font-semibold">
-                      {formatSignedKrw(detail.balance_krw)}
-                    </p>
-                  </div>
-                  <div>
-                    <p className="text-xs text-[var(--muted)]">미수</p>
-                    <p className="text-base font-semibold">
-                      {formatKrw(detail.receivable_krw)}
-                    </p>
-                  </div>
-                  <div>
-                    <p className="text-xs text-[var(--muted)]">크레딧</p>
-                    <p className="text-base font-semibold">{formatKrw(detail.credit_krw)}</p>
-                  </div>
-                  <div>
-                    <p className="text-xs text-[var(--muted)]">최근 활동</p>
-                    <p className="text-sm">{formatDateTimeKst(detail.last_activity_at)}</p>
-                  </div>
-                </div>
-              </CardBody>
-            </Card>
+        <div className="space-y-6">
+          {/* Summary Card (only for existing customers) */}
+          {detail?.party_type === "customer" && selectedPartyId !== "new" && (
+            <div className="grid grid-cols-4 gap-4 p-4 rounded-xl bg-[var(--chip)] border border-[var(--panel-border)]">
+              <div>
+                <p className="text-xs font-medium text-[var(--muted)] mb-1">잔액</p>
+                <p className="text-lg font-bold tabular-nums">
+                  {formatSignedKrw(detail.balance_krw)}
+                </p>
+              </div>
+              <div>
+                <p className="text-xs font-medium text-[var(--muted)] mb-1">미수</p>
+                <p className="text-lg font-bold tabular-nums">
+                  {formatKrw(detail.receivable_krw)}
+                </p>
+              </div>
+              <div>
+                <p className="text-xs font-medium text-[var(--muted)] mb-1">크레딧</p>
+                <p className="text-lg font-bold tabular-nums">{formatKrw(detail.credit_krw)}</p>
+              </div>
+              <div>
+                <p className="text-xs font-medium text-[var(--muted)] mb-1">최근 활동</p>
+                <p className="text-sm font-medium">{formatDateTimeKst(detail.last_activity_at)}</p>
+              </div>
+            </div>
           )}
 
-          <div className="flex items-center gap-2">
-            {tabs.map((tab) => (
-              <button
-                key={tab.key}
-                type="button"
-                onClick={() => onTabChange(tab.key)}
-                className={cn(
-                  "rounded-full border px-4 py-2 text-sm",
-                  activeTab === tab.key
-                    ? "border-[var(--primary)] bg-[var(--chip)] text-[var(--primary)]"
-                    : "border-[var(--panel-border)] text-[var(--muted)] hover:text-[var(--foreground)]"
-                )}
-              >
-                {tab.label}
-              </button>
-            ))}
+          {/* Sticky Tabs */}
+          <div className="sticky top-0 bg-[var(--background)] z-10 border-b border-[var(--panel-border)] pt-2">
+            <div className="flex gap-6">
+              {tabs.map((tab) => (
+                <button
+                  key={tab.key}
+                  type="button"
+                  onClick={() => onTabChange(tab.key)}
+                  className={cn(
+                    "py-3 text-sm font-medium border-b-2 transition-colors",
+                    activeTab === tab.key
+                      ? "border-[var(--primary)] text-[var(--primary)]"
+                      : "border-transparent text-[var(--muted)] hover:text-[var(--foreground)]"
+                  )}
+                >
+                  {tab.label}
+                </button>
+              ))}
+            </div>
           </div>
 
-          {activeTab === "basic" && (
-            <BasicInfoTab
-              form={form}
-              isEdit={selectedPartyId !== "new"}
-              canSave={canSave}
-              isSaving={isSaving}
-              onSubmit={onSubmit}
-            />
-          )}
+          <div className="pt-2">
+            {activeTab === "basic" && (
+              <BasicInfoTab
+                form={form}
+                isEdit={selectedPartyId !== "new"}
+                canSave={canSave}
+                isSaving={isSaving}
+                onSubmit={onSubmit}
+              />
+            )}
 
-          {activeTab === "address" && <AddressesTab addresses={detail?.addresses ?? []} />}
+            {activeTab === "address" && <AddressesTab addresses={detail?.addresses ?? []} />}
 
-          {activeTab === "contact" && <ContactsTab links={detail?.links ?? []} />}
+            {activeTab === "contact" && <ContactsTab links={detail?.links ?? []} />}
 
-          {activeTab === "prefix" && <PrefixMapTab prefixes={detail?.prefixes ?? []} />}
+            {activeTab === "prefix" && <PrefixMapTab prefixes={detail?.prefixes ?? []} />}
+          </div>
         </div>
       )}
     </div>

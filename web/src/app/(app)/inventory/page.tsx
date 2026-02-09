@@ -102,18 +102,23 @@ type MasterItem = {
   weight_default_g?: number;
   deduction_weight_default_g?: number;
   center_qty_default?: number;
+  center_stone_name_default?: string;
   sub1_qty_default?: number;
+  sub1_stone_name_default?: string;
   sub2_qty_default?: number;
+  sub2_stone_name_default?: string;
   plating_price_sell_default?: number;
   plating_price_cost_default?: number;
   labor_base_sell?: number;
   labor_center_sell?: number;
   labor_sub1_sell?: number;
   labor_sub2_sell?: number;
+  labor_other_sell?: number;
   labor_base_cost?: number;
   labor_center_cost?: number;
   labor_sub1_cost?: number;
   labor_sub2_cost?: number;
+  labor_other_cost?: number;
   color?: string;
   size?: string;
   symbol?: string;
@@ -142,6 +147,7 @@ type QuickMoveForm = {
   move_type: "RECEIPT" | "ISSUE" | "ADJUST" | "RETURN";
   location_code: string;
   bin_code?: string;
+  inbound_reason?: string;
   model_name: string;
   master_id?: string;
   session_id?: string;
@@ -153,13 +159,38 @@ type QuickMoveForm = {
   base_weight_g?: number;
   deduction_weight_g?: number;
   center_qty?: number;
+  center_stone_name?: string;
   sub1_qty?: number;
+  sub1_stone_name?: string;
   sub2_qty?: number;
+  sub2_stone_name?: string;
   plating_sell?: number;
   plating_cost?: number;
   labor_base_sell?: number;
+  labor_other_sell?: number;
   labor_base_cost?: number;
   memo: string;
+};
+
+const MATERIAL_CODE_OPTIONS = ["14", "18", "24", "925", "999", "00"] as const;
+const COLOR_OPTIONS = [
+  "",
+  "P",
+  "W",
+  "G",
+  "PW",
+  "PG",
+  "WG",
+  "PWG",
+] as const;
+
+const normalizeMaterialCode = (raw: string) => {
+  const value = String(raw || "").trim().toUpperCase();
+  if (!value) return "";
+  if (value === "14K") return "14";
+  if (value === "18K") return "18";
+  if (value === "24K") return "24";
+  return value;
 };
 
 type SessionForm = {
@@ -214,6 +245,9 @@ const getImageUrl = (path?: string | null): string | null => {
 // ===================== MAIN COMPONENT =====================
 export default function InventoryPage() {
   const queryClient = useQueryClient();
+  const [goldPrice, setGoldPrice] = useState(0);
+  const [silverPriceBase, setSilverPriceBase] = useState(0);
+  const [silverAdjustFactor, setSilverAdjustFactor] = useState(1);
   const [mobileSection, setMobileSection] = useState<"position" | "moves" | "stocktake" | "actions">(
     "position"
   );
@@ -227,6 +261,29 @@ export default function InventoryPage() {
   const [selectedQuickMaster, setSelectedQuickMaster] = useState<MasterItem | null>(null);
   const [masterSearchQuery, setMasterSearchQuery] = useState("");
   const [masterSearchContext, setMasterSearchContext] = useState<"quick" | "count" | null>(null);
+
+  useEffect(() => {
+    let mounted = true;
+    const run = async () => {
+      try {
+        const res = await fetch("/api/market-ticks", { cache: "no-store" });
+        const result = (await res.json()) as {
+          ok?: boolean;
+          data?: { gold?: number; silver?: number; silverOriginal?: number; _config?: { silverKrFactor?: number } };
+        };
+        if (!mounted || !result?.data) return;
+        setGoldPrice(Number(result.data.gold ?? 0));
+        setSilverPriceBase(Number(result.data.silverOriginal ?? result.data.silver ?? 0));
+        setSilverAdjustFactor(Number(result.data._config?.silverKrFactor ?? 1));
+      } catch {
+        // noop
+      }
+    };
+    void run();
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   // ===================== GALLERY DETAIL MODAL STATE =====================
   const [galleryDetailItem, setGalleryDetailItem] = useState<PositionRow | null>(null);
@@ -547,7 +604,7 @@ export default function InventoryPage() {
       const client = getSchemaClient();
       if (!client) throw new Error("No client");
       const { data, error } = await client
-        .from(CONTRACTS.views.masterItemLookup)
+        .from(CONTRACTS.views.masterItems)
         .select("*")
         .ilike("model_name", `%${masterSearchQuery}%`)
         .limit(10);
@@ -590,10 +647,11 @@ export default function InventoryPage() {
       move_type: "RECEIPT",
       location_code: "",
       bin_code: "",
+      inbound_reason: "",
       model_name: "",
       master_id: undefined,
       session_id: undefined,
-      qty: 0,
+      qty: 1,
       material_code: undefined,
       color: undefined,
       size: undefined,
@@ -601,17 +659,56 @@ export default function InventoryPage() {
       base_weight_g: undefined,
       deduction_weight_g: 0,
       center_qty: undefined,
+      center_stone_name: undefined,
       sub1_qty: undefined,
+      sub1_stone_name: undefined,
       sub2_qty: undefined,
+      sub2_stone_name: undefined,
       plating_sell: undefined,
       plating_cost: undefined,
       labor_base_sell: undefined,
+      labor_other_sell: undefined,
       labor_base_cost: undefined,
       memo: "",
     },
   });
 
   const quickLocationCode = quickMoveForm.watch("location_code") || "";
+  const qMaterial = String(quickMoveForm.watch("material_code") || "").trim();
+  const qMaterialCode = normalizeMaterialCode(qMaterial);
+  const qWeightRaw = Number(quickMoveForm.watch("base_weight_g") ?? 0);
+  const qDeductionRaw = Number(quickMoveForm.watch("deduction_weight_g") ?? 0);
+  const qWeight = Number.isFinite(qWeightRaw) ? qWeightRaw : 0;
+  const qDeduction = Number.isFinite(qDeductionRaw) ? qDeductionRaw : 0;
+  const qNetWeight = Math.max(0, qWeight - qDeduction);
+  const qLaborBaseSell = Number(quickMoveForm.watch("labor_base_sell") ?? 0);
+  const qLaborOtherSell = Number(quickMoveForm.watch("labor_other_sell") ?? 0);
+  const qCenterQty = Number(quickMoveForm.watch("center_qty") ?? 0);
+  const qSub1Qty = Number(quickMoveForm.watch("sub1_qty") ?? 0);
+  const qSub2Qty = Number(quickMoveForm.watch("sub2_qty") ?? 0);
+
+  const materialPriceEstimate = useMemo(() => {
+    const silverApplied = silverPriceBase * silverAdjustFactor;
+    if (qMaterialCode === "925") return silverApplied * qNetWeight * 0.925;
+    if (qMaterialCode === "999") return silverApplied * qNetWeight;
+    if (qMaterialCode === "14") return goldPrice * qNetWeight * 0.6435;
+    if (qMaterialCode === "18") return goldPrice * qNetWeight * 0.825;
+    if (qMaterialCode === "24") return goldPrice * qNetWeight;
+    return 0;
+  }, [qMaterialCode, qNetWeight, goldPrice, silverPriceBase, silverAdjustFactor]);
+
+  const stoneLaborEstimate = useMemo(() => {
+    const centerUnit = Number(selectedQuickMaster?.labor_center_sell ?? 0);
+    const sub1Unit = Number(selectedQuickMaster?.labor_sub1_sell ?? 0);
+    const sub2Unit = Number(selectedQuickMaster?.labor_sub2_sell ?? 0);
+    return centerUnit * Math.max(0, qCenterQty) + sub1Unit * Math.max(0, qSub1Qty) + sub2Unit * Math.max(0, qSub2Qty);
+  }, [selectedQuickMaster, qCenterQty, qSub1Qty, qSub2Qty]);
+
+  const expectedSellPrice = useMemo(
+    () => Math.round(materialPriceEstimate + Math.max(0, qLaborBaseSell) + Math.max(0, qLaborOtherSell) + stoneLaborEstimate),
+    [materialPriceEstimate, qLaborBaseSell, qLaborOtherSell, stoneLaborEstimate]
+  );
+
   const quickBinOptions = useMemo(
     () =>
       locationBinList
@@ -628,12 +725,39 @@ export default function InventoryPage() {
     successMessage: "등록 완료",
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["inventory"] });
-      quickMoveForm.reset();
+      quickMoveForm.reset({
+        move_type: "RECEIPT",
+        location_code: "",
+        bin_code: "",
+        inbound_reason: "",
+        model_name: "",
+        master_id: undefined,
+        session_id: undefined,
+        qty: 1,
+        material_code: undefined,
+        color: undefined,
+        size: undefined,
+        category_code: undefined,
+        base_weight_g: undefined,
+        deduction_weight_g: 0,
+        center_qty: undefined,
+        center_stone_name: undefined,
+        sub1_qty: undefined,
+        sub1_stone_name: undefined,
+        sub2_qty: undefined,
+        sub2_stone_name: undefined,
+        plating_sell: undefined,
+        plating_cost: undefined,
+        labor_base_sell: undefined,
+        labor_other_sell: undefined,
+        labor_base_cost: undefined,
+        memo: "",
+      });
       setSelectedQuickMaster(null);
     },
   });
 
-  const onSubmitQuickMove = (values: QuickMoveForm) => {
+  const onSubmitQuickMove = async (values: QuickMoveForm) => {
     if (values.base_weight_g === null || values.base_weight_g === undefined) {
       toast.error("기본 중량을 입력해주세요");
       return;
@@ -656,6 +780,40 @@ export default function InventoryPage() {
       return;
     }
 
+    const client = getSchemaClient();
+    if (!client) {
+      toast.error("Supabase 환경 변수가 설정되지 않았습니다.");
+      return;
+    }
+
+    let resolvedMasterId: string | null = values.master_id || null;
+    if (!resolvedMasterId) {
+      const normalizedModel = String(values.model_name ?? "").trim();
+      if (normalizedModel) {
+        const { data: masterRows, error: masterError } = await client
+          .from(CONTRACTS.views.masterItems)
+          .select("master_id, model_name")
+          .ilike("model_name", normalizedModel);
+        if (masterError) {
+          toast.error("마스터 조회 실패", { description: masterError.message });
+          return;
+        }
+        const exact = (masterRows ?? []).filter(
+          (row) => String((row as { model_name?: string | null }).model_name ?? "").trim().toLowerCase() === normalizedModel.toLowerCase()
+        );
+        if (exact.length === 1) {
+          resolvedMasterId = String((exact[0] as { master_id?: string | null }).master_id ?? "") || null;
+        }
+      }
+    }
+
+    if (!resolvedMasterId) {
+      toast.error("마스터 선택 필요", {
+        description: "재고 화면 반영을 위해 모델 마스터를 선택한 뒤 등록해주세요.",
+      });
+      return;
+    }
+
     quickMoveMutation.mutate({
       p_move_type: values.move_type,
       p_item_name: values.model_name,
@@ -664,23 +822,42 @@ export default function InventoryPage() {
       p_party_id: null,
       p_location_code: resolvedLocation,
       p_bin_code: values.bin_code || null,
-      p_master_id: values.master_id || null,
+      p_master_id: resolvedMasterId,
       p_variant_hint: [values.material_code, values.color, values.size].filter(Boolean).join("/") || null,
       p_unit: "EA",
       p_source: "MANUAL",
-      p_memo: values.memo || null,
+      p_memo: values.inbound_reason?.trim() || values.memo || null,
       p_meta: {
         ...(values.session_id ? { session_id: values.session_id } : {}),
         material_code: values.material_code || null,
         color: values.color || null,
         size: values.size || null,
+        center_stone_name: values.center_stone_name || null,
+        center_qty: values.center_qty ?? null,
+        sub1_stone_name: values.sub1_stone_name || null,
+        sub1_qty: values.sub1_qty ?? null,
+        sub2_stone_name: values.sub2_stone_name || null,
+        sub2_qty: values.sub2_qty ?? null,
+        plating_sell: values.plating_sell ?? null,
+        plating_cost: values.plating_cost ?? null,
+        labor_base_sell: values.labor_base_sell ?? null,
+        labor_base_cost: values.labor_base_cost ?? null,
+        labor_other_sell: values.labor_other_sell ?? null,
         base_weight_g: values.base_weight_g,
         deduction_weight_g: values.deduction_weight_g ?? 0,
         net_weight_g: Math.max(0, Number(values.base_weight_g ?? 0) - Number(values.deduction_weight_g ?? 0)),
+        inbound_reason: values.inbound_reason?.trim() || null,
+        tick_snapshot: {
+          gold_krw_per_g: goldPrice,
+          silver_krw_per_g_base: silverPriceBase,
+          silver_adjust_factor: silverAdjustFactor,
+          silver_krw_per_g_applied: silverPriceBase * silverAdjustFactor,
+          captured_at: new Date().toISOString(),
+        },
       },
       p_idempotency_key: null,
       p_actor_person_id: null,
-      p_note: values.session_id ? `Linked to session` : null,
+      p_note: values.inbound_reason?.trim() || (values.session_id ? `Linked to session` : null),
       p_correlation_id: crypto.randomUUID(),
     });
   };
@@ -689,11 +866,20 @@ export default function InventoryPage() {
     setSelectedQuickMaster(master);
     quickMoveForm.setValue("model_name", master.model_name);
     quickMoveForm.setValue("master_id", master.master_id);
-    quickMoveForm.setValue("material_code", master.material_code_default || "");
+    quickMoveForm.setValue("material_code", normalizeMaterialCode(master.material_code_default || ""));
     quickMoveForm.setValue("color", master.color || "");
     quickMoveForm.setValue("size", master.size || master.symbol || "");
     quickMoveForm.setValue("base_weight_g", master.weight_default_g ?? undefined);
     quickMoveForm.setValue("deduction_weight_g", master.deduction_weight_default_g ?? 0);
+    quickMoveForm.setValue("center_stone_name", master.center_stone_name_default || "");
+    quickMoveForm.setValue("center_qty", master.center_qty_default ?? 0);
+    quickMoveForm.setValue("sub1_stone_name", master.sub1_stone_name_default || "");
+    quickMoveForm.setValue("sub1_qty", master.sub1_qty_default ?? 0);
+    quickMoveForm.setValue("sub2_stone_name", master.sub2_stone_name_default || "");
+    quickMoveForm.setValue("sub2_qty", master.sub2_qty_default ?? 0);
+    quickMoveForm.setValue("labor_base_sell", master.labor_base_sell ?? 0);
+    quickMoveForm.setValue("labor_other_sell", master.labor_other_sell ?? 0);
+    quickMoveForm.setValue("qty", 1);
     setMasterSearchContext(null);
     setMasterSearchQuery("");
   };
@@ -704,15 +890,21 @@ export default function InventoryPage() {
       return;
     }
 
-    quickMoveForm.setValue("material_code", selectedQuickMaster.material_code_default || "");
+    quickMoveForm.setValue("material_code", normalizeMaterialCode(selectedQuickMaster.material_code_default || ""));
     quickMoveForm.setValue("category_code", selectedQuickMaster.category_code || "");
+    quickMoveForm.setValue("color", selectedQuickMaster.color || "");
+    quickMoveForm.setValue("size", selectedQuickMaster.size || selectedQuickMaster.symbol || "");
+    quickMoveForm.setValue("center_stone_name", selectedQuickMaster.center_stone_name_default || "");
     quickMoveForm.setValue("center_qty", selectedQuickMaster.center_qty_default || 0);
+    quickMoveForm.setValue("sub1_stone_name", selectedQuickMaster.sub1_stone_name_default || "");
     quickMoveForm.setValue("sub1_qty", selectedQuickMaster.sub1_qty_default || 0);
+    quickMoveForm.setValue("sub2_stone_name", selectedQuickMaster.sub2_stone_name_default || "");
     quickMoveForm.setValue("sub2_qty", selectedQuickMaster.sub2_qty_default || 0);
     quickMoveForm.setValue("plating_sell", selectedQuickMaster.plating_price_sell_default || 0);
     quickMoveForm.setValue("plating_cost", selectedQuickMaster.plating_price_cost_default || 0);
     quickMoveForm.setValue("labor_base_sell", selectedQuickMaster.labor_base_sell || 0);
     quickMoveForm.setValue("labor_base_cost", selectedQuickMaster.labor_base_cost || 0);
+    quickMoveForm.setValue("labor_other_sell", selectedQuickMaster.labor_other_sell || 0);
 
     toast.info("마스터 데이터 복사됨 (중량 제외)");
   };
@@ -1000,7 +1192,7 @@ export default function InventoryPage() {
             </div>
             <div className="flex items-center gap-2">
               <Button
-                variant="outline"
+                variant="secondary"
                 size="sm"
                 className="h-8 gap-1"
                 onClick={() => {
@@ -1008,7 +1200,34 @@ export default function InventoryPage() {
                   setMasterSearchContext("quick");
                   setMasterSearchQuery("");
                   setSelectedQuickMaster(null);
-                  quickMoveForm.reset();
+                  quickMoveForm.reset({
+                    move_type: "RECEIPT",
+                    location_code: "",
+                    bin_code: "",
+                    inbound_reason: "",
+                    model_name: "",
+                    master_id: undefined,
+                    session_id: undefined,
+                    qty: 1,
+                    material_code: undefined,
+                    color: undefined,
+                    size: undefined,
+                    category_code: undefined,
+                    base_weight_g: undefined,
+                    deduction_weight_g: 0,
+                    center_qty: undefined,
+                    center_stone_name: undefined,
+                    sub1_qty: undefined,
+                    sub1_stone_name: undefined,
+                    sub2_qty: undefined,
+                    sub2_stone_name: undefined,
+                    plating_sell: undefined,
+                    plating_cost: undefined,
+                    labor_base_sell: undefined,
+                    labor_other_sell: undefined,
+                    labor_base_cost: undefined,
+                    memo: "",
+                  });
                 }}
               >
                 <Plus className="w-3.5 h-3.5" />
@@ -1351,10 +1570,17 @@ export default function InventoryPage() {
       )}
       {/* Quick Input Modal */}
       {isQuickInputOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm" onClick={() => { setIsQuickInputOpen(false); setMasterSearchContext(null); }}>
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm"
+          onDoubleClick={() => {
+            setIsQuickInputOpen(false);
+            setMasterSearchContext(null);
+          }}
+        >
           <div
-            className="bg-[var(--panel)] rounded-2xl shadow-2xl max-w-lg w-full mx-4 max-h-[90vh] flex flex-col overflow-hidden"
+            className="bg-[var(--panel)] rounded-2xl shadow-2xl max-w-5xl w-full mx-4 max-h-[90vh] flex flex-col overflow-hidden"
             onClick={(e) => e.stopPropagation()}
+            onDoubleClick={(e) => e.stopPropagation()}
           >
             {/* Header */}
             <div className="flex items-center justify-between p-4 border-b border-[var(--panel-border)] shrink-0">
@@ -1388,9 +1614,9 @@ export default function InventoryPage() {
                     />
                   </div>
                   <div className="space-y-2">
-                    {masterSearchResults.map((master) => (
+                    {masterSearchResults.map((master, index) => (
                       <button
-                        key={master.master_id}
+                        key={`${master.master_id ?? "no-master"}-${master.model_name ?? "no-model"}-${index}`}
                         onClick={() => handleMasterSelect(master)}
                         className="w-full text-left p-3 rounded-lg border border-[var(--panel-border)] hover:bg-[var(--chip)] transition-colors flex items-center gap-3"
                       >
@@ -1455,8 +1681,8 @@ export default function InventoryPage() {
                   </div>
                   <p className="text-[11px] text-[var(--muted)]">마스터 기본값을 참고해 아래 입력값을 수정해서 등록할 수 있습니다.</p>
 
-                  <div className="grid grid-cols-2 gap-3">
-                    <div className="col-span-2">
+                  <div className="grid grid-cols-4 gap-3">
+                    <div className="col-span-4">
                       <label className="text-xs font-medium text-[var(--muted)] mb-1 block">구분</label>
                       <select
                         className="w-full h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
@@ -1469,7 +1695,7 @@ export default function InventoryPage() {
                       </select>
                     </div>
 
-                    <div>
+                    <div className="col-span-1">
                       <label className="text-xs font-medium text-[var(--muted)] mb-1 block">중량(g)</label>
                       <input
                         type="number"
@@ -1479,7 +1705,7 @@ export default function InventoryPage() {
                         {...quickMoveForm.register("base_weight_g", { valueAsNumber: true })}
                       />
                     </div>
-                    <div>
+                    <div className="col-span-1">
                       <label className="text-xs font-medium text-[var(--muted)] mb-1 block">차감중량(g)</label>
                       <input
                         type="number"
@@ -1489,7 +1715,7 @@ export default function InventoryPage() {
                         {...quickMoveForm.register("deduction_weight_g", { valueAsNumber: true })}
                       />
                     </div>
-                    <div>
+                    <div className="col-span-1">
                       <label className="text-xs font-medium text-[var(--muted)] mb-1 block">수량</label>
                       <input
                         type="number"
@@ -1498,7 +1724,7 @@ export default function InventoryPage() {
                         {...quickMoveForm.register("qty", { valueAsNumber: true })}
                       />
                     </div>
-                    <div>
+                    <div className="col-span-1">
                       <label className="text-xs font-medium text-[var(--muted)] mb-1 block">총중량(g)</label>
                       <input
                         type="text"
@@ -1508,7 +1734,7 @@ export default function InventoryPage() {
                       />
                     </div>
 
-                    <div className="col-span-2">
+                    <div className="col-span-1">
                       <label className="text-xs font-medium text-[var(--muted)] mb-1 block">위치 (Location)</label>
                       <select
                         className="w-full h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
@@ -1516,14 +1742,17 @@ export default function InventoryPage() {
                       >
                         <option value="">위치 선택</option>
                         {locationList.map((loc) => (
-                          <option key={loc.location_code} value={loc.location_code}>
+                          <option
+                            key={`${String(loc.location_code ?? "")}-${String(loc.location_name ?? "")}`}
+                            value={String(loc.location_code ?? "")}
+                          >
                             {loc.location_name || loc.location_code} ({loc.location_code})
                           </option>
                         ))}
                       </select>
                     </div>
 
-                    <div className="col-span-2">
+                    <div className="col-span-1">
                       <label className="text-xs font-medium text-[var(--muted)] mb-1 block">세부 위치 (bin)</label>
                       <select
                         className="w-full h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
@@ -1536,60 +1765,112 @@ export default function InventoryPage() {
                       </select>
                     </div>
 
-                    <div>
-                      <label className="text-xs font-medium text-[var(--muted)] mb-1 block">소재</label>
+                    <div className="col-span-2">
+                      <label className="text-xs font-medium text-[var(--muted)] mb-1 block">입고 사유/메모</label>
                       <input
                         type="text"
-                        placeholder="예: 14, 925"
+                        placeholder="어디서 입고되었는지/사유"
                         className="w-full h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                        {...quickMoveForm.register("material_code")}
-                      />
-                    </div>
-                    <div>
-                      <label className="text-xs font-medium text-[var(--muted)] mb-1 block">색상</label>
-                      <input
-                        type="text"
-                        placeholder="예: Y, WG"
-                        className="w-full h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                        {...quickMoveForm.register("color")}
-                      />
-                    </div>
-                    <div>
-                      <label className="text-xs font-medium text-[var(--muted)] mb-1 block">사이즈</label>
-                      <input
-                        type="text"
-                        placeholder="예: 12, 45cm"
-                        className="w-full h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                        {...quickMoveForm.register("size")}
+                        {...quickMoveForm.register("inbound_reason")}
                       />
                     </div>
 
-                    <div className="col-span-2">
-                      <label className="text-xs font-medium text-[var(--muted)] mb-1 block">비고 (Memo)</label>
-                      <input
-                        type="text"
-                        placeholder="메모 입력"
-                        className="w-full h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                        {...quickMoveForm.register("memo")}
-                      />
+                    <div className="col-span-4 grid grid-cols-[82px_82px_96px_1fr_1fr_1fr] gap-2 items-end">
+                      <div>
+                        <label className="text-xs font-medium text-[var(--muted)] mb-1 block">소재</label>
+                        <select
+                          className="w-full h-9 rounded-md border border-input bg-background px-2 py-1 text-sm"
+                          {...quickMoveForm.register("material_code")}
+                        >
+                          <option value="">선택</option>
+                          {MATERIAL_CODE_OPTIONS.map((code) => (
+                            <option key={code} value={code}>{code}</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="text-xs font-medium text-[var(--muted)] mb-1 block">색상</label>
+                        <select
+                          className="w-full h-9 rounded-md border border-input bg-background px-2 py-1 text-sm"
+                          {...quickMoveForm.register("color")}
+                        >
+                          {COLOR_OPTIONS.map((code) => (
+                            <option key={code || "none"} value={code}>{code || "-"}</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="text-xs font-medium text-[var(--muted)] mb-1 block">사이즈</label>
+                        <input
+                          type="text"
+                          placeholder="사이즈"
+                          className="w-full h-9 rounded-md border border-input bg-background px-2 py-1 text-sm"
+                          {...quickMoveForm.register("size")}
+                        />
+                      </div>
+                      <div>
+                        <label className="text-xs font-medium text-[var(--muted)] mb-1 block">기본공임(판매)</label>
+                        <input type="number" readOnly value={Math.max(0, qLaborBaseSell)} className="w-full h-9 rounded-md border border-input bg-[var(--chip)] px-2 py-1 text-sm text-right tabular-nums" />
+                      </div>
+                      <div>
+                        <label className="text-xs font-medium text-[var(--muted)] mb-1 block">보석공임(판매)</label>
+                        <input type="number" readOnly value={Math.round(stoneLaborEstimate)} className="w-full h-9 rounded-md border border-input bg-[var(--chip)] px-2 py-1 text-sm text-right tabular-nums" />
+                      </div>
+                      <div>
+                        <label className="text-xs font-medium text-[var(--muted)] mb-1 block">기타공임(판매)</label>
+                        <input
+                          type="number"
+                          min={0}
+                          className="w-full h-9 rounded-md border border-input bg-background px-2 py-1 text-sm"
+                          {...quickMoveForm.register("labor_other_sell", { valueAsNumber: true })}
+                        />
+                      </div>
                     </div>
-                    <div className="col-span-2">
-                      <label className="text-xs font-medium text-[var(--muted)] mb-1 block">추가 메모</label>
-                      <input
-                        type="text"
-                        placeholder="추가 메모 입력"
-                        className="w-full h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                        onBlur={(e) => {
-                          const current = quickMoveForm.getValues("memo") || "";
-                          if (e.target.value) {
-                            const newVal = current ? `${current} / ${e.target.value}` : e.target.value;
-                            quickMoveForm.setValue("memo", newVal);
-                            e.target.value = ""; // Clear after appending
-                          }
-                        }}
-                      />
-                      <p className="text-[10px] text-[var(--muted)] mt-1">* 입력 후 포커스를 이동하면 비고에 자동 추가됩니다.</p>
+
+                    <div className="col-span-4 grid grid-cols-[1fr_64px_1fr_64px_1fr_64px] gap-2 items-end">
+                      <div>
+                        <label className="text-xs font-medium text-[var(--muted)] mb-1 block">중심석</label>
+                        <input type="text" placeholder="중심석" className="w-full h-9 rounded-md border border-input bg-background px-3 py-1 text-sm" {...quickMoveForm.register("center_stone_name")} />
+                      </div>
+                      <div>
+                        <label className="text-xs font-medium text-[var(--muted)] mb-1 block">개수</label>
+                        <input type="number" min={0} className="w-full h-9 rounded-md border border-input bg-background px-2 py-1 text-sm" {...quickMoveForm.register("center_qty", { valueAsNumber: true })} />
+                      </div>
+                      <div>
+                        <label className="text-xs font-medium text-[var(--muted)] mb-1 block">보조1석</label>
+                        <input type="text" placeholder="보조1석" className="w-full h-9 rounded-md border border-input bg-background px-3 py-1 text-sm" {...quickMoveForm.register("sub1_stone_name")} />
+                      </div>
+                      <div>
+                        <label className="text-xs font-medium text-[var(--muted)] mb-1 block">개수</label>
+                        <input type="number" min={0} className="w-full h-9 rounded-md border border-input bg-background px-2 py-1 text-sm" {...quickMoveForm.register("sub1_qty", { valueAsNumber: true })} />
+                      </div>
+                      <div>
+                        <label className="text-xs font-medium text-[var(--muted)] mb-1 block">보조2석</label>
+                        <input type="text" placeholder="보조2석" className="w-full h-9 rounded-md border border-input bg-background px-3 py-1 text-sm" {...quickMoveForm.register("sub2_stone_name")} />
+                      </div>
+                      <div>
+                        <label className="text-xs font-medium text-[var(--muted)] mb-1 block">개수</label>
+                        <input type="number" min={0} className="w-full h-9 rounded-md border border-input bg-background px-2 py-1 text-sm" {...quickMoveForm.register("sub2_qty", { valueAsNumber: true })} />
+                      </div>
                     </div>
+
+                    <div className="col-span-4 rounded-md border border-[var(--panel-border)] bg-[var(--chip)] px-3 py-2 text-xs">
+                      <div className="font-semibold mb-1">예상 판매가</div>
+                      {(qMaterialCode === "925" || qMaterialCode === "999") && (
+                        <div className="mb-1 text-[10px] text-[var(--muted)]">
+                          은 시세 적용: {Math.round(silverPriceBase).toLocaleString()} x {silverAdjustFactor.toFixed(3)}
+                        </div>
+                      )}
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-[var(--muted)]">
+                        <div>소재가: <span className="text-[var(--foreground)] tabular-nums">{Math.round(materialPriceEstimate).toLocaleString()}</span></div>
+                        <div>기본공임: <span className="text-[var(--foreground)] tabular-nums">{Math.round(Math.max(0, qLaborBaseSell)).toLocaleString()}</span></div>
+                        <div>보석공임: <span className="text-[var(--foreground)] tabular-nums">{Math.round(stoneLaborEstimate).toLocaleString()}</span></div>
+                        <div>기타공임: <span className="text-[var(--foreground)] tabular-nums">{Math.round(Math.max(0, qLaborOtherSell)).toLocaleString()}</span></div>
+                      </div>
+                      <div className="mt-1 text-sm font-bold tabular-nums">합계: {expectedSellPrice.toLocaleString()} KRW</div>
+                    </div>
+
+                    <input type="hidden" {...quickMoveForm.register("memo")} />
                   </div>
 
                   <Button

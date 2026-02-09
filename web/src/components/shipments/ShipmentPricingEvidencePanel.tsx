@@ -14,7 +14,7 @@ type EvidenceStoneRowInput = {
   supply: StoneSource | null;
   qtyReceipt?: number | null;
   qtyUsed?: number | null;
-  qtySource?: "RECEIPT" | "ORDER" | null;
+  qtySource?: "RECEIPT" | "INVENTORY" | "ORDER" | null;
   qtyMaster?: number | null;
   unitSell?: number | null;
   unitCostMaster?: number | null;
@@ -45,6 +45,7 @@ type ShipmentPricingEvidencePanelProps = {
   stoneAdjustmentKrw?: number | null;
   stoneQtyDeltaTotal?: number | null;
   isVariationMode?: boolean;
+  isInventorySource?: boolean;
 };
 
 const formatKrw = (value?: number | null) => {
@@ -79,16 +80,18 @@ const deltaToneClass = (value: number) => {
 
 function ThreeColumnEvidenceRow({
   total,
-  receiptCost,
+  sourceCost,
   masterSellCost,
-  receiptSub,
+  sourceSub,
   masterSub,
+  sourceLabel,
 }: {
   total: string;
-  receiptCost: string;
+  sourceCost: string;
   masterSellCost: string;
-  receiptSub?: string;
+  sourceSub?: string;
   masterSub?: string;
+  sourceLabel: string;
 }) {
   return (
     <div>
@@ -96,7 +99,7 @@ function ThreeColumnEvidenceRow({
         <thead className="text-[var(--muted)] bg-[var(--panel)]">
           <tr>
             <th className="px-3 py-2 text-left">총액</th>
-            <th className="px-3 py-2 text-left">영수증 원가</th>
+            <th className="px-3 py-2 text-left">{sourceLabel} 원가</th>
             <th className="px-3 py-2 text-left">마스터 판매가/원가</th>
           </tr>
         </thead>
@@ -104,8 +107,8 @@ function ThreeColumnEvidenceRow({
           <tr className="border-t border-[var(--panel-border)]">
             <td className="px-3 py-2 font-semibold tabular-nums">{total}</td>
             <td className="px-3 py-2">
-              <div className="font-semibold tabular-nums">{receiptCost}</div>
-              {receiptSub ? <div className="text-[10px] text-[var(--muted)]">{receiptSub}</div> : null}
+              <div className="font-semibold tabular-nums">{sourceCost}</div>
+              {sourceSub ? <div className="text-[10px] text-[var(--muted)]">{sourceSub}</div> : null}
             </td>
             <td className="px-3 py-2">
               <div className="font-semibold tabular-nums">{masterSellCost}</div>
@@ -133,6 +136,7 @@ export function ShipmentPricingEvidencePanel({
   shipmentBaseLaborKrw,
   finalStoneSellKrw,
   stoneAdjustmentKrw,
+  isInventorySource = false,
 }: ShipmentPricingEvidencePanelProps) {
   const [isEvidenceOpen, setIsEvidenceOpen] = useState(false);
   const [isStoneDetailOpen, setIsStoneDetailOpen] = useState(false);
@@ -146,6 +150,7 @@ export function ShipmentPricingEvidencePanel({
       : (masterBaseMarginKrw ?? null);
 
   const displayedBaseSell = baseLaborSellKrw ?? shipmentBaseLaborKrw ?? null;
+  const qtyBasisLabel = isInventorySource ? "재고" : "영수증";
 
   const receiptStoneCostTotal = useMemo(
     () =>
@@ -297,14 +302,14 @@ export function ShipmentPricingEvidencePanel({
                 <tbody>
                   <tr className="text-[var(--muted)]">
                     <td className="px-2 py-1">총액</td>
-                    <td className="px-2 py-1">영수증원가/마진</td>
+                    <td className="px-2 py-1">영수증원가/마스터마진</td>
                     <td className="px-2 py-1">마스터판매가/원가</td>
                     <td className="px-2 py-1">원가차(마스터-영수증)</td>
                     <td className="px-2 py-1">판정</td>
                   </tr>
                   <tr>
                     <td className="px-2 py-1 font-semibold tabular-nums">{formatKrw(displayedBaseSell)}</td>
-                    <td className="px-2 py-1 font-semibold tabular-nums">{formatKrw(factoryBasicCostKrw)} / {formatKrw((displayedBaseSell ?? 0) - (factoryBasicCostKrw ?? 0))}</td>
+                    <td className="px-2 py-1 font-semibold tabular-nums">{formatKrw(factoryBasicCostKrw)} / {formatKrw(computedBaseMargin)}</td>
                     <td className="px-2 py-1 font-semibold tabular-nums text-[var(--muted)]">{formatKrw(masterBaseSellKrw)} / {formatKrw(masterBaseCostKrw)}</td>
                     <td className={`px-2 py-1 font-semibold tabular-nums ${deltaToneClass((masterBaseCostKrw ?? 0) - (factoryBasicCostKrw ?? 0))}`}>
                       {formatKrw((masterBaseCostKrw ?? 0) - (factoryBasicCostKrw ?? 0))}
@@ -339,16 +344,17 @@ export function ShipmentPricingEvidencePanel({
           <CardBody className="p-3 space-y-3 min-w-0">
             <ThreeColumnEvidenceRow
               total={formatKrw(finalStoneSellKrw ?? extraLaborSellKrw ?? null)}
-              receiptCost={`${formatKrw(finalStoneSellKrw ?? null)} / ${formatKrw(receiptStoneCostTotal)}`}
+              sourceCost={`${formatKrw(finalStoneSellKrw ?? null)} / ${formatKrw(receiptStoneCostTotal)}`}
               masterSellCost={`${formatKrw(masterStoneSellTotal)} / ${formatKrw(masterStoneCostTotal)}`}
-              receiptSub={`마진(판매가-영수증원가): ${formatKrw(receiptSellMargin)}`}
+              sourceSub={`마진(판매가-${qtyBasisLabel}원가): ${formatKrw(receiptSellMargin)}`}
               masterSub={`마진(마스터판매가-마스터원가): ${formatKrw(masterSellMargin)}`}
+              sourceLabel={qtyBasisLabel}
             />
 
             <div className="rounded-md border border-[var(--panel-border)] bg-[var(--surface)] p-2 text-xs">
               <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
                 <div className="rounded border border-[var(--panel-border)] bg-[var(--panel)] p-2">
-                  <div className="text-[var(--muted)]">추천판매가(영수증개수x마스터판매단가)</div>
+                  <div className="text-[var(--muted)]">추천판매가({qtyBasisLabel}개수x마스터판매단가)</div>
                   <div className="font-semibold tabular-nums">{formatKrw(recommendedByReceiptQtyTotal)}</div>
                 </div>
                 <div className="rounded border border-[var(--panel-border)] bg-[var(--panel)] p-2">
@@ -360,7 +366,7 @@ export function ShipmentPricingEvidencePanel({
                   <div className="font-semibold tabular-nums">{formatKrw(stoneAdjustmentKrw ?? null)}</div>
                 </div>
                 <div className="rounded border border-[var(--panel-border)] bg-[var(--panel)] p-2">
-                  <div className="text-[var(--muted)]">최종마진(최종판매가-영수증원가)</div>
+                  <div className="text-[var(--muted)]">최종마진(최종판매가-{qtyBasisLabel}원가)</div>
                   <div className="font-semibold tabular-nums">{formatKrw(stoneDeltaFromReceiptCost)}</div>
                 </div>
               </div>
@@ -382,10 +388,10 @@ export function ShipmentPricingEvidencePanel({
                   <tr>
                     <th className="px-2 py-1 text-left">보석</th>
                     <th className="px-2 py-1 text-left">공급구분</th>
-                    <th className="px-2 py-1 text-left">수량(영수증/마스터)</th>
-                    <th className="px-2 py-1 text-right">Δ개수(영수증-마스터)</th>
+                    <th className="px-2 py-1 text-left">수량({qtyBasisLabel}/마스터)</th>
+                    <th className="px-2 py-1 text-right">Δ개수({qtyBasisLabel}-마스터)</th>
                     <th className="px-2 py-1 text-right">마스터판매단가</th>
-                    <th className="px-2 py-1 text-right">판매가(영수증개수)</th>
+                    <th className="px-2 py-1 text-right">판매가({qtyBasisLabel}개수)</th>
                     <th className="px-2 py-1 text-right">판매가(마스터개수)</th>
                     <th className="px-2 py-1 text-right">판정</th>
                   </tr>
@@ -429,16 +435,16 @@ export function ShipmentPricingEvidencePanel({
             </div>
 
             <div className="rounded-md border border-[var(--panel-border)] bg-[var(--surface)] p-2">
-              <div className="text-[11px] font-semibold mb-2">원가 차이 (마스터 vs 영수증)</div>
+              <div className="text-[11px] font-semibold mb-2">원가 차이 (마스터 vs {qtyBasisLabel})</div>
             <div className="rounded-md border border-[var(--panel-border)] bg-[var(--panel)]">
               <table className="w-full table-fixed text-[11px]">
                 <thead className="text-[var(--muted)] border-b border-[var(--panel-border)]">
                   <tr>
                     <th className="px-2 py-1 text-left">보석</th>
-                    <th className="px-2 py-1 text-right">개당단가차(마스터원가-영수증)</th>
+                    <th className="px-2 py-1 text-right">개당단가차(마스터원가-{qtyBasisLabel})</th>
                     <th className="px-2 py-1 text-right">원가(마스터개수)</th>
-                    <th className="px-2 py-1 text-right">원가(영수증개수)</th>
-                    <th className="px-2 py-1 text-right">Δ원가(마스터-영수증)</th>
+                    <th className="px-2 py-1 text-right">원가({qtyBasisLabel}개수)</th>
+                    <th className="px-2 py-1 text-right">Δ원가(마스터-{qtyBasisLabel})</th>
                     <th className="px-2 py-1 text-right">검산오차</th>
                     <th className="px-2 py-1 text-right">판정</th>
                   </tr>

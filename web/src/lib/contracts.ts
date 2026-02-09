@@ -72,6 +72,7 @@ export const CONTRACTS = {
   },
   functions: {
     partyUpsert: process.env.NEXT_PUBLIC_CMS_FN_PARTY_UPSERT ?? "",
+    upsertVendorPrefix: "cms_fn_upsert_vendor_prefix",
     orderUpsert: process.env.NEXT_PUBLIC_CMS_FN_ORDER_UPSERT ?? "",
     orderUpsertV2: process.env.NEXT_PUBLIC_CMS_FN_ORDER_UPSERT_V2 ?? "",
     orderUpsertV3: "cms_fn_upsert_order_line_v3",

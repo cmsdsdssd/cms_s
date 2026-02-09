@@ -49,6 +49,50 @@ type InventoryPositionByLocationRow = {
   on_hand_qty?: number | null;
 };
 
+type InventoryIssueCandidateRow = {
+  move_line_id?: string | null;
+  master_id?: string | null;
+  occurred_at?: string | null;
+  location_code?: string | null;
+  bin_code?: string | null;
+  master_model_name?: string | null;
+  item_name?: string | null;
+  variant_hint?: string | null;
+  line_meta?: Record<string, unknown> | null;
+  move_meta?: Record<string, unknown> | null;
+  move_source?: string | null;
+  move_memo?: string | null;
+  qty?: number | null;
+  move_status?: string | null;
+  direction?: string | null;
+  is_void?: boolean | null;
+};
+
+type InventoryIssueCandidate = {
+  moveLineId: string;
+  masterId: string;
+  locationCode: string;
+  binCode: string;
+  material: string;
+  color: string;
+  size: string;
+  netWeight: string;
+  baseWeight: string;
+  deductionWeight: string;
+  qty: number;
+  centerStoneName: string;
+  centerQty: number;
+  sub1StoneName: string;
+  sub1Qty: number;
+  sub2StoneName: string;
+  sub2Qty: number;
+  laborOtherSell: number;
+  laborBaseSell: number;
+  memo: string;
+  source: string;
+  occurredAt: string;
+};
+
 // Lazy load Factory Order Wizard
 const FactoryOrderWizard = lazy(() => import("@/components/factory-order/factory-order-wizard"));
 
@@ -141,6 +185,112 @@ const MATERIAL_LABELS: Record<string, string> = {
   "00": "00",
 };
 
+const parseVariantParts = (variantHint?: string | null) => {
+  const parts = String(variantHint ?? "").split("/").map((p) => p.trim()).filter(Boolean);
+  return {
+    material: parts[0] ?? "-",
+    color: parts[1] ?? "-",
+    size: parts[2] ?? "-",
+  };
+};
+
+const toNumOrZero = (value: unknown) => {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : 0;
+};
+
+const pickMetaNumber = (meta: Record<string, unknown>, keys: string[]) => {
+  for (const key of keys) {
+    const raw = meta[key];
+    const n = Number(raw);
+    if (Number.isFinite(n)) return n;
+  }
+  return 0;
+};
+
+const pickMetaString = (meta: Record<string, unknown>, keys: string[]) => {
+  for (const key of keys) {
+    const raw = meta[key];
+    if (raw === null || raw === undefined) continue;
+    const s = String(raw).trim();
+    if (s) return s;
+  }
+  return "";
+};
+
+const appendInventorySelectionMemo = (memo: string | null | undefined, candidate: InventoryIssueCandidate) => {
+  const base = String(memo ?? "").replace(/\s*\[재고선택:[^\]]*\]/g, "").trim();
+  const tag =
+    `[재고선택:${candidate.locationCode}${candidate.binCode !== "-" ? `/${candidate.binCode}` : ""},` +
+    `${candidate.material},${candidate.color},${candidate.size},기본${candidate.baseWeight}g,차감${candidate.deductionWeight}g,` +
+    `순${candidate.netWeight}g,기본공임${candidate.laborBaseSell},기타공임${candidate.laborOtherSell},#${candidate.moveLineId.slice(0, 8)}]`;
+  return base ? `${base} ${tag}` : tag;
+};
+
+const upsertOrderMemoViaApi = async (
+  orderLineId: string,
+  memo: string,
+  detail?: {
+    material_code?: string;
+    color?: string;
+    size?: string;
+    center_stone_name?: string;
+    center_stone_qty?: number;
+    sub1_stone_name?: string;
+    sub1_stone_qty?: number;
+    sub2_stone_name?: string;
+    sub2_stone_qty?: number;
+  }
+) => {
+  const response = await fetch("/api/order-line-memo", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      order_line_id: orderLineId,
+      memo,
+      ...(detail ?? {}),
+    }),
+  });
+
+  if (!response.ok) {
+    let reason = `HTTP ${response.status}`;
+    try {
+      const payload = (await response.json()) as { error?: string; details?: string };
+      reason = payload.error || payload.details || reason;
+    } catch {
+      // ignore parse failure
+    }
+    throw new Error(reason);
+  }
+};
+
+const extractErrorMessage = (error: unknown) => {
+  if (error instanceof Error) return error.message;
+  if (typeof error === "string") return error;
+  if (error && typeof error === "object") {
+    const rec = error as Record<string, unknown>;
+    const candidates = [
+      rec.message,
+      rec.error,
+      rec.details,
+      rec.hint,
+      rec.code,
+      rec.statusText,
+      rec.status,
+    ];
+    for (const v of candidates) {
+      if (typeof v === "string" && v.trim()) return v;
+      if (typeof v === "number") return String(v);
+    }
+    try {
+      return JSON.stringify(error);
+    } catch {
+      return "알수없는오류";
+    }
+  }
+  return "알수없는오류";
+};
+
 function getMaterialLabel(value?: string | null) {
   if (!value) return "-";
   return MATERIAL_LABELS[value] ?? value;
@@ -188,7 +338,7 @@ export default function OrdersMainPage() {
   const [inventoryTagSavingIds, setInventoryTagSavingIds] = useState<Set<string>>(new Set());
   const [inventoryMatchModalOpen, setInventoryMatchModalOpen] = useState(false);
   const [inventoryMatchCandidates, setInventoryMatchCandidates] = useState<
-    Record<string, Array<{ locationCode: string; onHandQty: number }>>
+    Record<string, InventoryIssueCandidate[]>
   >({});
   const [inventoryMatchSelection, setInventoryMatchSelection] = useState<Record<string, string>>({});
   const actorId = process.env.NEXT_PUBLIC_CMS_ACTOR_ID ?? null;
@@ -407,7 +557,7 @@ export default function OrdersMainPage() {
 
   const toggleInventoryInOrder = async (order: OrderRow, checked: boolean) => {
     const orderLineId = String(order.order_line_id ?? "");
-    if (!orderLineId || !schemaClient) return;
+    if (!orderLineId) return;
 
     setInventoryTagSavingIds((prev) => {
       const next = new Set(prev);
@@ -416,10 +566,12 @@ export default function OrdersMainPage() {
     });
 
     const nextMemo = toggleInventoryTag(order.memo, checked);
-    const { error } = await schemaClient
-      .from("cms_order_line" as never)
-      .update({ memo: nextMemo } as never)
-      .eq("order_line_id", orderLineId);
+    let errorMessage: string | null = null;
+    try {
+      await upsertOrderMemoViaApi(orderLineId, nextMemo);
+    } catch (error) {
+      errorMessage = extractErrorMessage(error);
+    }
 
     setInventoryTagSavingIds((prev) => {
       const next = new Set(prev);
@@ -427,8 +579,8 @@ export default function OrdersMainPage() {
       return next;
     });
 
-    if (error) {
-      window.alert(`재고체크 저장 실패: ${error.message}`);
+    if (errorMessage) {
+      window.alert(`재고체크 저장 실패: ${errorMessage}`);
       return;
     }
 
@@ -464,7 +616,22 @@ export default function OrdersMainPage() {
       byModel.set(model, list);
     });
 
-    const nextCandidates: Record<string, Array<{ locationCode: string; onHandQty: number }>> = {};
+    const { data: lotRowsRaw, error: lotError } = await schemaClient
+      .from(CONTRACTS.views.inventoryMoveLinesEnriched)
+      .select("move_line_id, master_id, occurred_at, location_code, bin_code, master_model_name, item_name, variant_hint, line_meta, move_meta, move_source, move_memo, qty, move_status, direction, is_void")
+      .eq("move_status", "POSTED")
+      .eq("direction", "IN")
+      .eq("is_void", false)
+      .limit(3000);
+
+    if (lotError) {
+      window.alert(`재고 상세 조회 실패: ${lotError.message}`);
+      return;
+    }
+
+    const lotRows = (lotRowsRaw ?? []) as InventoryIssueCandidateRow[];
+
+    const nextCandidates: Record<string, InventoryIssueCandidate[]> = {};
     const nextSelection: Record<string, string> = {};
     for (const target of inventoryTargets) {
       const orderLineId = String(target.order_line_id);
@@ -474,8 +641,92 @@ export default function OrdersMainPage() {
         window.alert(`재고 부족: ${target.model_name ?? "(모델없음)"}`);
         return;
       }
-      nextCandidates[orderLineId] = candidates.sort((a, b) => b.onHandQty - a.onHandQty);
-      nextSelection[orderLineId] = nextCandidates[orderLineId][0].locationCode;
+      const positiveLocations = new Set(candidates.filter((c) => c.onHandQty > 0).map((c) => c.locationCode));
+      const modelOnHandTotal = candidates.reduce((sum, c) => sum + Math.max(0, c.onHandQty), 0);
+      const seenMoveLineIds = new Set<string>();
+
+      const lots = lotRows
+        .filter((row) => {
+          const rowModel = String(row.master_model_name ?? row.item_name ?? "").trim().toLowerCase();
+          if (!rowModel || rowModel !== model) return false;
+          const location = String(row.location_code ?? "").trim();
+          return !!location && positiveLocations.has(location);
+        })
+        .map((row) => {
+          const moveLineId = String(row.move_line_id ?? "");
+          if (!moveLineId || seenMoveLineIds.has(moveLineId)) return null;
+          seenMoveLineIds.add(moveLineId);
+
+          const parts = parseVariantParts(row.variant_hint);
+          const meta = {
+            ...((row.move_meta ?? {}) as Record<string, unknown>),
+            ...((row.line_meta ?? {}) as Record<string, unknown>),
+          };
+          const material = String(meta.material_code ?? parts.material ?? "-") || "-";
+          const color = String(meta.color ?? parts.color ?? "-") || "-";
+          const size = String(meta.size ?? parts.size ?? "-") || "-";
+
+          const baseWeight = pickMetaNumber(meta, ["base_weight_g", "baseWeightG", "weight_g", "weightG"]);
+          const deductionWeight = pickMetaNumber(meta, ["deduction_weight_g", "deductionWeightG"]);
+          const directNet = pickMetaNumber(meta, ["net_weight_g", "netWeightG", "net_weight", "weight_net_g"]);
+          const netWeightNum = directNet > 0 ? directNet : Math.max(0, baseWeight - deductionWeight);
+          const netWeight = netWeightNum > 0 ? netWeightNum.toFixed(2) : "-";
+          const baseWeightText = baseWeight > 0 ? baseWeight.toFixed(2) : "-";
+          const deductionWeightText = deductionWeight > 0 ? deductionWeight.toFixed(2) : "0.00";
+          const centerStoneName = pickMetaString(meta, ["center_stone_name", "centerStoneName"]);
+          const centerQty = Math.max(0, pickMetaNumber(meta, ["center_qty", "centerQty"]));
+          const sub1StoneName = pickMetaString(meta, ["sub1_stone_name", "sub1StoneName"]);
+          const sub1Qty = Math.max(0, pickMetaNumber(meta, ["sub1_qty", "sub1Qty"]));
+          const sub2StoneName = pickMetaString(meta, ["sub2_stone_name", "sub2StoneName"]);
+          const sub2Qty = Math.max(0, pickMetaNumber(meta, ["sub2_qty", "sub2Qty"]));
+          const laborOtherSell = Math.max(0, pickMetaNumber(meta, ["labor_other_sell", "laborOtherSell"]));
+          const laborBaseSell = Math.max(0, pickMetaNumber(meta, ["labor_base_sell", "laborBaseSell"]));
+
+          return {
+            moveLineId,
+            masterId: String(row.master_id ?? ""),
+            locationCode: String(row.location_code ?? "-"),
+            binCode: String(row.bin_code ?? "-") || "-",
+            material,
+            color,
+            size,
+            netWeight,
+            baseWeight: baseWeightText,
+            deductionWeight: deductionWeightText,
+            qty: Math.max(0, toNumOrZero(row.qty)),
+            centerStoneName,
+            centerQty,
+            sub1StoneName,
+            sub1Qty,
+            sub2StoneName,
+            sub2Qty,
+            laborOtherSell,
+            laborBaseSell,
+            memo: String(row.move_memo ?? ""),
+            source: String(row.move_source ?? ""),
+            occurredAt: String(row.occurred_at ?? ""),
+          } satisfies InventoryIssueCandidate;
+        })
+        .filter((row): row is InventoryIssueCandidate => Boolean(row && row.moveLineId))
+        .sort((a, b) => new Date(b.occurredAt).getTime() - new Date(a.occurredAt).getTime());
+
+      const trimmedLots: InventoryIssueCandidate[] = [];
+      let remaining = modelOnHandTotal;
+      for (const lot of lots) {
+        if (remaining <= 0) break;
+        const available = Math.min(remaining, Math.max(0, lot.qty));
+        if (available <= 0) continue;
+        trimmedLots.push({ ...lot, qty: available });
+        remaining -= available;
+      }
+
+      if (trimmedLots.length === 0) {
+        window.alert(`재고 상세 후보 없음: ${target.model_name ?? "(모델없음)"}`);
+        return;
+      }
+
+      nextCandidates[orderLineId] = trimmedLots;
+      nextSelection[orderLineId] = trimmedLots[0].moveLineId;
     }
 
     setInventoryMatchCandidates(nextCandidates);
@@ -485,8 +736,13 @@ export default function OrdersMainPage() {
 
   const confirmInventoryIssueWithMatch = async () => {
     const setStatusFn = CONTRACTS.functions.orderSetStatus;
+    const quickMoveFn = CONTRACTS.functions.quickInventoryMove;
     if (!setStatusFn) {
       window.alert("orderSetStatus RPC가 설정되지 않았습니다.");
+      return;
+    }
+    if (!quickMoveFn) {
+      window.alert("quickInventoryMove RPC가 설정되지 않았습니다.");
       return;
     }
     if (inventoryTargets.length === 0) {
@@ -496,24 +752,88 @@ export default function OrdersMainPage() {
 
     setBulkIssueLoading(true);
     const succeeded: string[] = [];
-    const failed: string[] = [];
+    const failed: Array<{ orderLineId: string; reason: string }> = [];
     for (const target of inventoryTargets) {
       const orderLineId = String(target.order_line_id);
-      const matchedLocation = inventoryMatchSelection[orderLineId];
-      if (!matchedLocation) {
-        failed.push(orderLineId);
+      const matchedMoveLineId = inventoryMatchSelection[orderLineId];
+      const matchedCandidate = (inventoryMatchCandidates[orderLineId] ?? []).find(
+        (candidate) => candidate.moveLineId === matchedMoveLineId
+      );
+      if (!matchedCandidate) {
+        failed.push({ orderLineId, reason: "매칭 후보 누락" });
         continue;
       }
       try {
+        if (schemaClient) {
+          const nextMemo = appendInventorySelectionMemo(target.memo, matchedCandidate);
+          await upsertOrderMemoViaApi(orderLineId, nextMemo, {
+            material_code: matchedCandidate.material === "-" ? undefined : matchedCandidate.material,
+            color: matchedCandidate.color === "-" ? undefined : matchedCandidate.color,
+            size: matchedCandidate.size === "-" ? undefined : matchedCandidate.size,
+            center_stone_name: matchedCandidate.centerStoneName || undefined,
+            center_stone_qty: matchedCandidate.centerQty || undefined,
+            sub1_stone_name: matchedCandidate.sub1StoneName || undefined,
+            sub1_stone_qty: matchedCandidate.sub1Qty || undefined,
+            sub2_stone_name: matchedCandidate.sub2StoneName || undefined,
+            sub2_stone_qty: matchedCandidate.sub2Qty || undefined,
+            selected_base_weight_g: matchedCandidate.baseWeight === "-" ? undefined : Number(matchedCandidate.baseWeight),
+            selected_deduction_weight_g: Number(matchedCandidate.deductionWeight || 0),
+            selected_net_weight_g: matchedCandidate.netWeight === "-" ? undefined : Number(matchedCandidate.netWeight),
+            selected_labor_base_sell_krw: matchedCandidate.laborBaseSell || undefined,
+            selected_labor_other_sell_krw: matchedCandidate.laborOtherSell || undefined,
+            selected_inventory_move_line_id: matchedCandidate.moveLineId,
+            selected_inventory_location_code: matchedCandidate.locationCode,
+            selected_inventory_bin_code: matchedCandidate.binCode === "-" ? undefined : matchedCandidate.binCode,
+          });
+        }
+
+        const issueQty = Math.max(1, Number(target.qty ?? 1));
+        await callRpc(quickMoveFn, {
+          p_move_type: "ISSUE",
+          p_item_name: target.model_name ?? "UNKNOWN_ITEM",
+          p_qty: issueQty,
+          p_occurred_at: new Date().toISOString(),
+          p_party_id: target.customer_party_id ?? null,
+          p_location_code: matchedCandidate.locationCode,
+          p_bin_code: matchedCandidate.binCode === "-" ? null : matchedCandidate.binCode,
+          p_variant_hint: [matchedCandidate.material, matchedCandidate.color, matchedCandidate.size]
+            .filter((x) => x && x !== "-")
+            .join("/") || null,
+          p_unit: "EA",
+          p_source: "AUTO_ORDER_READY",
+          p_memo:
+            `order_line=${orderLineId}, lot=${matchedCandidate.moveLineId.slice(0, 8)},` +
+            ` net=${matchedCandidate.netWeight}g, base=${matchedCandidate.baseWeight}g, deduction=${matchedCandidate.deductionWeight}g`,
+          p_meta: {
+            order_line_id: orderLineId,
+            selected_inventory_move_line_id: matchedCandidate.moveLineId,
+            selected_material_code: matchedCandidate.material,
+            selected_color: matchedCandidate.color,
+            selected_size: matchedCandidate.size,
+            selected_base_weight_g: matchedCandidate.baseWeight,
+            selected_deduction_weight_g: matchedCandidate.deductionWeight,
+            selected_net_weight_g: matchedCandidate.netWeight,
+            selected_labor_base_sell: matchedCandidate.laborBaseSell,
+            selected_labor_other_sell: matchedCandidate.laborOtherSell,
+          },
+          p_idempotency_key: `ORDER_READY_ISSUE:${orderLineId}:${matchedCandidate.moveLineId}`,
+          p_actor_person_id: actorId,
+          p_note: "orders_main inventory issue on ready_to_ship",
+          p_correlation_id: crypto.randomUUID(),
+          p_master_id: matchedCandidate.masterId || target.matched_master_id || null,
+        });
+
         await callRpc(setStatusFn, {
           p_order_line_id: orderLineId,
           p_to_status: "READY_TO_SHIP",
           p_actor_person_id: actorId,
-          p_reason: `재고출고(${matchedLocation})`,
+          p_reason:
+            `재고출고(${matchedCandidate.locationCode}${matchedCandidate.binCode !== "-" ? `/${matchedCandidate.binCode}` : ""}` +
+            `,${matchedCandidate.material},${matchedCandidate.color},${matchedCandidate.size},${matchedCandidate.netWeight}g,#${matchedCandidate.moveLineId.slice(0, 8)})`,
         });
         succeeded.push(orderLineId);
-      } catch {
-        failed.push(orderLineId);
+      } catch (error) {
+        failed.push({ orderLineId, reason: extractErrorMessage(error) });
       }
     }
     setBulkIssueLoading(false);
@@ -524,7 +844,12 @@ export default function OrdersMainPage() {
     }
 
     if (failed.length > 0) {
-      window.alert(`일부 실패: ${failed.length}건 (성공 ${succeeded.length}건)`);
+      const detail = failed
+        .slice(0, 3)
+        .map((item) => `${item.orderLineId.slice(0, 8)}: ${item.reason}`)
+        .join("\n");
+      const more = failed.length > 3 ? `\n외 ${failed.length - 3}건` : "";
+      window.alert(`일부 실패: ${failed.length}건 (성공 ${succeeded.length}건)\n${detail}${more}`);
     } else {
       window.alert(`재고출고 전환 완료: ${succeeded.length}건`);
     }
@@ -655,22 +980,40 @@ export default function OrdersMainPage() {
                 const orderLineId = String(target.order_line_id);
                 const model = String(target.model_name ?? "-");
                 const candidates = inventoryMatchCandidates[orderLineId] ?? [];
+                const selected = candidates.find((c) => c.moveLineId === inventoryMatchSelection[orderLineId]) ?? null;
                 return (
-                  <div key={orderLineId} className="grid grid-cols-[1fr_220px] gap-3 items-center rounded-lg border border-[var(--panel-border)] bg-[var(--chip)] px-3 py-2">
-                    <div className="text-sm truncate">{model}</div>
+                  <div key={orderLineId} className="space-y-2 rounded-lg border border-[var(--panel-border)] bg-[var(--chip)] px-3 py-2">
+                    <div className="text-sm font-semibold truncate">{model}</div>
                     <select
                       value={inventoryMatchSelection[orderLineId] ?? ""}
                       onChange={(e) =>
                         setInventoryMatchSelection((prev) => ({ ...prev, [orderLineId]: e.target.value }))
                       }
-                      className="h-8 text-xs rounded-md bg-[var(--background)] border border-[var(--panel-border)] px-2"
+                      className="h-8 w-full text-xs rounded-md bg-[var(--background)] border border-[var(--panel-border)] px-2"
                     >
                       {candidates.map((c) => (
-                        <option key={`${orderLineId}-${c.locationCode}`} value={c.locationCode}>
-                          {c.locationCode} (재고 {c.onHandQty})
+                        <option key={`${orderLineId}-${c.moveLineId}`} value={c.moveLineId}>
+                          {c.locationCode}{c.binCode !== "-" ? `/${c.binCode}` : ""} · 소재 {c.material} · 색 {c.color} · 사이즈 {c.size} · {c.netWeight === "-" ? "중량 -" : `${c.netWeight}g`} · 수량 {c.qty}
                         </option>
                       ))}
                     </select>
+                    {selected ? (
+                      <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-[11px] text-[var(--muted)]">
+                        <div>위치: <span className="text-[var(--foreground)]">{selected.locationCode}</span></div>
+                        <div>bin: <span className="text-[var(--foreground)]">{selected.binCode}</span></div>
+                        <div>소재: <span className="text-[var(--foreground)]">{selected.material}</span></div>
+                        <div>색상: <span className="text-[var(--foreground)]">{selected.color}</span></div>
+                        <div>사이즈: <span className="text-[var(--foreground)]">{selected.size}</span></div>
+                        <div>중량: <span className="text-[var(--foreground)]">기본 {selected.baseWeight}g / 차감 {selected.deductionWeight}g / 순 {selected.netWeight}g</span></div>
+                        <div>중심석: <span className="text-[var(--foreground)]">{selected.centerStoneName || "-"} {selected.centerQty ? `(${selected.centerQty})` : ""}</span></div>
+                        <div>보조1석: <span className="text-[var(--foreground)]">{selected.sub1StoneName || "-"} {selected.sub1Qty ? `(${selected.sub1Qty})` : ""}</span></div>
+                        <div>보조2석: <span className="text-[var(--foreground)]">{selected.sub2StoneName || "-"} {selected.sub2Qty ? `(${selected.sub2Qty})` : ""}</span></div>
+                        <div>기본공임(판매): <span className="text-[var(--foreground)]">{selected.laborBaseSell.toLocaleString()}</span></div>
+                        <div>기타공임(판매): <span className="text-[var(--foreground)]">{selected.laborOtherSell.toLocaleString()}</span></div>
+                        <div className="col-span-2">입고메모: <span className="text-[var(--foreground)]">{selected.memo || "-"}</span></div>
+                        <div className="col-span-2">입고소스: <span className="text-[var(--foreground)]">{selected.source || "-"}</span></div>
+                      </div>
+                    ) : null}
                   </div>
                 );
               })}

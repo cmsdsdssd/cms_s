@@ -10,7 +10,7 @@ import { Input, Select } from "@/components/ui/field";
 import { CONTRACTS } from "@/lib/contracts";
 import { getSchemaClient } from "@/lib/supabase/client";
 import { useRpcMutation } from "@/hooks/use-rpc-mutation";
-import { Factory, Phone, Save } from "lucide-react";
+import { Factory, Phone } from "lucide-react";
 
 type MarketTickConfig = {
   fx_markup: number;
@@ -99,6 +99,7 @@ export default function SettingsPage() {
   const [csFactor, setCsFactor] = useState<string | null>(null);
   const [silverKrFactor, setSilverKrFactor] = useState<string | null>(null);
   const [ruleRoundingUnit, setRuleRoundingUnit] = useState<string | null>(null);
+  const [isMarketAdvancedOpen, setIsMarketAdvancedOpen] = useState(false);
 
   const displayFxMarkup = fxMarkup ?? String(cfgQuery.data?.fx_markup ?? 1.03);
   const displayCsFactor = csFactor ?? String(cfgQuery.data?.cs_correction_factor ?? 1.2);
@@ -148,7 +149,7 @@ export default function SettingsPage() {
       return;
     }
     if (kr <= 0 || kr > 3.0) {
-      toast.error("한국 실버 보정계수는 0 ~ 3.0 범위여야 합니다.");
+      toast.error("한국 실버 해리는 0 ~ 3.0 범위여야 합니다.");
       return;
     }
 
@@ -302,6 +303,7 @@ export default function SettingsPage() {
   const [testVendorPartyId, setTestVendorPartyId] = useState("");
   const [testCostBasis, setTestCostBasis] = useState("0");
   const [testResult, setTestResult] = useState<{ picked_rule_id?: string | null; markup_krw?: number | null } | null>(null);
+  const [isGlobalRulePanelOpen, setIsGlobalRulePanelOpen] = useState(false);
 
   const resetRuleForm = () => {
     setEditingRuleId(null);
@@ -427,28 +429,42 @@ export default function SettingsPage() {
       {/* 왼쪽 컬럼: 시세 파이프라인 설정 */}
       <Card>
         <CardHeader>
-          <div>
-            <div className="text-sm font-semibold">시세 파이프라인 설정</div>
-            <div className="text-xs text-[var(--muted)]">FX 마크업 · 중국 CS 보정계수 · 한국 실버 보정계수</div>
+          <div className="flex items-center justify-between gap-2">
+            <div>
+              <div className="text-sm font-semibold">시세 파이프라인 설정</div>
+              <div className="text-xs text-[var(--muted)]">한국 실버 해리 우선 설정</div>
+            </div>
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              className="h-6 px-2 text-xs"
+              onClick={() => setIsMarketAdvancedOpen((prev) => !prev)}
+            >
+              {isMarketAdvancedOpen ? "나머지 접기" : "나머지 펼치기"}
+            </Button>
           </div>
         </CardHeader>
         <CardBody className="space-y-4">
-          {/* [변경됨] 카드가 반으로 줄어들었으므로 inputs를 세로로(grid-cols-1) 배치하여 가독성 확보 */}
           <div className="grid grid-cols-1 gap-4">
             <label className="space-y-1">
-              <div className="text-sm text-[var(--muted)]">FX 마크업 (예: 1.03)</div>
-              <Input value={displayFxMarkup} onChange={(e) => setFxMarkup(e.target.value)} />
-            </label>
-
-            <label className="space-y-1">
-              <div className="text-sm text-[var(--muted)]">중국 CS 보정계수 (예: 1.2)</div>
-              <Input value={displayCsFactor} onChange={(e) => setCsFactor(e.target.value)} />
-            </label>
-
-            <label className="space-y-1">
-              <div className="text-sm text-[var(--muted)]">한국 실버 보정계수 (예: 1.2)</div>
+              <div className="text-sm text-[var(--muted)]">한국 실버 해리 (예: 1.2)</div>
               <Input value={displaySilverKrFactor} onChange={(e) => setSilverKrFactor(e.target.value)} />
             </label>
+
+            {isMarketAdvancedOpen ? (
+              <>
+                <label className="space-y-1">
+                  <div className="text-sm text-[var(--muted)]">FX 마크업 (예: 1.03)</div>
+                  <Input value={displayFxMarkup} onChange={(e) => setFxMarkup(e.target.value)} />
+                </label>
+
+                <label className="space-y-1">
+                  <div className="text-sm text-[var(--muted)]">중국 CS 보정계수 (예: 1.2)</div>
+                  <Input value={displayCsFactor} onChange={(e) => setCsFactor(e.target.value)} />
+                </label>
+              </>
+            ) : null}
           </div>
 
           <div className="flex items-center gap-2 pt-2">
@@ -462,17 +478,19 @@ export default function SettingsPage() {
             </div>
           </div>
 
-          <div className="text-xs text-[var(--muted-weak)] leading-relaxed pt-2 border-t border-[var(--border)] mt-2">
-            <p className="mb-1">
-              • <strong>SILVER_CN_KRW_PER_G</strong>: (중국 은시세 × 환율 × FX 마크업) × CS 보정계수
-            </p>
-            <p className="mb-1">
-              • <strong>한국 실버 보정계수</strong>: 국내 은시세 파이프라인 및 출고확정 계산용
-            </p>
-            <p>
-              • 출고확정 시 현재 설정된 시세와 보정계수가 주문 라인에 스냅샷으로 저장됩니다.
-            </p>
-          </div>
+          {isMarketAdvancedOpen ? (
+            <div className="text-xs text-[var(--muted-weak)] leading-relaxed pt-2 border-t border-[var(--border)] mt-2">
+              <p className="mb-1">
+                • <strong>SILVER_CN_KRW_PER_G</strong>: (중국 은시세 × 환율 × FX 마크업) × CS 보정계수
+              </p>
+              <p className="mb-1">
+                • <strong>한국 실버 해리</strong>: 국내 은시세 파이프라인 및 출고확정 계산용
+              </p>
+              <p>
+                • 출고확정 시 현재 설정된 시세와 보정계수가 주문 라인에 스냅샷으로 저장됩니다.
+              </p>
+            </div>
+          ) : null}
         </CardBody>
       </Card>
 
@@ -517,14 +535,26 @@ export default function SettingsPage() {
         </CardBody>
       </Card>
 
-      <Card className="lg:col-span-2">
-        <CardHeader>
-          <div>
-            <div className="text-sm font-semibold">가격 룰(글로벌)</div>
-            <div className="text-xs text-[var(--muted)]">물림/원석/패키지 구간별 마크업 룰 관리</div>
+      <Card className="lg:col-span-2 order-last lg:order-last">
+        <CardHeader className="py-2 px-3">
+          <div className="flex items-center justify-between gap-2">
+            <div>
+              <div className="text-sm font-semibold">가격 룰(글로벌)</div>
+              <div className="text-xs text-[var(--muted)]">물림/원석/패키지 구간별 마크업 룰 관리</div>
+            </div>
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              className="h-6 px-2 text-xs"
+              onClick={() => setIsGlobalRulePanelOpen((prev) => !prev)}
+            >
+              {isGlobalRulePanelOpen ? "접기" : "펼치기"}
+            </Button>
           </div>
         </CardHeader>
-        <CardBody className="space-y-4">
+        {isGlobalRulePanelOpen ? (
+          <CardBody className="space-y-4">
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             <div className="rounded-lg border border-[var(--panel-border)] bg-[var(--panel)] p-3 space-y-3">
               <div className="text-xs font-semibold">룰 생성/수정</div>
@@ -690,7 +720,8 @@ export default function SettingsPage() {
               picked_rule_id: {testResult?.picked_rule_id ?? "-"} / markup_krw: {testResult?.markup_krw ?? "-"}
             </div>
           </div>
-        </CardBody>
+          </CardBody>
+        ) : null}
       </Card>
 
       {/* 오른쪽 컬럼: 공장 팩스 설정 */}
@@ -721,7 +752,7 @@ export default function SettingsPage() {
               <p className="text-xs mt-1">거래처 관리에서 공장을 먼저 등록해주세요</p>
             </div>
           ) : (
-            <div className="space-y-3 max-h-[400px] overflow-y-auto">
+            <div className="space-y-2 max-h-[520px] overflow-y-auto pr-1">
               {vendorsQuery.data?.map((vendor) => {
                 const edit = editingConfigs[vendor.vendor_party_id];
                 const faxNumber = edit?.fax_number ?? vendor.fax_number ?? "";
@@ -731,61 +762,45 @@ export default function SettingsPage() {
                 return (
                   <div
                     key={vendor.vendor_party_id}
-                    className={`p-3 rounded-lg border transition-all ${
+                    className={`p-2 rounded-lg border transition-all ${
                       hasChanges 
                         ? "border-[var(--primary)] bg-[var(--primary)]/5" 
                         : "border-[var(--panel-border)] bg-[var(--panel)]"
                     }`}
                   >
-                    <div className="flex items-center justify-between mb-2">
-                      <span className="font-medium text-sm">{vendor.vendor_name}</span>
-                      {hasChanges && (
-                        <Button
-                          size="sm"
-                          variant="primary"
-                          className="h-7 text-xs"
-                          onClick={() => handleSaveFaxConfig(vendor)}
-                          disabled={updateFaxConfigMutation.isPending}
-                        >
-                          <Save className="w-3 h-3 mr-1" />
-                          저장
-                        </Button>
-                      )}
-                    </div>
-                    
-                    <div className="grid grid-cols-2 gap-2">
-                      <div>
-                        <label className="text-[10px] text-[var(--muted)] uppercase tracking-wider">팩스 번호</label>
+                    <div className="overflow-x-auto">
+                      <div className="grid min-w-[560px] grid-cols-[140px_minmax(0,1fr)_96px_60px] items-center gap-1.5">
+                        <span className="truncate text-sm font-medium" title={vendor.vendor_name}>{vendor.vendor_name}</span>
                         <div className="flex items-center gap-1">
-                          <Phone className="w-3 h-3 text-[var(--muted)]" />
-                          <Input
-                            value={faxNumber}
-                            onChange={(e) => setEditingConfig(vendor.vendor_party_id, "fax_number", e.target.value)}
-                            placeholder="02-1234-5678"
-                            className="h-8 text-sm"
-                          />
+                        <Phone className="h-3 w-3 text-[var(--muted)]" />
+                        <Input
+                          value={faxNumber}
+                          onChange={(e) => setEditingConfig(vendor.vendor_party_id, "fax_number", e.target.value)}
+                          placeholder="02-1234-5678"
+                          className="h-7 py-0 text-xs"
+                        />
                         </div>
-                      </div>
-                      <div>
-                        <label className="text-[10px] text-[var(--muted)] uppercase tracking-wider">전송 방식</label>
                         <Select
                           value={faxProvider}
                           onChange={(e) => setEditingConfig(vendor.vendor_party_id, "fax_provider", e.target.value)}
-                          className="h-8 text-sm"
+                          className="h-7 w-[96px] min-w-[96px] px-2 pr-6 py-0 text-xs leading-5"
                         >
-                          <option value="mock">Mock (테스트용)</option>
-                          <option value="twilio">Twilio (실제 팩스)</option>
-                          <option value="sendpulse">SendPulse</option>
-                          <option value="custom">Custom</option>
-                          <option value="apiplex">API PLEX (국내 팩스)</option>
-                          <option value="uplus_print">U+ Webfax (인쇄 전송)</option>
+                          <option value="mock">mock</option>
+                          <option value="twilio">twilio</option>
+                          <option value="sendpulse">sendpulse</option>
+                          <option value="custom">custom</option>
+                          <option value="apiplex">apiplex</option>
+                          <option value="uplus_print">uplus</option>
                         </Select>
-                        {faxProvider === "uplus_print" && (
-                          <div className="mt-2 rounded-md border border-amber-300 bg-amber-50 px-2 py-1 text-[11px] leading-relaxed text-amber-900">
-                            <p>PC에 U+ 간편팩스 2.0 설치 + 프린터 목록에 &#39;U+Webfax&#39;가 있어야 함</p>
-                            <p>발주서 화면에서 인쇄 → 프린터 &#39;U+Webfax&#39; 선택 → U+ 팩스창에서 수신번호/제목 확인 후 전송</p>
-                          </div>
-                        )}
+                        <Button
+                          size="sm"
+                          variant={hasChanges ? "primary" : "secondary"}
+                          className="h-7 px-2 text-xs"
+                          onClick={() => handleSaveFaxConfig(vendor)}
+                          disabled={!hasChanges || updateFaxConfigMutation.isPending}
+                        >
+                          저장
+                        </Button>
                       </div>
                     </div>
                   </div>
