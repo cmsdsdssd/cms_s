@@ -277,6 +277,10 @@ const toLineAmountsArAligned = (line: ReceiptLine): Amounts => {
     const total = Number(line.total_amount_sell_krw ?? 0);
     return { gold: 0, silver: 0, labor: repairLabor, total };
   }
+  if (line.is_unit_pricing) {
+    const total = Number(line.total_amount_sell_krw ?? 0);
+    return { gold: 0, silver: 0, labor: total, total };
+  }
   return toLineAmounts(line);
 };
 

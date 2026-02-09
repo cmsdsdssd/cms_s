@@ -196,7 +196,7 @@ const formatGram = (value?: number | null) => {
   if (!Number.isFinite(numeric)) return "-";
   const formatted = new Intl.NumberFormat("ko-KR", {
     minimumFractionDigits: 0,
-    maximumFractionDigits: 2,
+    maximumFractionDigits: 3,
   }).format(numeric);
   return `${formatted}g`;
 };
@@ -330,6 +330,8 @@ export default function ArPage() {
   const [paymentCashKrw, setPaymentCashKrw] = useState("");
   const [paymentGoldG, setPaymentGoldG] = useState("");
   const [paymentSilverG, setPaymentSilverG] = useState("");
+  const [paymentProofFile, setPaymentProofFile] = useState<File | null>(null);
+  const [isPaymentProofUploading, setIsPaymentProofUploading] = useState(false);
   const [paymentIdempotencyKey, setPaymentIdempotencyKey] = useState(() => crypto.randomUUID());
 
   const [returnShipmentLineId, setReturnShipmentLineId] = useState("");
@@ -668,6 +670,7 @@ export default function ArPage() {
       setPaymentCashKrw("");
       setPaymentGoldG("");
       setPaymentSilverG("");
+      setPaymentProofFile(null);
       setPaidAt(toKstInputValue());
       setPaymentIdempotencyKey(crypto.randomUUID());
     },
@@ -780,7 +783,8 @@ export default function ArPage() {
     Boolean(effectiveSelectedPartyId) &&
     Boolean(paidAt) &&
     hasPaymentValue &&
-    !paymentMutation.isPending;
+    !paymentMutation.isPending &&
+    !isPaymentProofUploading;
 
   const effectiveReturnShipmentLineId = useMemo(() => {
     if (!returnShipmentLineId) return "";
@@ -1358,18 +1362,57 @@ export default function ArPage() {
                       {actionTab === "payment" && (
                         <form
                           className="space-y-6"
-                          onSubmit={(e) => {
+                          onSubmit={async (e) => {
                             e.preventDefault();
                             if (!canSubmitPayment) return;
-                            paymentMutation.mutate({
-                              p_party_id: effectiveSelectedPartyId,
-                              p_paid_at: new Date(paidAt).toISOString(),
-                              p_cash_krw: cashValue,
-                              p_gold_g: goldValue,
-                              p_silver_g: silverValue,
-                              p_idempotency_key: paymentIdempotencyKey,
-                              p_note: paymentMemo || null,
-                            });
+                            let resolvedNote = paymentMemo.trim();
+
+                            try {
+                              if (paymentProofFile && effectiveSelectedPartyId) {
+                                setIsPaymentProofUploading(true);
+                                const formData = new FormData();
+                                formData.append("party_id", effectiveSelectedPartyId);
+                                formData.append("idempotency_key", paymentIdempotencyKey);
+                                formData.append("file", paymentProofFile);
+
+                                const uploadRes = await fetch("/api/ar-payment-image-upload", {
+                                  method: "POST",
+                                  body: formData,
+                                });
+                                const uploadJson = await uploadRes.json().catch(() => ({}));
+                                if (!uploadRes.ok) {
+                                  const message =
+                                    typeof uploadJson?.error === "string"
+                                      ? uploadJson.error
+                                      : "수금 증빙 업로드 실패";
+                                  throw new Error(message);
+                                }
+
+                                const uploadedPath =
+                                  typeof uploadJson?.path === "string" ? uploadJson.path : "";
+                                if (uploadedPath) {
+                                  const attachmentLine = `[수금증빙] ${uploadedPath}`;
+                                  resolvedNote = resolvedNote
+                                    ? `${resolvedNote}\n${attachmentLine}`
+                                    : attachmentLine;
+                                }
+                              }
+
+                              await paymentMutation.mutateAsync({
+                                p_party_id: effectiveSelectedPartyId,
+                                p_paid_at: new Date(paidAt).toISOString(),
+                                p_cash_krw: cashValue,
+                                p_gold_g: goldValue,
+                                p_silver_g: silverValue,
+                                p_idempotency_key: paymentIdempotencyKey,
+                                p_note: resolvedNote || null,
+                              });
+                            } catch (error) {
+                              const message = error instanceof Error ? error.message : "잠시 후 다시 시도해 주세요";
+                              toast.error("수금 등록 실패", { description: message });
+                            } finally {
+                              setIsPaymentProofUploading(false);
+                            }
                           }}
                         >
                           <div className="space-y-1">
@@ -1402,8 +1445,25 @@ export default function ArPage() {
                             <Textarea value={paymentMemo} onChange={(e) => setPaymentMemo(e.target.value)} placeholder="메모 입력" className="resize-none" />
                           </div>
 
+                          <div className="space-y-2">
+                            <label className="text-xs font-semibold text-[var(--muted)]">수금 증빙 이미지</label>
+                            <Input
+                              type="file"
+                              accept="image/*"
+                              onChange={(e) => setPaymentProofFile(e.target.files?.[0] ?? null)}
+                            />
+                            {paymentProofFile && (
+                              <div className="flex items-center justify-between rounded border border-[var(--panel-border)] bg-[var(--chip)] px-3 py-2 text-xs">
+                                <span className="truncate pr-2">{paymentProofFile.name}</span>
+                                <Button type="button" size="sm" variant="secondary" onClick={() => setPaymentProofFile(null)}>
+                                  제거
+                                </Button>
+                              </div>
+                            )}
+                          </div>
+
                           <Button type="submit" size="lg" className="w-full" disabled={!canSubmitPayment}>
-                            수금 등록 완료
+                            {isPaymentProofUploading ? "증빙 업로드 중..." : "수금 등록 완료"}
                           </Button>
                         </form>
                       )}

@@ -74,6 +74,8 @@ export async function GET(request: Request) {
     return NextResponse.json({ data: [] });
   }
 
+  const warnings: string[] = [];
+
   const shipmentIds = Array.from(
     new Set(matches.map((row) => row.shipment_id).filter((id): id is string => typeof id === "string" && id.length > 0))
   );
@@ -95,18 +97,15 @@ export async function GET(request: Request) {
       .select("shipment_id, status")
       .in("shipment_id", shipmentIds);
     if (shipmentError) {
-      return jsonError(shipmentError.message ?? "shipment 조회 실패", 500, {
-        code: shipmentError.code ?? undefined,
-        details: shipmentError.details ?? undefined,
-        hint: shipmentError.hint ?? undefined,
+      warnings.push(shipmentError.message ?? "shipment 조회 실패");
+    } else {
+      (shipmentRows ?? []).forEach((row) => {
+        const id = (row as { shipment_id?: string | null }).shipment_id;
+        if (id) {
+          shipmentStatusMap.set(id, (row as { status?: string | null }).status ?? null);
+        }
       });
     }
-    (shipmentRows ?? []).forEach((row) => {
-      const id = (row as { shipment_id?: string | null }).shipment_id;
-      if (id) {
-        shipmentStatusMap.set(id, (row as { status?: string | null }).status ?? null);
-      }
-    });
   }
 
   const receiptLineMap = new Map<string, Record<string, unknown>>();
@@ -119,16 +118,13 @@ export async function GET(request: Request) {
       .eq("receipt_id", receiptId)
       .in("receipt_line_uuid", receiptLineUuids);
     if (lineError) {
-      return jsonError(lineError.message ?? "라인 요약 조회 실패", 500, {
-        code: lineError.code ?? undefined,
-        details: lineError.details ?? undefined,
-        hint: lineError.hint ?? undefined,
+      warnings.push(lineError.message ?? "라인 요약 조회 실패");
+    } else {
+      (lineRows ?? []).forEach((row) => {
+        const id = (row as { receipt_line_uuid?: string | null }).receipt_line_uuid;
+        if (id) receiptLineMap.set(id, row as Record<string, unknown>);
       });
     }
-    (lineRows ?? []).forEach((row) => {
-      const id = (row as { receipt_line_uuid?: string | null }).receipt_line_uuid;
-      if (id) receiptLineMap.set(id, row as Record<string, unknown>);
-    });
   }
 
   const orderMap = new Map<string, Record<string, unknown>>();
@@ -138,16 +134,13 @@ export async function GET(request: Request) {
       .select("order_line_id, customer_party_id, customer_name, order_no")
       .in("order_line_id", orderLineIds);
     if (orderError) {
-      return jsonError(orderError.message ?? "주문 요약 조회 실패", 500, {
-        code: orderError.code ?? undefined,
-        details: orderError.details ?? undefined,
-        hint: orderError.hint ?? undefined,
+      warnings.push(orderError.message ?? "주문 요약 조회 실패");
+    } else {
+      (orderRows ?? []).forEach((row) => {
+        const id = (row as { order_line_id?: string | null }).order_line_id;
+        if (id) orderMap.set(id, row as Record<string, unknown>);
       });
     }
-    (orderRows ?? []).forEach((row) => {
-      const id = (row as { order_line_id?: string | null }).order_line_id;
-      if (id) orderMap.set(id, row as Record<string, unknown>);
-    });
   }
 
   const data = matches.map((row) => {
@@ -183,5 +176,5 @@ export async function GET(request: Request) {
     };
   });
 
-  return NextResponse.json({ data });
+  return NextResponse.json({ data, warnings: warnings.length > 0 ? warnings : undefined });
 }

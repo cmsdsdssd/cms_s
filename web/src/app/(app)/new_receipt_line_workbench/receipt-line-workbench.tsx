@@ -29,6 +29,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { SearchSelect } from "@/components/ui/search-select";
 import { useRpcMutation } from "@/hooks/use-rpc-mutation";
 import { CONTRACTS } from "@/lib/contracts";
+import { callRpc } from "@/lib/supabase/rpc";
 import { getSchemaClient } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
 
@@ -65,6 +66,14 @@ type ReceiptHeaderRow = {
   bill_no?: string | null;
   issued_at?: string | null;
   memo?: string | null;
+};
+
+type FactorySnapshotMetaRow = {
+  snapshot_version?: number | null;
+  apply_status?: string | null;
+  confirmed_at?: string | null;
+  backdated_from_receipt_id?: string | null;
+  backdated_note?: string | null;
 };
 
 type ReceiptLineItemInput = {
@@ -375,6 +384,36 @@ function formatYmd(iso?: string | null) {
   return d.toLocaleDateString("ko-KR");
 }
 
+function formatDateTimeKst(iso?: string | null) {
+  if (!iso) return "-";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "-";
+  return new Intl.DateTimeFormat("sv-SE", {
+    timeZone: "Asia/Seoul",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(d);
+}
+
+function toAssetLabel(assetCode?: string | null) {
+  switch (assetCode) {
+    case "XAU_G":
+      return "금(g)";
+    case "XAG_G":
+      return "은(g)";
+    case "KRW_LABOR":
+      return "공임(원)";
+    case "KRW_MATERIAL":
+      return "소재비(원)";
+    default:
+      return assetCode ?? "-";
+  }
+}
+
 function formatStoneQty(value?: number | null) {
   const n = Number(value ?? 0);
   if (!Number.isFinite(n) || n <= 0) return "-";
@@ -453,6 +492,17 @@ function buildBillNo(billDate: string, vendorLabel: string, seq: number) {
   return `${dateToken}_${vendorToken}_${seq}`;
 }
 
+function normalizeBillNoSuffixForOrdering(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+  const matched = trimmed.match(/^(.*_)(\d+)$/);
+  if (!matched) return trimmed;
+  const prefix = matched[1];
+  const suffix = matched[2];
+  if (suffix.length >= 2) return trimmed;
+  return `${prefix}${suffix.padStart(2, "0")}`;
+}
+
 function parseNumber(value: string) {
   const trimmed = value.trim();
   if (!trimmed) return null;
@@ -491,6 +541,14 @@ function getRpcErrorMessage(error: unknown) {
   return message;
 }
 
+function isSeverityEnumTypeMismatchError(error: unknown) {
+  const message = getRpcErrorMessage(error);
+  return (
+    message.includes("cms_reconcile_issue_severity") &&
+    message.includes("expression is of type text")
+  );
+}
+
 function mapMatchClearError(message: string) {
   if (message.includes("shipment not DRAFT")) {
     return "출고확정된 건이라 취소할 수 없습니다. 정정 영수증으로 처리하세요.";
@@ -522,6 +580,150 @@ function getIssueCounts(result: FactoryStatementResult | undefined) {
     error: Number.isFinite(error) ? error : 0,
     warn: Number.isFinite(warn) ? warn : 0,
   };
+}
+
+function toReconcileIssueTypeLabel(issueType?: string | null) {
+  switch (issueType) {
+    case "PRE_NEQ_PREV_POST":
+      return "이전 POST와 현재 PRE 불일치";
+    case "PRE_PLUS_SALE_NEQ_POST":
+      return "PRE + SALE와 POST 불일치";
+    case "FACTORY_POST_NEQ_SYSTEM_ASOF":
+      return "공장 POST vs 시스템(as-of) 불일치";
+    case "RECENT_PAYMENT_INCONSISTENT":
+      return "공장 최근결제 vs 시스템 결제내역 불일치";
+    case "FACTORY_SALE_NEQ_INTERNAL_CALC":
+      return "당일 합계 vs 라인 계산 불일치";
+    default:
+      return issueType ?? "-";
+  }
+}
+
+function toReconcileSummaryKorean(issueType?: string | null, summary?: string | null) {
+  if (!summary) return "-";
+  if (summary === "PRE_BALANCE != previous POST_BALANCE (asset-level mismatch)") {
+    return "현재 PRE_BALANCE가 이전 영수증 POST_BALANCE와 자산 단위로 일치하지 않습니다.";
+  }
+  if (summary === "PRE_BALANCE + SALE != POST_BALANCE (requires adjustment or missing component)") {
+    return "PRE_BALANCE + SALE 값이 POST_BALANCE와 다릅니다. 누락 라인 또는 조정이 필요합니다.";
+  }
+  if (summary === "FACTORY SALE != INTERNAL CALC (review receipt line inputs / calc rules)") {
+    return "공장 SALE과 내부 계산값이 다릅니다. 영수증 라인 입력/계산 규칙을 확인하세요.";
+  }
+  if (
+    summary ===
+    "RECENT_PAYMENT != system payments in period (prev issued_at, current issued_at] (check window/ref_date)"
+  ) {
+    return "공장 최근결제와 해당 기간 시스템 결제합이 다릅니다. 기간/기준일(ref_date)을 확인하세요.";
+  }
+  if (
+    summary ===
+    "POST_BALANCE(factory) != system balance(as-of issued_at). Check missing SALE invoice, wrong payment alloc, or adjustment needed."
+  ) {
+    return "공장 POST_BALANCE와 발행일 기준 시스템 잔액이 다릅니다. SALE 누락/결제배분 오류/조정을 확인하세요.";
+  }
+  if (issueType && summary === issueType) {
+    return toReconcileIssueTypeLabel(issueType);
+  }
+  return summary;
+}
+
+function toReconcileSeverityLabel(severity?: string | null) {
+  switch ((severity ?? "").toUpperCase()) {
+    case "ERROR":
+      return "오류";
+    case "WARN":
+      return "경고";
+    case "INFO":
+      return "안내";
+    default:
+      return severity ?? "-";
+  }
+}
+
+function toReconcileStatusLabel(status?: string | null) {
+  switch ((status ?? "").toUpperCase()) {
+    case "OPEN":
+      return "미해결";
+    case "ACKED":
+      return "확인완료";
+    case "RESOLVED":
+      return "해결완료";
+    case "IGNORED":
+      return "무시";
+    default:
+      return status ?? "-";
+  }
+}
+
+function toReconcileFieldLabel(key: string) {
+  switch (key) {
+    case "issue_id":
+      return "이슈ID";
+    case "issue_type":
+      return "이슈유형";
+    case "summary":
+      return "요약";
+    case "severity":
+      return "심각도";
+    case "status":
+      return "상태";
+    case "created_at":
+      return "생성시각";
+    case "vendor_name":
+      return "공장명";
+    case "vendor_party_id":
+      return "공장ID";
+    case "receipt_id":
+      return "영수증ID";
+    case "expected":
+    case "expected_qty":
+    case "expected_amount":
+      return "기준값";
+    case "actual":
+    case "acutal":
+    case "actual_qty":
+    case "actual_amount":
+      return "실제값";
+    case "diff":
+    case "diff_qty":
+    case "diff_amount":
+      return "차이";
+    case "asset_code":
+      return "자산";
+    default:
+      return key;
+  }
+}
+
+function formatReconcileValue(key: string, value: unknown, row: Record<string, unknown>) {
+  if (value === null || value === undefined || value === "") return "-";
+
+  if (key === "issue_type") {
+    return toReconcileIssueTypeLabel(typeof value === "string" ? value : String(value));
+  }
+  if (key === "summary") {
+    return toReconcileSummaryKorean(
+      typeof row.issue_type === "string" ? row.issue_type : null,
+      typeof value === "string" ? value : String(value)
+    );
+  }
+  if (key === "severity") {
+    return toReconcileSeverityLabel(typeof value === "string" ? value : String(value));
+  }
+  if (key === "status") {
+    return toReconcileStatusLabel(typeof value === "string" ? value : String(value));
+  }
+  if (key === "created_at" || key === "resolved_at") {
+    return formatDateTimeKst(typeof value === "string" ? value : null);
+  }
+  if (key === "asset_code") {
+    return toAssetLabel(typeof value === "string" ? value : String(value));
+  }
+  if (typeof value === "number") {
+    return new Intl.NumberFormat("ko-KR").format(value);
+  }
+  return String(value);
 }
 
 function roundTo6(value: number) {
@@ -672,6 +874,7 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
   const [factoryNote, setFactoryNote] = useState("");
   const [factoryStatementHydratedReceiptId, setFactoryStatementHydratedReceiptId] = useState<string | null>(null);
   const [reconcileIssueCounts, setReconcileIssueCounts] = useState<{ error: number; warn: number } | null>(null);
+  const [backdatedConfirmRequired, setBackdatedConfirmRequired] = useState(false);
   const [apSyncStatus, setApSyncStatus] = useState<"idle" | "success" | "error">("idle");
   const [apSyncMessage, setApSyncMessage] = useState<string | null>(null);
 
@@ -942,6 +1145,26 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
     gcTime: 3 * 60 * 1000,
   });
 
+  const factorySnapshotMetaQuery = useQuery({
+    queryKey: ["new-receipt-workbench", "factory-snapshot-meta", selectedReceiptId],
+    queryFn: async () => {
+      if (!schemaClient || !selectedReceiptId) return null as FactorySnapshotMetaRow | null;
+      const { data, error } = await schemaClient
+        .from("cms_factory_receipt_snapshot")
+        .select("snapshot_version, apply_status, confirmed_at, backdated_from_receipt_id, backdated_note")
+        .eq("receipt_id", selectedReceiptId)
+        .eq("is_current", true)
+        .order("snapshot_version", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (error) throw error;
+      return (data ?? null) as FactorySnapshotMetaRow | null;
+    },
+    enabled: Boolean(schemaClient && selectedReceiptId),
+    staleTime: 10 * 1000,
+    gcTime: 2 * 60 * 1000,
+  });
+
   const selectedOrderStoneSourceQuery = useQuery({
     queryKey: ["new-receipt-workbench", "order-stone-source", selectedCandidate?.order_line_id],
     enabled: Boolean(schemaClient && selectedCandidate?.order_line_id),
@@ -1016,6 +1239,19 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
       }
       queryClient.invalidateQueries({ queryKey: ["new-receipt-workbench", "factory-statement", selectedReceiptId] });
       queryClient.invalidateQueries({ queryKey: ["new-receipt-workbench", "reconcile", selectedReceiptId] });
+    },
+  });
+
+  const factoryReceiptSetApplyStatus = useRpcMutation<{ ok?: boolean }>({
+    fn: CONTRACTS.functions.factoryReceiptSetApplyStatus,
+    successMessage: "상태 반영 완료",
+    onSuccess: () => {
+      setBackdatedConfirmRequired(false);
+      queryClient.invalidateQueries({ queryKey: ["new-receipt-workbench", "factory-snapshot-meta", selectedReceiptId] });
+      queryClient.invalidateQueries({ queryKey: ["new-receipt-workbench", "reconcile", selectedReceiptId] });
+      queryClient.invalidateQueries({ queryKey: ["cms", "ap_factory_post_balance"] });
+      queryClient.invalidateQueries({ queryKey: ["cms", "ap_factory_recent_payment"] });
+      queryClient.invalidateQueries({ queryKey: ["cms", "ap_reconcile_open_named"] });
     },
   });
 
@@ -2036,10 +2272,17 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
       toast.error("영수증을 선택하세요");
       return;
     }
+
+    const normalizedBillNo = normalizeBillNoSuffixForOrdering(billNo);
+    if (normalizedBillNo !== billNo) {
+      setBillNo(normalizedBillNo);
+      toast.info(`영수증 번호를 정렬용으로 보정했습니다: ${normalizedBillNo}`);
+    }
+
     await headerUpdate.mutateAsync({
       p_receipt_id: selectedReceiptId,
       p_vendor_party_id: vendorPartyId || null,
-      p_bill_no: billNo || null,
+      p_bill_no: normalizedBillNo || null,
       p_bill_date: billDate || null,
       p_memo: memo || null,
     });
@@ -2175,12 +2418,70 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
       ],
     }));
 
-    await factoryStatementUpsert.mutateAsync({
+    const payload = {
       p_receipt_id: selectedReceiptId,
       p_statement: { rows },
       p_note: factoryNote || null,
-    });
+    };
+
+    try {
+      await factoryStatementUpsert.mutateAsync(payload);
+    } catch (error) {
+      if (!isSeverityEnumTypeMismatchError(error)) {
+        throw error;
+      }
+
+      const fallbackResult = await callRpc<FactoryStatementResult>(
+        "cms_fn_upsert_factory_receipt_statement_v1",
+        payload
+      );
+      const counts = getIssueCounts(fallbackResult);
+      if (counts) {
+        setReconcileIssueCounts(counts);
+      }
+      queryClient.invalidateQueries({ queryKey: ["new-receipt-workbench", "factory-statement", selectedReceiptId] });
+      queryClient.invalidateQueries({ queryKey: ["new-receipt-workbench", "reconcile", selectedReceiptId] });
+      toast.warning("v2 정합 저장 오류로 v1 경로로 저장했습니다. DB 함수 패치가 필요합니다.");
+    }
+
     persistFactoryStatementSnapshot(selectedReceiptId, factoryRows, factoryNote);
+  }
+
+  async function confirmFactoryStatement(forceRecalc: boolean) {
+    if (!selectedReceiptId) return;
+    if (headerNeedsSave) {
+      toast.error("먼저 헤더 저장을 진행해 주세요.");
+      return;
+    }
+
+    await saveFactoryStatement();
+    try {
+      await factoryReceiptSetApplyStatus.mutateAsync({
+        p_receipt_id: selectedReceiptId,
+        p_status_text: "CONFIRMED",
+        p_force_recalc: forceRecalc,
+        p_note: factoryNote || null,
+      });
+      toast.success(forceRecalc ? "백데이트 재계산 확정 완료" : "확정 완료");
+    } catch (error) {
+      const message = getRpcErrorMessage(error);
+      if (message.includes("BACKDATED_RECEIPT_RECALC_REQUIRED")) {
+        setBackdatedConfirmRequired(true);
+        toast.warning("과거 영수증입니다. 재계산 포함 확정을 눌러 반영하세요.");
+        return;
+      }
+      throw error;
+    }
+  }
+
+  async function setFactoryStatementDraft() {
+    if (!selectedReceiptId) return;
+    await factoryReceiptSetApplyStatus.mutateAsync({
+      p_receipt_id: selectedReceiptId,
+      p_status_text: "DRAFT",
+      p_force_recalc: false,
+      p_note: factoryNote || null,
+    });
   }
 
   async function handleSuggest(lineOverride?: UnlinkedLineRow | null) {
@@ -2775,7 +3076,19 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
     headerUpdate.isPending ||
     matchConfirm.isPending ||
     factoryStatementUpsert.isPending ||
+    factoryReceiptSetApplyStatus.isPending ||
     isSuggesting;
+
+  const applyStatusText =
+    factorySnapshotMetaQuery.data?.apply_status?.toUpperCase() === "CONFIRMED" ? "확정" : "초안";
+  const applyStatusTone =
+    factorySnapshotMetaQuery.data?.apply_status?.toUpperCase() === "CONFIRMED"
+      ? "bg-emerald-100 text-emerald-700"
+      : "bg-amber-100 text-amber-700";
+
+  useEffect(() => {
+    setBackdatedConfirmRequired(false);
+  }, [selectedReceiptId]);
 
   const isMatchFocusMode = activeTab === "match" && isMatchPanelExpanded;
   const isWorkbenchExpanded = isPreviewExpanded;
@@ -3870,13 +4183,38 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                               />
                             </div>
                           </div>
-                          <Button
-                            size="sm"
-                            onClick={saveFactoryStatement}
-                            disabled={!selectedReceiptId || factoryStatementUpsert.isPending || headerNeedsSave}
-                          >
-                            저장
-                          </Button>
+                          <div className="flex items-center gap-2">
+                            <span className={cn("rounded px-2 py-1 text-[10px] font-semibold", applyStatusTone)}>
+                              상태: {applyStatusText}
+                            </span>
+                            {factorySnapshotMetaQuery.data?.confirmed_at && (
+                              <span className="text-[10px] text-[var(--muted)]">
+                                확정시각 {formatDateTimeKst(factorySnapshotMetaQuery.data.confirmed_at)}
+                              </span>
+                            )}
+                            <Button
+                              size="sm"
+                              variant="secondary"
+                              onClick={setFactoryStatementDraft}
+                              disabled={!selectedReceiptId || factoryReceiptSetApplyStatus.isPending}
+                            >
+                              초안
+                            </Button>
+                            <Button
+                              size="sm"
+                              onClick={() => confirmFactoryStatement(backdatedConfirmRequired)}
+                              disabled={!selectedReceiptId || factoryReceiptSetApplyStatus.isPending || headerNeedsSave}
+                            >
+                              {backdatedConfirmRequired ? "재계산 포함 확정" : "확정"}
+                            </Button>
+                            <Button
+                              size="sm"
+                              onClick={saveFactoryStatement}
+                              disabled={!selectedReceiptId || factoryStatementUpsert.isPending || headerNeedsSave}
+                            >
+                              저장
+                            </Button>
+                          </div>
                         </div>
                       </CardHeader>
                       <CardBody className="space-y-4 p-4">
@@ -3891,7 +4229,9 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                                 <div className="grid grid-cols-1 gap-2 md:grid-cols-[110px_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.2fr)] md:items-center">
                                   <div className="text-sm font-semibold text-[var(--foreground)]">{row.label}</div>
                                   <div className="space-y-0.5">
-                                    <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--muted)]">금</label>
+                                    <label className="inline-flex items-center rounded-md border border-amber-300 bg-amber-100 px-2 py-0.5 text-[11px] font-extrabold tracking-wide text-amber-800">
+                                      금 (g)
+                                    </label>
                                     <div className="flex items-center gap-2">
                                       <Input
                                         type="text"
@@ -3903,11 +4243,15 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                                         autoFormat={false}
                                         className="h-7 text-sm text-right"
                                       />
-                                      <span className="text-xs text-[var(--muted)]">g</span>
+                                      <span className="inline-flex h-6 items-center rounded-md border border-amber-300 bg-amber-50 px-2 text-xs font-bold text-amber-800">
+                                        g
+                                      </span>
                                     </div>
                                   </div>
                                   <div className="space-y-0.5">
-                                    <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--muted)]">은</label>
+                                    <label className="inline-flex items-center rounded-md border border-slate-300 bg-slate-100 px-2 py-0.5 text-[11px] font-extrabold tracking-wide text-slate-700">
+                                      은 (g)
+                                    </label>
                                     <div className="flex items-center gap-2">
                                       <Input
                                         type="text"
@@ -3919,11 +4263,15 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                                         autoFormat={false}
                                         className="h-7 text-sm text-right"
                                       />
-                                      <span className="text-xs text-[var(--muted)]">g</span>
+                                      <span className="inline-flex h-6 items-center rounded-md border border-slate-300 bg-slate-50 px-2 text-xs font-bold text-slate-700">
+                                        g
+                                      </span>
                                     </div>
                                   </div>
                                   <div className="space-y-0.5">
-                                    <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--muted)]">공임현금</label>
+                                    <label className="inline-flex items-center rounded-md border border-emerald-300 bg-emerald-100 px-2 py-0.5 text-[11px] font-extrabold tracking-wide text-emerald-800">
+                                      공임현금 (원)
+                                    </label>
                                     <Input
                                       type="text"
                                       inputMode="numeric"
@@ -4855,6 +5203,9 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                   ) : matchesQuery.isError ? (
                     <div className="rounded-lg border border-dashed border-[var(--panel-border)] p-3 text-xs text-[var(--muted)]">
                       <div>불러오기 실패</div>
+                      <div className="mt-1 break-all text-[11px] text-[var(--danger)]">
+                        {matchesQuery.error instanceof Error ? matchesQuery.error.message : "원인 불명"}
+                      </div>
                       <div className="mt-2">
                         <Button size="sm" variant="secondary" onClick={() => matchesQuery.refetch()}>
                           재시도
@@ -4940,16 +5291,37 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                     </div>
                   ) : (
                     <div className="space-y-2">
-                      {(reconcileQuery.data ?? []).map((row, idx) => (
-                        <div key={`reconcile-${idx}`} className="rounded-lg border border-[var(--panel-border)] bg-[var(--panel)] p-3 text-xs">
-                          {Object.entries(row).map(([key, value]) => (
-                            <div key={key} className="flex items-center justify-between gap-2">
-                              <span className="text-[var(--muted)]">{key}</span>
-                              <span className="text-[var(--foreground)]">{String(value ?? "-")}</span>
+                      {(reconcileQuery.data ?? []).map((row, idx) => {
+                        const issueType = typeof row.issue_type === "string" ? row.issue_type : null;
+                        const summary = typeof row.summary === "string" ? row.summary : null;
+                        return (
+                          <div
+                            key={`reconcile-${idx}`}
+                            className="rounded-lg border border-[var(--panel-border)] bg-[var(--panel)] p-3 text-xs"
+                          >
+                            <div className="mb-2 flex items-center justify-between gap-2">
+                              <span className="font-semibold text-[var(--foreground)]">
+                                {toReconcileIssueTypeLabel(issueType)}
+                              </span>
+                              <span className="text-[10px] text-[var(--muted)]">
+                                {toReconcileSeverityLabel(typeof row.severity === "string" ? row.severity : null)} ·{" "}
+                                {toReconcileStatusLabel(typeof row.status === "string" ? row.status : null)}
+                              </span>
                             </div>
-                          ))}
-                        </div>
-                      ))}
+                            <div className="mb-2 rounded-md border border-[var(--panel-border)] bg-[var(--surface)]/60 p-2 text-[11px] text-[var(--muted)]">
+                              {toReconcileSummaryKorean(issueType, summary)}
+                            </div>
+                            {Object.entries(row).map(([key, value]) => (
+                              <div key={key} className="flex items-center justify-between gap-2">
+                                <span className="text-[var(--muted)]">{toReconcileFieldLabel(key)}</span>
+                                <span className="text-[var(--foreground)]">
+                                  {formatReconcileValue(key, value, row as Record<string, unknown>)}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        );
+                      })}
                     </div>
                   )}
                 </div>

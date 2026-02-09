@@ -41,6 +41,12 @@ type ApReconcileOpenRow = Record<string, unknown> & {
   warn_count?: number | null;
 };
 
+type ApPaymentUnallocatedRow = Record<string, unknown> & {
+  vendor_party_id?: string | null;
+  asset_code?: string | null;
+  unallocated_qty?: number | null;
+};
+
 type AssetSummary = {
   gold: number;
   silver: number;
@@ -334,7 +340,7 @@ export default function ApPage() {
       if (error) throw error;
       return (data ?? []) as Record<string, unknown>[];
     },
-    enabled: Boolean(schemaClient && effectiveVendorId),
+    enabled: Boolean(schemaClient && effectiveVendorId && activeTab === "post"),
   });
 
   const factoryRecentPaymentQuery = useQuery({
@@ -345,11 +351,14 @@ export default function ApPage() {
         .from(CONTRACTS.views.apFactoryRecentPaymentByVendor)
         .select("*")
         .eq("vendor_party_id", effectiveVendorId)
-        .order("paid_at", { ascending: false });
+        .order("issued_at", { ascending: false })
+        .order("asset_code", { ascending: true })
+        .limit(16);
       if (error) throw error;
       return (data ?? []) as Record<string, unknown>[];
     },
-    enabled: Boolean(schemaClient && effectiveVendorId),
+    enabled: Boolean(schemaClient && effectiveVendorId && activeTab === "post"),
+    retry: false,
   });
 
   const paymentHistoryQuery = useQuery({
@@ -363,6 +372,20 @@ export default function ApPage() {
         .order("paid_at", { ascending: false });
       if (error) throw error;
       return (data ?? []) as Record<string, unknown>[];
+    },
+    enabled: Boolean(schemaClient && effectiveVendorId && activeTab === "history"),
+  });
+
+  const paymentUnallocatedQuery = useQuery({
+    queryKey: ["cms", "ap_payment_unallocated", effectiveVendorId],
+    queryFn: async () => {
+      if (!schemaClient || !effectiveVendorId) return [] as ApPaymentUnallocatedRow[];
+      const { data, error } = await schemaClient
+        .from(CONTRACTS.views.apPaymentUnallocated)
+        .select("*")
+        .eq("vendor_party_id", effectiveVendorId);
+      if (error) throw error;
+      return (data ?? []) as ApPaymentUnallocatedRow[];
     },
     enabled: Boolean(schemaClient && effectiveVendorId),
   });
@@ -404,6 +427,7 @@ export default function ApPage() {
         factoryPostQuery.refetch(),
         factoryRecentPaymentQuery.refetch(),
         paymentHistoryQuery.refetch(),
+        paymentUnallocatedQuery.refetch(),
         systemBalanceQuery.refetch(),
         reconcileOpenQuery.refetch(),
         invoiceQuery.refetch(),
@@ -442,13 +466,27 @@ export default function ApPage() {
     return vendorSummary;
   }, [systemBalanceQuery.data, vendorSummary]);
 
+  const unallocatedSummary = useMemo(
+    () => summarizeByAsset(paymentUnallocatedQuery.data ?? [], ["unallocated_qty", "qty", "amount"]),
+    [paymentUnallocatedQuery.data]
+  );
+
+  const netSystemSummary = useMemo(
+    () => ({
+      gold: systemSummary.gold - unallocatedSummary.gold,
+      silver: systemSummary.silver - unallocatedSummary.silver,
+      labor: systemSummary.labor - unallocatedSummary.labor,
+    }),
+    [systemSummary, unallocatedSummary]
+  );
+
   const diffSummary = useMemo(
     () => ({
-      gold: factoryPostSummary.gold - systemSummary.gold,
-      silver: factoryPostSummary.silver - systemSummary.silver,
-      labor: factoryPostSummary.labor - systemSummary.labor,
+      gold: factoryPostSummary.gold - netSystemSummary.gold,
+      silver: factoryPostSummary.silver - netSystemSummary.silver,
+      labor: factoryPostSummary.labor - netSystemSummary.labor,
     }),
-    [factoryPostSummary, systemSummary]
+    [factoryPostSummary, netSystemSummary]
   );
 
   const latestReceipt =
@@ -515,6 +553,7 @@ export default function ApPage() {
       factoryLatestReceiptQuery.refetch(),
       factoryRecentPaymentQuery.refetch(),
       paymentHistoryQuery.refetch(),
+      paymentUnallocatedQuery.refetch(),
       systemBalanceQuery.refetch(),
       reconcileOpenQuery.refetch(),
     ]);
@@ -625,24 +664,41 @@ export default function ApPage() {
                 </Button>
               </div>
 
-              <div className="grid grid-cols-1 gap-3 rounded-xl border border-[var(--panel-border)] bg-[var(--chip)] p-4 md:grid-cols-3">
-                <div>
-                  <p className="mb-1 text-xs font-medium text-[var(--muted)]">공장 기준(POST)</p>
-                  <p className="text-sm font-semibold">공임 {formatKrw(factoryPostSummary.labor)}</p>
-                  <p className="text-sm">금 {formatGram(factoryPostSummary.gold)}</p>
-                  <p className="text-sm">은 {formatGram(factoryPostSummary.silver)}</p>
-                </div>
-                <div>
-                  <p className="mb-1 text-xs font-medium text-[var(--muted)]">시스템 기준(장부)</p>
-                  <p className="text-sm font-semibold">공임 {formatKrw(systemSummary.labor)}</p>
-                  <p className="text-sm">금 {formatGram(systemSummary.gold)}</p>
-                  <p className="text-sm">은 {formatGram(systemSummary.silver)}</p>
-                </div>
-                <div>
-                  <p className="mb-1 text-xs font-medium text-[var(--muted)]">차이</p>
-                  <p className="text-sm font-semibold">공임 {formatKrw(diffSummary.labor)}</p>
-                  <p className="text-sm">금 {formatGram(diffSummary.gold)}</p>
-                  <p className="text-sm">은 {formatGram(diffSummary.silver)}</p>
+              <div className="rounded-xl border border-[var(--panel-border)] bg-[var(--chip)] p-4">
+                <p className="mb-3 text-xs text-[var(--muted)]">
+                  공장 입력값과 우리 장부/결제값을 분리 표시합니다. (공장값은 결제로 직접 변경되지 않음)
+                </p>
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-5">
+                  <div>
+                    <p className="mb-1 text-xs font-medium text-[var(--muted)]">공장 기준 미수(POST)</p>
+                    <p className="text-sm font-semibold">공임 {formatKrw(factoryPostSummary.labor)}</p>
+                    <p className="text-sm">금 {formatGram(factoryPostSummary.gold)}</p>
+                    <p className="text-sm">은 {formatGram(factoryPostSummary.silver)}</p>
+                  </div>
+                  <div>
+                    <p className="mb-1 text-xs font-medium text-[var(--muted)]">우리 장부 미수(due-alloc)</p>
+                    <p className="text-sm font-semibold">공임 {formatKrw(systemSummary.labor)}</p>
+                    <p className="text-sm">금 {formatGram(systemSummary.gold)}</p>
+                    <p className="text-sm">은 {formatGram(systemSummary.silver)}</p>
+                  </div>
+                  <div>
+                    <p className="mb-1 text-xs font-medium text-[var(--muted)]">미배정 결제(크레딧)</p>
+                    <p className="text-sm font-semibold">공임 {formatKrw(unallocatedSummary.labor)}</p>
+                    <p className="text-sm">금 {formatGram(unallocatedSummary.gold)}</p>
+                    <p className="text-sm">은 {formatGram(unallocatedSummary.silver)}</p>
+                  </div>
+                  <div>
+                    <p className="mb-1 text-xs font-medium text-[var(--muted)]">우리 순잔액(장부-크레딧)</p>
+                    <p className="text-sm font-semibold">공임 {formatKrw(netSystemSummary.labor)}</p>
+                    <p className="text-sm">금 {formatGram(netSystemSummary.gold)}</p>
+                    <p className="text-sm">은 {formatGram(netSystemSummary.silver)}</p>
+                  </div>
+                  <div>
+                    <p className="mb-1 text-xs font-medium text-[var(--muted)]">정합 차이(공장-우리순잔액)</p>
+                    <p className="text-sm font-semibold">공임 {formatKrw(diffSummary.labor)}</p>
+                    <p className="text-sm">금 {formatGram(diffSummary.gold)}</p>
+                    <p className="text-sm">은 {formatGram(diffSummary.silver)}</p>
+                  </div>
                 </div>
               </div>
             </div>

@@ -208,6 +208,9 @@ export const CONTRACTS = {
     factoryReceiptStatementUpsert:
       process.env.NEXT_PUBLIC_CMS_FN_FACTORY_RECEIPT_STATEMENT_UPSERT ||
       "cms_fn_upsert_factory_receipt_statement_v2",
+    factoryReceiptSetApplyStatus:
+      process.env.NEXT_PUBLIC_CMS_FN_FACTORY_RECEIPT_SET_APPLY_STATUS ||
+      "cms_fn_factory_receipt_set_apply_status_v1",
     apPayAndFifo:
       process.env.NEXT_PUBLIC_CMS_FN_AP_PAY_AND_FIFO || "cms_fn_ap2_pay_and_fifo_guarded_v1",
     apManualAlloc: "cms_fn_ap2_manual_alloc_v1",

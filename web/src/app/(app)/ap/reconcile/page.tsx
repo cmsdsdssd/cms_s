@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -91,6 +91,10 @@ const toStatusLabel = (status?: string | null) => {
 
 const toIssueTypeLabel = (issueType?: string | null) => {
   switch (issueType) {
+    case "PRE_NEQ_PREV_POST":
+      return "이전 POST와 현재 PRE 불일치";
+    case "PRE_PLUS_SALE_NEQ_POST":
+      return "PRE + SALE와 POST 불일치";
     case "FACTORY_POST_NEQ_SYSTEM_ASOF":
       return "공장 POST vs 시스템(as-of) 불일치";
     case "RECENT_PAYMENT_INCONSISTENT":
@@ -104,6 +108,10 @@ const toIssueTypeLabel = (issueType?: string | null) => {
 
 const toIssueTypeDescription = (issueType?: string | null) => {
   switch (issueType) {
+    case "PRE_NEQ_PREV_POST":
+      return "이전 영수증의 POST_BALANCE와 현재 영수증의 PRE_BALANCE가 다릅니다.";
+    case "PRE_PLUS_SALE_NEQ_POST":
+      return "현재 영수증에서 PRE_BALANCE + SALE 값이 POST_BALANCE와 맞지 않습니다.";
     case "FACTORY_POST_NEQ_SYSTEM_ASOF":
       return "공장 POST(거래 후 미수)와 시스템 잔액(as-of)이 다릅니다.";
     case "RECENT_PAYMENT_INCONSISTENT":
@@ -113,6 +121,34 @@ const toIssueTypeDescription = (issueType?: string | null) => {
     default:
       return "";
   }
+};
+
+const toIssueSummaryKorean = (issueType?: string | null, summary?: string | null) => {
+  if (!summary) return toIssueTypeDescription(issueType) || "-";
+
+  if (summary === "PRE_BALANCE != previous POST_BALANCE (asset-level mismatch)") {
+    return "현재 PRE_BALANCE가 이전 영수증 POST_BALANCE와 자산 단위로 일치하지 않습니다.";
+  }
+  if (summary === "PRE_BALANCE + SALE != POST_BALANCE (requires adjustment or missing component)") {
+    return "PRE_BALANCE + SALE 값이 POST_BALANCE와 다릅니다. 누락 라인 또는 조정이 필요합니다.";
+  }
+  if (summary === "FACTORY SALE != INTERNAL CALC (review receipt line inputs / calc rules)") {
+    return "공장 SALE과 내부 계산값이 다릅니다. 영수증 라인 입력/계산 규칙을 확인하세요.";
+  }
+  if (
+    summary ===
+    "RECENT_PAYMENT != system payments in period (prev issued_at, current issued_at] (check window/ref_date)"
+  ) {
+    return "공장 최근결제와 해당 기간 시스템 결제합이 다릅니다. 기간/기준일(ref_date)을 확인하세요.";
+  }
+  if (
+    summary ===
+    "POST_BALANCE(factory) != system balance(as-of issued_at). Check missing SALE invoice, wrong payment alloc, or adjustment needed."
+  ) {
+    return "공장 POST_BALANCE와 발행일 기준 시스템 잔액이 다릅니다. SALE 누락/결제배분 오류/조정을 확인하세요.";
+  }
+
+  return summary;
 };
 
 const toIssueFieldLabel = (key: string) => {
@@ -237,6 +273,29 @@ const getStatusColor = (status?: string | null) => {
 // Priority fields to show first in issue detail
 const PRIORITY_FIELDS = ["summary", "issue_type", "severity", "status", "created_at", "vendor_name"];
 
+type IssueSortKey = "created_desc" | "created_asc" | "severity_desc" | "issue_type_asc";
+
+const ISSUE_SORT_STORAGE_KEY = "ap-reconcile:issue-sort";
+
+const getSeverityRank = (severity?: string | null) => {
+  switch ((severity ?? "").toUpperCase()) {
+    case "ERROR":
+      return 3;
+    case "WARN":
+      return 2;
+    case "INFO":
+      return 1;
+    default:
+      return 0;
+  }
+};
+
+const getDateValue = (value?: string | null) => {
+  if (!value) return 0;
+  const parsed = new Date(value).getTime();
+  return Number.isFinite(parsed) ? parsed : 0;
+};
+
 function ApReconcileContent() {
   const schemaClient = getSchemaClient();
   const searchParams = useSearchParams();
@@ -252,6 +311,19 @@ function ApReconcileContent() {
   const [showAllFields, setShowAllFields] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [activeTab, setActiveTab] = useState<"issues" | "detail">("issues");
+  const [issueSort, setIssueSort] = useState<IssueSortKey>(() => {
+    if (typeof window === "undefined") return "severity_desc";
+    const saved = window.localStorage.getItem(ISSUE_SORT_STORAGE_KEY);
+    if (saved === "created_desc" || saved === "created_asc" || saved === "severity_desc" || saved === "issue_type_asc") {
+      return saved;
+    }
+    return "severity_desc";
+  });
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(ISSUE_SORT_STORAGE_KEY, issueSort);
+  }, [issueSort]);
 
   // ── Vendors Query (Named View) ──
   const vendorsQuery = useQuery({
@@ -330,6 +402,33 @@ function ApReconcileContent() {
   });
 
   const issues = issuesQuery.data ?? [];
+  const sortedIssues = useMemo(() => {
+    const list = [...issues];
+    if (issueSort === "created_desc") {
+      return list.sort((a, b) => getDateValue(b.created_at) - getDateValue(a.created_at));
+    }
+    if (issueSort === "created_asc") {
+      return list.sort((a, b) => getDateValue(a.created_at) - getDateValue(b.created_at));
+    }
+    if (issueSort === "issue_type_asc") {
+      return list.sort((a, b) => {
+        const typeA = (a.issue_type ?? "").toString();
+        const typeB = (b.issue_type ?? "").toString();
+        const typeCompare = typeA.localeCompare(typeB, "ko");
+        if (typeCompare !== 0) return typeCompare;
+        return getDateValue(b.created_at) - getDateValue(a.created_at);
+      });
+    }
+    return list.sort((a, b) => {
+      const sev = getSeverityRank(b.severity) - getSeverityRank(a.severity);
+      if (sev !== 0) return sev;
+      const statusA = (a.status ?? "").toString();
+      const statusB = (b.status ?? "").toString();
+      const statusCompare = statusA.localeCompare(statusB, "ko");
+      if (statusCompare !== 0) return statusCompare;
+      return getDateValue(b.created_at) - getDateValue(a.created_at);
+    });
+  }, [issues, issueSort]);
   const vendors = vendorsQuery.data ?? [];
 
   const filteredVendors = useMemo(() => {
@@ -613,18 +712,24 @@ function ApReconcileContent() {
                       <option value="ERROR">오류</option>
                       <option value="WARN">경고</option>
                     </Select>
+                    <Select value={issueSort} onChange={(e) => setIssueSort(e.target.value as IssueSortKey)}>
+                      <option value="severity_desc">오류우선</option>
+                      <option value="created_desc">최신순</option>
+                      <option value="created_asc">오래된순</option>
+                      <option value="issue_type_asc">유형순</option>
+                    </Select>
                   </div>
                 </div>
               </CardHeader>
               <CardBody className="space-y-2 max-h-[60vh] overflow-y-auto">
               {issuesQuery.isLoading ? (
                 <Skeleton className="h-20 w-full" />
-              ) : issues.length === 0 ? (
+              ) : sortedIssues.length === 0 ? (
                 <div className="rounded-md border border-dashed border-[var(--panel-border)] p-4 text-sm text-[var(--muted)]">
                   이슈가 없습니다.
                 </div>
               ) : (
-                issues.map((row, idx) => {
+                sortedIssues.map((row, idx) => {
                   const issueId = row.issue_id ?? "";
                   const isSelected = issueId === selectedIssueId;
                   return (
@@ -660,7 +765,7 @@ function ApReconcileContent() {
                       </div>
                       {row.summary && (
                         <div className="mt-1 text-xs text-[var(--muted)] line-clamp-2">
-                          {row.summary}
+                          {toIssueSummaryKorean(row.issue_type, row.summary)}
                         </div>
                       )}
                       {row.vendor_name && (
@@ -694,14 +799,16 @@ function ApReconcileContent() {
                       <div key={key} className="flex items-start justify-between gap-2">
                           <span className="text-[var(--muted)] shrink-0">{toIssueFieldLabel(key)}</span>
                           <span className="text-right break-words max-w-[200px]">
-                          {key === "created_at"
-                            ? formatDateTimeKst(value as string)
-                            : key === "severity"
-                              ? toSeverityLabel(value as string)
+                            {key === "created_at"
+                              ? formatDateTimeKst(value as string)
+                              : key === "severity"
+                                ? toSeverityLabel(value as string)
                               : key === "status"
                                 ? toStatusLabel(value as string)
                                 : key === "issue_type"
                                   ? toIssueTypeLabel(value as string)
+                                  : key === "summary"
+                                    ? toIssueSummaryKorean(selectedIssue?.issue_type, value as string)
                                 : renderValue(value)}
                           </span>
                       </div>
@@ -730,6 +837,8 @@ function ApReconcileContent() {
                                       ? toStatusLabel(value as string)
                                       : key === "issue_type"
                                         ? toIssueTypeLabel(value as string)
+                                        : key === "summary"
+                                          ? toIssueSummaryKorean(selectedIssue?.issue_type, value as string)
                                       : renderValue(value)}
                                </span>
                              </div>
