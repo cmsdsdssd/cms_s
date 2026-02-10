@@ -559,6 +559,15 @@ export default function ShipmentsMainPage() {
             <ToolbarButton variant="secondary" onClick={handleRefresh}>
               새로고침
             </ToolbarButton>
+            <ToolbarButton
+              variant="secondary"
+              onClick={() => {
+                const printedAt = getKstPrintTimestamp();
+                window.location.href = `/shipments_print?mode=all&date=${encodeURIComponent(receiptDate)}&printed_at=${encodeURIComponent(printedAt)}`;
+              }}
+            >
+              오늘 전체출고 영수증
+            </ToolbarButton>
           </div>
         }
       >

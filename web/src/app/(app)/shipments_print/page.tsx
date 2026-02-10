@@ -84,7 +84,10 @@ type Amounts = ReceiptAmounts;
 
 type ArPositionRow = {
   party_id?: string | null;
+  // ✅ cash balance can be negative (credit)
+  balance_krw?: number | null;
   receivable_krw?: number | null;
+  credit_krw?: number | null;
   labor_cash_outstanding_krw?: number | null;
   gold_outstanding_g?: number | null;
   silver_outstanding_g?: number | null;
@@ -99,12 +102,20 @@ type ArPositionAsOfRow = {
 };
 
 type ArPaymentAllocTodayRow = {
+  party_id?: string | null;
   shipment_line_id?: string | null;
   alloc_labor_krw?: number | null;
   alloc_material_krw?: number | null;
   alloc_gold_g?: number | null;
   alloc_silver_g?: number | null;
 };
+
+type ArLedgerTodayRow = {
+  party_id?: string | null;
+  entry_type?: string | null;
+  amount_krw?: number | null;
+};
+
 
 type ArInvoiceRatioRow = {
   shipment_line_id?: string | null;
@@ -161,21 +172,28 @@ const isSameRoundedAmounts = (a: Amounts, b: Amounts) => {
 };
 
 const buildSummaryRows = (page: PartyReceiptPage) => {
+  // ✅ 기본은 3줄만: 합계 / 이전미수 / 당일미수
   const rows = [
     { label: "합계", value: page.totals },
     { label: page.previousLabel ?? "이전 미수", value: page.previous },
-    { label: "당일 출고", value: page.todaySales },
+    { label: "당일 미수", value: page.today },
   ];
-  if (hasReturnAmounts(page.todayReturns)) {
+
+  // ✅ 상세(출고/반품/결제조정)는 "추가 이벤트"가 있을 때만 노출
+  const hasReturns = hasReturnAmounts(page.todayReturns);
+  const hasAdjustments = hasVisibleKrwDelta(page.todayAdjustments);
+  const showBreakdown = hasReturns || hasAdjustments;
+
+  if (showBreakdown && hasVisibleKrwDelta(page.todaySales)) {
+    rows.push({ label: "당일 출고", value: page.todaySales });
+  }
+  if (hasReturns) {
     rows.push({ label: "당일 반품", value: page.todayReturns });
   }
-  if (hasVisibleKrwDelta(page.todayAdjustments)) {
+  if (hasAdjustments) {
     rows.push({ label: "당일 결제/조정", value: page.todayAdjustments });
   }
-  const hasMeaningfulDiffFromSales = !isSameRoundedAmounts(page.today, page.todaySales);
-  if (hasMeaningfulDiffFromSales) {
-    rows.push({ label: "당일 순증감", value: page.today });
-  }
+
   return rows;
 };
 
@@ -299,19 +317,28 @@ const toLineAmounts = (line: ReceiptLine): Amounts => {
     const total = Number(line.total_amount_sell_krw ?? 0);
     return { gold: 0, silver: 0, labor: repairLabor, total };
   }
+
   const netWeight = Number(line.net_weight_g ?? 0);
   const labor = Number(line.labor_total_sell_krw ?? 0);
   const total = Number(line.total_amount_sell_krw ?? 0);
+
   if (line.is_unit_pricing) {
     return { gold: 0, silver: 0, labor: 0, total };
   }
+
   const bucket = getMaterialBucket(line.material_code ?? null);
   if (bucket.kind === "none") {
     return { gold: 0, silver: 0, labor, total };
   }
-  const silverAdjustFactor = Number(line.silver_adjust_factor ?? 1.2);
-  const silverWeightFactor = (line.material_code ?? "").trim() === "925" ? silverAdjustFactor : 1;
-  const weighted = netWeight * bucket.factor * (bucket.kind === "silver" ? silverWeightFactor : 1);
+
+  // ✅ 순금/순은 g 계산 규칙
+  // - 순도 factor(14/18/24, 925/999)는 항상 적용
+  // - silver_adjust_factor(해리 보정)는 "순은 g"에도 적용(업무 규칙)
+  const weightedByPurity = netWeight * bucket.factor;
+  const silverAdjust = bucket.kind === "silver" ? Number(line.silver_adjust_factor ?? 1) : 1;
+  const weighted =
+    bucket.kind === "silver" ? weightedByPurity * (silverAdjust > 0 ? silverAdjust : 1) : weightedByPurity;
+
   return {
     gold: bucket.kind === "gold" ? weighted : 0,
     silver: bucket.kind === "silver" ? weighted : 0,
@@ -319,6 +346,7 @@ const toLineAmounts = (line: ReceiptLine): Amounts => {
     total,
   };
 };
+
 
 const toLineAmountsArAligned = (line: ReceiptLine): Amounts => {
   if (line.is_repair) {
@@ -368,6 +396,7 @@ function ShipmentsPrintContent() {
   const mode = searchParams.get("mode") ?? "";
   const summaryParam = (searchParams.get("summary") ?? "").trim().toLowerCase();
   const summaryMode = summaryParam === "v1" ? "v1" : "v2";
+  const isAllMode = mode === "all";
   const isStorePickupMode = mode === "store_pickup";
   const filterPartyId = (searchParams.get("party_id") ?? "").trim();
 
@@ -384,13 +413,13 @@ function ShipmentsPrintContent() {
   const todayEndIso = useMemo(() => getKstNextStartIso(today), [today]);
 
   const updateQuery = useCallback(
-    (next: { date?: string; mode?: "store_pickup" | ""; partyId?: string | null }) => {
+    (next: { date?: string; mode?: "store_pickup" | "all" | ""; partyId?: string | null }) => {
       const params = new URLSearchParams(searchParams.toString());
       if (next.date) {
         params.set("date", next.date);
       }
-      if (next.mode === "store_pickup") {
-        params.set("mode", "store_pickup");
+      if (next.mode === "store_pickup" || next.mode === "all") {
+        params.set("mode", next.mode);
       } else if (next.mode !== undefined) {
         params.delete("mode");
       }
@@ -416,7 +445,13 @@ function ShipmentsPrintContent() {
         )
         .eq("status", "CONFIRMED");
 
-      if (isStorePickupMode) {
+      if (isAllMode) {
+        const dateFilter = `ship_date.eq.${today},and(ship_date.is.null,confirmed_at.gte.${todayStartIso},confirmed_at.lt.${todayEndIso})`;
+        query = query.or(dateFilter);
+        if (filterPartyId) {
+          query = query.eq("customer_party_id", filterPartyId);
+        }
+      } else if (isStorePickupMode) {
         const dateFilter = `ship_date.eq.${today},and(ship_date.is.null,confirmed_at.gte.${todayStartIso},confirmed_at.lt.${todayEndIso})`;
         query = query.eq("is_store_pickup", true).or(dateFilter);
         if (filterPartyId) {
@@ -547,7 +582,7 @@ function ShipmentsPrintContent() {
 
   const shipments = useMemo<ShipmentRow[]>(() => {
     return (shipmentsQuery.data ?? [])
-      .filter((row) => (isStorePickupMode ? row.is_store_pickup : !row.is_store_pickup))
+      .filter((row) => (isAllMode ? true : isStorePickupMode ? row.is_store_pickup : !row.is_store_pickup))
       .map((row) => {
         const lines = row.cms_shipment_line ?? [];
         const totalQty = lines.reduce((sum, line) => sum + Number(line.qty ?? 0), 0);
@@ -571,7 +606,7 @@ function ShipmentsPrintContent() {
         };
       })
       .filter((row) => Boolean(row.shipmentId));
-  }, [shipmentsQuery.data, isStorePickupMode]);
+  }, [shipmentsQuery.data, isAllMode, isStorePickupMode]);
   const resetTargets = useMemo(() => {
     if (!activePartyId) return shipments;
     return shipments.filter((s) => s.customerPartyId === activePartyId);
@@ -579,7 +614,7 @@ function ShipmentsPrintContent() {
 
   const todaySalesLines = useMemo<ReceiptLine[]>(() => {
     return (shipmentsQuery.data ?? [])
-      .filter((row) => (isStorePickupMode ? row.is_store_pickup : !row.is_store_pickup))
+      .filter((row) => (isAllMode ? true : isStorePickupMode ? row.is_store_pickup : !row.is_store_pickup))
       .flatMap((row) => {
         const header = {
           ship_date: row.ship_date ?? null,
@@ -608,12 +643,13 @@ function ShipmentsPrintContent() {
           shipment_header: header,
         }));
       });
-  }, [shipmentsQuery.data, isStorePickupMode, unitPricingMap]);
+  }, [shipmentsQuery.data, isAllMode, isStorePickupMode, unitPricingMap]);
 
   const todayReturnLines = useMemo<ReceiptLine[]>(() => {
     return (returnsQuery.data ?? [])
       .filter((row) => {
         const isStorePickup = Boolean(row.cms_shipment_line?.shipment_header?.is_store_pickup);
+        if (isAllMode) return true;
         return isStorePickupMode ? isStorePickup : !isStorePickup;
       })
       .map((row) => {
@@ -672,7 +708,7 @@ function ShipmentsPrintContent() {
         };
       })
       .filter((line) => (line.shipment_header?.customer_party_id ?? "").length > 0 && Number(line.qty ?? 0) > 0);
-  }, [returnsQuery.data, isStorePickupMode, unitPricingMap, returnInvoiceRatioMap]);
+  }, [returnsQuery.data, isAllMode, isStorePickupMode, unitPricingMap, returnInvoiceRatioMap]);
 
   const todayLines = useMemo<ReceiptLine[]>(() => {
     return [...todaySalesLines, ...todayReturnLines];
@@ -700,7 +736,7 @@ function ShipmentsPrintContent() {
       if (partyIds.length === 0) return [] as ArPositionRow[];
       const { data, error } = await schemaClient
         .from("cms_v_ar_position_by_party_v2")
-        .select("party_id, receivable_krw, labor_cash_outstanding_krw, gold_outstanding_g, silver_outstanding_g")
+        .select("party_id, balance_krw, receivable_krw, credit_krw, labor_cash_outstanding_krw, gold_outstanding_g, silver_outstanding_g")
         .in("party_id", partyIds);
       if (error) throw error;
       return (data ?? []) as ArPositionRow[];
@@ -724,41 +760,68 @@ function ShipmentsPrintContent() {
     retry: false,
   });
 
-  const todayShipmentLinePartyMap = useMemo(() => {
-    const map = new Map<string, string>();
-    todaySalesLines.forEach((line) => {
-      const shipmentLineId = line.shipment_line_id ?? "";
-      const partyId = line.shipment_header?.customer_party_id ?? "";
-      if (!shipmentLineId || !partyId) return;
-      map.set(shipmentLineId, partyId);
-    });
-    return map;
-  }, [todaySalesLines]);
-
-  const todayShipmentLineIds = useMemo(
-    () => Array.from(todayShipmentLinePartyMap.keys()),
-    [todayShipmentLinePartyMap]
-  );
-
-  const arTodayPaymentAllocQuery = useQuery({
-    queryKey: ["shipments-print-ar-payment-alloc-today", todayShipmentLineIds.join(","), todayStartIso, todayEndIso],
+    const arLedgerTodayQuery = useQuery({
+    queryKey: ["shipments-print-ar-ledger-today", partyIds.join(","), todayStartIso, todayEndIso],
     queryFn: async () => {
       if (!schemaClient) throw new Error("Supabase env is missing");
-      if (todayShipmentLineIds.length === 0) return [] as ArPaymentAllocTodayRow[];
+      if (partyIds.length === 0) return [] as ArLedgerTodayRow[];
+      const { data, error } = await schemaClient
+        .from("cms_ar_ledger")
+        .select("party_id, entry_type, amount_krw")
+        .gte("occurred_at", todayStartIso)
+        .lt("occurred_at", todayEndIso)
+        .in("party_id", partyIds);
+      if (error) throw error;
+      return (data ?? []) as ArLedgerTodayRow[];
+    },
+    enabled: Boolean(schemaClient) && partyIds.length > 0,
+  });
+
+  type LedgerSums = {
+    total: number;
+    shipment: number;
+    ret: number;
+    paymentAdj: number;
+  };
+
+  const arLedgerSumsMap = useMemo(() => {
+    const map = new Map<string, LedgerSums>();
+    (arLedgerTodayQuery.data ?? []).forEach((row) => {
+      const partyId = (row.party_id ?? "").trim();
+      if (!partyId) return;
+      const amount = Number(row.amount_krw ?? 0);
+      const entryType = String(row.entry_type ?? "").trim().toUpperCase();
+      const current = map.get(partyId) ?? { total: 0, shipment: 0, ret: 0, paymentAdj: 0 };
+
+      current.total += amount;
+
+      if (entryType === "SHIPMENT") current.shipment += amount;
+      else if (entryType === "RETURN") current.ret += amount;
+      else current.paymentAdj += amount;
+
+      map.set(partyId, current);
+    });
+    return map;
+  }, [arLedgerTodayQuery.data]);
+
+  const arTodayPaymentAllocQuery = useQuery({
+    queryKey: ["shipments-print-ar-payment-alloc-today", partyIds.join(","), todayStartIso, todayEndIso],
+    queryFn: async () => {
+      if (!schemaClient) throw new Error("Supabase env is missing");
+      if (partyIds.length === 0) return [] as ArPaymentAllocTodayRow[];
       const { data, error } = await schemaClient
         .from("cms_v_ar_payment_alloc_detail_v1")
-        .select("shipment_line_id, alloc_labor_krw, alloc_material_krw, alloc_gold_g, alloc_silver_g")
+        .select("party_id, shipment_line_id, alloc_labor_krw, alloc_material_krw, alloc_gold_g, alloc_silver_g")
         .gte("paid_at", todayStartIso)
         .lt("paid_at", todayEndIso)
-        .in("shipment_line_id", todayShipmentLineIds);
+        .in("party_id", partyIds);
       if (error) throw error;
       return (data ?? []) as ArPaymentAllocTodayRow[];
     },
-    enabled: Boolean(schemaClient) && todayShipmentLineIds.length > 0,
+    enabled: Boolean(schemaClient) && partyIds.length > 0,
   });
 
-
-  const arTotalsMap = useMemo(() => {
+const arTotalsMap = useMemo(() => {
     return new Map(
       (arPositionsQuery.data ?? []).map((row) => [
         row.party_id ?? "",
@@ -766,31 +829,48 @@ function ShipmentsPrintContent() {
           gold: Number(row.gold_outstanding_g ?? 0),
           silver: Number(row.silver_outstanding_g ?? 0),
           labor: Number(row.labor_cash_outstanding_krw ?? 0),
-          total: Number(row.receivable_krw ?? 0),
+          total: Number(row.balance_krw ?? row.receivable_krw ?? 0),
         },
       ])
     );
   }, [arPositionsQuery.data]);
 
-  const arAsOfTotalsMap = useMemo(() => {
-    return new Map(
-      (arAsOfPositionsQuery.data ?? []).map((row) => [
-        row.party_id ?? "",
-        {
-          gold: Number(row.gold_outstanding_g ?? 0),
-          silver: Number(row.silver_outstanding_g ?? 0),
-          labor: Number(row.labor_cash_outstanding_krw ?? 0),
-          total: Number(row.receivable_krw ?? 0),
-        },
-      ])
-    );
-  }, [arAsOfPositionsQuery.data]);
+  // ✅ 이전(기준시점) 현금 잔고 = 현재 balance - 당일 원장 증감
+  // - 선수금/크레딧(음수)까지 포함해서 "합계=이전+당일"이 항상 성립하게 만든다.
+  const previousBalanceMap = useMemo(() => {
+    const map = new Map<string, number>();
+    partyIds.forEach((partyId) => {
+      const totals = arTotalsMap.get(partyId);
+      const currentBalance = Number(totals?.total ?? 0);
+      const ledger = arLedgerSumsMap.get(partyId);
+      const todayDelta = Number(ledger?.total ?? 0);
+      map.set(partyId, currentBalance - todayDelta);
+    });
+    return map;
+  }, [partyIds, arTotalsMap, arLedgerSumsMap]);
 
-  const todayAdjustmentsByParty = useMemo(() => {
+
+
+    const arAsOfTotalsMap = useMemo(() => {
+    const map = new Map<string, Amounts>();
+    (arAsOfPositionsQuery.data ?? []).forEach((row) => {
+      const partyId = (row.party_id ?? "").trim();
+      if (!partyId) return;
+      map.set(partyId, {
+        gold: Number(row.gold_outstanding_g ?? 0),
+        silver: Number(row.silver_outstanding_g ?? 0),
+        labor: Number(row.labor_cash_outstanding_krw ?? 0),
+        total: Number(previousBalanceMap.get(partyId) ?? 0),
+      });
+    });
+    return map;
+  }, [arAsOfPositionsQuery.data, previousBalanceMap]);
+
+
+    const todayAdjustmentsByParty = useMemo(() => {
     const map = new Map<string, Amounts>();
     (arTodayPaymentAllocQuery.data ?? []).forEach((row) => {
-      const shipmentLineId = row.shipment_line_id ?? "";
-      const partyId = todayShipmentLinePartyMap.get(shipmentLineId) ?? "";
+      const partyId = (row.party_id ?? "").trim();
       if (!partyId) return;
       const labor = Number(row.alloc_labor_krw ?? 0);
       const material = Number(row.alloc_material_krw ?? 0);
@@ -805,7 +885,8 @@ function ShipmentsPrintContent() {
       });
     });
     return map;
-  }, [arTodayPaymentAllocQuery.data, todayShipmentLinePartyMap]);
+  }, [arTodayPaymentAllocQuery.data]);
+
 
 
   const todayByParty = useMemo(() => sumLineAmountsByParty(todayLines), [todayLines]);
@@ -818,23 +899,54 @@ function ShipmentsPrintContent() {
     [todayReturnLines]
   );
 
-  const receiptPages = useMemo(() => {
+    const receiptPages = useMemo(() => {
     const result: PartyReceiptPage[] = [];
     partyGroups.forEach((group) => {
       const chunks = chunkLines(group.lines, 15);
       const totals = arTotalsMap.get(group.partyId) ?? { ...zeroAmounts };
 
-      const todaySalesAr = todaySalesArByParty.get(group.partyId) ?? { ...zeroAmounts };
-      const todayReturnsAr = todayReturnsArByParty.get(group.partyId) ?? { ...zeroAmounts };
-      const todayNetAr = addAmounts(todaySalesAr, todayReturnsAr);
+      // --- 오늘 출고/반품(금/은/공임)은 라인 기반(표시용) ---
+      const todaySalesArRaw = todaySalesArByParty.get(group.partyId) ?? { ...zeroAmounts };
+      const todayReturnsArRaw = todayReturnsArByParty.get(group.partyId) ?? { ...zeroAmounts };
+      const todayNetAr = addAmounts(todaySalesArRaw, todayReturnsArRaw);
 
-      const previousSummaryLegacy = subtractAmounts(totals, todayNetAr);
+      // --- 오늘 결제/조정(금/은/공임)은 alloc 기반(표시용) ---
+      const todayAdjustmentsRaw = todayAdjustmentsByParty.get(group.partyId) ?? { ...zeroAmounts };
+
+      // ✅ 현금(total)은 원장(cms_ar_ledger) 기준으로 강제 (합계/이전/당일 정합 보장)
+      const ledger = arLedgerSumsMap.get(group.partyId) ?? { total: 0, shipment: 0, ret: 0, paymentAdj: 0 };
+      const todayCashTotal = Number(ledger.total ?? 0);
+      const previousCashTotal = Number(previousBalanceMap.get(group.partyId) ?? totals.total - todayCashTotal);
+
+      // breakdown(옵션 표기)용: 총금액만 ledger로 정합 강제
+      const todaySalesAr: Amounts = { ...todaySalesArRaw, total: Number(ledger.shipment ?? todaySalesArRaw.total) };
+      const todayReturnsAr: Amounts = { ...todayReturnsArRaw, total: Number(ledger.ret ?? todayReturnsArRaw.total) };
+      const todayAdjustments: Amounts = { ...todayAdjustmentsRaw, total: Number(ledger.paymentAdj ?? todayAdjustmentsRaw.total) };
+
+      // --- 이전 미수(금/은/공임): v2(as-of) 있으면 그걸 우선, 없으면 역산 ---
       const previousSummaryAsOf = arAsOfTotalsMap.get(group.partyId) ?? null;
       const useAsOfSummary = summaryMode === "v2" && previousSummaryAsOf !== null;
-      const previousSummary = useAsOfSummary ? previousSummaryAsOf : previousSummaryLegacy;
-      const totalsSummary = totals;
-      const todayAdjustments = todayAdjustmentsByParty.get(group.partyId) ?? { ...zeroAmounts };
-      const todaySummary = addAmounts(todayNetAr, todayAdjustments);
+
+      const previousSummaryLegacy = subtractAmounts(totals, addAmounts(todayNetAr, todayAdjustmentsRaw));
+      const previousGoldSilverLabor = useAsOfSummary ? previousSummaryAsOf : previousSummaryLegacy;
+
+      const previousSummary: Amounts = {
+        gold: Number(previousGoldSilverLabor.gold ?? 0),
+        silver: Number(previousGoldSilverLabor.silver ?? 0),
+        labor: Number(previousGoldSilverLabor.labor ?? 0),
+        total: previousCashTotal,
+      };
+
+      const totalsSummary: Amounts = totals;
+
+      // ✅ 당일 미수: 금/은/공임은 (합계-이전), 총금액은 ledger(day delta)
+      const todaySummary: Amounts = {
+        gold: totalsSummary.gold - previousSummary.gold,
+        silver: totalsSummary.silver - previousSummary.silver,
+        labor: totalsSummary.labor - previousSummary.labor,
+        total: todayCashTotal,
+      };
+
       chunks.forEach((chunk) => {
         result.push({
           partyId: group.partyId,
@@ -874,8 +986,11 @@ function ShipmentsPrintContent() {
     todayReturnsArByParty,
     arAsOfTotalsMap,
     todayAdjustmentsByParty,
+    arLedgerSumsMap,
+    previousBalanceMap,
     summaryMode,
   ]);
+
 
   const visiblePages = useMemo(() => {
     if (!activePartyId) return receiptPages;
@@ -920,8 +1035,8 @@ function ShipmentsPrintContent() {
     <div className="min-h-screen bg-[var(--background)]">
       <div className="receipt-print-actions no-print px-6 py-4 border-b border-[var(--panel-border)] bg-[var(--background)]/80 backdrop-blur">
         <ActionBar
-          title={isStorePickupMode ? "출고 영수증(매장출고)" : "출고 영수증(통상)"}
-          subtitle={`기준일: ${today} · ${isStorePickupMode ? "매장출고만" : "매장출고 제외"} · 출고확정됨`}
+          title={isAllMode ? "출고 영수증(오늘 전체)" : isStorePickupMode ? "출고 영수증(매장출고)" : "출고 영수증(통상)"}
+          subtitle={`기준일: ${today} · ${isAllMode ? "통상+매장출고" : isStorePickupMode ? "매장출고만" : "매장출고 제외"} · 출고확정됨`}
           actions={
             <div className="flex flex-wrap items-center gap-2">
               <div className="flex items-center gap-1">
@@ -943,7 +1058,7 @@ function ShipmentsPrintContent() {
                 </Button>
               </div>
               <div className="flex items-center gap-1">
-                <Button variant={isStorePickupMode ? "secondary" : "primary"} onClick={() => updateQuery({ mode: "" })}>
+                <Button variant={!isAllMode && !isStorePickupMode ? "primary" : "secondary"} onClick={() => updateQuery({ mode: "" })}>
                   통상
                 </Button>
                 <Button
@@ -951,6 +1066,9 @@ function ShipmentsPrintContent() {
                   onClick={() => updateQuery({ mode: "store_pickup" })}
                 >
                   매장출고
+                </Button>
+                <Button variant={isAllMode ? "primary" : "secondary"} onClick={() => updateQuery({ mode: "all" })}>
+                  전체
                 </Button>
               </div>
               <div className="flex items-center gap-2">

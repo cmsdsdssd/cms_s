@@ -627,12 +627,12 @@ export default function ShipmentsPage() {
       prev.map((item) =>
         item.id === id
           ? {
-              ...item,
-              meta: {
-                ...(item.meta ?? {}),
-                [key]: value,
-              },
-            }
+            ...item,
+            meta: {
+              ...(item.meta ?? {}),
+              [key]: value,
+            },
+          }
           : item
       )
     );
@@ -1631,6 +1631,24 @@ export default function ShipmentsPage() {
         p_actor_person_id: actorId,
         p_note: "set from shipments confirm",
       });
+
+      // ✅ 영수증 연결 (store pickup)
+      const rid = normalizeId(linkedReceiptId);
+      if (rid) {
+        try {
+          await receiptUsageUpsertMutation.mutateAsync({
+            p_receipt_id: rid,
+            p_entity_type: "SHIPMENT_HEADER",
+            p_entity_id: shipmentId,
+            p_actor_person_id: actorId,
+            p_note: "link from shipments store pickup save",
+          });
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : "영수증 연결 실패";
+          toast.error("영수증 연결 실패", { description: msg });
+        }
+      }
+
       toast.success("매장출고로 저장 완료", {
         description: "확정(시세 스냅샷)은 Workbench(당일출고)에서 ‘선택 영수증 확정’ 시점에만 진행됩니다.",
       });
@@ -1656,6 +1674,23 @@ export default function ShipmentsPage() {
       p_cost_lines: [],
       p_force: false,
     });
+
+    // ✅ 영수증 연결 (normal confirm)
+    const rid = normalizeId(linkedReceiptId);
+    if (rid) {
+      try {
+        await receiptUsageUpsertMutation.mutateAsync({
+          p_receipt_id: rid,
+          p_entity_type: "SHIPMENT_HEADER",
+          p_entity_id: shipmentId,
+          p_actor_person_id: actorId,
+          p_note: "link from shipments confirm",
+        });
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : "영수증 연결 실패";
+        toast.error("영수증 연결 실패", { description: msg });
+      }
+    }
   };
 
   const displayedLines = useMemo(() => {
@@ -2049,6 +2084,56 @@ export default function ShipmentsPage() {
       p_note: "set source location from shipments confirm",
     });
 
+    // ✅ MANUAL 모드 검증 (프론트엔드)
+    if (costMode === "MANUAL") {
+      // 검증 1: 모든 라인이 표시되어 있는지 확인
+      if (!showAllLines) {
+        toast.error("MANUAL 모드: 모든 라인을 표시해야 합니다.", {
+          description: "우측 상단 '모든 라인 보기' 버튼을 클릭하세요.",
+        });
+        return;
+      }
+
+      // 검증 2: 모든 shipment line에 대해 비용이 입력되었는지 확인
+      const allShipmentLines = currentLinesQuery.data ?? [];
+      const missingCostLines = allShipmentLines.filter((line) => {
+        const lineIdStr = String(line.shipment_line_id);
+        const inputCost = costInputs[lineIdStr];
+        return !inputCost || String(inputCost).trim() === "";
+      });
+
+      if (missingCostLines.length > 0) {
+        const missingLabels = missingCostLines
+          .slice(0, 3)
+          .map((l) => l.master_model_key || `Line ${l.shipment_line_id}`)
+          .join(", ");
+        const more = missingCostLines.length > 3 ? ` 외 ${missingCostLines.length - 3}건` : "";
+        toast.error("MANUAL 모드: 모든 라인에 비용을 입력해야 합니다.", {
+          description: missingLabels ? `누락: ${missingLabels}${more}` : `누락 라인 수: ${missingCostLines.length}`,
+        });
+        return;
+      }
+
+      // 검증 3: 모든 비용이 0보다 커야 함
+      const invalidCostLines = allShipmentLines.filter((line) => {
+        const lineIdStr = String(line.shipment_line_id);
+        const inputCost = costInputs[lineIdStr];
+        const numCost = Number(inputCost);
+        return Number.isNaN(numCost) || numCost <= 0;
+      });
+
+      if (invalidCostLines.length > 0) {
+        const invalidLabels = invalidCostLines
+          .slice(0, 3)
+          .map((l) => l.master_model_key || `Line ${l.shipment_line_id}`)
+          .join(", ");
+        const more = invalidCostLines.length > 3 ? ` 외 ${invalidCostLines.length - 3}건` : "";
+        toast.error("MANUAL 모드: 비용은 0보다 커야 합니다.", {
+          description: invalidLabels ? `잘못된 값: ${invalidLabels}${more}` : `잘못된 라인 수: ${invalidCostLines.length}`,
+        });
+        return;
+      }
+    }
 
     // ✅ MANUAL 모드일 때만 현재 화면에 보이는 라인(기본: 지금 출고한 라인)만 전송
     const allowedLineIds = new Set(
@@ -2168,8 +2253,8 @@ export default function ShipmentsPage() {
       const qtyUsed = hasInventoryQty
         ? Math.max(0, Number(row.inventoryQty ?? 0))
         : hasReceiptQty
-        ? Math.max(0, Number(row.receiptQty ?? 0))
-        : Math.max(0, Number(row.orderQtyPerPiece ?? 0)) * orderQty;
+          ? Math.max(0, Number(row.receiptQty ?? 0))
+          : Math.max(0, Number(row.orderQtyPerPiece ?? 0)) * orderQty;
       return {
         role: row.role,
         supply: row.supply,
@@ -2891,37 +2976,37 @@ export default function ShipmentsPage() {
                                     : "border-l-4 border-l-transparent"
                                 )}
                               >
-                                  <div className="grid min-w-[500px] grid-cols-[76px_120px_minmax(140px,1.2fr)_60px_50px_50px] gap-2 items-center text-xs">
+                                <div className="grid min-w-[500px] grid-cols-[76px_120px_minmax(140px,1.2fr)_60px_50px_50px] gap-2 items-center text-xs">
                                   <span className="text-black dark:text-white tabular-nums font-bold">
-                                      {formatDateCompact(orderDate)}
-                                      <span className="ml-1 inline-flex items-center align-middle">
-                                        <input
-                                          type="checkbox"
-                                          checked={isDemoted}
-                                          onClick={(event) => {
-                                            event.stopPropagation();
-                                          }}
-                                          onChange={(event) => {
-                                            event.stopPropagation();
-                                            const checked = event.currentTarget.checked;
-                                            const key = String(id);
-                                            setLongPendingDemoteIds((prev) => {
-                                              const next = new Set(prev);
-                                              if (checked) next.add(key);
-                                              else next.delete(key);
-                                              return next;
-                                            });
-                                          }}
-                                          className="h-3.5 w-3.5 rounded border border-[var(--panel-border)] accent-blue-600 cursor-pointer"
-                                          aria-label="장기미출고"
-                                          title="장기미출고"
-                                        />
+                                    {formatDateCompact(orderDate)}
+                                    <span className="ml-1 inline-flex items-center align-middle">
+                                      <input
+                                        type="checkbox"
+                                        checked={isDemoted}
+                                        onClick={(event) => {
+                                          event.stopPropagation();
+                                        }}
+                                        onChange={(event) => {
+                                          event.stopPropagation();
+                                          const checked = event.currentTarget.checked;
+                                          const key = String(id);
+                                          setLongPendingDemoteIds((prev) => {
+                                            const next = new Set(prev);
+                                            if (checked) next.add(key);
+                                            else next.delete(key);
+                                            return next;
+                                          });
+                                        }}
+                                        className="h-3.5 w-3.5 rounded border border-[var(--panel-border)] accent-blue-600 cursor-pointer"
+                                        aria-label="장기미출고"
+                                        title="장기미출고"
+                                      />
+                                    </span>
+                                    {formatDday(orderDate) ? (
+                                      <span className="ml-1 text-[10px] text-[var(--muted)]">
+                                        ({formatDday(orderDate)})
                                       </span>
-                                      {formatDday(orderDate) ? (
-                                        <span className="ml-1 text-[10px] text-[var(--muted)]">
-                                          ({formatDday(orderDate)})
-                                        </span>
-                                      ) : null}
+                                    ) : null}
                                   </span>
                                   <span className="truncate" title={customerLabel}>{customerLabel}</span>
                                   <div className="min-w-0 flex items-center">
@@ -3238,56 +3323,56 @@ export default function ShipmentsPage() {
                                 </Button>
                               </div>
 
-                          <div className="grid grid-cols-1 md:grid-cols-3 gap-2 text-[11px]">
-                            <div className="rounded border border-[var(--panel-border)] bg-[var(--panel)] p-1.5">
-                              <div className="text-[var(--muted)]">추천 알공임(마스터 기준)</div>
-                              <div className="text-sm font-semibold tabular-nums">{renderNumber(stoneRecommendation.recommended, "원")}</div>
-                            </div>
-                            <div className="rounded border border-[var(--panel-border)] bg-[var(--panel)] p-1.5">
-                              <div className="text-[var(--muted)]">조정(±)</div>
-                              <Input
-                                value={stoneAdjustmentAmount}
-                                onChange={(e) => setStoneAdjustmentAmount(e.target.value)}
-                                inputMode="numeric"
-                                className="h-7 tabular-nums text-xs"
-                              />
-                            </div>
-                            <div className="rounded border border-[var(--panel-border)] bg-[var(--panel)] p-1.5">
-                              <div className="text-[var(--muted)]">최종 알공임</div>
-                              <div className="text-sm font-semibold tabular-nums">{renderNumber(finalStoneSell, "원")}</div>
-                            </div>
-                          </div>
+                              <div className="grid grid-cols-1 md:grid-cols-3 gap-2 text-[11px]">
+                                <div className="rounded border border-[var(--panel-border)] bg-[var(--panel)] p-1.5">
+                                  <div className="text-[var(--muted)]">추천 알공임(마스터 기준)</div>
+                                  <div className="text-sm font-semibold tabular-nums">{renderNumber(stoneRecommendation.recommended, "원")}</div>
+                                </div>
+                                <div className="rounded border border-[var(--panel-border)] bg-[var(--panel)] p-1.5">
+                                  <div className="text-[var(--muted)]">조정(±)</div>
+                                  <Input
+                                    value={stoneAdjustmentAmount}
+                                    onChange={(e) => setStoneAdjustmentAmount(e.target.value)}
+                                    inputMode="numeric"
+                                    className="h-7 tabular-nums text-xs"
+                                  />
+                                </div>
+                                <div className="rounded border border-[var(--panel-border)] bg-[var(--panel)] p-1.5">
+                                  <div className="text-[var(--muted)]">최종 알공임</div>
+                                  <div className="text-sm font-semibold tabular-nums">{renderNumber(finalStoneSell, "원")}</div>
+                                </div>
+                              </div>
 
-                          <div className="grid grid-cols-1 md:grid-cols-[160px_1fr_1fr] gap-2">
-                            <div className="space-y-1">
-                              <label className="text-xs text-[var(--muted)]">조정 사유</label>
-                              <select
-                                className="h-8 w-full rounded-md border border-[var(--panel-border)] bg-[var(--input-bg)] px-2 text-xs"
-                                value={stoneAdjustmentReason}
-                                onChange={(e) =>
-                                  setStoneAdjustmentReason(
-                                    ["FACTORY_MISTAKE", "PRICE_UP", "VARIANT", "OTHER"].includes(e.target.value)
-                                      ? (e.target.value as StoneAdjustmentReason)
-                                      : "OTHER"
-                                  )
-                                }
-                              >
-                                <option value="FACTORY_MISTAKE">공장 오차/실수</option>
-                                <option value="PRICE_UP">단가 인상</option>
-                                <option value="VARIANT">변형</option>
-                                <option value="OTHER">기타</option>
-                              </select>
-                            </div>
-                            <div className="space-y-1 md:col-span-2">
-                              <label className="text-xs text-[var(--muted)]">조정 메모</label>
-                              <Input
-                                placeholder="조정 사유 메모"
-                                value={stoneAdjustmentNote}
-                                onChange={(e) => setStoneAdjustmentNote(e.target.value)}
-                                className="h-8 text-xs"
-                              />
-                            </div>
-                          </div>
+                              <div className="grid grid-cols-1 md:grid-cols-[160px_1fr_1fr] gap-2">
+                                <div className="space-y-1">
+                                  <label className="text-xs text-[var(--muted)]">조정 사유</label>
+                                  <select
+                                    className="h-8 w-full rounded-md border border-[var(--panel-border)] bg-[var(--input-bg)] px-2 text-xs"
+                                    value={stoneAdjustmentReason}
+                                    onChange={(e) =>
+                                      setStoneAdjustmentReason(
+                                        ["FACTORY_MISTAKE", "PRICE_UP", "VARIANT", "OTHER"].includes(e.target.value)
+                                          ? (e.target.value as StoneAdjustmentReason)
+                                          : "OTHER"
+                                      )
+                                    }
+                                  >
+                                    <option value="FACTORY_MISTAKE">공장 오차/실수</option>
+                                    <option value="PRICE_UP">단가 인상</option>
+                                    <option value="VARIANT">변형</option>
+                                    <option value="OTHER">기타</option>
+                                  </select>
+                                </div>
+                                <div className="space-y-1 md:col-span-2">
+                                  <label className="text-xs text-[var(--muted)]">조정 메모</label>
+                                  <Input
+                                    placeholder="조정 사유 메모"
+                                    value={stoneAdjustmentNote}
+                                    onChange={(e) => setStoneAdjustmentNote(e.target.value)}
+                                    className="h-8 text-xs"
+                                  />
+                                </div>
+                              </div>
 
                               {stoneRecommendation.deltaQtyTotal !== 0 ? (
                                 <div className="text-xs text-amber-700">
@@ -3344,7 +3429,7 @@ export default function ShipmentsPage() {
                           </div>
                         </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-5 gap-6">
+                        <div className="grid grid-cols-1 md:grid-cols-5 gap-6">
                           <div className="space-y-2">
                             <label className="text-sm font-medium text-[var(--foreground)]">중량 (g)</label>
                             <Input

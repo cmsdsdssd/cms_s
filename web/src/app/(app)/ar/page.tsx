@@ -1174,12 +1174,24 @@ export default function ArPage() {
               </div>
 
               {/* Stats Grid */}
-              <div className="grid grid-cols-4 gap-4 p-4 rounded-xl bg-[var(--chip)] border border-[var(--panel-border)]">
+              <div className="grid grid-cols-5 gap-4 p-4 rounded-xl bg-[var(--chip)] border border-[var(--panel-border)]">
                 <div>
                   <p className="text-xs font-medium text-[var(--muted)] mb-1">총 미수금</p>
                   <p className="text-lg font-bold tabular-nums text-[var(--danger)]">{formatKrw(selectedParty.receivable_krw)}</p>
                 </div>
                 <div>
+                  <p className="text-xs font-medium text-[var(--muted)] mb-1">금 잔액</p>
+                  <p className="text-lg font-bold tabular-nums">{formatGram(displayOutstanding.gold)}</p>
+                </div>
+                <div>
+                  <p className="text-xs font-medium text-[var(--muted)] mb-1">은 잔액</p>
+                  <p className="text-lg font-bold tabular-nums">{formatGram(displayOutstanding.silver)}</p>
+                </div>
+                <div>
+                  <p className="text-xs font-medium text-[var(--muted)] mb-1">공임 잔액</p>
+                  <p className="text-lg font-bold tabular-nums">{formatKrw(displayOutstanding.labor)}</p>
+                </div>
+                <div className="border-l border-[var(--panel-border)] pl-4">
                   <p className="text-xs font-medium text-[var(--muted)] mb-1">자재/공임 구분</p>
                   <div className="text-sm space-y-0.5">
                     <div className="flex justify-between">
@@ -1191,14 +1203,6 @@ export default function ArPage() {
                       <span className="font-medium">{formatKrw(displayOutstanding.labor)}</span>
                     </div>
                   </div>
-                </div>
-                <div>
-                  <p className="text-xs font-medium text-[var(--muted)] mb-1">금 잔액</p>
-                  <p className="text-lg font-bold tabular-nums">{formatGram(displayOutstanding.gold)}</p>
-                </div>
-                <div>
-                  <p className="text-xs font-medium text-[var(--muted)] mb-1">은 잔액</p>
-                  <p className="text-lg font-bold tabular-nums">{formatGram(displayOutstanding.silver)}</p>
                 </div>
               </div>
             </div>
@@ -2127,7 +2131,215 @@ export default function ArPage() {
         ledgerRows={ledgerQuery.data ?? []}
         schemaClient={schemaClient}
       />
-    </div >
+    </div>
+  );
+}
+
+function PaymentAllocationDetail({ paymentId, schemaClient }: { paymentId?: string | null; schemaClient: any }) {
+  const allocQuery = useQuery({
+    queryKey: ["cms", "payment_alloc_detail", paymentId],
+    queryFn: async () => {
+      if (!schemaClient || !paymentId) return [] as ArPaymentAllocDetailRow[];
+      const { data, error } = await schemaClient
+        .from(CONTRACTS.views.arPaymentAllocDetail)
+        .select(
+          "payment_id, paid_at, cash_krw, gold_g, silver_g, note, alloc_id, ar_id, alloc_cash_krw, alloc_gold_g, alloc_silver_g, alloc_value_krw, alloc_labor_krw, alloc_material_krw, shipment_line_id, model_name, suffix, color, size, invoice_occurred_at"
+        )
+        .eq("payment_id", paymentId)
+        .order("invoice_occurred_at", { ascending: false });
+      if (error) throw error;
+      return (data ?? []) as ArPaymentAllocDetailRow[];
+    },
+    enabled: Boolean(schemaClient) && Boolean(paymentId),
+  });
+
+  if (!paymentId) {
+    return (
+      <div className="border-t border-[var(--panel-border)] pt-4">
+        <h4 className="font-semibold mb-2">결제 상세</h4>
+        <p className="text-sm text-[var(--muted)]">결제 ID가 없습니다.</p>
+      </div>
+    );
+  }
+
+  if (allocQuery.isLoading) {
+    return (
+      <div className="border-t border-[var(--panel-border)] pt-4">
+        <h4 className="font-semibold mb-2">결제 상세</h4>
+        <p className="text-sm text-[var(--muted)]">상세 내역 로딩 중...</p>
+      </div>
+    );
+  }
+
+  const allocations = allocQuery.data ?? [];
+
+  // Payment totals (deposited amounts) - same for all rows
+  const paymentCashKrw = allocations.length > 0 ? Number(allocations[0].cash_krw ?? 0) : 0;
+  const paymentGoldG = allocations.length > 0 ? Number(allocations[0].gold_g ?? 0) : 0;
+  const paymentSilverG = allocations.length > 0 ? Number(allocations[0].silver_g ?? 0) : 0;
+  const paymentNote = allocations.length > 0 ? (allocations[0].note ?? "").trim() : "";
+
+  // Allocation totals (how it was distributed)
+  const totalLaborKrw = allocations.reduce((sum, a) => sum + Number(a.alloc_labor_krw ?? 0), 0);
+  const totalMaterialKrw = allocations.reduce((sum, a) => sum + Number(a.alloc_material_krw ?? 0), 0);
+  const totalGoldG = allocations.reduce((sum, a) => sum + Number(a.alloc_gold_g ?? 0), 0);
+  const totalSilverG = allocations.reduce((sum, a) => sum + Number(a.alloc_silver_g ?? 0), 0);
+  const totalCashKrw = allocations.reduce((sum, a) => sum + Number(a.alloc_cash_krw ?? 0), 0);
+
+  if (allocations.length === 0) {
+    return (
+      <div className="border-t border-[var(--panel-border)] pt-4">
+        <h4 className="font-semibold mb-2">결제 상세</h4>
+        <p className="text-sm text-[var(--muted)]">
+          배분 내역이 없습니다. (미할당 또는 FIFO 대기 중)
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="border-t border-[var(--panel-border)] pt-4 space-y-4">
+      <div>
+        <h4 className="font-semibold mb-1">결제 입금 내역</h4>
+        <p className="text-xs text-[var(--muted)] mb-3">
+          거래처가 입금한 금액 및 소재
+        </p>
+        <div className="grid grid-cols-2 gap-4 p-3 bg-[var(--panel-hover)] rounded-md border border-[var(--panel-border)]">
+          <div>
+            <div className="text-xs text-[var(--muted)] mb-0.5">현금(KRW)</div>
+            <div className="text-lg font-bold tabular-nums text-[var(--primary)]">
+              {paymentCashKrw === 0 ? "-" : formatKrw(paymentCashKrw)}
+            </div>
+          </div>
+          <div>
+            <div className="text-xs text-[var(--muted)] mb-0.5">메모</div>
+            <div className="text-sm truncate">{paymentNote || "-"}</div>
+          </div>
+          <div>
+            <div className="text-xs text-[var(--muted)] mb-0.5">금(g)</div>
+            <div className="text-lg font-bold tabular-nums text-yellow-600 dark:text-yellow-400">
+              {paymentGoldG === 0 ? "-" : formatGram(paymentGoldG)}
+            </div>
+          </div>
+          <div>
+            <div className="text-xs text-[var(--muted)] mb-0.5">은(g)</div>
+            <div className="text-lg font-bold tabular-nums text-slate-500 dark:text-slate-400">
+              {paymentSilverG === 0 ? "-" : formatGram(paymentSilverG)}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div>
+        <h4 className="font-semibold mb-1">배분 상세</h4>
+        <p className="text-xs text-[var(--muted)] mb-3">
+          입금된 금액/소재가 어떤 출고 건에 얼마씩 배분되었는지 보여줍니다. (총 {allocations.length}건)
+        </p>
+      </div>
+
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm border-collapse">
+          <thead>
+            <tr className="border-b border-[var(--panel-border)]">
+              <th className="text-left py-2 px-2 text-xs font-semibold text-[var(--muted)]">모델명</th>
+              <th className="text-left py-2 px-2 text-xs font-semibold text-[var(--muted)]">옵션</th>
+              <th className="text-right py-2 px-2 text-xs font-semibold text-[var(--muted)]">공임</th>
+              <th className="text-right py-2 px-2 text-xs font-semibold text-[var(--muted)]">재료비</th>
+              <th className="text-right py-2 px-2 text-xs font-semibold text-[var(--muted)]">금(g)</th>
+              <th className="text-right py-2 px-2 text-xs font-semibold text-[var(--muted)]">은(g)</th>
+              <th className="text-right py-2 px-2 text-xs font-semibold text-[var(--muted)]">합계</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-[var(--panel-border)]">
+            {allocations.map((alloc) => {
+              const modelName = (alloc.model_name ?? "").trim() || "-";
+              const suffix = (alloc.suffix ?? "").trim();
+              const color = (alloc.color ?? "").trim();
+              const size = (alloc.size ?? "").trim();
+              const opts = [suffix, color, size].filter(Boolean).join(" / ");
+              const laborKrw = Number(alloc.alloc_labor_krw ?? 0);
+              const materialKrw = Number(alloc.alloc_material_krw ?? 0);
+              const goldG = Number(alloc.alloc_gold_g ?? 0);
+              const silverG = Number(alloc.alloc_silver_g ?? 0);
+              // ✅ 합계 = 공임 + 재료비 (직접 계산)
+              const lineTotalKrw = laborKrw + materialKrw;
+
+              return (
+                <tr key={alloc.alloc_id ?? alloc.ar_id ?? Math.random()} className="hover:bg-[var(--panel-hover)]">
+                  <td className="py-2 px-2 font-medium">{modelName}</td>
+                  <td className="py-2 px-2 text-xs text-[var(--muted)]">{opts || "-"}</td>
+                  <td className="py-2 px-2 text-right tabular-nums">
+                    {laborKrw === 0 ? "-" : formatKrw(laborKrw)}
+                  </td>
+                  <td className="py-2 px-2 text-right tabular-nums">
+                    {materialKrw === 0 ? "-" : formatKrw(materialKrw)}
+                  </td>
+                  <td className="py-2 px-2 text-right tabular-nums">
+                    {goldG === 0 ? "-" : formatGram(goldG)}
+                  </td>
+                  <td className="py-2 px-2 text-right tabular-nums">
+                    {silverG === 0 ? "-" : formatGram(silverG)}
+                  </td>
+                  <td className="py-2 px-2 text-right tabular-nums font-semibold">
+                    {formatKrw(lineTotalKrw)}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+          <tfoot className="border-t-2 border-[var(--panel-border)]">
+            <tr className="font-semibold bg-[var(--panel-hover)]">
+              <td colSpan={2} className="py-2 px-2">
+                배분 합계
+              </td>
+              <td className="py-2 px-2 text-right tabular-nums">
+                {totalLaborKrw === 0 ? "-" : formatKrw(totalLaborKrw)}
+              </td>
+              <td className="py-2 px-2 text-right tabular-nums">
+                {totalMaterialKrw === 0 ? "-" : formatKrw(totalMaterialKrw)}
+              </td>
+              <td className="py-2 px-2 text-right tabular-nums">
+                {totalGoldG === 0 ? "-" : formatGram(totalGoldG)}
+              </td>
+              <td className="py-2 px-2 text-right tabular-nums">
+                {totalSilverG === 0 ? "-" : formatGram(totalSilverG)}
+              </td>
+              <td className="py-2 px-2 text-right tabular-nums">
+                {formatKrw(totalLaborKrw + totalMaterialKrw)}
+              </td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+
+
+      {/* Verification: Check if totals match */}
+      {(Math.abs(totalCashKrw - paymentCashKrw) > 100 ||
+        Math.abs(totalGoldG - paymentGoldG) > 0.01 ||
+        Math.abs(totalSilverG - paymentSilverG) > 0.01) && (
+          <div className="p-3 bg-blue-50 dark:bg-blue-950/20 border border-blue-200 dark:border-blue-800 rounded-md">
+            <div className="text-xs font-semibold text-blue-800 dark:text-blue-200 mb-1">ℹ️ 교차 결제 감지</div>
+            <div className="text-xs text-blue-700 dark:text-blue-300 space-y-1">
+              <div>입금액과 배분 합계에 차이가 있습니다:</div>
+              <div className="pl-2">
+                {Math.abs(totalCashKrw - paymentCashKrw) > 100 && (
+                  <div>• 현금: 입금 {formatKrw(paymentCashKrw)} → 배분 {formatKrw(totalCashKrw)} (차이: {formatKrw(totalCashKrw - paymentCashKrw)})</div>
+                )}
+                {Math.abs(totalGoldG - paymentGoldG) > 0.01 && (
+                  <div>• 금: 입금 {formatGram(paymentGoldG)} → 배분 {formatGram(totalGoldG)} (차이: {formatGram(totalGoldG - paymentGoldG)})</div>
+                )}
+                {Math.abs(totalSilverG - paymentSilverG) > 0.01 && (
+                  <div>• 은: 입금 {formatGram(paymentSilverG)} → 배분 {formatGram(totalSilverG)} (차이: {formatGram(totalSilverG - paymentSilverG)})</div>
+                )}
+              </div>
+              <div className="text-[10px] opacity-80 mt-1">
+                💡 현금↔소재 교차 결제가 발생했을 수 있습니다. (예: 초과 현금으로 재료비 소재 대체)<br />
+                일부가 미배분 상태이거나 FIFO 처리 중일 수도 있습니다.
+              </div>
+            </div>
+          </div>
+        )}
+    </div>
   );
 }
 
@@ -2258,12 +2470,7 @@ function DetailsModal({
         )}
 
         {isPayment && (
-          <div className="border-t border-[var(--panel-border)] pt-4">
-            <h4 className="font-semibold mb-2">결제 상세</h4>
-            <p className="text-sm text-[var(--muted)]">
-              결제 건은 별도의 시세 스냅샷이 존재하지 않으며, 입금 시점의 현금/금/은 수량을 기록합니다.
-            </p>
-          </div>
+          <PaymentAllocationDetail paymentId={row.payment_id} schemaClient={schemaClient} />
         )}
       </div>
     </Modal>
