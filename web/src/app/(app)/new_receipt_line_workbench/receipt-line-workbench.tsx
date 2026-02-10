@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ColumnDef,
@@ -20,11 +20,11 @@ import { toast } from "sonner";
 import { ActionBar } from "@/components/layout/action-bar";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Input, Select, Textarea } from "@/components/ui/field";
 import { Badge } from "@/components/ui/badge";
 import { NumberText } from "@/components/ui/number-text";
 import { Modal } from "@/components/ui/modal";
+import { Sheet } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SearchSelect } from "@/components/ui/search-select";
 import { useRpcMutation } from "@/hooks/use-rpc-mutation";
@@ -186,7 +186,7 @@ type MatchCandidate = {
   sub1_stone_source?: string | null;
   sub2_stone_source?: string | null;
   match_score?: number | null;
-  score_detail_json?: Record<string, number> | null;
+  score_detail_json?: Record<string, unknown> | null;
   order_date?: string | null;
   created_at?: string | null;
 };
@@ -755,6 +755,16 @@ function calcWeightTotal(raw: string, deduct: string) {
   return Math.max(0, rawNum - deductNum);
 }
 
+function buildWeightRangeFromCenter(center: number | null | undefined) {
+  if (center === null || center === undefined) return null;
+  if (!Number.isFinite(center)) return null;
+  const margin = Math.abs(center) * 0.1;
+  return {
+    min: Math.max(0, center - margin),
+    max: Math.max(0, center + margin),
+  };
+}
+
 function calcStoneFactoryCost(item: Pick<ReceiptLineItemInput, StoneField>) {
   const centerQty = parseNumber(item.stone_center_qty) ?? 0;
   const sub1Qty = parseNumber(item.stone_sub1_qty) ?? 0;
@@ -913,9 +923,11 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
   const suppressModelSuggestRef = useRef<{ lineId: string; value: string } | null>(null);
 
   const [activeTab, setActiveTab] = useState<"match" | "confirmed" | "reconcile" | "integrity">("match");
-  const [isMatchPanelExpanded, setIsMatchPanelExpanded] = useState(false);
+  const [isMatchDrawerOpen, setIsMatchDrawerOpen] = useState(false);
+  const [isAdvancedConfirmOpen, setIsAdvancedConfirmOpen] = useState(false);
   const [selectedUnlinked, setSelectedUnlinked] = useState<UnlinkedLineRow | null>(null);
   const [suggestions, setSuggestions] = useState<MatchCandidate[]>([]);
+  const [suggestionLineUuid, setSuggestionLineUuid] = useState<string | null>(null);
   const [selectedCandidate, setSelectedCandidate] = useState<MatchCandidate | null>(null);
   const [scoreOpenMap, setScoreOpenMap] = useState<Record<string, boolean>>({});
   const [selectedWeight, setSelectedWeight] = useState("");
@@ -938,9 +950,9 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
   const [matchClearReasonText, setMatchClearReasonText] = useState("");
   const [matchClearNote, setMatchClearNote] = useState("");
   const [matchClearError, setMatchClearError] = useState<string | null>(null);
-  const matchExpandRef = useRef<HTMLDivElement | null>(null);
-  const matchExpandHeightRef = useRef<number | null>(null);
-  const [matchPanelMinHeight, setMatchPanelMinHeight] = useState<number | null>(null);
+  const matchOpenTriggerRef = useRef<HTMLElement | null>(null);
+  const suggestionCacheRef = useRef<Map<string, MatchCandidate[]>>(new Map());
+  const autoSuggestTimerRef = useRef<number | null>(null);
 
   const debugSuggest = useMemo(() => {
     if (typeof window === "undefined") return false;
@@ -990,6 +1002,9 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
       }
       if (headerNudgeTimerRef.current) {
         window.clearTimeout(headerNudgeTimerRef.current);
+      }
+      if (autoSuggestTimerRef.current) {
+        window.clearTimeout(autoSuggestTimerRef.current);
       }
     };
   }, []);
@@ -1727,7 +1742,10 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
 
   useEffect(() => {
     setLineItemsDirty(false);
+    setIsMatchDrawerOpen(false);
+    setIsAdvancedConfirmOpen(false);
     setSuggestions([]);
+    setSuggestionLineUuid(null);
     setSelectedCandidate(null);
     setSelectedUnlinked(null);
     setConfirmResult(null);
@@ -1750,6 +1768,7 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
     setReconcileIssueCounts(null);
     setApSyncStatus("idle");
     setApSyncMessage(null);
+    suggestionCacheRef.current.clear();
 
     if (selectedReceiptId) {
       void loadFactoryStatementSnapshot(selectedReceiptId);
@@ -2615,6 +2634,8 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
       if (payload?.already_confirmed) {
         toast.error("이미 매칭 확정된 라인입니다.");
         setSuggestions([]);
+        setSuggestionLineUuid(receiptLineUuid);
+        suggestionCacheRef.current.set(receiptLineUuid, []);
         setSelectedCandidate(null);
         setConfirmResult(null);
         return;
@@ -2689,7 +2710,10 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
       if (nextCandidates.length === 0) {
         toast.error("매칭 후보가 없습니다.");
       }
-      setSuggestions(nextCandidates.slice(0, SUGGESTION_LIMIT));
+      const limited = nextCandidates.slice(0, SUGGESTION_LIMIT);
+      setSuggestions(limited);
+      setSuggestionLineUuid(receiptLineUuid);
+      suggestionCacheRef.current.set(receiptLineUuid, limited);
       setSelectedCandidate(null);
       setConfirmResult(null);
     } finally {
@@ -2994,14 +3018,44 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
     toast.success("라인 자동 배분을 적용했습니다.");
   }
 
+  const selectedReferenceWeightRange = useMemo(() => {
+    if (!selectedCandidate) return null;
+    const masterWeight = selectedMasterPricingQuery.data?.weight_default_g ?? null;
+    const masterDeduct = selectedMasterPricingQuery.data?.deduction_weight_default_g ?? null;
+    if (masterWeight !== null && masterWeight !== undefined) {
+      const masterNet = Math.max(0, masterWeight - (masterDeduct ?? 0));
+      const fromMaster = buildWeightRangeFromCenter(masterNet);
+      if (fromMaster) return fromMaster;
+    }
+    const candidateEffective = selectedCandidate.effective_weight_g ?? null;
+    if (candidateEffective !== null && candidateEffective !== undefined) {
+      const fromCandidate = buildWeightRangeFromCenter(candidateEffective);
+      if (fromCandidate) return fromCandidate;
+    }
+    const selectedLineWeight =
+      selectedUnlinked?.factory_weight_g ??
+      calcWeightTotal(String(selectedUnlinked?.weight_raw_g ?? ""), String(selectedUnlinked?.weight_deduct_g ?? ""));
+    return buildWeightRangeFromCenter(selectedLineWeight);
+  }, [selectedCandidate, selectedMasterPricingQuery.data, selectedUnlinked]);
+
+  function getCandidateDisplayWeightRange(candidate: MatchCandidate, isSelectedCandidate: boolean) {
+    if (isSelectedCandidate && selectedReferenceWeightRange) {
+      return selectedReferenceWeightRange;
+    }
+    const existingMin = candidate.weight_min_g ?? null;
+    const existingMax = candidate.weight_max_g ?? null;
+    if (existingMin !== null && existingMax !== null) {
+      return { min: Math.max(0, existingMin), max: Math.max(0, existingMax) };
+    }
+    return buildWeightRangeFromCenter(candidate.effective_weight_g ?? null);
+  }
+
   function isWeightInRange() {
     if (!selectedCandidate) return false;
     const weight = parseNumber(selectedWeight);
     if (weight === null) return false;
-    const min = selectedCandidate.weight_min_g ?? null;
-    const max = selectedCandidate.weight_max_g ?? null;
-    if (min === null || max === null) return true;
-    return weight >= min && weight <= max;
+    if (!selectedReferenceWeightRange) return true;
+    return weight >= selectedReferenceWeightRange.min && weight <= selectedReferenceWeightRange.max;
   }
 
   async function handleConfirm() {
@@ -3032,8 +3086,7 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
       return;
     }
     if (weight !== null && materialCode !== "00" && !isWeightInRange()) {
-      toast.error("허용 범위를 벗어난 중량입니다");
-      return;
+      toast.warning("중량이 허용 범위를 벗어났습니다. 참고 후 진행하세요.");
     }
 
     let note = confirmNote.trim();
@@ -3090,44 +3143,157 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
     setBackdatedConfirmRequired(false);
   }, [selectedReceiptId]);
 
-  const isMatchFocusMode = activeTab === "match" && isMatchPanelExpanded;
+  const unlinkedRows = unlinkedQuery.data ?? [];
+  const selectedUnlinkedUuid = selectedUnlinked ? getReceiptLineUuid(selectedUnlinked) : "";
+  const selectedUnlinkedIndex = selectedUnlinkedUuid
+    ? unlinkedRows.findIndex((row) => getReceiptLineUuid(row) === selectedUnlinkedUuid)
+    : -1;
+  const selectedUnlinkedOrder = selectedUnlinkedIndex >= 0 ? selectedUnlinkedIndex + 1 : null;
+  const isMatchPanelExpanded = false;
+  const isMatchFocusMode = false;
+  const matchPanelMinHeight = null;
+  const matchExpandRef = useRef<HTMLDivElement | null>(null);
+  const setMatchPanelExpandedSafely = useCallback((_value: boolean) => {}, []);
   const isWorkbenchExpanded = isPreviewExpanded;
 
-  const setMatchPanelExpandedSafely = useCallback(
-    (value: boolean) => {
-      if (value) {
-        matchExpandHeightRef.current = matchExpandRef.current?.offsetHeight ?? null;
-        setMatchPanelMinHeight(matchExpandHeightRef.current);
-      } else {
-        setMatchPanelMinHeight(null);
+  const openMatchDrawer = useCallback(
+    (line: UnlinkedLineRow, trigger?: HTMLElement | null) => {
+      setSelectedUnlinked(line);
+      setSelectedCandidate(null);
+      setConfirmResult(null);
+      setIsMatchDrawerOpen(true);
+      if (trigger) {
+        matchOpenTriggerRef.current = trigger;
       }
-      setIsMatchPanelExpanded(value);
     },
     []
   );
 
-  useLayoutEffect(() => {
-    if (!isMatchPanelExpanded) return;
-    if (matchPanelMinHeight !== null) return;
-    const height = matchExpandRef.current?.offsetHeight ?? null;
-    if (height !== null) setMatchPanelMinHeight(height);
-  }, [isMatchPanelExpanded, matchPanelMinHeight]);
+  const closeMatchDrawer = useCallback(() => {
+    setIsMatchDrawerOpen(false);
+  }, []);
+
+  const moveToRelativeUnlinkedLine = useCallback(
+    (direction: -1 | 1) => {
+      if (selectedUnlinkedIndex < 0) return;
+      const next = unlinkedRows[selectedUnlinkedIndex + direction] ?? null;
+      if (!next) return;
+      setSelectedUnlinked(next);
+      setSelectedCandidate(null);
+      setConfirmResult(null);
+      setConfirmNote("");
+      setScoreOpenMap({});
+    },
+    [selectedUnlinkedIndex, unlinkedRows]
+  );
+
+  const openSelectedLineEditor = useCallback(() => {
+    if (!selectedLineItem) {
+      toast.error("라인 입력에서 선택 라인을 찾지 못했습니다.");
+      return;
+    }
+    setExpandedLineId(selectedLineItem.line_uuid);
+    const target = document.querySelector(`[data-line-block="${selectedLineItem.line_uuid}"]`);
+    if (target instanceof HTMLElement) {
+      target.scrollIntoView({ behavior: "smooth", block: "center" });
+      const firstInput = target.querySelector("input, textarea, select, button");
+      if (firstInput instanceof HTMLElement) {
+        window.setTimeout(() => firstInput.focus(), 50);
+      }
+    }
+  }, [selectedLineItem]);
 
   useEffect(() => {
-    if (activeTab !== "match") setMatchPanelExpandedSafely(false);
+    if (activeTab !== "match") {
+      setIsMatchDrawerOpen(false);
+    }
   }, [activeTab]);
 
   useEffect(() => {
-    if (!isMatchPanelExpanded) return;
-    const handleOutside = (event: MouseEvent) => {
-      const target = event.target;
-      if (!(target instanceof Node)) return;
-      if (matchExpandRef.current?.contains(target)) return;
-      setMatchPanelExpandedSafely(false);
+    if (!isMatchDrawerOpen || !selectedUnlinked) return;
+    const lineUuid = getReceiptLineUuid(selectedUnlinked);
+    if (!lineUuid) return;
+    const cached = suggestionCacheRef.current.get(lineUuid);
+    if (cached) {
+      setSuggestions(cached);
+      setSuggestionLineUuid(lineUuid);
+      return;
+    }
+    if (suggestionLineUuid === lineUuid && suggestions.length > 0) return;
+    if (autoSuggestTimerRef.current) {
+      window.clearTimeout(autoSuggestTimerRef.current);
+    }
+    autoSuggestTimerRef.current = window.setTimeout(() => {
+      void handleSuggest(selectedUnlinked);
+    }, 200);
+    return () => {
+      if (autoSuggestTimerRef.current) {
+        window.clearTimeout(autoSuggestTimerRef.current);
+      }
     };
-    document.addEventListener("mousedown", handleOutside);
-    return () => document.removeEventListener("mousedown", handleOutside);
-  }, [isMatchPanelExpanded]);
+  }, [handleSuggest, isMatchDrawerOpen, selectedUnlinked, suggestionLineUuid, suggestions.length]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    if (isMatchDrawerOpen && selectedUnlinkedUuid) {
+      params.set("match", selectedUnlinkedUuid);
+    } else {
+      params.delete("match");
+    }
+    const next = `${window.location.pathname}${params.toString() ? `?${params.toString()}` : ""}`;
+    window.history.replaceState({}, "", next);
+  }, [isMatchDrawerOpen, selectedUnlinkedUuid]);
+
+  useEffect(() => {
+    if (isMatchDrawerOpen) return;
+    if (matchOpenTriggerRef.current) {
+      matchOpenTriggerRef.current.focus();
+      matchOpenTriggerRef.current = null;
+    }
+  }, [isMatchDrawerOpen]);
+
+  useEffect(() => {
+    if (!isMatchDrawerOpen) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.ctrlKey && event.key === "Enter") {
+        event.preventDefault();
+        if (!matchConfirm.isPending) {
+          void handleConfirm();
+        }
+      }
+      if (event.altKey && event.key === "ArrowLeft") {
+        event.preventDefault();
+        moveToRelativeUnlinkedLine(-1);
+      }
+      if (event.altKey && event.key === "ArrowRight") {
+        event.preventDefault();
+        moveToRelativeUnlinkedLine(1);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [handleConfirm, isMatchDrawerOpen, matchConfirm.isPending, moveToRelativeUnlinkedLine]);
+
+  useEffect(() => {
+    if (!isMatchDrawerOpen || unlinkedRows.length === 0 || selectedUnlinkedUuid) return;
+    const first = unlinkedRows[0] ?? null;
+    if (first) {
+      setSelectedUnlinked(first);
+    }
+  }, [isMatchDrawerOpen, selectedUnlinkedUuid, unlinkedRows]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (isMatchDrawerOpen) return;
+    if (!selectedReceiptId) return;
+    const target = new URLSearchParams(window.location.search).get("match");
+    if (!target) return;
+    const matched = unlinkedRows.find((line) => getReceiptLineUuid(line) === target) ?? null;
+    if (!matched) return;
+    setSelectedUnlinked(matched);
+    setIsMatchDrawerOpen(true);
+  }, [isMatchDrawerOpen, selectedReceiptId, unlinkedRows]);
 
   const reconcileStatus = useMemo(() => {
     if (!reconcileIssueCounts) {
@@ -3322,7 +3488,7 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                       variant="secondary"
                       onClick={() => {
                         setIsPreviewExpanded(false);
-                        setMatchPanelExpandedSafely(false);
+                        setIsMatchDrawerOpen(false);
                       }}
                     >
                       목록 열기
@@ -4473,19 +4639,11 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                     </button>
                   ))}
                 </div>
-                {activeTab === "match" ? (
-                  <Button
-                    size="sm"
-                    variant={isMatchPanelExpanded ? "primary" : "secondary"}
-                    onClick={() => setMatchPanelExpandedSafely(!isMatchPanelExpanded)}
-                  >
-                    {isMatchPanelExpanded ? "축소" : "확장"}
-                  </Button>
-                ) : null}
+                {activeTab === "match" ? <Badge tone="neutral" className="h-6 px-2 text-[10px]">{unlinkedRows.length}건</Badge> : null}
               </div>
             </CardHeader>
             <CardBody className="p-4 space-y-4 relative overflow-visible">
-              {activeTab === "match" && (
+              {/* Legacy inline match panel retained for reference
                 <div style={{ minHeight: matchPanelMinHeight ?? undefined }}>
                   <div
                     ref={matchExpandRef}
@@ -5188,6 +5346,76 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                 </div>
               )}
 
+              */}
+              {activeTab === "match" && (
+                <div className="space-y-3">
+                  <div className="rounded-lg border border-[var(--panel-border)] bg-[var(--surface)]/60 p-3 text-xs text-[var(--muted)]">
+                    미매칭 라인을 클릭하면 매칭 폼 드로어가 열립니다. Enter로 열기, 드로어에서 Ctrl+Enter로 확정 가능합니다.
+                  </div>
+                  {unlinkedQuery.isLoading ? (
+                    <div className="space-y-2">
+                      {Array.from({ length: 6 }).map((_, idx) => (
+                        <Skeleton key={`unlinked-row-${idx}`} className="h-14 w-full" />
+                      ))}
+                    </div>
+                  ) : unlinkedRows.length === 0 ? (
+                    <div className="rounded-md border border-dashed border-[var(--panel-border)] p-3 text-xs text-[var(--muted)]">
+                      미매칭 라인이 없습니다.
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      {unlinkedRows.map((line, index) => {
+                        const uuid = getReceiptLineUuid(line) || `unlinked-${index}`;
+                        const customerCode = line.customer_factory_code?.trim() ?? "";
+                        const customerName = customerCode ? customerNameMap[customerCode] ?? "매칭되는 고객 없음" : "-";
+                        const weightValue =
+                          line.factory_weight_g ??
+                          calcWeightTotal(String(line.weight_raw_g ?? ""), String(line.weight_deduct_g ?? ""));
+                        return (
+                          <button
+                            key={uuid}
+                            type="button"
+                            onClick={(event) => openMatchDrawer(line, event.currentTarget)}
+                            onKeyDown={(event) => {
+                              if (event.key === "Enter") {
+                                event.preventDefault();
+                                openMatchDrawer(line, event.currentTarget as HTMLElement);
+                              }
+                            }}
+                            className="w-full rounded-lg border border-[var(--panel-border)] bg-[var(--panel)] px-3 py-3 text-left transition-colors hover:border-[var(--primary)]/40"
+                          >
+                            <div className="flex items-start justify-between gap-2">
+                              <div className="min-w-0">
+                                <div className="text-xs font-semibold text-[var(--foreground)]">
+                                  {formatNumber(line.vendor_seq_no)} · {line.model_name ?? "-"}
+                                </div>
+                                <div className="mt-1 text-[11px] text-[var(--muted)]">
+                                  {line.material_code ?? "-"} / {line.color ?? "-"} / {line.size ?? "-"} · 거래처 {customerCode || "-"} {customerName}
+                                </div>
+                                <div className="mt-1 text-[11px] text-[var(--muted)]">
+                                  중량 {weightValue === null || weightValue === undefined ? "-" : `${formatNumber(weightValue)}g`} · 원석 {formatStoneQty(line.stone_center_qty)} / {formatStoneQty(line.stone_sub1_qty)} / {formatStoneQty(line.stone_sub2_qty)} · 비고 {line.remark ?? "-"}
+                                </div>
+                              </div>
+                              <Badge tone="neutral" className="h-5 px-2 text-[10px]">
+                                {index + 1}/{unlinkedRows.length}
+                              </Badge>
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onClick={() => setUnlinkedLimit((prev) => prev + 50)}
+                    disabled={unlinkedQuery.isFetching}
+                  >
+                    미매칭 더보기
+                  </Button>
+                </div>
+              )}
+
               {activeTab === "confirmed" && (
                 <div className="space-y-4">
                   <div className="rounded-lg border border-[var(--panel-border)] bg-[var(--surface)]/60 p-3 text-xs text-[var(--muted)]">
@@ -5355,6 +5583,357 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
           </Card>
         </div>
       </div>
+
+      <Sheet open={isMatchDrawerOpen} onClose={closeMatchDrawer} title="매칭 폼" className="w-[96vw] lg:w-[1100px]">
+        <div className="flex h-full min-h-0 flex-col">
+          <div className="border-b border-[var(--panel-border)] bg-[var(--panel)]/90 px-4 py-3">
+            <div className="flex items-center justify-between gap-2">
+              <div className="text-sm font-semibold text-[var(--foreground)]">
+                {selectedUnlinkedOrder ? `Line ${selectedUnlinkedOrder} of ${unlinkedRows.length}` : "매칭 라인"}
+              </div>
+              <div className="flex items-center gap-2">
+                <Button size="sm" variant="secondary" onClick={() => moveToRelativeUnlinkedLine(-1)} disabled={selectedUnlinkedIndex <= 0}>
+                  Prev
+                </Button>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => moveToRelativeUnlinkedLine(1)}
+                  disabled={selectedUnlinkedIndex < 0 || selectedUnlinkedIndex >= unlinkedRows.length - 1}
+                >
+                  Next
+                </Button>
+                <Button size="sm" variant="secondary" onClick={closeMatchDrawer}>
+                  닫기
+                </Button>
+              </div>
+            </div>
+            {(headerNeedsSave || lineItemsDirty) && (
+              <div className="mt-2 flex flex-wrap items-center gap-2 rounded-lg border border-amber-300 bg-amber-500/10 px-3 py-2 text-xs text-amber-800">
+                {headerNeedsSave ? <span>헤더 저장이 필요합니다.</span> : null}
+                {lineItemsDirty ? <span>라인 저장이 필요합니다.</span> : null}
+                {headerNeedsSave ? (
+                  <Button size="sm" variant="secondary" onClick={saveHeader} disabled={headerUpdate.isPending}>
+                    헤더 저장
+                  </Button>
+                ) : null}
+                {lineItemsDirty ? (
+                  <Button size="sm" variant="secondary" onClick={saveLines} disabled={upsertSnapshot.isPending}>
+                    라인 저장
+                  </Button>
+                ) : null}
+              </div>
+            )}
+            {confirmResult?.shipment_id ? (
+              <div className="mt-2 rounded-lg border border-emerald-300 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-800">
+                Matched! Line {selectedUnlinkedOrder ?? "-"} Confirmed (shipment: {confirmResult.shipment_id})
+              </div>
+            ) : null}
+          </div>
+
+          <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
+            <div className="space-y-4">
+              <div className="space-y-3 rounded-lg border border-[var(--panel-border)] bg-[var(--surface)]/50 p-3">
+                <div className="flex items-center justify-between">
+                  <div className="text-sm font-semibold">Selected Line</div>
+                  <Button size="sm" variant="secondary" onClick={openSelectedLineEditor}>
+                    라인 수정 열기
+                  </Button>
+                </div>
+                {selectedUnlinked ? (
+                  <div className="grid grid-cols-1 gap-2 text-xs text-[var(--muted)] lg:grid-cols-2">
+                    <div>
+                      <span className="font-semibold text-[var(--foreground)]">모델</span> {selectedUnlinked.model_name ?? "-"}
+                    </div>
+                    <div>
+                      <span className="font-semibold text-[var(--foreground)]">소재/색상/사이즈</span> {selectedUnlinked.material_code ?? "-"} / {selectedUnlinked.color ?? "-"} / {selectedUnlinked.size ?? "-"}
+                    </div>
+                    <div>
+                      <span className="font-semibold text-[var(--foreground)]">거래처</span> {selectedUnlinked.customer_factory_code ?? "-"}
+                    </div>
+                    <div>
+                      <span className="font-semibold text-[var(--foreground)]">중량</span> {formatNumber(
+                        selectedUnlinked.factory_weight_g ??
+                        calcWeightTotal(String(selectedUnlinked.weight_raw_g ?? ""), String(selectedUnlinked.weight_deduct_g ?? ""))
+                      )}g
+                    </div>
+                    <div>
+                      <span className="font-semibold text-[var(--foreground)]">원석(중/보1/보2)</span> {formatStoneQty(selectedUnlinked.stone_center_qty)} / {formatStoneQty(selectedUnlinked.stone_sub1_qty)} / {formatStoneQty(selectedUnlinked.stone_sub2_qty)}
+                    </div>
+                    <div>
+                      <span className="font-semibold text-[var(--foreground)]">비고</span> {selectedUnlinked.remark ?? "-"}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="text-xs text-[var(--muted)]">라인을 선택하세요.</div>
+                )}
+                <Button size="sm" variant="secondary" onClick={() => void handleSuggest(selectedUnlinked)} disabled={!selectedUnlinked || isSuggesting}>
+                  제안 다시 불러오기
+                </Button>
+              </div>
+
+              <div className="space-y-2 rounded-lg border border-[var(--panel-border)] bg-[var(--surface)]/50 p-3">
+                <div className="flex items-center justify-between">
+                  <div className="text-sm font-semibold">1:1 비교 후보</div>
+                  {selectedCandidate ? <Badge tone="active" className="h-5 px-2 text-[10px]">후보 선택됨</Badge> : null}
+                </div>
+                {isSuggesting ? (
+                  <div className="space-y-2">
+                    {Array.from({ length: 6 }).map((_, idx) => (
+                      <Skeleton key={`candidate-skel-${idx}`} className="h-14 w-full" />
+                    ))}
+                  </div>
+                ) : suggestions.length === 0 ? (
+                  <div className="rounded-md border border-dashed border-[var(--panel-border)] p-2 text-xs text-[var(--muted)]">후보가 없습니다.</div>
+                ) : (
+                  (() => {
+                    const baseCode = selectedUnlinked?.customer_factory_code ?? "-";
+                    const baseStone = `${formatStoneQty(selectedUnlinked?.stone_center_qty)} / ${formatStoneQty(selectedUnlinked?.stone_sub1_qty)} / ${formatStoneQty(selectedUnlinked?.stone_sub2_qty)}`;
+                    const diffClass = (value: string, base: string) => (value !== base ? "bg-amber-500/10" : "");
+                    return (
+                      <div className="max-h-[58vh] overflow-auto rounded-lg border border-[var(--panel-border)] bg-[var(--panel)]">
+                        <table className="w-full min-w-[1400px] text-[11px]">
+                          <thead className="sticky top-0 z-10 bg-[var(--panel)] text-[var(--muted)]">
+                            <tr>
+                              <th className="px-2 py-2 text-left">구분</th>
+                              <th className="px-2 py-2 text-left">주문번호</th>
+                              <th className="px-2 py-2 text-left">주문일</th>
+                              <th className="px-2 py-2 text-left">상태</th>
+                              <th className="px-2 py-2 text-left">모델</th>
+                              <th className="px-2 py-2 text-left">소재</th>
+                              <th className="px-2 py-2 text-left">색상</th>
+                              <th className="px-2 py-2 text-left">사이즈</th>
+                              <th className="px-2 py-2 text-left">거래처코드</th>
+                              <th className="px-2 py-2 text-left">거래처명</th>
+                              <th className="px-2 py-2 text-left">도금</th>
+                              <th className="px-2 py-2 text-left">도금색상</th>
+                              <th className="px-2 py-2 text-left">원석(중/보1/보2)</th>
+                              <th className="px-2 py-2 text-left">중량범위</th>
+                              <th className="px-2 py-2 text-left">메모</th>
+                              <th className="px-2 py-2 text-right">점수</th>
+                              <th className="px-2 py-2 text-right">선택</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            <tr className="border-t border-[var(--panel-border)] bg-[var(--surface)]/40">
+                              <td className="px-2 py-2 font-semibold">기준</td>
+                              <td className="px-2 py-2">-</td>
+                              <td className="px-2 py-2">-</td>
+                              <td className="px-2 py-2">-</td>
+                              <td className="px-2 py-2">{selectedUnlinked?.model_name ?? "-"}</td>
+                              <td className="px-2 py-2">{selectedUnlinked?.material_code ?? "-"}</td>
+                              <td className="px-2 py-2">{selectedUnlinked?.color ?? "-"}</td>
+                              <td className="px-2 py-2">{selectedUnlinked?.size ?? "-"}</td>
+                              <td className="px-2 py-2">{baseCode || "-"}</td>
+                              <td className="px-2 py-2">{baseCode ? customerNameMap[baseCode] ?? "매칭되는 고객 없음" : "-"}</td>
+                              <td className="px-2 py-2">-</td>
+                              <td className="px-2 py-2">-</td>
+                              <td className="px-2 py-2">{baseStone}</td>
+                              <td className="px-2 py-2">-</td>
+                              <td className="px-2 py-2">{selectedUnlinked?.remark ?? "-"}</td>
+                              <td className="px-2 py-2 text-right">-</td>
+                              <td className="px-2 py-2 text-right">-</td>
+                            </tr>
+                            {suggestions.map((candidate, idx) => {
+                              const key = candidate.order_line_id ?? `candidate-${idx}`;
+                              const isSelected = selectedCandidate?.order_line_id === candidate.order_line_id;
+                              const stone = `${formatStoneQty(candidate.stone_center_qty)} / ${formatStoneQty(candidate.stone_sub1_qty)} / ${formatStoneQty(candidate.stone_sub2_qty)}`;
+                              const displayRange = getCandidateDisplayWeightRange(candidate, isSelected);
+                              const weightRange = displayRange
+                                ? `${formatNumber(displayRange.min)} ~ ${formatNumber(displayRange.max)}g`
+                                : "-";
+                              const platedLabel =
+                                candidate.is_plated === null || candidate.is_plated === undefined
+                                  ? "-"
+                                  : candidate.is_plated
+                                    ? "Y"
+                                    : "-";
+                              return (
+                                <Fragment key={key}>
+                                  <tr className={cn("border-t border-[var(--panel-border)]", isSelected ? "bg-[var(--primary)]/5" : "")}> 
+                                    <td className="px-2 py-2">후보</td>
+                                    <td className="px-2 py-2">{candidate.order_no ?? "-"}</td>
+                                    <td className="px-2 py-2">{formatYmd(candidate.order_date)}</td>
+                                    <td className="px-2 py-2">{candidate.status ?? "-"}</td>
+                                    <td className={cn("px-2 py-2", diffClass(candidate.model_name ?? "-", selectedUnlinked?.model_name ?? "-"))}>{candidate.model_name ?? "-"}</td>
+                                    <td className={cn("px-2 py-2", diffClass(candidate.material_code ?? "-", selectedUnlinked?.material_code ?? "-"))}>{candidate.material_code ?? "-"}</td>
+                                    <td className={cn("px-2 py-2", diffClass(candidate.color ?? "-", selectedUnlinked?.color ?? "-"))}>{candidate.color ?? "-"}</td>
+                                    <td className={cn("px-2 py-2", diffClass(candidate.size ?? "-", selectedUnlinked?.size ?? "-"))}>{candidate.size ?? "-"}</td>
+                                    <td className={cn("px-2 py-2", diffClass(candidate.customer_mask_code ?? "-", baseCode))}>{candidate.customer_mask_code ?? "-"}</td>
+                                    <td className="px-2 py-2">{candidate.customer_name ?? "-"}</td>
+                                    <td className="px-2 py-2">{platedLabel}</td>
+                                    <td className="px-2 py-2">{candidate.plating_color_code ?? "-"}</td>
+                                    <td className={cn("px-2 py-2", diffClass(stone, baseStone))}>{stone}</td>
+                                    <td className="px-2 py-2">{weightRange}</td>
+                                    <td className="max-w-[220px] px-2 py-2">{candidate.memo ?? "-"}</td>
+                                    <td className="px-2 py-2 text-right">
+                                      <Badge tone="warning" className="h-5 px-2 text-[10px]">{formatNumber(candidate.match_score)}</Badge>
+                                    </td>
+                                    <td className="px-2 py-2 text-right">
+                                      <Button
+                                        size="sm"
+                                        variant={isSelected ? "primary" : "secondary"}
+                                        onClick={() => {
+                                          setSelectedCandidate(candidate);
+                                          setConfirmResult(null);
+                                        }}
+                                      >
+                                        선택
+                                      </Button>
+                                    </td>
+                                  </tr>
+                                  {isSelected ? (
+                                    <tr className="border-t border-[var(--panel-border)] bg-[var(--surface)]/30">
+                                      <td className="px-2 py-2 text-[10px] text-[var(--muted)]" colSpan={17}>
+                                        <div className="flex items-center gap-3">
+                                          <button
+                                            type="button"
+                                            className="text-[var(--primary)]"
+                                            onClick={() => setScoreOpenMap((prev) => ({ ...prev, [key]: !(prev[key] ?? false) }))}
+                                          >
+                                            {scoreOpenMap[key] ? "점수 상세 닫기" : "점수 상세 보기"}
+                                          </button>
+                                          <span>order_line_id: {candidate.order_line_id ?? "-"}</span>
+                                          <span>party_id: {candidate.customer_party_id ?? "-"}</span>
+                                        </div>
+                                        {scoreOpenMap[key] ? (
+                                          <pre className="mt-2 max-h-[24vh] overflow-auto rounded border border-[var(--panel-border)] bg-[var(--panel)] p-2 text-[10px] text-[var(--muted)]">{JSON.stringify(candidate.score_detail_json ?? {}, null, 2)}</pre>
+                                        ) : null}
+                                      </td>
+                                    </tr>
+                                  ) : null}
+                                </Fragment>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    );
+                  })()
+                )}
+              </div>
+            </div>
+          </div>
+
+          <div className="shrink-0 border-t border-[var(--panel-border)] bg-[var(--panel)]/95 px-4 py-3">
+            <div className="space-y-2">
+              {(() => {
+                const weightValue = parseNumber(selectedWeight);
+                const weightInvalid = weightValue !== null && !isWeightInRange();
+                return (
+                  <>
+                    <div className="grid grid-cols-1 gap-2 lg:grid-cols-[200px_1fr_180px_220px]">
+                      <Input
+                        type="number"
+                        value={selectedWeight}
+                        onChange={(e) => setSelectedWeight(e.target.value)}
+                        placeholder="선택 중량(g)"
+                        className="h-9 text-xs"
+                      />
+                      <div className="flex items-center text-xs text-[var(--muted)]">
+                        허용 범위 {selectedReferenceWeightRange
+                          ? `${formatNumber(selectedReferenceWeightRange.min)} ~ ${formatNumber(selectedReferenceWeightRange.max)}g`
+                          : "-"}
+                      </div>
+                      {hasFactoryStoneSource ? (
+                        <Select
+                          value={factoryBillingShape}
+                          onChange={(e) => setFactoryBillingShape(e.target.value as FactoryBillingShape)}
+                          className="h-9 text-xs"
+                        >
+                          <option value="BUNDLED_PACKAGE">BUNDLED_PACKAGE</option>
+                          <option value="SETTING_ONLY">SETTING_ONLY</option>
+                          <option value="SPLIT">SPLIT</option>
+                        </Select>
+                      ) : (
+                        <div className="" />
+                      )}
+                      <Button size="sm" onClick={handleConfirm} disabled={!selectedCandidate || matchConfirm.isPending}>
+                        확정
+                      </Button>
+                    </div>
+                    {weightInvalid ? <div className="text-xs text-amber-700">중량이 허용 범위를 벗어났습니다. 경고 상태로 확정은 가능합니다.</div> : null}
+                    <Textarea
+                      value={confirmNote}
+                      onChange={(e) => setConfirmNote(e.target.value)}
+                      placeholder="확정 메모 (선택)"
+                      className="min-h-[64px] text-xs"
+                    />
+                  </>
+                );
+              })()}
+
+              <button
+                type="button"
+                className="text-xs text-[var(--primary)]"
+                onClick={() => setIsAdvancedConfirmOpen((prev) => !prev)}
+              >
+                {isAdvancedConfirmOpen ? "고급 옵션 접기" : "고급 옵션 펼치기"}
+              </button>
+
+              {isAdvancedConfirmOpen ? (
+                <div className="space-y-2 rounded-lg border border-[var(--panel-border)] bg-[var(--surface)]/60 p-3">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Badge tone="neutral" className="h-5 px-2 text-[10px]">메인 {formatStoneSourceLabel(selectedStoneSources.center) || "-"}</Badge>
+                    <Badge tone="neutral" className="h-5 px-2 text-[10px]">보조1 {formatStoneSourceLabel(selectedStoneSources.sub1) || "-"}</Badge>
+                    <Badge tone="neutral" className="h-5 px-2 text-[10px]">보조2 {formatStoneSourceLabel(selectedStoneSources.sub2) || "-"}</Badge>
+                    {mixedStoneSources ? <Badge tone="warning" className="h-5 px-2 text-[10px]">혼재 공급</Badge> : null}
+                  </div>
+                  <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+                    <Input type="number" min={0} value={totalStoneCountInput} onChange={(e) => setTotalStoneCountInput(e.target.value)} placeholder="총 알수" className="h-8 text-xs" />
+                    <Input type="number" min={0} value={centerStoneCountInput} onChange={(e) => setCenterStoneCountInput(e.target.value)} placeholder="메인 개수(선택)" className="h-8 text-xs" />
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2 text-xs">
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      onClick={() => {
+                        if (!allocationPreview) {
+                          toast.error("총 알수를 입력하세요.");
+                          return;
+                        }
+                        applyAllocationToSelectedLine(allocationPreview);
+                      }}
+                      disabled={!selectedLineItem}
+                    >
+                      자동배분 적용
+                    </Button>
+                    {allocationPreview ? (
+                      <span className="text-[var(--muted)]">결과: {allocationPreview.center} / {allocationPreview.sub1} / {allocationPreview.sub2}</span>
+                    ) : null}
+                  </div>
+                  <div className="text-xs text-[var(--muted)]">
+                    {!selectedLineItem
+                      ? "라인 입력에서 선택 라인을 찾을 수 없습니다."
+                      : selectedMasterPricingQuery.isLoading
+                        ? "마스터 원가를 조회 중입니다."
+                        : !pricingPreview
+                          ? "마스터 원가 정보가 없어 프리뷰를 계산할 수 없습니다."
+                          : `원가 ${formatNumber(pricingPreview.factoryCostTotal)} / 추천 ${formatNumber(pricingPreview.recommendedTotal)} / 차이 ${formatNumber(pricingPreview.diff)}`}
+                  </div>
+                  {selfUnitCostWarningRoles.length > 0 ? (
+                    <div className="text-xs text-amber-700">SELF 단가 0: {selfUnitCostWarningRoles.map((role) => roleLabel(role)).join(", ")}</div>
+                  ) : null}
+                </div>
+              ) : null}
+
+              {confirmResult ? (
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button size="sm" onClick={() => moveToRelativeUnlinkedLine(1)} disabled={selectedUnlinkedIndex >= unlinkedRows.length - 1}>
+                    Next Unmatched Line
+                  </Button>
+                  <Button size="sm" variant="secondary" onClick={() => moveToRelativeUnlinkedLine(-1)} disabled={selectedUnlinkedIndex <= 0}>
+                    Previous Line
+                  </Button>
+                  <Button size="sm" variant="secondary" onClick={openSelectedLineEditor}>
+                    Edit Line
+                  </Button>
+                </div>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      </Sheet>
 
       <Modal open={matchClearOpen} onClose={closeMatchClearModal} title="매칭취소(출고대기 되돌리기)">
         <div className="space-y-4">

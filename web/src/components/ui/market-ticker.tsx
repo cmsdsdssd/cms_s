@@ -20,11 +20,19 @@ export function MarketTicker({ variant = "full" }: MarketTickerProps) {
     const [isOffline, setIsOffline] = useState(false);
 
     useEffect(() => {
+        let disposed = false;
+
         const fetchPrices = async () => {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 8000);
             try {
-                const response = await fetch("/api/market-ticks");
+                const response = await fetch("/api/market-ticks", {
+                    method: "GET",
+                    cache: "no-store",
+                    signal: controller.signal,
+                });
                 if (!response.ok) {
-                    setIsOffline(true);
+                    if (!disposed) setIsOffline(true);
                     return;
                 }
                 const result = (await response.json()) as {
@@ -44,26 +52,37 @@ export function MarketTicker({ variant = "full" }: MarketTickerProps) {
                     error?: string;
                 };
                 if (result.data) {
-                    setKg(result.data.kg ?? result.data.gold ?? null);
-                    setKs(result.data.ks ?? result.data.silver ?? null);
-                    setKsOriginal(result.data.ksOriginal ?? result.data.silverOriginal ?? null);
-                    setCs(result.data.cs ?? null);
-                    setCsOriginal(result.data.csOriginal ?? null);
-                    setCnyAd(result.data.cnyAd ?? null);
-                    setIsOffline(false);
+                    if (!disposed) {
+                        setKg(result.data.kg ?? result.data.gold ?? null);
+                        setKs(result.data.ks ?? result.data.silver ?? null);
+                        setKsOriginal(result.data.ksOriginal ?? result.data.silverOriginal ?? null);
+                        setCs(result.data.cs ?? null);
+                        setCsOriginal(result.data.csOriginal ?? null);
+                        setCnyAd(result.data.cnyAd ?? null);
+                        setIsOffline(false);
+                    }
                 } else {
-                    setIsOffline(true);
+                    if (!disposed) setIsOffline(true);
                 }
             } catch (error) {
-                console.error("Failed to fetch market ticks:", error);
-                setIsOffline(true);
+                const isAbort =
+                    error instanceof DOMException
+                    && error.name === "AbortError";
+                if (!disposed && !isAbort) {
+                    setIsOffline(true);
+                }
+            } finally {
+                clearTimeout(timeoutId);
             }
         };
 
         fetchPrices();
         // Refresh every 30 seconds to catch table updates quickly
         const interval = setInterval(fetchPrices, 30 * 1000);
-        return () => clearInterval(interval);
+        return () => {
+            disposed = true;
+            clearInterval(interval);
+        };
     }, []);
 
     const formatPrice = (price: number | null) => {
@@ -201,11 +220,3 @@ export function MarketTicker({ variant = "full" }: MarketTickerProps) {
         </div>
     );
 }
-
-// Added utility for conditional classes locally if needed, but imported `cn` is available.
-// import { cn } from "@/lib/utils"; is missing in my replacement block?
-// I need to ensure `cn` is imported or use template literals.
-// The file has `import { useEffect... }`. I should check if `cn` is imported.
-// It is NOT imported in the original file. I need to add insertion of import or use template literals.
-// I'll add `import { cn } from "@/lib/utils";` at the top.
-

@@ -1525,6 +1525,14 @@ function OrdersPageContent() {
     );
   };
 
+  const canBlurAutoSave = (row: GridRow) => {
+    return Boolean(
+      row.client_input.trim() &&
+      row.model_input.trim() &&
+      row.material_code
+    );
+  };
+
   const validateRow = (row: GridRow): boolean => {
     let isValid = true;
     const platingStr = getPlatingString(row);
@@ -1550,10 +1558,10 @@ function OrdersPageContent() {
       setRowError(row.id, { model: "등록되지 않은 모델입니다" });
       isValid = false;
     }
-    if (row.model_input.trim() && !(row.color_p || row.color_g || row.color_w || row.color_x)) {
-      setRowError(row.id, { color: "색상을 선택하세요" });
-      isValid = false;
-    }
+    setRowErrors((prev) => ({
+      ...prev,
+      [row.id]: { ...prev[row.id], color: undefined },
+    }));
     if (row.model_input.trim() && !row.material_code) {
       setRowError(row.id, { material: "소재를 선택하세요" });
       isValid = false;
@@ -1793,7 +1801,7 @@ function OrdersPageContent() {
                         const next = event.relatedTarget as Node | null;
                         if (next && event.currentTarget.contains(next)) return;
                         const current = rows.find((item) => item.id === row.id);
-                        if (current) void saveRow(current);
+                        if (current && canBlurAutoSave(current)) void saveRow(current);
                       }}
                     >
                       {/* Row Number */}
@@ -2073,7 +2081,7 @@ function OrdersPageContent() {
                           const next = event.relatedTarget as Node | null;
                           if (next && event.currentTarget.contains(next)) return;
                           const current = rows.find((item) => item.id === row.id);
-                          if (current) void saveRow(current);
+                          if (current && canBlurAutoSave(current)) void saveRow(current);
                         }}
                       >
                         {/* Center Stone */}
