@@ -137,6 +137,12 @@ export const CONTRACTS = {
     arCreateAdjustmentUpInvoice:
       process.env.NEXT_PUBLIC_CMS_FN_AR_CREATE_ADJUSTMENT_UP_INVOICE ||
       "cms_fn_ar_create_adjustment_up_invoice_v1",
+    arGetSettlementRecommendation:
+      process.env.NEXT_PUBLIC_CMS_FN_AR_GET_SETTLEMENT_RECOMMENDATION ||
+      "cms_fn_ar_get_settlement_recommendation_v1",
+    arApplyServiceWriteoffUnderLimit:
+      process.env.NEXT_PUBLIC_CMS_FN_AR_APPLY_SERVICE_WRITEOFF_UNDER_LIMIT ||
+      "cms_fn_ar_apply_service_writeoff_under_limit_v1",
 
 
     enumValues: process.env.NEXT_PUBLIC_CMS_FN_ENUM_VALUES ?? "cms_fn_enum_values_v1",

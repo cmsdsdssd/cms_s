@@ -49,10 +49,20 @@ export async function POST(request: Request) {
 
   const { data: row, error: lineError } = await supabase
     .from("cms_shipment_line")
-    .select("shipment_line_id, category_code, material_code")
+    .select(
+      "shipment_line_id, category_code, material_code, repair_fee_krw, measured_weight_g, deduction_weight_g, net_weight_g"
+    )
     .eq("shipment_id", shipmentId)
     .eq("repair_line_id", repairLineId)
-    .maybeSingle<{ shipment_line_id: string; category_code: string | null; material_code: string | null }>();
+    .maybeSingle<{
+      shipment_line_id: string;
+      category_code: string | null;
+      material_code: string | null;
+      repair_fee_krw: number | null;
+      measured_weight_g: number | null;
+      deduction_weight_g: number | null;
+      net_weight_g: number | null;
+    }>();
 
   if (lineError) {
     return NextResponse.json({ error: lineError.message ?? "shipment line query failed" }, { status: 500 });
@@ -62,24 +72,93 @@ export async function POST(request: Request) {
   }
 
   const nextCategory = (row.category_code ?? "").trim() || "ETC";
-  const nextMaterial = (row.material_code ?? "").trim() || materialCode;
+  const currentMaterial = (row.material_code ?? "").trim();
+  const nextMaterial = hasAddedWeight
+    ? (materialCode !== "00" ? materialCode : currentMaterial || materialCode)
+    : currentMaterial || materialCode;
 
   if (nextCategory !== (row.category_code ?? "") || nextMaterial !== (row.material_code ?? "") || hasAddedWeight) {
+    const measuredWeight = hasAddedWeight ? addedWeight : Number(row.measured_weight_g ?? row.net_weight_g ?? 0);
+    const deductionWeight = 0;
+    const netWeight = Math.max(0, measuredWeight - deductionWeight);
+
+    const { data: valuation, error: valuationError } = await supabase
+      .from("cms_shipment_valuation")
+      .select("gold_krw_per_g_snapshot, silver_krw_per_g_snapshot, silver_adjust_factor_snapshot")
+      .eq("shipment_id", shipmentId)
+      .maybeSingle<{
+        gold_krw_per_g_snapshot: number | null;
+        silver_krw_per_g_snapshot: number | null;
+        silver_adjust_factor_snapshot: number | null;
+      }>();
+
+    if (valuationError) {
+      return NextResponse.json({ error: valuationError.message ?? "shipment valuation query failed" }, { status: 500 });
+    }
+
+    const silverAdjustRaw = Number(valuation?.silver_adjust_factor_snapshot ?? 1);
+    const silverAdjust = Number.isFinite(silverAdjustRaw) && silverAdjustRaw > 0 ? silverAdjustRaw : 1;
+    const goldPrice = Number(valuation?.gold_krw_per_g_snapshot ?? 0);
+    const silverPrice = Number(valuation?.silver_krw_per_g_snapshot ?? 0);
+
+    let materialAmount = 0;
+    let goldTick: number | null = null;
+    let silverTick: number | null = null;
+    if (nextMaterial === "14") {
+      materialAmount = Math.round(netWeight * 0.6435 * goldPrice);
+      goldTick = goldPrice;
+    } else if (nextMaterial === "18") {
+      materialAmount = Math.round(netWeight * 0.825 * goldPrice);
+      goldTick = goldPrice;
+    } else if (nextMaterial === "24") {
+      materialAmount = Math.round(netWeight * goldPrice);
+      goldTick = goldPrice;
+    } else if (nextMaterial === "925") {
+      materialAmount = Math.round(netWeight * 0.925 * silverAdjust * silverPrice);
+      silverTick = silverPrice;
+    } else if (nextMaterial === "999") {
+      materialAmount = Math.round(netWeight * silverAdjust * silverPrice);
+      silverTick = silverPrice;
+    }
+
+    const laborAmount = Math.max(0, Math.round(Number(row.repair_fee_krw ?? 0)));
+    const totalAmount = materialAmount + laborAmount;
+
     const patch: {
       category_code: string;
       material_code: string;
+      pricing_mode: "RULE";
+      manual_total_amount_krw: null;
+      material_amount_sell_krw: number;
+      labor_total_sell_krw: number;
+      total_amount_sell_krw: number;
+      gold_tick_krw_per_g: number | null;
+      silver_tick_krw_per_g: number | null;
+      silver_adjust_factor: number;
+      price_calc_trace: Record<string, unknown>;
       measured_weight_g?: number;
       deduction_weight_g?: number;
       net_weight_g?: number;
     } = {
       category_code: nextCategory,
       material_code: nextMaterial,
+      pricing_mode: "RULE",
+      manual_total_amount_krw: null,
+      material_amount_sell_krw: materialAmount,
+      labor_total_sell_krw: laborAmount,
+      total_amount_sell_krw: totalAmount,
+      gold_tick_krw_per_g: goldTick,
+      silver_tick_krw_per_g: silverTick,
+      silver_adjust_factor: silverAdjust,
+      price_calc_trace: {
+        repair_prepare_confirm_repriced: true,
+        repair_fee_included: true,
+      },
     };
-    if (hasAddedWeight) {
-      patch.measured_weight_g = addedWeight;
-      patch.deduction_weight_g = 0;
-      patch.net_weight_g = addedWeight;
-    }
+    patch.measured_weight_g = measuredWeight;
+    patch.deduction_weight_g = deductionWeight;
+    patch.net_weight_g = netWeight;
+
     const { error: updateError } = await supabase
       .from("cms_shipment_line")
       .update(patch)

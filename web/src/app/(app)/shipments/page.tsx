@@ -2765,7 +2765,7 @@ export default function ShipmentsPage() {
                 >
                   {arInvoiceResyncMutation.isPending ? "재계산 중..." : "AR 재계산(999 포함)"}
                 </Button>
-                <Link href="/ar">
+                <Link href="/ar/v2">
                   <Button variant="secondary" size="sm">
                     AR 페이지로 이동
                   </Button>

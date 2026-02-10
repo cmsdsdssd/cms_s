@@ -62,7 +62,7 @@ type ReceiptPrintHalfProps = {
 };
 
 const buildAppliedPriceText = (lines: ReceiptLineItem[], kind: "gold" | "silver") => {
-  const notes: string[] = [];
+  const priceToLineNumbers = new Map<number, number[]>();
   lines.forEach((line, index) => {
     if (line.is_unit_pricing) return;
     const netWeight = Number(line.net_weight_g ?? 0);
@@ -74,11 +74,22 @@ const buildAppliedPriceText = (lines: ReceiptLineItem[], kind: "gold" | "silver"
     if (kind === "silver" && !isSilverMaterial) return;
     const price = kind === "gold" ? line.gold_tick_krw_per_g : line.silver_tick_krw_per_g;
     if (price === null || price === undefined) return;
-    notes.push(`${index + 1}번 ${formatKrw(price)}/g`);
+    const normalizedPrice = Number(price);
+    const lineNumbers = priceToLineNumbers.get(normalizedPrice) ?? [];
+    lineNumbers.push(index + 1);
+    priceToLineNumbers.set(normalizedPrice, lineNumbers);
   });
 
-  if (notes.length === 0) return null;
-  return notes.join(", ");
+  if (priceToLineNumbers.size === 0) return null;
+
+  const notes = Array.from(priceToLineNumbers.entries())
+    .sort((a, b) => a[0] - b[0])
+    .map(([price, lineNumbers]) => {
+      const refs = lineNumbers.map((n) => `[${n}]`).join(", ");
+      return `${formatKrw(price)}/g ${refs}`;
+    });
+
+  return notes.join(" · ");
 };
 
 export const ReceiptPrintHalf = ({
@@ -233,25 +244,30 @@ export const ReceiptPrintHalf = ({
             </tr>
           </thead>
           <tbody>
-            {summaryRows.map((row) => (
-              <tr key={row.label} className="border-b border-neutral-200">
-                <td className="py-1 font-medium">
+            {summaryRows.map((row) => {
+              const isCoreSummaryRow =
+                row.label === "합계" || row.label.includes("이전 미수") || row.label === "당일 미수";
+              const isTodaySummaryRow = row.label === "당일 미수";
+
+              return (
+              <tr key={row.label} className={cn("border-b border-neutral-200", isTodaySummaryRow && "border-b-2 border-neutral-400")}>
+                <td className={cn("py-1 font-medium", isCoreSummaryRow && "font-semibold")}>
                   {row.label === "당일 반품" ? <span className="text-blue-600">{row.label}</span> : row.label}
                 </td>
-                <td className={cn("py-1 text-right tabular-nums", row.label === "당일 반품" && "text-blue-600")}>
+                <td className={cn("py-1 text-right tabular-nums", isCoreSummaryRow && "font-semibold", row.label === "당일 반품" && "text-blue-600")}>
                   {formatWeight(row.value.gold)}
                 </td>
-                <td className={cn("py-1 text-right tabular-nums", row.label === "당일 반품" && "text-blue-600")}>
+                <td className={cn("py-1 text-right tabular-nums", isCoreSummaryRow && "font-semibold", row.label === "당일 반품" && "text-blue-600")}>
                   {formatWeight(row.value.silver)}
                 </td>
-                <td className={cn("py-1 text-right tabular-nums", row.label === "당일 반품" && "text-blue-600")}>
+                <td className={cn("py-1 text-right tabular-nums", isCoreSummaryRow && "font-semibold", row.label === "당일 반품" && "text-blue-600")}>
                   {formatKrw(row.value.labor)}
                 </td>
-                <td className={cn("py-1 text-right tabular-nums", row.label === "당일 반품" && "text-blue-600")}>
+                <td className={cn("py-1 text-right tabular-nums", isCoreSummaryRow && "font-semibold", row.label === "당일 반품" && "text-blue-600")}>
                   {formatKrw(row.value.total)}
                 </td>
               </tr>
-            ))}
+            );})}
           </tbody>
         </table>
       </div>

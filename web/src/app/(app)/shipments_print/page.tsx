@@ -104,6 +104,7 @@ type ArPositionAsOfRow = {
 type ArPaymentAllocTodayRow = {
   party_id?: string | null;
   shipment_line_id?: string | null;
+  note?: string | null;
   alloc_labor_krw?: number | null;
   alloc_material_krw?: number | null;
   alloc_gold_g?: number | null;
@@ -114,6 +115,7 @@ type ArLedgerTodayRow = {
   party_id?: string | null;
   entry_type?: string | null;
   amount_krw?: number | null;
+  memo?: string | null;
 };
 
 
@@ -138,6 +140,7 @@ type PartyReceiptPage = {
   today: Amounts;
   todaySales: Amounts;
   todayReturns: Amounts;
+  todayPayments: Amounts;
   todayAdjustments: Amounts;
   previous: Amounts;
   previousLabel?: string;
@@ -181,8 +184,9 @@ const buildSummaryRows = (page: PartyReceiptPage) => {
 
   // ✅ 상세(출고/반품/결제조정)는 "추가 이벤트"가 있을 때만 노출
   const hasReturns = hasReturnAmounts(page.todayReturns);
+  const hasPayments = hasVisibleKrwDelta(page.todayPayments);
   const hasAdjustments = hasVisibleKrwDelta(page.todayAdjustments);
-  const showBreakdown = hasReturns || hasAdjustments;
+  const showBreakdown = hasReturns || hasPayments || hasAdjustments;
 
   if (showBreakdown && hasVisibleKrwDelta(page.todaySales)) {
     rows.push({ label: "당일 출고", value: page.todaySales });
@@ -190,8 +194,11 @@ const buildSummaryRows = (page: PartyReceiptPage) => {
   if (hasReturns) {
     rows.push({ label: "당일 반품", value: page.todayReturns });
   }
+  if (hasPayments) {
+    rows.push({ label: "당일 결제", value: page.todayPayments });
+  }
   if (hasAdjustments) {
-    rows.push({ label: "당일 결제/조정", value: page.todayAdjustments });
+    rows.push({ label: "당일 조정(완불 포함)", value: page.todayAdjustments });
   }
 
   return rows;
@@ -349,10 +356,29 @@ const toLineAmounts = (line: ReceiptLine): Amounts => {
 
 
 const toLineAmountsArAligned = (line: ReceiptLine): Amounts => {
-  if (line.is_repair) {
+  if (line.is_repair && !hasRepairMaterialReceivable(line)) {
     const repairLabor = Number(line.repair_fee_krw ?? 0);
     const total = Number(line.total_amount_sell_krw ?? 0);
     return { gold: 0, silver: 0, labor: repairLabor, total };
+  }
+  if (line.is_repair) {
+    const netWeight = Number(line.net_weight_g ?? 0);
+    const total = Number(line.total_amount_sell_krw ?? 0);
+    const repairLabor = Number(line.repair_fee_krw ?? 0);
+    const bucket = getMaterialBucket(line.material_code ?? null);
+    if (bucket.kind === "none") {
+      return { gold: 0, silver: 0, labor: repairLabor, total };
+    }
+    const weightedByPurity = netWeight * bucket.factor;
+    const silverAdjust = bucket.kind === "silver" ? Number(line.silver_adjust_factor ?? 1) : 1;
+    const weighted =
+      bucket.kind === "silver" ? weightedByPurity * (silverAdjust > 0 ? silverAdjust : 1) : weightedByPurity;
+    return {
+      gold: bucket.kind === "gold" ? weighted : 0,
+      silver: bucket.kind === "silver" ? weighted : 0,
+      labor: repairLabor,
+      total,
+    };
   }
   if (line.is_unit_pricing) {
     const total = Number(line.total_amount_sell_krw ?? 0);
@@ -767,7 +793,7 @@ function ShipmentsPrintContent() {
       if (partyIds.length === 0) return [] as ArLedgerTodayRow[];
       const { data, error } = await schemaClient
         .from("cms_ar_ledger")
-        .select("party_id, entry_type, amount_krw")
+        .select("party_id, entry_type, amount_krw, memo")
         .gte("occurred_at", todayStartIso)
         .lt("occurred_at", todayEndIso)
         .in("party_id", partyIds);
@@ -781,7 +807,8 @@ function ShipmentsPrintContent() {
     total: number;
     shipment: number;
     ret: number;
-    paymentAdj: number;
+    payment: number;
+    adjust: number;
   };
 
   const arLedgerSumsMap = useMemo(() => {
@@ -791,13 +818,14 @@ function ShipmentsPrintContent() {
       if (!partyId) return;
       const amount = Number(row.amount_krw ?? 0);
       const entryType = String(row.entry_type ?? "").trim().toUpperCase();
-      const current = map.get(partyId) ?? { total: 0, shipment: 0, ret: 0, paymentAdj: 0 };
+      const current = map.get(partyId) ?? { total: 0, shipment: 0, ret: 0, payment: 0, adjust: 0 };
 
       current.total += amount;
 
       if (entryType === "SHIPMENT") current.shipment += amount;
       else if (entryType === "RETURN") current.ret += amount;
-      else current.paymentAdj += amount;
+      else if (entryType === "ADJUST") current.adjust += amount;
+      else current.payment += amount;
 
       map.set(partyId, current);
     });
@@ -811,7 +839,7 @@ function ShipmentsPrintContent() {
       if (partyIds.length === 0) return [] as ArPaymentAllocTodayRow[];
       const { data, error } = await schemaClient
         .from("cms_v_ar_payment_alloc_detail_v1")
-        .select("party_id, shipment_line_id, alloc_labor_krw, alloc_material_krw, alloc_gold_g, alloc_silver_g")
+        .select("party_id, shipment_line_id, note, alloc_labor_krw, alloc_material_krw, alloc_gold_g, alloc_silver_g")
         .gte("paid_at", todayStartIso)
         .lt("paid_at", todayEndIso)
         .in("party_id", partyIds);
@@ -868,23 +896,26 @@ const arTotalsMap = useMemo(() => {
 
 
     const todayAdjustmentsByParty = useMemo(() => {
-    const map = new Map<string, Amounts>();
+    const paymentMap = new Map<string, Amounts>();
+    const adjustMap = new Map<string, Amounts>();
     (arTodayPaymentAllocQuery.data ?? []).forEach((row) => {
       const partyId = (row.party_id ?? "").trim();
       if (!partyId) return;
+      const isServiceWriteoff = String(row.note ?? "").toUpperCase().includes("SERVICE_WRITEOFF");
       const labor = Number(row.alloc_labor_krw ?? 0);
       const material = Number(row.alloc_material_krw ?? 0);
       const gold = Number(row.alloc_gold_g ?? 0);
       const silver = Number(row.alloc_silver_g ?? 0);
-      const current = map.get(partyId) ?? { ...zeroAmounts };
-      map.set(partyId, {
+      const targetMap = isServiceWriteoff ? adjustMap : paymentMap;
+      const current = targetMap.get(partyId) ?? { ...zeroAmounts };
+      targetMap.set(partyId, {
         gold: current.gold - gold,
         silver: current.silver - silver,
         labor: current.labor - labor,
         total: current.total - (labor + material),
       });
     });
-    return map;
+    return { paymentMap, adjustMap };
   }, [arTodayPaymentAllocQuery.data]);
 
 
@@ -911,23 +942,25 @@ const arTotalsMap = useMemo(() => {
       const todayNetAr = addAmounts(todaySalesArRaw, todayReturnsArRaw);
 
       // --- 오늘 결제/조정(금/은/공임)은 alloc 기반(표시용) ---
-      const todayAdjustmentsRaw = todayAdjustmentsByParty.get(group.partyId) ?? { ...zeroAmounts };
+      const todayPaymentsRaw = todayAdjustmentsByParty.paymentMap.get(group.partyId) ?? { ...zeroAmounts };
+      const todayAdjustmentsRaw = todayAdjustmentsByParty.adjustMap.get(group.partyId) ?? { ...zeroAmounts };
 
       // ✅ 현금(total)은 원장(cms_ar_ledger) 기준으로 강제 (합계/이전/당일 정합 보장)
-      const ledger = arLedgerSumsMap.get(group.partyId) ?? { total: 0, shipment: 0, ret: 0, paymentAdj: 0 };
+      const ledger = arLedgerSumsMap.get(group.partyId) ?? { total: 0, shipment: 0, ret: 0, payment: 0, adjust: 0 };
       const todayCashTotal = Number(ledger.total ?? 0);
       const previousCashTotal = Number(previousBalanceMap.get(group.partyId) ?? totals.total - todayCashTotal);
 
       // breakdown(옵션 표기)용: 총금액만 ledger로 정합 강제
       const todaySalesAr: Amounts = { ...todaySalesArRaw, total: Number(ledger.shipment ?? todaySalesArRaw.total) };
       const todayReturnsAr: Amounts = { ...todayReturnsArRaw, total: Number(ledger.ret ?? todayReturnsArRaw.total) };
-      const todayAdjustments: Amounts = { ...todayAdjustmentsRaw, total: Number(ledger.paymentAdj ?? todayAdjustmentsRaw.total) };
+      const todayPayments: Amounts = { ...todayPaymentsRaw, total: Number(ledger.payment ?? todayPaymentsRaw.total) };
+      const todayAdjustments: Amounts = { ...todayAdjustmentsRaw, total: Number(ledger.adjust ?? todayAdjustmentsRaw.total) };
 
       // --- 이전 미수(금/은/공임): v2(as-of) 있으면 그걸 우선, 없으면 역산 ---
       const previousSummaryAsOf = arAsOfTotalsMap.get(group.partyId) ?? null;
       const useAsOfSummary = summaryMode === "v2" && previousSummaryAsOf !== null;
 
-      const previousSummaryLegacy = subtractAmounts(totals, addAmounts(todayNetAr, todayAdjustmentsRaw));
+      const previousSummaryLegacy = subtractAmounts(totals, addAmounts(todayNetAr, addAmounts(todayPaymentsRaw, todayAdjustmentsRaw)));
       const previousGoldSilverLabor = useAsOfSummary ? previousSummaryAsOf : previousSummaryLegacy;
 
       const previousSummary: Amounts = {
@@ -956,6 +989,7 @@ const arTotalsMap = useMemo(() => {
           today: todaySummary,
           todaySales: todaySalesAr,
           todayReturns: todayReturnsAr,
+          todayPayments,
           todayAdjustments,
           previous: previousSummary,
           previousLabel: useAsOfSummary ? "이전 미수(기준시점)" : "이전 미수(역산)",
@@ -972,6 +1006,7 @@ const arTotalsMap = useMemo(() => {
         today: { ...zeroAmounts },
         todaySales: { ...zeroAmounts },
         todayReturns: { ...zeroAmounts },
+        todayPayments: { ...zeroAmounts },
         todayAdjustments: { ...zeroAmounts },
         previous: { ...zeroAmounts },
         previousLabel: summaryMode === "v2" ? "이전 미수(기준시점)" : "이전 미수(역산)",

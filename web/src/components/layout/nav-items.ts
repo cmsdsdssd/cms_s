@@ -49,7 +49,7 @@ export const navItems: NavItem[] = [
   {
     label: "미수",
     items: [
-      { label: "손님미수", href: "/ar", icon: CreditCard },
+      { label: "손님미수", href: "/ar/v2", icon: CreditCard },
       { label: "공장미수", href: "/ap", icon: Calculator },
       { label: "공장정합", href: "/ap/reconcile", icon: Calculator },
     ],

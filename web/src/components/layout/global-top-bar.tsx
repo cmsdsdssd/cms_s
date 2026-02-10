@@ -149,7 +149,7 @@ export function GlobalTopBar({ onMobileMenuOpen, onWorkbenchOpen }: GlobalTopBar
                 <PackageCheck className="h-4 w-4" />
               </Button>
             </Link>
-            <Link href="/ar">
+            <Link href="/ar/v2">
               <Button variant="ghost" size="icon" className="h-8 w-8 text-[var(--muted-strong)]" title="미수금">
                 <CreditCard className="h-4 w-4" />
               </Button>
