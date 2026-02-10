@@ -155,8 +155,9 @@ export const ReceiptPrintHalf = ({
               const modelWithReturnPrefix = isReturn && modelName && !modelName.trim().startsWith("-")
                 ? `-${modelName}`
                 : modelName;
+              const typeLabel = isRepair ? "[수리]" : isReturn ? "[반품]" : "";
               const modelLabel = hasContent
-                ? `${index + 1}. ${modelWithReturnPrefix}`.trim()
+                ? `${index + 1}. ${typeLabel} ${modelWithReturnPrefix}`.trim()
                 : "";
               return (
                 <tr key={line.shipment_line_id ?? `row-${index}`} className="border-b border-neutral-200">
@@ -209,9 +210,14 @@ export const ReceiptPrintHalf = ({
                     {hasContent && isUnitPricing
                       ? "-"
                       : isRepair
-                        ? line.repair_fee_krw === null || line.repair_fee_krw === undefined
-                          ? ""
-                          : formatKrw(line.repair_fee_krw)
+                        ? (() => {
+                            const repairCash = line.repair_fee_krw;
+                            if (repairCash !== null && repairCash !== undefined) return formatKrw(repairCash);
+                            if (line.labor_total_sell_krw !== null && line.labor_total_sell_krw !== undefined) {
+                              return formatKrw(line.labor_total_sell_krw);
+                            }
+                            return "";
+                          })()
                         : line.labor_total_sell_krw === null || line.labor_total_sell_krw === undefined
                           ? ""
                           : formatKrw(line.labor_total_sell_krw)}
