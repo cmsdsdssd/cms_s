@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { RefreshCw, Search, ChevronRight, ArrowUpRight, ArrowDownLeft, X, Check, Wallet, RotateCcw } from "lucide-react";
@@ -122,6 +122,23 @@ type ArPaymentAllocDetailRow = {
   color?: string | null;
   size?: string | null;
   invoice_occurred_at?: string | null;
+};
+
+type AdvancedAllocationMode = "GLOBAL_FIFO" | "TARGET_FIRST";
+
+type PaymentAllocationPreviewLine = {
+  arId: string;
+  occurredAt: string | null;
+  modelName: string;
+  laborApplied: number;
+  materialApplied: number;
+};
+
+type PaymentAllocationPreview = {
+  laborAppliedTotal: number;
+  materialAppliedTotal: number;
+  remainingCash: number;
+  lines: PaymentAllocationPreviewLine[];
 };
 
 type ShipmentValuationRow = {
@@ -246,7 +263,84 @@ const getMaterialCodeToneClass = (materialCode?: string | null) => {
   return "text-amber-700 dark:text-amber-300";
 };
 
-const toKstInputValue = () => {
+const buildPaymentAllocationPreview = (args: {
+  rows: ArInvoicePositionRow[];
+  cashValue: number;
+  allowCashForMaterial: boolean;
+  mode: AdvancedAllocationMode;
+  targetArIds: string[];
+}): PaymentAllocationPreview => {
+  const { rows, cashValue, allowCashForMaterial, mode, targetArIds } = args;
+  const targetSet = new Set(targetArIds);
+  const sortable = rows
+    .filter((row) => Number(row.total_cash_outstanding_krw ?? 0) > 0)
+    .slice()
+    .sort((a, b) => {
+      const aTarget = mode === "TARGET_FIRST" && targetSet.has(a.ar_id ?? "") ? 0 : 1;
+      const bTarget = mode === "TARGET_FIRST" && targetSet.has(b.ar_id ?? "") ? 0 : 1;
+      if (aTarget !== bTarget) return aTarget - bTarget;
+      const aTime = new Date(a.occurred_at ?? 0).getTime();
+      const bTime = new Date(b.occurred_at ?? 0).getTime();
+      if (aTime !== bTime) return aTime - bTime;
+      return String(a.ar_id ?? "").localeCompare(String(b.ar_id ?? ""));
+    });
+
+  let remainingCash = Math.max(cashValue, 0);
+  const lines = new Map<string, PaymentAllocationPreviewLine>();
+
+  const ensureLine = (row: ArInvoicePositionRow) => {
+    const arId = row.ar_id ?? "";
+    const prev = lines.get(arId);
+    if (prev) return prev;
+    const created: PaymentAllocationPreviewLine = {
+      arId,
+      occurredAt: row.occurred_at ?? null,
+      modelName: [row.model_name, row.suffix, row.color, row.size].filter(Boolean).join(" / ") || "-",
+      laborApplied: 0,
+      materialApplied: 0,
+    };
+    lines.set(arId, created);
+    return created;
+  };
+
+  for (const row of sortable) {
+    if (remainingCash <= 0) break;
+    const laborOutstanding = Math.max(Number(row.labor_cash_outstanding_krw ?? 0), 0);
+    if (laborOutstanding <= 0) continue;
+    const applied = Math.min(remainingCash, laborOutstanding);
+    const line = ensureLine(row);
+    line.laborApplied += applied;
+    remainingCash -= applied;
+  }
+
+  if (allowCashForMaterial) {
+    for (const row of sortable) {
+      if (remainingCash <= 0) break;
+      const materialOutstanding = Math.max(Number(row.material_cash_outstanding_krw ?? 0), 0);
+      if (materialOutstanding <= 0) continue;
+      const applied = Math.min(remainingCash, materialOutstanding);
+      const line = ensureLine(row);
+      line.materialApplied += applied;
+      remainingCash -= applied;
+    }
+  }
+
+  const previewLines = Array.from(lines.values()).sort((a, b) => {
+    const aTarget = mode === "TARGET_FIRST" && targetSet.has(a.arId) ? 0 : 1;
+    const bTarget = mode === "TARGET_FIRST" && targetSet.has(b.arId) ? 0 : 1;
+    if (aTarget !== bTarget) return aTarget - bTarget;
+    return new Date(a.occurredAt ?? 0).getTime() - new Date(b.occurredAt ?? 0).getTime();
+  });
+
+  return {
+    laborAppliedTotal: previewLines.reduce((sum, row) => sum + row.laborApplied, 0),
+    materialAppliedTotal: previewLines.reduce((sum, row) => sum + row.materialApplied, 0),
+    remainingCash,
+    lines: previewLines,
+  };
+};
+
+const toKstInputValue = (withSeconds = false) => {
   const now = new Date();
   const utc = now.getTime() + now.getTimezoneOffset() * 60000;
   const kst = new Date(utc + 9 * 60 * 60000);
@@ -255,7 +349,10 @@ const toKstInputValue = () => {
   const day = String(kst.getDate()).padStart(2, '0');
   const hours = String(kst.getHours()).padStart(2, '0');
   const minutes = String(kst.getMinutes()).padStart(2, '0');
-  return `${year}-${month}-${day}T${hours}:${minutes}`;
+  const seconds = String(kst.getSeconds()).padStart(2, '0');
+  return withSeconds
+    ? `${year}-${month}-${day}T${hours}:${minutes}:${seconds}`
+    : `${year}-${month}-${day}T${hours}:${minutes}`;
 };
 
 // ------------------------------------------------------------------
@@ -311,6 +408,7 @@ const AmountPill = ({ amount, className, simple }: AmountPillProps) => {
 
 export default function ArPage() {
   const schemaClient = getSchemaClient();
+  const advancedAllocationEnabled = process.env.NEXT_PUBLIC_AR_TARGETED_ALLOC_ENABLED === "true";
   const [searchQuery, setSearchQuery] = useState("");
   const [balanceFilter, setBalanceFilter] = useState("all");
 
@@ -325,11 +423,15 @@ export default function ArPage() {
   const [selectedLedgerId, setSelectedLedgerId] = useState<string | null>(null);
 
   // Forms State
-  const [paidAt, setPaidAt] = useState(toKstInputValue);
+  const [paidAt, setPaidAt] = useState(() => toKstInputValue(true));
   const [paymentMemo, setPaymentMemo] = useState("");
   const [paymentCashKrw, setPaymentCashKrw] = useState("");
   const [paymentGoldG, setPaymentGoldG] = useState("");
   const [paymentSilverG, setPaymentSilverG] = useState("");
+  const [allowCashForMaterial, setAllowCashForMaterial] = useState(false);
+  const [advancedAllocationMode, setAdvancedAllocationMode] = useState<AdvancedAllocationMode>("GLOBAL_FIFO");
+  const [advancedTargetArIds, setAdvancedTargetArIds] = useState<string[]>([]);
+  const [advancedAllocationConfirm, setAdvancedAllocationConfirm] = useState(false);
   const [paymentProofFile, setPaymentProofFile] = useState<File | null>(null);
   const [isPaymentProofUploading, setIsPaymentProofUploading] = useState(false);
   const [paymentIdempotencyKey, setPaymentIdempotencyKey] = useState(() => crypto.randomUUID());
@@ -491,6 +593,17 @@ export default function ArPage() {
       { labor: 0, material: 0, gold: 0, silver: 0 }
     );
   }, [invoicePositionsQuery.data, selectedParty]);
+
+  const targetableInvoiceRows = useMemo(() => {
+    return (invoicePositionsQuery.data ?? []).filter(
+      (row) => Number(row.total_cash_outstanding_krw ?? 0) > 0
+    );
+  }, [invoicePositionsQuery.data]);
+
+  useEffect(() => {
+    const valid = new Set(targetableInvoiceRows.map((row) => row.ar_id ?? "").filter(Boolean));
+    setAdvancedTargetArIds((prev) => prev.filter((id) => valid.has(id)));
+  }, [targetableInvoiceRows]);
 
   // 4. Fetch Payment Details
   const paymentAllocQuery = useQuery({
@@ -670,8 +783,34 @@ export default function ArPage() {
       setPaymentCashKrw("");
       setPaymentGoldG("");
       setPaymentSilverG("");
+      setAllowCashForMaterial(false);
+      setAdvancedAllocationMode("GLOBAL_FIFO");
+      setAdvancedTargetArIds([]);
+      setAdvancedAllocationConfirm(false);
       setPaymentProofFile(null);
-      setPaidAt(toKstInputValue());
+      setPaidAt(toKstInputValue(true));
+      setPaymentIdempotencyKey(crypto.randomUUID());
+    },
+  });
+
+  const paymentAdvancedMutation = useRpcMutation<{ ok?: boolean }>({
+    fn: CONTRACTS.functions.arApplyPaymentFifoAdvanced,
+    successMessage: "결제 등록 완료",
+    onSuccess: () => {
+      positionsQuery.refetch();
+      ledgerQuery.refetch();
+      invoicePositionsQuery.refetch();
+      paymentAllocQuery.refetch();
+      setPaymentMemo("");
+      setPaymentCashKrw("");
+      setPaymentGoldG("");
+      setPaymentSilverG("");
+      setAllowCashForMaterial(false);
+      setAdvancedAllocationMode("GLOBAL_FIFO");
+      setAdvancedTargetArIds([]);
+      setAdvancedAllocationConfirm(false);
+      setPaymentProofFile(null);
+      setPaidAt(toKstInputValue(true));
       setPaymentIdempotencyKey(crypto.randomUUID());
     },
   });
@@ -777,14 +916,39 @@ export default function ArPage() {
   const goldValue = Number.isFinite(parsedGold) ? parsedGold : 0;
   const silverValue = Number.isFinite(parsedSilver) ? parsedSilver : 0;
   const hasPaymentValue = cashValue > 0 || goldValue > 0 || silverValue > 0;
+  const isTargetFirstMode = advancedAllocationEnabled && advancedAllocationMode === "TARGET_FIRST";
+  const requiresTargetSelection = isTargetFirstMode;
+  const missingTargetSelection = requiresTargetSelection && advancedTargetArIds.length === 0;
+  const requiresAdvancedConfirm = isTargetFirstMode;
+  const missingAdvancedConfirm = requiresAdvancedConfirm && !advancedAllocationConfirm;
+  const exceedsLaborCashWithoutMaterialAllowance =
+    !allowCashForMaterial &&
+    cashValue > 0 &&
+    cashValue > Number(displayOutstanding.labor ?? 0) + 0.000001;
+  const paymentSubmitting = paymentMutation.isPending || paymentAdvancedMutation.isPending;
 
   const canSubmitPayment =
     canSavePayment &&
     Boolean(effectiveSelectedPartyId) &&
     Boolean(paidAt) &&
     hasPaymentValue &&
-    !paymentMutation.isPending &&
+    !exceedsLaborCashWithoutMaterialAllowance &&
+    !missingTargetSelection &&
+    !missingAdvancedConfirm &&
+    !paymentSubmitting &&
     !isPaymentProofUploading;
+
+  const paymentAllocationPreview = useMemo(
+    () =>
+      buildPaymentAllocationPreview({
+        rows: invoicePositionsQuery.data ?? [],
+        cashValue,
+        allowCashForMaterial,
+        mode: isTargetFirstMode ? "TARGET_FIRST" : "GLOBAL_FIFO",
+        targetArIds: isTargetFirstMode ? advancedTargetArIds : [],
+      }),
+    [invoicePositionsQuery.data, cashValue, allowCashForMaterial, isTargetFirstMode, advancedTargetArIds]
+  );
 
   const effectiveReturnShipmentLineId = useMemo(() => {
     if (!returnShipmentLineId) return "";
@@ -794,20 +958,6 @@ export default function ArPage() {
     return exists ? returnShipmentLineId : "";
   }, [returnShipmentLineId, shipmentLines]);
 
-  const canSaveReturn = isFnConfigured(CONTRACTS.functions.recordReturn);
-  const selectedReturnLine = shipmentLines.find(l => l.shipment_line_id === effectiveReturnShipmentLineId);
-  const returnedBefore = selectedReturnLine?.shipment_line_id ? returnedQtyByLine.get(selectedReturnLine.shipment_line_id) ?? 0 : 0;
-  const qtyRemains = Math.max(Number(selectedReturnLine?.qty ?? 0) - returnedBefore, 0);
-  const parsedReturnQty = Number(returnQty);
-
-  const canSubmitReturn =
-    canSaveReturn &&
-    Boolean(effectiveSelectedPartyId) &&
-    Boolean(effectiveReturnShipmentLineId) &&
-    Boolean(returnOccurredAt) &&
-    parsedReturnQty > 0 &&
-    parsedReturnQty <= qtyRemains &&
-    !returnMutation.isPending;
   const parseNum = (s: string) => {
     const n = Number((s ?? "").replace(/,/g, "").trim());
     return Number.isFinite(n) ? n : 0;
@@ -819,6 +969,20 @@ export default function ArPage() {
     return Number.isFinite(n) ? n : null;
   };
 
+  const canSaveReturn = isFnConfigured(CONTRACTS.functions.recordReturn);
+  const selectedReturnLine = shipmentLines.find(l => l.shipment_line_id === effectiveReturnShipmentLineId);
+  const returnedBefore = selectedReturnLine?.shipment_line_id ? returnedQtyByLine.get(selectedReturnLine.shipment_line_id) ?? 0 : 0;
+  const qtyRemains = Math.max(Number(selectedReturnLine?.qty ?? 0) - returnedBefore, 0);
+  const parsedReturnQty = parseNum(returnQty);
+
+  const canSubmitReturn =
+    canSaveReturn &&
+    Boolean(effectiveSelectedPartyId) &&
+    Boolean(effectiveReturnShipmentLineId) &&
+    Boolean(returnOccurredAt) &&
+    parsedReturnQty > 0 &&
+    parsedReturnQty <= qtyRemains &&
+    !returnMutation.isPending;
   // OFFSET
   const canSaveOffset = isFnConfigured(CONTRACTS.functions.arApplyOffsetFromUnallocatedCash);
   const offsetCashValue = parseNum(offsetCashKrw);
@@ -1364,8 +1528,27 @@ export default function ArPage() {
                           className="space-y-6"
                           onSubmit={async (e) => {
                             e.preventDefault();
-                            if (!canSubmitPayment) return;
+                            if (!canSubmitPayment) {
+                              if (exceedsLaborCashWithoutMaterialAllowance) {
+                                toast.error("수금 등록 실패", {
+                                  description: `소재 현금 허용이 꺼져 있어 현금은 공임(${formatKrw(displayOutstanding.labor)})까지만 결제할 수 있습니다.`,
+                                });
+                              }
+                              if (missingTargetSelection) {
+                                toast.error("수금 등록 실패", {
+                                  description: "대상 우선 배분 모드에서는 최소 1개 송장을 선택해야 합니다.",
+                                });
+                              }
+                              if (missingAdvancedConfirm) {
+                                toast.error("수금 등록 실패", {
+                                  description: "고급 배분 확인 체크를 완료해야 진행할 수 있습니다.",
+                                });
+                              }
+                              return;
+                            }
                             let resolvedNote = paymentMemo.trim();
+                            const paidAtIso = new Date().toISOString();
+                            setPaidAt(toKstInputValue(true));
 
                             try {
                               if (paymentProofFile && effectiveSelectedPartyId) {
@@ -1398,15 +1581,31 @@ export default function ArPage() {
                                 }
                               }
 
-                              await paymentMutation.mutateAsync({
-                                p_party_id: effectiveSelectedPartyId,
-                                p_paid_at: new Date(paidAt).toISOString(),
-                                p_cash_krw: cashValue,
-                                p_gold_g: goldValue,
-                                p_silver_g: silverValue,
-                                p_idempotency_key: paymentIdempotencyKey,
-                                p_note: resolvedNote || null,
-                              });
+                              if (isTargetFirstMode) {
+                                await paymentAdvancedMutation.mutateAsync({
+                                  p_party_id: effectiveSelectedPartyId,
+                                  p_paid_at: paidAtIso,
+                                  p_cash_krw: cashValue,
+                                  p_gold_g: goldValue,
+                                  p_silver_g: silverValue,
+                                  p_allow_cash_for_material: allowCashForMaterial,
+                                  p_allocation_mode: "TARGET_FIRST",
+                                  p_target_ar_ids: advancedTargetArIds,
+                                  p_idempotency_key: paymentIdempotencyKey,
+                                  p_note: resolvedNote || null,
+                                });
+                              } else {
+                                await paymentMutation.mutateAsync({
+                                  p_party_id: effectiveSelectedPartyId,
+                                  p_paid_at: paidAtIso,
+                                  p_cash_krw: cashValue,
+                                  p_gold_g: goldValue,
+                                  p_silver_g: silverValue,
+                                  p_allow_cash_for_material: allowCashForMaterial,
+                                  p_idempotency_key: paymentIdempotencyKey,
+                                  p_note: resolvedNote || null,
+                                });
+                              }
                             } catch (error) {
                               const message = error instanceof Error ? error.message : "잠시 후 다시 시도해 주세요";
                               toast.error("수금 등록 실패", { description: message });
@@ -1417,13 +1616,14 @@ export default function ArPage() {
                         >
                           <div className="space-y-1">
                             <label className="text-xs font-semibold text-[var(--muted)]">수금일시</label>
-                            <Input type="datetime-local" value={paidAt} onChange={(e) => setPaidAt(e.target.value)} />
+                            <Input type="datetime-local" step={1} value={paidAt} onChange={(e) => setPaidAt(e.target.value)} />
                           </div>
 
                           <div className="grid grid-cols-2 gap-4">
                             <div className="space-y-1 col-span-2">
                               <label className="text-xs font-semibold text-[var(--muted)]">현금 (KRW)</label>
                               <Input
+                                inputMode="numeric"
                                 className="text-right text-lg font-bold"
                                 value={paymentCashKrw}
                                 onChange={(e) => setPaymentCashKrw(e.target.value)}
@@ -1432,11 +1632,23 @@ export default function ArPage() {
                             </div>
                             <div className="space-y-1">
                               <label className="text-xs font-semibold text-[var(--muted)]">금 (g)</label>
-                              <Input className="text-right" value={paymentGoldG} onChange={(e) => setPaymentGoldG(e.target.value)} placeholder="0.00" />
+                              <Input
+                                inputMode="decimal"
+                                className="text-right"
+                                value={paymentGoldG}
+                                onChange={(e) => setPaymentGoldG(e.target.value)}
+                                placeholder="0.00"
+                              />
                             </div>
                             <div className="space-y-1">
                               <label className="text-xs font-semibold text-[var(--muted)]">은 (g)</label>
-                              <Input className="text-right" value={paymentSilverG} onChange={(e) => setPaymentSilverG(e.target.value)} placeholder="0.00" />
+                              <Input
+                                inputMode="decimal"
+                                className="text-right"
+                                value={paymentSilverG}
+                                onChange={(e) => setPaymentSilverG(e.target.value)}
+                                placeholder="0.00"
+                              />
                             </div>
                           </div>
 
@@ -1444,6 +1656,110 @@ export default function ArPage() {
                             <label className="text-xs font-semibold text-[var(--muted)]">메모</label>
                             <Textarea value={paymentMemo} onChange={(e) => setPaymentMemo(e.target.value)} placeholder="메모 입력" className="resize-none" />
                           </div>
+
+                          <label className="flex items-center gap-2 text-xs">
+                            <input
+                              type="checkbox"
+                              checked={allowCashForMaterial}
+                              onChange={(e) => setAllowCashForMaterial(e.target.checked)}
+                            />
+                            <span className="text-[var(--muted)]">소재 현금 허용 (기본 OFF, 공임 소진 후 FIFO 적용)</span>
+                          </label>
+                          {advancedAllocationEnabled ? (
+                            <div className="space-y-2 rounded border border-[var(--panel-border)] bg-[var(--chip)] p-3">
+                              <div className="text-xs font-semibold text-[var(--muted)]">고급 배분 모드 (제한 개방)</div>
+                              <label className="flex items-center gap-2 text-xs">
+                                <input
+                                  type="checkbox"
+                                  checked={advancedAllocationMode === "TARGET_FIRST"}
+                                  onChange={(e) => {
+                                    if (e.target.checked) {
+                                      setAdvancedAllocationMode("TARGET_FIRST");
+                                    } else {
+                                      setAdvancedAllocationMode("GLOBAL_FIFO");
+                                      setAdvancedTargetArIds([]);
+                                      setAdvancedAllocationConfirm(false);
+                                    }
+                                  }}
+                                />
+                                <span className="text-[var(--muted)]">대상 우선 배분(TARGET_FIRST)</span>
+                              </label>
+
+                              {isTargetFirstMode ? (
+                                <>
+                                  <div className="max-h-40 overflow-y-auto rounded border border-[var(--panel-border)] bg-[var(--panel)] p-2 text-xs">
+                                    {targetableInvoiceRows.length === 0 ? (
+                                      <div className="text-[var(--muted)]">선택 가능한 미수 송장이 없습니다.</div>
+                                    ) : (
+                                      <div className="space-y-1">
+                                        {targetableInvoiceRows.map((row) => {
+                                          const arId = row.ar_id ?? "";
+                                          const checked = advancedTargetArIds.includes(arId);
+                                          const label = [row.model_name, row.suffix, row.color, row.size].filter(Boolean).join("/") || "-";
+                                          return (
+                                            <label key={arId} className="flex items-center justify-between gap-2">
+                                              <span className="flex items-center gap-2">
+                                                <input
+                                                  type="checkbox"
+                                                  checked={checked}
+                                                  onChange={(e) => {
+                                                    setAdvancedTargetArIds((prev) =>
+                                                      e.target.checked
+                                                        ? Array.from(new Set([...prev, arId]))
+                                                        : prev.filter((id) => id !== arId)
+                                                    );
+                                                  }}
+                                                />
+                                                <span className="truncate max-w-[240px]">{formatDateTimeKst(row.occurred_at)} · {label}</span>
+                                              </span>
+                                              <span className="tabular-nums text-[var(--muted)]">{formatKrw(row.total_cash_outstanding_krw)}</span>
+                                            </label>
+                                          );
+                                        })}
+                                      </div>
+                                    )}
+                                  </div>
+
+                                  <div className="rounded border border-[var(--panel-border)] bg-[var(--panel)] p-2 text-xs space-y-1">
+                                    <div className="font-semibold text-[var(--foreground)]">배분 프리뷰</div>
+                                    <div className="text-[var(--muted)]">
+                                      공임 {formatKrw(paymentAllocationPreview.laborAppliedTotal)} · 소재 {formatKrw(paymentAllocationPreview.materialAppliedTotal)} · 잔여현금 {formatKrw(paymentAllocationPreview.remainingCash)}
+                                    </div>
+                                    <div className="max-h-28 overflow-y-auto space-y-1">
+                                      {paymentAllocationPreview.lines.map((line) => (
+                                        <div key={line.arId} className="flex items-center justify-between gap-2">
+                                          <span className="truncate">{line.modelName}</span>
+                                          <span className="tabular-nums text-[var(--muted)]">공임 {formatKrw(line.laborApplied)} / 소재 {formatKrw(line.materialApplied)}</span>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </div>
+
+                                  <label className="flex items-center gap-2 text-xs">
+                                    <input
+                                      type="checkbox"
+                                      checked={advancedAllocationConfirm}
+                                      onChange={(e) => setAdvancedAllocationConfirm(e.target.checked)}
+                                    />
+                                    <span className="text-[var(--muted)]">기본 FIFO와 다른 결과가 될 수 있음을 확인했습니다.</span>
+                                  </label>
+                                </>
+                              ) : (
+                                <div className="text-xs text-[var(--muted)]">기본 GLOBAL FIFO 적용 중</div>
+                              )}
+                            </div>
+                          ) : null}
+                          {exceedsLaborCashWithoutMaterialAllowance ? (
+                            <div className="text-xs text-[var(--danger)]">
+                              현금 입력액이 공임 잔액({formatKrw(displayOutstanding.labor)})을 초과했습니다. 소재 현금 허용을 켜거나 현금액을 줄여주세요.
+                            </div>
+                          ) : null}
+                          {missingTargetSelection ? (
+                            <div className="text-xs text-[var(--danger)]">대상 우선 배분 모드에서는 최소 1개 송장을 선택해야 합니다.</div>
+                          ) : null}
+                          {missingAdvancedConfirm ? (
+                            <div className="text-xs text-[var(--danger)]">고급 배분 확인 체크를 완료해야 제출할 수 있습니다.</div>
+                          ) : null}
 
                           <div className="space-y-2">
                             <label className="text-xs font-semibold text-[var(--muted)]">수금 증빙 이미지</label>
@@ -1463,7 +1779,7 @@ export default function ArPage() {
                           </div>
 
                           <Button type="submit" size="lg" className="w-full" disabled={!canSubmitPayment}>
-                            {isPaymentProofUploading ? "증빙 업로드 중..." : "수금 등록 완료"}
+                            {isPaymentProofUploading ? "증빙 업로드 중..." : paymentSubmitting ? "처리 중..." : "수금 등록 완료"}
                           </Button>
                         </form>
                       )}
@@ -1479,7 +1795,7 @@ export default function ArPage() {
                               p_shipment_line_id: effectiveReturnShipmentLineId,
                               p_return_qty: parsedReturnQty,
                               p_occurred_at: new Date(returnOccurredAt).toISOString(),
-                              p_override_amount_krw: returnOverrideAmount !== "" ? Number(returnOverrideAmount) : null,
+                              p_override_amount_krw: parseOptNum(returnOverrideAmount),
                               p_reason: returnReason || null,
                             });
                           }}
@@ -1514,11 +1830,23 @@ export default function ArPage() {
                           <div className="grid grid-cols-2 gap-4">
                             <div className="space-y-1">
                               <label className="text-xs font-semibold text-[var(--muted)]">반품 수량</label>
-                              <Input type="number" className="text-right" value={returnQty} onChange={(e) => setReturnQty(e.target.value)} min={1} />
+                              <Input
+                                inputMode="numeric"
+                                className="text-right"
+                                value={returnQty}
+                                onChange={(e) => setReturnQty(e.target.value)}
+                                placeholder="1"
+                              />
                             </div>
                             <div className="space-y-1">
                               <label className="text-xs font-semibold text-[var(--muted)]">금액 강제지정 (선택)</label>
-                              <Input type="number" className="text-right" value={returnOverrideAmount} onChange={(e) => setReturnOverrideAmount(e.target.value)} placeholder="자동계산" />
+                              <Input
+                                inputMode="numeric"
+                                className="text-right"
+                                value={returnOverrideAmount}
+                                onChange={(e) => setReturnOverrideAmount(e.target.value)}
+                                placeholder="자동계산"
+                              />
                             </div>
                           </div>
 

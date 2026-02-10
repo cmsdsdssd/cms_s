@@ -92,9 +92,7 @@ export const CONTRACTS = {
       process.env.NEXT_PUBLIC_CMS_FN_SHIPMENT_UPDATE_LINE ?? "cms_fn_shipment_update_line_v1",
 
     // ✅ FIX: 실제 존재하는 RPC로 교체
-    shipmentUpsertFromOrder:
-      process.env.NEXT_PUBLIC_RPC_SHIPMENT_UPSERT_FROM_ORDER ||
-      "cms_fn_shipment_upsert_from_order_line",
+    shipmentUpsertFromOrder: "cms_fn_shipment_upsert_from_order_line_v2",
 
     shipmentConfirm:
       process.env.NEXT_PUBLIC_RPC_SHIPMENT_CONFIRM || "cms_fn_confirm_shipment_v3_cost_v1",
@@ -120,7 +118,9 @@ export const CONTRACTS = {
     recordPayment:
       process.env.NEXT_PUBLIC_CMS_FN_RECORD_PAYMENT || "cms_fn_record_payment_v2",
     arApplyPaymentFifo:
-      process.env.NEXT_PUBLIC_CMS_FN_AR_APPLY_PAYMENT_FIFO || "cms_fn_ar_apply_payment_fifo_v1",
+      process.env.NEXT_PUBLIC_CMS_FN_AR_APPLY_PAYMENT_FIFO || "cms_fn_ar_apply_payment_fifo_v2",
+    arApplyPaymentFifoAdvanced:
+      process.env.NEXT_PUBLIC_CMS_FN_AR_APPLY_PAYMENT_FIFO_ADVANCED || "cms_fn_ar_apply_payment_fifo_v3",
     arInvoiceResyncFromShipment:
       process.env.NEXT_PUBLIC_RPC_AR_INVOICE_RESYNC || "cms_fn_ar_create_from_shipment_confirm_v1",
     recordReturn:

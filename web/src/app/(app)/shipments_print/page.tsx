@@ -90,6 +90,29 @@ type ArPositionRow = {
   silver_outstanding_g?: number | null;
 };
 
+type ArPositionAsOfRow = {
+  party_id?: string | null;
+  receivable_krw?: number | null;
+  labor_cash_outstanding_krw?: number | null;
+  gold_outstanding_g?: number | null;
+  silver_outstanding_g?: number | null;
+};
+
+type ArPaymentAllocTodayRow = {
+  shipment_line_id?: string | null;
+  alloc_labor_krw?: number | null;
+  alloc_material_krw?: number | null;
+  alloc_gold_g?: number | null;
+  alloc_silver_g?: number | null;
+};
+
+type ArInvoiceRatioRow = {
+  shipment_line_id?: string | null;
+  labor_cash_due_krw?: number | null;
+  material_cash_due_krw?: number | null;
+  total_cash_due_krw?: number | null;
+};
+
 type MasterItemRow = {
   model_name?: string | null;
   is_unit_pricing?: boolean | null;
@@ -104,7 +127,9 @@ type PartyReceiptPage = {
   today: Amounts;
   todaySales: Amounts;
   todayReturns: Amounts;
+  todayAdjustments: Amounts;
   previous: Amounts;
+  previousLabel?: string;
 };
 
 const hasReturnAmounts = (amounts: Amounts) => {
@@ -117,14 +142,38 @@ const hasReturnAmounts = (amounts: Amounts) => {
   );
 };
 
+const hasVisibleKrwDelta = (amounts: Amounts) => {
+  const roundedTotal = Math.round(Number(amounts.total ?? 0));
+  const roundedLabor = Math.round(Number(amounts.labor ?? 0));
+  const roundedGold = Math.round(Number(amounts.gold ?? 0) * 1000) / 1000;
+  const roundedSilver = Math.round(Number(amounts.silver ?? 0) * 1000) / 1000;
+  return roundedTotal !== 0 || roundedLabor !== 0 || roundedGold !== 0 || roundedSilver !== 0;
+};
+
+const isSameRoundedAmounts = (a: Amounts, b: Amounts) => {
+  const round3 = (v: number) => Math.round(v * 1000) / 1000;
+  return (
+    Math.round(Number(a.total ?? 0)) === Math.round(Number(b.total ?? 0)) &&
+    Math.round(Number(a.labor ?? 0)) === Math.round(Number(b.labor ?? 0)) &&
+    round3(Number(a.gold ?? 0)) === round3(Number(b.gold ?? 0)) &&
+    round3(Number(a.silver ?? 0)) === round3(Number(b.silver ?? 0))
+  );
+};
+
 const buildSummaryRows = (page: PartyReceiptPage) => {
   const rows = [
     { label: "합계", value: page.totals },
-    { label: "이전 미수", value: page.previous },
+    { label: page.previousLabel ?? "이전 미수", value: page.previous },
     { label: "당일 출고", value: page.todaySales },
   ];
   if (hasReturnAmounts(page.todayReturns)) {
     rows.push({ label: "당일 반품", value: page.todayReturns });
+  }
+  if (hasVisibleKrwDelta(page.todayAdjustments)) {
+    rows.push({ label: "당일 결제/조정", value: page.todayAdjustments });
+  }
+  const hasMeaningfulDiffFromSales = !isSameRoundedAmounts(page.today, page.todaySales);
+  if (hasMeaningfulDiffFromSales) {
     rows.push({ label: "당일 순증감", value: page.today });
   }
   return rows;
@@ -258,7 +307,7 @@ const toLineAmounts = (line: ReceiptLine): Amounts => {
   }
   const bucket = getMaterialBucket(line.material_code ?? null);
   if (bucket.kind === "none") {
-    return { gold: 0, silver: 0, labor: 0, total: 0 };
+    return { gold: 0, silver: 0, labor, total };
   }
   const silverAdjustFactor = Number(line.silver_adjust_factor ?? 1.2);
   const silverWeightFactor = (line.material_code ?? "").trim() === "925" ? silverAdjustFactor : 1;
@@ -317,6 +366,8 @@ function ShipmentsPrintContent() {
   const [targetShipmentId, setTargetShipmentId] = useState<string | null>(null);
 
   const mode = searchParams.get("mode") ?? "";
+  const summaryParam = (searchParams.get("summary") ?? "").trim().toLowerCase();
+  const summaryMode = summaryParam === "v1" ? "v1" : "v2";
   const isStorePickupMode = mode === "store_pickup";
   const filterPartyId = (searchParams.get("party_id") ?? "").trim();
 
@@ -409,6 +460,50 @@ function ShipmentsPrintContent() {
     },
     enabled: Boolean(schemaClient),
   });
+
+  const returnShipmentLineIds = useMemo(() => {
+    const ids = new Set<string>();
+    (returnsQuery.data ?? []).forEach((row) => {
+      const id = row.cms_shipment_line?.shipment_line_id ?? "";
+      if (id) ids.add(id);
+    });
+    return Array.from(ids);
+  }, [returnsQuery.data]);
+
+  const returnInvoiceRatiosQuery = useQuery({
+    queryKey: ["shipments-print-return-invoice-ratios", returnShipmentLineIds.join(",")],
+    queryFn: async () => {
+      if (!schemaClient) throw new Error("Supabase env is missing");
+      if (returnShipmentLineIds.length === 0) return [] as ArInvoiceRatioRow[];
+      const { data, error } = await schemaClient
+        .from("cms_v_ar_invoice_position_v1")
+        .select("shipment_line_id, labor_cash_due_krw, material_cash_due_krw, total_cash_due_krw")
+        .in("shipment_line_id", returnShipmentLineIds);
+      if (error) throw error;
+      return (data ?? []) as ArInvoiceRatioRow[];
+    },
+    enabled: Boolean(schemaClient) && returnShipmentLineIds.length > 0,
+  });
+
+  const returnInvoiceRatioMap = useMemo(() => {
+    const map = new Map<string, { laborRatio: number; materialRatio: number }>();
+    (returnInvoiceRatiosQuery.data ?? []).forEach((row) => {
+      const lineId = row.shipment_line_id ?? "";
+      if (!lineId || map.has(lineId)) return;
+      const totalDue = Math.max(Number(row.total_cash_due_krw ?? 0), 0);
+      const laborDue = Math.max(Number(row.labor_cash_due_krw ?? 0), 0);
+      const materialDue = Math.max(Number(row.material_cash_due_krw ?? 0), 0);
+      if (totalDue <= 0) {
+        map.set(lineId, { laborRatio: 0, materialRatio: 0 });
+        return;
+      }
+      map.set(lineId, {
+        laborRatio: laborDue / totalDue,
+        materialRatio: materialDue / totalDue,
+      });
+    });
+    return map;
+  }, [returnInvoiceRatiosQuery.data]);
 
   const modelNames = useMemo(() => {
     const names = new Set<string>();
@@ -526,12 +621,29 @@ function ShipmentsPrintContent() {
         const modelName = (source?.model_name ?? "").trim();
         const isUnitPricing = unitPricingMap.get(modelName) ?? false;
         const returnQty = Math.max(Number(row.return_qty ?? 0), 0);
+        const sourceLineId = source?.shipment_line_id ?? "";
+        const sourceQty = Math.max(Number(source?.qty ?? 0), 1);
         const netWeight = Number(source?.net_weight_g ?? 0);
         const labor = Number(source?.labor_total_sell_krw ?? 0);
         const material = Number(source?.material_amount_sell_krw ?? 0);
-        const repairFee = Number(source?.repair_fee_krw ?? 0);
         const total = Number(source?.total_amount_sell_krw ?? 0);
+        const unitNetWeight = netWeight / sourceQty;
+        const unitTotal = total / sourceQty;
         const overrideTotal = row.final_return_amount_krw;
+        const estimatedReturnTotal = Math.abs(unitTotal * returnQty);
+        const returnTotal =
+          overrideTotal === null || overrideTotal === undefined
+            ? estimatedReturnTotal
+            : Math.abs(Number(overrideTotal));
+        const ratioFromInvoice = returnInvoiceRatioMap.get(sourceLineId);
+        const sourceTotalAbs = Math.abs(total);
+        const laborRatio =
+          ratioFromInvoice?.laborRatio ?? (sourceTotalAbs > 0 ? Math.abs(labor) / sourceTotalAbs : 0);
+        const materialRatio =
+          ratioFromInvoice?.materialRatio ?? (sourceTotalAbs > 0 ? Math.abs(material) / sourceTotalAbs : 0);
+        const ratioSum = laborRatio + materialRatio;
+        const normalizedLaborRatio = ratioSum > 0 ? laborRatio / ratioSum : 0;
+        const normalizedMaterialRatio = ratioSum > 0 ? materialRatio / ratioSum : 0;
         return {
           is_return: true,
           is_repair: Boolean(source?.repair_line_id),
@@ -540,16 +652,13 @@ function ShipmentsPrintContent() {
           model_name: source?.model_name ?? null,
           qty: returnQty,
           material_code: source?.material_code ?? null,
-          net_weight_g: isUnitPricing ? 0 : -Math.abs(netWeight * returnQty),
+          net_weight_g: isUnitPricing ? 0 : -Math.abs(unitNetWeight * returnQty),
           color: source?.color ?? null,
           size: source?.size ?? null,
-          labor_total_sell_krw: isUnitPricing ? 0 : -Math.abs(labor * returnQty),
-          material_amount_sell_krw: isUnitPricing ? 0 : -Math.abs(material * returnQty),
-          repair_fee_krw: isUnitPricing ? 0 : -Math.abs(repairFee * returnQty),
-          total_amount_sell_krw:
-            overrideTotal === null || overrideTotal === undefined
-              ? -Math.abs(total * returnQty)
-              : -Math.abs(Number(overrideTotal)),
+          labor_total_sell_krw: isUnitPricing ? 0 : -Math.abs(returnTotal * normalizedLaborRatio),
+          material_amount_sell_krw: isUnitPricing ? 0 : -Math.abs(returnTotal * normalizedMaterialRatio),
+          repair_fee_krw: 0,
+          total_amount_sell_krw: -Math.abs(returnTotal),
           gold_tick_krw_per_g: source?.gold_tick_krw_per_g ?? null,
           silver_tick_krw_per_g: source?.silver_tick_krw_per_g ?? null,
           silver_adjust_factor: source?.silver_adjust_factor ?? null,
@@ -563,7 +672,7 @@ function ShipmentsPrintContent() {
         };
       })
       .filter((line) => (line.shipment_header?.customer_party_id ?? "").length > 0 && Number(line.qty ?? 0) > 0);
-  }, [returnsQuery.data, isStorePickupMode, unitPricingMap]);
+  }, [returnsQuery.data, isStorePickupMode, unitPricingMap, returnInvoiceRatioMap]);
 
   const todayLines = useMemo<ReceiptLine[]>(() => {
     return [...todaySalesLines, ...todayReturnLines];
@@ -599,6 +708,55 @@ function ShipmentsPrintContent() {
     enabled: Boolean(schemaClient) && partyIds.length > 0,
   });
 
+  const arAsOfPositionsQuery = useQuery({
+    queryKey: ["shipments-print-ar-asof", partyIds.join(","), todayStartIso, summaryMode],
+    queryFn: async () => {
+      if (!schemaClient) throw new Error("Supabase env is missing");
+      if (partyIds.length === 0) return [] as ArPositionAsOfRow[];
+      const { data, error } = await schemaClient.rpc("cms_fn_ar_position_asof_v1", {
+        p_party_ids: partyIds,
+        p_asof: todayStartIso,
+      });
+      if (error) throw error;
+      return (data ?? []) as ArPositionAsOfRow[];
+    },
+    enabled: Boolean(schemaClient) && partyIds.length > 0 && summaryMode === "v2",
+    retry: false,
+  });
+
+  const todayShipmentLinePartyMap = useMemo(() => {
+    const map = new Map<string, string>();
+    todaySalesLines.forEach((line) => {
+      const shipmentLineId = line.shipment_line_id ?? "";
+      const partyId = line.shipment_header?.customer_party_id ?? "";
+      if (!shipmentLineId || !partyId) return;
+      map.set(shipmentLineId, partyId);
+    });
+    return map;
+  }, [todaySalesLines]);
+
+  const todayShipmentLineIds = useMemo(
+    () => Array.from(todayShipmentLinePartyMap.keys()),
+    [todayShipmentLinePartyMap]
+  );
+
+  const arTodayPaymentAllocQuery = useQuery({
+    queryKey: ["shipments-print-ar-payment-alloc-today", todayShipmentLineIds.join(","), todayStartIso, todayEndIso],
+    queryFn: async () => {
+      if (!schemaClient) throw new Error("Supabase env is missing");
+      if (todayShipmentLineIds.length === 0) return [] as ArPaymentAllocTodayRow[];
+      const { data, error } = await schemaClient
+        .from("cms_v_ar_payment_alloc_detail_v1")
+        .select("shipment_line_id, alloc_labor_krw, alloc_material_krw, alloc_gold_g, alloc_silver_g")
+        .gte("paid_at", todayStartIso)
+        .lt("paid_at", todayEndIso)
+        .in("shipment_line_id", todayShipmentLineIds);
+      if (error) throw error;
+      return (data ?? []) as ArPaymentAllocTodayRow[];
+    },
+    enabled: Boolean(schemaClient) && todayShipmentLineIds.length > 0,
+  });
+
 
   const arTotalsMap = useMemo(() => {
     return new Map(
@@ -614,10 +772,43 @@ function ShipmentsPrintContent() {
     );
   }, [arPositionsQuery.data]);
 
+  const arAsOfTotalsMap = useMemo(() => {
+    return new Map(
+      (arAsOfPositionsQuery.data ?? []).map((row) => [
+        row.party_id ?? "",
+        {
+          gold: Number(row.gold_outstanding_g ?? 0),
+          silver: Number(row.silver_outstanding_g ?? 0),
+          labor: Number(row.labor_cash_outstanding_krw ?? 0),
+          total: Number(row.receivable_krw ?? 0),
+        },
+      ])
+    );
+  }, [arAsOfPositionsQuery.data]);
+
+  const todayAdjustmentsByParty = useMemo(() => {
+    const map = new Map<string, Amounts>();
+    (arTodayPaymentAllocQuery.data ?? []).forEach((row) => {
+      const shipmentLineId = row.shipment_line_id ?? "";
+      const partyId = todayShipmentLinePartyMap.get(shipmentLineId) ?? "";
+      if (!partyId) return;
+      const labor = Number(row.alloc_labor_krw ?? 0);
+      const material = Number(row.alloc_material_krw ?? 0);
+      const gold = Number(row.alloc_gold_g ?? 0);
+      const silver = Number(row.alloc_silver_g ?? 0);
+      const current = map.get(partyId) ?? { ...zeroAmounts };
+      map.set(partyId, {
+        gold: current.gold - gold,
+        silver: current.silver - silver,
+        labor: current.labor - labor,
+        total: current.total - (labor + material),
+      });
+    });
+    return map;
+  }, [arTodayPaymentAllocQuery.data, todayShipmentLinePartyMap]);
+
 
   const todayByParty = useMemo(() => sumLineAmountsByParty(todayLines), [todayLines]);
-  const todaySalesByParty = useMemo(() => sumLineAmountsByParty(todaySalesLines), [todaySalesLines]);
-  const todayReturnsByParty = useMemo(() => sumLineAmountsByParty(todayReturnLines), [todayReturnLines]);
   const todaySalesArByParty = useMemo(
     () => sumLineAmountsByParty(todaySalesLines, toLineAmountsArAligned),
     [todaySalesLines]
@@ -633,25 +824,29 @@ function ShipmentsPrintContent() {
       const chunks = chunkLines(group.lines, 15);
       const totals = arTotalsMap.get(group.partyId) ?? { ...zeroAmounts };
 
-      const todaySales = todaySalesByParty.get(group.partyId) ?? { ...zeroAmounts };
-      const todayReturns = todayReturnsByParty.get(group.partyId) ?? { ...zeroAmounts };
-      const todayNet = addAmounts(todaySales, todayReturns);
       const todaySalesAr = todaySalesArByParty.get(group.partyId) ?? { ...zeroAmounts };
       const todayReturnsAr = todayReturnsArByParty.get(group.partyId) ?? { ...zeroAmounts };
       const todayNetAr = addAmounts(todaySalesAr, todayReturnsAr);
 
-      const previousSummary = subtractAmounts(totals, todayNetAr);
-      const totalsSummary = addAmounts(previousSummary, todayNet);
+      const previousSummaryLegacy = subtractAmounts(totals, todayNetAr);
+      const previousSummaryAsOf = arAsOfTotalsMap.get(group.partyId) ?? null;
+      const useAsOfSummary = summaryMode === "v2" && previousSummaryAsOf !== null;
+      const previousSummary = useAsOfSummary ? previousSummaryAsOf : previousSummaryLegacy;
+      const totalsSummary = totals;
+      const todayAdjustments = todayAdjustmentsByParty.get(group.partyId) ?? { ...zeroAmounts };
+      const todaySummary = addAmounts(todayNetAr, todayAdjustments);
       chunks.forEach((chunk) => {
         result.push({
           partyId: group.partyId,
           partyName: group.partyName,
           lines: chunk,
           totals: totalsSummary,
-          today: todayNet,
-          todaySales,
-          todayReturns,
+          today: todaySummary,
+          todaySales: todaySalesAr,
+          todayReturns: todayReturnsAr,
+          todayAdjustments,
           previous: previousSummary,
+          previousLabel: useAsOfSummary ? "이전 미수(기준시점)" : "이전 미수(역산)",
         });
       });
     });
@@ -665,7 +860,9 @@ function ShipmentsPrintContent() {
         today: { ...zeroAmounts },
         todaySales: { ...zeroAmounts },
         todayReturns: { ...zeroAmounts },
+        todayAdjustments: { ...zeroAmounts },
         previous: { ...zeroAmounts },
+        previousLabel: summaryMode === "v2" ? "이전 미수(기준시점)" : "이전 미수(역산)",
       });
     }
 
@@ -673,10 +870,11 @@ function ShipmentsPrintContent() {
   }, [
     partyGroups,
     arTotalsMap,
-    todaySalesByParty,
-    todayReturnsByParty,
     todaySalesArByParty,
     todayReturnsArByParty,
+    arAsOfTotalsMap,
+    todayAdjustmentsByParty,
+    summaryMode,
   ]);
 
   const visiblePages = useMemo(() => {

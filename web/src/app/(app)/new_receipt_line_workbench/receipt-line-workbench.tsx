@@ -789,7 +789,7 @@ const DEFAULT_STATUS_FILTER = "ALL";
 const AUTO_FIELD_CLASS = "bg-[var(--panel)]/70";
 const DEFAULT_RANGE_MONTHS = -3;
 const DON_TO_G = 3.75;
-const SUGGESTION_LIMIT = 5;
+const SUGGESTION_LIMIT = 10;
 
 const FACTORY_ROWS: Array<Pick<FactoryRowInput, "rowCode" | "label">> = [
   { rowCode: "RECENT_PAYMENT", label: "최근결제" },
@@ -3038,18 +3038,6 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
     return buildWeightRangeFromCenter(selectedLineWeight);
   }, [selectedCandidate, selectedMasterPricingQuery.data, selectedUnlinked]);
 
-  function getCandidateDisplayWeightRange(candidate: MatchCandidate, isSelectedCandidate: boolean) {
-    if (isSelectedCandidate && selectedReferenceWeightRange) {
-      return selectedReferenceWeightRange;
-    }
-    const existingMin = candidate.weight_min_g ?? null;
-    const existingMax = candidate.weight_max_g ?? null;
-    if (existingMin !== null && existingMax !== null) {
-      return { min: Math.max(0, existingMin), max: Math.max(0, existingMax) };
-    }
-    return buildWeightRangeFromCenter(candidate.effective_weight_g ?? null);
-  }
-
   function isWeightInRange() {
     if (!selectedCandidate) return false;
     const weight = parseNumber(selectedWeight);
@@ -3173,6 +3161,38 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
     setIsMatchDrawerOpen(false);
   }, []);
 
+  const openUnlinkedQuickDrawer = useCallback(() => {
+    const target = selectedUnlinked ?? unlinkedRows[0] ?? null;
+    if (!target) {
+      toast.error("열 수 있는 미매칭 라인이 없습니다.");
+      return;
+    }
+    openMatchDrawer(target);
+  }, [openMatchDrawer, selectedUnlinked, unlinkedRows]);
+
+  const openConfirmQuickDrawer = useCallback(async () => {
+    const target = selectedUnlinked ?? unlinkedRows[0] ?? null;
+    if (!target) {
+      toast.error("열 수 있는 미매칭 라인이 없습니다.");
+      return;
+    }
+    openMatchDrawer(target);
+    const targetUuid = getReceiptLineUuid(target);
+    if (!targetUuid) return;
+    const cached = suggestionCacheRef.current.get(targetUuid) ?? null;
+    if (cached && cached.length > 0) {
+      setSuggestions(cached);
+      setSuggestionLineUuid(targetUuid);
+      setSelectedCandidate(cached[0] ?? null);
+      return;
+    }
+    await handleSuggest(target);
+    const next = suggestionCacheRef.current.get(targetUuid) ?? [];
+    if (next.length > 0) {
+      setSelectedCandidate(next[0] ?? null);
+    }
+  }, [handleSuggest, openMatchDrawer, selectedUnlinked, unlinkedRows]);
+
   const moveToRelativeUnlinkedLine = useCallback(
     (direction: -1 | 1) => {
       if (selectedUnlinkedIndex < 0) return;
@@ -3294,23 +3314,6 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
     setSelectedUnlinked(matched);
     setIsMatchDrawerOpen(true);
   }, [isMatchDrawerOpen, selectedReceiptId, unlinkedRows]);
-
-  const reconcileStatus = useMemo(() => {
-    if (!reconcileIssueCounts) {
-      return { label: "미확인", tone: "neutral" as const };
-    }
-    if (reconcileIssueCounts.error > 0) {
-      return { label: "ERROR", tone: "danger" as const };
-    }
-    if (reconcileIssueCounts.warn > 0) {
-      return { label: "WARN", tone: "warning" as const };
-    }
-    return { label: "OK", tone: "active" as const };
-  }, [reconcileIssueCounts]);
-
-  const reconcileLink = vendorPartyId
-    ? `/ap/reconcile?vendor_party_id=${encodeURIComponent(vendorPartyId)}&status=OPEN,ACKED`
-    : "/ap/reconcile";
 
   const previewImageClass = isPreviewExpanded ? "max-h-[70vh]" : "max-h-[55vh]";
   const previewFrameClass = isPreviewExpanded ? "h-[70vh]" : "h-[55vh]";
@@ -4406,7 +4409,6 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                                         onChange={(e) =>
                                           updateFactoryMetal(row.rowCode, "gold", { value: e.target.value })
                                         }
-                                        autoFormat={false}
                                         className="h-7 text-sm text-right"
                                       />
                                       <span className="inline-flex h-6 items-center rounded-md border border-amber-300 bg-amber-50 px-2 text-xs font-bold text-amber-800">
@@ -4426,7 +4428,6 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                                         onChange={(e) =>
                                           updateFactoryMetal(row.rowCode, "silver", { value: e.target.value })
                                         }
-                                        autoFormat={false}
                                         className="h-7 text-sm text-right"
                                       />
                                       <span className="inline-flex h-6 items-center rounded-md border border-slate-300 bg-slate-50 px-2 text-xs font-bold text-slate-700">
@@ -4443,7 +4444,6 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                                       inputMode="numeric"
                                       value={row.laborKrw}
                                       onChange={(e) => updateFactoryRow(row.rowCode, { laborKrw: e.target.value })}
-                                      autoFormat={false}
                                       className="h-7 text-sm text-right"
                                     />
                                   </div>
@@ -4584,34 +4584,35 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
             </CardBody>
           </Card>
 
-          <div>
-            <Card className="border-none shadow-sm ring-1 ring-black/5">
-              <CardHeader className="border-b border-[var(--panel-border)] bg-[var(--panel)]/50 px-4 py-3">
-                <div className="flex items-center justify-between">
-                  <div className="text-sm font-semibold">정합 상태</div>
-                  <Badge tone={reconcileStatus.tone} className="h-6 px-2 text-[10px]">
-                    {reconcileStatus.label}
-                  </Badge>
-                </div>
-              </CardHeader>
-              <CardBody className="space-y-2 p-4">
-                <div className="text-xs text-[var(--muted)]">
-                  오류 {reconcileIssueCounts?.error ?? "-"} · 경고 {reconcileIssueCounts?.warn ?? "-"}
-                </div>
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  onClick={() => {
-                    window.location.href = reconcileLink;
-                  }}
-                >
-                  정합 큐 열기
-                </Button>
-                {apSyncStatus === "error" && apSyncMessage ? (
-                  <div className="text-[11px] text-[var(--danger)]">AP 동기화 실패: {apSyncMessage}</div>
-                ) : null}
-              </CardBody>
-            </Card>
+          <div className="rounded-lg border border-[var(--panel-border)] bg-[var(--surface)]/70 p-2">
+            <div className="flex items-center justify-between gap-2">
+              <div className="text-xs font-semibold text-[var(--muted)]">빠른 매칭 액션</div>
+              <div className="flex items-center gap-2">
+                <Badge tone="neutral" className="h-6 px-2 text-[10px]">미매칭 {unlinkedRows.length}건</Badge>
+                <Badge tone="active" className="h-6 px-2 text-[10px]">확정/출고대기 {confirmedMatches.length}건</Badge>
+              </div>
+            </div>
+            <div className="mt-2 inline-flex items-center gap-1 rounded-md border border-[var(--panel-border)] bg-[var(--panel)] p-1">
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={() => {
+                  setActiveTab("match");
+                  openUnlinkedQuickDrawer();
+                }}
+              >
+                미매칭라인
+              </Button>
+              <Button
+                size="sm"
+                onClick={() => {
+                  setActiveTab("match");
+                  void openConfirmQuickDrawer();
+                }}
+              >
+                확정/출고대기
+              </Button>
+            </div>
           </div>
 
           <Card className="border-none shadow-sm ring-1 ring-black/5 overflow-visible">
@@ -5688,88 +5689,103 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                 ) : (
                   (() => {
                     const baseCode = selectedUnlinked?.customer_factory_code ?? "-";
-                    const baseStone = `${formatStoneQty(selectedUnlinked?.stone_center_qty)} / ${formatStoneQty(selectedUnlinked?.stone_sub1_qty)} / ${formatStoneQty(selectedUnlinked?.stone_sub2_qty)}`;
-                    const diffClass = (value: string, base: string) => (value !== base ? "bg-amber-500/10" : "");
+                    const baseName = baseCode && baseCode !== "-" ? customerNameMap[baseCode] ?? "매칭되는 고객 없음" : "-";
+                    const baseModel = selectedUnlinked?.model_name ?? "-";
+                    const baseMaterial = selectedUnlinked?.material_code ?? "-";
+                    const baseColor = selectedUnlinked?.color ?? "-";
+                    const baseSize = selectedUnlinked?.size ?? "-";
+                    const basePlated = "-";
+                    const basePlatingColor = "-";
+                    const baseStone = `${formatStoneQty(selectedUnlinked?.stone_center_qty)}/${formatStoneQty(selectedUnlinked?.stone_sub1_qty)}/${formatStoneQty(selectedUnlinked?.stone_sub2_qty)}`;
+                    const baseMemo = selectedUnlinked?.remark ?? "-";
+                    const diffClass = (value: string, base: string) =>
+                      value !== base ? "text-amber-700 font-semibold" : "text-[var(--foreground)]";
                     return (
-                      <div className="max-h-[58vh] overflow-auto rounded-lg border border-[var(--panel-border)] bg-[var(--panel)]">
-                        <table className="w-full min-w-[1400px] text-[11px]">
-                          <thead className="sticky top-0 z-10 bg-[var(--panel)] text-[var(--muted)]">
+                      <div className="max-h-[58vh] overflow-y-scroll overflow-x-hidden rounded-lg border border-[var(--panel-border)] bg-[var(--panel)]">
+                        <table className="w-full table-fixed text-xs font-semibold">
+                          <thead className="sticky top-0 z-10 bg-[var(--panel)] text-[var(--muted)] font-bold">
                             <tr>
-                              <th className="px-2 py-2 text-left">구분</th>
-                              <th className="px-2 py-2 text-left">주문번호</th>
-                              <th className="px-2 py-2 text-left">주문일</th>
-                              <th className="px-2 py-2 text-left">상태</th>
-                              <th className="px-2 py-2 text-left">모델</th>
-                              <th className="px-2 py-2 text-left">소재</th>
-                              <th className="px-2 py-2 text-left">색상</th>
-                              <th className="px-2 py-2 text-left">사이즈</th>
-                              <th className="px-2 py-2 text-left">거래처코드</th>
-                              <th className="px-2 py-2 text-left">거래처명</th>
-                              <th className="px-2 py-2 text-left">도금</th>
-                              <th className="px-2 py-2 text-left">도금색상</th>
-                              <th className="px-2 py-2 text-left">원석(중/보1/보2)</th>
-                              <th className="px-2 py-2 text-left">중량범위</th>
-                              <th className="px-2 py-2 text-left">메모</th>
-                              <th className="px-2 py-2 text-right">점수</th>
-                              <th className="px-2 py-2 text-right">선택</th>
+                              <th className="w-[7%] px-1.5 py-2 text-left">구분</th>
+                              <th className="w-[13%] px-1.5 py-2 text-left">발주일/입고일</th>
+                              <th className="w-[14%] px-1.5 py-2 text-left">모델명</th>
+                              <th className="w-[5%] px-1.5 py-2 text-left">소재</th>
+                              <th className="w-[6%] px-1.5 py-2 text-left">색상</th>
+                              <th className="w-[8%] px-1.5 py-2 text-left">사이즈</th>
+                              <th className="w-[4%] px-1.5 py-2 text-left">도금</th>
+                              <th className="w-[7%] px-1.5 py-2 text-left">도금색상</th>
+                              <th className="w-[10%] px-1.5 py-2 text-left">거래처명</th>
+                              <th className="w-[7%] px-1.5 py-2 text-left">거래처코드</th>
+                              <th className="w-[8%] px-1.5 py-2 text-left">원석(중/보1/보2)</th>
+                              <th className="w-[4%] px-1.5 py-2 text-right">점수</th>
+                              <th className="w-[6%] px-1.5 py-2 text-right">선택</th>
                             </tr>
                           </thead>
                           <tbody>
-                            <tr className="border-t border-[var(--panel-border)] bg-[var(--surface)]/40">
-                              <td className="px-2 py-2 font-semibold">기준</td>
-                              <td className="px-2 py-2">-</td>
-                              <td className="px-2 py-2">-</td>
-                              <td className="px-2 py-2">-</td>
-                              <td className="px-2 py-2">{selectedUnlinked?.model_name ?? "-"}</td>
-                              <td className="px-2 py-2">{selectedUnlinked?.material_code ?? "-"}</td>
-                              <td className="px-2 py-2">{selectedUnlinked?.color ?? "-"}</td>
-                              <td className="px-2 py-2">{selectedUnlinked?.size ?? "-"}</td>
-                              <td className="px-2 py-2">{baseCode || "-"}</td>
-                              <td className="px-2 py-2">{baseCode ? customerNameMap[baseCode] ?? "매칭되는 고객 없음" : "-"}</td>
-                              <td className="px-2 py-2">-</td>
-                              <td className="px-2 py-2">-</td>
-                              <td className="px-2 py-2">{baseStone}</td>
-                              <td className="px-2 py-2">-</td>
-                              <td className="px-2 py-2">{selectedUnlinked?.remark ?? "-"}</td>
-                              <td className="px-2 py-2 text-right">-</td>
-                              <td className="px-2 py-2 text-right">-</td>
+                            <tr className="border-t border-[var(--panel-border)] bg-slate-100/80">
+                              <td className="px-1.5 py-2">
+                                <Badge tone="neutral" className="h-5 px-2 text-[10px]">기준</Badge>
+                              </td>
+                              <td className="px-1.5 py-2 font-bold text-[var(--foreground)]">{formatYmd(selectedUnlinked?.issued_at)}</td>
+                              <td className="px-1.5 py-2 truncate" title={baseModel}>{baseModel}</td>
+                              <td className="px-1.5 py-2 truncate" title={baseMaterial}>{baseMaterial}</td>
+                              <td className="px-1.5 py-2 truncate" title={baseColor}>{baseColor}</td>
+                              <td className="px-1.5 py-2 truncate" title={baseSize}>{baseSize}</td>
+                              <td className="px-1.5 py-2">{basePlated}</td>
+                              <td className="px-1.5 py-2 truncate" title={basePlatingColor}>{basePlatingColor}</td>
+                              <td className="px-1.5 py-2 truncate" title={baseName}>{baseName}</td>
+                              <td className="px-1.5 py-2 truncate" title={baseCode}>{baseCode}</td>
+                              <td className="px-1.5 py-2 truncate" title={baseStone}>{baseStone}</td>
+                              <td className="px-1.5 py-2 text-right">-</td>
+                              <td className="px-1.5 py-2 text-right">-</td>
+                            </tr>
+                            <tr className="border-t border-[var(--panel-border)] bg-[var(--surface)]/20">
+                              <td className="px-1.5 py-1.5 text-[10px] font-medium text-[var(--muted)]" colSpan={13}>
+                                비고: {baseMemo}
+                              </td>
                             </tr>
                             {suggestions.map((candidate, idx) => {
                               const key = candidate.order_line_id ?? `candidate-${idx}`;
                               const isSelected = selectedCandidate?.order_line_id === candidate.order_line_id;
-                              const stone = `${formatStoneQty(candidate.stone_center_qty)} / ${formatStoneQty(candidate.stone_sub1_qty)} / ${formatStoneQty(candidate.stone_sub2_qty)}`;
-                              const displayRange = getCandidateDisplayWeightRange(candidate, isSelected);
-                              const weightRange = displayRange
-                                ? `${formatNumber(displayRange.min)} ~ ${formatNumber(displayRange.max)}g`
-                                : "-";
-                              const platedLabel =
+                              const candidateModel = candidate.model_name ?? "-";
+                              const candidateMaterial = candidate.material_code ?? "-";
+                              const candidateColor = candidate.color ?? "-";
+                              const candidateSize = candidate.size ?? "-";
+                              const candidatePlated =
                                 candidate.is_plated === null || candidate.is_plated === undefined
                                   ? "-"
                                   : candidate.is_plated
                                     ? "Y"
                                     : "-";
+                              const candidatePlatingColor = candidate.plating_color_code ?? "-";
+                              const candidateName = candidate.customer_name ?? "-";
+                              const candidateCode = candidate.customer_mask_code ?? "-";
+                              const candidateStone = `${formatStoneQty(candidate.stone_center_qty)}/${formatStoneQty(candidate.stone_sub1_qty)}/${formatStoneQty(candidate.stone_sub2_qty)}`;
+                              const candidateMemo = candidate.memo ?? "-";
+                              const orderDayDiff = candidate.order_date
+                                ? Math.max(0, differenceInDays(new Date(), new Date(candidate.order_date)))
+                                : null;
                               return (
                                 <Fragment key={key}>
-                                  <tr className={cn("border-t border-[var(--panel-border)]", isSelected ? "bg-[var(--primary)]/5" : "")}> 
-                                    <td className="px-2 py-2">후보</td>
-                                    <td className="px-2 py-2">{candidate.order_no ?? "-"}</td>
-                                    <td className="px-2 py-2">{formatYmd(candidate.order_date)}</td>
-                                    <td className="px-2 py-2">{candidate.status ?? "-"}</td>
-                                    <td className={cn("px-2 py-2", diffClass(candidate.model_name ?? "-", selectedUnlinked?.model_name ?? "-"))}>{candidate.model_name ?? "-"}</td>
-                                    <td className={cn("px-2 py-2", diffClass(candidate.material_code ?? "-", selectedUnlinked?.material_code ?? "-"))}>{candidate.material_code ?? "-"}</td>
-                                    <td className={cn("px-2 py-2", diffClass(candidate.color ?? "-", selectedUnlinked?.color ?? "-"))}>{candidate.color ?? "-"}</td>
-                                    <td className={cn("px-2 py-2", diffClass(candidate.size ?? "-", selectedUnlinked?.size ?? "-"))}>{candidate.size ?? "-"}</td>
-                                    <td className={cn("px-2 py-2", diffClass(candidate.customer_mask_code ?? "-", baseCode))}>{candidate.customer_mask_code ?? "-"}</td>
-                                    <td className="px-2 py-2">{candidate.customer_name ?? "-"}</td>
-                                    <td className="px-2 py-2">{platedLabel}</td>
-                                    <td className="px-2 py-2">{candidate.plating_color_code ?? "-"}</td>
-                                    <td className={cn("px-2 py-2", diffClass(stone, baseStone))}>{stone}</td>
-                                    <td className="px-2 py-2">{weightRange}</td>
-                                    <td className="max-w-[220px] px-2 py-2">{candidate.memo ?? "-"}</td>
-                                    <td className="px-2 py-2 text-right">
-                                      <Badge tone="warning" className="h-5 px-2 text-[10px]">{formatNumber(candidate.match_score)}</Badge>
+                                  <tr className={cn("border-t border-[var(--panel-border)]", isSelected ? "bg-[var(--primary)]/8" : "bg-white")}> 
+                                    <td className="px-1.5 py-2">
+                                      <Badge tone={isSelected ? "active" : "warning"} className="h-5 px-2 text-[10px]">후보</Badge>
                                     </td>
-                                    <td className="px-2 py-2 text-right">
+                                    <td className="px-1.5 py-2 font-bold" title={formatYmd(candidate.order_date)}>
+                                      {orderDayDiff === null ? "-" : `[D+${orderDayDiff}]`} {formatYmd(candidate.order_date)}
+                                    </td>
+                                    <td className={cn("px-1.5 py-2 truncate", diffClass(candidateModel, baseModel))} title={candidateModel}>{candidateModel}</td>
+                                    <td className={cn("px-1.5 py-2 truncate", diffClass(candidateMaterial, baseMaterial))} title={candidateMaterial}>{candidateMaterial}</td>
+                                    <td className={cn("px-1.5 py-2 truncate", diffClass(candidateColor, baseColor))} title={candidateColor}>{candidateColor}</td>
+                                    <td className={cn("px-1.5 py-2 truncate", diffClass(candidateSize, baseSize))} title={candidateSize}>{candidateSize}</td>
+                                    <td className={cn("px-1.5 py-2", diffClass(candidatePlated, basePlated))}>{candidatePlated}</td>
+                                    <td className={cn("px-1.5 py-2 truncate", diffClass(candidatePlatingColor, basePlatingColor))} title={candidatePlatingColor}>{candidatePlatingColor}</td>
+                                    <td className={cn("px-1.5 py-2 truncate", diffClass(candidateName, baseName))} title={candidateName}>{candidateName}</td>
+                                    <td className={cn("px-1.5 py-2 truncate", diffClass(candidateCode, baseCode))} title={candidateCode}>{candidateCode}</td>
+                                    <td className={cn("px-1.5 py-2 truncate", diffClass(candidateStone, baseStone))} title={candidateStone}>{candidateStone}</td>
+                                    <td className="px-1.5 py-2 text-right">
+                                      <Badge tone="warning" className="h-5 px-1.5 text-[10px]">{formatNumber(candidate.match_score)}</Badge>
+                                    </td>
+                                    <td className="px-1.5 py-2 text-right">
                                       <Button
                                         size="sm"
                                         variant={isSelected ? "primary" : "secondary"}
@@ -5782,24 +5798,118 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                                       </Button>
                                     </td>
                                   </tr>
-                                  {isSelected ? (
+                                  <tr className="border-t border-[var(--panel-border)] bg-[var(--surface)]/20">
+                                    <td className={cn("px-1.5 py-1.5 text-[10px] font-medium", diffClass(candidateMemo, baseMemo))} colSpan={13}>
+                                      <div className="flex items-center justify-between gap-2">
+                                        <span>비고: {candidateMemo}</span>
+                                        <button
+                                          type="button"
+                                          className="text-[10px] text-[var(--primary)]"
+                                          onClick={() => setScoreOpenMap((prev) => ({ ...prev, [key]: !(prev[key] ?? false) }))}
+                                        >
+                                          {scoreOpenMap[key] ? "점수 상세 닫기" : "점수 상세 보기"}
+                                        </button>
+                                      </div>
+                                    </td>
+                                  </tr>
+                                  {scoreOpenMap[key] ? (
                                     <tr className="border-t border-[var(--panel-border)] bg-[var(--surface)]/30">
-                                      <td className="px-2 py-2 text-[10px] text-[var(--muted)]" colSpan={17}>
-                                        <div className="flex items-center gap-3">
-                                          <button
-                                            type="button"
-                                            className="text-[var(--primary)]"
-                                            onClick={() => setScoreOpenMap((prev) => ({ ...prev, [key]: !(prev[key] ?? false) }))}
-                                          >
-                                            {scoreOpenMap[key] ? "점수 상세 닫기" : "점수 상세 보기"}
-                                          </button>
-                                          <span>order_line_id: {candidate.order_line_id ?? "-"}</span>
-                                          <span>party_id: {candidate.customer_party_id ?? "-"}</span>
-                                        </div>
-                                        {scoreOpenMap[key] ? (
-                                          <pre className="mt-2 max-h-[24vh] overflow-auto rounded border border-[var(--panel-border)] bg-[var(--panel)] p-2 text-[10px] text-[var(--muted)]">{JSON.stringify(candidate.score_detail_json ?? {}, null, 2)}</pre>
-                                        ) : null}
-                                      </td>
+                                      {(() => {
+                                        const detail = (candidate.score_detail_json ?? {}) as Record<string, unknown>;
+                                        const modelDetail =
+                                          detail.model_name && typeof detail.model_name === "object"
+                                            ? (detail.model_name as Record<string, unknown>)
+                                            : null;
+                                        const customerDetail =
+                                          detail.customer_factory_code && typeof detail.customer_factory_code === "object"
+                                            ? (detail.customer_factory_code as Record<string, unknown>)
+                                            : null;
+                                        const memoDetail =
+                                          detail.memo_match && typeof detail.memo_match === "object"
+                                            ? (detail.memo_match as Record<string, unknown>)
+                                            : null;
+                                        const scoreBreakdown =
+                                          detail.score_breakdown && typeof detail.score_breakdown === "object"
+                                            ? (detail.score_breakdown as Record<string, unknown>)
+                                            : null;
+
+                                        const readScore = (value: unknown) =>
+                                          typeof value === "number"
+                                            ? value
+                                            : typeof value === "string" && value.trim() !== "" && !Number.isNaN(Number(value))
+                                              ? Number(value)
+                                              : 0;
+
+                                        const scoreModel =
+                                          scoreBreakdown !== null
+                                            ? readScore(scoreBreakdown.model_name)
+                                            : typeof modelDetail?.exact === "boolean"
+                                              ? modelDetail.exact
+                                                ? 60
+                                                : 0
+                                              : 0;
+                                        const scoreMaterial =
+                                          scoreBreakdown !== null
+                                            ? readScore(scoreBreakdown.material)
+                                            : typeof detail.material_code_match === "boolean"
+                                              ? detail.material_code_match
+                                                ? 15
+                                                : 0
+                                              : 0;
+                                        const scoreColor =
+                                          scoreBreakdown !== null
+                                            ? readScore(scoreBreakdown.color)
+                                            : typeof detail.color_match === "boolean"
+                                              ? detail.color_match
+                                                ? 10
+                                                : 0
+                                              : 0;
+                                        const scoreSize =
+                                          scoreBreakdown !== null
+                                            ? readScore(scoreBreakdown.size)
+                                            : typeof detail.size_match === "boolean"
+                                              ? detail.size_match
+                                                ? 10
+                                                : 0
+                                              : 0;
+                                        const scoreMemo =
+                                          scoreBreakdown !== null
+                                            ? readScore(scoreBreakdown.memo)
+                                            : typeof memoDetail?.exact === "boolean"
+                                              ? memoDetail.exact
+                                                ? 10
+                                                : typeof memoDetail?.partial === "boolean" && memoDetail.partial
+                                                  ? 5
+                                                  : 0
+                                              : 0;
+                                        const scoreCustomer =
+                                          scoreBreakdown !== null
+                                            ? readScore(scoreBreakdown.customer_factory_code)
+                                            : typeof customerDetail?.match === "boolean"
+                                              ? customerDetail.match
+                                                ? 5
+                                                : 0
+                                              : 0;
+                                        const scoreTotal = scoreModel + scoreMaterial + scoreColor + scoreSize + scoreMemo + scoreCustomer;
+
+                                        return (
+                                          <>
+                                            <td className="px-1.5 py-1.5 text-[10px] text-left">-</td>
+                                            <td className="px-1.5 py-1.5 text-[10px] text-left">-</td>
+                                            <td className="px-1.5 py-1.5 text-[10px] text-left">{scoreModel}점</td>
+                                            <td className="px-1.5 py-1.5 text-[10px] text-left">{scoreMaterial}점</td>
+                                            <td className="px-1.5 py-1.5 text-[10px] text-left">{scoreColor}점</td>
+                                            <td className="px-1.5 py-1.5 text-[10px] text-left">{scoreSize}점</td>
+                                            <td className="px-1.5 py-1.5 text-[10px] text-left">-</td>
+                                            <td className="px-1.5 py-1.5 text-[10px] text-left">-</td>
+                                            <td className="px-1.5 py-1.5 text-[10px] text-left">-</td>
+                                            <td className="px-1.5 py-1.5 text-[10px] text-left">{scoreCustomer}점</td>
+                                            <td className="px-1.5 py-1.5 text-[10px] text-left">-</td>
+                                            <td className="px-1.5 py-1.5 text-[10px] text-left font-bold text-blue-600">{scoreTotal}점</td>
+                                            <td className="px-1.5 py-1.5" />
+                                          </>
+                                        );
+                                      })()}
                                     </tr>
                                   ) : null}
                                 </Fragment>
