@@ -12,7 +12,7 @@ import {
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/field";
-import { getSchemaClient, getSupabaseClient } from "@/lib/supabase/client";
+import { getSupabaseClient } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
 
 type Amounts = ReceiptAmounts;
@@ -41,6 +41,7 @@ type LedgerStatementRow = {
     delta_total_krw: number;
     delta_shipment_krw: number;
     delta_return_krw: number;
+    delta_payment_krw?: number;
   };
   end_position: {
     balance_krw: number;
@@ -94,6 +95,9 @@ type LedgerStatementRow = {
       paid_at?: string | null;
       ledger_occurred_at?: string | null;
       cash_krw?: number | null;
+      alloc_gold_g?: number | null;
+      alloc_silver_g?: number | null;
+      alloc_labor_krw?: number | null;
       ledger_amount_krw?: number | null;
       ledger_memo?: string | null;
       note?: string | null;
@@ -128,7 +132,8 @@ type PartyReceiptPage = {
   lines: ReceiptLine[];
   totals: Amounts;
   previous: Amounts;
-  today: Amounts;
+  sales: Amounts;
+  dayPayment: Amounts;
 };
 
 const zeroAmounts: Amounts = { gold: 0, silver: 0, labor: 0, total: 0 };
@@ -159,6 +164,13 @@ const getKstYmd = () => {
   const utc = now.getTime() + now.getTimezoneOffset() * 60000;
   const kst = new Date(utc + 9 * 60 * 60000);
   return kst.toISOString().slice(0, 10);
+};
+
+const getKstStartIso = (ymd: string) => `${ymd}T00:00:00+09:00`;
+
+const getKstNextStartIso = (ymd: string) => {
+  const start = new Date(`${ymd}T00:00:00+09:00`);
+  return new Date(start.getTime() + 24 * 60 * 60 * 1000).toISOString();
 };
 
 const toKstPrintTimestamp = (value: Date) =>
@@ -200,9 +212,10 @@ const chunkLines = (lines: ReceiptLine[], size: number) => {
 };
 
 const buildSummaryRows = (page: PartyReceiptPage) => [
-  { label: "합계", value: page.totals },
+  { label: "당일결제", value: page.dayPayment },
   { label: "이전 미수", value: page.previous },
-  { label: "당일 미수", value: page.today },
+  { label: "판매", value: page.sales },
+  { label: "합계", value: page.totals },
 ];
 
 const isPartyPass = (checks: LedgerStatementRow["checks"]) =>
@@ -214,6 +227,9 @@ const toMessage = (error: unknown) => {
   if (error instanceof Error) return error.message;
   return "알 수 없는 오류가 발생했습니다.";
 };
+
+const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
+const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? "";
 
 const toNumber = (value: unknown) => {
   const n = Number(value);
@@ -228,6 +244,55 @@ const toObject = (value: unknown): Record<string, unknown> => {
 };
 
 const toArray = (value: unknown): unknown[] => (Array.isArray(value) ? value : []);
+
+const addAmounts = (a: Amounts, b: Amounts): Amounts => ({
+  gold: a.gold + b.gold,
+  silver: a.silver + b.silver,
+  labor: a.labor + b.labor,
+  total: a.total + b.total,
+});
+
+const materialBucket = (materialCode?: string | null) => {
+  const code = (materialCode ?? "").trim();
+  if (!code || code === "00") return { kind: "none" as const, factor: 0 };
+  if (code === "14") return { kind: "gold" as const, factor: 0.6435 };
+  if (code === "18") return { kind: "gold" as const, factor: 0.825 };
+  if (code === "24") return { kind: "gold" as const, factor: 1 };
+  if (code === "925") return { kind: "silver" as const, factor: 0.925 };
+  if (code === "999") return { kind: "silver" as const, factor: 1 };
+  return { kind: "none" as const, factor: 0 };
+};
+
+const toShipmentLineAmounts = (line: {
+  material_code?: string | null;
+  net_weight_g?: number | null;
+  labor_total_sell_krw?: number | null;
+  repair_fee_krw?: number | null;
+  material_amount_sell_krw?: number | null;
+  repair_line_id?: string | null;
+  amount_krw?: number | null;
+}): Amounts => {
+  const bucket = materialBucket(line.material_code ?? null);
+  const weight = Number(line.net_weight_g ?? 0);
+  const isRepair = Boolean(line.repair_line_id);
+  const repairLabor =
+    line.repair_fee_krw !== null && line.repair_fee_krw !== undefined
+      ? Number(line.repair_fee_krw)
+      : Number(line.labor_total_sell_krw ?? 0);
+  const labor = isRepair ? repairLabor : Number(line.labor_total_sell_krw ?? 0);
+
+  if (isRepair && Number(line.material_amount_sell_krw ?? 0) <= 0) {
+    return { gold: 0, silver: 0, labor, total: Number(line.amount_krw ?? 0) };
+  }
+
+  const pureWeight = weight * bucket.factor;
+  return {
+    gold: bucket.kind === "gold" ? pureWeight : 0,
+    silver: bucket.kind === "silver" ? pureWeight : 0,
+    labor,
+    total: Number(line.amount_krw ?? 0),
+  };
+};
 
 const normalizeLegacyRow = (row: LegacyLedgerStatementRow): LedgerStatementRow => {
   const prev = toObject(row.prev_position);
@@ -267,11 +332,12 @@ const normalizeLegacyRow = (row: LegacyLedgerStatementRow): LedgerStatementRow =
       gold_outstanding_g: toNumber(prev.gold_outstanding_g),
       silver_outstanding_g: toNumber(prev.silver_outstanding_g),
     },
-    day_ledger_totals: {
-      delta_total_krw: toNumber(day.delta_total_krw),
-      delta_shipment_krw: toNumber(day.delta_shipment_krw),
-      delta_return_krw: toNumber(day.delta_return_krw),
-    },
+      day_ledger_totals: {
+        delta_total_krw: toNumber(day.delta_total_krw),
+        delta_shipment_krw: toNumber(day.delta_shipment_krw),
+        delta_return_krw: toNumber(day.delta_return_krw),
+        delta_payment_krw: toNumber(day.delta_payment_krw),
+      },
     end_position: {
       balance_krw: toNumber(end.balance_krw),
       labor_cash_outstanding_krw: toNumber(end.labor_cash_outstanding_krw),
@@ -309,6 +375,8 @@ function ShipmentsPrintContent() {
   }, [printedAtParam, today]);
 
   const activePartyId = filterPartyId || null;
+  const dayStartIso = useMemo(() => getKstStartIso(today), [today]);
+  const dayEndIso = useMemo(() => getKstNextStartIso(today), [today]);
 
   const updateQuery = useCallback(
     (next: { date?: string; partyId?: string | null }) => {
@@ -333,15 +401,13 @@ function ShipmentsPrintContent() {
       const sortRows = (rows: LedgerStatementRow[]) =>
         [...rows].sort((a, b) => (a.party_name ?? "").localeCompare(b.party_name ?? "", "ko-KR"));
 
-      const params = new URLSearchParams({ date: today });
-      if (filterPartyId) {
-        params.set("party_id", filterPartyId);
-      }
-      const supabase = getSupabaseClient();
-      const token = supabase
-        ? ((await supabase.auth.getSession()).data.session?.access_token ?? "")
-        : "";
       try {
+        const params = new URLSearchParams({ date: today });
+        if (filterPartyId) params.set("party_id", filterPartyId);
+        const supabase = getSupabaseClient();
+        const token = supabase
+          ? ((await supabase.auth.getSession()).data.session?.access_token ?? "")
+          : "";
         const response = await fetch(`/api/shipments-print-ledger-statement?${params.toString()}`, {
           method: "GET",
           cache: "no-store",
@@ -359,33 +425,54 @@ function ShipmentsPrintContent() {
         if (payload?.error) throw new Error(payload.error);
         return sortRows(payload?.data ?? []);
       } catch (apiError) {
-        const schemaClient = getSchemaClient();
-        if (!schemaClient) throw apiError;
-        const rpc = schemaClient.rpc as unknown as (
-          fn: string,
-          args: { p_party_ids: string[] | null; p_kst_date: string }
-        ) => Promise<{ data: LedgerStatementRow[] | null; error: { message?: string } | null }>;
-        const { data, error } = await rpc("cms_fn_shipments_print_ledger_statement_v2", {
-          p_party_ids: filterPartyId ? [filterPartyId] : null,
-          p_kst_date: today,
-        });
-        if (!error) return sortRows(data ?? []);
-
-        const legacyRpc = schemaClient.rpc as unknown as (
-          fn: string,
-          args: { p_party_ids: string[] | null; p_kst_date: string }
-        ) => Promise<{ data: LegacyLedgerStatementRow[] | null; error: { message?: string } | null }>;
-        const { data: legacyData, error: legacyError } = await legacyRpc(
-          "cms_fn_shipments_print_ledger_statement_v1",
-          {
-            p_party_ids: filterPartyId ? [filterPartyId] : null,
-            p_kst_date: today,
-          }
-        );
-        if (legacyError) {
-          throw new Error(`원장 명세 조회 실패: v2=${error.message ?? "unknown"} | v1=${legacyError.message ?? "unknown"}`);
+        if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
+          throw new Error(`원장 명세 조회 실패: api=${toMessage(apiError)} (Supabase public env missing)`);
         }
-        return sortRows((legacyData ?? []).map(normalizeLegacyRow));
+
+        const supabase = getSupabaseClient();
+        const token = supabase
+          ? ((await supabase.auth.getSession()).data.session?.access_token ?? SUPABASE_ANON_KEY)
+          : SUPABASE_ANON_KEY;
+
+        const callRpc = async <T,>(fn: "cms_fn_shipments_print_ledger_statement_v2" | "cms_fn_shipments_print_ledger_statement_v1") => {
+          const response = await fetch(`${SUPABASE_URL}/rest/v1/rpc/${fn}`, {
+            method: "POST",
+            headers: {
+              apikey: SUPABASE_ANON_KEY,
+              Authorization: `Bearer ${token}`,
+              "Content-Type": "application/json",
+              "Accept-Profile": "public",
+              "Content-Profile": "public",
+            },
+            body: JSON.stringify({
+              p_party_ids: filterPartyId ? [filterPartyId] : null,
+              p_kst_date: today,
+            }),
+          });
+          let payload: T | null = null;
+          let text = "";
+          try {
+            payload = (await response.json()) as T;
+          } catch {
+            text = await response.text();
+          }
+          if (!response.ok) {
+            throw new Error(text || `rpc ${fn} failed (${response.status})`);
+          }
+          return payload;
+        };
+
+        try {
+          const v2Rows = (await callRpc<LedgerStatementRow[]>("cms_fn_shipments_print_ledger_statement_v2")) ?? [];
+          return sortRows(v2Rows);
+        } catch (v2Err) {
+          try {
+            const v1Rows = (await callRpc<LegacyLedgerStatementRow[]>("cms_fn_shipments_print_ledger_statement_v1")) ?? [];
+            return sortRows(v1Rows.map(normalizeLegacyRow));
+          } catch (v1Err) {
+            throw new Error(`원장 명세 조회 실패: api=${toMessage(apiError)} | rest-v2=${toMessage(v2Err)} | rest-v1=${toMessage(v1Err)}`);
+          }
+        }
       }
     },
     staleTime: 30_000,
@@ -454,6 +541,62 @@ function ShipmentsPrintContent() {
     });
   }, [statementQuery.data]);
 
+  const paymentFallbackQuery = useQuery({
+    queryKey: ["shipments-print-payment-fallback", today, filterPartyId],
+    queryFn: async () => {
+      const supabase = getSupabaseClient();
+      if (!supabase) return [] as Array<{ party_id: string; payment_id: string; occurred_at: string; amount_krw: number }>;
+      let query = supabase
+        .from("cms_ar_ledger")
+        .select("party_id,payment_id,occurred_at,amount_krw")
+        .eq("entry_type", "PAYMENT")
+        .gte("occurred_at", dayStartIso)
+        .lt("occurred_at", dayEndIso)
+        .order("occurred_at", { ascending: false });
+      if (filterPartyId) {
+        query = query.eq("party_id", filterPartyId);
+      }
+      const { data, error } = await query;
+      if (error) return [];
+      return (data ?? []) as Array<{ party_id: string; payment_id: string; occurred_at: string; amount_krw: number }>;
+    },
+    enabled: true,
+    staleTime: 30_000,
+    refetchOnWindowFocus: false,
+  });
+
+  const paymentFallbackByParty = useMemo(() => {
+    const map = new Map<string, Array<LedgerStatementRow["details"]["payments"] extends Array<infer T> ? T : never>>();
+    (paymentFallbackQuery.data ?? []).forEach((row) => {
+      const partyId = (row.party_id ?? "").toString();
+      if (!partyId) return;
+      const current = map.get(partyId) ?? [];
+      current.push({
+        payment_id: row.payment_id,
+        paid_at: row.occurred_at,
+        ledger_occurred_at: row.occurred_at,
+        cash_krw: -Number(row.amount_krw ?? 0),
+        alloc_gold_g: 0,
+        alloc_silver_g: 0,
+        alloc_labor_krw: 0,
+        ledger_amount_krw: Number(row.amount_krw ?? 0),
+        ledger_memo: null,
+        note: null,
+      });
+      map.set(partyId, current);
+    });
+    return map;
+  }, [paymentFallbackQuery.data]);
+
+  const getPartyPayments = useCallback(
+    (group: PartyGroup) => {
+      const statementPayments = group.statement.details.payments ?? [];
+      if (statementPayments.length > 0) return statementPayments;
+      return paymentFallbackByParty.get(group.partyId) ?? [];
+    },
+    [paymentFallbackByParty]
+  );
+
   const receiptPages = useMemo<PartyReceiptPage[]>(() => {
     const pages: PartyReceiptPage[] = [];
     partyGroups.forEach((group) => {
@@ -461,9 +604,44 @@ function ShipmentsPrintContent() {
       const end = group.statement.end_position;
       const day = group.statement.day_ledger_totals;
 
+      const partyPayments = getPartyPayments(group);
+      const shipmentSales = (group.statement.details.shipments ?? []).reduce<Amounts>(
+        (sum, shipment) => {
+          const shipmentSum = (shipment.lines ?? []).reduce<Amounts>(
+            (lineSum, line) => addAmounts(lineSum, toShipmentLineAmounts(line)),
+            { ...zeroAmounts }
+          );
+          return addAmounts(sum, shipmentSum);
+        },
+        { ...zeroAmounts }
+      );
+
+      const paymentAmounts = partyPayments.reduce<Amounts>(
+        (sum, payment) => ({
+          gold: sum.gold + Number(payment.alloc_gold_g ?? 0),
+          silver: sum.silver + Number(payment.alloc_silver_g ?? 0),
+          labor: sum.labor + Number(payment.alloc_labor_krw ?? 0),
+          total:
+            sum.total +
+            Number(
+              payment.cash_krw ??
+                (payment.ledger_amount_krw !== null && payment.ledger_amount_krw !== undefined
+                  ? -payment.ledger_amount_krw
+                  : 0)
+            ),
+        }),
+        { ...zeroAmounts }
+      );
+
       const pageTemplate: Omit<PartyReceiptPage, "lines"> = {
         partyId: group.partyId,
         partyName: group.partyName,
+        dayPayment: {
+          gold: paymentAmounts.gold,
+          silver: paymentAmounts.silver,
+          labor: paymentAmounts.labor,
+          total: -Number(day.delta_payment_krw ?? paymentAmounts.total),
+        },
         totals: {
           gold: Number(end.gold_outstanding_g ?? 0),
           silver: Number(end.silver_outstanding_g ?? 0),
@@ -476,11 +654,11 @@ function ShipmentsPrintContent() {
           labor: Number(prev.labor_cash_outstanding_krw ?? 0),
           total: Number(prev.balance_krw ?? 0),
         },
-        today: {
-          gold: Number(end.gold_outstanding_g ?? 0) - Number(prev.gold_outstanding_g ?? 0),
-          silver: Number(end.silver_outstanding_g ?? 0) - Number(prev.silver_outstanding_g ?? 0),
-          labor: Number(end.labor_cash_outstanding_krw ?? 0) - Number(prev.labor_cash_outstanding_krw ?? 0),
-          total: Number(day.delta_total_krw ?? 0),
+        sales: {
+          gold: shipmentSales.gold,
+          silver: shipmentSales.silver,
+          labor: shipmentSales.labor,
+          total: Number(day.delta_shipment_krw ?? shipmentSales.total),
         },
       };
 
@@ -499,12 +677,13 @@ function ShipmentsPrintContent() {
         lines: [],
         totals: { ...zeroAmounts },
         previous: { ...zeroAmounts },
-        today: { ...zeroAmounts },
+        sales: { ...zeroAmounts },
+        dayPayment: { ...zeroAmounts },
       });
     }
 
     return pages;
-  }, [partyGroups]);
+  }, [getPartyPayments, partyGroups]);
 
   const pageChecks = useMemo(
     () =>
@@ -544,40 +723,31 @@ function ShipmentsPrintContent() {
     [partyGroups]
   );
 
-  const recentPaymentByParty = useMemo(
+  const dayPaymentByParty = useMemo(
     () =>
       partyGroups.map((group) => {
-        const latest = [...(group.statement.details.payments ?? [])]
-          .sort(
-            (a, b) =>
-              new Date(b.paid_at ?? b.ledger_occurred_at ?? 0).getTime() -
-              new Date(a.paid_at ?? a.ledger_occurred_at ?? 0).getTime()
-          )[0];
+        const partyPayments = getPartyPayments(group);
         return {
           partyId: group.partyId,
-          paidAt: latest?.paid_at ?? latest?.ledger_occurred_at ?? null,
-          amount: latest
-            ? Number(
-                latest.cash_krw ??
-                  (latest.ledger_amount_krw !== undefined && latest.ledger_amount_krw !== null
-                    ? -latest.ledger_amount_krw
-                    : 0)
-              )
-            : null,
+          amount: -Number(group.statement.day_ledger_totals.delta_payment_krw ?? 0),
+          paymentCount: partyPayments.length,
         };
       }),
+    [getPartyPayments, partyGroups]
+  );
+
+  const dayPaymentOverall = useMemo(
+    () =>
+      partyGroups.reduce(
+        (sum, group) => sum - Number(group.statement.day_ledger_totals.delta_payment_krw ?? 0),
+        0
+      ),
     [partyGroups]
   );
 
-  const recentPaymentOverall = useMemo(() => {
-    const rows = recentPaymentByParty.filter((row) => row.paidAt);
-    if (rows.length === 0) return null;
-    return [...rows].sort((a, b) => new Date(b.paidAt ?? 0).getTime() - new Date(a.paidAt ?? 0).getTime())[0];
-  }, [recentPaymentByParty]);
-
-  const recentPaymentByPartyMap = useMemo(
-    () => new Map(recentPaymentByParty.map((row) => [row.partyId, row])),
-    [recentPaymentByParty]
+  const dayPaymentByPartyMap = useMemo(
+    () => new Map(dayPaymentByParty.map((row) => [row.partyId, row])),
+    [dayPaymentByParty]
   );
 
   const isLoading = statementQuery.isLoading;
@@ -700,15 +870,8 @@ function ShipmentsPrintContent() {
               </Card>
               <Card className="border-[var(--panel-border)]">
                 <CardBody className="p-4">
-                  <div className="text-xs text-[var(--muted)]">최근 결제</div>
-                  {recentPaymentOverall ? (
-                    <>
-                      <div className="text-sm font-semibold tabular-nums">{formatDateTimeKst(recentPaymentOverall.paidAt)}</div>
-                      <div className="text-sm tabular-nums">{formatKrw(recentPaymentOverall.amount)}</div>
-                    </>
-                  ) : (
-                    <div className="text-sm text-[var(--muted)]">당일 결제 없음</div>
-                  )}
+                  <div className="text-xs text-[var(--muted)]">당일 결제 합계(원장 SOT)</div>
+                  <div className="text-xl font-semibold tabular-nums">{formatKrw(dayPaymentOverall)}</div>
                 </CardBody>
               </Card>
             </div>
@@ -734,7 +897,7 @@ function ShipmentsPrintContent() {
                     {partyGroups.map((group) => {
                       const isActive = group.partyId === activePartyId;
                       const partyPass = isPartyPass(group.statement.checks);
-                      const recentPayment = recentPaymentByPartyMap.get(group.partyId) ?? null;
+                      const dayPayment = dayPaymentByPartyMap.get(group.partyId) ?? null;
                       return (
                         <button
                           key={group.partyId}
@@ -750,7 +913,7 @@ function ShipmentsPrintContent() {
                             {group.lines.length}건 · {partyPass ? "PASS" : "FAIL"}
                           </div>
                           <div className="text-[11px] text-[var(--muted)] tabular-nums mt-1">
-                            최근결제: {recentPayment?.paidAt ? `${formatDateTimeKst(recentPayment.paidAt)} · ${formatKrw(recentPayment.amount)}` : "없음"}
+                            당일결제: {formatKrw(dayPayment?.amount ?? 0)} · {dayPayment?.paymentCount ?? 0}건
                           </div>
                         </button>
                       );
@@ -818,6 +981,61 @@ function ShipmentsPrintContent() {
                   })}
                 </div>
               )}
+
+              <div className="space-y-4">
+                {visiblePartyGroups.map((group) => {
+                  const payments = getPartyPayments(group)
+                    .slice()
+                    .sort(
+                    (a, b) =>
+                      new Date(b.paid_at ?? b.ledger_occurred_at ?? 0).getTime() -
+                      new Date(a.paid_at ?? a.ledger_occurred_at ?? 0).getTime()
+                  );
+                  return (
+                    <Card key={`payments-${group.partyId}`} className="border-[var(--panel-border)]">
+                      <CardHeader className="border-b border-[var(--panel-border)] py-3">
+                        <div className="text-sm font-semibold">당일결제 내역(원장 SOT) · {group.partyName}</div>
+                        <div className="text-xs text-[var(--muted)] tabular-nums">합계 {formatKrw(payments.reduce((sum, payment) => {
+                          const amount =
+                            payment.cash_krw !== null && payment.cash_krw !== undefined
+                              ? Number(payment.cash_krw)
+                              : payment.ledger_amount_krw !== null && payment.ledger_amount_krw !== undefined
+                                ? -Number(payment.ledger_amount_krw)
+                                : 0;
+                          return sum + amount;
+                        }, 0))} · {payments.length}건</div>
+                      </CardHeader>
+                      <CardBody className="p-4">
+                        {payments.length === 0 ? (
+                          <div className="text-xs text-[var(--muted)]">당일 결제 내역 없음</div>
+                        ) : (
+                          <div className="space-y-2 text-xs">
+                            {payments.map((payment, index) => {
+                              const amount =
+                                payment.cash_krw !== null && payment.cash_krw !== undefined
+                                  ? Number(payment.cash_krw)
+                                  : payment.ledger_amount_krw !== null && payment.ledger_amount_krw !== undefined
+                                    ? -Number(payment.ledger_amount_krw)
+                                    : 0;
+                              return (
+                                <div
+                                  key={`${payment.payment_id ?? "payment"}-${payment.ledger_occurred_at ?? index}`}
+                                  className="flex items-center justify-between gap-4 tabular-nums"
+                                >
+                                  <div className="truncate">
+                                    {formatDateTimeKst(payment.paid_at ?? payment.ledger_occurred_at)} · {payment.payment_id ?? "-"}
+                                  </div>
+                                  <div className="font-semibold">{formatKrw(amount)}</div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </CardBody>
+                    </Card>
+                  );
+                })}
+              </div>
             </div>
 
             <div className="receipt-print-root shipments-print-root print-only space-y-6">
