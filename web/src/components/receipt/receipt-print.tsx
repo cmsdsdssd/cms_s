@@ -357,23 +357,23 @@ export const ReceiptPrintHalf = ({
               const isTodaySummaryRow = row.label === "반품/조정/상계";
 
               return (
-                <tr key={row.label} className={cn("border-b border-neutral-200", isTodaySummaryRow && "border-b-2 border-neutral-400")}>
-                  <td className={cn("py-1 font-medium", isCoreSummaryRow && "font-semibold")}>
-                    {row.label === "당일 반품" ? <span className="text-blue-600">{row.label}</span> : row.label}
-                  </td>
-                  <td className={cn("py-1 text-right tabular-nums", isCoreSummaryRow && "font-semibold", row.label === "당일 반품" && "text-blue-600")}>
-                    {formatWeight(row.value.gold)}
-                  </td>
-                  <td className={cn("py-1 text-right tabular-nums", isCoreSummaryRow && "font-semibold", row.label === "당일 반품" && "text-blue-600")}>
-                    {formatWeight(row.value.silver)}
-                  </td>
-                  <td className={cn("py-1 text-right tabular-nums", isCoreSummaryRow && "font-semibold", row.label === "당일 반품" && "text-blue-600")}>
-                    {formatKrw(row.value.labor)}
-                  </td>
-                  <td className={cn("py-1 text-right tabular-nums", isCoreSummaryRow && "font-semibold", row.label === "당일 반품" && "text-blue-600")}>
-                    {formatKrw(row.value.total)}
-                  </td>
-                </tr>
+              <tr key={row.label} className={cn("border-b border-neutral-200", isTodaySummaryRow && "border-b-2 border-neutral-400")}>
+                <td className={cn("py-1 font-medium", isCoreSummaryRow && "font-semibold")}>
+                  {row.label === "당일 반품" ? <span className="text-blue-600">{row.label}</span> : row.label}
+                </td>
+                <td className={cn("py-1 text-right tabular-nums", isCoreSummaryRow && "font-semibold", row.label === "당일 반품" && "text-blue-600")}>
+                  {formatWeight(row.value.gold)}
+                </td>
+                <td className={cn("py-1 text-right tabular-nums", isCoreSummaryRow && "font-semibold", row.label === "당일 반품" && "text-blue-600")}>
+                  {formatWeight(row.value.silver)}
+                </td>
+                <td className={cn("py-1 text-right tabular-nums", isCoreSummaryRow && "font-semibold", row.label === "당일 반품" && "text-blue-600")}>
+                  {formatKrw(row.value.labor)}
+                </td>
+                <td className={cn("py-1 text-right tabular-nums", isCoreSummaryRow && "font-semibold", row.label === "당일 반품" && "text-blue-600")}>
+                  {formatKrw(row.value.total)}
+                </td>
+              </tr>
               );
             })}
           </tbody>

@@ -1468,9 +1468,9 @@ export default function ArPage() {
                           const isServiceWriteoff = isServiceWriteoffEntry(row);
                           const entryLabel = getLedgerEntryLabel(row);
                           const entryToneClass = isShipment
-                            ? "border-[var(--primary)] bg-[var(--chip)] text-red-700 font-bold"
+                            ? "border-red-600 bg-red-100 text-red-700 font-extrabold"
                             : isReturn
-                              ? "border-[var(--primary)] bg-[var(--chip)] text-blue-700 font-bold"
+                              ? "border-[var(--primary)] bg-[var(--chip)] text-[var(--primary)] font-bold"
                               : isPayment
                                 ? "border-[var(--primary)] bg-[var(--chip)] text-[var(--primary)]"
                                 : isAdjust
@@ -1527,8 +1527,8 @@ export default function ArPage() {
                                     isShipment
                                       ? "text-red-600 dark:text-red-400"
                                       : isReturn
-                                        ? "text-blue-600 dark:text-blue-400"
-                                        : isPayment
+                                        ? "text-[var(--primary)]"
+                                        : isPayment || isAdjust
                                           ? "text-[var(--primary)]"
                                           : ""
                                   )}
@@ -1648,8 +1648,9 @@ export default function ArPage() {
                   {/* Action Panel */}
                   <Card className="flex-1 shadow-sm border-2 border-[var(--panel-border)]">
                     <CardHeader className="border-b border-[var(--panel-border)] p-4">
-                      <div className="grid grid-cols-2 gap-2">
+                      <div className="grid grid-cols-3 gap-2">
                         <Button
+                          className="whitespace-nowrap"
                           variant={actionTab === "payment" ? "primary" : "secondary"}
                           onClick={() => setActionTab("payment")}
                         >
@@ -1657,6 +1658,7 @@ export default function ArPage() {
                         </Button>
 
                         <Button
+                          className="whitespace-nowrap"
                           variant={actionTab === "return" ? "primary" : "secondary"}
                           onClick={() => setActionTab("return")}
                         >
@@ -1664,6 +1666,15 @@ export default function ArPage() {
                         </Button>
 
                         <Button
+                          className="whitespace-nowrap"
+                          variant={actionTab === "service_writeoff" ? "primary" : "secondary"}
+                          onClick={() => setActionTab("service_writeoff")}
+                        >
+                          <CheckCircle className="w-4 h-4 mr-2" /> 완불처리
+                        </Button>
+
+                        <Button
+                          className="whitespace-nowrap"
                           variant={actionTab === "offset" ? "primary" : "secondary"}
                           onClick={() => setActionTab("offset")}
                         >
@@ -1671,6 +1682,7 @@ export default function ArPage() {
                         </Button>
 
                         <Button
+                          className="whitespace-nowrap"
                           variant={actionTab === "adjust_down" ? "primary" : "secondary"}
                           onClick={() => setActionTab("adjust_down")}
                         >
@@ -1678,19 +1690,11 @@ export default function ArPage() {
                         </Button>
 
                         <Button
-                          className="col-span-2"
+                          className="whitespace-nowrap"
                           variant={actionTab === "adjust_up" ? "primary" : "secondary"}
                           onClick={() => setActionTab("adjust_up")}
                         >
                           <ArrowUpRight className="w-4 h-4 mr-2" /> 조정-증가
-                        </Button>
-
-                        <Button
-                          className="col-span-2"
-                          variant={actionTab === "service_writeoff" ? "primary" : "secondary"}
-                          onClick={() => setActionTab("service_writeoff")}
-                        >
-                          <CheckCircle className="w-4 h-4 mr-2" /> 완불처리(≤₩1,000)
                         </Button>
                       </div>
                     </CardHeader>
@@ -2756,6 +2760,7 @@ function DetailsModal({
   const isShipment = row.entry_type === "SHIPMENT";
   const isReturn = row.entry_type === "RETURN";
   const isPayment = (row.entry_type ?? "").toUpperCase().includes("PAYMENT");
+  const isAdjust = (row.entry_type ?? "").toUpperCase() === "ADJUST";
   const title = isShipment ? "매출 상세" : isReturn ? "반품 상세" : isPayment ? "결제 상세" : "거래 내역 상세";
 
   return (
@@ -2776,14 +2781,14 @@ function DetailsModal({
           </div>
           <div className="col-span-2">
             <span className="block text-[var(--muted)] text-xs mb-1">금액</span>
-            <span className={cn(
-              "text-xl font-bold tabular-nums",
-              isShipment ? "text-red-600 dark:text-red-400" :
-                isReturn ? "text-blue-600 dark:text-blue-400" :
-                  isPayment ? "text-[var(--primary)]" : ""
-            )}>
-              {formatKrw(row.amount_krw)}
-            </span>
+              <span className={cn(
+                "text-xl font-bold tabular-nums",
+                isShipment ? "text-red-600 dark:text-red-400" :
+                isReturn ? "text-[var(--primary)]" :
+                  isPayment || isAdjust ? "text-[var(--primary)]" : ""
+              )}>
+                {formatKrw(row.amount_krw)}
+              </span>
           </div>
         </div>
 
