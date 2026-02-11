@@ -38,6 +38,7 @@ export const navItems: NavItem[] = [
       { label: "주문", href: "/orders_main", icon: ClipboardList },
       { label: "영수증/매칭", href: "/new_receipt_line_workbench", icon: ClipboardList },
       { label: "출고", href: "/shipments_main", icon: PackageCheck },
+      { label: "출고 분석", href: "/shipments_analysis", icon: TrendingUp },
     ],
   },
   {
