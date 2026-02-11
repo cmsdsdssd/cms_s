@@ -17,7 +17,7 @@ import {
 import { format, differenceInDays } from "date-fns";
 import { toast } from "sonner";
 
-import { ActionBar } from "@/components/layout/action-bar";
+
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input, Select, Textarea } from "@/components/ui/field";
@@ -858,8 +858,9 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
 
   const [statusFilter, setStatusFilter] = useState(DEFAULT_STATUS_FILTER);
   const [vendorFilter, setVendorFilter] = useState("");
-  const [fromDate, setFromDate] = useState(() => getDefaultRangeDateByMonths(DEFAULT_RANGE_MONTHS));
+  const [fromDate, setFromDate] = useState(() => getDefaultRangeDateByMonths(0));
   const [toDate, setToDate] = useState(() => getDefaultRangeDateByMonths(0));
+  const [filterExpanded, setFilterExpanded] = useState(false);
   const [unlinkedOnly, setUnlinkedOnly] = useState(true);
   const [limit, setLimit] = useState(50);
   const [lineLimit, setLineLimit] = useState(50);
@@ -3141,7 +3142,7 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
   const isMatchFocusMode = false;
   const matchPanelMinHeight = null;
   const matchExpandRef = useRef<HTMLDivElement | null>(null);
-  const setMatchPanelExpandedSafely = useCallback((_value: boolean) => {}, []);
+  const setMatchPanelExpandedSafely = useCallback((_value: boolean) => { }, []);
   const isWorkbenchExpanded = isPreviewExpanded;
 
   const openMatchDrawer = useCallback(
@@ -3319,34 +3320,64 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
   const previewFrameClass = isPreviewExpanded ? "h-[70vh]" : "h-[55vh]";
 
   return (
-    <div className="mx-auto max-w-[1900px] space-y-6 px-4 pb-10 pt-4 md:px-6">
-      <div className="rounded-[18px] border border-[var(--panel-border)] bg-[var(--panel)]/70 p-4 shadow-[0_10px_30px_rgba(15,23,42,0.06)] backdrop-blur">
-        <ActionBar
-          title="NEW 영수증/매칭 워크벤치"
-          subtitle="영수증 업로드부터 라인 입력, 매칭 확정까지 한 화면에서 처리합니다."
-          actions={
+    <div className="mx-auto max-w-[1900px] space-y-4 px-4 pb-10 pt-4 md:px-6">
+      <div className="rounded-[12px] border border-[var(--panel-border)] bg-[var(--panel)]/70 p-3 shadow-sm backdrop-blur">
+        <div className="flex flex-col gap-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="flex items-center gap-2">
-              <Button variant="secondary" size="sm" onClick={() => receiptsQuery.refetch()} disabled={busy}>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setFilterExpanded(!filterExpanded)}
+                className="h-8 gap-1 text-xs"
+              >
+                {filterExpanded ? "필터 접기" : "필터 펼치기"}
+              </Button>
+
+              <div className="flex items-center gap-2">
+                <Input
+                  type="date"
+                  value={fromDate}
+                  onChange={(e) => setFromDate(e.target.value)}
+                  className="h-8 w-[130px] text-xs"
+                />
+                <span className="text-[var(--muted)]">~</span>
+                <Input
+                  type="date"
+                  value={toDate}
+                  onChange={(e) => setToDate(e.target.value)}
+                  className="h-8 w-[130px] text-xs"
+                />
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  className="h-8 px-2 text-xs"
+                  onClick={() => {
+                    const today = getDefaultRangeDateByMonths(0);
+                    setFromDate(today);
+                    setToDate(today);
+                  }}
+                >
+                  오늘
+                </Button>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <Button variant="secondary" size="sm" onClick={() => receiptsQuery.refetch()} disabled={busy} className="h-8 text-xs">
                 새로고침
               </Button>
-              <Button size="sm" onClick={() => setUploadOpen(true)} disabled={busy}>
+              <Button size="sm" onClick={() => setUploadOpen(true)} disabled={busy} className="h-8 gap-1.5 text-xs">
                 영수증 업로드
               </Button>
             </div>
-          }
-        />
-      </div>
+          </div>
 
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-12 items-start">
-        <div className={cn("space-y-4", isWorkbenchExpanded ? "lg:hidden" : "lg:col-span-3")}>
-          <Card className="border-none shadow-sm ring-1 ring-black/5">
-            <CardHeader className="border-b border-[var(--panel-border)] bg-[var(--panel)]/50 px-4 py-3">
-              <div className="text-sm font-semibold">영수증 필터</div>
-            </CardHeader>
-            <CardBody className="space-y-3 p-4">
+          {filterExpanded && (
+            <div className="grid grid-cols-1 gap-4 border-t border-[var(--border)] pt-3 md:grid-cols-4">
               <div className="space-y-1.5">
-                <label className="text-xs font-semibold uppercase tracking-wider text-[var(--muted)]">상태</label>
-                <Select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
+                <label className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)]">상태</label>
+                <Select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="h-8 text-xs">
                   {statusOptions.map((status) => (
                     <option key={status} value={status}>
                       {status}
@@ -3354,52 +3385,31 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                   ))}
                 </Select>
               </div>
-
               <div className="space-y-1.5">
-                <label className="text-xs font-semibold uppercase tracking-wider text-[var(--muted)]">미매칭</label>
-                <Select value={unlinkedOnly ? "only" : "all"} onChange={(e) => setUnlinkedOnly(e.target.value === "only")}
-                >
+                <label className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)]">미매칭 여부</label>
+                <Select value={unlinkedOnly ? "only" : "all"} onChange={(e) => setUnlinkedOnly(e.target.value === "only")} className="h-8 text-xs">
                   <option value="only">미매칭만</option>
                   <option value="all">전체</option>
                 </Select>
               </div>
-
-              <SearchSelect
-                label="공장"
-                placeholder="검색 (* 입력 시 전체)"
-                options={[{ label: "전체", value: "" }, ...vendorOptions]}
-                value={vendorFilter}
-                onChange={(value) => setVendorFilter(value)}
-                showResultsOnEmptyQuery={false}
-              />
-
-              <div className="grid grid-cols-2 gap-2">
-                <div className="space-y-1.5">
-                  <label className="text-xs font-semibold uppercase tracking-wider text-[var(--muted)]">시작일</label>
-                  <Input type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)} />
-                </div>
-                <div className="space-y-1.5">
-                  <label className="text-xs font-semibold uppercase tracking-wider text-[var(--muted)]">종료일</label>
-                  <Input type="date" value={toDate} onChange={(e) => setToDate(e.target.value)} />
-                </div>
+              <div className="col-span-1 space-y-1.5 md:col-span-2">
+                <SearchSelect
+                  label="공장"
+                  placeholder="검색 (* 입력 시 전체)"
+                  options={[{ label: "전체", value: "" }, ...vendorOptions]}
+                  value={vendorFilter}
+                  onChange={(value) => setVendorFilter(value)}
+                  showResultsOnEmptyQuery={false}
+                />
               </div>
+            </div>
+          )}
+        </div>
+      </div>
 
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => {
-                  setStatusFilter(DEFAULT_STATUS_FILTER);
-                  setVendorFilter("");
-                  setFromDate(getDefaultRangeDateByMonths(DEFAULT_RANGE_MONTHS));
-                  setToDate(getDefaultRangeDateByMonths(0));
-                  setUnlinkedOnly(true);
-                  setLimit(50);
-                }}
-              >
-                필터 초기화
-              </Button>
-            </CardBody>
-          </Card>
+      <div className="grid grid-cols-1 gap-6 items-start lg:grid-cols-12">
+        <div className={cn("space-y-4", isWorkbenchExpanded ? "lg:hidden" : "lg:col-span-3")}>
+
 
           <Card className="flex-1 border-none shadow-sm ring-1 ring-black/5">
             <CardHeader className="border-b border-[var(--panel-border)] bg-[var(--panel)]/50 px-4 py-3">
@@ -5766,7 +5776,7 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                                 : null;
                               return (
                                 <Fragment key={key}>
-                                  <tr className={cn("border-t border-[var(--panel-border)]", isSelected ? "bg-[var(--primary)]/8" : "bg-white")}> 
+                                  <tr className={cn("border-t border-[var(--panel-border)]", isSelected ? "bg-[var(--primary)]/8" : "bg-white")}>
                                     <td className="px-1.5 py-2">
                                       <Badge tone={isSelected ? "active" : "warning"} className="h-5 px-2 text-[10px]">후보</Badge>
                                     </td>

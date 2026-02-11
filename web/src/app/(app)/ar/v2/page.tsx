@@ -1807,6 +1807,48 @@ export default function ArPage() {
                                 onChange={(e) => setPaymentCashKrw(e.target.value)}
                                 placeholder="0"
                               />
+                              <div className="flex justify-end gap-2 pt-1">
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  variant="secondary"
+                                  className="border-emerald-300 bg-emerald-100 text-emerald-700 hover:bg-emerald-200 hover:border-emerald-400"
+                                  onClick={() => {
+                                    const currentCash = Number(paymentCashKrw.replace(/,/g, "").trim());
+                                    const nextCash = Number.isFinite(currentCash) && currentCash > 0
+                                      ? Math.floor(currentCash / 1000) * 1000
+                                      : 0;
+                                    setPaymentCashKrw(new Intl.NumberFormat("ko-KR").format(nextCash));
+                                  }}
+                                >
+                                  {(() => {
+                                    const currentCash = Number(paymentCashKrw.replace(/,/g, "").trim());
+                                    const normalizedCash = Number.isFinite(currentCash) && currentCash > 0 ? currentCash : 0;
+                                    const removedCash = normalizedCash - Math.floor(normalizedCash / 1000) * 1000;
+                                    return `천원단위 맞춤 (${formatKrw(removedCash)})`;
+                                  })()}
+                                </Button>
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  variant="secondary"
+                                  className="border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 hover:border-emerald-300"
+                                  onClick={() => {
+                                    const currentCash = Number(paymentCashKrw.replace(/,/g, "").trim());
+                                    const nextCash = Number.isFinite(currentCash) && currentCash > 0
+                                      ? Math.floor(currentCash / 100) * 100
+                                      : 0;
+                                    setPaymentCashKrw(new Intl.NumberFormat("ko-KR").format(nextCash));
+                                  }}
+                                >
+                                  {(() => {
+                                    const currentCash = Number(paymentCashKrw.replace(/,/g, "").trim());
+                                    const normalizedCash = Number.isFinite(currentCash) && currentCash > 0 ? currentCash : 0;
+                                    const removedCash = normalizedCash - Math.floor(normalizedCash / 100) * 100;
+                                    return `백원단위 맞춤 (${formatKrw(removedCash)})`;
+                                  })()}
+                                </Button>
+                              </div>
                             </div>
                             <div className="space-y-1">
                               <label className="text-xs font-semibold text-[var(--muted)]">금 (g)</label>

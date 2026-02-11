@@ -254,13 +254,17 @@ export const ReceiptPrintHalf = ({
               const modelLabel = hasContent
                 ? `${index + 1}. ${typeLabel} ${modelWithReturnPrefix}`.trim()
                 : "";
+              const total = Number(line.total_amount_sell_krw ?? 0);
               const labor =
                 line.labor_total_sell_krw !== null && line.labor_total_sell_krw !== undefined
                   ? Number(line.labor_total_sell_krw)
                   : line.repair_fee_krw !== null && line.repair_fee_krw !== undefined
                     ? Number(line.repair_fee_krw)
                     : 0;
-              const total = Number(line.total_amount_sell_krw ?? 0);
+              const unitPricingLabor =
+                line.labor_total_sell_krw !== null && line.labor_total_sell_krw !== undefined
+                  ? Number(line.labor_total_sell_krw)
+                  : total;
               const buildPriceFormula = () => {
                 if (!hasContent) return { materialExpr: "", labor, total, isUnitPricing };
                 const code = (line.material_code ?? "").trim();
@@ -270,7 +274,7 @@ export const ReceiptPrintHalf = ({
                 const silverFactor = Number(line.silver_adjust_factor ?? 1);
                 const materialSell = Number(line.material_amount_sell_krw ?? 0);
                 if (isUnitPricing) {
-                  return { materialExpr: "", labor, total, isUnitPricing: true };
+                  return { materialExpr: "", labor: unitPricingLabor, total, isUnitPricing: true };
                 }
 
                 let pureWeight = 0;
@@ -344,7 +348,7 @@ export const ReceiptPrintHalf = ({
                     </td>
                     <td className="py-1 text-right tabular-nums">
                       {hasContent && isUnitPricing
-                        ? "-"
+                        ? formatKrw(unitPricingLabor)
                         : isRepair
                           ? (() => {
                             const repairCash = line.repair_fee_krw;
@@ -369,7 +373,7 @@ export const ReceiptPrintHalf = ({
                       {priceFormula.materialExpr}
                     </td>
                     <td className="py-1 text-right text-[10px] tabular-nums text-neutral-600">
-                      {hasContent ? (priceFormula.isUnitPricing ? "" : `+ ${formatKrw(priceFormula.labor)}`) : ""}
+                      {hasContent ? `+ ${formatKrw(priceFormula.labor)}` : ""}
                     </td>
                     <td className="py-1 text-right text-[10px] tabular-nums text-neutral-600">
                       {hasContent ? (priceFormula.isUnitPricing ? formatKrw(priceFormula.total) : `= ${formatKrw(priceFormula.total)}`) : ""}

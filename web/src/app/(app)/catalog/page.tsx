@@ -231,6 +231,8 @@ export default function CatalogPage() {
   const [uploadingImage, setUploadingImage] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [centerQty, setCenterQty] = useState(0);
   const [sub1Qty, setSub1Qty] = useState(0);
@@ -1238,6 +1240,36 @@ export default function CatalogPage() {
     }
   };
 
+  const handleDeleteMaster = async () => {
+    const targetMasterId = masterId.trim();
+    if (!targetMasterId) {
+      toast.error("처리 실패", { description: "삭제 대상 마스터 ID가 없습니다." });
+      return;
+    }
+
+    setIsDeleting(true);
+    try {
+      const response = await fetch(`/api/master-item?id=${encodeURIComponent(targetMasterId)}`, {
+        method: "DELETE",
+      });
+      const result = (await response.json()) as { error?: string };
+      if (!response.ok) {
+        throw new Error(result.error ?? "삭제에 실패했습니다.");
+      }
+
+      toast.success("마스터 삭제 완료");
+      setDeleteConfirmOpen(false);
+      setRegisterOpen(false);
+      setIsEditMode(false);
+      void fetchCatalogItems();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "삭제에 실패했습니다.";
+      toast.error("처리 실패", { description: message });
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
   const openDetailDrawer = (id: string) => {
     setSelectedItemId(id);
     setIsDetailDrawerOpen(true);
@@ -1833,14 +1865,25 @@ export default function CatalogPage() {
               </div>
             </div>
             <div className="sticky bottom-0 flex items-center justify-end gap-2 border-t border-[var(--panel-border)] bg-[var(--panel)] pt-4">
+              {isEditMode ? (
+                <Button
+                  variant="danger"
+                  type="button"
+                  onClick={() => setDeleteConfirmOpen(true)}
+                  disabled={isSaving || isDeleting}
+                >
+                  삭제
+                </Button>
+              ) : null}
               <Button
                 variant="secondary"
                 type="button"
                 onClick={() => setRegisterOpen(false)}
+                disabled={isDeleting}
               >
                 취소
               </Button>
-              <Button type="submit" disabled={!canSave || isSaving}>
+              <Button type="submit" disabled={!canSave || isSaving || isDeleting}>
                 저장
               </Button>
             </div>
@@ -2904,6 +2947,21 @@ export default function CatalogPage() {
 
       {renderRegisterDrawer()}
       {renderImageOverlay()}
+
+      <Modal open={deleteConfirmOpen} onClose={() => setDeleteConfirmOpen(false)} title="마스터 삭제">
+        <div className="space-y-6">
+          <div className="text-sm text-[var(--foreground)]">
+            <p>선택한 마스터를 삭제합니다.</p>
+            <p className="mt-1 text-[var(--muted)]">이 작업은 되돌릴 수 없습니다.</p>
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button variant="secondary" onClick={() => setDeleteConfirmOpen(false)} disabled={isDeleting}>취소</Button>
+            <Button variant="danger" onClick={handleDeleteMaster} disabled={isDeleting}>
+              {isDeleting ? "삭제 중..." : "삭제"}
+            </Button>
+          </div>
+        </div>
+      </Modal>
     </>
   );
 }

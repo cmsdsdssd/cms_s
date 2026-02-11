@@ -120,3 +120,49 @@ export async function POST(request: Request) {
 
   return NextResponse.json({ master_id: masterId ?? undefined });
 }
+
+export async function DELETE(request: Request) {
+  const supabase = getSupabaseAdmin();
+  if (!supabase) {
+    return NextResponse.json({ error: "Supabase 환경 변수가 설정되지 않았습니다." }, { status: 500 });
+  }
+
+  const { searchParams } = new URL(request.url);
+  const masterId = String(searchParams.get("id") ?? searchParams.get("master_id") ?? "").trim();
+  if (!masterId) {
+    return NextResponse.json({ error: "삭제할 master_id(id) 값이 필요합니다." }, { status: 400 });
+  }
+
+  const { data: existingRow, error: findError } = await supabase
+    .from("cms_master_item")
+    .select("master_id")
+    .eq("master_id", masterId)
+    .maybeSingle();
+
+  if (findError) {
+    return NextResponse.json({ error: findError.message ?? "삭제 대상 확인에 실패했습니다." }, { status: 400 });
+  }
+
+  if (!existingRow?.master_id) {
+    return NextResponse.json({ error: "삭제할 마스터를 찾을 수 없습니다." }, { status: 404 });
+  }
+
+  const { error: deleteError } = await supabase
+    .from("cms_master_item")
+    .delete()
+    .eq("master_id", masterId);
+
+  if (deleteError) {
+    const isReferenceError = deleteError.code === "23503";
+    return NextResponse.json(
+      {
+        error: isReferenceError
+          ? "이 마스터를 참조하는 데이터가 있어 삭제할 수 없습니다. 먼저 연결된 데이터를 정리해 주세요."
+          : deleteError.message ?? "삭제에 실패했습니다.",
+      },
+      { status: 400 }
+    );
+  }
+
+  return NextResponse.json({ ok: true, master_id: masterId });
+}
