@@ -374,7 +374,7 @@ function WorkbenchContent() {
   const getStorePickupPrintUrl = () => {
     const dateParam = format(new Date(), "yyyy-MM-dd");
     const printedAt = getKstPrintTimestamp();
-    return `/shipments_print?mode=store_pickup&party_id=${encodeURIComponent(
+    return `/shipments_print?party_id=${encodeURIComponent(
       partyId
     )}&date=${encodeURIComponent(dateParam)}&printed_at=${encodeURIComponent(printedAt)}`;
   };

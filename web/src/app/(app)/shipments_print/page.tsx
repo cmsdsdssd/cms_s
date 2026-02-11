@@ -65,6 +65,7 @@ type LedgerStatementRow = {
         qty?: number | null;
         material_code?: string | null;
         net_weight_g?: number | null;
+        silver_adjust_factor?: number | null;
         color?: string | null;
         size?: string | null;
         labor_total_sell_krw?: number | null;
@@ -126,14 +127,14 @@ type PartyGroup = {
   lines: ReceiptLine[];
 };
 
+type LedgerPaymentDetail = NonNullable<LedgerStatementRow["details"]["payments"]>[number];
+
 type PartyReceiptPage = {
   partyId: string;
   partyName: string;
   lines: ReceiptLine[];
   totals: Amounts;
   previous: Amounts;
-  sales: Amounts;
-  dayPayment: Amounts;
 };
 
 const zeroAmounts: Amounts = { gold: 0, silver: 0, labor: 0, total: 0 };
@@ -212,9 +213,16 @@ const chunkLines = (lines: ReceiptLine[], size: number) => {
 };
 
 const buildSummaryRows = (page: PartyReceiptPage) => [
-  { label: "당일결제", value: page.dayPayment },
   { label: "이전 미수", value: page.previous },
-  { label: "판매", value: page.sales },
+  {
+    label: "당일 미수",
+    value: {
+      gold: Number(page.totals.gold ?? 0) - Number(page.previous.gold ?? 0),
+      silver: Number(page.totals.silver ?? 0) - Number(page.previous.silver ?? 0),
+      labor: Number(page.totals.labor ?? 0) - Number(page.previous.labor ?? 0),
+      total: Number(page.totals.total ?? 0) - Number(page.previous.total ?? 0),
+    },
+  },
   { label: "합계", value: page.totals },
 ];
 
@@ -245,55 +253,6 @@ const toObject = (value: unknown): Record<string, unknown> => {
 
 const toArray = (value: unknown): unknown[] => (Array.isArray(value) ? value : []);
 
-const addAmounts = (a: Amounts, b: Amounts): Amounts => ({
-  gold: a.gold + b.gold,
-  silver: a.silver + b.silver,
-  labor: a.labor + b.labor,
-  total: a.total + b.total,
-});
-
-const materialBucket = (materialCode?: string | null) => {
-  const code = (materialCode ?? "").trim();
-  if (!code || code === "00") return { kind: "none" as const, factor: 0 };
-  if (code === "14") return { kind: "gold" as const, factor: 0.6435 };
-  if (code === "18") return { kind: "gold" as const, factor: 0.825 };
-  if (code === "24") return { kind: "gold" as const, factor: 1 };
-  if (code === "925") return { kind: "silver" as const, factor: 0.925 };
-  if (code === "999") return { kind: "silver" as const, factor: 1 };
-  return { kind: "none" as const, factor: 0 };
-};
-
-const toShipmentLineAmounts = (line: {
-  material_code?: string | null;
-  net_weight_g?: number | null;
-  labor_total_sell_krw?: number | null;
-  repair_fee_krw?: number | null;
-  material_amount_sell_krw?: number | null;
-  repair_line_id?: string | null;
-  amount_krw?: number | null;
-}): Amounts => {
-  const bucket = materialBucket(line.material_code ?? null);
-  const weight = Number(line.net_weight_g ?? 0);
-  const isRepair = Boolean(line.repair_line_id);
-  const repairLabor =
-    line.repair_fee_krw !== null && line.repair_fee_krw !== undefined
-      ? Number(line.repair_fee_krw)
-      : Number(line.labor_total_sell_krw ?? 0);
-  const labor = isRepair ? repairLabor : Number(line.labor_total_sell_krw ?? 0);
-
-  if (isRepair && Number(line.material_amount_sell_krw ?? 0) <= 0) {
-    return { gold: 0, silver: 0, labor, total: Number(line.amount_krw ?? 0) };
-  }
-
-  const pureWeight = weight * bucket.factor;
-  return {
-    gold: bucket.kind === "gold" ? pureWeight : 0,
-    silver: bucket.kind === "silver" ? pureWeight : 0,
-    labor,
-    total: Number(line.amount_krw ?? 0),
-  };
-};
-
 const normalizeLegacyRow = (row: LegacyLedgerStatementRow): LedgerStatementRow => {
   const prev = toObject(row.prev_position);
   const day = toObject(row.day_ledger_totals);
@@ -308,16 +267,16 @@ const normalizeLegacyRow = (row: LegacyLedgerStatementRow): LedgerStatementRow =
     return "-";
   };
 
-  const shipmentLinesSum = toArray(details.shipments).reduce((partySum, shipment) => {
+  const shipmentLinesSum = toArray(details.shipments).reduce<number>((partySum, shipment) => {
     return (
       partySum +
-      toArray(toObject(shipment).lines).reduce(
+      toArray(toObject(shipment).lines).reduce<number>(
         (lineSum, line) => lineSum + toNumber(toObject(line).amount_krw),
         0
       )
     );
   }, 0);
-  const returnSum = toArray(details.returns).reduce(
+  const returnSum = toArray(details.returns).reduce<number>(
     (sum, ret) => sum + toNumber(toObject(ret).amount_krw),
     0
   );
@@ -491,6 +450,7 @@ function ShipmentsPrintContent() {
           qty: line.qty ?? null,
           material_code: line.material_code ?? null,
           net_weight_g: line.net_weight_g ?? null,
+          silver_adjust_factor: line.silver_adjust_factor ?? null,
           color: line.color ?? null,
           size: line.size ?? null,
           labor_total_sell_krw: line.labor_total_sell_krw ?? null,
@@ -566,7 +526,7 @@ function ShipmentsPrintContent() {
   });
 
   const paymentFallbackByParty = useMemo(() => {
-    const map = new Map<string, Array<LedgerStatementRow["details"]["payments"] extends Array<infer T> ? T : never>>();
+    const map = new Map<string, LedgerPaymentDetail[]>();
     (paymentFallbackQuery.data ?? []).forEach((row) => {
       const partyId = (row.party_id ?? "").toString();
       if (!partyId) return;
@@ -602,46 +562,10 @@ function ShipmentsPrintContent() {
     partyGroups.forEach((group) => {
       const prev = group.statement.prev_position;
       const end = group.statement.end_position;
-      const day = group.statement.day_ledger_totals;
-
-      const partyPayments = getPartyPayments(group);
-      const shipmentSales = (group.statement.details.shipments ?? []).reduce<Amounts>(
-        (sum, shipment) => {
-          const shipmentSum = (shipment.lines ?? []).reduce<Amounts>(
-            (lineSum, line) => addAmounts(lineSum, toShipmentLineAmounts(line)),
-            { ...zeroAmounts }
-          );
-          return addAmounts(sum, shipmentSum);
-        },
-        { ...zeroAmounts }
-      );
-
-      const paymentAmounts = partyPayments.reduce<Amounts>(
-        (sum, payment) => ({
-          gold: sum.gold + Number(payment.alloc_gold_g ?? 0),
-          silver: sum.silver + Number(payment.alloc_silver_g ?? 0),
-          labor: sum.labor + Number(payment.alloc_labor_krw ?? 0),
-          total:
-            sum.total +
-            Number(
-              payment.cash_krw ??
-                (payment.ledger_amount_krw !== null && payment.ledger_amount_krw !== undefined
-                  ? -payment.ledger_amount_krw
-                  : 0)
-            ),
-        }),
-        { ...zeroAmounts }
-      );
 
       const pageTemplate: Omit<PartyReceiptPage, "lines"> = {
         partyId: group.partyId,
         partyName: group.partyName,
-        dayPayment: {
-          gold: paymentAmounts.gold,
-          silver: paymentAmounts.silver,
-          labor: paymentAmounts.labor,
-          total: -Number(day.delta_payment_krw ?? paymentAmounts.total),
-        },
         totals: {
           gold: Number(end.gold_outstanding_g ?? 0),
           silver: Number(end.silver_outstanding_g ?? 0),
@@ -653,12 +577,6 @@ function ShipmentsPrintContent() {
           silver: Number(prev.silver_outstanding_g ?? 0),
           labor: Number(prev.labor_cash_outstanding_krw ?? 0),
           total: Number(prev.balance_krw ?? 0),
-        },
-        sales: {
-          gold: shipmentSales.gold,
-          silver: shipmentSales.silver,
-          labor: shipmentSales.labor,
-          total: Number(day.delta_shipment_krw ?? shipmentSales.total),
         },
       };
 
@@ -677,13 +595,11 @@ function ShipmentsPrintContent() {
         lines: [],
         totals: { ...zeroAmounts },
         previous: { ...zeroAmounts },
-        sales: { ...zeroAmounts },
-        dayPayment: { ...zeroAmounts },
       });
     }
 
     return pages;
-  }, [getPartyPayments, partyGroups]);
+  }, [partyGroups]);
 
   const pageChecks = useMemo(
     () =>
@@ -994,16 +910,8 @@ function ShipmentsPrintContent() {
                   return (
                     <Card key={`payments-${group.partyId}`} className="border-[var(--panel-border)]">
                       <CardHeader className="border-b border-[var(--panel-border)] py-3">
-                        <div className="text-sm font-semibold">당일결제 내역(원장 SOT) · {group.partyName}</div>
-                        <div className="text-xs text-[var(--muted)] tabular-nums">합계 {formatKrw(payments.reduce((sum, payment) => {
-                          const amount =
-                            payment.cash_krw !== null && payment.cash_krw !== undefined
-                              ? Number(payment.cash_krw)
-                              : payment.ledger_amount_krw !== null && payment.ledger_amount_krw !== undefined
-                                ? -Number(payment.ledger_amount_krw)
-                                : 0;
-                          return sum + amount;
-                        }, 0))} · {payments.length}건</div>
+        <div className="text-sm font-semibold">당일결제 내역(원장 SOT) · {group.partyName}</div>
+        <div className="text-xs text-[var(--muted)] tabular-nums">합계 {formatKrw(-Number(group.statement.day_ledger_totals.delta_payment_krw ?? 0))} · {payments.length}건</div>
                       </CardHeader>
                       <CardBody className="p-4">
                         {payments.length === 0 ? (
@@ -1012,11 +920,9 @@ function ShipmentsPrintContent() {
                           <div className="space-y-2 text-xs">
                             {payments.map((payment, index) => {
                               const amount =
-                                payment.cash_krw !== null && payment.cash_krw !== undefined
-                                  ? Number(payment.cash_krw)
-                                  : payment.ledger_amount_krw !== null && payment.ledger_amount_krw !== undefined
-                                    ? -Number(payment.ledger_amount_krw)
-                                    : 0;
+                                payment.ledger_amount_krw !== null && payment.ledger_amount_krw !== undefined
+                                  ? -Number(payment.ledger_amount_krw)
+                                  : 0;
                               return (
                                 <div
                                   key={`${payment.payment_id ?? "payment"}-${payment.ledger_occurred_at ?? index}`}

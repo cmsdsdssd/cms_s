@@ -40,7 +40,7 @@ const formatKrw = (value?: number | null) => {
 const formatWeight = (value?: number | null) => {
   if (value === null || value === undefined) return "-";
   return `${new Intl.NumberFormat("ko-KR", {
-    minimumFractionDigits: 0,
+    minimumFractionDigits: 3,
     maximumFractionDigits: 3,
   }).format(value)}g`;
 };

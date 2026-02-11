@@ -96,14 +96,14 @@ const normalizeLegacyRow = (row: LegacyLedgerStatementRow): LedgerStatementRow =
   const end = toObject(row.end_position);
   const details = toObject(row.details);
 
-  const shipmentLinesSum = toArray(details.shipments).reduce((partySum, shipment) => {
+  const shipmentLinesSum = toArray(details.shipments).reduce<number>((partySum, shipment) => {
     const lines = toArray(toObject(shipment).lines);
     return (
       partySum +
-      lines.reduce((lineSum, line) => lineSum + toNumber(toObject(line).amount_krw), 0)
+      lines.reduce<number>((lineSum, line) => lineSum + toNumber(toObject(line).amount_krw), 0)
     );
   }, 0);
-  const returnSum = toArray(details.returns).reduce(
+  const returnSum = toArray(details.returns).reduce<number>(
     (sum, ret) => sum + toNumber(toObject(ret).amount_krw),
     0
   );

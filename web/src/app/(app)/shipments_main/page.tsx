@@ -563,7 +563,7 @@ export default function ShipmentsMainPage() {
               variant="secondary"
               onClick={() => {
                 const printedAt = getKstPrintTimestamp();
-                window.location.href = `/shipments_print?mode=all&date=${encodeURIComponent(receiptDate)}&printed_at=${encodeURIComponent(printedAt)}`;
+                window.location.href = `/shipments_print?date=${encodeURIComponent(receiptDate)}&printed_at=${encodeURIComponent(printedAt)}`;
               }}
             >
               오늘 전체출고 영수증
