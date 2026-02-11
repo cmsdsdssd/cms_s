@@ -11,11 +11,12 @@ import { Card, CardBody, CardHeader } from "@/components/ui/card";
 import { ListCard } from "@/components/ui/list-card";
 import { KpiCard } from "@/components/ui/kpi-card";
 import { Button } from "@/components/ui/button";
+import { Sheet } from "@/components/ui/sheet";
 import { Input, Select, Textarea } from "@/components/ui/field";
 import { SearchSelect } from "@/components/ui/search-select";
 import { Modal } from "@/components/ui/modal";
 import { Badge } from "@/components/ui/badge";
-import { Search, RotateCcw, Wrench } from "lucide-react";
+import { Search, RotateCcw, Wrench, CircleCheckBig, TriangleAlert } from "lucide-react";
 import { useRpcMutation } from "@/hooks/use-rpc-mutation";
 import { CONTRACTS } from "@/lib/contracts";
 import { getSchemaClient } from "@/lib/supabase/client";
@@ -363,6 +364,12 @@ export default function RepairsPage() {
     return map;
   }, [masterQuery.data]);
 
+  const createPartyLabel = useMemo(() => {
+    if (!createPartyId) return "";
+    return (partiesQuery.data ?? []).find((option) => option.value === createPartyId)?.label ?? "";
+  }, [createPartyId, partiesQuery.data]);
+  const hasCreatePartyMatch = Boolean(createPartyId && createPartyLabel);
+
   // ---- data: plating options
   const platingQuery = useQuery<PlatingOption[]>({
     queryKey: ["plating-options"],
@@ -607,6 +614,7 @@ export default function RepairsPage() {
   const canSaveDetail = Boolean(selectedRepair && detailDraft && !updateRepairMutation.isPending);
   const isSendActionPending = sendToShipmentMutation.isPending || confirmShipmentMutation.isPending;
   const canSend = Boolean(selectedRepair && !isSendActionPending);
+  const canSubmitCreate = Boolean(!createRepairMutation.isPending && hasCreatePartyMatch);
 
   const closeSendModalAndReset = () => {
     setSendOpen(false);
@@ -708,6 +716,8 @@ export default function RepairsPage() {
 
   const handleSubmitCreate = async () => {
     if (!createPartyId) throw new Error("거래처를 선택하세요");
+    const isValidParty = (partiesQuery.data ?? []).some((option) => option.value === createPartyId);
+    if (!isValidParty) throw new Error("거래처 매칭을 다시 선택하세요");
     lastCreatePartyIdRef.current = createPartyId;
     const lines = createLines
       .map((line) => {
@@ -1384,282 +1394,329 @@ export default function RepairsPage() {
       </div>
 
       {/* Modals */}
-      <Modal
+      <Sheet
         open={createOpen}
-        onClose={() => {
-          setCreateOpen(false);
-          setCreateLineFiles({});
+        onOpenChange={(open) => {
+          if (!open) {
+            setCreateOpen(false);
+            setCreateLineFiles({});
+          }
         }}
         title="수리 접수"
         description="거래처를 선택하고, 여러 라인을 한 번에 접수할 수 있습니다."
+        className="w-full lg:w-[1000px] sm:max-w-none"
       >
-        <div className="space-y-4">
-          <SearchSelect
-            label="거래처(필수)"
-            placeholder="거래처 검색"
-            options={partiesQuery.data ?? []}
-            value={createPartyId}
-            onChange={(value) => setCreatePartyId(value)}
-            floating
-          />
-
-          <div>
-            <p className="mb-1 text-xs font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">헤더 메모(선택)</p>
-            <Input value={createHeaderNote} onChange={(e) => setCreateHeaderNote(e.target.value)} placeholder="예: 고객이 방문 예정" />
-          </div>
-
-          <div className="space-y-3">
-            <div className="flex items-center justify-between">
-              <div className="text-sm font-semibold">라인</div>
-              <Button
-                variant="secondary"
-                onClick={() => setCreateLines((prev) => [...prev, createEmptyLine()])}
-              >
-                라인 추가
-              </Button>
+        <div className="h-full overflow-y-auto p-6 scrollbar-hide">
+          <div className="space-y-4">
+            <SearchSelect
+              label="거래처(필수)"
+              placeholder="거래처 검색"
+              options={partiesQuery.data ?? []}
+              value={createPartyId}
+              onChange={(value) => setCreatePartyId(value)}
+              clearValueOnType
+              floating
+            />
+            <div
+              className={cn(
+                "rounded-[12px] border px-3 py-2 text-xs",
+                hasCreatePartyMatch
+                  ? "border-emerald-300 bg-emerald-50 text-emerald-800"
+                  : "border-amber-300 bg-amber-50 text-amber-800"
+              )}
+            >
+              {hasCreatePartyMatch ? (
+                <div className="flex items-center gap-2 font-medium">
+                  <CircleCheckBig className="h-3.5 w-3.5" />
+                  고객 매칭 완료 · {createPartyLabel}
+                </div>
+              ) : (
+                <div className="flex items-center gap-2 font-medium">
+                  <TriangleAlert className="h-3.5 w-3.5" />
+                  고객 미매칭 · 목록에서 고객을 선택해야 미수가 정확히 반영됩니다
+                </div>
+              )}
             </div>
 
-            {createLines.map((line, idx) => (
-              <Card key={line.id} className="border-[var(--panel-border)]">
-                <CardBody className="p-4 space-y-3">
-                  <div className="flex items-center justify-between">
-                    <div className="text-sm font-semibold">#{idx + 1}</div>
-                    {createLines.length > 1 ? (
-                      <Button
-                        variant="ghost"
-                        onClick={() => setCreateLines((prev) => prev.filter((v) => v.id !== line.id))}
-                      >
-                        삭제
-                      </Button>
-                    ) : null}
-                  </div>
+            <div>
+              <p className="mb-1 text-xs font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">헤더 메모(선택)</p>
+              <Input value={createHeaderNote} onChange={(e) => setCreateHeaderNote(e.target.value)} placeholder="예: 고객이 방문 예정" />
+            </div>
 
-                  <SearchSelect
-                    label="모델 선택(선택)"
-                    placeholder="모델명 검색"
-                    options={masterOptions}
-                    value={line.modelId}
-                    onChange={(value) => handleCreateLineModelChange(line.id, value)}
-                    floating
-                    columns={2}
-                  />
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="text-sm font-semibold">라인</div>
+                <Button
+                  variant="secondary"
+                  onClick={() => setCreateLines((prev) => [...prev, createEmptyLine()])}
+                >
+                  라인 추가
+                </Button>
+              </div>
 
-                  <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-                    <div>
-                      <p className="mb-1 text-xs font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">모델명(필수)</p>
-                      <Input
-                        value={line.modelText}
-                        onChange={(e) =>
-                          setCreateLines((prev) => prev.map((v) => (v.id === line.id ? { ...v, modelText: e.target.value } : v)))
-                        }
-                        placeholder="예: 루체 반지"
-                      />
+              {createLines.map((line, idx) => (
+                <Card key={line.id} className="border-[var(--panel-border)]">
+                  <CardBody className="p-4 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <div className="text-sm font-semibold">#{idx + 1}</div>
+                      {createLines.length > 1 ? (
+                        <Button
+                          variant="ghost"
+                          onClick={() => setCreateLines((prev) => prev.filter((v) => v.id !== line.id))}
+                        >
+                          삭제
+                        </Button>
+                      ) : null}
                     </div>
-                    <div>
-                      <p className="mb-1 text-xs font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">수량(필수)</p>
-                      <Input
-                        type="number"
-                        value={line.qty}
-                        onChange={(e) =>
-                          setCreateLines((prev) => prev.map((v) => (v.id === line.id ? { ...v, qty: e.target.value } : v)))
-                        }
-                      />
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-                    <div>
-                      <p className="mb-1 text-xs font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">소재</p>
-                      <Select
-                        value={line.materialCode}
-                        onChange={(e) =>
-                          setCreateLines((prev) => prev.map((v) => (v.id === line.id ? { ...v, materialCode: e.target.value } : v)))
-                        }
-                      >
-                        <option value="">-</option>
-                        {MATERIAL_OPTIONS.map((m) => (
-                          <option key={m.value} value={m.value}>
-                            {m.label}
-                          </option>
-                        ))}
-                      </Select>
-                    </div>
-                    <div>
-                      <p className="mb-1 text-xs font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">우선순위</p>
-                      <Select
-                        value={line.priorityCode}
-                        onChange={(e) =>
-                          setCreateLines((prev) => prev.map((v) => (v.id === line.id ? { ...v, priorityCode: e.target.value as CreateLineDraft["priorityCode"] } : v)))
-                        }
-                      >
-                        {PRIORITY_OPTIONS.map((p) => (
-                          <option key={p.value} value={p.value}>
-                            {p.label}
-                          </option>
-                        ))}
-                      </Select>
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-                    <div>
-                      <p className="mb-1 text-xs font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">납기</p>
-                      <Input
-                        type="date"
-                        value={line.requestedDueDate}
-                        onChange={(e) =>
-                          setCreateLines((prev) => prev.map((v) => (v.id === line.id ? { ...v, requestedDueDate: e.target.value } : v)))
-                        }
-                        autoFormat={false}
-                      />
-                    </div>
-                    <div>
-                      <p className="mb-1 text-xs font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">색상</p>
-                      <Input
-                        value={line.color}
-                        onChange={(e) =>
-                          setCreateLines((prev) => prev.map((v) => (v.id === line.id ? { ...v, color: e.target.value } : v)))
-                        }
-                        placeholder="예: W / Y / G"
-                      />
-                    </div>
-                  </div>
-
-                  <div>
-                    <p className="mb-1 text-xs font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">수리 내용(필수)</p>
-                    <Textarea
-                      rows={3}
-                      value={line.issueDesc}
-                      onChange={(e) =>
-                        setCreateLines((prev) => prev.map((v) => (v.id === line.id ? { ...v, issueDesc: e.target.value } : v)))
-                      }
-                      placeholder="예: 길이 2cm 늘림 / 잠금장치 교체"
-                    />
-                  </div>
-                  <div>
-                    <p className="mb-1 text-xs font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">메모</p>
-                    <Textarea
-                      rows={2}
-                      value={line.memo}
-                      onChange={(e) =>
-                        setCreateLines((prev) => prev.map((v) => (v.id === line.id ? { ...v, memo: e.target.value } : v)))
-                      }
-                    />
-                  </div>
-
-                  <div>
-                    <p className="mb-1 text-xs font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">수리 사진</p>
-                    <Input
-                      type="file"
-                      accept="image/*"
-                      multiple
-                      onChange={(e) => {
-                        const files = Array.from(e.target.files ?? []);
-                        setCreateLineFiles((prev) => ({ ...prev, [line.id]: files }));
-                      }}
-                    />
-                    {(createLineFiles[line.id] ?? []).length > 0 ? (
-                      <div className="mt-2 text-xs text-[var(--muted)]">
-                        {(createLineFiles[line.id] ?? []).map((file) => file.name).join(", ")}
-                      </div>
-                    ) : null}
-                  </div>
-
-                  <div className="rounded-[12px] border border-[var(--panel-border)] bg-[var(--panel)] p-3 space-y-3">
-                    <div className="text-xs font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">추가 정보(선택)</div>
 
                     <SearchSelect
-                      label="도금"
-                      placeholder="도금명 검색"
-                      options={[{ value: "", label: "-" }, ...platingOptions]}
-                      value={line.platingVariantId}
-                      onChange={(value) =>
-                        setCreateLines((prev) =>
-                          prev.map((v) =>
-                            v.id === line.id
-                              ? {
-                                ...v,
-                                platingVariantId: value,
-                                isPlated: Boolean(value) ? true : v.isPlated,
-                              }
-                              : v
-                          )
-                        )
-                      }
-                      columns={2}
+                      label="모델 선택(선택)"
+                      placeholder="모델명 검색"
+                      options={masterOptions}
+                      value={line.modelId}
+                      onChange={(value) => handleCreateLineModelChange(line.id, value)}
+                      clearValueOnType
                       floating
+                      columns={2}
                     />
-                    <label className="flex items-center gap-2 text-sm text-[var(--muted)]">
-                      <input
-                        type="checkbox"
-                        checked={line.isPlated}
+                    <div
+                      className={cn(
+                        "rounded-[10px] border px-3 py-2 text-xs",
+                        line.modelId
+                          ? "border-emerald-300 bg-emerald-50 text-emerald-800"
+                          : "border-[var(--panel-border)] bg-[var(--panel)] text-[var(--muted)]"
+                      )}
+                    >
+                      {line.modelId ? (
+                        <span className="inline-flex items-center gap-1.5 font-medium">
+                          <CircleCheckBig className="h-3.5 w-3.5" />
+                          모델 매칭 완료
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1.5">
+                          <TriangleAlert className="h-3.5 w-3.5" />
+                          모델 미매칭 (직접 입력 가능)
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                      <div>
+                        <p className="mb-1 text-xs font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">모델명(필수)</p>
+                        <Input
+                          value={line.modelText}
+                          onChange={(e) =>
+                            setCreateLines((prev) => prev.map((v) => (v.id === line.id ? { ...v, modelId: "", modelText: e.target.value } : v)))
+                          }
+                          placeholder="예: 루체 반지"
+                        />
+                      </div>
+                      <div>
+                        <p className="mb-1 text-xs font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">수량(필수)</p>
+                        <Input
+                          type="number"
+                          value={line.qty}
+                          onChange={(e) =>
+                            setCreateLines((prev) => prev.map((v) => (v.id === line.id ? { ...v, qty: e.target.value } : v)))
+                          }
+                        />
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                      <div>
+                        <p className="mb-1 text-xs font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">소재</p>
+                        <Select
+                          value={line.materialCode}
+                          onChange={(e) =>
+                            setCreateLines((prev) => prev.map((v) => (v.id === line.id ? { ...v, materialCode: e.target.value } : v)))
+                          }
+                        >
+                          <option value="">-</option>
+                          {MATERIAL_OPTIONS.map((m) => (
+                            <option key={m.value} value={m.value}>
+                              {m.label}
+                            </option>
+                          ))}
+                        </Select>
+                      </div>
+                      <div>
+                        <p className="mb-1 text-xs font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">우선순위</p>
+                        <Select
+                          value={line.priorityCode}
+                          onChange={(e) =>
+                            setCreateLines((prev) => prev.map((v) => (v.id === line.id ? { ...v, priorityCode: e.target.value as CreateLineDraft["priorityCode"] } : v)))
+                          }
+                        >
+                          {PRIORITY_OPTIONS.map((p) => (
+                            <option key={p.value} value={p.value}>
+                              {p.label}
+                            </option>
+                          ))}
+                        </Select>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                      <div>
+                        <p className="mb-1 text-xs font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">납기</p>
+                        <Input
+                          type="date"
+                          value={line.requestedDueDate}
+                          onChange={(e) =>
+                            setCreateLines((prev) => prev.map((v) => (v.id === line.id ? { ...v, requestedDueDate: e.target.value } : v)))
+                          }
+                          autoFormat={false}
+                        />
+                      </div>
+                      <div>
+                        <p className="mb-1 text-xs font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">색상</p>
+                        <Input
+                          value={line.color}
+                          onChange={(e) =>
+                            setCreateLines((prev) => prev.map((v) => (v.id === line.id ? { ...v, color: e.target.value } : v)))
+                          }
+                          placeholder="예: W / Y / G"
+                        />
+                      </div>
+                    </div>
+
+                    <div>
+                      <p className="mb-1 text-xs font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">수리 내용(필수)</p>
+                      <Textarea
+                        rows={3}
+                        value={line.issueDesc}
                         onChange={(e) =>
+                          setCreateLines((prev) => prev.map((v) => (v.id === line.id ? { ...v, issueDesc: e.target.value } : v)))
+                        }
+                        placeholder="예: 길이 2cm 늘림 / 잠금장치 교체"
+                      />
+                    </div>
+                    <div>
+                      <p className="mb-1 text-xs font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">메모</p>
+                      <Textarea
+                        rows={2}
+                        value={line.memo}
+                        onChange={(e) =>
+                          setCreateLines((prev) => prev.map((v) => (v.id === line.id ? { ...v, memo: e.target.value } : v)))
+                        }
+                      />
+                    </div>
+
+                    <div>
+                      <p className="mb-1 text-xs font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">수리 사진</p>
+                      <Input
+                        type="file"
+                        accept="image/*"
+                        multiple
+                        onChange={(e) => {
+                          const files = Array.from(e.target.files ?? []);
+                          setCreateLineFiles((prev) => ({ ...prev, [line.id]: files }));
+                        }}
+                      />
+                      {(createLineFiles[line.id] ?? []).length > 0 ? (
+                        <div className="mt-2 text-xs text-[var(--muted)]">
+                          {(createLineFiles[line.id] ?? []).map((file) => file.name).join(", ")}
+                        </div>
+                      ) : null}
+                    </div>
+
+                    <div className="rounded-[12px] border border-[var(--panel-border)] bg-[var(--panel)] p-3 space-y-3">
+                      <div className="text-xs font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">추가 정보(선택)</div>
+
+                      <SearchSelect
+                        label="도금"
+                        placeholder="도금명 검색"
+                        options={[{ value: "", label: "-" }, ...platingOptions]}
+                        value={line.platingVariantId}
+                        onChange={(value) =>
                           setCreateLines((prev) =>
                             prev.map((v) =>
                               v.id === line.id
                                 ? {
                                   ...v,
-                                  isPlated: e.target.checked,
-                                  platingVariantId: e.target.checked ? v.platingVariantId : "",
+                                  platingVariantId: value,
+                                  isPlated: Boolean(value) ? true : v.isPlated,
                                 }
                                 : v
                             )
                           )
                         }
+                        columns={2}
+                        floating
                       />
-                      도금 있음
-                    </label>
-
-                    <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-                      <div>
-                        <p className="mb-1 text-xs font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">접수중량(g)</p>
-                        <Input
-                          type="number"
-                          inputMode="decimal"
-                          value={line.weightReceivedG}
+                      <label className="flex items-center gap-2 text-sm text-[var(--muted)]">
+                        <input
+                          type="checkbox"
+                          checked={line.isPlated}
                           onChange={(e) =>
-                            setCreateLines((prev) => prev.map((v) => (v.id === line.id ? { ...v, weightReceivedG: e.target.value } : v)))
+                            setCreateLines((prev) =>
+                              prev.map((v) =>
+                                v.id === line.id
+                                  ? {
+                                    ...v,
+                                    isPlated: e.target.checked,
+                                    platingVariantId: e.target.checked ? v.platingVariantId : "",
+                                  }
+                                  : v
+                              )
+                            )
                           }
                         />
+                        도금 있음
+                      </label>
+
+                      <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                        <div>
+                          <p className="mb-1 text-xs font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">접수중량(g)</p>
+                          <Input
+                            type="number"
+                            inputMode="decimal"
+                            value={line.weightReceivedG}
+                            onChange={(e) =>
+                              setCreateLines((prev) => prev.map((v) => (v.id === line.id ? { ...v, weightReceivedG: e.target.value } : v)))
+                            }
+                          />
+                        </div>
+                        <div>
+                          <p className="mb-1 text-xs font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">실측중량(g)</p>
+                          <Input
+                            type="number"
+                            inputMode="decimal"
+                            value={line.measuredWeightG}
+                            onChange={(e) =>
+                              setCreateLines((prev) => prev.map((v) => (v.id === line.id ? { ...v, measuredWeightG: e.target.value } : v)))
+                            }
+                          />
+                        </div>
                       </div>
-                      <div>
-                        <p className="mb-1 text-xs font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">실측중량(g)</p>
-                        <Input
-                          type="number"
-                          inputMode="decimal"
-                          value={line.measuredWeightG}
-                          onChange={(e) =>
-                            setCreateLines((prev) => prev.map((v) => (v.id === line.id ? { ...v, measuredWeightG: e.target.value } : v)))
-                          }
-                        />
+
+                      <div className="text-xs text-[var(--muted)]">
+                        수리비는 접수 단계에서 확정하지 않습니다. 수리 완료 후 <span className="font-semibold">출고로 보내기</span>에서 입력하세요.
                       </div>
                     </div>
+                  </CardBody>
+                </Card>
+              ))}
+            </div>
 
-                    <div className="text-xs text-[var(--muted)]">
-                      수리비는 접수 단계에서 확정하지 않습니다. 수리 완료 후 <span className="font-semibold">출고로 보내기</span>에서 입력하세요.
-                    </div>
-                  </div>
-                </CardBody>
-              </Card>
-            ))}
-          </div>
-
-          <div className="flex items-center justify-end gap-2">
-            <Button
-              variant="secondary"
-              onClick={() => {
-                setCreateOpen(false);
-                setCreateLineFiles({});
-              }}
-            >
-              닫기
-            </Button>
-            <Button onClick={handleSubmitCreate} disabled={createRepairMutation.isPending}>
-              접수 저장
-            </Button>
+            <div className="flex items-center justify-end gap-2 mt-4">
+              <Button
+                variant="secondary"
+                onClick={() => {
+                  setCreateOpen(false);
+                  setCreateLineFiles({});
+                }}
+              >
+                닫기
+              </Button>
+              <Button onClick={handleSubmitCreate} disabled={!canSubmitCreate}>
+                접수 저장
+              </Button>
+            </div>
           </div>
         </div>
-      </Modal>
+      </Sheet>
 
       {/* ---- Send Modal ---- */}
       <Modal

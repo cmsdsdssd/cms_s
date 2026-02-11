@@ -116,7 +116,7 @@ export function SidebarNav({ mobileOpen, onMobileClose, onWorkbenchOpen }: Sideb
             <div className="flex h-8 w-8 items-center justify-center rounded-[var(--radius-md)] bg-gradient-to-br from-[var(--primary)] to-[var(--primary-strong)] text-white shadow-sm">
               J
             </div>
-            <span>Jewel Ops</span>
+            <span>MS</span>
           </div>
         )}
         {isCollapsed && (

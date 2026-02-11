@@ -16,6 +16,7 @@ type SearchSelectProps = {
   showResultsOnEmptyQuery?: boolean;
   floating?: boolean;
   columns?: number;
+  clearValueOnType?: boolean;
 };
 
 export function SearchSelect({
@@ -28,6 +29,7 @@ export function SearchSelect({
   showResultsOnEmptyQuery = true,
   floating = false,
   columns,
+  clearValueOnType = false,
 }: SearchSelectProps) {
   const [query, setQuery] = useState("");
   const [isFocused, setIsFocused] = useState(false);
@@ -60,7 +62,13 @@ export function SearchSelect({
         value={inputValue}
         onFocus={() => setIsFocused(true)}
         onBlur={() => setIsFocused(false)}
-        onChange={(e) => setQuery(e.target.value)}
+        onChange={(e) => {
+          const nextQuery = e.target.value;
+          setQuery(nextQuery);
+          if (clearValueOnType && value) {
+            onChange?.("");
+          }
+        }}
       />
 
       {shouldShowResults ? (

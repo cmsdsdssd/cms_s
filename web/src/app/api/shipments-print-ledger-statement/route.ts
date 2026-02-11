@@ -17,6 +17,17 @@ type LedgerStatementRow = {
     delta_total_krw: number;
     delta_shipment_krw: number;
     delta_return_krw: number;
+    delta_payment_krw?: number;
+    delta_adjust_krw?: number;
+    delta_offset_krw?: number;
+  };
+  day_breakdown?: {
+    shipment?: { krw?: number; labor_krw?: number; gold_g?: number; silver_g?: number };
+    return?: { krw?: number; labor_krw?: number; gold_g?: number; silver_g?: number };
+    payment?: { krw?: number; labor_krw?: number; gold_g?: number; silver_g?: number };
+    adjust?: { krw?: number; labor_krw?: number; gold_g?: number; silver_g?: number };
+    offset?: { krw?: number; labor_krw?: number; gold_g?: number; silver_g?: number };
+    other?: { krw?: number; labor_krw?: number; gold_g?: number; silver_g?: number };
   };
   end_position: {
     balance_krw: number;
@@ -28,11 +39,7 @@ type LedgerStatementRow = {
     shipments: unknown[];
     returns: unknown[];
   };
-  checks: {
-    check_end_equals_prev_plus_delta_krw: number;
-    check_ship_lines_equals_ledger_shipment_krw: number;
-    check_return_sum_equals_ledger_return_krw: number;
-  };
+  checks: Record<string, number>;
 };
 
 type LegacyLedgerStatementRow = {
@@ -173,13 +180,27 @@ export async function GET(request: Request) {
       args: { p_party_ids: string[] | null; p_kst_date: string }
     ) => Promise<{ data: LedgerStatementRow[] | null; error: { message?: string; code?: string } | null }>;
 
-    const { data, error } = await rpc("cms_fn_shipments_print_ledger_statement_v2", {
+    const { data, error } = await rpc("cms_fn_shipments_print_ledger_statement_v3", {
       p_party_ids: partyId ? [partyId] : null,
       p_kst_date: date,
     });
 
     if (!error) {
-      return NextResponse.json({ data: data ?? [] });
+      return NextResponse.json({ data: data ?? [], source: "v3" });
+    }
+
+    const v2Rpc = supabase.rpc as unknown as (
+      fn: string,
+      args: { p_party_ids: string[] | null; p_kst_date: string }
+    ) => Promise<{ data: LedgerStatementRow[] | null; error: { message?: string; code?: string } | null }>;
+
+    const { data: v2Data, error: v2Error } = await v2Rpc("cms_fn_shipments_print_ledger_statement_v2", {
+      p_party_ids: partyId ? [partyId] : null,
+      p_kst_date: date,
+    });
+
+    if (!v2Error) {
+      return NextResponse.json({ data: v2Data ?? [], source: "v2" });
     }
 
     const legacyRpc = supabase.rpc as unknown as (
@@ -199,9 +220,10 @@ export async function GET(request: Request) {
       return NextResponse.json({ data: (legacyData ?? []).map(normalizeLegacyRow) });
     }
 
-    const v2Message = `${error.message ?? "v2 실패"}${error.code ? ` (code=${error.code})` : ""}`;
+    const v3Message = `${error.message ?? "v3 실패"}${error.code ? ` (code=${error.code})` : ""}`;
+    const v2Message = `${v2Error.message ?? "v2 실패"}${v2Error.code ? ` (code=${v2Error.code})` : ""}`;
     const v1Message = `${legacyError.message ?? "v1 실패"}${legacyError.code ? ` (code=${legacyError.code})` : ""}`;
-    return NextResponse.json({ error: `원장 명세 조회 실패: v2=${v2Message} | v1=${v1Message}` }, { status: 500 });
+    return NextResponse.json({ error: `원장 명세 조회 실패: v3=${v3Message} | v2=${v2Message} | v1=${v1Message}` }, { status: 500 });
   } catch (error) {
     const message = error instanceof Error ? error.message : "원장 명세 조회 실패";
     return NextResponse.json({ error: message }, { status: 500 });

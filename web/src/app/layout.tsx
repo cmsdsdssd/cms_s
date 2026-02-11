@@ -15,7 +15,7 @@ const jetbrainsMono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "MS_S 1차 운영",
+  title: "MS",
   description: "1차 운영 UI",
 };
 
@@ -41,4 +41,3 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     </html>
   );
 }
-

@@ -61,7 +61,7 @@ export function TopNav() {
                         <span className="text-sm font-extrabold tracking-tight text-[var(--primary)]">J</span>
                     </div>
                     <div className="leading-tight">
-                        <div className="text-sm font-bold tracking-tight text-[var(--foreground)]">Jewel Ops</div>
+                        <div className="text-sm font-bold tracking-tight text-[var(--foreground)]">MS</div>
                         <div className="text-[11px] font-medium text-[var(--muted)]">{currentLabel || "Phase 1"}</div>
                     </div>
                 </Link>

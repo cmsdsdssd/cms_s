@@ -42,7 +42,7 @@ export default function Sidebar() {
           J
         </div>
         <div className="leading-tight">
-          <div className="text-sm font-semibold">Jewel Ops</div>
+          <div className="text-sm font-semibold">MS</div>
           <div className="text-xs text-[var(--muted)]">Phase 1</div>
         </div>
       </div>

@@ -449,6 +449,16 @@ function WorkbenchContent() {
         />
         
         <div className="flex items-center gap-2">
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => {
+              window.location.href = getStorePickupPrintUrl();
+            }}
+          >
+            <PackageCheck className="w-4 h-4 mr-2" />
+            당일영수증
+          </Button>
           <Link href={`/orders?party_id=${partyId}`}>
             <Button variant="secondary" size="sm">
               <Plus className="w-4 h-4 mr-2" />

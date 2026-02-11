@@ -21,6 +21,7 @@ import { getSchemaClient } from "@/lib/supabase/client";
 import { compressImage } from "@/lib/image-utils";
 import { deriveCategoryCodeFromModelName } from "@/lib/model-name";
 import { CatalogGalleryGrid } from "@/components/catalog/CatalogGalleryGrid";
+import { ChinaCostPanel, type ChinaExtraLaborItem } from "../../../components/catalog/ChinaCostPanel";
 /* eslint-disable @next/next/no-img-element */
 
 type CatalogItem = {
@@ -254,6 +255,9 @@ export default function CatalogPage() {
   const [goldPrice, setGoldPrice] = useState(0);
   const [silverModifiedPrice, setSilverModifiedPrice] = useState(0);
   const [cnyAdRate, setCnyAdRate] = useState(0);
+  const [csOriginalKrwPerG, setCsOriginalKrwPerG] = useState(0);
+  const [cnLaborBasicCnyPerG, setCnLaborBasicCnyPerG] = useState("");
+  const [cnLaborExtraItems, setCnLaborExtraItems] = useState<ChinaExtraLaborItem[]>([]);
   const [isUnitPricing, setIsUnitPricing] = useState(false);
 
   const [showBomPanel, setShowBomPanel] = useState(false);
@@ -274,22 +278,24 @@ export default function CatalogPage() {
   const actorId = (process.env.NEXT_PUBLIC_CMS_ACTOR_ID || "").trim();
 
   // Fetch market prices
-  useEffect(() => {
-    const fetchPrices = async () => {
-      try {
-        const response = await fetch("/api/market-ticks");
-        const result = await response.json();
-        if (result.data) {
-          setGoldPrice(result.data.gold);
-          setSilverModifiedPrice(result.data.silver);
-          setCnyAdRate(Number(result.data.cnyAd ?? 0));
-        }
-      } catch (error) {
-        console.error("Failed to fetch market ticks:", error);
+  const refreshMarketTicks = useCallback(async () => {
+    try {
+      const response = await fetch("/api/market-ticks");
+      const result = await response.json();
+      if (result.data) {
+        setGoldPrice(result.data.gold);
+        setSilverModifiedPrice(result.data.silver);
+        setCnyAdRate(Number(result.data.cnyAd ?? 0));
+        setCsOriginalKrwPerG(Number(result.data.csOriginal ?? 0));
       }
-    };
-    fetchPrices();
+    } catch (error) {
+      console.error("Failed to fetch market ticks:", error);
+    }
   }, []);
+
+  useEffect(() => {
+    void refreshMarketTicks();
+  }, [refreshMarketTicks]);
 
   // Reset saving state when modal opens/closes to prevent stuck state
   useEffect(() => {
@@ -782,6 +788,27 @@ export default function CatalogPage() {
   const unitPricingDisabledReason = canToggleUnitPricing ? "" : "저장 후 설정 가능";
   const isAccessoryCategory = categoryCode === "ACCESSORY";
 
+  const netWeightG = useMemo(() => {
+    const w = Number(weightDefault);
+    const d = Number(deductionWeight);
+    const safeW = Number.isFinite(w) ? w : 0;
+    const safeD = Number.isFinite(d) ? d : 0;
+    return Math.max(safeW - safeD, 0);
+  }, [weightDefault, deductionWeight]);
+
+  const addCnExtraItem = useCallback(() => {
+    setCnLaborExtraItems((prev) => [...prev, { id: crypto.randomUUID(), label: "", cnyPerG: "" }]);
+  }, []);
+
+  const changeCnExtraItem = useCallback((id: string, patch: Partial<Pick<ChinaExtraLaborItem, "label" | "cnyPerG">>) => {
+    setCnLaborExtraItems((prev) => prev.map((it) => (it.id === id ? { ...it, ...patch } : it)));
+  }, []);
+
+  const removeCnExtraItem = useCallback((id: string) => {
+    setCnLaborExtraItems((prev) => prev.filter((it) => it.id !== id));
+  }, []);
+
+
   const toKrwFromCny = (cny: number) => {
     if (cnyAdRate <= 0) return 0;
     return Math.round(cny * cnyAdRate);
@@ -987,6 +1014,8 @@ export default function CatalogPage() {
     setModifiedDate("");
     setImageUrl(null);
     setImagePath(null);
+    setCnLaborBasicCnyPerG("");
+    setCnLaborExtraItems([]);
     setIsUnitPricing(false);
   };
 
@@ -1047,6 +1076,28 @@ export default function CatalogPage() {
     setImageUrl(row?.image_url ? String(row.image_url) : null);
     setImagePath(row?.image_path ? String(row.image_path) : null);
     setIsUnitPricing(Boolean(row?.is_unit_pricing));
+
+    // China cost inputs (optional columns)
+    const cnBasicRaw = (row as Record<string, unknown>)?.cn_labor_basic_cny_per_g;
+    const cnBasicNum = typeof cnBasicRaw === "number" ? cnBasicRaw : Number(cnBasicRaw);
+    setCnLaborBasicCnyPerG(Number.isFinite(cnBasicNum) && cnBasicNum > 0 ? String(cnBasicNum) : "");
+
+    const cnExtraRaw = (row as Record<string, unknown>)?.cn_labor_extra_items;
+    if (Array.isArray(cnExtraRaw)) {
+      setCnLaborExtraItems(
+        cnExtraRaw
+          .map((it) => ({
+            id: crypto.randomUUID(),
+            label: String((it as any)?.label ?? "").trim(),
+            cnyPerG: (it as any)?.cny_per_g === null || (it as any)?.cny_per_g === undefined
+              ? ""
+              : String((it as any)?.cny_per_g),
+          }))
+          .filter((it) => it.label)
+      );
+    } else {
+      setCnLaborExtraItems([]);
+    }
 
     setRegisterOpen(true);
   };
@@ -1135,6 +1186,37 @@ export default function CatalogPage() {
 
       const savedId = result.master_id ?? masterId;
 
+      // China cost inputs: add-only backend endpoint
+      if (savedId) {
+        try {
+          const extraPayload = cnLaborExtraItems
+            .map((it) => ({
+              label: it.label.trim(),
+              cny_per_g: Number(it.cnyPerG),
+            }))
+            .filter((it) => it.label && Number.isFinite(it.cny_per_g) && it.cny_per_g >= 0);
+
+          const cnResp = await fetch("/api/master-item-cn-cost", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              master_id: savedId,
+              cn_labor_basic_cny_per_g: Number(cnLaborBasicCnyPerG || 0),
+              cn_labor_extra_items: extraPayload,
+            }),
+          });
+
+          if (!cnResp.ok) {
+            const cnResult = (await cnResp.json()) as { error?: string };
+            const desc = cnResult.error ? `중국 원가 저장 실패: ${cnResult.error}` : "중국 원가 저장에 실패했습니다.";
+            toast.error("부가 저장 실패", { description: desc });
+          }
+        } catch (err) {
+          const desc = err instanceof Error ? err.message : "중국 원가 저장에 실패했습니다.";
+          toast.error("부가 저장 실패", { description: desc });
+        }
+      }
+
       toast.success("저장 완료");
 
       // ✅ 저장 성공 시 즉시 닫기
@@ -1174,579 +1256,598 @@ export default function CatalogPage() {
   }, [isDetailDrawerOpen, selectedItemId]);
 
 
-  const renderRegisterModal = () => (
-    <Modal
+  const renderRegisterDrawer = () => (
+    <Sheet
       open={registerOpen}
-      onClose={() => {
-        setRegisterOpen(false);
-        setIsSaving(false);
-        setUploadError(null);
-        setUploadingImage(false);
+      onOpenChange={(open: boolean) => {
+        if (!open) {
+          setRegisterOpen(false);
+          setIsSaving(false);
+          setUploadError(null);
+          setUploadingImage(false);
+        }
       }}
       title={isEditMode ? "마스터 수정" : "새 상품 등록"}
-      className="max-w-6xl"
+      className="w-full lg:w-[1240px] sm:max-w-none"
     >
-      <div
-        className="grid gap-6 lg:grid-cols-[320px,1fr]"
-        // ✅ [유지] 내부 내용물을 더블클릭했을 때는 닫히지 않도록 이벤트 전파를 막습니다.
-        // 이 코드가 있어야 배경 더블클릭 감지(useEffect)가 정상 작동합니다.
-        onDoubleClickCapture={(e) => {
-          e.stopPropagation();
-          e.nativeEvent.stopImmediatePropagation?.();
-        }}
-      >
-        {/* 1. 좌측 이미지 업로드 영역 */}
-        <div className="space-y-4">
-          <div className="rounded-[18px] border border-dashed border-[var(--panel-border)] bg-[var(--panel)] p-4">
-            <div className="mb-3 flex items-center justify-between text-sm font-semibold text-[var(--foreground)]">
-              <span>대표 이미지</span>
-              {uploadingImage ? (
-                <span className="text-xs text-[var(--muted)]">
-                  업로드 중...
-                </span>
-              ) : null}
-            </div>
-            <label className="group relative flex h-56 w-56 mx-auto cursor-pointer flex-col items-center justify-center overflow-hidden rounded-[16px] border border-[var(--panel-border)] bg-[var(--panel)] text-center">
-              <input
-                type="file"
-                accept="image/*"
-                className="sr-only"
-                ref={fileInputRef}
-                onChange={(event) => {
-                  const file = event.target.files?.[0];
-                  if (file) {
-                    handleImageUpload(file);
-                  }
-                  event.currentTarget.value = "";
-                }}
-              />
-              {imageUrl ? (
-                <img
-                  src={imageUrl}
-                  alt="업로드 이미지"
-                  className="h-full w-full object-cover"
-                />
-              ) : (
-                <div className="space-y-2 px-6">
-                  <div className="text-sm font-semibold text-[var(--foreground)]">
-                    이미지 업로드
-                  </div>
-                  <div className="text-xs text-[var(--muted)]">
-                    JPG, PNG 파일을 드래그하거나 클릭해서 추가하세요.
-                  </div>
-                  <div className="text-[11px] text-[var(--muted-weak)]">
-                    권장 비율 1:1 · 최대 10MB
-                  </div>
-                </div>
-              )}
-            </label>
-            {uploadError ? (
-              <p className="mt-2 text-xs text-red-500">{uploadError}</p>
-            ) : null}
-            {imageUrl ? (
-              <div className="mt-3 flex justify-between gap-2">
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  type="button"
-                  onClick={() => fileInputRef.current?.click()}
-                >
-                  변경
-                </Button>
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  type="button"
-                  onClick={handleImageRemove}
-                >
-                  삭제
-                </Button>
-              </div>
-            ) : null}
-          </div>
-        </div>
-
-        {/* 2. 우측 폼 영역 */}
-        <form
-          className="flex flex-col"
-          onSubmit={(event) => {
-            event.preventDefault();
-            handleSave();
+      <div className="h-full overflow-y-auto p-6 scrollbar-hide">
+        <div
+          className="grid gap-6 lg:grid-cols-[320px,1fr]"
+          // ✅ [유지] 내부 내용물을 더블클릭했을 때는 닫히지 않도록 이벤트 전파를 막습니다.
+          onDoubleClickCapture={(e) => {
+            e.stopPropagation();
+            e.nativeEvent.stopImmediatePropagation?.();
           }}
         >
-          <div className="pr-2">
-            <div className="grid gap-6 lg:grid-cols-2 h-full">
-              {/* 2-1. 좌측 열: 기본 정보 및 비고 */}
-              <div className="flex flex-col gap-4 h-full">
-                <div className="rounded-[18px] border border-[var(--panel-border)] bg-[var(--panel)] p-4">
-                  <div className="mb-4 flex items-center justify-between">
-                    <p className="text-sm font-semibold text-[var(--foreground)]">
-                      기본 정보
-                    </p>
-                    <span className="text-xs text-[var(--muted)]">
-                      필수 항목 포함
-                    </span>
+          {/* 1. 좌측 이미지 업로드 영역 */}
+          <div className="space-y-4">
+            <div className="rounded-[18px] border border-dashed border-[var(--panel-border)] bg-[var(--panel)] p-4">
+              <div className="mb-3 flex items-center justify-between text-sm font-semibold text-[var(--foreground)]">
+                <span>대표 이미지</span>
+                {uploadingImage ? (
+                  <span className="text-xs text-[var(--muted)]">
+                    업로드 중...
+                  </span>
+                ) : null}
+              </div>
+              <label className="group relative flex h-56 w-56 mx-auto cursor-pointer flex-col items-center justify-center overflow-hidden rounded-[16px] border border-[var(--panel-border)] bg-[var(--panel)] text-center">
+                <input
+                  type="file"
+                  accept="image/*"
+                  className="sr-only"
+                  ref={fileInputRef}
+                  onChange={(event) => {
+                    const file = event.target.files?.[0];
+                    if (file) {
+                      handleImageUpload(file);
+                    }
+                    event.currentTarget.value = "";
+                  }}
+                />
+                {imageUrl ? (
+                  <img
+                    src={imageUrl}
+                    alt="업로드 이미지"
+                    className="h-full w-full object-cover"
+                  />
+                ) : (
+                  <div className="space-y-2 px-6">
+                    <div className="text-sm font-semibold text-[var(--foreground)]">
+                      이미지 업로드
+                    </div>
+                    <div className="text-xs text-[var(--muted)]">
+                      JPG, PNG 파일을 드래그하거나 클릭해서 추가하세요.
+                    </div>
+                    <div className="text-[11px] text-[var(--muted-weak)]">
+                      권장 비율 1:1 · 최대 10MB
+                    </div>
                   </div>
-                  <div className="grid gap-4 md:grid-cols-2">
-                    <Field label="모델명">
-                      <Input
-                        placeholder="모델명*"
-                        value={modelName}
-                        onChange={(event) => setModelName(event.target.value)}
-                        onBlur={() => {
-                          const derived =
-                            deriveCategoryCodeFromModelName(modelName);
-                          if (derived) {
-                            setCategoryCode(derived);
+                )}
+              </label>
+              {uploadError ? (
+                <p className="mt-2 text-xs text-red-500">{uploadError}</p>
+              ) : null}
+              {imageUrl ? (
+                <div className="mt-3 flex justify-between gap-2">
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                  >
+                    변경
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    type="button"
+                    onClick={handleImageRemove}
+                  >
+                    삭제
+                  </Button>
+                </div>
+              ) : null}
+            </div>
+          </div>
+
+          {/* 2. 우측 폼 영역 */}
+          <form
+            className="flex flex-col"
+            onSubmit={(event) => {
+              event.preventDefault();
+              handleSave();
+            }}
+          >
+            <div className="pr-2">
+              <div className="grid gap-6 lg:grid-cols-[1fr_1fr_360px] h-full">
+                {/* 2-1. 좌측 열: 기본 정보 및 비고 */}
+                <div className="flex flex-col gap-4 h-full">
+                  <div className="rounded-[18px] border border-[var(--panel-border)] bg-[var(--panel)] p-4">
+                    <div className="mb-4 flex items-center justify-between">
+                      <p className="text-sm font-semibold text-[var(--foreground)]">
+                        기본 정보
+                      </p>
+                      <span className="text-xs text-[var(--muted)]">
+                        필수 항목 포함
+                      </span>
+                    </div>
+                    <div className="grid gap-4 md:grid-cols-2">
+                      <Field label="모델명">
+                        <Input
+                          placeholder="모델명*"
+                          value={modelName}
+                          onChange={(event) => setModelName(event.target.value)}
+                          onBlur={() => {
+                            const derived =
+                              deriveCategoryCodeFromModelName(modelName);
+                            if (derived) {
+                              setCategoryCode(derived);
+                            }
+                            applyVendorFromModelName(modelName);
+                          }}
+                        />
+                      </Field>
+                      <Field label="공급처">
+                        <Select
+                          value={vendorId}
+                          onChange={(event) => setVendorId(event.target.value)}
+                        >
+                          <option value="">공급처 선택</option>
+                          {vendorOptions.map((vendor) => (
+                            <option key={vendor.value} value={vendor.value}>
+                              {vendor.label}
+                            </option>
+                          ))}
+                        </Select>
+                      </Field>
+                      <Field label="기본 재질">
+                        <Select
+                          value={materialCode}
+                          onChange={(event) =>
+                            setMaterialCode(event.target.value)
                           }
-                          applyVendorFromModelName(modelName);
-                        }}
-                      />
-                    </Field>
-                    <Field label="공급처">
-                      <Select
-                        value={vendorId}
-                        onChange={(event) => setVendorId(event.target.value)}
-                      >
-                        <option value="">공급처 선택</option>
-                        {vendorOptions.map((vendor) => (
-                          <option key={vendor.value} value={vendor.value}>
-                            {vendor.label}
-                          </option>
-                        ))}
-                      </Select>
-                    </Field>
-                    <Field label="기본 재질">
-                      <Select
-                        value={materialCode}
-                        onChange={(event) =>
-                          setMaterialCode(event.target.value)
-                        }
-                      >
-                        <option value="">기본 재질 선택</option>
-                        {materialOptions.map((material) => (
-                          <option key={material.value} value={material.value}>
-                            {material.label}
-                          </option>
-                        ))}
-                      </Select>
-                    </Field>
-                    <Field label="카테고리">
-                      <Select
-                        value={categoryCode}
-                        onChange={(event) => {
-                          setCategoryCode(event.target.value);
-                        }}
-                      >
-                        <option value="">카테고리 선택*</option>
-                        {categoryOptions.map((category) => (
-                          <option key={category.value} value={category.value}>
-                            {category.label}
-                          </option>
-                        ))}
-                      </Select>
-                    </Field>
-                    <Field label="기본 중량 (g)">
-                      <Input
-                        type="number"
-                        step="0.01"
-                        min={0}
-                        placeholder="중량"
-                        value={weightDefault}
-                        onChange={(event) =>
-                          setWeightDefault(event.target.value)
-                        }
-                      />
-                    </Field>
-                    <Field label="차감 중량 (g)">
-                      <Input
-                        type="number"
-                        step="0.01"
-                        min={0}
-                        placeholder="차감 중량"
-                        value={deductionWeight}
-                        onChange={(event) =>
-                          setDeductionWeight(event.target.value)
-                        }
-                      />
-                    </Field>
-                    <Field label="단가제 (확정 시 RULE 올림 적용)">
-                      <div className="space-y-2">
-                        <label className="inline-flex items-center gap-2 text-sm">
-                          <input
-                            type="checkbox"
-                            checked={isUnitPricing}
-                            onChange={handleToggleUnitPricing}
-                            disabled={!canToggleUnitPricing || setMasterUnitPricingMutation.isPending}
-                            title={unitPricingDisabledReason || undefined}
-                            className="h-4 w-4"
-                          />
-                          <span>단가제</span>
-                        </label>
-                        <div className="text-[11px] text-[var(--muted)] leading-relaxed">
-                          <p>체크된 모델은 확정 시 RULE 계산 판매가가 설정된 올림 단위로 자동 올림됩니다.</p>
-                          <p>총액 덮어쓰기는 제외됩니다.</p>
-                          {!canToggleUnitPricing ? <p>저장 후 설정 가능</p> : null}
+                        >
+                          <option value="">기본 재질 선택</option>
+                          {materialOptions.map((material) => (
+                            <option key={material.value} value={material.value}>
+                              {material.label}
+                            </option>
+                          ))}
+                        </Select>
+                      </Field>
+                      <Field label="카테고리">
+                        <Select
+                          value={categoryCode}
+                          onChange={(event) => {
+                            setCategoryCode(event.target.value);
+                          }}
+                        >
+                          <option value="">카테고리 선택*</option>
+                          {categoryOptions.map((category) => (
+                            <option key={category.value} value={category.value}>
+                              {category.label}
+                            </option>
+                          ))}
+                        </Select>
+                      </Field>
+                      <Field label="기본 중량 (g)">
+                        <Input
+                          type="number"
+                          step="0.01"
+                          min={0}
+                          placeholder="중량"
+                          value={weightDefault}
+                          onChange={(event) =>
+                            setWeightDefault(event.target.value)
+                          }
+                        />
+                      </Field>
+                      <Field label="차감 중량 (g)">
+                        <Input
+                          type="number"
+                          step="0.01"
+                          min={0}
+                          placeholder="차감 중량"
+                          value={deductionWeight}
+                          onChange={(event) =>
+                            setDeductionWeight(event.target.value)
+                          }
+                        />
+                      </Field>
+                      <Field label="단가제 (확정 시 RULE 올림 적용)">
+                        <div className="space-y-2">
+                          <label className="inline-flex items-center gap-2 text-sm">
+                            <input
+                              type="checkbox"
+                              checked={isUnitPricing}
+                              onChange={handleToggleUnitPricing}
+                              disabled={!canToggleUnitPricing || setMasterUnitPricingMutation.isPending}
+                              title={unitPricingDisabledReason || undefined}
+                              className="h-4 w-4"
+                            />
+                            <span>단가제</span>
+                          </label>
+                          <div className="text-[11px] text-[var(--muted)] leading-relaxed">
+                            <p>체크된 모델은 확정 시 RULE 계산 판매가가 설정된 올림 단위로 자동 올림됩니다.</p>
+                            <p>총액 덮어쓰기는 제외됩니다.</p>
+                            {!canToggleUnitPricing ? <p>저장 후 설정 가능</p> : null}
+                          </div>
                         </div>
-                      </div>
-                    </Field>
+                      </Field>
+                    </div>
+                  </div>
+
+                  <div className="rounded-[18px] border border-[var(--panel-border)] bg-[var(--panel)] p-4 flex flex-col">
+                    <p className="mb-3 text-sm font-semibold text-[var(--foreground)]">
+                      비고
+                    </p>
+                    <Textarea
+                      placeholder="상품에 대한 상세 정보를 입력하세요."
+                      value={note}
+                      onChange={(event) => setNote(event.target.value)}
+                      className="resize-none h-[17rem]"
+                    />
                   </div>
                 </div>
 
-                <div className="rounded-[18px] border border-[var(--panel-border)] bg-[var(--panel)] p-4 flex flex-col">
-                  <p className="mb-3 text-sm font-semibold text-[var(--foreground)]">
-                    비고
-                  </p>
-                  <Textarea
-                    placeholder="상품에 대한 상세 정보를 입력하세요."
-                    value={note}
-                    onChange={(event) => setNote(event.target.value)}
-                    className="resize-none h-[17rem]"
+                {/* 2-2. 우측 열: 공임 및 프로파일 설정 */}
+                <div className="space-y-4">
+                  <div className="rounded-[18px] border border-[var(--panel-border)] bg-[var(--panel)] p-4">
+                    <div className="mb-4 flex items-center justify-between">
+                      <p className="text-sm font-semibold text-[var(--foreground)]">
+                        공임 및 구성
+                      </p>
+                      <div className="flex gap-2">
+                        <span className="text-[10px] bg-[var(--primary)]/10 text-[var(--primary)] px-2 py-0.5 rounded">
+                          좌:판매
+                        </span>
+                        <span className="text-[10px] bg-[var(--muted)]/10 text-[var(--muted)] px-2 py-0.5 rounded">
+                          우:원가
+                        </span>
+                      </div>
+                    </div>
+                    {isAccessoryCategory ? (
+                      <div className="mb-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-[11px] text-red-900">
+                        CNY 환율 적용: 1 CNY = {cnyAdRate > 0 ? new Intl.NumberFormat("ko-KR", { maximumFractionDigits: 2 }).format(cnyAdRate) : "-"} KRW
+                      </div>
+                    ) : null}
+
+                    <div className="grid grid-cols-[0.8fr_1fr_0.6fr_1fr] gap-x-2 gap-y-3 items-center text-xs">
+                      <div className="text-center font-semibold text-[var(--muted)]">
+                        항목
+                      </div>
+                      <div className="text-center font-semibold text-[var(--muted)]">
+                        판매 (Sell)
+                      </div>
+                      <div className="text-center font-semibold text-[var(--muted)]">
+                        수량 (Qty)
+                      </div>
+                      <div className="text-center font-semibold text-[var(--muted)]">
+                        원가 (Cost){isAccessoryCategory ? " KRW/CNY" : ""}
+                      </div>
+
+                      {/* Base */}
+                      <div className="text-center font-medium text-[var(--foreground)]">
+                        기본
+                      </div>
+                      <Input
+                        type="number"
+                        min={0}
+                        value={laborBaseSell}
+                        onChange={(e) =>
+                          setLaborBaseSell(toNumber(e.target.value))
+                        }
+                      />
+                      <div className="text-center text-[var(--muted)]">-</div>
+                      {isAccessoryCategory ? (
+                        <div className="grid grid-cols-2 gap-1">
+                          <Input type="number" min={0} value={laborBaseCost} readOnly className="text-right" />
+                          <Input
+                            type="number"
+                            min={0}
+                            step="0.01"
+                            value={laborBaseCostCny}
+                            onChange={(e) =>
+                              updateKrwFromCnyInput(e.target.value, setLaborBaseCostCny, setLaborBaseCost)
+                            }
+                            className="border-red-300 focus-visible:ring-red-300"
+                            placeholder="CNY"
+                          />
+                        </div>
+                      ) : (
+                        <Input
+                          type="number"
+                          min={0}
+                          value={laborBaseCost}
+                          onChange={(e) => setLaborBaseCost(toNumber(e.target.value))}
+                        />
+                      )}
+
+                      <div className="col-span-4 h-px bg-dashed border-t border-[var(--panel-border)]/70" />
+
+                      {/* Center */}
+                      <div className="text-center text-[var(--muted)]">센터석</div>
+                      <Input
+                        className="col-span-3"
+                        placeholder="센터석 이름"
+                        value={centerStoneName}
+                        onChange={(e) => setCenterStoneName(e.target.value)}
+                      />
+                      <div className="text-center font-medium text-[var(--foreground)]">
+                        센터
+                      </div>
+                      <Input
+                        type="number"
+                        min={0}
+                        value={laborCenterSell}
+                        onChange={(e) =>
+                          setLaborCenterSell(toNumber(e.target.value))
+                        }
+                      />
+                      <Input
+                        type="number"
+                        min={0}
+                        placeholder="수량"
+                        className="text-center bg-[var(--input-bg)]"
+                        value={centerQty}
+                        onChange={(e) => setCenterQty(toNumber(e.target.value))}
+                      />
+                      {isAccessoryCategory ? (
+                        <div className="grid grid-cols-2 gap-1">
+                          <Input type="number" min={0} value={laborCenterCost} readOnly className="text-right" />
+                          <Input
+                            type="number"
+                            min={0}
+                            step="0.01"
+                            value={laborCenterCostCny}
+                            onChange={(e) =>
+                              updateKrwFromCnyInput(e.target.value, setLaborCenterCostCny, setLaborCenterCost)
+                            }
+                            className="border-red-300 focus-visible:ring-red-300"
+                            placeholder="CNY"
+                          />
+                        </div>
+                      ) : (
+                        <Input
+                          type="number"
+                          min={0}
+                          value={laborCenterCost}
+                          onChange={(e) => setLaborCenterCost(toNumber(e.target.value))}
+                        />
+                      )}
+                      <div className="col-span-4 h-px bg-dashed border-t border-[var(--panel-border)]/70" />
+
+                      {/* Sub1 */}
+                      <div className="text-center text-[var(--muted)]">서브1석</div>
+                      <Input
+                        className="col-span-3"
+                        placeholder="서브1석 이름"
+                        value={sub1StoneName}
+                        onChange={(e) => setSub1StoneName(e.target.value)}
+                      />
+                      <div className="text-center font-medium text-[var(--foreground)]">
+                        서브1
+                      </div>
+                      <Input
+                        type="number"
+                        min={0}
+                        value={laborSub1Sell}
+                        onChange={(e) =>
+                          setLaborSub1Sell(toNumber(e.target.value))
+                        }
+                      />
+                      <Input
+                        type="number"
+                        min={0}
+                        placeholder="수량"
+                        className="text-center bg-[var(--input-bg)]"
+                        value={sub1Qty}
+                        onChange={(e) => setSub1Qty(toNumber(e.target.value))}
+                      />
+                      {isAccessoryCategory ? (
+                        <div className="grid grid-cols-2 gap-1">
+                          <Input type="number" min={0} value={laborSub1Cost} readOnly className="text-right" />
+                          <Input
+                            type="number"
+                            min={0}
+                            step="0.01"
+                            value={laborSub1CostCny}
+                            onChange={(e) =>
+                              updateKrwFromCnyInput(e.target.value, setLaborSub1CostCny, setLaborSub1Cost)
+                            }
+                            className="border-red-300 focus-visible:ring-red-300"
+                            placeholder="CNY"
+                          />
+                        </div>
+                      ) : (
+                        <Input
+                          type="number"
+                          min={0}
+                          value={laborSub1Cost}
+                          onChange={(e) => setLaborSub1Cost(toNumber(e.target.value))}
+                        />
+                      )}
+                      <div className="col-span-4 h-px bg-dashed border-t border-[var(--panel-border)]/70" />
+
+                      {/* Sub2 */}
+                      <div className="text-center text-[var(--muted)]">서브2석</div>
+                      <Input
+                        className="col-span-3"
+                        placeholder="서브2석 이름"
+                        value={sub2StoneName}
+                        onChange={(e) => setSub2StoneName(e.target.value)}
+                      />
+                      <div className="text-center font-medium text-[var(--foreground)]">
+                        서브2
+                      </div>
+                      <Input
+                        type="number"
+                        min={0}
+                        value={laborSub2Sell}
+                        onChange={(e) =>
+                          setLaborSub2Sell(toNumber(e.target.value))
+                        }
+                      />
+                      <Input
+                        type="number"
+                        min={0}
+                        placeholder="수량"
+                        className="text-center bg-[var(--input-bg)]"
+                        value={sub2Qty}
+                        onChange={(e) => setSub2Qty(toNumber(e.target.value))}
+                      />
+                      {isAccessoryCategory ? (
+                        <div className="grid grid-cols-2 gap-1">
+                          <Input type="number" min={0} value={laborSub2Cost} readOnly className="text-right" />
+                          <Input
+                            type="number"
+                            min={0}
+                            step="0.01"
+                            value={laborSub2CostCny}
+                            onChange={(e) =>
+                              updateKrwFromCnyInput(e.target.value, setLaborSub2CostCny, setLaborSub2Cost)
+                            }
+                            className="border-red-300 focus-visible:ring-red-300"
+                            placeholder="CNY"
+                          />
+                        </div>
+                      ) : (
+                        <Input
+                          type="number"
+                          min={0}
+                          value={laborSub2Cost}
+                          onChange={(e) => setLaborSub2Cost(toNumber(e.target.value))}
+                        />
+                      )}
+
+                      <div className="col-span-4 h-px bg-dashed border-t border-[var(--panel-border)] my-2" />
+
+                      {/* Plating */}
+                      <div className="text-center font-medium text-[var(--muted)]">
+                        도금
+                      </div>
+                      <Input
+                        type="number"
+                        min={0}
+                        value={platingSell}
+                        onChange={(e) =>
+                          setPlatingSell(toNumber(e.target.value))
+                        }
+                      />
+                      <div className="text-center text-[var(--muted)]">-</div>
+                      {isAccessoryCategory ? (
+                        <div className="grid grid-cols-2 gap-1">
+                          <Input type="number" min={0} value={platingCost} readOnly className="text-right" />
+                          <Input
+                            type="number"
+                            min={0}
+                            step="0.01"
+                            value={platingCostCny}
+                            onChange={(e) =>
+                              updateKrwFromCnyInput(e.target.value, setPlatingCostCny, setPlatingCost)
+                            }
+                            className="border-red-300 focus-visible:ring-red-300"
+                            placeholder="CNY"
+                          />
+                        </div>
+                      ) : (
+                        <Input
+                          type="number"
+                          min={0}
+                          value={platingCost}
+                          onChange={(e) => setPlatingCost(toNumber(e.target.value))}
+                        />
+                      )}
+
+                      <div className="text-center font-medium text-[var(--muted)]">
+                        세팅 부가마진(개당)
+                      </div>
+                      <Input
+                        type="number"
+                        min={0}
+                        value={settingAddonMarginKrwPerPiece}
+                        onChange={(e) =>
+                          setSettingAddonMarginKrwPerPiece(toNumber(e.target.value))
+                        }
+                      />
+                      <div className="text-center text-[var(--muted)]">-</div>
+                      <div className="text-center text-[var(--muted)]">룰 외 추가</div>
+
+                      <div className="text-center font-medium text-[var(--muted)]">
+                        원석 부가마진(개당)
+                      </div>
+                      <Input
+                        type="number"
+                        min={0}
+                        value={stoneAddonMarginKrwPerPiece}
+                        onChange={(e) =>
+                          setStoneAddonMarginKrwPerPiece(toNumber(e.target.value))
+                        }
+                      />
+                      <div className="text-center text-[var(--muted)]">-</div>
+                      <div className="text-center text-[var(--muted)]">룰 외 추가</div>
+
+                      <div className="col-span-4 h-px bg-dashed border-t border-[var(--panel-border)] my-2" />
+
+                      {/* Total */}
+                      <div className="text-center font-bold text-[var(--foreground)]">
+                        합계공임
+                      </div>
+                      <Input
+                        type="number"
+                        min={0}
+                        readOnly
+                        autoFormat={false}
+                        className="text-right font-bold bg-[var(--input-bg)] text-[var(--primary)] border-[var(--panel-border)]"
+                        value={totalLaborSell}
+                      />
+                      <div className="text-center text-[var(--muted)]">-</div>
+                      <Input
+                        type="number"
+                        min={0}
+                        readOnly
+                        autoFormat={false}
+                        className="text-right font-bold bg-[var(--input-bg)] text-[var(--foreground)] border-[var(--panel-border)]"
+                        value={totalLaborCost}
+                      />
+                    </div>
+                  </div>
+
+                </div>
+
+                {/* 2-3. 중국 원가 계산 */}
+                <div className="lg:sticky lg:top-4 space-y-4">
+                  <ChinaCostPanel
+                    csOriginalKrwPerG={csOriginalKrwPerG}
+                    cnyKrwPer1={cnyAdRate}
+                    onRefreshMarket={refreshMarketTicks}
+                    netWeightG={netWeightG}
+                    basicCnyPerG={cnLaborBasicCnyPerG}
+                    extraItems={cnLaborExtraItems}
+                    onChangeBasic={setCnLaborBasicCnyPerG}
+                    onAddExtra={addCnExtraItem}
+                    onChangeExtra={changeCnExtraItem}
+                    onRemoveExtra={removeCnExtraItem}
                   />
                 </div>
               </div>
-
-              {/* 2-2. 우측 열: 공임 및 프로파일 설정 */}
-              <div className="space-y-4">
-                <div className="rounded-[18px] border border-[var(--panel-border)] bg-[var(--panel)] p-4">
-                  <div className="mb-4 flex items-center justify-between">
-                    <p className="text-sm font-semibold text-[var(--foreground)]">
-                      공임 및 구성
-                    </p>
-                    <div className="flex gap-2">
-                      <span className="text-[10px] bg-[var(--primary)]/10 text-[var(--primary)] px-2 py-0.5 rounded">
-                        좌:판매
-                      </span>
-                      <span className="text-[10px] bg-[var(--muted)]/10 text-[var(--muted)] px-2 py-0.5 rounded">
-                        우:원가
-                      </span>
-                    </div>
-                  </div>
-                  {isAccessoryCategory ? (
-                    <div className="mb-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-[11px] text-red-900">
-                      CNY 환율 적용: 1 CNY = {cnyAdRate > 0 ? new Intl.NumberFormat("ko-KR", { maximumFractionDigits: 2 }).format(cnyAdRate) : "-"} KRW
-                    </div>
-                  ) : null}
-
-                  <div className="grid grid-cols-[0.8fr_1fr_0.6fr_1fr] gap-x-2 gap-y-3 items-center text-xs">
-                    <div className="text-center font-semibold text-[var(--muted)]">
-                      항목
-                    </div>
-                    <div className="text-center font-semibold text-[var(--muted)]">
-                      판매 (Sell)
-                    </div>
-                    <div className="text-center font-semibold text-[var(--muted)]">
-                      수량 (Qty)
-                    </div>
-                    <div className="text-center font-semibold text-[var(--muted)]">
-                      원가 (Cost){isAccessoryCategory ? " KRW/CNY" : ""}
-                    </div>
-
-                    {/* Base */}
-                    <div className="text-center font-medium text-[var(--foreground)]">
-                      기본
-                    </div>
-                    <Input
-                      type="number"
-                      min={0}
-                      value={laborBaseSell}
-                      onChange={(e) =>
-                        setLaborBaseSell(toNumber(e.target.value))
-                      }
-                    />
-                    <div className="text-center text-[var(--muted)]">-</div>
-                    {isAccessoryCategory ? (
-                      <div className="grid grid-cols-2 gap-1">
-                        <Input type="number" min={0} value={laborBaseCost} readOnly className="text-right" />
-                        <Input
-                          type="number"
-                          min={0}
-                          step="0.01"
-                          value={laborBaseCostCny}
-                          onChange={(e) =>
-                            updateKrwFromCnyInput(e.target.value, setLaborBaseCostCny, setLaborBaseCost)
-                          }
-                          className="border-red-300 focus-visible:ring-red-300"
-                          placeholder="CNY"
-                        />
-                      </div>
-                    ) : (
-                      <Input
-                        type="number"
-                        min={0}
-                        value={laborBaseCost}
-                        onChange={(e) => setLaborBaseCost(toNumber(e.target.value))}
-                      />
-                    )}
-
-                    <div className="col-span-4 h-px bg-dashed border-t border-[var(--panel-border)]/70" />
-
-                    {/* Center */}
-                    <div className="text-center text-[var(--muted)]">센터석</div>
-                    <Input
-                      className="col-span-3"
-                      placeholder="센터석 이름"
-                      value={centerStoneName}
-                      onChange={(e) => setCenterStoneName(e.target.value)}
-                    />
-                    <div className="text-center font-medium text-[var(--foreground)]">
-                      센터
-                    </div>
-                    <Input
-                      type="number"
-                      min={0}
-                      value={laborCenterSell}
-                      onChange={(e) =>
-                        setLaborCenterSell(toNumber(e.target.value))
-                      }
-                    />
-                    <Input
-                      type="number"
-                      min={0}
-                      placeholder="수량"
-                      className="text-center bg-[var(--input-bg)]"
-                      value={centerQty}
-                      onChange={(e) => setCenterQty(toNumber(e.target.value))}
-                    />
-                    {isAccessoryCategory ? (
-                      <div className="grid grid-cols-2 gap-1">
-                        <Input type="number" min={0} value={laborCenterCost} readOnly className="text-right" />
-                        <Input
-                          type="number"
-                          min={0}
-                          step="0.01"
-                          value={laborCenterCostCny}
-                          onChange={(e) =>
-                            updateKrwFromCnyInput(e.target.value, setLaborCenterCostCny, setLaborCenterCost)
-                          }
-                          className="border-red-300 focus-visible:ring-red-300"
-                          placeholder="CNY"
-                        />
-                      </div>
-                    ) : (
-                      <Input
-                        type="number"
-                        min={0}
-                        value={laborCenterCost}
-                        onChange={(e) => setLaborCenterCost(toNumber(e.target.value))}
-                      />
-                    )}
-                    <div className="col-span-4 h-px bg-dashed border-t border-[var(--panel-border)]/70" />
-
-                    {/* Sub1 */}
-                    <div className="text-center text-[var(--muted)]">서브1석</div>
-                    <Input
-                      className="col-span-3"
-                      placeholder="서브1석 이름"
-                      value={sub1StoneName}
-                      onChange={(e) => setSub1StoneName(e.target.value)}
-                    />
-                    <div className="text-center font-medium text-[var(--foreground)]">
-                      서브1
-                    </div>
-                    <Input
-                      type="number"
-                      min={0}
-                      value={laborSub1Sell}
-                      onChange={(e) =>
-                        setLaborSub1Sell(toNumber(e.target.value))
-                      }
-                    />
-                    <Input
-                      type="number"
-                      min={0}
-                      placeholder="수량"
-                      className="text-center bg-[var(--input-bg)]"
-                      value={sub1Qty}
-                      onChange={(e) => setSub1Qty(toNumber(e.target.value))}
-                    />
-                    {isAccessoryCategory ? (
-                      <div className="grid grid-cols-2 gap-1">
-                        <Input type="number" min={0} value={laborSub1Cost} readOnly className="text-right" />
-                        <Input
-                          type="number"
-                          min={0}
-                          step="0.01"
-                          value={laborSub1CostCny}
-                          onChange={(e) =>
-                            updateKrwFromCnyInput(e.target.value, setLaborSub1CostCny, setLaborSub1Cost)
-                          }
-                          className="border-red-300 focus-visible:ring-red-300"
-                          placeholder="CNY"
-                        />
-                      </div>
-                    ) : (
-                      <Input
-                        type="number"
-                        min={0}
-                        value={laborSub1Cost}
-                        onChange={(e) => setLaborSub1Cost(toNumber(e.target.value))}
-                      />
-                    )}
-                    <div className="col-span-4 h-px bg-dashed border-t border-[var(--panel-border)]/70" />
-
-                    {/* Sub2 */}
-                    <div className="text-center text-[var(--muted)]">서브2석</div>
-                    <Input
-                      className="col-span-3"
-                      placeholder="서브2석 이름"
-                      value={sub2StoneName}
-                      onChange={(e) => setSub2StoneName(e.target.value)}
-                    />
-                    <div className="text-center font-medium text-[var(--foreground)]">
-                      서브2
-                    </div>
-                    <Input
-                      type="number"
-                      min={0}
-                      value={laborSub2Sell}
-                      onChange={(e) =>
-                        setLaborSub2Sell(toNumber(e.target.value))
-                      }
-                    />
-                    <Input
-                      type="number"
-                      min={0}
-                      placeholder="수량"
-                      className="text-center bg-[var(--input-bg)]"
-                      value={sub2Qty}
-                      onChange={(e) => setSub2Qty(toNumber(e.target.value))}
-                    />
-                    {isAccessoryCategory ? (
-                      <div className="grid grid-cols-2 gap-1">
-                        <Input type="number" min={0} value={laborSub2Cost} readOnly className="text-right" />
-                        <Input
-                          type="number"
-                          min={0}
-                          step="0.01"
-                          value={laborSub2CostCny}
-                          onChange={(e) =>
-                            updateKrwFromCnyInput(e.target.value, setLaborSub2CostCny, setLaborSub2Cost)
-                          }
-                          className="border-red-300 focus-visible:ring-red-300"
-                          placeholder="CNY"
-                        />
-                      </div>
-                    ) : (
-                      <Input
-                        type="number"
-                        min={0}
-                        value={laborSub2Cost}
-                        onChange={(e) => setLaborSub2Cost(toNumber(e.target.value))}
-                      />
-                    )}
-
-                    <div className="col-span-4 h-px bg-dashed border-t border-[var(--panel-border)] my-2" />
-
-                    {/* Plating */}
-                    <div className="text-center font-medium text-[var(--muted)]">
-                      도금
-                    </div>
-                    <Input
-                      type="number"
-                      min={0}
-                      value={platingSell}
-                      onChange={(e) =>
-                        setPlatingSell(toNumber(e.target.value))
-                      }
-                    />
-                    <div className="text-center text-[var(--muted)]">-</div>
-                    {isAccessoryCategory ? (
-                      <div className="grid grid-cols-2 gap-1">
-                        <Input type="number" min={0} value={platingCost} readOnly className="text-right" />
-                        <Input
-                          type="number"
-                          min={0}
-                          step="0.01"
-                          value={platingCostCny}
-                          onChange={(e) =>
-                            updateKrwFromCnyInput(e.target.value, setPlatingCostCny, setPlatingCost)
-                          }
-                          className="border-red-300 focus-visible:ring-red-300"
-                          placeholder="CNY"
-                        />
-                      </div>
-                    ) : (
-                      <Input
-                        type="number"
-                        min={0}
-                        value={platingCost}
-                        onChange={(e) => setPlatingCost(toNumber(e.target.value))}
-                      />
-                    )}
-
-                    <div className="text-center font-medium text-[var(--muted)]">
-                      세팅 부가마진(개당)
-                    </div>
-                    <Input
-                      type="number"
-                      min={0}
-                      value={settingAddonMarginKrwPerPiece}
-                      onChange={(e) =>
-                        setSettingAddonMarginKrwPerPiece(toNumber(e.target.value))
-                      }
-                    />
-                    <div className="text-center text-[var(--muted)]">-</div>
-                    <div className="text-center text-[var(--muted)]">룰 외 추가</div>
-
-                    <div className="text-center font-medium text-[var(--muted)]">
-                      원석 부가마진(개당)
-                    </div>
-                    <Input
-                      type="number"
-                      min={0}
-                      value={stoneAddonMarginKrwPerPiece}
-                      onChange={(e) =>
-                        setStoneAddonMarginKrwPerPiece(toNumber(e.target.value))
-                      }
-                    />
-                    <div className="text-center text-[var(--muted)]">-</div>
-                    <div className="text-center text-[var(--muted)]">룰 외 추가</div>
-
-                    <div className="col-span-4 h-px bg-dashed border-t border-[var(--panel-border)] my-2" />
-
-                    {/* Total */}
-                    <div className="text-center font-bold text-[var(--foreground)]">
-                      합계공임
-                    </div>
-                    <Input
-                      type="number"
-                      min={0}
-                      readOnly
-                      autoFormat={false}
-                      className="text-right font-bold bg-[var(--input-bg)] text-[var(--primary)] border-[var(--panel-border)]"
-                      value={totalLaborSell}
-                    />
-                    <div className="text-center text-[var(--muted)]">-</div>
-                    <Input
-                      type="number"
-                      min={0}
-                      readOnly
-                      autoFormat={false}
-                      className="text-right font-bold bg-[var(--input-bg)] text-[var(--foreground)] border-[var(--panel-border)]"
-                      value={totalLaborCost}
-                    />
-                  </div>
-                </div>
-
-              </div>
             </div>
-          </div>
-          <div className="sticky bottom-0 flex items-center justify-end gap-2 border-t border-[var(--panel-border)] bg-[var(--panel)] pt-4">
-            <Button
-              variant="secondary"
-              type="button"
-              onClick={() => setRegisterOpen(false)}
-            >
-              취소
-            </Button>
-            <Button type="submit" disabled={!canSave || isSaving}>
-              저장
-            </Button>
-          </div>
-        </form>
+            <div className="sticky bottom-0 flex items-center justify-end gap-2 border-t border-[var(--panel-border)] bg-[var(--panel)] pt-4">
+              <Button
+                variant="secondary"
+                type="button"
+                onClick={() => setRegisterOpen(false)}
+              >
+                취소
+              </Button>
+              <Button type="submit" disabled={!canSave || isSaving}>
+                저장
+              </Button>
+            </div>
+          </form>
+        </div>
       </div>
-    </Modal>
+    </Sheet>
   );
 
   const renderImageOverlay = () => (
@@ -2112,6 +2213,87 @@ export default function CatalogPage() {
           </CardBody>
         </Card>
 
+      </div> {/* End of Left Column */}
+
+      {/* Right Column: China Cost Summary (Reserved) + BOM */}
+      <div className="space-y-4 min-w-0">
+        {/* D. 중국 원가 (예약공간) 요약 */}
+        {(() => {
+          if (!selectedItem || !selectedMasterId) return null;
+          const row = masterRowsById[selectedMasterId] as Record<string, any>;
+          if (!row) return null;
+
+          const basicCny = Number(row.cn_labor_basic_cny_per_g) || 0;
+          const extras = (Array.isArray(row.cn_labor_extra_items) ? row.cn_labor_extra_items : []) as { label: string; cny_per_g: number }[];
+          const extraCny = extras.reduce((sum, it) => sum + (Number(it.cny_per_g) || 0), 0);
+          const totalCnyPerG = basicCny + extraCny;
+
+          const weight = parseFloat(String(row.weight_default_g ?? 0));
+          const deduction = parseFloat(String(row.deduction_weight_default_g ?? 0));
+          const netWeight = Number.isFinite(weight) ? Math.max(weight - (Number.isFinite(deduction) ? deduction : 0), 0) : 0;
+
+          const matKrw = Math.round(netWeight * csOriginalKrwPerG);
+          const laborKrw = Math.round(netWeight * totalCnyPerG * cnyAdRate);
+          const totKrw = matKrw + laborKrw;
+
+          const hasChinaData = basicCny > 0 || extras.length > 0;
+
+          return (
+            <Card id="catalog.detail.china" className="border-dashed border-[var(--panel-border)]">
+              <CardHeader>
+                <div className="flex items-center justify-between">
+                  <ActionBar title="중국 원가(예약)" subtitle={hasChinaData ? `시장값: 은 ${csOriginalKrwPerG.toLocaleString()} / 환율 ${cnyAdRate.toFixed(2)}` : "설정된 원가 데이터가 없습니다."} />
+                  <div className="text-xs font-mono text-[var(--muted)]">READ-ONLY</div>
+                </div>
+              </CardHeader>
+              <CardBody className="py-3 space-y-3 text-sm">
+                {!hasChinaData ? (
+                  <div className="text-center text-[var(--muted)] py-4 text-xs">
+                    (중국 원가 데이터가 설정되지 않은 모델입니다)
+                  </div>
+                ) : (
+                  <>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div className="rounded border border-[var(--panel-border)] p-2">
+                        <p className="text-[10px] text-[var(--muted)]">기본 공임</p>
+                        <p className="font-semibold">{basicCny.toFixed(2)} <span className="text-[10px] text-[var(--muted)]">CNY/g</span></p>
+                      </div>
+                      <div className="rounded border border-[var(--panel-border)] p-2">
+                        <p className="text-[10px] text-[var(--muted)]">기타 공임 합계</p>
+                        <p className="font-semibold">{extraCny.toFixed(2)} <span className="text-[10px] text-[var(--muted)]">CNY/g</span></p>
+                      </div>
+                    </div>
+                    {extras.length > 0 && (
+                      <div className="bg-[var(--panel)] rounded p-2 text-xs text-[var(--muted)] space-y-1">
+                        {extras.map((it, idx) => (
+                          <div key={idx} className="flex justify-between">
+                            <span>{it.label}</span>
+                            <span>{Number(it.cny_per_g).toFixed(2)} CNY</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    <div className="border-t border-dashed border-[var(--panel-border)] pt-2">
+                      <div className="flex justify-between items-center mb-1">
+                        <span className="text-xs text-[var(--muted)]">소재 비용</span>
+                        <span className="font-medium"><NumberText value={matKrw} /></span>
+                      </div>
+                      <div className="flex justify-between items-center mb-1">
+                        <span className="text-xs text-[var(--muted)]">총 공임(CNY환산)</span>
+                        <span className="font-medium"><NumberText value={laborKrw} /></span>
+                      </div>
+                      <div className="flex justify-between items-center pt-2 border-t border-[var(--panel-border)]">
+                        <span className="text-sm font-bold">총 원가 (KRW)</span>
+                        <span className="text-sm font-bold text-[var(--primary)]"><NumberText value={totKrw} /></span>
+                      </div>
+                    </div>
+                  </>
+                )}
+              </CardBody>
+            </Card>
+          );
+        })()}
+
         {showBomPanel ? (
           <div className="space-y-4" id="catalog.detail.bom">
             <ActionBar
@@ -2407,13 +2589,6 @@ export default function CatalogPage() {
           </div>
         ) : null}
       </div>
-
-      {/* [오른쪽 기둥] 예약 공간 */}
-      <aside className="min-w-0 rounded-[14px] border border-dashed border-[var(--panel-border)] bg-[var(--panel)] p-4 sticky top-24 self-start">
-        <div className="flex h-[min(62vh,680px)] items-center justify-center">
-          <p className="text-xs text-[var(--muted)]">예약 공간</p>
-        </div>
-      </aside>
     </div>
   );
 
@@ -2727,7 +2902,7 @@ export default function CatalogPage() {
         )}
       </div>
 
-      {renderRegisterModal()}
+      {renderRegisterDrawer()}
       {renderImageOverlay()}
     </>
   );
