@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useCallback, useMemo } from "react";
+import { Suspense, useCallback, useMemo, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { ActionBar } from "@/components/layout/action-bar";
@@ -8,10 +8,14 @@ import {
   ReceiptPrintHalf,
   type ReceiptAmounts,
   type ReceiptLineItem,
+  type ReceiptPrintWriteoffRow,
 } from "@/components/receipt/receipt-print";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/field";
+import { Input, Textarea } from "@/components/ui/field";
+import { Modal } from "@/components/ui/modal";
+import { useRpcMutation } from "@/hooks/use-rpc-mutation";
+import { CONTRACTS } from "@/lib/contracts";
 import { getSupabaseClient } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
 
@@ -42,6 +46,8 @@ type LedgerStatementRow = {
     delta_shipment_krw: number;
     delta_return_krw: number;
     delta_payment_krw?: number;
+    delta_adjust_krw?: number;
+    delta_offset_krw?: number;
   };
   end_position: {
     balance_krw: number;
@@ -103,6 +109,19 @@ type LedgerStatementRow = {
       ledger_memo?: string | null;
       note?: string | null;
     }>;
+    adjusts?: Array<{
+      ar_ledger_id: string;
+      occurred_at: string;
+      amount_krw: number;
+      memo?: string | null;
+      payment_id?: string | null;
+    }>;
+    offsets?: Array<{
+      ar_ledger_id: string;
+      occurred_at: string;
+      amount_krw: number;
+      memo?: string | null;
+    }>;
   };
   checks: {
     check_end_equals_prev_plus_delta_krw: number;
@@ -135,6 +154,30 @@ type PartyReceiptPage = {
   lines: ReceiptLine[];
   totals: Amounts;
   previous: Amounts;
+  dayShipment: Amounts;
+  dayPayment: Amounts;
+  dayOther: Amounts;
+  printPayments?: {
+    totalKrw: number;
+    count: number;
+    totalGoldG: number;
+    totalSilverG: number;
+    totalCashKrw: number;
+  };
+  printWriteoffs?: {
+    totalKrw: number;
+    count: number;
+    rows: ReceiptPrintWriteoffRow[];
+    extraCount: number;
+  };
+  printDayBreakdown?: {
+    shipmentKrw: number;
+    returnKrw: number;
+    paymentKrw: number;
+    adjustKrw: number;
+    offsetKrw: number;
+    netDeltaKrw: number;
+  };
 };
 
 const zeroAmounts: Amounts = { gold: 0, silver: 0, labor: 0, total: 0 };
@@ -214,15 +257,9 @@ const chunkLines = (lines: ReceiptLine[], size: number) => {
 
 const buildSummaryRows = (page: PartyReceiptPage) => [
   { label: "이전 미수", value: page.previous },
-  {
-    label: "당일 미수",
-    value: {
-      gold: Number(page.totals.gold ?? 0) - Number(page.previous.gold ?? 0),
-      silver: Number(page.totals.silver ?? 0) - Number(page.previous.silver ?? 0),
-      labor: Number(page.totals.labor ?? 0) - Number(page.previous.labor ?? 0),
-      total: Number(page.totals.total ?? 0) - Number(page.previous.total ?? 0),
-    },
-  },
+  { label: "당일 출고", value: page.dayShipment },
+  { label: "당일 결제", value: page.dayPayment },
+  { label: "반품/조정/상계", value: page.dayOther },
   { label: "합계", value: page.totals },
 ];
 
@@ -252,6 +289,16 @@ const toObject = (value: unknown): Record<string, unknown> => {
 };
 
 const toArray = (value: unknown): unknown[] => (Array.isArray(value) ? value : []);
+
+const materialToPureFactor = (materialCode?: string | null) => {
+  const code = (materialCode ?? "").trim();
+  if (code === "14") return { kind: "gold" as const, factor: 0.6435 };
+  if (code === "18") return { kind: "gold" as const, factor: 0.825 };
+  if (code === "24") return { kind: "gold" as const, factor: 1 };
+  if (code === "925") return { kind: "silver" as const, factor: 0.925 };
+  if (code === "999") return { kind: "silver" as const, factor: 1 };
+  return { kind: "none" as const, factor: 0 };
+};
 
 const normalizeLegacyRow = (row: LegacyLedgerStatementRow): LedgerStatementRow => {
   const prev = toObject(row.prev_position);
@@ -296,6 +343,8 @@ const normalizeLegacyRow = (row: LegacyLedgerStatementRow): LedgerStatementRow =
         delta_shipment_krw: toNumber(day.delta_shipment_krw),
         delta_return_krw: toNumber(day.delta_return_krw),
         delta_payment_krw: toNumber(day.delta_payment_krw),
+        delta_adjust_krw: toNumber(day.delta_adjust_krw),
+        delta_offset_krw: toNumber(day.delta_offset_krw),
       },
     end_position: {
       balance_krw: toNumber(end.balance_krw),
@@ -307,6 +356,8 @@ const normalizeLegacyRow = (row: LegacyLedgerStatementRow): LedgerStatementRow =
       shipments: toArray(details.shipments) as LedgerStatementRow["details"]["shipments"],
       returns: toArray(details.returns) as LedgerStatementRow["details"]["returns"],
       payments: toArray(details.payments) as LedgerStatementRow["details"]["payments"],
+      adjusts: toArray(details.adjusts) as LedgerStatementRow["details"]["adjusts"],
+      offsets: toArray(details.offsets) as LedgerStatementRow["details"]["offsets"],
     },
     checks: {
       check_end_equals_prev_plus_delta_krw:
@@ -321,6 +372,10 @@ function ShipmentsPrintContent() {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
+  const [rightPanel, setRightPanel] = useState<"payments" | "reset">("payments");
+  const [selectedResetShipmentId, setSelectedResetShipmentId] = useState<string | null>(null);
+  const [reasonModalOpen, setReasonModalOpen] = useState(false);
+  const [reasonText, setReasonText] = useState("");
 
   const filterPartyId = (searchParams.get("party_id") ?? "").trim();
   const dateParam = (searchParams.get("date") ?? "").trim();
@@ -562,6 +617,98 @@ function ShipmentsPrintContent() {
     partyGroups.forEach((group) => {
       const prev = group.statement.prev_position;
       const end = group.statement.end_position;
+      const day = group.statement.day_ledger_totals;
+      const partyPayments = getPartyPayments(group)
+        .slice()
+        .sort(
+          (a, b) =>
+            new Date(b.paid_at ?? b.ledger_occurred_at ?? 0).getTime() -
+            new Date(a.paid_at ?? a.ledger_occurred_at ?? 0).getTime()
+        );
+      const writeoffs = (group.statement.details.adjusts ?? [])
+        .filter((adjust) => (adjust.memo ?? "").toUpperCase().includes("SERVICE_WRITEOFF"))
+        .slice()
+        .sort((a, b) => new Date(b.occurred_at ?? 0).getTime() - new Date(a.occurred_at ?? 0).getTime());
+
+      const shipmentCommodities = (group.statement.details.shipments ?? []).reduce(
+        (acc, shipment) => {
+          (shipment.lines ?? []).forEach((line) => {
+            const pure = materialToPureFactor(line.material_code ?? null);
+            const weight = Number(line.net_weight_g ?? 0);
+            const silverAdjust =
+              pure.kind === "silver" && Number(line.silver_adjust_factor ?? 0) > 0
+                ? Number(line.silver_adjust_factor)
+                : 1;
+            const pureWeight = weight * pure.factor * (pure.kind === "silver" ? silverAdjust : 1);
+
+            if (pure.kind === "gold") acc.gold += pureWeight;
+            if (pure.kind === "silver") acc.silver += pureWeight;
+
+            const labor =
+              line.labor_total_sell_krw !== null && line.labor_total_sell_krw !== undefined
+                ? Number(line.labor_total_sell_krw)
+                : line.repair_fee_krw !== null && line.repair_fee_krw !== undefined
+                  ? Number(line.repair_fee_krw)
+                  : 0;
+            acc.labor += labor;
+          });
+          return acc;
+        },
+        { gold: 0, silver: 0, labor: 0 }
+      );
+
+      const returnCommodities = (group.statement.details.returns ?? []).reduce(
+        (acc, ret) => {
+          const pure = materialToPureFactor(ret.material_code ?? null);
+          const weight = Number(ret.net_weight_g ?? 0);
+          const pureWeight = weight * pure.factor;
+
+          if (pure.kind === "gold") acc.gold -= pureWeight;
+          if (pure.kind === "silver") acc.silver -= pureWeight;
+
+          acc.labor -= Number(ret.labor_total_sell_krw ?? 0);
+          return acc;
+        },
+        { gold: 0, silver: 0, labor: 0 }
+      );
+
+      const paymentCommodities = partyPayments.reduce(
+        (acc, payment) => {
+          acc.gold -= Number(payment.alloc_gold_g ?? 0);
+          acc.silver -= Number(payment.alloc_silver_g ?? 0);
+          acc.labor -= Number(payment.alloc_labor_krw ?? 0);
+          return acc;
+        },
+        { gold: 0, silver: 0, labor: 0 }
+      );
+
+      const printPayments = {
+        totalKrw: -Number(day.delta_payment_krw ?? 0),
+        count: partyPayments.length,
+        totalGoldG: partyPayments.reduce((sum, payment) => sum + Number(payment.alloc_gold_g ?? 0), 0),
+        totalSilverG: partyPayments.reduce((sum, payment) => sum + Number(payment.alloc_silver_g ?? 0), 0),
+        totalCashKrw: partyPayments.reduce((sum, payment) => sum + Number(payment.cash_krw ?? 0), 0),
+      };
+
+      const printWriteoffs = {
+        totalKrw: writeoffs.reduce((sum, adjust) => sum + -Number(adjust.amount_krw ?? 0), 0),
+        count: writeoffs.length,
+        rows: writeoffs.slice(0, 2).map((adjust) => ({
+          atLabel: formatDateTimeKst(adjust.occurred_at),
+          amountKrw: -Number(adjust.amount_krw ?? 0),
+          memo: adjust.memo ?? null,
+        })),
+        extraCount: Math.max(writeoffs.length - 2, 0),
+      };
+
+      const printDayBreakdown = {
+        shipmentKrw: Number(day.delta_shipment_krw ?? 0),
+        returnKrw: Number(day.delta_return_krw ?? 0),
+        paymentKrw: Number(day.delta_payment_krw ?? 0),
+        adjustKrw: Number(day.delta_adjust_krw ?? 0),
+        offsetKrw: Number(day.delta_offset_krw ?? 0),
+        netDeltaKrw: Number(day.delta_total_krw ?? 0),
+      };
 
       const pageTemplate: Omit<PartyReceiptPage, "lines"> = {
         partyId: group.partyId,
@@ -578,12 +725,36 @@ function ShipmentsPrintContent() {
           labor: Number(prev.labor_cash_outstanding_krw ?? 0),
           total: Number(prev.balance_krw ?? 0),
         },
+        dayShipment: {
+          gold: shipmentCommodities.gold,
+          silver: shipmentCommodities.silver,
+          labor: shipmentCommodities.labor,
+          total: Number(day.delta_shipment_krw ?? 0),
+        },
+        dayPayment: {
+          gold: paymentCommodities.gold,
+          silver: paymentCommodities.silver,
+          labor: paymentCommodities.labor,
+          total: Number(day.delta_payment_krw ?? 0),
+        },
+        dayOther: {
+          gold: returnCommodities.gold,
+          silver: returnCommodities.silver,
+          labor: returnCommodities.labor,
+          total:
+            Number(day.delta_return_krw ?? 0) +
+            Number(day.delta_adjust_krw ?? 0) +
+            Number(day.delta_offset_krw ?? 0),
+        },
       };
 
-      chunkLines(group.lines, 15).forEach((chunk) => {
+      chunkLines(group.lines, 6).forEach((chunk, chunkIndex) => {
         pages.push({
           ...pageTemplate,
           lines: chunk,
+          printPayments: chunkIndex === 0 && printPayments.count > 0 ? printPayments : undefined,
+          printWriteoffs: chunkIndex === 0 && printWriteoffs.count > 0 ? printWriteoffs : undefined,
+          printDayBreakdown: chunkIndex === 0 ? printDayBreakdown : undefined,
         });
       });
     });
@@ -595,11 +766,22 @@ function ShipmentsPrintContent() {
         lines: [],
         totals: { ...zeroAmounts },
         previous: { ...zeroAmounts },
+        dayShipment: { ...zeroAmounts },
+        dayPayment: { ...zeroAmounts },
+        dayOther: { ...zeroAmounts },
+        printDayBreakdown: {
+          shipmentKrw: 0,
+          returnKrw: 0,
+          paymentKrw: 0,
+          adjustKrw: 0,
+          offsetKrw: 0,
+          netDeltaKrw: 0,
+        },
       });
     }
 
     return pages;
-  }, [partyGroups]);
+  }, [getPartyPayments, partyGroups]);
 
   const pageChecks = useMemo(
     () =>
@@ -623,6 +805,46 @@ function ShipmentsPrintContent() {
     if (!activePartyId) return partyGroups;
     return partyGroups.filter((group) => group.partyId === activePartyId);
   }, [activePartyId, partyGroups]);
+
+  const selectedPartyGroup = useMemo(
+    () => (activePartyId ? partyGroups.find((group) => group.partyId === activePartyId) ?? null : null),
+    [activePartyId, partyGroups]
+  );
+
+  const resetCandidates = useMemo(() => {
+    if (!selectedPartyGroup)
+      return [] as Array<{
+        shipmentId: string;
+        occurredAt: string;
+        customerName: string;
+        modelSummary: string;
+        lineCount: number;
+        amountKrw: number;
+      }>;
+    return (selectedPartyGroup.statement.details.shipments ?? [])
+      .map((shipment) => {
+        const modelSummary = (shipment.lines ?? [])
+          .map((line) => (line.model_name ?? "").trim())
+          .filter(Boolean)
+          .slice(0, 2)
+          .join(", ");
+        const amountKrw = (shipment.lines ?? []).reduce((sum, line) => sum + Number(line.amount_krw ?? 0), 0);
+        return {
+          shipmentId: shipment.shipment_id,
+          occurredAt: shipment.ledger_occurred_at,
+          customerName: shipment.customer_name ?? selectedPartyGroup.partyName,
+          modelSummary: modelSummary || "모델정보 없음",
+          lineCount: (shipment.lines ?? []).length,
+          amountKrw,
+        };
+      })
+      .filter((row) => Boolean(row.shipmentId));
+  }, [selectedPartyGroup]);
+
+  const selectedResetShipment = useMemo(
+    () => resetCandidates.find((row) => row.shipmentId === selectedResetShipmentId) ?? null,
+    [resetCandidates, selectedResetShipmentId]
+  );
 
   const totalLineCount = useMemo(
     () => partyGroups.reduce((sum, group) => sum + group.lines.length, 0),
@@ -665,6 +887,28 @@ function ShipmentsPrintContent() {
     () => new Map(dayPaymentByParty.map((row) => [row.partyId, row])),
     [dayPaymentByParty]
   );
+
+  const unconfirmShipmentMutation = useRpcMutation<unknown>({
+    fn: CONTRACTS.functions.shipmentUnconfirm,
+    successMessage: "출고 초기화 완료",
+    onSuccess: () => {
+      setReasonModalOpen(false);
+      setReasonText("");
+      setSelectedResetShipmentId(null);
+      statementQuery.refetch();
+    },
+  });
+
+  const handleConfirmClear = useCallback(async () => {
+    if (!selectedResetShipment) return;
+    const reason = reasonText.trim();
+    if (!reason) return;
+    await unconfirmShipmentMutation.mutateAsync({
+      p_shipment_id: selectedResetShipment.shipmentId,
+      p_reason: reason,
+      p_note: "unconfirm from shipments_print",
+    });
+  }, [reasonText, selectedResetShipment, unconfirmShipmentMutation]);
 
   const isLoading = statementQuery.isLoading;
   const errorMessage = statementQuery.error ? toMessage(statementQuery.error) : "";
@@ -713,6 +957,16 @@ function ShipmentsPrintContent() {
             </div>
           }
         />
+        {rightPanel === "reset" && selectedResetShipment && (
+          <div className="mt-3 flex items-center justify-between gap-3 rounded-md border border-[var(--panel-border)] bg-[var(--panel)] px-3 py-2">
+            <div className="text-xs tabular-nums">
+              선택 출고: {selectedResetShipment.customerName} · {selectedResetShipment.modelSummary} · {formatKrw(selectedResetShipment.amountKrw)} · {formatDateTimeKst(selectedResetShipment.occurredAt)}
+            </div>
+            <Button variant="secondary" onClick={() => setReasonModalOpen(true)}>
+              출고초기화
+            </Button>
+          </div>
+        )}
       </div>
 
       <div className="shipments-print-stage px-6 py-6 space-y-6">
@@ -780,7 +1034,7 @@ function ShipmentsPrintContent() {
               </Card>
               <Card className="border-[var(--panel-border)]">
                 <CardBody className="p-4">
-                  <div className="text-xs text-[var(--muted)]">라인 합계(amount_krw)</div>
+                  <div className="text-xs text-[var(--muted)]">출고/반품 라인 합계(amount_krw)</div>
                   <div className="text-xl font-semibold tabular-nums">{formatKrw(totalLineAmountKrw)}</div>
                 </CardBody>
               </Card>
@@ -801,7 +1055,10 @@ function ShipmentsPrintContent() {
                   <div className="divide-y divide-[var(--panel-border)]">
                     <button
                       type="button"
-                      onClick={() => updateQuery({ partyId: null })}
+                      onClick={() => {
+                        setSelectedResetShipmentId(null);
+                        updateQuery({ partyId: null });
+                      }}
                       className={cn(
                         "w-full text-left px-4 py-3 transition-colors",
                         activePartyId ? "hover:bg-[var(--panel-hover)]" : "bg-[var(--panel-hover)]"
@@ -815,23 +1072,46 @@ function ShipmentsPrintContent() {
                       const partyPass = isPartyPass(group.statement.checks);
                       const dayPayment = dayPaymentByPartyMap.get(group.partyId) ?? null;
                       return (
-                        <button
-                          key={group.partyId}
-                          type="button"
-                          onClick={() => updateQuery({ partyId: group.partyId })}
-                          className={cn(
-                            "w-full text-left px-4 py-3 transition-colors",
-                            isActive ? "bg-[var(--panel-hover)]" : "hover:bg-[var(--panel-hover)]"
+                        <div key={group.partyId}>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedResetShipmentId(null);
+                              updateQuery({ partyId: group.partyId });
+                            }}
+                            className={cn(
+                              "w-full text-left px-4 py-3 transition-colors",
+                              isActive ? "bg-[var(--panel-hover)]" : "hover:bg-[var(--panel-hover)]"
+                            )}
+                          >
+                            <div className="text-sm font-semibold truncate">{group.partyName}</div>
+                            <div className="text-xs text-[var(--muted)] tabular-nums">
+                              {group.lines.length}건 · {partyPass ? "PASS" : "FAIL"}
+                            </div>
+                            <div className="text-[11px] text-[var(--muted)] tabular-nums mt-1">
+                              당일결제: {formatKrw(dayPayment?.amount ?? 0)} · {dayPayment?.paymentCount ?? 0}건
+                            </div>
+                          </button>
+                          {isActive && (
+                            <div className="px-4 pb-3 flex items-center gap-2 bg-[var(--panel-hover)]">
+                              <Button
+                                variant={rightPanel === "payments" ? "primary" : "secondary"}
+                                onClick={() => setRightPanel("payments")}
+                              >
+                                당일결제내역
+                              </Button>
+                              <Button
+                                variant={rightPanel === "reset" ? "primary" : "secondary"}
+                                onClick={() => {
+                                  setSelectedResetShipmentId(null);
+                                  setRightPanel("reset");
+                                }}
+                              >
+                                출고초기화
+                              </Button>
+                            </div>
                           )}
-                        >
-                          <div className="text-sm font-semibold truncate">{group.partyName}</div>
-                          <div className="text-xs text-[var(--muted)] tabular-nums">
-                            {group.lines.length}건 · {partyPass ? "PASS" : "FAIL"}
-                          </div>
-                          <div className="text-[11px] text-[var(--muted)] tabular-nums mt-1">
-                            당일결제: {formatKrw(dayPayment?.amount ?? 0)} · {dayPayment?.paymentCount ?? 0}건
-                          </div>
-                        </button>
+                        </div>
                       );
                     })}
                   </div>
@@ -898,49 +1178,88 @@ function ShipmentsPrintContent() {
                 </div>
               )}
 
-              <div className="space-y-4">
-                {visiblePartyGroups.map((group) => {
-                  const payments = getPartyPayments(group)
-                    .slice()
-                    .sort(
-                    (a, b) =>
-                      new Date(b.paid_at ?? b.ledger_occurred_at ?? 0).getTime() -
-                      new Date(a.paid_at ?? a.ledger_occurred_at ?? 0).getTime()
-                  );
-                  return (
-                    <Card key={`payments-${group.partyId}`} className="border-[var(--panel-border)]">
-                      <CardHeader className="border-b border-[var(--panel-border)] py-3">
-        <div className="text-sm font-semibold">당일결제 내역(원장 SOT) · {group.partyName}</div>
-        <div className="text-xs text-[var(--muted)] tabular-nums">합계 {formatKrw(-Number(group.statement.day_ledger_totals.delta_payment_krw ?? 0))} · {payments.length}건</div>
-                      </CardHeader>
-                      <CardBody className="p-4">
-                        {payments.length === 0 ? (
-                          <div className="text-xs text-[var(--muted)]">당일 결제 내역 없음</div>
-                        ) : (
-                          <div className="space-y-2 text-xs">
-                            {payments.map((payment, index) => {
-                              const amount =
-                                payment.ledger_amount_krw !== null && payment.ledger_amount_krw !== undefined
-                                  ? -Number(payment.ledger_amount_krw)
-                                  : 0;
-                              return (
-                                <div
-                                  key={`${payment.payment_id ?? "payment"}-${payment.ledger_occurred_at ?? index}`}
-                                  className="flex items-center justify-between gap-4 tabular-nums"
-                                >
-                                  <div className="truncate">
-                                    {formatDateTimeKst(payment.paid_at ?? payment.ledger_occurred_at)} · {payment.payment_id ?? "-"}
+              <div className="space-y-2">
+                {!selectedPartyGroup ? (
+                  <Card className="border-[var(--panel-border)]">
+                    <CardBody className="p-2 text-xs text-[var(--muted)]">좌측에서 거래처를 선택하면 패널을 사용할 수 있습니다.</CardBody>
+                  </Card>
+                ) : rightPanel === "payments" ? (
+                  (() => {
+                    const payments = getPartyPayments(selectedPartyGroup)
+                      .slice()
+                      .sort(
+                        (a, b) =>
+                          new Date(b.paid_at ?? b.ledger_occurred_at ?? 0).getTime() -
+                          new Date(a.paid_at ?? a.ledger_occurred_at ?? 0).getTime()
+                      );
+                    return (
+                      <Card key={`payments-${selectedPartyGroup.partyId}`} className="border-[var(--panel-border)]">
+                        <CardHeader className="border-b border-[var(--panel-border)] py-3">
+                          <div className="text-sm font-semibold">당일결제 내역(원장 SOT) · {selectedPartyGroup.partyName}</div>
+                          <div className="text-xs text-[var(--muted)] tabular-nums">합계 {formatKrw(-Number(selectedPartyGroup.statement.day_ledger_totals.delta_payment_krw ?? 0))} · {payments.length}건</div>
+                        </CardHeader>
+                        <CardBody className="p-4">
+                          {payments.length === 0 ? (
+                            <div className="text-xs text-[var(--muted)]">당일 결제 내역 없음</div>
+                          ) : (
+                            <div className="space-y-2 text-xs">
+                              {payments.map((payment, index) => {
+                                const amount =
+                                  payment.ledger_amount_krw !== null && payment.ledger_amount_krw !== undefined
+                                    ? -Number(payment.ledger_amount_krw)
+                                    : 0;
+                                return (
+                                  <div
+                                    key={`${payment.payment_id ?? "payment"}-${payment.ledger_occurred_at ?? index}`}
+                                    className="flex items-center justify-between gap-4 tabular-nums"
+                                  >
+                                    <div className="truncate">
+                                      {formatDateTimeKst(payment.paid_at ?? payment.ledger_occurred_at)} · 현금 {formatKrw(payment.cash_krw ?? 0)} · 금 {Number(payment.alloc_gold_g ?? 0).toFixed(3)}g · 은 {Number(payment.alloc_silver_g ?? 0).toFixed(3)}g
+                                    </div>
+                                    <div className="font-semibold">{formatKrw(amount)}</div>
                                   </div>
-                                  <div className="font-semibold">{formatKrw(amount)}</div>
-                                </div>
-                              );
-                            })}
-                          </div>
-                        )}
-                      </CardBody>
-                    </Card>
-                  );
-                })}
+                                );
+                              })}
+                            </div>
+                          )}
+                        </CardBody>
+                      </Card>
+                    );
+                  })()
+                ) : (
+                  <Card className="border-[var(--panel-border)]">
+                    <CardHeader className="border-b border-[var(--panel-border)] py-3">
+                      <div className="text-sm font-semibold">출고초기화 대상 · {selectedPartyGroup.partyName}</div>
+                      <div className="text-xs text-[var(--muted)]">대상을 선택하면 상단에서 초기화 액션을 실행할 수 있습니다.</div>
+                    </CardHeader>
+                    <CardBody className="p-0">
+                      {resetCandidates.length === 0 ? (
+                        <div className="p-4 text-xs text-[var(--muted)]">초기화 가능한 출고가 없습니다.</div>
+                      ) : (
+                        <div className="divide-y divide-[var(--panel-border)]">
+                          {resetCandidates.map((row) => (
+                            <button
+                              key={row.shipmentId}
+                              type="button"
+                              onClick={() => setSelectedResetShipmentId(row.shipmentId)}
+                              className={cn(
+                                "w-full px-4 py-3 text-left transition-colors",
+                                selectedResetShipmentId === row.shipmentId
+                                  ? "bg-[var(--panel-hover)]"
+                                  : "hover:bg-[var(--panel-hover)]"
+                              )}
+                            >
+                              <div className="text-sm font-semibold">{row.customerName}</div>
+                              <div className="text-xs text-[var(--muted)] tabular-nums">
+                                {row.modelSummary} · {row.lineCount}건 · {formatKrw(row.amountKrw)} · {formatDateTimeKst(row.occurredAt)}
+                              </div>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </CardBody>
+                  </Card>
+                )}
               </div>
             </div>
 
@@ -962,6 +1281,9 @@ function ShipmentsPrintContent() {
                           dateLabel={printedAtLabel}
                           lines={page.lines}
                           summaryRows={buildSummaryRows(page)}
+                          printPayments={page.printPayments}
+                          printWriteoffs={page.printWriteoffs}
+                          printDayBreakdown={page.printDayBreakdown}
                         />
                       </div>
                       <div className="h-full pl-4">
@@ -970,6 +1292,9 @@ function ShipmentsPrintContent() {
                           dateLabel={printedAtLabel}
                           lines={page.lines}
                           summaryRows={buildSummaryRows(page)}
+                          printPayments={page.printPayments}
+                          printWriteoffs={page.printWriteoffs}
+                          printDayBreakdown={page.printDayBreakdown}
                         />
                       </div>
                     </div>
@@ -995,6 +1320,44 @@ function ShipmentsPrintContent() {
           </>
         )}
       </div>
+
+      <Modal
+        open={reasonModalOpen}
+        onClose={() => setReasonModalOpen(false)}
+        title="출고초기화 사유"
+        className="max-w-lg"
+      >
+        <div className="space-y-4">
+          <div className="space-y-2">
+            <label className="text-sm font-medium">사유</label>
+            <Textarea
+              placeholder="예: 당일 발송 불가"
+              value={reasonText}
+              onChange={(event) => setReasonText(event.target.value)}
+              className="min-h-[120px]"
+            />
+          </div>
+          <div className="flex items-center justify-between">
+            <div className={cn("text-xs", reasonText.trim() ? "text-[var(--muted)]" : "text-[var(--danger)]")}>
+              사유를 입력해야 초기화됩니다.
+            </div>
+            <div className="flex items-center gap-2">
+              <Button variant="secondary" onClick={() => setReasonModalOpen(false)}>
+                취소
+              </Button>
+              <Button
+                variant="primary"
+                onClick={() => {
+                  void handleConfirmClear();
+                }}
+                disabled={!reasonText.trim() || !selectedResetShipment || unconfirmShipmentMutation.isPending}
+              >
+                {unconfirmShipmentMutation.isPending ? "처리 중..." : "초기화"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 }
