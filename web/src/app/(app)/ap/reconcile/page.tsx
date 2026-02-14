@@ -38,6 +38,7 @@ type ReconcileIssueRow = Record<string, unknown> & {
   receipt_id?: string | null;
   snapshot_version?: number | null;
   calc_version?: number | null;
+  details?: unknown;
 };
 
 // ── Formatters ──────────────────────────────────────────────────────────────
@@ -62,6 +63,107 @@ const renderValue = (value: unknown) => {
   if (typeof value === "string" && value.trim()) return value;
   return String(value);
 };
+
+
+const JsonBlock = ({ value }: { value: unknown }) => {
+  try {
+    return (
+      <pre className="mt-2 max-h-[260px] overflow-auto rounded-md border border-[var(--panel-border)] bg-[var(--panel)] p-2 text-[11px]">
+        {JSON.stringify(value, null, 2)}
+      </pre>
+    );
+  } catch {
+    return <div className="text-xs">{String(value)}</div>;
+  }
+};
+
+function IssueDetailsPanel({ issue }: { issue: ReconcileIssueRow }) {
+  const details = issue.details as any;
+  if (!details || typeof details !== "object") return null;
+
+  if (issue.issue_type === "RECENT_PAYMENT_INCONSISTENT") {
+    return (
+      <div className="rounded-lg border border-[var(--panel-border)] p-3">
+        <div className="text-sm font-semibold">최근결제(best-fit) 힌트</div>
+        <div className="mt-2 grid grid-cols-2 gap-2 text-xs">
+          <div>
+            <span className="text-[var(--muted)]">best_candidate:</span>{" "}
+            {String(details.best_candidate ?? "-")}
+          </div>
+          <div>
+            <span className="text-[var(--muted)]">best_score:</span> {String(details.best_score ?? "-")}
+          </div>
+          <div>
+            <span className="text-[var(--muted)]">factory_ref_date:</span>{" "}
+            {String(details.factory_ref_date ?? "-")}
+          </div>
+          <div>
+            <span className="text-[var(--muted)]">last_pay_date:</span> {String(details.last_pay_date ?? "-")}
+          </div>
+          <div className="col-span-2">
+            <span className="text-[var(--muted)]">as_of_occurred_at:</span>{" "}
+            {String(details.as_of_occurred_at ?? details.cur_occurred_at ?? "-")}
+          </div>
+        </div>
+        <JsonBlock value={details} />
+      </div>
+    );
+  }
+
+  if (issue.issue_type === "FACTORY_POST_NEQ_SYSTEM_ASOF") {
+    const rows = Array.isArray(details.system_position) ? details.system_position : [];
+    return (
+      <div className="rounded-lg border border-[var(--panel-border)] p-3">
+        <div className="text-sm font-semibold">시스템 포지션(as-of) (due/paid/alloc/net/credit)</div>
+        <div className="mt-2 overflow-x-auto rounded-lg border border-[var(--panel-border)]">
+          <table className="w-full min-w-[720px] text-xs">
+            <thead className="bg-[var(--chip)] text-[var(--muted)]">
+              <tr>
+                <th className="px-3 py-2 text-left font-medium">asset</th>
+                <th className="px-3 py-2 text-right font-medium">due</th>
+                <th className="px-3 py-2 text-right font-medium">paid</th>
+                <th className="px-3 py-2 text-right font-medium">alloc</th>
+                <th className="px-3 py-2 text-right font-medium">net_balance</th>
+                <th className="px-3 py-2 text-right font-medium">allocated_balance</th>
+                <th className="px-3 py-2 text-right font-medium">unallocated_credit</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r: any, idx: number) => (
+                <tr key={idx} className="border-t border-[var(--panel-border)]">
+                  <td className="px-3 py-2">{String(r.asset_code ?? "-")}</td>
+                  <td className="px-3 py-2 text-right">{String(r.due ?? "-")}</td>
+                  <td className="px-3 py-2 text-right">{String(r.paid ?? "-")}</td>
+                  <td className="px-3 py-2 text-right">{String(r.alloc ?? "-")}</td>
+                  <td className="px-3 py-2 text-right font-semibold">{String(r.net_balance ?? "-")}</td>
+                  <td className="px-3 py-2 text-right">{String(r.allocated_balance ?? "-")}</td>
+                  <td className="px-3 py-2 text-right">{String(r.unallocated_credit ?? "-")}</td>
+                </tr>
+              ))}
+              {rows.length === 0 && (
+                <tr>
+                  <td className="px-3 py-3 text-[var(--muted)]" colSpan={7}>
+                    details.system_position 없음
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+        <div className="mt-2 text-xs text-[var(--muted)]">
+          as_of_occurred_at: {String(details.as_of_occurred_at ?? "-")}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="rounded-lg border border-[var(--panel-border)] p-3">
+      <div className="text-sm font-semibold">details</div>
+      <JsonBlock value={details} />
+    </div>
+  );
+}
 
 const toSeverityLabel = (severity?: string | null) => {
   switch (severity?.toUpperCase()) {
@@ -94,13 +196,13 @@ const toIssueTypeLabel = (issueType?: string | null) => {
     case "PRE_NEQ_PREV_POST":
       return "이전 POST와 현재 PRE 불일치";
     case "PRE_PLUS_SALE_NEQ_POST":
-      return "PRE + SALE와 POST 불일치";
+      return "PRE + SALE - 최근결제 vs POST 불일치";
     case "FACTORY_POST_NEQ_SYSTEM_ASOF":
-      return "공장 POST vs 시스템(as-of) 불일치";
+      return "공장 POST vs 시스템 NET(as-of) 불일치";
     case "RECENT_PAYMENT_INCONSISTENT":
-      return "공장 최근결제 vs 시스템 결제내역 불일치";
+      return "공장 최근결제 vs 시스템 결제 불일치 (best-fit)";
     case "FACTORY_SALE_NEQ_INTERNAL_CALC":
-      return "당일 합계 vs 라인 계산 불일치";
+      return "공장 SALE vs 내부 계산 불일치";
     default:
       return issueType ?? "-";
   }
@@ -109,15 +211,15 @@ const toIssueTypeLabel = (issueType?: string | null) => {
 const toIssueTypeDescription = (issueType?: string | null) => {
   switch (issueType) {
     case "PRE_NEQ_PREV_POST":
-      return "이전 영수증의 POST_BALANCE와 현재 영수증의 PRE_BALANCE가 다릅니다.";
+      return "이전 영수증의 POST(거래 후 미수)와 현재 영수증의 PRE(거래 전 미수)가 일치하는지 확인합니다.";
     case "PRE_PLUS_SALE_NEQ_POST":
-      return "현재 영수증에서 PRE_BALANCE + SALE 값이 POST_BALANCE와 맞지 않습니다.";
+      return "공장 4행 산식(PRE + SALE - 최근결제 = POST)이 맞는지 확인합니다.";
     case "FACTORY_POST_NEQ_SYSTEM_ASOF":
-      return "공장 POST(거래 후 미수)와 시스템 잔액(as-of)이 다릅니다.";
+      return "공장 POST(거래 후 미수)와 시스템 NET 잔액(as-of occurred_at)이 일치하는지 확인합니다.";
     case "RECENT_PAYMENT_INCONSISTENT":
-      return "공장 최근결제와 시스템 결제내역이 다릅니다.";
+      return "공장 최근결제와 시스템 결제내역이 (best-fit 기준으로) 일치하는지 확인합니다.";
     case "FACTORY_SALE_NEQ_INTERNAL_CALC":
-      return "당일 합계와 라인 계산 결과가 다릅니다.";
+      return "공장 SALE(판매)와 내부 라인 기반 계산값이 일치하는지 확인합니다.";
     default:
       return "";
   }
@@ -126,7 +228,38 @@ const toIssueTypeDescription = (issueType?: string | null) => {
 const toIssueSummaryKorean = (issueType?: string | null, summary?: string | null) => {
   if (!summary) return toIssueTypeDescription(issueType) || "-";
 
-  if (summary === "PRE_BALANCE != previous POST_BALANCE (asset-level mismatch)") {
+  
+// ── v0430+ (best-fit / occurred_at / NET) summary mappings ──
+if (summary === "PRE_BALANCE(current) != POST_BALANCE(previous) (check missing/backdated receipt order)") {
+  return "현재 PRE가 이전 영수증 POST와 다릅니다. (누락/백데이트/정렬 문제 가능)";
+}
+if (
+  summary === "PRE + SALE - RECENT_PAYMENT != POST_BALANCE (factory statement inconsistent or missing component)"
+) {
+  return "공장 4행 산식(PRE + SALE - 최근결제 = POST)이 맞지 않습니다. (팩스 입력/누락 요소 점검)";
+}
+if (
+  summary ===
+    "RECENT_PAYMENT(factory) != system payments (best-fit window). Check ref_date/window or missing payment entry."
+) {
+  return "공장 ‘최근결제’가 시스템 결제와 다릅니다. (best-fit 기준/결제 누락/기준일 확인)";
+}
+if (
+  summary ===
+    "POST_BALANCE(factory) != system NET balance(as-of occurred_at). Check missing SALE sync, wrong payment entry, or adjustment needed."
+) {
+  return "공장 POST와 시스템 NET 잔액(as-of)이 다릅니다. (SALE sync 누락/결제 누락/조정 필요)";
+}
+if (summary === "PRE_BALANCE + SALE - RECENT_PAYMENT != POST_BALANCE (requires adjustment or missing component)") {
+  return "PRE + SALE - 최근결제 값이 POST와 다릅니다. 누락/정정/조정이 필요할 수 있습니다.";
+}
+if (
+  summary ===
+    "POST_BALANCE(factory) != system NET balance(as-of occurred_at). Check missing SALE invoice, wrong payment entry, or adjustment needed."
+) {
+  return "공장 POST와 시스템 NET 잔액(as-of)이 다릅니다. (SALE 누락/결제 입력 오류/조정 필요)";
+}
+if (summary === "PRE_BALANCE != previous POST_BALANCE (asset-level mismatch)") {
     return "현재 PRE_BALANCE가 이전 영수증 POST_BALANCE와 자산 단위로 일치하지 않습니다.";
   }
   if (summary === "PRE_BALANCE + SALE != POST_BALANCE (requires adjustment or missing component)") {
@@ -272,6 +405,7 @@ const getStatusColor = (status?: string | null) => {
 
 // Priority fields to show first in issue detail
 const PRIORITY_FIELDS = ["summary", "issue_type", "severity", "status", "created_at", "vendor_name"];
+const HIDDEN_FIELDS = ["details"];
 
 type IssueSortKey = "created_desc" | "created_asc" | "severity_desc" | "issue_type_asc";
 
@@ -505,6 +639,7 @@ function ApReconcileContent() {
     const priority: [string, unknown][] = [];
     const rest: [string, unknown][] = [];
     for (const [key, value] of entries) {
+      if (HIDDEN_FIELDS.includes(key)) continue;
       if (PRIORITY_FIELDS.includes(key)) {
         priority.push([key, value]);
       } else {
@@ -814,6 +949,8 @@ function ApReconcileContent() {
                       </div>
                     ))}
                   </div>
+
+                  <IssueDetailsPanel issue={selectedIssue as ReconcileIssueRow} />
 
                   {/* Expandable Rest Fields */}
                   {restEntries.length > 0 && (

@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useCallback, useMemo, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { ActionBar } from "@/components/layout/action-bar";
@@ -434,6 +434,13 @@ const normalizeLegacyRow = (row: LegacyLedgerStatementRow): LedgerStatementRow =
 };
 
 function ShipmentsPrintContent() {
+  useEffect(() => {
+    document.body.classList.add("shipments-print-printing");
+    return () => {
+      document.body.classList.remove("shipments-print-printing");
+    };
+  }, []);
+
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();

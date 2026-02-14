@@ -22,6 +22,7 @@ import { compressImage } from "@/lib/image-utils";
 import { deriveCategoryCodeFromModelName } from "@/lib/model-name";
 import { CatalogGalleryGrid } from "@/components/catalog/CatalogGalleryGrid";
 import { ChinaCostPanel, type ChinaExtraLaborItem } from "../../../components/catalog/ChinaCostPanel";
+import { EffectivePriceCard } from "@/components/pricing/EffectivePriceCard";
 /* eslint-disable @next/next/no-img-element */
 
 type CatalogItem = {
@@ -39,9 +40,11 @@ type CatalogItem = {
   cost: string;
   grades: string[];
   imageUrl?: string | null;
+  masterKind: "MODEL" | "PART" | "STONE" | "BUNDLE";
 };
 
 type CatalogDetail = {
+  masterKind: "MODEL" | "PART" | "STONE" | "BUNDLE";
   categoryCode: string;
   materialCode: string;
   weight: string;
@@ -97,7 +100,20 @@ type BomRecipeRow = {
   variant_key?: string | null;
   is_active: boolean;
   note?: string | null;
+  meta?: Record<string, unknown> | null;
   line_count: number;
+};
+
+type BomFlattenLeafRow = {
+  depth?: number | null;
+  path?: string | null;
+  qty_per_product_unit?: number | null;
+  component_ref_type?: "MASTER" | "PART" | null;
+  component_master_id?: string | null;
+  component_master_model_name?: string | null;
+  component_part_id?: string | null;
+  component_part_name?: string | null;
+  unit?: string | null;
 };
 
 type BomLineRow = {
@@ -214,6 +230,7 @@ export default function CatalogPage() {
   const [vendorPrefixMap, setVendorPrefixMap] = useState<Record<string, string>>({});
   const [masterRowsById, setMasterRowsById] = useState<Record<string, Record<string, unknown>>>({});
   const [categoryCode, setCategoryCode] = useState("");
+  const [masterKind, setMasterKind] = useState<"MODEL" | "PART" | "STONE" | "BUNDLE">("MODEL");
   const [materialCode, setMaterialCode] = useState("");
   const [weightDefault, setWeightDefault] = useState("");
   const [deductionWeight, setDeductionWeight] = useState("");
@@ -265,7 +282,11 @@ export default function CatalogPage() {
   const [showBomPanel, setShowBomPanel] = useState(false);
   const [recipeVariantKey, setRecipeVariantKey] = useState("");
   const [recipeNote, setRecipeNote] = useState("");
+  const [recipeSellAdjustRate, setRecipeSellAdjustRate] = useState("1");
+  const [recipeSellAdjustKrw, setRecipeSellAdjustKrw] = useState("0");
+  const [recipeRoundUnitKrw, setRecipeRoundUnitKrw] = useState("1000");
   const [selectedRecipeId, setSelectedRecipeId] = useState<string | null>(null);
+  const [showFlattenDebug, setShowFlattenDebug] = useState(false);
   const [componentType, setComponentType] = useState<"PART" | "MASTER">("MASTER");
   const [showAdvancedComponents, setShowAdvancedComponents] = useState(false);
   const [componentQuery, setComponentQuery] = useState("");
@@ -530,6 +551,7 @@ export default function CatalogPage() {
           cost,
           grades: ["-", "-", "-"],
           imageUrl: row.image_url ? String(row.image_url) : null,
+          masterKind: String(row.master_kind ?? "MODEL") as "MODEL" | "PART" | "STONE" | "BUNDLE",
         } as CatalogItem;
       });
 
@@ -569,6 +591,7 @@ export default function CatalogPage() {
     if (!row) {
       const materialCodeValue = materialCodeFromLabel(selectedItem.material);
       return {
+        masterKind: "MODEL",
         categoryCode: "",
         materialCode: materialCodeValue,
         weight: selectedItem.weight,
@@ -616,6 +639,7 @@ export default function CatalogPage() {
       Number(row.labor_sub2_cost ?? 0) * sub2Qty;
 
     return {
+      masterKind: String(row.master_kind ?? "MODEL") as "MODEL" | "PART" | "STONE" | "BUNDLE",
       categoryCode: String(row.category_code ?? ""),
       materialCode: String(row.material_code_default ?? ""),
       weight: row.weight_default_g ? `${row.weight_default_g} g` : "",
@@ -650,14 +674,23 @@ export default function CatalogPage() {
 
   useEffect(() => {
     setShowBomPanel(false);
+    setShowFlattenDebug(false);
     setSelectedRecipeId(null);
     setRecipeVariantKey("");
     setRecipeNote("");
+    setRecipeSellAdjustRate("1");
+    setRecipeSellAdjustKrw("0");
+    setRecipeRoundUnitKrw("1000");
     setComponentQuery("");
     setSelectedComponentId(null);
     setComponentType("MASTER");
     setShowAdvancedComponents(false);
   }, [selectedMasterId]);
+
+  useEffect(() => {
+    if (masterKind !== "BUNDLE") return;
+    setMaterialCode("00");
+  }, [masterKind]);
 
   const recipesQuery = useQuery({
     queryKey: ["bom", "recipes", selectedMasterId],
@@ -683,6 +716,28 @@ export default function CatalogPage() {
     }));
   }, [recipesQuery.data]);
 
+  const selectedRecipe = useMemo(() => {
+    if (!selectedRecipeId) return null;
+    return (recipesQuery.data ?? []).find((recipe) => recipe.bom_id === selectedRecipeId) ?? null;
+  }, [recipesQuery.data, selectedRecipeId]);
+
+  useEffect(() => {
+    if (!selectedRecipe) return;
+    setRecipeVariantKey(selectedRecipe.variant_key ?? "");
+    setRecipeNote(selectedRecipe.note ?? "");
+
+    const meta = selectedRecipe.meta ?? {};
+    const sellAdjustRate = Number(meta.sell_adjust_rate ?? 1);
+    const sellAdjustKrw = Number(meta.sell_adjust_krw ?? 0);
+    const roundUnitKrw = Number(meta.round_unit_krw ?? 1000);
+
+    setRecipeSellAdjustRate(String(Number.isFinite(sellAdjustRate) ? sellAdjustRate : 1));
+    setRecipeSellAdjustKrw(String(Number.isFinite(sellAdjustKrw) ? sellAdjustKrw : 0));
+    setRecipeRoundUnitKrw(String(Number.isFinite(roundUnitKrw) ? roundUnitKrw : 1000));
+  }, [selectedRecipe]);
+
+  const previewVariantKey = selectedRecipe?.variant_key ?? null;
+
   const linesQuery = useQuery({
     queryKey: ["bom", "lines", selectedRecipeId],
     enabled: Boolean(schema) && Boolean(selectedRecipeId) && showBomPanel,
@@ -697,6 +752,21 @@ export default function CatalogPage() {
         .order("line_no", { ascending: true });
       if (error) throw error;
       return (data ?? []) as BomLineRow[];
+    },
+  });
+
+  const flattenQuery = useQuery({
+    queryKey: ["bom", "flatten", selectedMasterId, previewVariantKey],
+    enabled: Boolean(selectedMasterId) && showFlattenDebug,
+    queryFn: async () => {
+      if (!selectedMasterId) return [];
+      const params = new URLSearchParams();
+      params.set("product_master_id", selectedMasterId);
+      if (previewVariantKey) params.set("variant_key", previewVariantKey);
+      const response = await fetch(`/api/bom-flatten?${params.toString()}`, { cache: "no-store" });
+      const json = (await response.json()) as BomFlattenLeafRow[] | { error?: string };
+      if (!response.ok) throw new Error((json as { error?: string }).error ?? "BOM 펼침 조회 실패");
+      return (Array.isArray(json) ? json : []) as BomFlattenLeafRow[];
     },
   });
 
@@ -851,13 +921,31 @@ export default function CatalogPage() {
     if (!selectedMasterId) return toast.error("제품(마스터)을 먼저 선택해 주세요.");
     if (!canWrite) return notifyWriteDisabled();
 
+    const parsedSellAdjustRate = Number(recipeSellAdjustRate);
+    const parsedSellAdjustKrw = Number(recipeSellAdjustKrw);
+    const parsedRoundUnitKrw = Number(recipeRoundUnitKrw);
+
+    if (!Number.isFinite(parsedSellAdjustRate) || parsedSellAdjustRate <= 0) {
+      return toast.error("sell_adjust_rate는 0보다 큰 숫자여야 합니다.");
+    }
+    if (!Number.isFinite(parsedSellAdjustKrw)) {
+      return toast.error("sell_adjust_krw를 올바르게 입력해 주세요.");
+    }
+    if (!Number.isFinite(parsedRoundUnitKrw) || parsedRoundUnitKrw < 0) {
+      return toast.error("round_unit_krw를 올바르게 입력해 주세요.");
+    }
+
     await upsertRecipeMutation.mutateAsync({
       p_product_master_id: selectedMasterId,
       p_variant_key: recipeVariantKey.trim() ? recipeVariantKey.trim() : null,
       p_is_active: true,
       p_note: recipeNote.trim() ? recipeNote.trim() : null,
-      p_meta: {},
-      p_bom_id: null,
+      p_meta: {
+        sell_adjust_rate: parsedSellAdjustRate,
+        sell_adjust_krw: parsedSellAdjustKrw,
+        round_unit_krw: parsedRoundUnitKrw,
+      },
+      p_bom_id: selectedRecipeId,
       p_actor_person_id: actorId,
       p_note2: "upsert from web",
     });
@@ -983,6 +1071,7 @@ export default function CatalogPage() {
     setModelName("");
     setVendorId("");
     setCategoryCode("");
+    setMasterKind("MODEL");
     setMaterialCode("");
     setWeightDefault("");
     setDeductionWeight("");
@@ -1042,6 +1131,7 @@ export default function CatalogPage() {
         : vendorOptions.find((option) => option.label === vendorCandidate)?.value ?? ""
     );
     setCategoryCode(detail?.categoryCode ?? "");
+    setMasterKind((String((row as Record<string, unknown>)?.master_kind ?? detail?.masterKind ?? "MODEL") as "MODEL" | "PART" | "STONE" | "BUNDLE"));
     setMaterialCode(detail?.materialCode ?? materialCodeFromLabel(selectedItem.material));
     setWeightDefault(row?.weight_default_g ? String(row.weight_default_g) : "");
     setDeductionWeight(row?.deduction_weight_default_g ? String(row.deduction_weight_default_g) : "");
@@ -1146,13 +1236,14 @@ export default function CatalogPage() {
     const payload = {
       master_id: masterId || null,
       model_name: modelName,
+      master_kind: masterKind,
       category_code: categoryCode || null,
       material_code_default: materialCode || null,
-      weight_default_g: weightDefault ? Number(weightDefault) : null,
-      deduction_weight_default_g: deductionWeight ? Number(deductionWeight) : 0,
-      center_qty_default: centerQty,
-      sub1_qty_default: sub1Qty,
-      sub2_qty_default: sub2Qty,
+      weight_default_g: masterKind === "BUNDLE" ? null : weightDefault ? Number(weightDefault) : null,
+      deduction_weight_default_g: masterKind === "BUNDLE" ? 0 : deductionWeight ? Number(deductionWeight) : 0,
+      center_qty_default: masterKind === "BUNDLE" ? 0 : centerQty,
+      sub1_qty_default: masterKind === "BUNDLE" ? 0 : sub1Qty,
+      sub2_qty_default: masterKind === "BUNDLE" ? 0 : sub2Qty,
       center_stone_name_default: centerStoneName || null,
       sub1_stone_name_default: sub1StoneName || null,
       sub2_stone_name_default: sub2StoneName || null,
@@ -1291,13 +1382,11 @@ export default function CatalogPage() {
   const renderRegisterDrawer = () => (
     <Sheet
       open={registerOpen}
-      onOpenChange={(open: boolean) => {
-        if (!open) {
-          setRegisterOpen(false);
-          setIsSaving(false);
-          setUploadError(null);
-          setUploadingImage(false);
-        }
+      onClose={() => {
+        setRegisterOpen(false);
+        setIsSaving(false);
+        setUploadError(null);
+        setUploadingImage(false);
       }}
       title={isEditMode ? "마스터 수정" : "새 상품 등록"}
       className="w-full lg:w-[1240px] sm:max-w-none"
@@ -1447,6 +1536,17 @@ export default function CatalogPage() {
                           ))}
                         </Select>
                       </Field>
+                      <Field label="마스터 구분">
+                        <Select
+                          value={masterKind}
+                          onChange={(event) => setMasterKind(event.target.value as "MODEL" | "PART" | "STONE" | "BUNDLE")}
+                        >
+                          <option value="MODEL">MODEL</option>
+                          <option value="PART">PART</option>
+                          <option value="STONE">STONE</option>
+                          <option value="BUNDLE">BUNDLE</option>
+                        </Select>
+                      </Field>
                       <Field label="카테고리">
                         <Select
                           value={categoryCode}
@@ -1472,6 +1572,7 @@ export default function CatalogPage() {
                           onChange={(event) =>
                             setWeightDefault(event.target.value)
                           }
+                          disabled={masterKind === "BUNDLE"}
                         />
                       </Field>
                       <Field label="차감 중량 (g)">
@@ -1484,6 +1585,7 @@ export default function CatalogPage() {
                           onChange={(event) =>
                             setDeductionWeight(event.target.value)
                           }
+                          disabled={masterKind === "BUNDLE"}
                         />
                       </Field>
                       <Field label="단가제 (확정 시 RULE 올림 적용)">
@@ -1604,6 +1706,7 @@ export default function CatalogPage() {
                         placeholder="센터석 이름"
                         value={centerStoneName}
                         onChange={(e) => setCenterStoneName(e.target.value)}
+                        disabled={masterKind === "BUNDLE"}
                       />
                       <div className="text-center font-medium text-[var(--foreground)]">
                         센터
@@ -1623,6 +1726,7 @@ export default function CatalogPage() {
                         className="text-center bg-[var(--input-bg)]"
                         value={centerQty}
                         onChange={(e) => setCenterQty(toNumber(e.target.value))}
+                        disabled={masterKind === "BUNDLE"}
                       />
                       {isAccessoryCategory ? (
                         <div className="grid grid-cols-2 gap-1">
@@ -1656,6 +1760,7 @@ export default function CatalogPage() {
                         placeholder="서브1석 이름"
                         value={sub1StoneName}
                         onChange={(e) => setSub1StoneName(e.target.value)}
+                        disabled={masterKind === "BUNDLE"}
                       />
                       <div className="text-center font-medium text-[var(--foreground)]">
                         서브1
@@ -1675,6 +1780,7 @@ export default function CatalogPage() {
                         className="text-center bg-[var(--input-bg)]"
                         value={sub1Qty}
                         onChange={(e) => setSub1Qty(toNumber(e.target.value))}
+                        disabled={masterKind === "BUNDLE"}
                       />
                       {isAccessoryCategory ? (
                         <div className="grid grid-cols-2 gap-1">
@@ -1708,6 +1814,7 @@ export default function CatalogPage() {
                         placeholder="서브2석 이름"
                         value={sub2StoneName}
                         onChange={(e) => setSub2StoneName(e.target.value)}
+                        disabled={masterKind === "BUNDLE"}
                       />
                       <div className="text-center font-medium text-[var(--foreground)]">
                         서브2
@@ -1727,6 +1834,7 @@ export default function CatalogPage() {
                         className="text-center bg-[var(--input-bg)]"
                         value={sub2Qty}
                         onChange={(e) => setSub2Qty(toNumber(e.target.value))}
+                        disabled={masterKind === "BUNDLE"}
                       />
                       {isAccessoryCategory ? (
                         <div className="grid grid-cols-2 gap-1">
@@ -2260,6 +2368,71 @@ export default function CatalogPage() {
 
       {/* Right Column: China Cost Summary (Reserved) + BOM */}
       <div className="space-y-4 min-w-0">
+        {selectedMasterId ? (
+          <Card>
+            <CardBody className="space-y-3">
+              <EffectivePriceCard
+                masterId={selectedMasterId}
+                qty={1}
+                variantKey={previewVariantKey}
+                title="유효가격 프리뷰"
+                showBreakdown
+              />
+
+              <div className="space-y-2">
+                <button
+                  type="button"
+                  onClick={() => setShowFlattenDebug((prev) => !prev)}
+                  className="text-xs font-semibold text-[var(--primary)]"
+                >
+                  {showFlattenDebug ? "Flatten 숨기기" : "Flatten 보기"}
+                </button>
+
+                {showFlattenDebug ? (
+                  flattenQuery.isLoading ? (
+                    <div className="text-xs text-[var(--muted)]">Flatten 조회 중...</div>
+                  ) : flattenQuery.isError ? (
+                    <div className="rounded-[8px] border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-900">
+                      {flattenQuery.error instanceof Error ? flattenQuery.error.message : "Flatten 조회 실패"}
+                    </div>
+                  ) : (flattenQuery.data ?? []).length === 0 ? (
+                    <div className="text-xs text-[var(--muted)]">표시할 leaf가 없습니다.</div>
+                  ) : (
+                    <div className="overflow-x-auto rounded-[10px] border border-[var(--panel-border)]">
+                      <table className="min-w-full text-left text-xs">
+                        <thead className="bg-[var(--subtle-bg)] text-[var(--muted)]">
+                          <tr>
+                            <th className="px-3 py-2">깊이</th>
+                            <th className="px-3 py-2">타입</th>
+                            <th className="px-3 py-2">구성품</th>
+                            <th className="px-3 py-2">qty_per_product_unit</th>
+                            <th className="px-3 py-2">단위</th>
+                            <th className="px-3 py-2">경로</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {(flattenQuery.data ?? []).map((leaf, idx) => (
+                            <tr key={`flatten-${idx}`} className="border-t border-[var(--panel-border)]">
+                              <td className="px-3 py-2">{leaf.depth ?? "-"}</td>
+                              <td className="px-3 py-2">{leaf.component_ref_type ?? "-"}</td>
+                              <td className="px-3 py-2">
+                                {leaf.component_master_model_name ?? leaf.component_part_name ?? leaf.component_master_id ?? leaf.component_part_id ?? "-"}
+                              </td>
+                              <td className="px-3 py-2 tabular-nums">{leaf.qty_per_product_unit ?? "-"}</td>
+                              <td className="px-3 py-2">{leaf.unit ?? "-"}</td>
+                              <td className="px-3 py-2">{leaf.path ?? "-"}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )
+                ) : null}
+              </div>
+            </CardBody>
+          </Card>
+        ) : null}
+
         {/* D. 중국 원가 (예약공간) 요약 */}
         {(() => {
           if (!selectedItem || !selectedMasterId) return null;
@@ -2428,8 +2601,31 @@ export default function CatalogPage() {
                           value={recipeNote}
                           onChange={(e) => setRecipeNote(e.target.value)}
                         />
+                        <div className="grid grid-cols-3 gap-2">
+                          <Input
+                            aria-label="sell_adjust_rate"
+                            placeholder="sell_adjust_rate"
+                            value={recipeSellAdjustRate}
+                            onChange={(e) => setRecipeSellAdjustRate(e.target.value)}
+                            inputMode="decimal"
+                          />
+                          <Input
+                            aria-label="sell_adjust_krw"
+                            placeholder="sell_adjust_krw"
+                            value={recipeSellAdjustKrw}
+                            onChange={(e) => setRecipeSellAdjustKrw(e.target.value)}
+                            inputMode="numeric"
+                          />
+                          <Input
+                            aria-label="round_unit_krw"
+                            placeholder="round_unit_krw"
+                            value={recipeRoundUnitKrw}
+                            onChange={(e) => setRecipeRoundUnitKrw(e.target.value)}
+                            inputMode="numeric"
+                          />
+                        </div>
                         <div className="text-xs text-[var(--muted)]">
-                          현재 선택된 마스터 기준으로 레시피를 저장합니다.
+                          현재 선택 레시피가 있으면 업데이트, 없으면 신규 생성됩니다.
                         </div>
                       </CardBody>
                     </Card>

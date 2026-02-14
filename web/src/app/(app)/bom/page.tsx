@@ -14,6 +14,7 @@ import { Modal } from "@/components/ui/modal";
 import { useRpcMutation } from "@/hooks/use-rpc-mutation";
 import { CONTRACTS, isFnConfigured } from "@/lib/contracts";
 import { getSchemaClient } from "@/lib/supabase/client";
+import { EffectivePriceCard } from "@/components/pricing/EffectivePriceCard";
 
 type MasterSummary = {
     master_id: string;
@@ -39,7 +40,18 @@ type BomRecipeRow = {
     variant_key?: string | null;
     is_active: boolean;
     note?: string | null;
+    meta?: Record<string, unknown> | null;
     line_count: number;
+};
+
+type BomFlattenLeafRow = {
+    depth?: number | null;
+    path?: string | null;
+    qty_per_product_unit?: number | null;
+    component_ref_type?: "MASTER" | "PART" | null;
+    component_master_model_name?: string | null;
+    component_part_name?: string | null;
+    unit?: string | null;
 };
 
 type BomLineRow = {
@@ -88,6 +100,12 @@ export default function BomPage() {
 
     const [recipeVariantKey, setRecipeVariantKey] = useState("");
     const [recipeNote, setRecipeNote] = useState("");
+    const [recipeSellAdjustRate, setRecipeSellAdjustRate] = useState("1");
+    const [recipeSellAdjustKrw, setRecipeSellAdjustKrw] = useState("0");
+    const [recipeRoundUnitKrw, setRecipeRoundUnitKrw] = useState("1000");
+    const [variantSuffix, setVariantSuffix] = useState("");
+    const [variantColor, setVariantColor] = useState("");
+    const [variantSize, setVariantSize] = useState("");
 
     const [selectedRecipeId, setSelectedRecipeId] = useState<string | null>(null);
 
@@ -154,6 +172,13 @@ export default function BomPage() {
         }));
     }, [recipesQuery.data]);
 
+    const selectedRecipe = useMemo(() => {
+        if (!selectedRecipeId) return null;
+        return (recipesQuery.data ?? []).find((recipe) => recipe.bom_id === selectedRecipeId) ?? null;
+    }, [recipesQuery.data, selectedRecipeId]);
+
+    const previewVariantKey = selectedRecipe?.variant_key ?? null;
+
     // --- recipe lines ---
     const linesQuery = useQuery({
         queryKey: ["bom", "lines", selectedRecipeId],
@@ -171,6 +196,35 @@ export default function BomPage() {
             return (data ?? []) as BomLineRow[];
         },
     });
+
+    const flattenQuery = useQuery({
+        queryKey: ["bom", "flatten", selectedProductId, previewVariantKey],
+        enabled: Boolean(selectedProductId),
+        queryFn: async () => {
+            if (!selectedProductId) return [];
+            const params = new URLSearchParams();
+            params.set("product_master_id", selectedProductId);
+            if (previewVariantKey) params.set("variant_key", previewVariantKey);
+            const response = await fetch(`/api/bom-flatten?${params.toString()}`, { cache: "no-store" });
+            const json = (await response.json()) as BomFlattenLeafRow[] | { error?: string };
+            if (!response.ok) throw new Error((json as { error?: string }).error ?? "BOM 펼침 조회 실패");
+            return (Array.isArray(json) ? json : []) as BomFlattenLeafRow[];
+        },
+    });
+
+    useEffect(() => {
+        if (!selectedRecipe) return;
+        setRecipeVariantKey(selectedRecipe.variant_key ?? "");
+        setRecipeNote(selectedRecipe.note ?? "");
+
+        const meta = selectedRecipe.meta ?? {};
+        const sellAdjustRate = Number(meta.sell_adjust_rate ?? 1);
+        const sellAdjustKrw = Number(meta.sell_adjust_krw ?? 0);
+        const roundUnitKrw = Number(meta.round_unit_krw ?? 1000);
+        setRecipeSellAdjustRate(String(Number.isFinite(sellAdjustRate) ? sellAdjustRate : 1));
+        setRecipeSellAdjustKrw(String(Number.isFinite(sellAdjustKrw) ? sellAdjustKrw : 0));
+        setRecipeRoundUnitKrw(String(Number.isFinite(roundUnitKrw) ? roundUnitKrw : 1000));
+    }, [selectedRecipe]);
 
     // --- component search (PART / MASTER) ---
     const componentSearchQuery = useQuery({
@@ -287,13 +341,30 @@ export default function BomPage() {
         if (!selectedProductId) return toast.error("제품(마스터)을 먼저 선택해 주세요.");
         if (!canWrite) return notifyWriteDisabled();
 
+        const parsedSellAdjustRate = Number(recipeSellAdjustRate);
+        const parsedSellAdjustKrw = Number(recipeSellAdjustKrw);
+        const parsedRoundUnitKrw = Number(recipeRoundUnitKrw);
+        if (!Number.isFinite(parsedSellAdjustRate) || parsedSellAdjustRate <= 0) {
+            return toast.error("sell_adjust_rate는 0보다 큰 숫자여야 합니다.");
+        }
+        if (!Number.isFinite(parsedSellAdjustKrw)) {
+            return toast.error("sell_adjust_krw를 올바르게 입력해 주세요.");
+        }
+        if (!Number.isFinite(parsedRoundUnitKrw) || parsedRoundUnitKrw < 0) {
+            return toast.error("round_unit_krw를 올바르게 입력해 주세요.");
+        }
+
         await upsertRecipeMutation.mutateAsync({
             p_product_master_id: selectedProductId,
             p_variant_key: recipeVariantKey.trim() ? recipeVariantKey.trim() : null,
             p_is_active: true,
             p_note: recipeNote.trim() ? recipeNote.trim() : null,
-            p_meta: {},
-            p_bom_id: null,
+            p_meta: {
+                sell_adjust_rate: parsedSellAdjustRate,
+                sell_adjust_krw: parsedSellAdjustKrw,
+                round_unit_krw: parsedRoundUnitKrw,
+            },
+            p_bom_id: selectedRecipeId,
             p_actor_person_id: actorId,
             p_note2: "upsert from web",
         });
@@ -402,6 +473,11 @@ export default function BomPage() {
                                     onChange={(v) => {
                                         setSelectedProductId(v);
                                         setSelectedRecipeId(null);
+                                        setRecipeVariantKey("");
+                                        setRecipeNote("");
+                                        setRecipeSellAdjustRate("1");
+                                        setRecipeSellAdjustKrw("0");
+                                        setRecipeRoundUnitKrw("1000");
                                     }}
                                 />
 
@@ -432,12 +508,27 @@ export default function BomPage() {
                                     value={selectedRecipeId ?? undefined}
                                     onChange={(v) => setSelectedRecipeId(v)}
                                 />
+                                {selectedRecipe && !selectedRecipe.is_active ? (
+                                    <div className="rounded-[10px] border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                                        INACTIVE 레시피입니다. 출고 프리뷰 적용 시 주의하세요.
+                                    </div>
+                                ) : null}
                             </CardBody>
                         </Card>
                     </div>
                 }
                 right={
                     <div className="space-y-4">
+                        {selectedProductId ? (
+                            <EffectivePriceCard
+                                masterId={selectedProductId}
+                                qty={1}
+                                variantKey={previewVariantKey}
+                                title="유효가격 프리뷰"
+                                showBreakdown
+                            />
+                        ) : null}
+
                         <Card>
                             <CardHeader>
                                 <CardTitle
@@ -451,10 +542,95 @@ export default function BomPage() {
                                     value={recipeVariantKey}
                                     onChange={(e) => setRecipeVariantKey(e.target.value)}
                                 />
-                                <Textarea placeholder="메모(선택)" value={recipeNote} onChange={(e) => setRecipeNote(e.target.value)} />
-                                <div className="text-xs text-[var(--muted)]">
-                                    현재 선택된 제품 기준으로 레시피를 저장합니다.
+                                <div className="grid grid-cols-4 gap-2">
+                                    <Input placeholder="suffix" value={variantSuffix} onChange={(e) => setVariantSuffix(e.target.value)} />
+                                    <Input placeholder="color" value={variantColor} onChange={(e) => setVariantColor(e.target.value)} />
+                                    <Input placeholder="size" value={variantSize} onChange={(e) => setVariantSize(e.target.value)} />
+                                    <Button
+                                        type="button"
+                                        variant="secondary"
+                                        onClick={() => {
+                                            const next = [variantSuffix, variantColor, variantSize]
+                                                .map((v) => v.trim())
+                                                .filter(Boolean)
+                                                .join("|");
+                                            setRecipeVariantKey(next);
+                                        }}
+                                    >
+                                        variant_key 생성
+                                    </Button>
                                 </div>
+                                <Textarea placeholder="메모(선택)" value={recipeNote} onChange={(e) => setRecipeNote(e.target.value)} />
+                                <div className="grid grid-cols-3 gap-2">
+                                    <Input
+                                        aria-label="sell_adjust_rate"
+                                        placeholder="sell_adjust_rate"
+                                        value={recipeSellAdjustRate}
+                                        onChange={(e) => setRecipeSellAdjustRate(e.target.value)}
+                                        inputMode="decimal"
+                                    />
+                                    <Input
+                                        aria-label="sell_adjust_krw"
+                                        placeholder="sell_adjust_krw"
+                                        value={recipeSellAdjustKrw}
+                                        onChange={(e) => setRecipeSellAdjustKrw(e.target.value)}
+                                        inputMode="numeric"
+                                    />
+                                    <Input
+                                        aria-label="round_unit_krw"
+                                        placeholder="round_unit_krw"
+                                        value={recipeRoundUnitKrw}
+                                        onChange={(e) => setRecipeRoundUnitKrw(e.target.value)}
+                                        inputMode="numeric"
+                                    />
+                                </div>
+                                <div className="text-xs text-[var(--muted)]">
+                                    현재 선택 레시피가 있으면 업데이트, 없으면 신규 생성됩니다.
+                                </div>
+                            </CardBody>
+                        </Card>
+
+                        <Card>
+                            <CardHeader>
+                                <CardTitle title="Flatten 디버그" subtitle="실제 leaf 전개 결과를 확인합니다." />
+                            </CardHeader>
+                            <CardBody className="space-y-2">
+                                {flattenQuery.isLoading ? (
+                                    <p className="text-xs text-[var(--muted)]">불러오는 중...</p>
+                                ) : flattenQuery.isError ? (
+                                    <div className="rounded-[10px] border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-900">
+                                        {flattenQuery.error instanceof Error ? flattenQuery.error.message : "Flatten 조회 실패"}
+                                    </div>
+                                ) : (flattenQuery.data ?? []).length === 0 ? (
+                                    <p className="text-xs text-[var(--muted)]">표시할 leaf가 없습니다.</p>
+                                ) : (
+                                    <div className="overflow-x-auto rounded-[10px] border border-[var(--panel-border)]">
+                                        <table className="min-w-full text-xs">
+                                            <thead className="bg-[var(--subtle-bg)] text-[var(--muted)]">
+                                                <tr>
+                                                    <th className="px-3 py-2 text-left">깊이</th>
+                                                    <th className="px-3 py-2 text-left">타입</th>
+                                                    <th className="px-3 py-2 text-left">구성품</th>
+                                                    <th className="px-3 py-2 text-left">qty_per_product_unit</th>
+                                                    <th className="px-3 py-2 text-left">단위</th>
+                                                    <th className="px-3 py-2 text-left">경로</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                {(flattenQuery.data ?? []).map((leaf, idx) => (
+                                                    <tr key={`flatten-${idx}`} className="border-t border-[var(--panel-border)]">
+                                                        <td className="px-3 py-2">{leaf.depth ?? "-"}</td>
+                                                        <td className="px-3 py-2">{leaf.component_ref_type ?? "-"}</td>
+                                                        <td className="px-3 py-2">{leaf.component_master_model_name ?? leaf.component_part_name ?? "-"}</td>
+                                                        <td className="px-3 py-2">{leaf.qty_per_product_unit ?? "-"}</td>
+                                                        <td className="px-3 py-2">{leaf.unit ?? "-"}</td>
+                                                        <td className="px-3 py-2">{leaf.path ?? "-"}</td>
+                                                    </tr>
+                                                ))}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                )}
                             </CardBody>
                         </Card>
                         <Card>

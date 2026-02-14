@@ -308,7 +308,7 @@ export const ReceiptPrintHalf = ({
               const priceFormula = buildPriceFormula();
               return (
                 <Fragment key={`${line.shipment_line_id ?? `row-${index}`}-pair`}>
-                  <tr className="border-b border-neutral-200">
+                  <tr>
                     <td className="py-1 pr-2 align-middle">
                       <div className="flex items-center gap-1">
                         {hasContent && isUnitPricing && (
@@ -368,14 +368,14 @@ export const ReceiptPrintHalf = ({
                         : formatKrw(line.total_amount_sell_krw)}
                     </td>
                   </tr>
-                  <tr className="border-b border-neutral-200">
-                    <td colSpan={6} className="py-1 text-[10px] tabular-nums text-neutral-600">
+                  <tr>
+                    <td colSpan={6} className="py-0.5 text-[9px] tabular-nums text-neutral-600 leading-tight">
                       {priceFormula.materialExpr}
                     </td>
-                    <td className="py-1 text-right text-[10px] tabular-nums text-neutral-600">
+                    <td className="py-0.5 text-right text-[9px] tabular-nums text-neutral-600 leading-tight">
                       {hasContent ? `+ ${formatKrw(priceFormula.labor)}` : ""}
                     </td>
-                    <td className="py-1 text-right text-[10px] tabular-nums text-neutral-600">
+                    <td className="py-0.5 text-right text-[9px] tabular-nums text-neutral-600 leading-tight">
                       {hasContent ? (priceFormula.isUnitPricing ? formatKrw(priceFormula.total) : `= ${formatKrw(priceFormula.total)}`) : ""}
                     </td>
                   </tr>
@@ -386,57 +386,13 @@ export const ReceiptPrintHalf = ({
         </table>
       </div>
 
-      <div className="mt-auto space-y-2 border-t border-neutral-300 pt-2">
+      <div className="mt-auto space-y-2 pt-2">
         <div className="space-y-1 text-[10px] text-neutral-700">
           {appliedPriceParts.length > 0 && <div>적용 시세: {appliedPriceParts.join(" · ")}</div>}
         </div>
-        <div className="text-xs font-semibold">미수 내역 (요약)</div>
-        <table className="w-full border-collapse text-[11px]">
-          <thead>
-            <tr className="border-b border-neutral-300">
-              <th className="py-1 text-left font-medium">구분</th>
-              <th className="py-1 text-right font-medium">순금</th>
-              <th className="py-1 text-right font-medium">순은</th>
-              <th className="py-1 text-right font-medium">공임</th>
-              <th className="py-1 text-right font-medium">총금액</th>
-            </tr>
-          </thead>
-          <tbody>
-            {summaryRows.map((row) => {
-              const isCoreSummaryRow =
-                row.label === "합계" ||
-                row.label.includes("이전 미수") ||
-                row.label === "당일 출고" ||
-                row.label === "당일 결제" ||
-                row.label === "반품/조정/상계";
-              const isTodaySummaryRow = row.label === "반품/조정/상계";
-
-              return (
-              <tr key={row.label} className={cn("border-b border-neutral-200", isTodaySummaryRow && "border-b-2 border-neutral-400")}>
-                <td className={cn("py-1 font-medium", isCoreSummaryRow && "font-semibold")}>
-                  {row.label === "당일 반품" ? <span className="text-blue-600">{row.label}</span> : row.label}
-                </td>
-                <td className={cn("py-1 text-right tabular-nums", isCoreSummaryRow && "font-semibold", row.label === "당일 반품" && "text-blue-600")}>
-                  {formatWeight(row.value.gold)}
-                </td>
-                <td className={cn("py-1 text-right tabular-nums", isCoreSummaryRow && "font-semibold", row.label === "당일 반품" && "text-blue-600")}>
-                  {formatWeight(row.value.silver)}
-                </td>
-                <td className={cn("py-1 text-right tabular-nums", isCoreSummaryRow && "font-semibold", row.label === "당일 반품" && "text-blue-600")}>
-                  {formatKrw(row.value.labor)}
-                </td>
-                <td className={cn("py-1 text-right tabular-nums", isCoreSummaryRow && "font-semibold", row.label === "당일 반품" && "text-blue-600")}>
-                  {formatKrw(row.value.total)}
-                </td>
-              </tr>
-              );
-            })}
-          </tbody>
-        </table>
-
         {printCategoryBreakdown && (
-          <div className="mt-2 space-y-1 border-t border-neutral-200 pt-2 text-[10px]">
-            <div className="font-semibold">당일 변동 요약</div>
+          <div className="space-y-1 text-[11px]">
+            <div className="text-[10px] font-semibold tracking-[0.02em] text-neutral-500">당일 변동 요약</div>
             {(() => {
               const sales = addAmounts(printCategoryBreakdown.shipment, printCategoryBreakdown.return);
               const payment = printCategoryBreakdown.payment;
@@ -454,24 +410,31 @@ export const ReceiptPrintHalf = ({
               if (showMisc) rows.push(["기타(조정+상계+정정)", misc]);
               rows.push(["당일 미수 변화", net]);
               return (
-                <table className="w-full border-collapse text-[10px] tabular-nums">
+                <table className="w-full table-fixed border-collapse border border-neutral-200 text-[10px] tabular-nums">
+                  <colgroup>
+                    <col className="w-[31%]" />
+                    <col className="w-[17.25%]" />
+                    <col className="w-[17.25%]" />
+                    <col className="w-[17.25%]" />
+                    <col className="w-[17.25%]" />
+                  </colgroup>
                   <thead>
                     <tr className="border-b border-neutral-200">
-                      <th className="py-1 text-left font-medium">구분</th>
-                      <th className="py-1 text-right font-medium">순금</th>
-                      <th className="py-1 text-right font-medium">순은</th>
-                      <th className="py-1 text-right font-medium">공임</th>
-                      <th className="py-1 text-right font-medium">총금액</th>
+                      <th className="py-0.5 text-left font-medium border-r border-neutral-200 last:border-r-0">구분</th>
+                      <th className="py-0.5 text-right font-medium border-r border-neutral-200 last:border-r-0">순금</th>
+                      <th className="py-0.5 text-right font-medium border-r border-neutral-200 last:border-r-0">순은</th>
+                      <th className="py-0.5 text-right font-medium border-r border-neutral-200 last:border-r-0">공임</th>
+                      <th className="py-0.5 text-right font-medium">총금액</th>
                     </tr>
                   </thead>
                   <tbody>
                     {rows.map(([label, value]) => (
-                      <tr key={label} className="border-b border-neutral-100">
-                        <td className={cn("py-1", label === "당일 미수 변화" && "font-semibold")}>{label}</td>
-                        <td className="py-1 text-right">{formatWeight((value as ReceiptAmounts).gold)}</td>
-                        <td className="py-1 text-right">{formatWeight((value as ReceiptAmounts).silver)}</td>
-                        <td className="py-1 text-right">{formatKrw((value as ReceiptAmounts).labor)}</td>
-                        <td className="py-1 text-right">{formatBreakdownKrw(value as ReceiptAmounts)}</td>
+                      <tr key={label} className={cn("border-b border-neutral-100 last:border-b-0", label === "당일 미수 변화" && "border-b-2 border-neutral-300")}>
+                        <td className={cn("py-0.5 text-[10px] border-r border-neutral-100 last:border-r-0", label === "당일 미수 변화" && "font-semibold")}>{label}</td>
+                        <td className="py-0.5 text-right text-[9px] border-r border-neutral-100 last:border-r-0">{formatWeight((value as ReceiptAmounts).gold)}</td>
+                        <td className="py-0.5 text-right text-[9px] border-r border-neutral-100 last:border-r-0">{formatWeight((value as ReceiptAmounts).silver)}</td>
+                        <td className="py-0.5 text-right text-[9px] border-r border-neutral-100 last:border-r-0">{formatKrw((value as ReceiptAmounts).labor)}</td>
+                        <td className="py-0.5 text-right text-[9px]">{formatBreakdownKrw(value as ReceiptAmounts)}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -483,6 +446,45 @@ export const ReceiptPrintHalf = ({
             )}
           </div>
         )}
+
+        <table className="mt-0.5 w-full table-fixed border-collapse border border-neutral-200 border-t-2 border-t-neutral-400 text-[11px]">
+          <colgroup>
+            <col className="w-[31%]" />
+            <col className="w-[17.25%]" />
+            <col className="w-[17.25%]" />
+            <col className="w-[17.25%]" />
+            <col className="w-[17.25%]" />
+          </colgroup>
+          <tbody>
+            {summaryRows.map((row) => {
+              const isCoreSummaryRow =
+                row.label === "합계" ||
+                row.label.includes("이전 미수") ||
+                row.label === "당일 출고" ||
+                row.label === "당일 결제" ||
+                row.label === "반품/조정/상계";
+              return (
+              <tr key={row.label} className={cn("border-b border-neutral-100 last:border-b-0", row.label === "합계" && "border-b-2 border-neutral-300")}>
+                <td className={cn("py-1 font-medium border-r border-neutral-100 last:border-r-0", isCoreSummaryRow && "font-semibold")}>
+                  {row.label === "당일 반품" ? <span className="text-blue-600">{row.label}</span> : row.label}
+                </td>
+                <td className={cn("py-1 text-right tabular-nums border-r border-neutral-100 last:border-r-0", isCoreSummaryRow && "font-semibold", row.label === "당일 반품" && "text-blue-600")}>
+                  {formatWeight(row.value.gold)}
+                </td>
+                <td className={cn("py-1 text-right tabular-nums border-r border-neutral-100 last:border-r-0", isCoreSummaryRow && "font-semibold", row.label === "당일 반품" && "text-blue-600")}>
+                  {formatWeight(row.value.silver)}
+                </td>
+                <td className={cn("py-1 text-right tabular-nums border-r border-neutral-100 last:border-r-0", isCoreSummaryRow && "font-semibold", row.label === "당일 반품" && "text-blue-600")}>
+                  {formatKrw(row.value.labor)}
+                </td>
+                <td className={cn("py-1 text-right tabular-nums", isCoreSummaryRow && "font-semibold", row.label === "당일 반품" && "text-blue-600")}>
+                  {formatKrw(row.value.total)}
+                </td>
+              </tr>
+              );
+            })}
+          </tbody>
+        </table>
 
         {printMode === "evidence" && evidencePayments && (
           <div className="mt-2 border-t border-neutral-200 pt-2 text-[10px]">

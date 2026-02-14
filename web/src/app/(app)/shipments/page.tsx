@@ -15,6 +15,7 @@ import { Modal } from "@/components/ui/modal";
 import { SearchSelect } from "@/components/ui/search-select";
 import { NumberText } from "@/components/ui/number-text";
 import { ShipmentPricingEvidencePanel } from "@/components/shipments/ShipmentPricingEvidencePanel";
+import { EffectivePriceCard, type EffectivePriceResponse } from "@/components/pricing/EffectivePriceCard";
 
 import { CONTRACTS } from "@/lib/contracts";
 import { type StoneSource } from "@/lib/stone-source";
@@ -282,6 +283,11 @@ const normalizeId = (value: unknown) => {
   return text;
 };
 
+const buildVariantKey = (...parts: Array<string | null | undefined>) => {
+  const normalized = parts.map((part) => String(part ?? "").trim()).filter(Boolean);
+  return normalized.length > 0 ? normalized.join("|") : null;
+};
+
 const formatKrw = (value?: number | null) => {
   if (value === null || value === undefined) return "-";
   return `₩${new Intl.NumberFormat("ko-KR").format(Math.round(value))}`;
@@ -536,6 +542,8 @@ export default function ShipmentsPage() {
 
   // UI State
   const [activeTab, setActiveTab] = useState<"create" | "confirmed">("create");
+  const [effectivePriceData, setEffectivePriceData] = useState<EffectivePriceResponse | null>(null);
+  const bundleBlockToastRef = useRef<string | null>(null);
 
   const normalizeExtraLaborItems = (value: unknown): ExtraLaborItem[] => {
     if (!Array.isArray(value)) return [];
@@ -1098,6 +1106,34 @@ export default function ShipmentsPage() {
     () => getVendorInitials(masterLookupQuery.data?.vendor_name),
     [masterLookupQuery.data?.vendor_name]
   );
+
+  const selectedOrderSuffix = useMemo(() => {
+    if (!selectedOrderLineId) return null;
+    return orderLineModelMap.get(String(selectedOrderLineId))?.suffix ?? null;
+  }, [orderLineModelMap, selectedOrderLineId]);
+
+  const resolvedVariantKey = useMemo(
+    () =>
+      buildVariantKey(
+        selectedOrderSuffix,
+        orderLineDetailQuery.data?.color ?? prefill?.color ?? null,
+        orderLineDetailQuery.data?.size ?? prefill?.size ?? null
+      ),
+    [orderLineDetailQuery.data?.color, orderLineDetailQuery.data?.size, prefill?.color, prefill?.size, selectedOrderSuffix]
+  );
+
+  const effectiveMasterId = useMemo(
+    () =>
+      normalizeId(orderLineDetailQuery.data?.matched_master_id) ??
+      normalizeId(masterLookupQuery.data?.master_item_id),
+    [masterLookupQuery.data?.master_item_id, orderLineDetailQuery.data?.matched_master_id]
+  );
+
+  const effectiveQty = useMemo(() => {
+    const detailQty = Number(orderLineDetailQuery.data?.qty ?? NaN);
+    if (Number.isFinite(detailQty) && detailQty > 0) return detailQty;
+    return 1;
+  }, [orderLineDetailQuery.data?.qty]);
 
   // ✅ (필수) 상태 배지 렌더러 - map에서 사용 중인데 기존 코드엔 없어서 런타임 에러 났을 가능성 큼
   const getOrderStatusBadge = (status?: string | null) => {
@@ -1933,6 +1969,8 @@ export default function ShipmentsPage() {
     setReceiptPreviewKind(null);
     setReceiptPreviewTitle("");
     setReceiptPreviewError(null);
+    setEffectivePriceData(null);
+    bundleBlockToastRef.current = null;
   };
 
   // --- RPC: 출고 확정 ---
@@ -1951,6 +1989,12 @@ export default function ShipmentsPage() {
     if (!actorId) {
       toast.error("ACTOR_ID 설정이 필요합니다.", {
         description: "NEXT_PUBLIC_CMS_ACTOR_ID를 확인하세요.",
+      });
+      return;
+    }
+    if (isBundlePricingBlocked) {
+      toast.error("BOM 오류(확정 불가)", {
+        description: effectivePriceData?.error_message ?? "BUNDLE BOM 오류를 먼저 해결해 주세요.",
       });
       return;
     }
@@ -2723,6 +2767,22 @@ export default function ShipmentsPage() {
   const isShipmentConfirmed =
     Boolean(shipmentHeaderQuery.data?.confirmed_at) || shipmentHeaderQuery.data?.status === "CONFIRMED";
   const canResyncAr = Boolean(shipmentIdForResync) && isShipmentConfirmed && !arInvoiceResyncMutation.isPending;
+  const isBundlePricingBlocked =
+    !isStorePickup &&
+    !isShipmentConfirmed &&
+    effectivePriceData?.pricing_method === "BUNDLE_ROLLUP" &&
+    effectivePriceData?.ok === false;
+
+  useEffect(() => {
+    if (!isBundlePricingBlocked) {
+      bundleBlockToastRef.current = null;
+      return;
+    }
+    const message = effectivePriceData?.error_message ?? "BOM 오류로 확정할 수 없습니다.";
+    if (bundleBlockToastRef.current === message) return;
+    bundleBlockToastRef.current = message;
+    toast.error("BOM 오류(확정 불가)", { description: message });
+  }, [effectivePriceData?.error_message, isBundlePricingBlocked]);
 
   const handleArResync = async () => {
     if (!shipmentIdForResync) return;
@@ -3099,6 +3159,10 @@ export default function ShipmentsPage() {
                               <div className="font-medium">{prefill?.size ?? "-"}</div>
                             </div>
                             <div className="space-y-1">
+                              <span className="text-[var(--muted)]">variant_key</span>
+                              <div className="font-medium">{resolvedVariantKey ?? "(DEFAULT)"}</div>
+                            </div>
+                            <div className="space-y-1">
                               <span className="text-[var(--muted)]">도금/도금색상</span>
                               <div className="font-medium">
                                 {prefill?.plating_status
@@ -3171,6 +3235,16 @@ export default function ShipmentsPage() {
                             </div>
                           </div>
                         </div>
+                        {effectiveMasterId ? (
+                          <EffectivePriceCard
+                            masterId={effectiveMasterId}
+                            qty={effectiveQty}
+                            variantKey={resolvedVariantKey}
+                            title="유효가격 프리뷰"
+                            showBreakdown
+                            onDataChange={setEffectivePriceData}
+                          />
+                        ) : null}
                         <div className="rounded-lg border border-[var(--panel-border)] bg-[var(--panel)] p-3">
                           <div className="text-xs font-semibold text-[var(--muted)] mb-2">비고</div>
                           <div className="text-sm font-semibold text-[var(--foreground)] whitespace-pre-wrap min-h-[48px]">
@@ -4002,6 +4076,55 @@ export default function ShipmentsPage() {
                 </div>
               </div>
             </div>
+
+            <div className="space-y-2 pt-2 border-t border-[var(--primary)]/20">
+              {isShipmentConfirmed ? (
+                <div className="rounded-[12px] border border-[var(--panel-border)] bg-[var(--panel)] px-4 py-3">
+                  <div className="mb-2 flex items-center gap-2">
+                    <Badge tone="active">확정값</Badge>
+                    <span className="text-xs text-[var(--muted)]">shipment_line 저장값</span>
+                  </div>
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs">
+                    <div>
+                      <span className="text-[var(--muted)] block mb-1">재료비(판매)</span>
+                      <span className="font-semibold">{formatKrw(currentLine?.material_amount_sell_krw ?? null)}</span>
+                    </div>
+                    <div>
+                      <span className="text-[var(--muted)] block mb-1">기본공임</span>
+                      <span className="font-semibold">{formatKrw(currentLine?.base_labor_krw ?? null)}</span>
+                    </div>
+                    <div>
+                      <span className="text-[var(--muted)] block mb-1">기타공임</span>
+                      <span className="font-semibold">{formatKrw(currentLine?.extra_labor_krw ?? null)}</span>
+                    </div>
+                    <div>
+                      <span className="text-[var(--muted)] block mb-1">중량</span>
+                      <span className="font-semibold">{renderNumber(currentLine?.measured_weight_g ?? null, "g")}</span>
+                    </div>
+                  </div>
+                  <p className="mt-2 text-[10px] text-[var(--muted)]">프리뷰 값은 현재 시세/환율 기준으로 달라질 수 있습니다.</p>
+                </div>
+              ) : effectiveMasterId ? (
+                <>
+                  <EffectivePriceCard
+                    masterId={effectiveMasterId}
+                    qty={effectiveQty}
+                    variantKey={resolvedVariantKey}
+                    title="유효가격 프리뷰"
+                    showBreakdown
+                    onDataChange={setEffectivePriceData}
+                  />
+                  {isBundlePricingBlocked ? (
+                    <div className="flex items-center gap-2">
+                      <Badge tone="danger">BOM 오류(확정 불가)</Badge>
+                      <span className="text-xs text-red-700">{effectivePriceData?.error_message ?? "BUNDLE BOM 오류"}</span>
+                    </div>
+                  ) : null}
+                </>
+              ) : (
+                <div className="text-xs text-[var(--muted)]">매칭된 master가 없어 유효가격 프리뷰를 표시할 수 없습니다.</div>
+              )}
+            </div>
           </div>
 
           {/* Cost Mode Selection */}
@@ -4226,10 +4349,16 @@ export default function ShipmentsPage() {
             <Button
               variant="primary"
               onClick={handleFinalConfirm}
-              disabled={isConfirming}
+              disabled={isConfirming || isBundlePricingBlocked}
               className="px-6"
             >
-              {isConfirming ? "처리 중..." : isStorePickup ? "매장출고 저장 (워크벤치에서 확정)" : "출고 확정"}
+              {isBundlePricingBlocked
+                ? "BOM 오류(확정 불가)"
+                : isConfirming
+                  ? "처리 중..."
+                  : isStorePickup
+                    ? "매장출고 저장 (워크벤치에서 확정)"
+                    : "출고 확정"}
             </Button>
           </div>
         </div>
