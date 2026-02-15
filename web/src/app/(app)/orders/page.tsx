@@ -9,13 +9,14 @@ import { Card, CardBody, CardHeader } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/field";
 import { Badge } from "@/components/ui/badge";
+import { Modal } from "@/components/ui/modal";
 import { CONTRACTS } from "@/lib/contracts";
 import { isStoneSource, type StoneSource } from "@/lib/stone-source";
 import { hasVariationTag, toggleVariationTag } from "@/lib/variation-tag";
 import { getSchemaClient } from "@/lib/supabase/client";
 import { callRpc } from "@/lib/supabase/rpc";
 import { cn } from "@/lib/utils";
-import { Check, ChevronDown, ChevronUp } from "lucide-react";
+import { ChevronDown, ChevronUp, Copy, CopyPlus } from "lucide-react";
 
 type ClientSummary = {
   client_id?: string;
@@ -156,6 +157,7 @@ type OrderUpsertPayload = {
 type GridRow = {
   id: string;
   order_line_id?: string | null;
+  save_error_message?: string | null;
   client_input: string;
   client_id: string | null;
   client_name: string | null;
@@ -212,6 +214,7 @@ type SuggestField = "client" | "model";
 const PAGE_SIZE = 10;
 const INITIAL_PAGES = 1;
 const EMPTY_ROWS = PAGE_SIZE * INITIAL_PAGES;
+const MAX_SPLIT_QTY = 50;
 
 const toKstDateKey = (value: string | Date) => {
   const date = value instanceof Date ? value : new Date(value);
@@ -275,6 +278,7 @@ const getCategoryName = (code: string | null | undefined) => {
 const createEmptyRow = (index: number): GridRow => ({
   id: `row-${index}-${createRowId()}`,
   order_line_id: null,
+  save_error_message: null,
   client_input: "",
   client_id: null,
   client_name: null,
@@ -574,6 +578,11 @@ function OrdersPageContent() {
   const [activeSuggest, setActiveSuggest] = useState<{ rowId: string; field: SuggestField } | null>(null);
   const saveCache = useRef(new Map<string, string>());
   const saveInFlight = useRef(new Set<string>());
+  const bulkSaveInFlight = useRef(new Set<string>());
+  const qtyLimitToastShown = useRef(new Set<string>());
+  const [copyModalOpen, setCopyModalOpen] = useState(false);
+  const [copyTargetRowId, setCopyTargetRowId] = useState<string | null>(null);
+  const [copyTotalCountInput, setCopyTotalCountInput] = useState("2");
   const [pageIndex, setPageIndex] = useState(1);
   const loadToastRef = useRef<string | null>(null);
 
@@ -672,7 +681,7 @@ function OrdersPageContent() {
       p_suffix: normalizeText(row.suffix) || master?.category_code || null,
       p_color: colorStr || null,
       p_material_code: row.material_code || master?.material_code_default || null,
-      p_qty: toNumber(row.qty),
+      p_qty: 1,
       p_size: normalizeTextOrNull(row.size) as string | null,
       p_is_plated: !!(platingStr),
       p_plating_variant_id: platingVariantId,
@@ -788,6 +797,7 @@ function OrdersPageContent() {
         const loadedRow: GridRow = {
           id: `loaded-${editId}`,
           order_line_id: order.order_line_id,
+          save_error_message: null,
           client_input: client?.client_name ?? "Unknown",
           client_id: order.customer_party_id ?? null,
           client_name: client?.client_name ?? null,
@@ -961,6 +971,7 @@ function OrdersPageContent() {
           return {
             id: `bulk-${order.order_line_id ?? index}`,
             order_line_id: order.order_line_id ?? null,
+            save_error_message: null,
             client_input: client?.client_name ?? "",
             client_id: order.customer_party_id ?? null,
             client_name: client?.client_name ?? null,
@@ -1024,6 +1035,60 @@ function OrdersPageContent() {
 
   const updateRow = (rowId: string, patch: Partial<GridRow>) => {
     setRows((prev) => prev.map((row) => (row.id === rowId ? { ...row, ...patch } : row)));
+  };
+
+  const cloneOrderRowTemplate = (row: GridRow): GridRow => ({
+    ...row,
+    id: `row-copy-${createRowId()}`,
+    order_line_id: null,
+    qty: "1",
+    save_error_message: null,
+  });
+
+  const buildPayloadWithOverrides = (
+    row: GridRow,
+    overrides?: { orderLineId?: string | null }
+  ): OrderUpsertPayload => {
+    const payload = buildPayload({ ...row, qty: "1" });
+    return {
+      ...payload,
+      p_qty: 1,
+      p_order_line_id: overrides?.orderLineId ?? row.order_line_id ?? null,
+    };
+  };
+
+  const parseRequestedQty = (value: string) => {
+    const parsed = toNumber(value);
+    if (parsed === null) return null;
+    if (!Number.isFinite(parsed)) return null;
+    return Math.floor(parsed);
+  };
+
+  const isCopyableRow = (row: GridRow) => {
+    return Boolean(row.client_id && row.master_item_id && row.material_code);
+  };
+
+  const applyQtyInput = (rowId: string, value: string) => {
+    updateRow(rowId, { qty: value });
+    const parsed = parseRequestedQty(value);
+    if (parsed !== null && parsed > MAX_SPLIT_QTY) {
+      setRowError(rowId, { qty: `최대 ${MAX_SPLIT_QTY}개까지만 가능합니다` });
+      if (!qtyLimitToastShown.current.has(rowId)) {
+        toast.error(`최대 ${MAX_SPLIT_QTY}개까지만 가능합니다`);
+        qtyLimitToastShown.current.add(rowId);
+      }
+      return;
+    }
+
+    qtyLimitToastShown.current.delete(rowId);
+    setRowErrors((prev) => {
+      const current = prev[rowId];
+      if (!current?.qty) return prev;
+      if (current.qty.includes("최대")) {
+        return { ...prev, [rowId]: { ...current, qty: undefined } };
+      }
+      return prev;
+    });
   };
 
   const toggleColor = (rowId: string, color: "color_p" | "color_g" | "color_w") => {
@@ -1193,6 +1258,7 @@ function OrdersPageContent() {
         const nextRows = orders.map((order, index) => ({
           id: `bulk-${order.order_line_id ?? index}`,
           order_line_id: order.order_line_id ?? null,
+          save_error_message: null,
           client_input: "",
           client_id: order.customer_party_id ?? null,
           client_name: null,
@@ -1566,8 +1632,12 @@ function OrdersPageContent() {
       setRowError(row.id, { material: "소재를 선택하세요" });
       isValid = false;
     }
-    if (row.model_input.trim() && !toNumber(row.qty)) {
+    const requestedQty = parseRequestedQty(row.qty);
+    if (row.model_input.trim() && !requestedQty) {
       setRowError(row.id, { qty: "수량을 입력하세요" });
+      isValid = false;
+    } else if (requestedQty !== null && requestedQty > MAX_SPLIT_QTY) {
+      setRowError(row.id, { qty: `최대 ${MAX_SPLIT_QTY}개까지만 가능합니다` });
       isValid = false;
     }
     if (!platingStr) {
@@ -1588,6 +1658,144 @@ function OrdersPageContent() {
     return isValid;
   };
 
+  const bulkCreateOrderLines = async (
+    templateRow: GridRow,
+    totalCount: number
+  ) => {
+    const normalizedTotal = Math.max(1, Math.min(MAX_SPLIT_QTY, Math.floor(totalCount)));
+    const hasExisting = Boolean(templateRow.order_line_id);
+    const sourceOrderLineId = hasExisting
+      ? String(templateRow.order_line_id)
+      : crypto.randomUUID();
+
+    const sourceRow: GridRow = {
+      ...templateRow,
+      order_line_id: sourceOrderLineId,
+      qty: "1",
+      save_error_message: null,
+    };
+
+    const stagedRows: GridRow[] = [sourceRow];
+    if (hasExisting) {
+      const needToCreate = Math.max(0, normalizedTotal - 1);
+      for (let i = 0; i < needToCreate; i += 1) {
+        const cloned = cloneOrderRowTemplate(templateRow);
+        stagedRows.push({
+          ...cloned,
+          order_line_id: crypto.randomUUID(),
+          qty: "1",
+          save_error_message: null,
+        });
+      }
+    } else {
+      for (let i = 1; i < normalizedTotal; i += 1) {
+        const cloned = cloneOrderRowTemplate(templateRow);
+        stagedRows.push({
+          ...cloned,
+          order_line_id: crypto.randomUUID(),
+          qty: "1",
+          save_error_message: null,
+        });
+      }
+    }
+
+    const payloads = stagedRows.map((item) => {
+      const payload = buildPayloadWithOverrides(item, {
+        orderLineId: item.order_line_id ?? null,
+      });
+      return {
+        row: item,
+        payload,
+        cacheKey: JSON.stringify(payload),
+      };
+    });
+
+    const settled = await Promise.allSettled(
+      payloads.map(async (entry) => {
+        const savedId = await upsertOrderLine(entry.payload);
+        return { ...entry, savedId };
+      })
+    );
+
+    const successById = new Map<string, GridRow>();
+    const failedById = new Map<string, string>();
+
+    settled.forEach((result, index) => {
+      const target = payloads[index];
+      if (result.status === "fulfilled") {
+        const effectiveId = String(result.value.savedId ?? target.row.order_line_id ?? "").trim();
+        const normalized = {
+          ...target.row,
+          order_line_id: effectiveId || target.row.order_line_id,
+          qty: "1",
+          save_error_message: null,
+        };
+        successById.set(target.row.id, normalized);
+        saveCache.current.set(target.row.id, target.cacheKey);
+        return;
+      }
+      const message = result.reason instanceof Error ? result.reason.message : "저장 실패";
+      failedById.set(target.row.id, message);
+    });
+
+    setRows((prev) => {
+      const index = prev.findIndex((item) => item.id === templateRow.id);
+      if (index < 0) return prev;
+
+      const next = [...prev];
+      const sourceOk = successById.get(sourceRow.id);
+      const sourceErr = failedById.get(sourceRow.id);
+      next[index] = {
+        ...next[index],
+        order_line_id: sourceOk?.order_line_id ?? sourceRow.order_line_id ?? next[index].order_line_id ?? null,
+        qty: "1",
+        save_error_message: sourceErr ?? null,
+      };
+
+      const additionalRows = stagedRows.slice(1).map((item) => {
+        const ok = successById.get(item.id);
+        const err = failedById.get(item.id);
+        return {
+          ...item,
+          order_line_id: ok?.order_line_id ?? item.order_line_id,
+          qty: "1",
+          save_error_message: err ?? null,
+        };
+      });
+      if (additionalRows.length > 0) {
+        next.splice(index + 1, 0, ...additionalRows);
+      }
+      return next;
+    });
+
+    setRowErrors((prev) => {
+      const next = { ...prev };
+      delete next[sourceRow.id];
+      return next;
+    });
+
+    return {
+      totalRequested: normalizedTotal,
+      successCount: successById.size,
+      failedCount: failedById.size,
+    };
+  };
+
+  const executeBulkCreate = async (
+    row: GridRow,
+    totalCount: number
+  ) => {
+    if (bulkSaveInFlight.current.has(row.id)) {
+      return null;
+    }
+    bulkSaveInFlight.current.add(row.id);
+    try {
+      return await bulkCreateOrderLines(row, totalCount);
+    } finally {
+      bulkSaveInFlight.current.delete(row.id);
+    }
+  };
+
   const saveRow = async (row: GridRow) => {
     if (!schemaClient) return;
     const status = rowStatusMap[row.id];
@@ -1606,7 +1814,30 @@ function OrdersPageContent() {
 
     if (!validateRow(row)) return;
 
-    const payload = buildPayload(row);
+    const requestedQty = parseRequestedQty(row.qty) ?? 1;
+    if (requestedQty > MAX_SPLIT_QTY) {
+      setRowError(row.id, { qty: `최대 ${MAX_SPLIT_QTY}개까지만 가능합니다` });
+      toast.error(`최대 ${MAX_SPLIT_QTY}개까지만 가능합니다`);
+      return;
+    }
+
+    if (requestedQty > 1) {
+      if (row.order_line_id) {
+        toast.info("이 라인은 1개 단위로 저장됩니다. 추가 수량은 동일 라인으로 분해 생성됩니다.");
+      }
+      const result = await executeBulkCreate(row, requestedQty);
+      if (!result) return;
+      if (result.failedCount > 0) {
+        toast.error(
+          `${result.totalRequested}건 중 ${result.successCount}건 저장 완료, ${result.failedCount}건 실패`
+        );
+      } else {
+        toast.success(`수량 ${result.totalRequested} → 1개 단위 라인 ${result.totalRequested}개로 저장했습니다.`);
+      }
+      return;
+    }
+
+    const payload = buildPayloadWithOverrides(row, { orderLineId: row.order_line_id ?? null });
     const cacheKey = JSON.stringify(payload);
     if (saveCache.current.get(row.id) === cacheKey) return;
 
@@ -1617,7 +1848,11 @@ function OrdersPageContent() {
       const savedId = await upsertOrderLine(payload);
       if (savedId) {
         saveCache.current.set(row.id, cacheKey);
-        updateRow(row.id, { order_line_id: String(savedId) });
+        updateRow(row.id, {
+          order_line_id: String(savedId),
+          qty: "1",
+          save_error_message: null,
+        });
         setRowErrors((prev) => {
           const next = { ...prev };
           delete next[row.id];
@@ -1634,7 +1869,11 @@ function OrdersPageContent() {
             const savedId = await upsertOrderLine(payload);
             if (savedId) {
               saveCache.current.set(row.id, cacheKey);
-              updateRow(row.id, { order_line_id: String(savedId) });
+              updateRow(row.id, {
+                order_line_id: String(savedId),
+                qty: "1",
+                save_error_message: null,
+              });
               setRowErrors((prev) => {
                 const next = { ...prev };
                 delete next[row.id];
@@ -1645,16 +1884,70 @@ function OrdersPageContent() {
             }
           } catch (retryError) {
             const retryMessage = retryError instanceof Error ? retryError.message : "저장 실패";
+            updateRow(row.id, { save_error_message: retryMessage, qty: "1" });
             toast.error("저장 실패", { description: retryMessage });
           }
         } else {
+          updateRow(row.id, { save_error_message: message, qty: "1" });
           toast.error("저장 실패", { description: message });
         }
       } else {
+        updateRow(row.id, { save_error_message: message, qty: "1" });
         toast.error("저장 실패", { description: message });
       }
     } finally {
       saveInFlight.current.delete(row.id);
+    }
+  };
+
+  const handleCopyOne = async (row: GridRow) => {
+    if (!isCopyableRow(row)) {
+      toast.error("거래처/모델/소재 매칭 후 복사 가능합니다");
+      return;
+    }
+    const result = await executeBulkCreate(row, 2);
+    if (!result) return;
+    if (result.failedCount > 0) {
+      toast.error(`복사 2건 중 ${result.successCount}건 저장, ${result.failedCount}건 실패`);
+    } else {
+      toast.success("복사 1건 생성 완료");
+    }
+  };
+
+  const openCopyModalForRow = (row: GridRow) => {
+    if (!isCopyableRow(row)) {
+      toast.error("거래처/모델/소재 매칭 후 복사 가능합니다");
+      return;
+    }
+    setCopyTargetRowId(row.id);
+    setCopyTotalCountInput("2");
+    setCopyModalOpen(true);
+  };
+
+  const submitCopyModal = async () => {
+    if (!copyTargetRowId) return;
+    const target = rows.find((item) => item.id === copyTargetRowId);
+    if (!target) {
+      setCopyModalOpen(false);
+      return;
+    }
+    const parsed = parseRequestedQty(copyTotalCountInput);
+    if (parsed === null || parsed < 1) {
+      toast.error("총 개수는 1 이상이어야 합니다");
+      return;
+    }
+    if (parsed > MAX_SPLIT_QTY) {
+      toast.error(`최대 ${MAX_SPLIT_QTY}개까지만 가능합니다`);
+      return;
+    }
+
+    const result = await executeBulkCreate(target, parsed);
+    if (!result) return;
+    setCopyModalOpen(false);
+    if (result.failedCount > 0) {
+      toast.error(`${result.totalRequested}건 중 ${result.successCount}건 저장, ${result.failedCount}건 실패`);
+    } else {
+      toast.success(`라인 ${result.totalRequested}건 생성 완료`);
     }
   };
 
@@ -1717,6 +2010,45 @@ function OrdersPageContent() {
         </div>
       )}
 
+      <Modal
+        open={copyModalOpen}
+        onClose={() => setCopyModalOpen(false)}
+        title="라인 복사"
+        description="선택한 라인을 포함하여 총 몇 개로 만들까요?"
+      >
+        <div className="space-y-4">
+          <div className="space-y-1.5">
+            <label className="text-xs font-semibold uppercase tracking-wider text-[var(--muted)]">총 개수</label>
+            <Input
+              type="number"
+              min={1}
+              max={MAX_SPLIT_QTY}
+              value={copyTotalCountInput}
+              onChange={(event) => setCopyTotalCountInput(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  void submitCopyModal();
+                }
+                if (event.key === "Escape") {
+                  event.preventDefault();
+                  setCopyModalOpen(false);
+                }
+              }}
+              autoFocus
+            />
+          </div>
+          <div className="flex items-center justify-end gap-2">
+            <Button size="sm" variant="secondary" onClick={() => setCopyModalOpen(false)}>
+              취소
+            </Button>
+            <Button size="sm" onClick={() => void submitCopyModal()}>
+              생성
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
       <div className="min-h-screen bg-[var(--background)] pb-20">
 
         {/* High-grade Sticky Header */}
@@ -1733,8 +2065,8 @@ function OrdersPageContent() {
               </div>
               <div className="h-4 w-px bg-border/40 mx-2" />
               <div className="flex items-center gap-2 text-xs font-medium px-2 py-1 rounded-md bg-[var(--panel)] border border-[var(--panel-border)] shadow-sm">
-                <span className={cn("w-2 h-2 rounded-full shadow-[0_0_4px_currentColor]", saveInFlight.current.size > 0 ? "bg-[var(--warning)] text-[var(--warning)] animate-pulse" : "bg-[var(--success)] text-[var(--success)]")} />
-                <span className="text-[var(--muted)]">{saveInFlight.current.size > 0 ? "저장 중..." : "준비됨"}</span>
+                <span className={cn("w-2 h-2 rounded-full shadow-[0_0_4px_currentColor]", saveInFlight.current.size > 0 || bulkSaveInFlight.current.size > 0 ? "bg-[var(--warning)] text-[var(--warning)] animate-pulse" : "bg-[var(--success)] text-[var(--success)]")} />
+                <span className="text-[var(--muted)]">{saveInFlight.current.size > 0 || bulkSaveInFlight.current.size > 0 ? "저장 중..." : "준비됨"}</span>
               </div>
             </div>
 
@@ -1763,7 +2095,7 @@ function OrdersPageContent() {
           {/* Left Column: Compact Order Grid - Card Wrapper */}
           <div className="space-y-1 min-w-0 order-2 lg:col-span-2 xl:col-span-1 bg-[var(--panel)] rounded-xl border border-[var(--panel-border)] shadow-sm overflow-visible flex flex-col h-fit min-h-0">
             {/* Header Row */}
-            <div className="bg-[var(--surface-1)] border-b border-[var(--panel-border)] grid grid-cols-[40px_84px_160px_200px_90px_110px_70px_42px_140px_30px_1fr_40px] gap-2 px-3 py-2 text-[11px] font-semibold text-[var(--muted-foreground)] uppercase tracking-wider items-center select-none rounded-t-xl">
+            <div className="bg-[var(--surface-1)] border-b border-[var(--panel-border)] grid grid-cols-[40px_84px_160px_200px_90px_110px_70px_42px_140px_30px_1fr_96px] gap-2 px-3 py-2 text-[11px] font-semibold text-[var(--muted-foreground)] uppercase tracking-wider items-center select-none rounded-t-xl">
               <span className="text-center">No.</span>
               <span className="text-center">옵션</span>
               <span>거래처</span>
@@ -1793,8 +2125,9 @@ function OrdersPageContent() {
                     {/* Main Row */}
                     <div
                       className={cn(
-                        "grid grid-cols-[40px_84px_160px_200px_90px_110px_70px_42px_140px_30px_1fr_40px] gap-2 px-3 py-1.5 items-center text-xs rounded-lg border transition-all duration-200 group relative",
+                        "grid grid-cols-[40px_84px_160px_200px_90px_110px_70px_42px_140px_30px_1fr_96px] gap-2 px-3 py-1.5 items-center text-xs rounded-lg border transition-all duration-200 group relative",
                         row.order_line_id ? "bg-emerald-500/5 border-emerald-500/20" : "bg-[var(--surface-1)]/50 border-transparent hover:border-[var(--panel-border)] hover:bg-[var(--panel-hover)] hover:shadow-sm",
+                        row.save_error_message ? "border-[var(--danger)]/50 bg-[var(--danger)]/5" : "",
                         (errors.client || errors.model) ? "bg-[var(--danger)]/5 border-[var(--danger)]/30" : ""
                       )}
                       onBlur={(event) => {
@@ -2008,8 +2341,9 @@ function OrdersPageContent() {
                           errors.qty ? "border-[var(--danger)]/50" : "hover:border-[var(--border)] group-hover:bg-[var(--background)]/50"
                         )}
                         value={row.qty}
-                        onChange={(e) => updateRow(row.id, { qty: e.target.value })}
+                        onChange={(e) => applyQtyInput(row.id, e.target.value)}
                         min="1"
+                        max={String(MAX_SPLIT_QTY)}
                       />
 
                       {/* Plating Checkboxes (P, G, W, B) */}
@@ -2064,13 +2398,43 @@ function OrdersPageContent() {
                         />
                       </div>
 
-                      {/* Delete Button */}
-                      <button
-                        onClick={() => handleDeleteRow(row.id)}
-                        className="w-6 h-6 ml-auto flex items-center justify-center text-[var(--muted)] hover:text-[var(--danger)] hover:bg-[var(--danger)]/10 rounded-full transition-colors"
-                      >
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6 6 18" /><path d="m6 6 12 12" /></svg>
-                      </button>
+                      <div className="ml-auto flex items-center justify-end gap-1">
+                        {row.save_error_message ? (
+                          <button
+                            type="button"
+                            onClick={() => void saveRow(row)}
+                            className="h-6 rounded-md border border-[var(--danger)]/40 bg-[var(--danger)]/10 px-1.5 text-[10px] font-semibold text-[var(--danger)]"
+                            title={row.save_error_message}
+                          >
+                            재시도
+                          </button>
+                        ) : null}
+                        <button
+                          type="button"
+                          onClick={() => void handleCopyOne(row)}
+                          className="w-6 h-6 flex items-center justify-center text-[var(--muted)] hover:text-[var(--foreground)] hover:bg-[var(--panel-hover)] rounded-full transition-colors"
+                          title="이 라인 1개 추가 생성"
+                          aria-label="복사"
+                        >
+                          <Copy className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => openCopyModalForRow(row)}
+                          className="w-6 h-6 flex items-center justify-center text-[var(--muted)] hover:text-[var(--foreground)] hover:bg-[var(--panel-hover)] rounded-full transition-colors"
+                          title="이 라인을 여러 개로 생성"
+                          aria-label="복사 xN"
+                        >
+                          <CopyPlus className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteRow(row.id)}
+                          className="w-6 h-6 flex items-center justify-center text-[var(--muted)] hover:text-[var(--danger)] hover:bg-[var(--danger)]/10 rounded-full transition-colors"
+                        >
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6 6 18" /><path d="m6 6 12 12" /></svg>
+                        </button>
+                      </div>
                     </div>
 
                     {/* Expanded Stone Row */}

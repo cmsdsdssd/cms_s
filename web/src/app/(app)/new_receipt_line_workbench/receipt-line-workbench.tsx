@@ -790,6 +790,7 @@ const AUTO_FIELD_CLASS = "bg-[var(--panel)]/70";
 const DEFAULT_RANGE_MONTHS = -3;
 const DON_TO_G = 3.75;
 const SUGGESTION_LIMIT = 10;
+const MAX_LINE_COPY_TOTAL = 50;
 
 const FACTORY_ROWS: Array<Pick<FactoryRowInput, "rowCode" | "label">> = [
   { rowCode: "RECENT_PAYMENT", label: "최근결제" },
@@ -809,6 +810,34 @@ function createDefaultFactoryRows() {
     silver: { value: "", unit: "g" as const },
     laborKrw: "",
   }));
+}
+
+function getKstNowIso() {
+  const now = new Date();
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Seoul",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  }).formatToParts(now);
+
+  const pick = (type: string) => parts.find((item) => item.type === type)?.value ?? "00";
+  const stamp = `${pick("year")}-${pick("month")}-${pick("day")}T${pick("hour")}:${pick("minute")}:${pick("second")}+09:00`;
+  const parsed = new Date(stamp);
+  if (Number.isNaN(parsed.getTime())) return now.toISOString();
+  return parsed.toISOString();
+}
+
+function buildImmediatePaidAtIso(billDate: string) {
+  const trimmed = billDate.trim();
+  if (!trimmed) return getKstNowIso();
+  const candidate = new Date(`${trimmed}T09:00:00+09:00`);
+  if (Number.isNaN(candidate.getTime())) return getKstNowIso();
+  return candidate.toISOString();
 }
 
 function getFactoryStatementStorageKey(receiptId: string) {
@@ -883,6 +912,8 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
   const [factoryRows, setFactoryRows] = useState<FactoryRowInput[]>(() => createDefaultFactoryRows());
   const [factoryRefDate, setFactoryRefDate] = useState("");
   const [factoryNote, setFactoryNote] = useState("");
+  const [immediateSettleByReceipt, setImmediateSettleByReceipt] = useState<Record<string, boolean>>({});
+  const [immediatePayPending, setImmediatePayPending] = useState(false);
   const [factoryStatementHydratedReceiptId, setFactoryStatementHydratedReceiptId] = useState<string | null>(null);
   const [reconcileIssueCounts, setReconcileIssueCounts] = useState<{ error: number; warn: number } | null>(null);
   const [backdatedConfirmRequired, setBackdatedConfirmRequired] = useState(false);
@@ -892,6 +923,9 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
   const [lineItems, setLineItems] = useState<ReceiptLineItemInput[]>([]);
   const [lineItemsDirty, setLineItemsDirty] = useState(false);
   const [expandedLineId, setExpandedLineId] = useState<string | null>(null);
+  const [lineCopyModalOpen, setLineCopyModalOpen] = useState(false);
+  const [lineCopyTargetId, setLineCopyTargetId] = useState<string | null>(null);
+  const [lineCopyTotalCountInput, setLineCopyTotalCountInput] = useState("2");
 
   const [activeLineSuggest, setActiveLineSuggest] = useState<
     { lineId: string; field: "customer" | "model" } | null
@@ -954,6 +988,10 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
   const matchOpenTriggerRef = useRef<HTMLElement | null>(null);
   const suggestionCacheRef = useRef<Map<string, MatchCandidate[]>>(new Map());
   const autoSuggestTimerRef = useRef<number | null>(null);
+
+  const immediateSettleEnabled = selectedReceiptId
+    ? Boolean(immediateSettleByReceipt[selectedReceiptId])
+    : false;
 
   const debugSuggest = useMemo(() => {
     if (typeof window === "undefined") return false;
@@ -1927,6 +1965,70 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
     });
   }
 
+  function cloneLineForCopy(template: ReceiptLineItemInput, vendorSeqNo: number): ReceiptLineItemInput {
+    return {
+      ...template,
+      line_uuid: crypto.randomUUID(),
+      receipt_line_uuid: null,
+      qty: "1",
+      vendor_seq_no: String(vendorSeqNo),
+    };
+  }
+
+  function copyLineWithTotalCount(target: ReceiptLineItemInput, totalCount: number) {
+    const normalizedTotal = Math.max(1, Math.min(MAX_LINE_COPY_TOTAL, Math.floor(totalCount)));
+    const additionalCount = Math.max(0, normalizedTotal - 1);
+    if (additionalCount === 0) {
+      toast.info("추가 생성할 라인이 없습니다.");
+      return;
+    }
+
+    setLineItemsDirty(true);
+    setLineItems((prev) => {
+      const index = prev.findIndex((item) => item.line_uuid === target.line_uuid);
+      if (index < 0) return prev;
+      const next = [...prev];
+      let nextSeq = getNextVendorSeq(prev);
+      const copies: ReceiptLineItemInput[] = [];
+      for (let i = 0; i < additionalCount; i += 1) {
+        copies.push(cloneLineForCopy(target, nextSeq));
+        nextSeq += 1;
+      }
+      next.splice(index + 1, 0, ...copies);
+      return next;
+    });
+
+    toast.success(`라인 ${additionalCount}개를 추가했습니다.`);
+  }
+
+  function openLineCopyModal(target: ReceiptLineItemInput) {
+    setLineCopyTargetId(target.line_uuid);
+    setLineCopyTotalCountInput("2");
+    setLineCopyModalOpen(true);
+  }
+
+  function submitLineCopyModal() {
+    if (!lineCopyTargetId) return;
+    const target = lineItems.find((item) => item.line_uuid === lineCopyTargetId);
+    if (!target) {
+      setLineCopyModalOpen(false);
+      return;
+    }
+
+    const parsed = parseNumber(lineCopyTotalCountInput);
+    if (parsed === null || parsed < 1) {
+      toast.error("총 개수는 1 이상이어야 합니다.");
+      return;
+    }
+    if (parsed > MAX_LINE_COPY_TOTAL) {
+      toast.error(`최대 ${MAX_LINE_COPY_TOTAL}개까지만 가능합니다.`);
+      return;
+    }
+
+    copyLineWithTotalCount(target, parsed);
+    setLineCopyModalOpen(false);
+  }
+
   function removeLineLocal(lineUuid: string) {
     setLineItemsDirty(true);
     setLineItems((prev) => prev.filter((item) => item.line_uuid !== lineUuid));
@@ -2416,7 +2518,7 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
     }
   }
 
-  async function saveFactoryStatement() {
+  async function saveFactoryStatement(options?: { rows?: FactoryRowInput[]; note?: string }) {
     if (!selectedReceiptId) {
       toast.error("영수증을 선택하세요");
       return;
@@ -2427,7 +2529,10 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
       return;
     }
 
-    const rows = factoryRows.map((row) => ({
+    const targetRows = options?.rows ?? factoryRows;
+    const targetNote = options?.note ?? factoryNote;
+
+    const rows = targetRows.map((row) => ({
       row_code: row.rowCode,
       ref_date: row.refDate || null,
       note: row.note || null,
@@ -2441,7 +2546,7 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
     const payload = {
       p_receipt_id: selectedReceiptId,
       p_statement: { rows },
-      p_note: factoryNote || null,
+      p_note: targetNote || null,
     };
 
     try {
@@ -2464,7 +2569,104 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
       toast.warning("v2 정합 저장 오류로 v1 경로로 저장했습니다. DB 함수 패치가 필요합니다.");
     }
 
-    persistFactoryStatementSnapshot(selectedReceiptId, factoryRows, factoryNote);
+    persistFactoryStatementSnapshot(selectedReceiptId, targetRows, targetNote);
+  }
+
+  const buildImmediateSettleFactoryRows = (refDate: string) => {
+    const saleGold = roundTo6(lineMetalTotals.convertedGold);
+    const saleSilver = roundTo6(lineMetalTotals.convertedSilver);
+    const saleLabor = Math.round(lineTotals.totalAmount);
+
+    return FACTORY_ROWS.map((meta) => {
+      const isSale = meta.rowCode === "SALE";
+      const isRecentPayment = meta.rowCode === "RECENT_PAYMENT";
+      const shouldApplyAmount = isSale || isRecentPayment;
+      return {
+        rowCode: meta.rowCode,
+        label: meta.label,
+        refDate,
+        note: immediateSettleEnabled ? "AUTO 즉시완불" : "",
+        gold: { value: shouldApplyAmount ? String(saleGold) : "0", unit: "g" as const },
+        silver: { value: shouldApplyAmount ? String(saleSilver) : "0", unit: "g" as const },
+        laborKrw: shouldApplyAmount ? String(saleLabor) : "0",
+      };
+    });
+  };
+
+  async function ensureApReadyForImmediateSettle() {
+    if (!selectedReceiptId) return false;
+    if (apSyncStatus === "success") return true;
+    try {
+      await callRpc<{ ok?: boolean }>(CONTRACTS.functions.ensureApFromReceipt, {
+        p_receipt_id: selectedReceiptId,
+        p_note: memo || null,
+      });
+      setApSyncStatus("success");
+      setApSyncMessage(null);
+      return true;
+    } catch (error) {
+      const message = getRpcErrorMessage(error);
+      setApSyncStatus("error");
+      setApSyncMessage(message);
+      toast.error("AP 동기화가 필요합니다(재시도 후 진행)", { description: message });
+      return false;
+    }
+  }
+
+  async function runImmediateSettlePayment() {
+    if (!selectedReceiptId) return false;
+    if (!vendorPartyId) {
+      toast.error("결제 등록 실패", { description: "공장 거래처를 먼저 확인해 주세요." });
+      return false;
+    }
+
+    const payableGold = roundTo6(lineMetalTotals.convertedGold);
+    const payableSilver = roundTo6(lineMetalTotals.convertedSilver);
+    const payableLabor = Math.round(lineTotals.totalAmount);
+    if (payableGold === 0 && payableSilver === 0 && payableLabor === 0) {
+      toast.error("결제할 금액이 없습니다.");
+      return false;
+    }
+
+    const legs = [
+      payableGold > 0 ? { asset_code: "XAU_G", qty: payableGold } : null,
+      payableSilver > 0 ? { asset_code: "XAG_G", qty: payableSilver } : null,
+      payableLabor > 0 ? { asset_code: "KRW_LABOR", qty: payableLabor } : null,
+    ].filter(Boolean);
+
+    if (legs.length === 0) {
+      toast.error("결제할 금액이 없습니다.");
+      return false;
+    }
+
+    const paidAtIso = buildImmediatePaidAtIso(billDate);
+    const noteText = `AUTO: receipt ${billNo || selectedReceiptId.slice(0, 8)} 즉시완불`;
+    const idempotencyKey = `receipt:${selectedReceiptId}:autoPay:v1`;
+
+    setImmediatePayPending(true);
+    try {
+      await callRpc(CONTRACTS.functions.apPayAndFifo, {
+        p_vendor_party_id: vendorPartyId,
+        p_paid_at: paidAtIso,
+        p_legs: legs,
+        p_note: noteText,
+        p_idempotency_key: idempotencyKey,
+      });
+      queryClient.invalidateQueries({ queryKey: ["new-receipt-workbench", "reconcile", selectedReceiptId] });
+      queryClient.invalidateQueries({ queryKey: ["new-receipt-workbench", "factory-statement", selectedReceiptId] });
+      queryClient.invalidateQueries({
+        predicate: (query) => Array.isArray(query.queryKey) && query.queryKey[0] === "ap",
+      });
+      toast.success("즉시완불 처리 완료 (결제 등록됨)");
+      return true;
+    } catch (error) {
+      const message = getRpcErrorMessage(error);
+      toast.error("AP 결제 등록 실패", { description: message });
+      toast.info("AP 페이지에서 수동 결제 처리 후, 이 영수증 reconcile 확인");
+      return false;
+    } finally {
+      setImmediatePayPending(false);
+    }
   }
 
   async function confirmFactoryStatement(forceRecalc: boolean) {
@@ -2474,7 +2676,43 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
       return;
     }
 
-    await saveFactoryStatement();
+    if (immediateSettleEnabled && lineItemsDirty) {
+      const saved = await saveLines();
+      if (!saved) return;
+      await Promise.all([lineItemsQuery.refetch(), unlinkedQuery.refetch()]);
+    }
+
+    if (immediateSettleEnabled) {
+      const apReady = await ensureApReadyForImmediateSettle();
+      if (!apReady) return;
+    }
+
+    if (immediateSettleEnabled) {
+      const payableGold = roundTo6(lineMetalTotals.convertedGold);
+      const payableSilver = roundTo6(lineMetalTotals.convertedSilver);
+      const payableLabor = Math.round(lineTotals.totalAmount);
+      if (payableGold === 0 && payableSilver === 0 && payableLabor === 0) {
+        toast.error("결제할 금액이 없습니다.");
+        return;
+      }
+    }
+
+    const refDate = factoryRefDate || billDate || format(new Date(), "yyyy-MM-dd");
+    const immediateRows = immediateSettleEnabled ? buildImmediateSettleFactoryRows(refDate) : null;
+    if (immediateRows) {
+      setFactoryRows(immediateRows);
+      setFactoryRefDate(refDate);
+    }
+
+    try {
+      await saveFactoryStatement({
+        rows: immediateRows ?? undefined,
+      });
+    } catch (error) {
+      toast.error("Factory Statement 저장 실패", { description: getRpcErrorMessage(error) });
+      return;
+    }
+
     try {
       await factoryReceiptSetApplyStatus.mutateAsync({
         p_receipt_id: selectedReceiptId,
@@ -2482,7 +2720,6 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
         p_force_recalc: forceRecalc,
         p_note: factoryNote || null,
       });
-      toast.success(forceRecalc ? "백데이트 재계산 확정 완료" : "확정 완료");
     } catch (error) {
       const message = getRpcErrorMessage(error);
       if (message.includes("BACKDATED_RECEIPT_RECALC_REQUIRED")) {
@@ -2490,8 +2727,16 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
         toast.warning("과거 영수증입니다. 재계산 포함 확정을 눌러 반영하세요.");
         return;
       }
-      throw error;
+      toast.error("Factory Statement 확정 실패", { description: message });
+      return;
     }
+
+    if (immediateSettleEnabled) {
+      await runImmediateSettlePayment();
+      return;
+    }
+
+    toast.success(forceRecalc ? "백데이트 재계산 확정 완료" : "확정 완료");
   }
 
   async function setFactoryStatementDraft() {
@@ -3119,6 +3364,7 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
     matchConfirm.isPending ||
     factoryStatementUpsert.isPending ||
     factoryReceiptSetApplyStatus.isPending ||
+    immediatePayPending ||
     isSuggesting;
 
   const applyStatusText =
@@ -4268,7 +4514,25 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                                             : "출고확정 이후에는 수정/삭제할 수 없습니다. 정정 영수증으로 처리하세요."}
                                         </div>
                                       ) : null}
-                                      <div className="flex justify-end">
+                                      <div className="flex justify-end gap-2">
+                                        <Button
+                                          type="button"
+                                          size="sm"
+                                          variant="secondary"
+                                          onClick={() => copyLineWithTotalCount(item, 2)}
+                                          data-line-id={item.line_uuid}
+                                        >
+                                          복사
+                                        </Button>
+                                        <Button
+                                          type="button"
+                                          size="sm"
+                                          variant="secondary"
+                                          onClick={() => openLineCopyModal(item)}
+                                          data-line-id={item.line_uuid}
+                                        >
+                                          복사×N
+                                        </Button>
                                         <span className="inline-flex" title={deleteTooltip}>
                                           <Button
                                             type="button"
@@ -4350,7 +4614,7 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                     <Card className="border-none shadow-sm ring-1 ring-black/5">
                       <CardHeader className="border-b border-[var(--panel-border)] bg-[var(--panel)]/50 px-4 py-3">
                         <div className="flex flex-wrap items-center justify-between gap-3">
-                          <div className="flex items-center gap-3">
+                          <div className="flex flex-wrap items-center gap-3">
                             <div className="text-sm font-semibold">공장 영수증 하단 4행</div>
                             <div className="flex items-center gap-2">
                               <label className="text-xs font-semibold uppercase tracking-wider text-[var(--muted)]">기준일</label>
@@ -4361,6 +4625,26 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                                 className="h-8 text-sm"
                               />
                             </div>
+                            <label className="inline-flex items-start gap-2 rounded-md border border-[var(--panel-border)] bg-[var(--surface)]/70 px-2 py-1">
+                              <input
+                                type="checkbox"
+                                checked={immediateSettleEnabled}
+                                disabled={!selectedReceiptId || immediatePayPending}
+                                onChange={(event) => {
+                                  if (!selectedReceiptId) return;
+                                  const checked = event.target.checked;
+                                  setImmediateSettleByReceipt((prev) => ({
+                                    ...prev,
+                                    [selectedReceiptId]: checked,
+                                  }));
+                                }}
+                                className="mt-0.5 h-3.5 w-3.5 accent-[var(--primary)]"
+                              />
+                              <span className="leading-tight">
+                                <span className="block text-[11px] font-semibold text-[var(--foreground)]">즉시완불(미수 없음)</span>
+                                <span className="block text-[10px] text-[var(--muted)]">확정 시 AP 결제까지 자동 등록하여 미수를 0으로 맞춥니다.</span>
+                              </span>
+                            </label>
                           </div>
                           <div className="flex items-center gap-2">
                             <span className={cn("rounded px-2 py-1 text-[10px] font-semibold", applyStatusTone)}>
@@ -4382,13 +4666,19 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                             <Button
                               size="sm"
                               onClick={() => confirmFactoryStatement(backdatedConfirmRequired)}
-                              disabled={!selectedReceiptId || factoryReceiptSetApplyStatus.isPending || headerNeedsSave}
+                              disabled={!selectedReceiptId || factoryReceiptSetApplyStatus.isPending || headerNeedsSave || immediatePayPending}
                             >
-                              {backdatedConfirmRequired ? "재계산 포함 확정" : "확정"}
+                              {immediateSettleEnabled
+                                ? backdatedConfirmRequired
+                                  ? "재계산 포함 확정+완불"
+                                  : "확정+완불"
+                                : backdatedConfirmRequired
+                                  ? "재계산 포함 확정"
+                                  : "확정"}
                             </Button>
                             <Button
                               size="sm"
-                              onClick={saveFactoryStatement}
+                              onClick={() => void saveFactoryStatement()}
                               disabled={!selectedReceiptId || factoryStatementUpsert.isPending || headerNeedsSave}
                             >
                               저장
@@ -6054,6 +6344,43 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
           </div>
         </div>
       </Sheet>
+
+      <Modal
+        open={lineCopyModalOpen}
+        onClose={() => setLineCopyModalOpen(false)}
+        title="라인 복사"
+        description="선택한 라인을 포함하여 총 몇 개로 만들까요?"
+      >
+        <div className="space-y-4">
+          <div className="space-y-1.5">
+            <label className="text-xs font-semibold uppercase tracking-wider text-[var(--muted)]">총 개수</label>
+            <Input
+              type="number"
+              min={1}
+              max={MAX_LINE_COPY_TOTAL}
+              value={lineCopyTotalCountInput}
+              onChange={(event) => setLineCopyTotalCountInput(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  submitLineCopyModal();
+                }
+                if (event.key === "Escape") {
+                  event.preventDefault();
+                  setLineCopyModalOpen(false);
+                }
+              }}
+              autoFocus
+            />
+          </div>
+          <div className="flex items-center justify-end gap-2">
+            <Button variant="secondary" onClick={() => setLineCopyModalOpen(false)}>
+              취소
+            </Button>
+            <Button onClick={submitLineCopyModal}>생성</Button>
+          </div>
+        </div>
+      </Modal>
 
       <Modal open={matchClearOpen} onClose={closeMatchClearModal} title="매칭취소(출고대기 되돌리기)">
         <div className="space-y-4">
