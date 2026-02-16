@@ -21,6 +21,11 @@ import { fetchParties, fetchPartyDetail } from "@/lib/api/cmsParty";
 import { PartyList } from "@/components/party/PartyList";
 import { PartyDetail } from "@/components/party/PartyDetail";
 import type { PartyForm } from "@/components/party/types";
+import {
+  applyVendorImmediateSettleTag,
+  hasVendorImmediateSettleTag,
+  stripVendorImmediateSettleTag,
+} from "@/lib/vendor-immediate-settle";
 
 function PartyPageContent() {
   const router = useRouter();
@@ -85,6 +90,7 @@ function PartyPageContent() {
   const form = useForm<PartyForm>({
     defaultValues: {
       party_type: "customer",
+      vendor_immediate_settle: false,
       is_active: true,
     },
   });
@@ -99,18 +105,21 @@ function PartyPageContent() {
         region: "",
         address: "",
         note: "",
+        vendor_immediate_settle: false,
         is_active: true,
         mask_code: "",
         prefix: "",
       });
     } else if (detailData) {
+      const isVendor = detailData.party_type === "vendor";
       form.reset({
         party_type: detailData.party_type,
         name: detailData.name,
         phone: detailData.phone ?? "",
         region: detailData.region ?? "",
         address: detailData.address ?? "",
-        note: detailData.note ?? "",
+        note: stripVendorImmediateSettleTag(detailData.note),
+        vendor_immediate_settle: isVendor ? hasVendorImmediateSettleTag(detailData.note) : false,
         is_active: detailData.is_active,
         mask_code: detailData.mask_code ?? "",
         prefix: detailData.prefixes?.[0]?.prefix ?? "",
@@ -139,6 +148,7 @@ function PartyPageContent() {
 
       queryClient.invalidateQueries({ queryKey: ["cms", "parties"] });
       queryClient.invalidateQueries({ queryKey: ["cms", "party", partyId] });
+      queryClient.invalidateQueries({ queryKey: ["vendor-parties"] });
       if (selectedPartyId === "new") {
         setSelectedPartyId(partyId);
       }
@@ -153,13 +163,17 @@ function PartyPageContent() {
   };
 
   const onSubmit = (values: PartyForm) => {
+    const cleanNote = values.note ?? "";
+    const enabled = values.party_type === "vendor" && Boolean(values.vendor_immediate_settle);
+    const memo = applyVendorImmediateSettleTag(cleanNote, enabled);
+
     mutation.mutate({
       p_party_type: values.party_type,
       p_name: values.name,
       p_phone: values.phone || null,
       p_region: values.region || null,
       p_address: values.address || null,
-      p_memo: values.note || null,
+      p_memo: memo || null,
       p_party_id: effectiveSelectedPartyId === "new" ? null : effectiveSelectedPartyId,
       p_is_active: values.is_active,
     });

@@ -2592,7 +2592,7 @@ export default function CatalogPage() {
                       </CardHeader>
                       <CardBody className="space-y-3">
                         <Input
-                          placeholder="variant_key (예: suffix / color / size). 비우면 DEFAULT"
+                          placeholder="variant_key (예: suffix|color|size). 비우면 DEFAULT"
                           value={recipeVariantKey}
                           onChange={(e) => setRecipeVariantKey(e.target.value)}
                         />

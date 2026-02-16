@@ -239,7 +239,11 @@ type MatchClearReasonCode =
   | "TEST"
   | "OTHER";
 
-type PartyOption = { label: string; value: string };
+type VendorOption = {
+  label: string;
+  value: string;
+  immediate_settle_vendor?: boolean;
+};
 
 const MATERIAL_OPTIONS = ["14", "18", "24", "925", "999", "00"] as const;
 const MATCH_CLEAR_REASONS: Array<{ value: MatchClearReasonCode; label: string }> = [
@@ -912,8 +916,9 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
   const [factoryRows, setFactoryRows] = useState<FactoryRowInput[]>(() => createDefaultFactoryRows());
   const [factoryRefDate, setFactoryRefDate] = useState("");
   const [factoryNote, setFactoryNote] = useState("");
-  const [immediateSettleByReceipt, setImmediateSettleByReceipt] = useState<Record<string, boolean>>({});
   const [immediatePayPending, setImmediatePayPending] = useState(false);
+  const [autoPayConfirmOpen, setAutoPayConfirmOpen] = useState(false);
+  const [autoPayConfirmForceRecalc, setAutoPayConfirmForceRecalc] = useState(false);
   const [factoryStatementHydratedReceiptId, setFactoryStatementHydratedReceiptId] = useState<string | null>(null);
   const [reconcileIssueCounts, setReconcileIssueCounts] = useState<{ error: number; warn: number } | null>(null);
   const [backdatedConfirmRequired, setBackdatedConfirmRequired] = useState(false);
@@ -989,10 +994,6 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
   const suggestionCacheRef = useRef<Map<string, MatchCandidate[]>>(new Map());
   const autoSuggestTimerRef = useRef<number | null>(null);
 
-  const immediateSettleEnabled = selectedReceiptId
-    ? Boolean(immediateSettleByReceipt[selectedReceiptId])
-    : false;
-
   const debugSuggest = useMemo(() => {
     if (typeof window === "undefined") return false;
     return new URLSearchParams(window.location.search).get("debugSuggest") === "1";
@@ -1054,10 +1055,15 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
       const res = await fetch("/api/vendors", { cache: "no-store" });
       const json = await res.json();
       if (!res.ok) throw new Error(json?.error ?? "거래처 조회 실패");
-      const rows = (json?.data ?? []) as Array<{ party_id: string; name: string }>;
+      const rows = (json?.data ?? []) as Array<{
+        party_id: string;
+        name: string;
+        immediate_settle_vendor?: boolean;
+      }>;
       return rows.map((row) => ({
         label: row.name,
         value: row.party_id,
+        immediate_settle_vendor: Boolean(row.immediate_settle_vendor),
       }));
     },
     staleTime: 5 * 60 * 1000,
@@ -1428,7 +1434,9 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
   });
 
   const receipts = receiptsQuery.data ?? [];
-  const vendorOptions = vendorOptionsQuery.data ?? [];
+  const vendorOptions = (vendorOptionsQuery.data ?? []) as VendorOption[];
+  const selectedVendorOption = vendorOptions.find((option) => option.value === vendorPartyId) ?? null;
+  const immediateSettleEnabled = Boolean(selectedVendorOption?.immediate_settle_vendor);
   const confirmedMatches = matchesQuery.data ?? [];
   const lockedLineMap = useMemo(() => {
     const map = new Map<string, ConfirmedMatchRow>();
@@ -1664,6 +1672,10 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
     if (!lineItemsQuery.data) return;
     if (lineItemsDirty) return;
     const rows = lineItemsQuery.data;
+    const hasLegacyQty = rows.some((row) => Number(row.qty ?? 1) !== 1);
+    if (hasLegacyQty) {
+      toast.warning("레거시 qty>1 라인이 감지되어 qty=1로 보정했습니다.");
+    }
     const existingSeqs = rows
       .map((row) => row.vendor_seq_no)
       .filter((value): value is number => value !== null && value !== undefined && Number.isFinite(value));
@@ -1677,7 +1689,7 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
         customer_factory_code: row.customer_factory_code ?? "",
         model_name: row.model_name ?? "",
         material_code: row.material_code ?? "",
-        qty: toInputNumber(row.qty ?? 1),
+        qty: "1",
         weight_raw_g: toInputNumber(row.weight_raw_g ?? row.weight_g ?? null),
         weight_deduct_g: toInputNumber(row.weight_deduct_g ?? null),
         labor_basic_cost_krw: toInputNumber(row.labor_basic_cost_krw ?? null),
@@ -2313,7 +2325,7 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
   const lineTotals = useMemo(() => {
     return lineItems.reduce(
       (acc, item) => {
-        const qty = parseNumber(item.qty) ?? 1;
+        const qty = 1;
         const weight = calcWeightTotal(item.weight_raw_g, item.weight_deduct_g);
         const laborBasic = parseNumber(item.labor_basic_cost_krw) ?? 0;
         const laborOther = parseNumber(item.labor_other_cost_krw) ?? 0;
@@ -2335,7 +2347,7 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
   const lineMetalTotals = useMemo(() => {
     return lineItems.reduce(
       (acc, item) => {
-        const qty = parseNumber(item.qty) ?? 1;
+        const qty = 1;
         const weight = calcWeightTotal(item.weight_raw_g, item.weight_deduct_g) * qty;
         switch (item.material_code) {
           case "14":
@@ -2438,7 +2450,7 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
     }
 
     const payload = lineItems.map((item) => {
-      const qty = parseNumber(item.qty) ?? 1;
+      const qty = 1;
       const laborBasic = parseNumber(item.labor_basic_cost_krw) ?? 0;
       const laborOther = parseNumber(item.labor_other_cost_krw) ?? 0;
       const totalAmount = parseNumber(item.total_amount_krw) ?? laborBasic + laborOther;
@@ -2737,6 +2749,15 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
     }
 
     toast.success(forceRecalc ? "백데이트 재계산 확정 완료" : "확정 완료");
+  }
+
+  function handleConfirmFactoryStatementClick(forceRecalc: boolean) {
+    if (immediateSettleEnabled) {
+      setAutoPayConfirmForceRecalc(forceRecalc);
+      setAutoPayConfirmOpen(true);
+      return;
+    }
+    void confirmFactoryStatement(forceRecalc);
   }
 
   async function setFactoryStatementDraft() {
@@ -3376,6 +3397,7 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
 
   useEffect(() => {
     setBackdatedConfirmRequired(false);
+    setAutoPayConfirmOpen(false);
   }, [selectedReceiptId]);
 
   const unlinkedRows = unlinkedQuery.data ?? [];
@@ -4625,28 +4647,22 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                                 className="h-8 text-sm"
                               />
                             </div>
-                            <label className="inline-flex items-start gap-2 rounded-md border border-[var(--panel-border)] bg-[var(--surface)]/70 px-2 py-1">
-                              <input
-                                type="checkbox"
-                                checked={immediateSettleEnabled}
-                                disabled={!selectedReceiptId || immediatePayPending}
-                                onChange={(event) => {
-                                  if (!selectedReceiptId) return;
-                                  const checked = event.target.checked;
-                                  setImmediateSettleByReceipt((prev) => ({
-                                    ...prev,
-                                    [selectedReceiptId]: checked,
-                                  }));
-                                }}
-                                className="mt-0.5 h-3.5 w-3.5 accent-[var(--primary)]"
-                              />
-                              <span className="leading-tight">
-                                <span className="block text-[11px] font-semibold text-[var(--foreground)]">즉시완불(미수 없음)</span>
-                                <span className="block text-[10px] text-[var(--muted)]">확정 시 AP 결제까지 자동 등록하여 미수를 0으로 맞춥니다.</span>
-                              </span>
-                            </label>
                           </div>
                           <div className="flex items-center gap-2">
+                            {immediateSettleEnabled ? (
+                              <span className="rounded px-2 py-1 text-[10px] font-semibold bg-[var(--danger)]/15 text-[var(--danger)]">
+                                즉시완불 공장
+                              </span>
+                            ) : (
+                              <span className="rounded px-2 py-1 text-[10px] font-semibold bg-[var(--surface)] text-[var(--muted)]">
+                                외상(미지급) 공장
+                              </span>
+                            )}
+                            <span className="text-[10px] text-[var(--muted)]">
+                              {immediateSettleEnabled
+                                ? "확정 시 AP 결제가 자동 등록됩니다."
+                                : "확정 시 AP 미지급이 누적됩니다."}
+                            </span>
                             <span className={cn("rounded px-2 py-1 text-[10px] font-semibold", applyStatusTone)}>
                               상태: {applyStatusText}
                             </span>
@@ -4665,13 +4681,13 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                             </Button>
                             <Button
                               size="sm"
-                              onClick={() => confirmFactoryStatement(backdatedConfirmRequired)}
+                              onClick={() => handleConfirmFactoryStatementClick(backdatedConfirmRequired)}
                               disabled={!selectedReceiptId || factoryReceiptSetApplyStatus.isPending || headerNeedsSave || immediatePayPending}
                             >
                               {immediateSettleEnabled
                                 ? backdatedConfirmRequired
-                                  ? "재계산 포함 확정+완불"
-                                  : "확정+완불"
+                                  ? "재계산 포함 확정+자동결제"
+                                  : "확정+자동결제"
                                 : backdatedConfirmRequired
                                   ? "재계산 포함 확정"
                                   : "확정"}
@@ -6378,6 +6394,44 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
               취소
             </Button>
             <Button onClick={submitLineCopyModal}>생성</Button>
+          </div>
+        </div>
+      </Modal>
+
+      <Modal
+        open={autoPayConfirmOpen}
+        onClose={() => setAutoPayConfirmOpen(false)}
+        title="자동 결제 등록 확인"
+        description="확정 시 AP 결제가 자동 등록됩니다."
+      >
+        <div className="space-y-4 text-sm">
+          <div className="rounded-lg border border-[var(--danger)]/35 bg-[var(--danger)]/10 p-3 text-[var(--danger)]">
+            실수 방지를 위해 마지막 확인이 필요합니다.
+          </div>
+          <div className="space-y-1 rounded-lg border border-[var(--panel-border)] bg-[var(--surface)]/60 p-3">
+            <div className="text-xs text-[var(--muted)]">공장</div>
+            <div className="font-semibold text-[var(--foreground)]">{selectedVendorOption?.label ?? "-"}</div>
+            <div className="mt-2 grid grid-cols-1 gap-1 text-xs text-[var(--muted)]">
+              <div>환산 금(g): {formatNumber(roundTo6(lineMetalTotals.convertedGold))}</div>
+              <div>환산 은(g): {formatNumber(roundTo6(lineMetalTotals.convertedSilver))}</div>
+              <div>공임현금(KRW): {formatNumber(Math.round(lineTotals.totalAmount))}</div>
+            </div>
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button type="button" variant="secondary" onClick={() => setAutoPayConfirmOpen(false)}>
+              취소
+            </Button>
+            <Button
+              type="button"
+              variant="danger"
+              disabled={immediatePayPending || factoryReceiptSetApplyStatus.isPending}
+              onClick={() => {
+                setAutoPayConfirmOpen(false);
+                void confirmFactoryStatement(autoPayConfirmForceRecalc);
+              }}
+            >
+              확인
+            </Button>
           </div>
         </div>
       </Modal>

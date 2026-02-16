@@ -17,6 +17,14 @@ type BasicInfoTabProps = {
   onSubmit: (values: PartyForm) => void;
 };
 
+type DaumPostcodeResult = {
+  address: string;
+  addressType: string;
+  bname: string;
+  buildingName: string;
+  sido: string;
+};
+
 const REGIONS = [
   "서울", "부산", "대구", "인천", "광주", "대전", "울산", "세종",
   "경기", "강원", "충북", "충남", "전북", "전남", "경북", "경남", "제주"
@@ -24,8 +32,9 @@ const REGIONS = [
 
 export function BasicInfoTab({ form, isEdit, canSave, isSaving, onSubmit }: BasicInfoTabProps) {
   const [isPostcodeOpen, setIsPostcodeOpen] = useState(false);
+  const [isImmediateSettleConfirmOpen, setIsImmediateSettleConfirmOpen] = useState(false);
 
-  const handleComplete = (data: any) => {
+  const handleComplete = (data: DaumPostcodeResult) => {
     let fullAddress = data.address;
     let extraAddress = "";
 
@@ -72,6 +81,7 @@ export function BasicInfoTab({ form, isEdit, canSave, isSaving, onSubmit }: Basi
 
   const isVendor = form.watch("party_type") === "vendor";
   const maskCode = form.watch("mask_code");
+  const vendorImmediateSettle = Boolean(form.watch("vendor_immediate_settle"));
 
   const formatPhoneNumber = (value: string) => {
     const numbers = value.replace(/\D/g, "");
@@ -93,6 +103,14 @@ export function BasicInfoTab({ form, isEdit, canSave, isSaving, onSubmit }: Basi
   const handlePhoneChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const formatted = formatPhoneNumber(e.target.value);
     form.setValue("phone", formatted);
+  };
+
+  const handleVendorImmediateSettleToggle = (checked: boolean) => {
+    if (!checked) {
+      form.setValue("vendor_immediate_settle", false, { shouldDirty: true });
+      return;
+    }
+    setIsImmediateSettleConfirmOpen(true);
   };
 
   return (
@@ -130,6 +148,28 @@ export function BasicInfoTab({ form, isEdit, canSave, isSaving, onSubmit }: Basi
                 <p className="text-xs text-[var(--muted)]">제품 코드 생성 시 사용됩니다.</p>
               </div>
             )}
+
+            {isVendor ? (
+              <div className="rounded-lg border border-[var(--danger)]/45 bg-[var(--danger)]/5 p-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="space-y-1">
+                    <p className="text-sm font-semibold text-[var(--danger)]">즉시완불 공장 (확정 시 AP 결제가 자동 등록됨)</p>
+                    <p className="text-xs text-[var(--danger)]/90">
+                      ⚠️ 이 설정은 모든 영수증에 적용됩니다. 잘못 켜면 자동 결제가 기록됩니다.
+                    </p>
+                  </div>
+                  <label className="inline-flex items-center gap-2 text-sm font-semibold">
+                    <input
+                      type="checkbox"
+                      checked={vendorImmediateSettle}
+                      onChange={(e) => handleVendorImmediateSettleToggle(e.target.checked)}
+                      className="h-4 w-4 accent-[var(--danger)]"
+                    />
+                    활성화
+                  </label>
+                </div>
+              </div>
+            ) : null}
 
             <Input
               placeholder="연락처 (010-0000-0000)"
@@ -180,6 +220,34 @@ export function BasicInfoTab({ form, isEdit, canSave, isSaving, onSubmit }: Basi
       <Modal open={isPostcodeOpen} onClose={() => setIsPostcodeOpen(false)} title="주소 검색">
         <div className="h-[400px]">
           <DaumPostcodeEmbed onComplete={handleComplete} style={{ height: '100%' }} />
+        </div>
+      </Modal>
+
+      <Modal
+        open={isImmediateSettleConfirmOpen}
+        onClose={() => setIsImmediateSettleConfirmOpen(false)}
+        title="즉시완불 공장 설정"
+        description="이 공장은 영수증 확정 시 AP 결제가 자동 등록됩니다."
+      >
+        <div className="space-y-4">
+          <div className="rounded-md border border-[var(--danger)]/40 bg-[var(--danger)]/5 p-3 text-sm text-[var(--danger)]">
+            설정을 켜면 해당 공장의 모든 영수증 확정에 자동결제가 포함됩니다.
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button type="button" variant="secondary" onClick={() => setIsImmediateSettleConfirmOpen(false)}>
+              취소
+            </Button>
+            <Button
+              type="button"
+              variant="danger"
+              onClick={() => {
+                form.setValue("vendor_immediate_settle", true, { shouldDirty: true });
+                setIsImmediateSettleConfirmOpen(false);
+              }}
+            >
+              확인
+            </Button>
+          </div>
         </div>
       </Modal>
     </>

@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
+import { hasVendorImmediateSettleTag } from "@/lib/vendor-immediate-settle";
 
 function getSupabaseAdmin() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
@@ -18,7 +19,7 @@ export async function GET() {
     supabase
       .schema("public")
       .from("cms_party")
-      .select("party_id,name,party_type")
+      .select("party_id,name,party_type,note")
       .eq("party_type", "vendor")
       .order("name"),
     supabase
@@ -39,5 +40,10 @@ export async function GET() {
     return NextResponse.json({ error: prefixesError.message ?? "공장이니셜 조회 실패" }, { status: 500 });
   }
 
-  return NextResponse.json({ data: data ?? [], prefixes: prefixes ?? [] });
+  const rows = (data ?? []).map((vendor) => ({
+    ...vendor,
+    immediate_settle_vendor: hasVendorImmediateSettleTag(vendor.note),
+  }));
+
+  return NextResponse.json({ data: rows, prefixes: prefixes ?? [] });
 }

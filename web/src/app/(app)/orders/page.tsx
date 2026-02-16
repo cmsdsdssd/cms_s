@@ -1061,7 +1061,9 @@ function OrdersPageContent() {
     const parsed = toNumber(value);
     if (parsed === null) return null;
     if (!Number.isFinite(parsed)) return null;
-    return Math.floor(parsed);
+    const floored = Math.floor(parsed);
+    if (floored < 1) return null;
+    return floored;
   };
 
   const isCopyableRow = (row: GridRow) => {
@@ -1634,7 +1636,7 @@ function OrdersPageContent() {
     }
     const requestedQty = parseRequestedQty(row.qty);
     if (row.model_input.trim() && !requestedQty) {
-      setRowError(row.id, { qty: "수량을 입력하세요" });
+      setRowError(row.id, { qty: "수량은 1 이상이어야 합니다" });
       isValid = false;
     } else if (requestedQty !== null && requestedQty > MAX_SPLIT_QTY) {
       setRowError(row.id, { qty: `최대 ${MAX_SPLIT_QTY}개까지만 가능합니다` });

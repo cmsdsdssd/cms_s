@@ -148,6 +148,7 @@ type ReceiptMatchPrefillRow = {
 };
 
 type MasterLookupRow = {
+  master_id?: string;
   master_item_id?: string;
   model_name?: string;
   photo_url?: string | null;
@@ -543,6 +544,11 @@ export default function ShipmentsPage() {
   // UI State
   const [activeTab, setActiveTab] = useState<"create" | "confirmed">("create");
   const [effectivePriceData, setEffectivePriceData] = useState<EffectivePriceResponse | null>(null);
+  const [effectivePriceState, setEffectivePriceState] = useState<{
+    isLoading: boolean;
+    isError: boolean;
+    errorMessage: string | null;
+  } | null>(null);
   const bundleBlockToastRef = useRef<string | null>(null);
 
   const normalizeExtraLaborItems = (value: unknown): ExtraLaborItem[] => {
@@ -1077,9 +1083,9 @@ export default function ShipmentsPage() {
       const { data, error } = await schemaClient
         .from("cms_master_item")
         .select(
-          "master_item_id, labor_base_sell, labor_base_cost, labor_center, labor_center_cost, labor_side1, labor_sub1_cost, labor_side2, labor_sub2_cost, center_qty_default, sub1_qty_default, sub2_qty_default"
+          "master_id, labor_base_sell, labor_base_cost, labor_center, labor_center_cost, labor_side1, labor_sub1_cost, labor_side2, labor_sub2_cost, center_qty_default, sub1_qty_default, sub2_qty_default"
         )
-        .eq("master_item_id", orderLineDetailQuery.data.matched_master_id)
+        .eq("master_id", orderLineDetailQuery.data.matched_master_id)
         .maybeSingle();
       if (error) throw error;
       return (data ?? null) as MasterLookupRow | null;
@@ -1125,9 +1131,27 @@ export default function ShipmentsPage() {
   const effectiveMasterId = useMemo(
     () =>
       normalizeId(orderLineDetailQuery.data?.matched_master_id) ??
+      normalizeId(masterLookupQuery.data?.master_id) ??
       normalizeId(masterLookupQuery.data?.master_item_id),
-    [masterLookupQuery.data?.master_item_id, orderLineDetailQuery.data?.matched_master_id]
+    [masterLookupQuery.data?.master_id, masterLookupQuery.data?.master_item_id, orderLineDetailQuery.data?.matched_master_id]
   );
+
+  const effectiveMasterKindQuery = useQuery({
+    queryKey: ["effective-master-kind", effectiveMasterId],
+    enabled: Boolean(schemaClient && effectiveMasterId),
+    queryFn: async () => {
+      if (!schemaClient || !effectiveMasterId) return null;
+      const { data, error } = await schemaClient
+        .from("cms_master_item")
+        .select("master_id, master_kind")
+        .eq("master_id", effectiveMasterId)
+        .maybeSingle();
+      if (error) throw error;
+      return (data ?? null) as { master_id: string; master_kind: string } | null;
+    },
+  });
+
+  const isEffectiveBundle = effectiveMasterKindQuery.data?.master_kind === "BUNDLE";
 
   const effectiveQty = useMemo(() => {
     const detailQty = Number(orderLineDetailQuery.data?.qty ?? NaN);
@@ -1970,6 +1994,7 @@ export default function ShipmentsPage() {
     setReceiptPreviewTitle("");
     setReceiptPreviewError(null);
     setEffectivePriceData(null);
+    setEffectivePriceState(null);
     bundleBlockToastRef.current = null;
   };
 
@@ -1994,7 +2019,7 @@ export default function ShipmentsPage() {
     }
     if (isBundlePricingBlocked) {
       toast.error("BOM 오류(확정 불가)", {
-        description: effectivePriceData?.error_message ?? "BUNDLE BOM 오류를 먼저 해결해 주세요.",
+        description: bundlePricingBlockMessage,
       });
       return;
     }
@@ -2767,22 +2792,33 @@ export default function ShipmentsPage() {
   const isShipmentConfirmed =
     Boolean(shipmentHeaderQuery.data?.confirmed_at) || shipmentHeaderQuery.data?.status === "CONFIRMED";
   const canResyncAr = Boolean(shipmentIdForResync) && isShipmentConfirmed && !arInvoiceResyncMutation.isPending;
+  const bundlePricingBlockMessage = isEffectiveBundle
+    ? effectivePriceState?.isLoading
+      ? "BUNDLE 유효가격 계산 중(확정 대기)"
+      : effectivePriceState?.isError
+        ? `유효가격 조회 실패(확정 불가): ${effectivePriceState.errorMessage ?? "유효가격 조회 실패"}`
+        : !effectivePriceData
+          ? "BUNDLE 유효가격 데이터가 없어 확정할 수 없습니다."
+          : effectivePriceData.ok === false
+            ? (effectivePriceData.error_message ?? "BUNDLE BOM 오류")
+            : null
+    : null;
   const isBundlePricingBlocked =
     !isStorePickup &&
     !isShipmentConfirmed &&
-    effectivePriceData?.pricing_method === "BUNDLE_ROLLUP" &&
-    effectivePriceData?.ok === false;
+    isEffectiveBundle &&
+    Boolean(bundlePricingBlockMessage);
 
   useEffect(() => {
     if (!isBundlePricingBlocked) {
       bundleBlockToastRef.current = null;
       return;
     }
-    const message = effectivePriceData?.error_message ?? "BOM 오류로 확정할 수 없습니다.";
+    const message = bundlePricingBlockMessage ?? "BOM 오류로 확정할 수 없습니다.";
     if (bundleBlockToastRef.current === message) return;
     bundleBlockToastRef.current = message;
     toast.error("BOM 오류(확정 불가)", { description: message });
-  }, [effectivePriceData?.error_message, isBundlePricingBlocked]);
+  }, [bundlePricingBlockMessage, isBundlePricingBlocked]);
 
   const handleArResync = async () => {
     if (!shipmentIdForResync) return;
@@ -3243,6 +3279,7 @@ export default function ShipmentsPage() {
                             title="유효가격 프리뷰"
                             showBreakdown
                             onDataChange={setEffectivePriceData}
+                            onStateChange={setEffectivePriceState}
                           />
                         ) : null}
                         <div className="rounded-lg border border-[var(--panel-border)] bg-[var(--panel)] p-3">
@@ -4113,11 +4150,12 @@ export default function ShipmentsPage() {
                     title="유효가격 프리뷰"
                     showBreakdown
                     onDataChange={setEffectivePriceData}
+                    onStateChange={setEffectivePriceState}
                   />
                   {isBundlePricingBlocked ? (
                     <div className="flex items-center gap-2">
                       <Badge tone="danger">BOM 오류(확정 불가)</Badge>
-                      <span className="text-xs text-red-700">{effectivePriceData?.error_message ?? "BUNDLE BOM 오류"}</span>
+                      <span className="text-xs text-red-700">{bundlePricingBlockMessage ?? "BUNDLE BOM 오류"}</span>
                     </div>
                   ) : null}
                 </>

@@ -25,6 +25,11 @@ type EffectivePriceCardProps = {
   showBreakdown?: boolean;
   compact?: boolean;
   onDataChange?: (data: EffectivePriceResponse | null) => void;
+  onStateChange?: (state: {
+    isLoading: boolean;
+    isError: boolean;
+    errorMessage: string | null;
+  }) => void;
 };
 
 const KRW = new Intl.NumberFormat("ko-KR");
@@ -77,6 +82,7 @@ export function EffectivePriceCard({
   showBreakdown = true,
   compact = false,
   onDataChange,
+  onStateChange,
 }: EffectivePriceCardProps) {
   const effectivePriceQuery = useQuery({
     queryKey: ["effective-price", masterId, qty, variantKey],
@@ -90,17 +96,31 @@ export function EffectivePriceCard({
       const response = await fetch(`/api/master-effective-price?${params.toString()}`, {
         cache: "no-store",
       });
-      const json = (await response.json()) as EffectivePriceResponse | { error?: string };
+      const payload = (await response.json()) as
+        | EffectivePriceResponse
+        | EffectivePriceResponse[]
+        | { error?: string };
+      const normalized = Array.isArray(payload) ? (payload[0] ?? null) : payload;
       if (!response.ok) {
-        throw new Error((json as { error?: string }).error ?? "유효가격 조회 실패");
+        throw new Error((normalized as { error?: string } | null)?.error ?? "유효가격 조회 실패");
       }
-      return json as EffectivePriceResponse;
+      return (normalized ?? null) as EffectivePriceResponse | null;
     },
   });
 
   useEffect(() => {
     onDataChange?.(effectivePriceQuery.data ?? null);
   }, [effectivePriceQuery.data, onDataChange]);
+
+  useEffect(() => {
+    onStateChange?.({
+      isLoading: effectivePriceQuery.isLoading,
+      isError: effectivePriceQuery.isError,
+      errorMessage: effectivePriceQuery.isError
+        ? ((effectivePriceQuery.error as Error)?.message ?? "유효가격 조회 실패")
+        : null,
+    });
+  }, [effectivePriceQuery.error, effectivePriceQuery.isError, effectivePriceQuery.isLoading, onStateChange]);
 
   const breakdownRows = useMemo(() => {
     const rows = effectivePriceQuery.data?.breakdown;
@@ -127,7 +147,9 @@ export function EffectivePriceCard({
     ];
     const allKeys = new Set<string>();
     breakdownRows.forEach((row) => Object.keys(row).forEach((key) => allKeys.add(key)));
-    return preferredOrder.filter((key) => allKeys.has(key));
+    const preferredColumns = preferredOrder.filter((key) => allKeys.has(key));
+    if (preferredColumns.length > 0) return preferredColumns;
+    return Array.from(allKeys.values());
   }, [breakdownRows]);
 
   const data = effectivePriceQuery.data;

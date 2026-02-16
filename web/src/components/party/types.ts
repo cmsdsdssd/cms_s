@@ -5,6 +5,7 @@ export type PartyForm = {
   region?: string;
   address?: string;
   note?: string;
+  vendor_immediate_settle?: boolean;
   is_active: boolean;
   prefix?: string; // Vendor only
   mask_code?: string; // ReadOnly

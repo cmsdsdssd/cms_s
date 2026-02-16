@@ -41,5 +41,6 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: error.message ?? "유효가격 조회 실패" }, { status: 400 });
   }
 
-  return NextResponse.json(data ?? null, { headers: { "Cache-Control": "no-store" } });
+  const row = Array.isArray(data) ? (data[0] ?? null) : (data ?? null);
+  return NextResponse.json(row, { headers: { "Cache-Control": "no-store" } });
 }
