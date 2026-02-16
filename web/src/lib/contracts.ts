@@ -207,7 +207,7 @@ export const CONTRACTS = {
     receiptLineMatchConfirm:
       process.env.NEXT_PUBLIC_CMS_FN_RECEIPT_MATCH_CONFIRM ||
       process.env.NEXT_PUBLIC_CMS_FN_RECEIPT_LINE_MATCH_CONFIRM ||
-      "cms_fn_receipt_line_match_confirm_v3",
+      "cms_fn_receipt_line_match_confirm_v5",
     receiptLineDeleteV1: "cms_fn_receipt_line_delete_v1",
 
     // ✅ AP (미지급) RPCs

@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
+import { isStoneSource } from "@/lib/stone-source";
 
 function getSupabaseAdmin() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
@@ -19,6 +20,19 @@ export async function POST(request: Request) {
   if (!modelName) {
     return NextResponse.json({ error: "model_name 값이 필요합니다." }, { status: 400 });
   }
+
+  const centerStoneSourceDefault = isStoneSource(body.center_stone_source_default)
+    ? body.center_stone_source_default
+    : null;
+  const sub1StoneSourceDefault = isStoneSource(body.sub1_stone_source_default)
+    ? body.sub1_stone_source_default
+    : null;
+  const sub2StoneSourceDefault = isStoneSource(body.sub2_stone_source_default)
+    ? body.sub2_stone_source_default
+    : null;
+  const buyMarginProfileId = typeof body.buy_margin_profile_id === "string"
+    ? body.buy_margin_profile_id.trim() || null
+    : null;
 
   // ✅ WRITE는 RPC만
   const rpcPayload = {
@@ -90,6 +104,10 @@ export async function POST(request: Request) {
       center_stone_name_default: centerStoneName,
       sub1_stone_name_default: sub1StoneName,
       sub2_stone_name_default: sub2StoneName,
+      center_stone_source_default: centerStoneSourceDefault,
+      sub1_stone_source_default: sub1StoneSourceDefault,
+      sub2_stone_source_default: sub2StoneSourceDefault,
+      buy_margin_profile_id: buyMarginProfileId,
     };
     if (laborBaseSell !== undefined) updatePayload.labor_base_sell = laborBaseSell;
     if (laborCenterSell !== undefined) updatePayload.labor_center_sell = laborCenterSell;

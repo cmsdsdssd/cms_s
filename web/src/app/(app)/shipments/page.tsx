@@ -393,6 +393,21 @@ type StoneAdjustmentReason = "FACTORY_MISTAKE" | "PRICE_UP" | "VARIANT" | "OTHER
 const EXTRA_TYPE_VENDOR_DELTA = "VENDOR_DELTA";
 const EXTRA_TYPE_CUSTOM_VARIATION = "CUSTOM_VARIATION";
 const EXTRA_TYPE_ADJUSTMENT = "ADJUSTMENT";
+const AUTO_EVIDENCE_TYPES = new Set(["COST_BASIS", "MARGINS", "WARN"]);
+
+const isAutoEvidenceItem = (item: ExtraLaborItem) => {
+  const type = String(item.type ?? "").trim().toUpperCase();
+  const label = String(item.label ?? "").trim().toUpperCase();
+  if (AUTO_EVIDENCE_TYPES.has(type)) return true;
+  return label.includes("COST_BASIS") || label.includes("MARGIN") || label.includes("WARN");
+};
+
+const isAutoAbsorbItem = (item: ExtraLaborItem) => {
+  const type = String(item.type ?? "").trim().toUpperCase();
+  const label = String(item.label ?? "").trim().toUpperCase();
+  if (type === "ABSORB") return true;
+  return label.includes("ABSORB") || label.includes("흡수");
+};
 
 // Helper function to convert relative photo path to full Supabase Storage URL
 const getMasterPhotoUrl = (photoUrl: string | null | undefined): string | null => {
@@ -543,6 +558,8 @@ export default function ShipmentsPage() {
 
   // UI State
   const [activeTab, setActiveTab] = useState<"create" | "confirmed">("create");
+  const [isAutoEvidenceOpen, setIsAutoEvidenceOpen] = useState(false);
+  const [isAutoAbsorbOpen, setIsAutoAbsorbOpen] = useState(false);
   const [effectivePriceData, setEffectivePriceData] = useState<EffectivePriceResponse | null>(null);
   const [effectivePriceState, setEffectivePriceState] = useState<{
     isLoading: boolean;
@@ -2271,14 +2288,26 @@ export default function ShipmentsPage() {
     return found?.amount ?? "0";
   }, [extraLaborItems]);
 
-  const visibleExtraLaborItems = useMemo(
+  const userEditableExtraLaborItems = useMemo(
     () =>
       extraLaborItems.filter(
         (item) =>
           item.type !== "STONE_LABOR" &&
           item.type !== EXTRA_TYPE_VENDOR_DELTA &&
-          item.type !== EXTRA_TYPE_CUSTOM_VARIATION
+          item.type !== EXTRA_TYPE_CUSTOM_VARIATION &&
+          !isAutoEvidenceItem(item) &&
+          !isAutoAbsorbItem(item)
       ),
+    [extraLaborItems]
+  );
+
+  const autoEvidenceItems = useMemo(
+    () => extraLaborItems.filter((item) => isAutoEvidenceItem(item)),
+    [extraLaborItems]
+  );
+
+  const autoAbsorbItems = useMemo(
+    () => extraLaborItems.filter((item) => isAutoAbsorbItem(item)),
     [extraLaborItems]
   );
 
@@ -2416,8 +2445,8 @@ export default function ShipmentsPage() {
   );
 
   const resolvedEtcLaborItemsTotal = useMemo(
-    () => visibleExtraLaborItems.reduce((sum, item) => sum + parseNumberInput(item.amount), 0),
-    [visibleExtraLaborItems]
+    () => userEditableExtraLaborItems.reduce((sum, item) => sum + parseNumberInput(item.amount), 0),
+    [userEditableExtraLaborItems]
   );
 
   const resolvedOtherLaborCost = useMemo(() => parseNumberInput(otherLaborCost), [otherLaborCost]);
@@ -3653,10 +3682,10 @@ export default function ShipmentsPage() {
                             </div>
                           </div>
                           <div className="space-y-2">
-                            {visibleExtraLaborItems.length === 0 ? (
+                            {userEditableExtraLaborItems.length === 0 ? (
                               <div className="text-xs text-[var(--muted)]">추가된 내역이 없습니다.</div>
                             ) : (
-                              visibleExtraLaborItems.map((item) => (
+                              userEditableExtraLaborItems.map((item) => (
                                 <div key={item.id} className="flex items-center gap-2">
                                   <div className="text-xs font-medium text-[var(--foreground)] min-w-[90px]">
                                     {item.label}
@@ -3699,6 +3728,52 @@ export default function ShipmentsPage() {
                                 </div>
                               ))
                             )}
+                          </div>
+                          <div className="rounded-md border border-[var(--panel-border)] bg-[var(--panel)] p-2">
+                            <button
+                              type="button"
+                              className="w-full text-left text-xs font-semibold"
+                              onClick={() => setIsAutoEvidenceOpen((prev) => !prev)}
+                            >
+                              자동 계산 내역(고급) {isAutoEvidenceOpen ? "접기" : `펼치기 (${autoEvidenceItems.length})`}
+                            </button>
+                            {isAutoEvidenceOpen ? (
+                              <div className="mt-2 space-y-1">
+                                {autoEvidenceItems.length === 0 ? (
+                                  <div className="text-xs text-[var(--muted)]">자동 증빙 라인이 없습니다.</div>
+                                ) : (
+                                  autoEvidenceItems.map((item) => (
+                                    <div key={item.id} className="flex items-center justify-between gap-2 text-xs">
+                                      <span className="text-[var(--foreground)]">{item.label}</span>
+                                      <span className="tabular-nums text-[var(--muted)]">{renderNumber(parseNumberInput(item.amount))}</span>
+                                    </div>
+                                  ))
+                                )}
+                              </div>
+                            ) : null}
+                          </div>
+                          <div className="rounded-md border border-[var(--panel-border)] bg-[var(--panel)] p-2">
+                            <button
+                              type="button"
+                              className="w-full text-left text-xs font-semibold"
+                              onClick={() => setIsAutoAbsorbOpen((prev) => !prev)}
+                            >
+                              자동 흡수공임(고급) {isAutoAbsorbOpen ? "접기" : `펼치기 (${autoAbsorbItems.length})`}
+                            </button>
+                            {isAutoAbsorbOpen ? (
+                              <div className="mt-2 space-y-1">
+                                {autoAbsorbItems.length === 0 ? (
+                                  <div className="text-xs text-[var(--muted)]">자동 흡수공임 라인이 없습니다.</div>
+                                ) : (
+                                  autoAbsorbItems.map((item) => (
+                                    <div key={item.id} className="flex items-center justify-between gap-2 text-xs">
+                                      <span className="text-[var(--foreground)]">{item.label}</span>
+                                      <span className="tabular-nums text-[var(--muted)]">{renderNumber(parseNumberInput(item.amount))}</span>
+                                    </div>
+                                  ))
+                                )}
+                              </div>
+                            ) : null}
                           </div>
                         </div>
                       </div>
@@ -4016,10 +4091,10 @@ export default function ShipmentsPage() {
                   </div>
                 </div>
                 <div className="space-y-1">
-                  {visibleExtraLaborItems.length === 0 ? (
+                  {userEditableExtraLaborItems.length === 0 ? (
                     <div className="text-[10px] text-[var(--muted)]">추가된 내역이 없습니다.</div>
                   ) : (
-                    visibleExtraLaborItems.map((item) => (
+                    userEditableExtraLaborItems.map((item) => (
                       <div key={item.id} className="flex items-center gap-2">
                         <span className="text-[10px] text-[var(--primary)] min-w-[80px]">
                           {item.label}
@@ -4042,6 +4117,52 @@ export default function ShipmentsPage() {
                       </div>
                     ))
                   )}
+                </div>
+                <div className="rounded-md border border-[var(--panel-border)] bg-[var(--panel)] p-2">
+                  <button
+                    type="button"
+                    className="w-full text-left text-[10px] font-semibold"
+                    onClick={() => setIsAutoEvidenceOpen((prev) => !prev)}
+                  >
+                    자동 계산 내역(고급) {isAutoEvidenceOpen ? "접기" : `펼치기 (${autoEvidenceItems.length})`}
+                  </button>
+                  {isAutoEvidenceOpen ? (
+                    <div className="mt-2 space-y-1">
+                      {autoEvidenceItems.length === 0 ? (
+                        <div className="text-[10px] text-[var(--muted)]">자동 증빙 라인이 없습니다.</div>
+                      ) : (
+                        autoEvidenceItems.map((item) => (
+                          <div key={item.id} className="flex items-center justify-between gap-2 text-[10px]">
+                            <span>{item.label}</span>
+                            <span className="tabular-nums text-[var(--muted)]">{renderNumber(parseNumberInput(item.amount))}</span>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  ) : null}
+                </div>
+                <div className="rounded-md border border-[var(--panel-border)] bg-[var(--panel)] p-2">
+                  <button
+                    type="button"
+                    className="w-full text-left text-[10px] font-semibold"
+                    onClick={() => setIsAutoAbsorbOpen((prev) => !prev)}
+                  >
+                    자동 흡수공임(고급) {isAutoAbsorbOpen ? "접기" : `펼치기 (${autoAbsorbItems.length})`}
+                  </button>
+                  {isAutoAbsorbOpen ? (
+                    <div className="mt-2 space-y-1">
+                      {autoAbsorbItems.length === 0 ? (
+                        <div className="text-[10px] text-[var(--muted)]">자동 흡수공임 라인이 없습니다.</div>
+                      ) : (
+                        autoAbsorbItems.map((item) => (
+                          <div key={item.id} className="flex items-center justify-between gap-2 text-[10px]">
+                            <span>{item.label}</span>
+                            <span className="tabular-nums text-[var(--muted)]">{renderNumber(parseNumberInput(item.amount))}</span>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  ) : null}
                 </div>
               </div>
             </div>

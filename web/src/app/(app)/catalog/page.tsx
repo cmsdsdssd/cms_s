@@ -76,6 +76,30 @@ type CatalogDetail = {
   modifiedDate: string;
 };
 
+type BuyMarginProfileOption = {
+  profile_id: string;
+  profile_name: string;
+  margin_center_krw: number;
+  margin_sub1_krw: number;
+  margin_sub2_krw: number;
+  is_active: boolean;
+};
+
+type AbsorbLaborBucket = "BASE_LABOR" | "STONE_LABOR" | "PLATING" | "ETC";
+
+type MasterAbsorbLaborItem = {
+  absorb_item_id: string;
+  master_id: string;
+  bucket: AbsorbLaborBucket;
+  reason: string;
+  amount_krw: number;
+  is_per_piece: boolean;
+  vendor_party_id: string | null;
+  priority: number;
+  is_active: boolean;
+  note: string | null;
+};
+
 type MasterSummary = {
   master_id: string;
   model_name: string;
@@ -164,6 +188,19 @@ type VendorOption = { label: string; value: string };
 const laborProfileOptions = [
   { label: "수동", value: "MANUAL" },
   { label: "밴드", value: "BAND" },
+];
+
+const stoneSourceOptions = [
+  { label: "자입(BUY: 우리가 구매)", value: "SELF" },
+  { label: "공장", value: "FACTORY" },
+  { label: "고객지급", value: "PROVIDED" },
+] as const;
+
+const absorbBucketOptions: Array<{ label: string; value: AbsorbLaborBucket }> = [
+  { label: "기본공임", value: "BASE_LABOR" },
+  { label: "알공임", value: "STONE_LABOR" },
+  { label: "도금", value: "PLATING" },
+  { label: "기타", value: "ETC" },
 ];
 
 type FieldProps = {
@@ -257,6 +294,10 @@ export default function CatalogPage() {
   const [centerStoneName, setCenterStoneName] = useState("");
   const [sub1StoneName, setSub1StoneName] = useState("");
   const [sub2StoneName, setSub2StoneName] = useState("");
+  const [centerStoneSourceDefault, setCenterStoneSourceDefault] = useState<"SELF" | "FACTORY" | "PROVIDED">("FACTORY");
+  const [sub1StoneSourceDefault, setSub1StoneSourceDefault] = useState<"SELF" | "FACTORY" | "PROVIDED">("FACTORY");
+  const [sub2StoneSourceDefault, setSub2StoneSourceDefault] = useState<"SELF" | "FACTORY" | "PROVIDED">("FACTORY");
+  const [buyMarginProfileId, setBuyMarginProfileId] = useState("");
   const [laborBaseSell, setLaborBaseSell] = useState(0);
   const [laborCenterSell, setLaborCenterSell] = useState(0);
   const [laborSub1Sell, setLaborSub1Sell] = useState(0);
@@ -271,6 +312,16 @@ export default function CatalogPage() {
   const [laborSub2CostCny, setLaborSub2CostCny] = useState("");
   const [platingCostCny, setPlatingCostCny] = useState("");
   const [previewImage, setPreviewImage] = useState<string | null>(null);
+  const [absorbLaborItems, setAbsorbLaborItems] = useState<MasterAbsorbLaborItem[]>([]);
+  const [absorbBucket, setAbsorbBucket] = useState<AbsorbLaborBucket>("BASE_LABOR");
+  const [absorbReason, setAbsorbReason] = useState("");
+  const [absorbAmount, setAbsorbAmount] = useState("0");
+  const [absorbIsPerPiece, setAbsorbIsPerPiece] = useState(true);
+  const [absorbVendorId, setAbsorbVendorId] = useState("");
+  const [absorbPriority, setAbsorbPriority] = useState("100");
+  const [absorbIsActive, setAbsorbIsActive] = useState(true);
+  const [absorbNote, setAbsorbNote] = useState("");
+  const [editingAbsorbItemId, setEditingAbsorbItemId] = useState<string | null>(null);
   const [goldPrice, setGoldPrice] = useState(0);
   const [silverModifiedPrice, setSilverModifiedPrice] = useState(0);
   const [cnyAdRate, setCnyAdRate] = useState(0);
@@ -299,6 +350,29 @@ export default function CatalogPage() {
 
   const schema = getSchemaClient();
   const actorId = (process.env.NEXT_PUBLIC_CMS_ACTOR_ID || "").trim();
+
+  const buyProfilesQuery = useQuery({
+    queryKey: ["catalog-buy-margin-profiles"],
+    queryFn: async (): Promise<BuyMarginProfileOption[]> => {
+      const response = await fetch("/api/buy-margin-profiles", { cache: "no-store" });
+      const json = (await response.json()) as { data?: BuyMarginProfileOption[]; error?: string };
+      if (!response.ok) throw new Error(json.error ?? "BUY 프로파일 조회 실패");
+      return (json.data ?? []).filter((row) => row.is_active);
+    },
+  });
+
+  const loadAbsorbLaborItems = useCallback(async (targetMasterId: string) => {
+    if (!targetMasterId) {
+      setAbsorbLaborItems([]);
+      return;
+    }
+    const response = await fetch(`/api/master-absorb-labor-items?master_id=${encodeURIComponent(targetMasterId)}`, {
+      cache: "no-store",
+    });
+    const json = (await response.json()) as { data?: MasterAbsorbLaborItem[]; error?: string };
+    if (!response.ok) throw new Error(json.error ?? "흡수공임 조회 실패");
+    setAbsorbLaborItems(json.data ?? []);
+  }, []);
 
   // Fetch market prices
   const refreshMarketTicks = useCallback(async () => {
@@ -364,6 +438,16 @@ export default function CatalogPage() {
     laborBaseSell + laborCenterSell * centerQty + laborSub1Sell * sub1Qty + laborSub2Sell * sub2Qty;
   const totalLaborCost =
     laborBaseCost + laborCenterCost * centerQty + laborSub1Cost * sub1Qty + laborSub2Cost * sub2Qty;
+  const hasSelfStoneSource =
+    centerStoneSourceDefault === "SELF" ||
+    sub1StoneSourceDefault === "SELF" ||
+    sub2StoneSourceDefault === "SELF";
+
+  useEffect(() => {
+    if (!hasSelfStoneSource && buyMarginProfileId) {
+      setBuyMarginProfileId("");
+    }
+  }, [buyMarginProfileId, hasSelfStoneSource]);
 
 
   // 1. 필터 상태 추가 (검색어, 재질, 카테고리)
@@ -1081,6 +1165,10 @@ export default function CatalogPage() {
     setCenterStoneName("");
     setSub1StoneName("");
     setSub2StoneName("");
+    setCenterStoneSourceDefault("FACTORY");
+    setSub1StoneSourceDefault("FACTORY");
+    setSub2StoneSourceDefault("FACTORY");
+    setBuyMarginProfileId("");
     setLaborBaseSell(0);
     setLaborCenterSell(0);
     setLaborSub1Sell(0);
@@ -1108,6 +1196,16 @@ export default function CatalogPage() {
     setCnLaborBasicCnyPerG("");
     setCnLaborExtraItems([]);
     setIsUnitPricing(false);
+    setAbsorbLaborItems([]);
+    setAbsorbBucket("BASE_LABOR");
+    setAbsorbReason("");
+    setAbsorbAmount("0");
+    setAbsorbIsPerPiece(true);
+    setAbsorbVendorId("");
+    setAbsorbPriority("100");
+    setAbsorbIsActive(true);
+    setAbsorbNote("");
+    setEditingAbsorbItemId(null);
   };
 
   const handleOpenNew = () => {
@@ -1141,6 +1239,13 @@ export default function CatalogPage() {
     setCenterStoneName(detail?.centerStoneName ?? "");
     setSub1StoneName(detail?.sub1StoneName ?? "");
     setSub2StoneName(detail?.sub2StoneName ?? "");
+    const rowCenterSource = String((row as Record<string, unknown>)?.center_stone_source_default ?? "FACTORY");
+    const rowSub1Source = String((row as Record<string, unknown>)?.sub1_stone_source_default ?? "FACTORY");
+    const rowSub2Source = String((row as Record<string, unknown>)?.sub2_stone_source_default ?? "FACTORY");
+    setCenterStoneSourceDefault(rowCenterSource === "SELF" || rowCenterSource === "PROVIDED" ? rowCenterSource : "FACTORY");
+    setSub1StoneSourceDefault(rowSub1Source === "SELF" || rowSub1Source === "PROVIDED" ? rowSub1Source : "FACTORY");
+    setSub2StoneSourceDefault(rowSub2Source === "SELF" || rowSub2Source === "PROVIDED" ? rowSub2Source : "FACTORY");
+    setBuyMarginProfileId(String((row as Record<string, unknown>)?.buy_margin_profile_id ?? ""));
     setLaborBaseSell(detail?.laborBaseSell ?? 0);
     setLaborCenterSell(detail?.laborCenterSell ?? 0);
     setLaborSub1Sell(detail?.laborSub1Sell ?? 0);
@@ -1189,6 +1294,13 @@ export default function CatalogPage() {
       );
     } else {
       setCnLaborExtraItems([]);
+    }
+
+    if (selectedItem.id) {
+      void loadAbsorbLaborItems(selectedItem.id).catch((error) => {
+        const message = error instanceof Error ? error.message : "흡수공임 조회 실패";
+        toast.error("처리 실패", { description: message });
+      });
     }
 
     setRegisterOpen(true);
@@ -1247,6 +1359,10 @@ export default function CatalogPage() {
       center_stone_name_default: centerStoneName || null,
       sub1_stone_name_default: sub1StoneName || null,
       sub2_stone_name_default: sub2StoneName || null,
+      center_stone_source_default: centerStoneSourceDefault,
+      sub1_stone_source_default: sub1StoneSourceDefault,
+      sub2_stone_source_default: sub2StoneSourceDefault,
+      buy_margin_profile_id: hasSelfStoneSource ? buyMarginProfileId || null : null,
       labor_base_sell: laborBaseSell,
       labor_center_sell: laborCenterSell,
       labor_sub1_sell: laborSub1Sell,
@@ -1329,6 +1445,95 @@ export default function CatalogPage() {
     } finally {
       setIsSaving(false);
     }
+  };
+
+  const resetAbsorbForm = () => {
+    setEditingAbsorbItemId(null);
+    setAbsorbBucket("BASE_LABOR");
+    setAbsorbReason("");
+    setAbsorbAmount("0");
+    setAbsorbIsPerPiece(true);
+    setAbsorbVendorId("");
+    setAbsorbPriority("100");
+    setAbsorbIsActive(true);
+    setAbsorbNote("");
+  };
+
+  const handleSaveAbsorbLaborItem = async () => {
+    const targetMasterId = masterId.trim();
+    if (!targetMasterId) {
+      toast.error("처리 실패", { description: "먼저 마스터를 저장해 주세요." });
+      return;
+    }
+    const amount = Number(absorbAmount);
+    const priority = Number(absorbPriority);
+    if (!absorbReason.trim()) {
+      toast.error("처리 실패", { description: "사유를 입력해 주세요." });
+      return;
+    }
+    if (!Number.isFinite(amount) || amount < 0) {
+      toast.error("처리 실패", { description: "금액은 0 이상 숫자여야 합니다." });
+      return;
+    }
+    if (!Number.isInteger(priority)) {
+      toast.error("처리 실패", { description: "우선순위는 정수여야 합니다." });
+      return;
+    }
+
+    try {
+      const response = await fetch("/api/master-absorb-labor-items", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          absorb_item_id: editingAbsorbItemId,
+          master_id: targetMasterId,
+          bucket: absorbBucket,
+          reason: absorbReason.trim(),
+          amount_krw: amount,
+          is_per_piece: absorbIsPerPiece,
+          vendor_party_id: absorbVendorId || null,
+          priority,
+          is_active: absorbIsActive,
+          note: absorbNote.trim() || null,
+        }),
+      });
+      const json = (await response.json()) as { error?: string };
+      if (!response.ok) throw new Error(json.error ?? "흡수공임 저장 실패");
+      await loadAbsorbLaborItems(targetMasterId);
+      resetAbsorbForm();
+      toast.success("흡수공임 저장 완료");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "흡수공임 저장 실패";
+      toast.error("처리 실패", { description: message });
+    }
+  };
+
+  const handleDeleteAbsorbLaborItem = async (absorbItemId: string) => {
+    const targetMasterId = masterId.trim();
+    try {
+      const response = await fetch(`/api/master-absorb-labor-items?absorb_item_id=${encodeURIComponent(absorbItemId)}`, {
+        method: "DELETE",
+      });
+      const json = (await response.json()) as { error?: string };
+      if (!response.ok) throw new Error(json.error ?? "흡수공임 삭제 실패");
+      if (targetMasterId) await loadAbsorbLaborItems(targetMasterId);
+      toast.success("흡수공임 삭제 완료");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "흡수공임 삭제 실패";
+      toast.error("처리 실패", { description: message });
+    }
+  };
+
+  const handleEditAbsorbLaborItem = (item: MasterAbsorbLaborItem) => {
+    setEditingAbsorbItemId(item.absorb_item_id);
+    setAbsorbBucket(item.bucket);
+    setAbsorbReason(item.reason);
+    setAbsorbAmount(String(item.amount_krw));
+    setAbsorbIsPerPiece(Boolean(item.is_per_piece));
+    setAbsorbVendorId(item.vendor_party_id ?? "");
+    setAbsorbPriority(String(item.priority));
+    setAbsorbIsActive(Boolean(item.is_active));
+    setAbsorbNote(item.note ?? "");
   };
 
   const handleDeleteMaster = async () => {
@@ -1950,6 +2155,133 @@ export default function CatalogPage() {
                         className="text-right font-bold bg-[var(--input-bg)] text-[var(--foreground)] border-[var(--panel-border)]"
                         value={totalLaborCost}
                       />
+                    </div>
+                  </div>
+
+                  <div className="rounded-[18px] border border-[var(--panel-border)] bg-[var(--panel)] p-4 space-y-4">
+                    <p className="text-sm font-semibold text-[var(--foreground)]">알공임 정책 / 흡수공임</p>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      <Field label="센터석 소스 기본값">
+                        <Select value={centerStoneSourceDefault} onChange={(e) => setCenterStoneSourceDefault(e.target.value as "SELF" | "FACTORY" | "PROVIDED") }>
+                          {stoneSourceOptions.map((option) => (
+                            <option key={option.value} value={option.value}>{option.label}</option>
+                          ))}
+                        </Select>
+                      </Field>
+                      <Field label="보조1 소스 기본값">
+                        <Select value={sub1StoneSourceDefault} onChange={(e) => setSub1StoneSourceDefault(e.target.value as "SELF" | "FACTORY" | "PROVIDED") }>
+                          {stoneSourceOptions.map((option) => (
+                            <option key={option.value} value={option.value}>{option.label}</option>
+                          ))}
+                        </Select>
+                      </Field>
+                      <Field label="보조2 소스 기본값">
+                        <Select value={sub2StoneSourceDefault} onChange={(e) => setSub2StoneSourceDefault(e.target.value as "SELF" | "FACTORY" | "PROVIDED") }>
+                          {stoneSourceOptions.map((option) => (
+                            <option key={option.value} value={option.value}>{option.label}</option>
+                          ))}
+                        </Select>
+                      </Field>
+                      <Field label="BUY 마진 프로파일">
+                        <Select
+                          value={buyMarginProfileId}
+                          onChange={(e) => setBuyMarginProfileId(e.target.value)}
+                          disabled={!hasSelfStoneSource}
+                        >
+                          <option value="">{hasSelfStoneSource ? "프로파일 선택" : "SELF 소스에서만 선택 가능"}</option>
+                          {(buyProfilesQuery.data ?? []).map((profile) => (
+                            <option key={profile.profile_id} value={profile.profile_id}>{profile.profile_name}</option>
+                          ))}
+                        </Select>
+                      </Field>
+                    </div>
+
+                    <div className="rounded-md border border-[var(--panel-border)] bg-[var(--surface)] p-3 space-y-3">
+                      <div className="flex items-center justify-between gap-2">
+                        <div>
+                          <div className="text-sm font-semibold">흡수공임</div>
+                          <div className="text-xs text-[var(--muted)]">사유/금액/버킷/공장 스코프 기반 SKU 예외</div>
+                        </div>
+                        {masterId.trim() ? null : <span className="text-xs text-[var(--muted)]">저장 후 등록 가능</span>}
+                      </div>
+
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                        <Select value={absorbBucket} onChange={(e) => setAbsorbBucket(e.target.value as AbsorbLaborBucket)}>
+                          {absorbBucketOptions.map((option) => (
+                            <option key={option.value} value={option.value}>{option.label}</option>
+                          ))}
+                        </Select>
+                        <Input value={absorbReason} onChange={(e) => setAbsorbReason(e.target.value)} placeholder="사유" />
+                        <Input value={absorbAmount} onChange={(e) => setAbsorbAmount(e.target.value)} placeholder="금액" />
+                        <Select value={absorbVendorId} onChange={(e) => setAbsorbVendorId(e.target.value)}>
+                          <option value="">전체 공장</option>
+                          {vendorOptions.map((vendor) => (
+                            <option key={vendor.value} value={vendor.value}>{vendor.label}</option>
+                          ))}
+                        </Select>
+                        <Input value={absorbPriority} onChange={(e) => setAbsorbPriority(e.target.value)} placeholder="우선순위" />
+                        <Input value={absorbNote} onChange={(e) => setAbsorbNote(e.target.value)} placeholder="노트" />
+                        <label className="inline-flex items-center gap-2 text-xs">
+                          <input type="checkbox" checked={absorbIsPerPiece} onChange={(e) => setAbsorbIsPerPiece(e.target.checked)} className="h-4 w-4" />
+                          수량 곱(is_per_piece)
+                        </label>
+                        <label className="inline-flex items-center gap-2 text-xs">
+                          <input type="checkbox" checked={absorbIsActive} onChange={(e) => setAbsorbIsActive(e.target.checked)} className="h-4 w-4" />
+                          활성화
+                        </label>
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        <Button type="button" variant="secondary" onClick={handleSaveAbsorbLaborItem} disabled={!masterId.trim()}>
+                          {editingAbsorbItemId ? "흡수공임 수정" : "흡수공임 추가"}
+                        </Button>
+                        {editingAbsorbItemId ? (
+                          <Button type="button" variant="ghost" onClick={resetAbsorbForm}>취소</Button>
+                        ) : null}
+                      </div>
+
+                      <div className="overflow-x-auto">
+                        <table className="min-w-[920px] w-full text-xs">
+                          <thead className="text-[var(--muted)]">
+                            <tr>
+                              <th className="text-left py-1">Active</th>
+                              <th className="text-left py-1">Bucket</th>
+                              <th className="text-left py-1">Reason</th>
+                              <th className="text-left py-1">Amount</th>
+                              <th className="text-left py-1">Per-piece</th>
+                              <th className="text-left py-1">Vendor Scope</th>
+                              <th className="text-left py-1">Priority</th>
+                              <th className="text-left py-1">Actions</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {absorbLaborItems.length === 0 ? (
+                              <tr className="border-t border-[var(--panel-border)]">
+                                <td className="py-2 text-[var(--muted)]" colSpan={8}>등록된 흡수공임이 없습니다.</td>
+                              </tr>
+                            ) : (
+                              absorbLaborItems.map((item) => (
+                                <tr key={item.absorb_item_id} className="border-t border-[var(--panel-border)]">
+                                  <td className="py-1">{item.is_active ? "Y" : "N"}</td>
+                                  <td className="py-1">{item.bucket}</td>
+                                  <td className="py-1">{item.reason}</td>
+                                  <td className="py-1">+{Number(item.amount_krw).toLocaleString()}</td>
+                                  <td className="py-1">{item.is_per_piece ? "Y" : "N"}</td>
+                                  <td className="py-1">{vendorOptions.find((vendor) => vendor.value === item.vendor_party_id)?.label ?? "전체"}</td>
+                                  <td className="py-1">{item.priority}</td>
+                                  <td className="py-1">
+                                    <div className="flex items-center gap-1">
+                                      <Button type="button" size="sm" variant="secondary" onClick={() => handleEditAbsorbLaborItem(item)}>Edit</Button>
+                                      <Button type="button" size="sm" variant="secondary" onClick={() => handleDeleteAbsorbLaborItem(item.absorb_item_id)}>Delete</Button>
+                                    </div>
+                                  </td>
+                                </tr>
+                              ))
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
                     </div>
                   </div>
 

@@ -1,13 +1,17 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
-type PricingRuleComponent = "SETTING" | "STONE" | "PACKAGE";
+type PricingRuleComponent = "BASE_LABOR" | "SETTING" | "STONE" | "PACKAGE";
 type PricingRuleScope = "ANY" | "SELF" | "PROVIDED" | "FACTORY";
+type PricingRuleApplyUnit = "PER_PIECE" | "PER_STONE" | "PER_G";
+type PricingRuleStoneRole = "CENTER" | "SUB1" | "SUB2" | "BEAD";
 
 type PricingRuleRow = {
   rule_id: string;
   component: PricingRuleComponent;
   scope: PricingRuleScope;
+  apply_unit: PricingRuleApplyUnit;
+  stone_role: PricingRuleStoneRole | null;
   vendor_party_id: string | null;
   min_cost_krw: number;
   max_cost_krw: number | null;
@@ -19,8 +23,10 @@ type PricingRuleRow = {
   updated_at: string;
 };
 
-const COMPONENTS = new Set<PricingRuleComponent>(["SETTING", "STONE", "PACKAGE"]);
+const COMPONENTS = new Set<PricingRuleComponent>(["BASE_LABOR", "SETTING", "STONE", "PACKAGE"]);
 const SCOPES = new Set<PricingRuleScope>(["ANY", "SELF", "PROVIDED", "FACTORY"]);
+const APPLY_UNITS = new Set<PricingRuleApplyUnit>(["PER_PIECE", "PER_STONE", "PER_G"]);
+const STONE_ROLES = new Set<PricingRuleStoneRole>(["CENTER", "SUB1", "SUB2", "BEAD"]);
 
 function getSupabaseAdmin() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
@@ -71,6 +77,9 @@ export async function POST(request: Request) {
   const body = (await request.json()) as Record<string, unknown>;
   const component = String(body.component ?? "").trim() as PricingRuleComponent;
   const scope = String(body.scope ?? "").trim() as PricingRuleScope;
+  const applyUnit = String(body.apply_unit ?? "").trim() as PricingRuleApplyUnit;
+  const stoneRoleRaw = String(body.stone_role ?? "").trim();
+  const stoneRole = stoneRoleRaw ? (stoneRoleRaw as PricingRuleStoneRole) : null;
   const minCost = toNumber(body.min_cost_krw);
   const maxCost = body.max_cost_krw === null || body.max_cost_krw === undefined || body.max_cost_krw === ""
     ? null
@@ -83,6 +92,21 @@ export async function POST(request: Request) {
   }
   if (!SCOPES.has(scope)) {
     return NextResponse.json({ error: "scope 값이 올바르지 않습니다." }, { status: 400 });
+  }
+  if (!APPLY_UNITS.has(applyUnit)) {
+    return NextResponse.json({ error: "apply_unit 값이 올바르지 않습니다." }, { status: 400 });
+  }
+  if (stoneRole !== null && !STONE_ROLES.has(stoneRole)) {
+    return NextResponse.json({ error: "stone_role 값이 올바르지 않습니다." }, { status: 400 });
+  }
+  if (component === "BASE_LABOR" && applyUnit !== "PER_PIECE") {
+    return NextResponse.json({ error: "BASE_LABOR는 apply_unit=PER_PIECE만 허용됩니다." }, { status: 400 });
+  }
+  if (component === "BASE_LABOR" && stoneRole !== null) {
+    return NextResponse.json({ error: "BASE_LABOR는 stone_role을 허용하지 않습니다." }, { status: 400 });
+  }
+  if (component === "STONE" && applyUnit === "PER_STONE" && stoneRole === null) {
+    return NextResponse.json({ error: "STONE + PER_STONE은 stone_role이 필요합니다." }, { status: 400 });
   }
   if (minCost === null || minCost < 0) {
     return NextResponse.json({ error: "min_cost_krw는 0 이상이어야 합니다." }, { status: 400 });
@@ -99,6 +123,8 @@ export async function POST(request: Request) {
     rule_id: ruleId,
     component,
     scope,
+    apply_unit: applyUnit,
+    stone_role: stoneRole,
     vendor_party_id: toNullableText(body.vendor_party_id),
     min_cost_krw: minCost,
     max_cost_krw: maxCost,

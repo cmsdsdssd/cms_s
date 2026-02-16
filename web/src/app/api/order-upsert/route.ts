@@ -12,6 +12,7 @@ type OrderUpsertPayload = {
   p_center_stone_source?: StoneSource | null;
   p_sub1_stone_source?: StoneSource | null;
   p_sub2_stone_source?: StoneSource | null;
+  p_buy_margin_profile_id?: string | null;
 } & Record<string, unknown>;
 
 type LegacyOrderUpsertPayload = Omit<
@@ -102,6 +103,8 @@ const shouldSyncSources = (payload: OrderUpsertPayload) =>
   payload.p_center_stone_source !== undefined ||
   payload.p_sub1_stone_source !== undefined ||
   payload.p_sub2_stone_source !== undefined;
+
+const shouldSyncBuyProfile = (payload: OrderUpsertPayload) => payload.p_buy_margin_profile_id !== undefined;
 
 const syncStoneSourcesAfterLegacyUpsert = async (
   orderLineId: string,
@@ -244,6 +247,39 @@ export async function POST(request: Request) {
           hint: syncError.hint,
           code: syncError.code,
           sourceSyncMessage: syncError.message,
+        },
+        { status: 400 }
+      );
+    }
+  }
+
+  if (!error && shouldSyncBuyProfile(typedPayload)) {
+    const orderLineId = extractOrderLineId(data, typedPayload);
+    if (!orderLineId) {
+      return NextResponse.json(
+        { error: "order_line_id could not be resolved for buy_margin_profile sync" },
+        { status: 400 }
+      );
+    }
+
+    const buyMarginProfileId =
+      typeof typedPayload.p_buy_margin_profile_id === "string"
+        ? typedPayload.p_buy_margin_profile_id.trim() || null
+        : null;
+
+    const { error: buyProfileSyncError } = await supabase
+      .from("cms_order_line")
+      .update({ buy_margin_profile_id: buyMarginProfileId })
+      .eq("order_line_id", orderLineId);
+
+    if (buyProfileSyncError) {
+      return NextResponse.json(
+        {
+          error: "order upsert succeeded but buy_margin_profile sync failed",
+          details: buyProfileSyncError.details,
+          hint: buyProfileSyncError.hint,
+          code: buyProfileSyncError.code,
+          sourceSyncMessage: buyProfileSyncError.message,
         },
         { status: 400 }
       );
