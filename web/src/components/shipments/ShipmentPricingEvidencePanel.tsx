@@ -46,6 +46,14 @@ type ShipmentPricingEvidencePanelProps = {
   stoneQtyDeltaTotal?: number | null;
   isVariationMode?: boolean;
   isInventorySource?: boolean;
+  absorbBaseLaborKrw?: number | null;
+  absorbStoneCenterKrw?: number | null;
+  absorbStoneSub1Krw?: number | null;
+  absorbStoneSub2Krw?: number | null;
+  absorbPlatingKrw?: number | null;
+  absorbEtcKrw?: number | null;
+  absorbDecorKrw?: number | null;
+  absorbOtherKrw?: number | null;
 };
 
 const formatKrw = (value?: number | null) => {
@@ -137,17 +145,44 @@ export function ShipmentPricingEvidencePanel({
   finalStoneSellKrw,
   stoneAdjustmentKrw,
   isInventorySource = false,
+  absorbBaseLaborKrw,
+  absorbStoneCenterKrw,
+  absorbStoneSub1Krw,
+  absorbStoneSub2Krw,
+  absorbPlatingKrw,
+  absorbEtcKrw,
+  absorbDecorKrw,
+  absorbOtherKrw,
 }: ShipmentPricingEvidencePanelProps) {
   const [isEvidenceOpen, setIsEvidenceOpen] = useState(false);
   const [isStoneDetailOpen, setIsStoneDetailOpen] = useState(false);
 
-  const computedBaseMargin =
+  const absorbBase = Math.max(Number(absorbBaseLaborKrw ?? 0), 0);
+  const absorbStoneCenter = Math.max(Number(absorbStoneCenterKrw ?? 0), 0);
+  const absorbStoneSub1 = Math.max(Number(absorbStoneSub1Krw ?? 0), 0);
+  const absorbStoneSub2 = Math.max(Number(absorbStoneSub2Krw ?? 0), 0);
+  const absorbPlating = Math.max(Number(absorbPlatingKrw ?? 0), 0);
+  const absorbEtc = Math.max(Number(absorbEtcKrw ?? 0), 0);
+  const absorbDecor = Math.max(Number(absorbDecorKrw ?? 0), 0);
+  const absorbOther = Math.max(Number(absorbOtherKrw ?? 0), 0);
+
+  const computedBaseMarginRaw =
     masterBaseSellKrw !== null &&
     masterBaseSellKrw !== undefined &&
     masterBaseCostKrw !== null &&
     masterBaseCostKrw !== undefined
       ? masterBaseSellKrw - masterBaseCostKrw
       : (masterBaseMarginKrw ?? null);
+
+  const computedBaseMargin =
+    computedBaseMarginRaw === null || computedBaseMarginRaw === undefined
+      ? null
+      : computedBaseMarginRaw + absorbBase;
+
+  const masterBaseSellWithAbsorb =
+    masterBaseSellKrw === null || masterBaseSellKrw === undefined
+      ? (absorbBase > 0 ? absorbBase : null)
+      : masterBaseSellKrw + absorbBase;
 
   const displayedBaseSell = baseLaborSellKrw ?? shipmentBaseLaborKrw ?? null;
   const qtyBasisLabel = isInventorySource ? "재고" : "영수증";
@@ -166,6 +201,9 @@ export function ShipmentPricingEvidencePanel({
     () => stoneRows.reduce((sum, row) => sum + Math.max(row.qtyMaster ?? 0, 0) * Math.max(row.unitSell ?? 0, 0), 0),
     [stoneRows]
   );
+
+  const masterStoneSellTotalWithAbsorb =
+    masterStoneSellTotal + absorbStoneCenter + absorbStoneSub1 + absorbStoneSub2;
 
   const masterStoneCostTotal = useMemo(
     () => stoneRows.reduce((sum, row) => sum + Math.max(row.qtyMaster ?? 0, 0) * Math.max(row.unitCostMaster ?? 0, 0), 0),
@@ -196,7 +234,7 @@ export function ShipmentPricingEvidencePanel({
       ? null
       : finalStoneSellKrw - receiptStoneCostTotal;
 
-  const masterSellMargin = masterStoneSellTotal - masterStoneCostTotal;
+  const masterSellMargin = masterStoneSellTotalWithAbsorb - masterStoneCostTotal;
 
   const pricingJustificationRows = useMemo(
     () =>
@@ -229,18 +267,18 @@ export function ShipmentPricingEvidencePanel({
         const receiptUnitCost = Math.max(stone.unitCostReceipt ?? 0, 0);
         const masterCostSubtotal = qtyMaster * masterUnitCost;
         const receiptCostSubtotal = qtyReceipt * receiptUnitCost;
-        const unitEffect = (masterUnitCost - receiptUnitCost) * qtyMaster;
-        const qtyEffect = (qtyMaster - qtyReceipt) * receiptUnitCost;
+        const unitEffect = (receiptUnitCost - masterUnitCost) * qtyMaster;
+        const qtyEffect = (qtyReceipt - qtyMaster) * receiptUnitCost;
         return {
           role: stone.role,
           masterUnitCost,
           receiptUnitCost,
-          unitDelta: masterUnitCost - receiptUnitCost,
+          unitDelta: receiptUnitCost - masterUnitCost,
           qtyMaster,
           qtyReceipt,
           masterCostSubtotal,
           receiptCostSubtotal,
-          costDelta: masterCostSubtotal - receiptCostSubtotal,
+          costDelta: receiptCostSubtotal - masterCostSubtotal,
           unitEffect,
           qtyEffect,
           expectedCostDelta: unitEffect + qtyEffect,
@@ -268,7 +306,7 @@ export function ShipmentPricingEvidencePanel({
 
   const extraCostJustifiedByQty =
     Math.round(totalValidationError) === 0 &&
-    costComparisonRows.every((row) => row.unitEffect >= 0 || (row.qtyMaster === 0 && row.qtyReceipt === 0));
+    costComparisonRows.every((row) => row.unitEffect <= 0 || (row.qtyMaster === 0 && row.qtyReceipt === 0));
 
   const baseJudgement = (masterBaseCostKrw ?? 0) < (factoryBasicCostKrw ?? 0) ? "경고" : "정상";
   const extraJudgement = !extraCostMismatch
@@ -304,15 +342,15 @@ export function ShipmentPricingEvidencePanel({
                     <td className="px-2 py-1">총액</td>
                     <td className="px-2 py-1">영수증원가/마스터마진</td>
                     <td className="px-2 py-1">마스터판매가/원가</td>
-                    <td className="px-2 py-1">원가차(마스터-영수증)</td>
+                    <td className="px-2 py-1">원가차(영수증-마스터)</td>
                     <td className="px-2 py-1">판정</td>
                   </tr>
                   <tr>
                     <td className="px-2 py-1 font-semibold tabular-nums">{formatKrw(displayedBaseSell)}</td>
                     <td className="px-2 py-1 font-semibold tabular-nums">{formatKrw(factoryBasicCostKrw)} / {formatKrw(computedBaseMargin)}</td>
-                    <td className="px-2 py-1 font-semibold tabular-nums text-[var(--muted)]">{formatKrw(masterBaseSellKrw)} / {formatKrw(masterBaseCostKrw)}</td>
-                    <td className={`px-2 py-1 font-semibold tabular-nums ${deltaToneClass((masterBaseCostKrw ?? 0) - (factoryBasicCostKrw ?? 0))}`}>
-                      {formatKrw((masterBaseCostKrw ?? 0) - (factoryBasicCostKrw ?? 0))}
+                    <td className="px-2 py-1 font-semibold tabular-nums text-[var(--muted)]">{formatKrw(masterBaseSellWithAbsorb)} / {formatKrw(masterBaseCostKrw)}</td>
+                    <td className={`px-2 py-1 font-semibold tabular-nums ${deltaToneClass((factoryBasicCostKrw ?? 0) - (masterBaseCostKrw ?? 0))}`}>
+                      {formatKrw((factoryBasicCostKrw ?? 0) - (masterBaseCostKrw ?? 0))}
                     </td>
                     <td className="px-2 py-1">
                       {(masterBaseCostKrw ?? 0) < (factoryBasicCostKrw ?? 0) ? (
@@ -345,11 +383,27 @@ export function ShipmentPricingEvidencePanel({
             <ThreeColumnEvidenceRow
               total={formatKrw(finalStoneSellKrw ?? extraLaborSellKrw ?? null)}
               sourceCost={`${formatKrw(finalStoneSellKrw ?? null)} / ${formatKrw(receiptStoneCostTotal)}`}
-              masterSellCost={`${formatKrw(masterStoneSellTotal)} / ${formatKrw(masterStoneCostTotal)}`}
+              masterSellCost={`${formatKrw(masterStoneSellTotalWithAbsorb)} / ${formatKrw(masterStoneCostTotal)}`}
               sourceSub={`마진(판매가-${qtyBasisLabel}원가): ${formatKrw(receiptSellMargin)}`}
               masterSub={`마진(마스터판매가-마스터원가): ${formatKrw(masterSellMargin)}`}
               sourceLabel={qtyBasisLabel}
             />
+
+            {(absorbBase > 0 || absorbStoneCenter > 0 || absorbStoneSub1 > 0 || absorbStoneSub2 > 0 || absorbPlating > 0 || absorbEtc > 0) ? (
+              <div className="rounded-md border border-[var(--panel-border)] bg-[var(--panel)] p-2 text-[11px]">
+                <div className="text-[var(--muted)] mb-1">흡수공임 반영</div>
+                <div className="flex flex-wrap gap-2">
+                  {absorbBase > 0 ? <Badge tone="active" className="text-[10px]">기본 +{formatKrw(absorbBase)}</Badge> : null}
+                  {absorbStoneCenter > 0 ? <Badge tone="active" className="text-[10px]">알(메인) +{formatKrw(absorbStoneCenter)}</Badge> : null}
+                  {absorbStoneSub1 > 0 ? <Badge tone="active" className="text-[10px]">알(보조1) +{formatKrw(absorbStoneSub1)}</Badge> : null}
+                  {absorbStoneSub2 > 0 ? <Badge tone="active" className="text-[10px]">알(보조2) +{formatKrw(absorbStoneSub2)}</Badge> : null}
+                  {absorbPlating > 0 ? <Badge tone="active" className="text-[10px]">도금 +{formatKrw(absorbPlating)}</Badge> : null}
+                  {absorbDecor > 0 ? <Badge tone="active" className="text-[10px]">기타(장식) +{formatKrw(absorbDecor)}</Badge> : null}
+                  {absorbOther > 0 ? <Badge tone="active" className="text-[10px]">기타 +{formatKrw(absorbOther)}</Badge> : null}
+                  {absorbEtc > 0 ? <Badge tone="warning" className="text-[10px]">기타합계 +{formatKrw(absorbEtc)}</Badge> : null}
+                </div>
+              </div>
+            ) : null}
 
             <div className="rounded-md border border-[var(--panel-border)] bg-[var(--surface)] p-2 text-xs">
               <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
@@ -435,16 +489,16 @@ export function ShipmentPricingEvidencePanel({
             </div>
 
             <div className="rounded-md border border-[var(--panel-border)] bg-[var(--surface)] p-2">
-              <div className="text-[11px] font-semibold mb-2">원가 차이 (마스터 vs {qtyBasisLabel})</div>
+              <div className="text-[11px] font-semibold mb-2">원가 차이 ({qtyBasisLabel} vs 마스터)</div>
             <div className="rounded-md border border-[var(--panel-border)] bg-[var(--panel)]">
               <table className="w-full table-fixed text-[11px]">
                 <thead className="text-[var(--muted)] border-b border-[var(--panel-border)]">
                   <tr>
                     <th className="px-2 py-1 text-left">보석</th>
-                    <th className="px-2 py-1 text-right">개당단가차(마스터원가-{qtyBasisLabel})</th>
+                    <th className="px-2 py-1 text-right">개당단가차({qtyBasisLabel}-마스터원가)</th>
                     <th className="px-2 py-1 text-right">원가(마스터개수)</th>
                     <th className="px-2 py-1 text-right">원가({qtyBasisLabel}개수)</th>
-                    <th className="px-2 py-1 text-right">Δ원가(마스터-{qtyBasisLabel})</th>
+                    <th className="px-2 py-1 text-right">Δ원가({qtyBasisLabel}-마스터)</th>
                     <th className="px-2 py-1 text-right">검산오차</th>
                     <th className="px-2 py-1 text-right">판정</th>
                   </tr>
@@ -462,7 +516,7 @@ export function ShipmentPricingEvidencePanel({
                         {row.qtyMaster === 0 && row.qtyReceipt === 0 ? (
                           <Badge tone="neutral" className="text-[9px]">데이터없음</Badge>
                         ) : Math.round(row.costDelta - row.expectedCostDelta) === 0 ? (
-                          row.unitEffect < 0 ? (
+                          row.unitEffect > 0 ? (
                             <Badge tone="danger" className="text-[9px]">원가상승 확인</Badge>
                           ) : row.qtyEffect !== 0 ? (
                             <Badge tone="active" className="text-[9px]">정상(개수차)</Badge>
@@ -479,13 +533,13 @@ export function ShipmentPricingEvidencePanel({
                     <td className="px-2 py-1 text-[var(--muted)]" colSpan={2}>합계</td>
                     <td className="px-2 py-1 text-right tabular-nums">{formatKrw(masterStoneCostTotal)}</td>
                     <td className="px-2 py-1 text-right tabular-nums">{formatKrw(receiptStoneCostTotal)}</td>
-                    <td className={`px-2 py-1 text-right tabular-nums font-semibold ${deltaToneClass(masterStoneCostTotal - receiptStoneCostTotal)}`}>{formatKrw(masterStoneCostTotal - receiptStoneCostTotal)}</td>
+                    <td className={`px-2 py-1 text-right tabular-nums font-semibold ${deltaToneClass(receiptStoneCostTotal - masterStoneCostTotal)}`}>{formatKrw(receiptStoneCostTotal - masterStoneCostTotal)}</td>
                     <td className={`px-2 py-1 text-right tabular-nums ${deltaToneClass(totalValidationError)}`}>{formatKrw(totalValidationError)}</td>
                     <td className="px-2 py-1 text-right">
                       {costComparisonRows.length > 0 && costComparisonRows.every((row) => {
                         if (row.qtyMaster === 0 && row.qtyReceipt === 0) return true;
                         if (Math.round(row.costDelta - row.expectedCostDelta) !== 0) return false;
-                        return row.unitEffect >= 0;
+                        return row.unitEffect <= 0;
                       }) ? (
                         costComparisonRows.some((row) => row.qtyEffect !== 0) ? (
                           <Badge tone="active" className="text-[9px]">정상(개수차)</Badge>

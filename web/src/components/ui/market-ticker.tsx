@@ -15,7 +15,9 @@ export function MarketTicker({ variant = "full" }: MarketTickerProps) {
     const [ks, setKs] = useState<number | null>(null);
     const [ksOriginal, setKsOriginal] = useState<number | null>(null);
     const [cs, setCs] = useState<number | null>(null);
+    const [csTick, setCsTick] = useState<number | null>(null);
     const [csOriginal, setCsOriginal] = useState<number | null>(null);
+    const [csOriginalStrict, setCsOriginalStrict] = useState<number | null>(null);
     const [cnyAd, setCnyAd] = useState<number | null>(null);
     const [isOffline, setIsOffline] = useState(false);
 
@@ -46,7 +48,9 @@ export function MarketTicker({ variant = "full" }: MarketTickerProps) {
                         ks?: number;
                         ksOriginal?: number;
                         cs?: number | null;
+                        csTick?: number | null;
                         csOriginal?: number | null;
+                        csOriginalStrict?: number | null;
                         cnyAd?: number | null;
                     };
                     error?: string;
@@ -57,7 +61,9 @@ export function MarketTicker({ variant = "full" }: MarketTickerProps) {
                         setKs(result.data.ks ?? result.data.silver ?? null);
                         setKsOriginal(result.data.ksOriginal ?? result.data.silverOriginal ?? null);
                         setCs(result.data.cs ?? null);
+                        setCsTick(result.data.csTick ?? null);
                         setCsOriginal(result.data.csOriginal ?? null);
+                        setCsOriginalStrict(result.data.csOriginalStrict ?? null);
                         setCnyAd(result.data.cnyAd ?? null);
                         setIsOffline(false);
                     }
@@ -95,9 +101,7 @@ export function MarketTicker({ variant = "full" }: MarketTickerProps) {
     const labels = useMemo(() => {
         const kgValue = formatPrice(kg);
         const ksDisplay = formatPrice(ksOriginal ?? ks);
-        const ksAdjusted = formatPrice(ks);
-        const csDisplay = formatPrice(csOriginal ?? cs);
-        const csAdjusted = formatPrice(cs);
+        const csDisplay = formatPrice(csTick ?? csOriginalStrict ?? csOriginal ?? cs);
 
         return {
             kg: {
@@ -125,7 +129,7 @@ export function MarketTicker({ variant = "full" }: MarketTickerProps) {
                 color: "text-rose-600 dark:text-rose-400",
             },
         };
-    }, [kg, ks, ksOriginal, cs, csOriginal, cnyAd]);
+    }, [kg, ks, ksOriginal, cs, csTick, csOriginal, csOriginalStrict, cnyAd]);
 
     const offlineBadge = isOffline ? (
         <span className="flex items-center gap-1.5 rounded-full bg-red-500/10 px-2 py-0.5 text-[10px] font-medium text-red-600 dark:text-red-400">
@@ -211,9 +215,6 @@ export function MarketTicker({ variant = "full" }: MarketTickerProps) {
                         {data.value}
                         <span className="text-sm font-medium text-[var(--muted)] ml-1">{data.unit}</span>
                     </div>
-                    {(data as any).subValue && (
-                        <div className="text-xs text-[var(--muted-weak)]">{(data as any).subValue}</div>
-                    )}
                 </div>
             ))}
             {offlineBadge}

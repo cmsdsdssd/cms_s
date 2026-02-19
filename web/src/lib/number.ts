@@ -3,6 +3,12 @@ export function formatNumber(value?: number | null) {
   return new Intl.NumberFormat("ko-KR").format(value);
 }
 
+export function roundUpToUnit(value: number, unit: number) {
+  if (!Number.isFinite(value)) return 0;
+  if (!Number.isFinite(unit) || unit <= 0) return Math.ceil(value);
+  return Math.ceil(value / unit) * unit;
+}
+
 export function formatNumberInput(value: string) {
   const cleaned = value.replaceAll(",", "").trim();
   if (!cleaned) return "";

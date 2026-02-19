@@ -31,6 +31,7 @@ import { useRpcMutation } from "@/hooks/use-rpc-mutation";
 import { CONTRACTS } from "@/lib/contracts";
 import { callRpc } from "@/lib/supabase/rpc";
 import { getSchemaClient } from "@/lib/supabase/client";
+import { roundUpToUnit } from "@/lib/number";
 import { cn } from "@/lib/utils";
 
 type ReceiptInboxRow = {
@@ -243,9 +244,28 @@ type VendorOption = {
   label: string;
   value: string;
   immediate_settle_vendor?: boolean;
+  no_factory_receipt_vendor?: boolean;
 };
 
 const MATERIAL_OPTIONS = ["14", "18", "24", "925", "999", "00"] as const;
+const CATEGORY_LABEL_KO: Record<string, string> = {
+  BRACELET: "팔찌",
+  ANKLET: "발찌",
+  NECKLACE: "목걸이",
+  EARRING: "귀걸이",
+  RING: "반지",
+  PIERCING: "피어싱",
+  PENDANT: "펜던트",
+  WATCH: "시계",
+  KEYRING: "키링",
+  SYMBOL: "상징",
+  ACCESSORY: "부속",
+  CHAIN: "체인",
+  BANGLE: "뱅글",
+  COUPLING: "커플링",
+  SET: "세트",
+  ETC: "기타",
+};
 const MATCH_CLEAR_REASONS: Array<{ value: MatchClearReasonCode; label: string }> = [
   { value: "INPUT_ERROR", label: "입력오류(공임/중량/수량)" },
   { value: "WRONG_MATCH", label: "오매칭(다른 주문에 연결)" },
@@ -295,6 +315,72 @@ type MasterPricingRow = {
   stone_addon_margin_krw_per_piece?: number | null;
   weight_default_g?: number | null;
   deduction_weight_default_g?: number | null;
+};
+
+type MasterLookupPreviewRow = {
+  master_item_id?: string | null;
+  model_name?: string | null;
+  material_code_default?: string | null;
+  category_code?: string | null;
+  photo_url?: string | null;
+  image_url?: string | null;
+  image_path?: string | null;
+  note?: string | null;
+  weight_default_g?: number | null;
+  deduction_weight_default_g?: number | null;
+  center_qty_default?: number | null;
+  sub1_qty_default?: number | null;
+  sub2_qty_default?: number | null;
+  labor_base_cost?: number | null;
+  labor_basic_cost?: number | null;
+  labor_center_cost?: number | null;
+  labor_sub1_cost?: number | null;
+  labor_side1_cost?: number | null;
+  labor_sub2_cost?: number | null;
+  labor_side2_cost?: number | null;
+  labor_bead_cost?: number | null;
+  labor_other_cost?: number | null;
+  labor_etc_cost?: number | null;
+  labor_misc_cost?: number | null;
+  labor_plating_cost?: number | null;
+  plating_price_cost_default?: number | null;
+};
+
+type MasterFlattenComponentRow = {
+  qty_per_product_unit?: number | null;
+  component_ref_type?: "MASTER" | "PART" | null;
+  component_master_id?: string | null;
+  component_master_model_name?: string | null;
+  component_part_name?: string | null;
+};
+
+type LineMasterAccessoryItem = {
+  modelName: string;
+  qty: number;
+  cost: number;
+};
+
+type LineMasterInfo = {
+  masterItemId: string | null;
+  modelName: string;
+  materialCode: string | null;
+  categoryCode: string | null;
+  imageUrl: string | null;
+  grossWeight: number;
+  deductionWeight: number;
+  netWeight: number;
+  baseLaborCost: number;
+  centerQty: number;
+  centerLaborCost: number;
+  sub1Qty: number;
+  sub1LaborCost: number;
+  sub2Qty: number;
+  sub2LaborCost: number;
+  stoneLaborCost: number;
+  totalLaborCost: number;
+  otherLaborCost: number;
+  accessoryItems: LineMasterAccessoryItem[];
+  note: string | null;
 };
 
 type StoneAllocation = {
@@ -379,6 +465,33 @@ type FactoryStatementFetchResult = {
 function formatNumber(n?: number | null) {
   if (n === null || n === undefined || Number.isNaN(Number(n))) return "-";
   return new Intl.NumberFormat("ko-KR").format(Number(n));
+}
+
+function readStringField(row: Record<string, unknown>, keys: string[]): string | null {
+  for (const key of keys) {
+    const value = row[key];
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return null;
+}
+
+function readNumberField(row: Record<string, unknown>, keys: string[]): number {
+  for (const key of keys) {
+    const raw = row[key];
+    if (typeof raw === "number" && Number.isFinite(raw)) return raw;
+    if (typeof raw === "string" && raw.trim()) {
+      const parsed = Number(raw);
+      if (Number.isFinite(parsed)) return parsed;
+    }
+  }
+  return 0;
+}
+
+function toCategoryLabel(categoryCode: string | null): string {
+  if (!categoryCode) return "-";
+  const normalized = categoryCode.trim().toUpperCase();
+  if (!normalized) return "-";
+  return CATEGORY_LABEL_KO[normalized] ?? categoryCode;
 }
 
 function formatYmd(iso?: string | null) {
@@ -512,6 +625,12 @@ function parseNumber(value: string) {
   if (!trimmed) return null;
   const n = Number(trimmed.replaceAll(",", ""));
   return Number.isFinite(n) ? n : null;
+}
+
+function roundLaborMarginToHundred(value: number) {
+  if (!Number.isFinite(value)) return 0;
+  if (value <= 0) return Math.round(value);
+  return roundUpToUnit(value, 100);
 }
 
 function formatNumberInput(value: string) {
@@ -974,7 +1093,8 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
   const [confirmNote, setConfirmNote] = useState("");
   const [totalStoneCountInput, setTotalStoneCountInput] = useState("");
   const [centerStoneCountInput, setCenterStoneCountInput] = useState("");
-  const [lineTotalStoneInputs, setLineTotalStoneInputs] = useState<Record<string, string>>({});
+  const [lineMasterInfoByLine, setLineMasterInfoByLine] = useState<Record<string, LineMasterInfo | null>>({});
+  const [lineMasterInfoLoading, setLineMasterInfoLoading] = useState<Record<string, boolean>>({});
   const [factoryBillingShape, setFactoryBillingShape] =
     useState<FactoryBillingShape>("BUNDLED_PACKAGE");
   const [confirmResult, setConfirmResult] = useState<ConfirmResult | null>(null);
@@ -992,6 +1112,8 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
   const [matchClearError, setMatchClearError] = useState<string | null>(null);
   const matchOpenTriggerRef = useRef<HTMLElement | null>(null);
   const suggestionCacheRef = useRef<Map<string, MatchCandidate[]>>(new Map());
+  const masterInfoCacheRef = useRef<Map<string, LineMasterInfo | null>>(new Map());
+  const baseLaborAutoFilledModelRef = useRef<Map<string, string>>(new Map());
   const autoSuggestTimerRef = useRef<number | null>(null);
 
   const debugSuggest = useMemo(() => {
@@ -1059,11 +1181,13 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
         party_id: string;
         name: string;
         immediate_settle_vendor?: boolean;
+        no_factory_receipt_vendor?: boolean;
       }>;
       return rows.map((row) => ({
         label: row.name,
         value: row.party_id,
         immediate_settle_vendor: Boolean(row.immediate_settle_vendor),
+        no_factory_receipt_vendor: Boolean(row.no_factory_receipt_vendor),
       }));
     },
     staleTime: 5 * 60 * 1000,
@@ -1437,6 +1561,7 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
   const vendorOptions = (vendorOptionsQuery.data ?? []) as VendorOption[];
   const selectedVendorOption = vendorOptions.find((option) => option.value === vendorPartyId) ?? null;
   const immediateSettleEnabled = Boolean(selectedVendorOption?.immediate_settle_vendor);
+  const noFactoryReceiptEnabled = Boolean(selectedVendorOption?.no_factory_receipt_vendor);
   const confirmedMatches = matchesQuery.data ?? [];
   const lockedLineMap = useMemo(() => {
     const map = new Map<string, ConfirmedMatchRow>();
@@ -2130,6 +2255,31 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
     );
   }
 
+  function applyMasterBaseLaborCostToLine(lineUuid: string, modelKey: string, info: LineMasterInfo | null) {
+    if (!info) return;
+    const lastAutoFilledModelKey = baseLaborAutoFilledModelRef.current.get(lineUuid);
+    if (lastAutoFilledModelKey === modelKey) return;
+
+    const nextValue = String(Math.max(0, Math.round(info.baseLaborCost)));
+    let changed = false;
+    setLineItems((prev) =>
+      prev.map((item) => {
+        if (item.line_uuid !== lineUuid) return item;
+        if (item.labor_basic_cost_krw.trim()) return item;
+        changed = true;
+        return {
+          ...item,
+          labor_basic_cost_krw: nextValue,
+          total_amount_krw: "",
+        };
+      })
+    );
+    baseLaborAutoFilledModelRef.current.set(lineUuid, modelKey);
+    if (changed) {
+      setLineItemsDirty(true);
+    }
+  }
+
   async function fetchCustomerCodeSuggest(q: string, lineId: string) {
     try {
       const res = await fetch("/api/new-receipt-workbench/customer-code-suggest", {
@@ -2180,6 +2330,183 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
     }
   }
 
+  const resolveMasterImageUrl = useCallback(async (path: string | null) => {
+    if (!path) return null;
+    if (path.startsWith("http://") || path.startsWith("https://")) return path;
+    const params = new URLSearchParams({ path });
+    const res = await fetch(`/api/master-image?${params.toString()}`);
+    if (!res.ok) return null;
+    const json = (await res.json()) as { signedUrl?: string };
+    return json.signedUrl ?? null;
+  }, []);
+
+  const fetchMasterInfoByModelName = useCallback(
+    async (modelName: string): Promise<LineMasterInfo | null> => {
+      if (!schemaClient) return null;
+      const normalized = modelName.trim();
+      if (!normalized) return null;
+
+      let row: MasterLookupPreviewRow | null = null;
+      const { data: exactData, error: exactError } = await schemaClient
+        .from(CONTRACTS.views.masterItemLookup)
+        .select("*")
+        .eq("model_name", normalized)
+        .limit(1)
+        .maybeSingle();
+
+      if (exactError) {
+        console.log("[line-master-info] exact lookup failed", exactError);
+      }
+
+      if (exactData) {
+        row = exactData as MasterLookupPreviewRow;
+      }
+
+      if (!row) {
+        const { data: fuzzyData, error: fuzzyError } = await schemaClient
+          .from(CONTRACTS.views.masterItemLookup)
+          .select("*")
+          .ilike("model_name", `%${normalized}%`)
+          .limit(30);
+        if (fuzzyError) {
+          console.log("[line-master-info] fuzzy lookup failed", fuzzyError);
+          return null;
+        }
+        const rows = (fuzzyData ?? []) as MasterLookupPreviewRow[];
+        if (rows.length === 0) return null;
+        const exactMatched =
+          rows.find((candidate) =>
+            String(candidate.model_name ?? "").trim().toLowerCase() === normalized.toLowerCase()
+          ) ?? rows[0];
+        row = exactMatched;
+      }
+
+      const rowRecord = row as Record<string, unknown>;
+
+      const computeLaborByMasterRow = (source: Record<string, unknown>) => {
+        const baseLaborCost = readNumberField(source, ["labor_base_cost", "labor_basic_cost"]);
+        const centerQty = Math.max(0, Math.floor(readNumberField(source, ["center_qty_default"])));
+        const sub1Qty = Math.max(0, Math.floor(readNumberField(source, ["sub1_qty_default"])));
+        const sub2Qty = Math.max(0, Math.floor(readNumberField(source, ["sub2_qty_default"]))); 
+        const centerLaborCost = readNumberField(source, ["labor_center_cost"]);
+        const sub1LaborCost = readNumberField(source, ["labor_sub1_cost", "labor_side1_cost"]);
+        const sub2LaborCost = readNumberField(source, ["labor_sub2_cost", "labor_side2_cost"]);
+
+        const stoneLaborCost =
+          centerQty * centerLaborCost +
+          sub1Qty * sub1LaborCost +
+          sub2Qty * sub2LaborCost;
+
+        const otherLaborCost =
+          readNumberField(source, ["labor_bead_cost"]) +
+          readNumberField(source, ["labor_other_cost", "labor_etc_cost", "labor_misc_cost"]) +
+          readNumberField(source, ["labor_plating_cost", "plating_price_cost_default"]);
+
+        return {
+          baseLaborCost,
+          centerQty,
+          sub1Qty,
+          sub2Qty,
+          centerLaborCost,
+          sub1LaborCost,
+          sub2LaborCost,
+          stoneLaborCost,
+          otherLaborCost,
+          totalLaborCost: baseLaborCost + stoneLaborCost + otherLaborCost,
+        };
+      };
+
+      const laborSummary = computeLaborByMasterRow(rowRecord);
+
+      const grossWeight = readNumberField(rowRecord, ["weight_default_g"]);
+      const deductionWeight = readNumberField(rowRecord, ["deduction_weight_default_g"]);
+      const imageCandidate = readStringField(rowRecord, ["photo_url", "image_url", "image_path"]);
+      const masterItemId = readStringField(rowRecord, ["master_item_id", "master_id"]);
+
+      const accessoryItems: LineMasterAccessoryItem[] = [];
+      if (masterItemId) {
+        try {
+          const flattenRes = await fetch(
+            `/api/bom-flatten?product_master_id=${encodeURIComponent(masterItemId)}`,
+            { cache: "no-store" }
+          );
+          if (flattenRes.ok) {
+            const flattenRows = (await flattenRes.json()) as MasterFlattenComponentRow[];
+            const componentMasterIds = Array.from(
+              new Set(
+                flattenRows
+                  .map((rowItem) => String(rowItem.component_master_id ?? "").trim())
+                  .filter(Boolean)
+              )
+            );
+
+            const componentUnitCostByMasterId = new Map<string, number>();
+            if (componentMasterIds.length > 0) {
+              const { data: componentMasters } = await schemaClient
+                .from(CONTRACTS.views.masterItemLookup)
+                .select("*")
+                .in("master_item_id", componentMasterIds);
+
+              (componentMasters ?? []).forEach((componentMaster) => {
+                const componentRecord = componentMaster as Record<string, unknown>;
+                const componentMasterId = readStringField(componentRecord, ["master_item_id", "master_id"]);
+                if (!componentMasterId) return;
+                const componentLaborSummary = computeLaborByMasterRow(componentRecord);
+                componentUnitCostByMasterId.set(componentMasterId, componentLaborSummary.totalLaborCost);
+              });
+            }
+
+            flattenRows.forEach((rowItem) => {
+              const qtyRaw = Number(rowItem.qty_per_product_unit ?? 0);
+              const qty = Number.isFinite(qtyRaw) ? Math.max(0, qtyRaw) : 0;
+              if (qty <= 0) return;
+
+              const modelName =
+                String(rowItem.component_master_model_name ?? "").trim() ||
+                String(rowItem.component_part_name ?? "").trim() ||
+                String(rowItem.component_master_id ?? "").trim() ||
+                "-";
+
+              const componentMasterId = String(rowItem.component_master_id ?? "").trim();
+              const unitCost = componentMasterId ? componentUnitCostByMasterId.get(componentMasterId) ?? 0 : 0;
+              accessoryItems.push({
+                modelName,
+                qty,
+                cost: unitCost * qty,
+              });
+            });
+          }
+        } catch (error) {
+          console.log("[line-master-info] accessory fetch failed", error);
+        }
+      }
+
+      return {
+        masterItemId,
+        modelName: readStringField(rowRecord, ["model_name"]) ?? normalized,
+        materialCode: readStringField(rowRecord, ["material_code_default"]),
+        categoryCode: readStringField(rowRecord, ["category_code"]),
+        imageUrl: await resolveMasterImageUrl(imageCandidate),
+        grossWeight,
+        deductionWeight,
+        netWeight: Math.max(0, grossWeight - deductionWeight),
+        baseLaborCost: laborSummary.baseLaborCost,
+        centerQty: laborSummary.centerQty,
+        centerLaborCost: laborSummary.centerLaborCost,
+        sub1Qty: laborSummary.sub1Qty,
+        sub1LaborCost: laborSummary.sub1LaborCost,
+        sub2Qty: laborSummary.sub2Qty,
+        sub2LaborCost: laborSummary.sub2LaborCost,
+        stoneLaborCost: laborSummary.stoneLaborCost,
+        totalLaborCost: laborSummary.totalLaborCost,
+        otherLaborCost: laborSummary.otherLaborCost,
+        accessoryItems,
+        note: readStringField(rowRecord, ["note", "remark", "memo"]),
+      };
+    },
+    [resolveMasterImageUrl, schemaClient]
+  );
+
   function handleCustomerChange(lineId: string, nextValue: string) {
     updateLine(lineId, "customer_factory_code", nextValue);
     const query = nextValue.trim();
@@ -2205,6 +2532,9 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
 
   function handleModelChange(lineId: string, nextValue: string) {
     updateLine(lineId, "model_name", nextValue);
+    baseLaborAutoFilledModelRef.current.delete(lineId);
+    setLineMasterInfoByLine((prev) => ({ ...prev, [lineId]: null }));
+    setLineMasterInfoLoading((prev) => ({ ...prev, [lineId]: false }));
     if (suppressModelSuggestRef.current) {
       const suppress = suppressModelSuggestRef.current;
       if (suppress.lineId === lineId && suppress.value === nextValue) {
@@ -2234,6 +2564,51 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
       void fetchModelNameSuggest(query, lineId);
     }, 150);
   }
+
+  useEffect(() => {
+    if (!expandedLineId) return;
+    const target = lineItems.find((item) => item.line_uuid === expandedLineId);
+    if (!target) return;
+
+    const modelName = target.model_name.trim();
+    if (!modelName) {
+      setLineMasterInfoByLine((prev) => ({ ...prev, [target.line_uuid]: null }));
+      setLineMasterInfoLoading((prev) => ({ ...prev, [target.line_uuid]: false }));
+      return;
+    }
+
+    const cacheKey = modelName.toLowerCase();
+    if (masterInfoCacheRef.current.has(cacheKey)) {
+      const cached = masterInfoCacheRef.current.get(cacheKey) ?? null;
+      setLineMasterInfoByLine((prev) => ({ ...prev, [target.line_uuid]: cached }));
+      setLineMasterInfoLoading((prev) => ({ ...prev, [target.line_uuid]: false }));
+      applyMasterBaseLaborCostToLine(target.line_uuid, cacheKey, cached);
+      return;
+    }
+
+    let cancelled = false;
+    setLineMasterInfoLoading((prev) => ({ ...prev, [target.line_uuid]: true }));
+    void fetchMasterInfoByModelName(modelName)
+      .then((resolved) => {
+        if (cancelled) return;
+        masterInfoCacheRef.current.set(cacheKey, resolved);
+        setLineMasterInfoByLine((prev) => ({ ...prev, [target.line_uuid]: resolved }));
+        applyMasterBaseLaborCostToLine(target.line_uuid, cacheKey, resolved);
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        console.log("[line-master-info] failed", error);
+        setLineMasterInfoByLine((prev) => ({ ...prev, [target.line_uuid]: null }));
+      })
+      .finally(() => {
+        if (cancelled) return;
+        setLineMasterInfoLoading((prev) => ({ ...prev, [target.line_uuid]: false }));
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [expandedLineId, fetchMasterInfoByModelName, lineItems]);
 
   function updateLineNumber(
     lineUuid: string,
@@ -2330,7 +2705,7 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
         const laborBasic = parseNumber(item.labor_basic_cost_krw) ?? 0;
         const laborOther = parseNumber(item.labor_other_cost_krw) ?? 0;
         const stoneFactory = calcStoneFactoryCost(item);
-        const totalLine = parseNumber(item.total_amount_krw) ?? laborBasic + laborOther;
+        const totalLine = laborBasic + laborOther;
         return {
           qty: acc.qty + qty,
           weight: acc.weight + weight * qty,
@@ -2453,7 +2828,7 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
       const qty = 1;
       const laborBasic = parseNumber(item.labor_basic_cost_krw) ?? 0;
       const laborOther = parseNumber(item.labor_other_cost_krw) ?? 0;
-      const totalAmount = parseNumber(item.total_amount_krw) ?? laborBasic + laborOther;
+      const totalAmount = laborBasic + laborOther;
       const weightTotal = calcWeightTotal(item.weight_raw_g, item.weight_deduct_g);
 
       return {
@@ -2531,6 +2906,10 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
   }
 
   async function saveFactoryStatement(options?: { rows?: FactoryRowInput[]; note?: string }) {
+    if (noFactoryReceiptEnabled) {
+      toast.info("무영수증 공장은 하단 4행 저장이 비활성화됩니다.");
+      return;
+    }
     if (!selectedReceiptId) {
       toast.error("영수증을 선택하세요");
       return;
@@ -2682,6 +3061,10 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
   }
 
   async function confirmFactoryStatement(forceRecalc: boolean) {
+    if (noFactoryReceiptEnabled) {
+      toast.info("무영수증 공장은 하단 4행 확정을 사용하지 않습니다.");
+      return;
+    }
     if (!selectedReceiptId) return;
     if (headerNeedsSave) {
       toast.error("먼저 헤더 저장을 진행해 주세요.");
@@ -2752,6 +3135,10 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
   }
 
   function handleConfirmFactoryStatementClick(forceRecalc: boolean) {
+    if (noFactoryReceiptEnabled) {
+      toast.info("무영수증 공장은 하단 4행 확정을 사용하지 않습니다.");
+      return;
+    }
     if (immediateSettleEnabled) {
       setAutoPayConfirmForceRecalc(forceRecalc);
       setAutoPayConfirmOpen(true);
@@ -2761,6 +3148,10 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
   }
 
   async function setFactoryStatementDraft() {
+    if (noFactoryReceiptEnabled) {
+      toast.info("무영수증 공장은 하단 4행 초안 전환을 사용하지 않습니다.");
+      return;
+    }
     if (!selectedReceiptId) return;
     await factoryReceiptSetApplyStatus.mutateAsync({
       p_receipt_id: selectedReceiptId,
@@ -3173,7 +3564,7 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
     const sub2Unit = parseNumber(selectedLineItem.stone_sub2_unit_cost_krw) ?? 0;
 
     const baseDiff = (master.labor_base_sell ?? 0) - (master.labor_base_cost ?? 0);
-    const baseSell = basicCost + baseDiff;
+    const baseSell = basicCost + roundLaborMarginToHundred(baseDiff);
 
     const selfStoneCostTotal =
       (selectedStoneSources.center === "SELF" ? centerQty * centerUnit : 0) +
@@ -3182,16 +3573,19 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
 
     const extraCostTotal = settingFeeCostTotal + selfStoneCostTotal;
 
-    const stoneMarginTotal =
+    const stoneMarginTotalRaw =
       centerQty * ((master.labor_center_sell ?? 0) - (master.labor_center_cost ?? 0)) +
       sub1Qty * ((master.labor_sub1_sell ?? 0) - (master.labor_sub1_cost ?? 0)) +
       sub2Qty * ((master.labor_sub2_sell ?? 0) - (master.labor_sub2_cost ?? 0));
-    const beadMarginTotal = ((master.labor_bead_sell ?? 0) - (master.labor_bead_cost ?? 0)) * qty;
-    const addonMarginTotal =
+    const beadMarginTotalRaw = ((master.labor_bead_sell ?? 0) - (master.labor_bead_cost ?? 0)) * qty;
+    const addonMarginTotalRaw =
       ((master.setting_addon_margin_krw_per_piece ?? 0) +
         (master.stone_addon_margin_krw_per_piece ?? 0)) *
       qty;
-    const extraSell = extraCostTotal + stoneMarginTotal + beadMarginTotal + addonMarginTotal;
+    const marginTotalRounded = roundLaborMarginToHundred(
+      stoneMarginTotalRaw + beadMarginTotalRaw + addonMarginTotalRaw
+    );
+    const extraSell = extraCostTotal + marginTotalRounded;
 
     const factoryCostTotal = basicCost + settingFeeCostTotal + selfStoneCostTotal;
     const recommendedTotal = baseSell + extraSell;
@@ -3243,46 +3637,6 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
       )
     );
     toast.success("자동 배분을 적용했습니다.");
-  }
-
-  function applyAllocationToLineByTotal(lineUuid: string, totalText: string) {
-    if (!selectedCandidate) {
-      toast.error("매칭 후보를 먼저 선택하세요.");
-      return;
-    }
-    const total = parseNonNegativeInt(totalText);
-    if (total === null) {
-      toast.error("총 알수를 올바르게 입력하세요.");
-      return;
-    }
-    const target = lineItems.find((item) => item.line_uuid === lineUuid);
-    if (!target) {
-      toast.error("라인을 찾지 못했습니다.");
-      return;
-    }
-    const centerFixed = parseNonNegativeInt(target.stone_center_qty);
-    const allocation = allocateStoneCounts({
-      total,
-      centerFixed,
-      dC: Math.max(0, Number(selectedCandidate.stone_center_qty ?? 0)),
-      d1: Math.max(0, Number(selectedCandidate.stone_sub1_qty ?? 0)),
-      d2: Math.max(0, Number(selectedCandidate.stone_sub2_qty ?? 0)),
-    });
-    setLineItemsDirty(true);
-    setLineItems((prev) =>
-      prev.map((item) =>
-        item.line_uuid === lineUuid
-          ? {
-            ...item,
-            stone_center_qty: String(allocation.center),
-            stone_sub1_qty: String(allocation.sub1),
-            stone_sub2_qty: String(allocation.sub2),
-            total_amount_krw: "",
-          }
-          : item
-      )
-    );
-    toast.success("라인 자동 배분을 적용했습니다.");
   }
 
   const selectedReferenceWeightRange = useMemo(() => {
@@ -3851,7 +4205,9 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                           const laborOther = parseNumber(item.labor_other_cost_krw) ?? 0;
                           const stoneFactoryCost = calcStoneFactoryCost(item);
                           const autoCalculatedTotal = laborBasic + laborOther;
-                          const totalAmount = parseNumber(item.total_amount_krw) ?? autoCalculatedTotal;
+                          const totalAmount = autoCalculatedTotal;
+                          const lineMasterInfo = lineMasterInfoByLine[item.line_uuid] ?? null;
+                          const isLineMasterInfoLoading = lineMasterInfoLoading[item.line_uuid] ?? false;
                           const isExpanded = expandedLineId === item.line_uuid;
                           const seqValue = parseNumber(item.vendor_seq_no);
                           const isSeqDuplicate = seqValue !== null && duplicateSeqSet.has(seqValue);
@@ -4280,30 +4636,7 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                                         />
                                       </div>
                                     </div>
-                                    <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)]">
-                                      <div className="space-y-1">
-                                        <label className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)]">
-                                          공장청구총액(저장/AP)
-                                        </label>
-                                        <Input
-                                          type="text"
-                                          inputMode="numeric"
-                                          value={item.total_amount_krw}
-                                          disabled={inputDisabled}
-                                          onChange={(e) =>
-                                            updateLineNumber(item.line_uuid, "total_amount_krw", e.target.value, {
-                                              format: false,
-                                            })
-                                          }
-                                          autoFormat={false}
-                                          onBlur={(e) => {
-                                            const nextId = getLineIdFromTarget(e.relatedTarget);
-                                            if (nextId !== item.line_uuid) setExpandedLineId(null);
-                                          }}
-                                          data-line-id={item.line_uuid}
-                                          className="h-8 text-[11px] text-right"
-                                        />
-                                      </div>
+                                    <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
                                       <div className="space-y-1">
                                         <label className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)]">
                                           자동계산(기본+보석공임)
@@ -4329,12 +4662,6 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                                           data-line-id={item.line_uuid}
                                           className="h-8 text-[11px]"
                                         />
-                                      </div>
-                                      <div className="text-[10px] text-[var(--muted)] md:col-span-3">
-                                        비우면 기본공임+보석공임 합(자동계산값)으로 저장된다
-                                      </div>
-                                      <div className="text-[10px] text-[var(--muted)] md:col-span-3">
-                                        원석단가 입력합은 총액에 자동 포함하지 않는다
                                       </div>
                                     </div>
                                     <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-[46px_110px_46px_110px_46px_110px_110px_172px]">
@@ -4493,40 +4820,93 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                                       </div>
                                     </div>
                                     <div className="mt-2 rounded-md border border-[var(--panel-border)] bg-[var(--surface)]/50 p-2">
-                                      <div className="flex flex-wrap items-center gap-2">
-                                        <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)]">
-                                          총 알수 -&gt; 자동배분
-                                        </span>
-                                        <Input
-                                          inputMode="numeric"
-                                          placeholder="총 알수"
-                                          value={lineTotalStoneInputs[item.line_uuid] ?? ""}
-                                          onChange={(e) =>
-                                            setLineTotalStoneInputs((prev) => ({
-                                              ...prev,
-                                              [item.line_uuid]: e.target.value,
-                                            }))
-                                          }
-                                          className="h-7 w-24 text-[11px] text-right"
-                                          disabled={inputDisabled}
-                                          data-line-id={item.line_uuid}
-                                        />
-                                        <Button
-                                          type="button"
-                                          size="sm"
-                                          variant="secondary"
-                                          disabled={inputDisabled}
-                                          onClick={() =>
-                                            applyAllocationToLineByTotal(
-                                              item.line_uuid,
-                                              lineTotalStoneInputs[item.line_uuid] ?? ""
-                                            )
-                                          }
-                                          data-line-id={item.line_uuid}
-                                        >
-                                          후보 비율로 자동배분
-                                        </Button>
+                                      <div className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)]">
+                                        마스터 아이템 정보
                                       </div>
+                                      {isLineMasterInfoLoading ? (
+                                        <div className="text-[11px] text-[var(--muted)]">모델명 기준 마스터 정보를 조회 중입니다.</div>
+                                      ) : !item.model_name.trim() ? (
+                                        <div className="text-[11px] text-[var(--muted)]">모델명을 입력하면 마스터 정보가 자동으로 연결됩니다.</div>
+                                      ) : !lineMasterInfo ? (
+                                        <div className="text-[11px] text-[var(--muted)]">매칭된 마스터 아이템이 없습니다.</div>
+                                      ) : (
+                                        <div className="grid grid-cols-1 gap-3 md:grid-cols-[108px_minmax(0,1fr)_minmax(0,0.95fr)]">
+                                          <div className="aspect-square overflow-hidden rounded-md border border-[var(--panel-border)] bg-[var(--panel)]/70">
+                                            {lineMasterInfo.imageUrl ? (
+                                              <img
+                                                src={lineMasterInfo.imageUrl}
+                                                alt={lineMasterInfo.modelName}
+                                                className="h-full w-full object-cover"
+                                                loading="lazy"
+                                              />
+                                            ) : (
+                                              <div className="flex h-full items-center justify-center text-[10px] text-[var(--muted)]">이미지 없음</div>
+                                            )}
+                                          </div>
+                                          <div className="space-y-1 rounded-md border border-[var(--panel-border)] bg-[var(--panel)]/40 p-2 text-[11px]">
+                                            <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                                              <span className="font-semibold text-[var(--foreground)]">모델명</span>
+                                              <span>{lineMasterInfo.modelName || "-"}</span>
+                                              <span className="text-[var(--muted)]">|</span>
+                                              <span className="font-semibold text-[var(--foreground)]">소재/카테고리</span>
+                                              <span>{`${lineMasterInfo.materialCode || "-"}/${toCategoryLabel(lineMasterInfo.categoryCode)}`}</span>
+                                            </div>
+                                            <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                                              <span className="font-semibold text-[var(--foreground)]">총중량</span>
+                                              <span className="font-semibold text-sky-700">{`${formatNumber(lineMasterInfo.netWeight)}(${formatNumber(lineMasterInfo.grossWeight)}-${formatNumber(lineMasterInfo.deductionWeight)})`}</span>
+                                              <span className="text-[var(--muted)]">|</span>
+                                              <span className="font-semibold text-[var(--foreground)]">총공임</span>
+                                              <span>{formatNumber(lineMasterInfo.totalLaborCost)}</span>
+                                            </div>
+                                            <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                                              <span className="font-semibold text-[var(--foreground)]">기본원가</span>
+                                              <span className="font-semibold text-sky-700">{formatNumber(lineMasterInfo.baseLaborCost)}</span>
+                                              <span className="text-[var(--muted)]">|</span>
+                                              <span className="font-semibold text-[var(--foreground)]">총알공임원가</span>
+                                              <span className="font-semibold text-sky-700">{formatNumber(lineMasterInfo.stoneLaborCost)}</span>
+                                              <span className="text-[var(--muted)]">|</span>
+                                              <span className="font-semibold text-[var(--foreground)]">총기타원가</span>
+                                              <span className="font-semibold text-sky-700">{formatNumber(lineMasterInfo.otherLaborCost)}</span>
+                                            </div>
+                                            <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                                              <span className="font-semibold text-[var(--foreground)]">알개수/원가</span>
+                                              <span className="font-semibold text-sky-700">
+                                                메인  {formatNumber(lineMasterInfo.centerQty)}개/{formatNumber(lineMasterInfo.centerLaborCost)}
+                                                , 보조1  {formatNumber(lineMasterInfo.sub1Qty)}개/{formatNumber(lineMasterInfo.sub1LaborCost)}
+                                                , 보조2  {formatNumber(lineMasterInfo.sub2Qty)}개/{formatNumber(lineMasterInfo.sub2LaborCost)}
+                                              </span>
+                                            </div>
+                                            <div className="flex items-center gap-2">
+                                              <span className="font-semibold text-[var(--foreground)]">비고</span>
+                                              <span>{lineMasterInfo.note ?? item.remark ?? "-"}</span>
+                                            </div>
+                                          </div>
+                                          <div className="rounded-md border border-[var(--panel-border)] bg-[var(--panel)]/40 p-2 text-[11px]">
+                                            <div className="mb-1 font-semibold text-[var(--foreground)]">부속/장식</div>
+                                            <div className="grid grid-cols-[minmax(0,1fr)_56px_90px] gap-2 border-b border-[var(--panel-border)] pb-1 text-[10px] font-semibold text-[var(--muted)]">
+                                              <span>모델명</span>
+                                              <span className="text-right">개수</span>
+                                              <span className="text-right">원가</span>
+                                            </div>
+                                            {lineMasterInfo.accessoryItems.length === 0 ? (
+                                              <div className="py-3 text-[11px] text-[var(--muted)]">등록된 부속/장식이 없습니다.</div>
+                                            ) : (
+                                              <div className="max-h-28 space-y-1 overflow-y-auto pt-1">
+                                                {lineMasterInfo.accessoryItems.map((accessory, idx) => (
+                                                  <div
+                                                    key={`${accessory.modelName}-${idx}`}
+                                                    className="grid grid-cols-[minmax(0,1fr)_56px_90px] gap-2"
+                                                  >
+                                                    <span className="truncate" title={accessory.modelName}>{accessory.modelName}</span>
+                                                    <span className="text-right">{formatNumber(accessory.qty)}</span>
+                                                    <span className="text-right">{formatNumber(accessory.cost)}</span>
+                                                  </div>
+                                                ))}
+                                              </div>
+                                            )}
+                                          </div>
+                                        </div>
+                                      )}
                                     </div>
                                     <div className="mt-3 space-y-2">
                                       {isLocked ? (
@@ -4649,6 +5029,11 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                             </div>
                           </div>
                           <div className="flex items-center gap-2">
+                            {noFactoryReceiptEnabled ? (
+                              <span className="rounded px-2 py-1 text-[10px] font-semibold bg-sky-100 text-sky-700">
+                                무영수증 공장 모드
+                              </span>
+                            ) : null}
                             {immediateSettleEnabled ? (
                               <span className="rounded px-2 py-1 text-[10px] font-semibold bg-[var(--danger)]/15 text-[var(--danger)]">
                                 즉시완불 공장
@@ -4671,39 +5056,47 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                                 확정시각 {formatDateTimeKst(factorySnapshotMetaQuery.data.confirmed_at)}
                               </span>
                             )}
-                            <Button
-                              size="sm"
-                              variant="secondary"
-                              onClick={setFactoryStatementDraft}
-                              disabled={!selectedReceiptId || factoryReceiptSetApplyStatus.isPending}
-                            >
-                              초안
-                            </Button>
-                            <Button
-                              size="sm"
-                              onClick={() => handleConfirmFactoryStatementClick(backdatedConfirmRequired)}
-                              disabled={!selectedReceiptId || factoryReceiptSetApplyStatus.isPending || headerNeedsSave || immediatePayPending}
-                            >
-                              {immediateSettleEnabled
-                                ? backdatedConfirmRequired
-                                  ? "재계산 포함 확정+자동결제"
-                                  : "확정+자동결제"
-                                : backdatedConfirmRequired
-                                  ? "재계산 포함 확정"
-                                  : "확정"}
-                            </Button>
-                            <Button
-                              size="sm"
-                              onClick={() => void saveFactoryStatement()}
-                              disabled={!selectedReceiptId || factoryStatementUpsert.isPending || headerNeedsSave}
-                            >
-                              저장
-                            </Button>
+                            {!noFactoryReceiptEnabled ? (
+                              <>
+                                <Button
+                                  size="sm"
+                                  variant="secondary"
+                                  onClick={setFactoryStatementDraft}
+                                  disabled={!selectedReceiptId || factoryReceiptSetApplyStatus.isPending}
+                                >
+                                  초안
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  onClick={() => handleConfirmFactoryStatementClick(backdatedConfirmRequired)}
+                                  disabled={!selectedReceiptId || factoryReceiptSetApplyStatus.isPending || headerNeedsSave || immediatePayPending}
+                                >
+                                  {immediateSettleEnabled
+                                    ? backdatedConfirmRequired
+                                      ? "재계산 포함 확정+자동결제"
+                                      : "확정+자동결제"
+                                    : backdatedConfirmRequired
+                                      ? "재계산 포함 확정"
+                                      : "확정"}
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  onClick={() => void saveFactoryStatement()}
+                                  disabled={!selectedReceiptId || factoryStatementUpsert.isPending || headerNeedsSave}
+                                >
+                                  저장
+                                </Button>
+                              </>
+                            ) : null}
                           </div>
                         </div>
                       </CardHeader>
                       <CardBody className="space-y-4 p-4">
-                        {!selectedReceiptId ? (
+                        {noFactoryReceiptEnabled ? (
+                          <div className="rounded-lg border border-dashed border-sky-300 bg-sky-50/70 p-4 text-center text-sm text-sky-700">
+                            무영수증 공장 모드입니다. 하단 4행 정합성 입력/확정은 생략되고, 라인 매칭/출고대기/공임 계산만 사용합니다.
+                          </div>
+                        ) : !selectedReceiptId ? (
                           <div className="rounded-lg border border-dashed border-[var(--panel-border)] bg-[var(--surface)]/60 p-4 text-center text-sm text-[var(--muted)]">
                             영수증을 선택하세요.
                           </div>
@@ -6530,7 +6923,7 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                   수량 {formatNumber(parseNumber(deleteTarget.qty) ?? 0)}
                 </Badge>
                 <Badge tone="neutral" className="h-5 px-2 text-[10px]">
-                  금액 {formatNumber(parseNumber(deleteTarget.total_amount_krw) ?? 0)}
+                  금액 {formatNumber((parseNumber(deleteTarget.labor_basic_cost_krw) ?? 0) + (parseNumber(deleteTarget.labor_other_cost_krw) ?? 0))}
                 </Badge>
               </div>
               <div className="mt-1 text-[11px] text-[var(--muted)]">

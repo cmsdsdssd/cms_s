@@ -26,6 +26,11 @@ import {
   hasVendorImmediateSettleTag,
   stripVendorImmediateSettleTag,
 } from "@/lib/vendor-immediate-settle";
+import {
+  applyVendorNoFactoryReceiptTag,
+  hasVendorNoFactoryReceiptTag,
+  stripVendorNoFactoryReceiptTag,
+} from "@/lib/vendor-no-factory-receipt";
 
 function PartyPageContent() {
   const router = useRouter();
@@ -118,7 +123,7 @@ function PartyPageContent() {
         phone: detailData.phone ?? "",
         region: detailData.region ?? "",
         address: detailData.address ?? "",
-        note: stripVendorImmediateSettleTag(detailData.note),
+        note: stripVendorNoFactoryReceiptTag(stripVendorImmediateSettleTag(detailData.note)),
         vendor_immediate_settle: isVendor ? hasVendorImmediateSettleTag(detailData.note) : false,
         is_active: detailData.is_active,
         mask_code: detailData.mask_code ?? "",
@@ -165,7 +170,9 @@ function PartyPageContent() {
   const onSubmit = (values: PartyForm) => {
     const cleanNote = values.note ?? "";
     const enabled = values.party_type === "vendor" && Boolean(values.vendor_immediate_settle);
-    const memo = applyVendorImmediateSettleTag(cleanNote, enabled);
+    const noFactoryReceiptEnabled = values.party_type === "vendor" && hasVendorNoFactoryReceiptTag(detailData?.note);
+    let memo = applyVendorImmediateSettleTag(cleanNote, enabled);
+    memo = applyVendorNoFactoryReceiptTag(memo, noFactoryReceiptEnabled);
 
     mutation.mutate({
       p_party_type: values.party_type,

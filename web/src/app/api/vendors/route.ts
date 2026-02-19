@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { hasVendorImmediateSettleTag } from "@/lib/vendor-immediate-settle";
+import { hasVendorNoFactoryReceiptTag } from "@/lib/vendor-no-factory-receipt";
 
 function getSupabaseAdmin() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
@@ -43,6 +44,7 @@ export async function GET() {
   const rows = (data ?? []).map((vendor) => ({
     ...vendor,
     immediate_settle_vendor: hasVendorImmediateSettleTag(vendor.note),
+    no_factory_receipt_vendor: hasVendorNoFactoryReceiptTag(vendor.note),
   }));
 
   return NextResponse.json({ data: rows, prefixes: prefixes ?? [] });

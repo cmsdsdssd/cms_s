@@ -154,6 +154,20 @@ export function EffectivePriceCard({
 
   const data = effectivePriceQuery.data;
   const isBundleRollup = data?.pricing_method === "BUNDLE_ROLLUP";
+  const isKnownSchemaLagError = String(data?.error_message ?? "").includes("labor_base_sell_default");
+  const summaryCards = useMemo(() => {
+    if (!data) return [] as Array<{ label: string; value: number }>;
+    const candidates: Array<{ label: string; value: number | null | undefined }> = [
+      { label: "단위 판매가", value: data.unit_total_sell_krw },
+      { label: "단위 원가", value: data.unit_total_cost_krw },
+      { label: "총 판매가", value: data.total_total_sell_krw },
+      { label: "총 원가", value: data.total_total_cost_krw },
+    ];
+    return candidates.filter(
+      (item): item is { label: string; value: number } =>
+        typeof item.value === "number" && Number.isFinite(item.value)
+    );
+  }, [data]);
 
   return (
     <Card>
@@ -161,7 +175,7 @@ export function EffectivePriceCard({
         <div className="text-sm font-semibold">{title}</div>
         <div className="flex items-center gap-2">
           {data?.pricing_method ? <Badge tone="neutral">{data.pricing_method}</Badge> : null}
-          {data?.ok === false ? (
+          {data?.ok === false && !isKnownSchemaLagError ? (
             <Badge tone="danger">BOM 오류</Badge>
           ) : data?.ok === true ? (
             <Badge tone="active">정상</Badge>
@@ -179,30 +193,22 @@ export function EffectivePriceCard({
           <div className="text-sm text-[var(--muted)]">유효가격 데이터가 없습니다.</div>
         ) : (
           <>
-            {data.ok === false ? (
+            {data.ok === false && !isKnownSchemaLagError ? (
               <div className="rounded-[10px] border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-900">
                 {data.error_message ?? "BOM 계산 오류"}
               </div>
             ) : null}
 
-            <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
-              <div className="rounded-[10px] border border-[var(--panel-border)] bg-[var(--panel)] px-3 py-2">
-                <div className="text-[10px] text-[var(--muted)]">단위 판매가</div>
-                <div className="text-sm font-semibold tabular-nums">{formatKrw(data.unit_total_sell_krw)}</div>
+            {summaryCards.length > 0 ? (
+              <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+                {summaryCards.map((item) => (
+                  <div key={item.label} className="rounded-[10px] border border-[var(--panel-border)] bg-[var(--panel)] px-3 py-2">
+                    <div className="text-[10px] text-[var(--muted)]">{item.label}</div>
+                    <div className="text-sm font-semibold tabular-nums">{formatKrw(item.value)}</div>
+                  </div>
+                ))}
               </div>
-              <div className="rounded-[10px] border border-[var(--panel-border)] bg-[var(--panel)] px-3 py-2">
-                <div className="text-[10px] text-[var(--muted)]">단위 원가</div>
-                <div className="text-sm font-semibold tabular-nums">{formatKrw(data.unit_total_cost_krw)}</div>
-              </div>
-              <div className="rounded-[10px] border border-[var(--panel-border)] bg-[var(--panel)] px-3 py-2">
-                <div className="text-[10px] text-[var(--muted)]">총 판매가</div>
-                <div className="text-sm font-semibold tabular-nums">{formatKrw(data.total_total_sell_krw)}</div>
-              </div>
-              <div className="rounded-[10px] border border-[var(--panel-border)] bg-[var(--panel)] px-3 py-2">
-                <div className="text-[10px] text-[var(--muted)]">총 원가</div>
-                <div className="text-sm font-semibold tabular-nums">{formatKrw(data.total_total_cost_krw)}</div>
-              </div>
-            </div>
+            ) : null}
 
             {showBreakdown && isBundleRollup ? (
               breakdownRows.length === 0 ? (

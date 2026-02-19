@@ -2,7 +2,32 @@ import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
 const MAX_SIZE_BYTES = 10 * 1024 * 1024;
-const ALLOWED_TYPES = ["image/jpeg", "image/png", "image/webp", "image/gif"];
+const ALLOWED_TYPES = [
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+  "image/gif",
+  "image/heic",
+  "image/heif",
+  "application/octet-stream",
+];
+const ALLOWED_EXTENSIONS = new Set(["jpg", "jpeg", "png", "webp", "gif", "heic", "heif"]);
+
+function getFileExtension(fileName: string) {
+  const ext = fileName.split(".").pop()?.toLowerCase() ?? "";
+  return ext.replace(/[^a-z0-9]/g, "");
+}
+
+function inferContentType(rawType: string, ext: string) {
+  if (rawType && rawType !== "application/octet-stream") return rawType;
+  if (ext === "jpg" || ext === "jpeg") return "image/jpeg";
+  if (ext === "png") return "image/png";
+  if (ext === "webp") return "image/webp";
+  if (ext === "gif") return "image/gif";
+  if (ext === "heic") return "image/heic";
+  if (ext === "heif") return "image/heif";
+  return "application/octet-stream";
+}
 
 function getSupabaseAdmin() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
@@ -26,23 +51,26 @@ export async function POST(request: Request) {
   if (!(file instanceof File)) {
     return NextResponse.json({ error: "파일이 필요합니다." }, { status: 400 });
   }
-  if (!ALLOWED_TYPES.includes(file.type)) {
+  const ext = getFileExtension(file.name);
+  const isAllowedType = ALLOWED_TYPES.includes(file.type);
+  const isAllowedExtension = ALLOWED_EXTENSIONS.has(ext);
+  if (!isAllowedType && !isAllowedExtension) {
     return NextResponse.json({ error: "지원하지 않는 이미지 형식입니다." }, { status: 400 });
   }
   if (file.size > MAX_SIZE_BYTES) {
     return NextResponse.json({ error: "이미지 용량은 10MB 이하만 가능합니다." }, { status: 400 });
   }
 
-  const ext = file.name.split(".").pop()?.toLowerCase() ?? "jpg";
-  const safeExt = ext.replace(/[^a-z0-9]/g, "");
+  const safeExt = ext || "jpg";
   const fileName = `${crypto.randomUUID()}.${safeExt || "jpg"}`;
   const filePath = `master/${fileName}`;
+  const contentType = inferContentType(file.type, safeExt);
 
   const arrayBuffer = await file.arrayBuffer();
   const bucket = getBucketName();
   const { error } = await supabase.storage
     .from(bucket)
-    .upload(filePath, arrayBuffer, { contentType: file.type, upsert: true });
+    .upload(filePath, arrayBuffer, { contentType, upsert: true });
 
   if (error) {
     return NextResponse.json({ error: "이미지 업로드에 실패했습니다." }, { status: 500 });

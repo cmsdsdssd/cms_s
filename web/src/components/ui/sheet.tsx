@@ -17,6 +17,11 @@ const FOCUSABLE_SELECTOR =
 export function Sheet({ open, onClose, title, children, className }: SheetProps) {
   const panelRef = useRef<HTMLDivElement | null>(null);
   const prevFocusedRef = useRef<HTMLElement | null>(null);
+  const onCloseRef = useRef(onClose);
+
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
 
   useEffect(() => {
     if (!open) return;
@@ -32,7 +37,7 @@ export function Sheet({ open, onClose, title, children, className }: SheetProps)
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         event.preventDefault();
-        onClose();
+        onCloseRef.current();
       }
     };
 
@@ -45,7 +50,7 @@ export function Sheet({ open, onClose, title, children, className }: SheetProps)
         prevFocusedRef.current.focus();
       }
     };
-  }, [onClose, open]);
+  }, [open]);
 
   if (!open) return null;
 

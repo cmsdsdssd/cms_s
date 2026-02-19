@@ -1,5 +1,5 @@
 import { cn } from "@/lib/utils";
-import { formatNumber, splitFormattedNumberParts } from "@/lib/number";
+import { formatNumber } from "@/lib/number";
 
 type NumberTextProps = {
   value?: number | null;
@@ -9,13 +9,17 @@ type NumberTextProps = {
 
 export function NumberText({ value, className, highlightClassName }: NumberTextProps) {
   const formatted = formatNumber(value);
-  const parts = splitFormattedNumberParts(formatted);
-  const hasComma = Boolean(parts.rest);
+  const [integerPartRaw, decimalPartRaw] = formatted.split(".");
+  const integerPart = integerPartRaw ?? "";
+  const lastCommaIndex = integerPart.lastIndexOf(",");
+  const head = lastCommaIndex === -1 ? "" : integerPart.slice(0, lastCommaIndex);
+  const tailInt = lastCommaIndex === -1 ? integerPart : integerPart.slice(lastCommaIndex);
+  const tailDecimal = decimalPartRaw ?? "";
   return (
     <span className={className}>
-      {hasComma ? <span className={cn("text-[color:var(--primary)]", highlightClassName)}>{parts.prefix}</span> : parts.prefix}
-      {parts.rest}
-      {parts.decimal ? <span className="text-[#fca5a5]">{parts.decimal}</span> : null}
+      {head ? <span className={cn("text-[color:var(--primary)]", highlightClassName)}>{head}</span> : null}
+      {tailInt}
+      {tailDecimal ? <><span className="decimal-point-emphasis">.</span>{tailDecimal}</> : null}
     </span>
   );
 }

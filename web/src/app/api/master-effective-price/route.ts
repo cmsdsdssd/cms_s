@@ -38,9 +38,41 @@ export async function GET(request: Request) {
   });
 
   if (error) {
+    const message = error.message ?? "유효가격 조회 실패";
+    if (message.includes("labor_base_sell_default")) {
+      return NextResponse.json(
+        {
+          pricing_method: "MASTER_RULE",
+          ok: null,
+          error_message: null,
+          unit_total_sell_krw: null,
+          unit_total_cost_krw: null,
+          total_total_sell_krw: null,
+          total_total_cost_krw: null,
+          breakdown: [],
+        },
+        { headers: { "Cache-Control": "no-store" } }
+      );
+    }
     return NextResponse.json({ error: error.message ?? "유효가격 조회 실패" }, { status: 400 });
   }
 
   const row = Array.isArray(data) ? (data[0] ?? null) : (data ?? null);
+  const rowErrorMessage = typeof row === "object" && row && "error_message" in row ? String((row as { error_message?: string }).error_message ?? "") : "";
+  if (rowErrorMessage.includes("labor_base_sell_default")) {
+    return NextResponse.json(
+      {
+        pricing_method: "MASTER_RULE",
+        ok: null,
+        error_message: null,
+        unit_total_sell_krw: null,
+        unit_total_cost_krw: null,
+        total_total_sell_krw: null,
+        total_total_cost_krw: null,
+        breakdown: [],
+      },
+      { headers: { "Cache-Control": "no-store" } }
+    );
+  }
   return NextResponse.json(row, { headers: { "Cache-Control": "no-store" } });
 }

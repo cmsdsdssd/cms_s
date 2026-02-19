@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ActionBar } from "@/components/layout/action-bar";
 import { SplitLayout } from "@/components/layout/split-layout";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
@@ -9,7 +9,6 @@ import { Button } from "@/components/ui/button";
 import { Input, Select, Textarea } from "@/components/ui/field";
 import { Badge } from "@/components/ui/badge";
 import { NumberText } from "@/components/ui/number-text";
-import { SearchSelect } from "@/components/ui/search-select";
 import { Modal } from "@/components/ui/modal";
 import { Grid2x2, List, X } from "lucide-react";
 import { Sheet } from "@/components/ui/sheet";
@@ -20,9 +19,9 @@ import { CONTRACTS, isFnConfigured } from "@/lib/contracts";
 import { getSchemaClient } from "@/lib/supabase/client";
 import { compressImage } from "@/lib/image-utils";
 import { deriveCategoryCodeFromModelName } from "@/lib/model-name";
+import { roundUpToUnit } from "@/lib/number";
 import { CatalogGalleryGrid } from "@/components/catalog/CatalogGalleryGrid";
 import { ChinaCostPanel, type ChinaExtraLaborItem } from "../../../components/catalog/ChinaCostPanel";
-import { EffectivePriceCard } from "@/components/pricing/EffectivePriceCard";
 /* eslint-disable @next/next/no-img-element */
 
 type CatalogItem = {
@@ -76,15 +75,6 @@ type CatalogDetail = {
   modifiedDate: string;
 };
 
-type BuyMarginProfileOption = {
-  profile_id: string;
-  profile_name: string;
-  margin_center_krw: number;
-  margin_sub1_krw: number;
-  margin_sub2_krw: number;
-  is_active: boolean;
-};
-
 type AbsorbLaborBucket = "BASE_LABOR" | "STONE_LABOR" | "PLATING" | "ETC";
 
 type MasterAbsorbLaborItem = {
@@ -99,6 +89,11 @@ type MasterAbsorbLaborItem = {
   is_active: boolean;
   note: string | null;
 };
+
+type AbsorbStoneRole = "CENTER" | "SUB1" | "SUB2";
+
+const ACCESSORY_BASE_REASON = "ACCESSORY_LABOR";
+const CN_BASIC_BASIS_META_LABEL = "__CN_BASIC_BASIS__";
 
 type MasterSummary = {
   master_id: string;
@@ -185,16 +180,15 @@ const materialOptions = [
 
 type VendorOption = { label: string; value: string };
 
-const laborProfileOptions = [
-  { label: "수동", value: "MANUAL" },
-  { label: "밴드", value: "BAND" },
-];
+const FORCED_LABOR_PROFILE_MODE = "BAND";
+const FORCED_LABOR_BAND_CODE = "DEFAULT";
 
 const stoneSourceOptions = [
-  { label: "자입(BUY: 우리가 구매)", value: "SELF" },
-  { label: "공장", value: "FACTORY" },
-  { label: "고객지급", value: "PROVIDED" },
+  { label: "자입", value: "SELF" },
+  { label: "공입", value: "FACTORY" },
 ] as const;
+
+type CatalogStoneSource = "SELF" | "FACTORY";
 
 const absorbBucketOptions: Array<{ label: string; value: AbsorbLaborBucket }> = [
   { label: "기본공임", value: "BASE_LABOR" },
@@ -202,6 +196,152 @@ const absorbBucketOptions: Array<{ label: string; value: AbsorbLaborBucket }> = 
   { label: "도금", value: "PLATING" },
   { label: "기타", value: "ETC" },
 ];
+
+const absorbStoneRoleOptions: Array<{ label: string; value: AbsorbStoneRole }> = [
+  { label: "중심", value: "CENTER" },
+  { label: "보조1", value: "SUB1" },
+  { label: "보조2", value: "SUB2" },
+];
+
+const ABSORB_STONE_ROLE_PREFIX = "STONE_ROLE:";
+const LEGACY_BOM_AUTO_REASON = "BOM_AUTO_TOTAL";
+const ACCESSORY_ETC_REASON_KEYWORD = "부속공임";
+const ABSORB_AUTO_EXCLUDED_REASONS = new Set([LEGACY_BOM_AUTO_REASON, ACCESSORY_BASE_REASON]);
+
+function shouldExcludeEtcAbsorbItem(item: MasterAbsorbLaborItem): boolean {
+  const normalizedReason = String(item.reason ?? "").trim().toUpperCase();
+  if (ABSORB_AUTO_EXCLUDED_REASONS.has(normalizedReason)) return true;
+  if (item.bucket !== "ETC") return false;
+  const rawReason = String(item.reason ?? "").trim();
+  return rawReason.includes(ACCESSORY_ETC_REASON_KEYWORD);
+}
+
+function parseAbsorbStoneRole(note: string | null | undefined): AbsorbStoneRole | null {
+  const text = String(note ?? "").trim().toUpperCase();
+  if (!text.startsWith(ABSORB_STONE_ROLE_PREFIX)) return null;
+  const value = text.slice(ABSORB_STONE_ROLE_PREFIX.length);
+  if (value === "CENTER" || value === "SUB1" || value === "SUB2") return value;
+  return null;
+}
+
+function buildAbsorbNote(bucket: AbsorbLaborBucket, stoneRole: AbsorbStoneRole | null): string | null {
+  if (bucket !== "STONE_LABOR") return null;
+  const role = stoneRole ?? "CENTER";
+  return `${ABSORB_STONE_ROLE_PREFIX}${role}`;
+}
+
+function getAbsorbBucketLabel(bucket: AbsorbLaborBucket): string {
+  return absorbBucketOptions.find((option) => option.value === bucket)?.label ?? bucket;
+}
+
+function getAbsorbBucketDisplayLabel(item: MasterAbsorbLaborItem): string {
+  const bucketLabel = getAbsorbBucketLabel(item.bucket);
+  if (item.bucket !== "STONE_LABOR") return bucketLabel;
+  const roleLabel = getAbsorbStoneRoleLabel(item.note);
+  return roleLabel !== "-" ? `${bucketLabel}(${roleLabel})` : bucketLabel;
+}
+
+function getAbsorbBucketToneClass(bucket: AbsorbLaborBucket): string {
+  if (bucket === "BASE_LABOR") return "bg-lime-50";
+  if (bucket === "STONE_LABOR") return "bg-green-50";
+  return "bg-[var(--subtle-bg)]";
+}
+
+function getAbsorbStoneRoleLabel(note: string | null | undefined): string {
+  const role = parseAbsorbStoneRole(note);
+  if (!role) return "-";
+  return absorbStoneRoleOptions.find((option) => option.value === role)?.label ?? role;
+}
+
+type AbsorbImpactSummary = {
+  baseLaborUnit: number;
+  stoneCenterUnit: number;
+  stoneSub1Unit: number;
+  stoneSub2Unit: number;
+  platingUnit: number;
+  etcUnit: number;
+  baseLabor: number;
+  stoneCenter: number;
+  stoneSub1: number;
+  stoneSub2: number;
+  plating: number;
+  etc: number;
+  total: number;
+};
+
+function createEmptyAbsorbSummary(): AbsorbImpactSummary {
+  return {
+    baseLaborUnit: 0,
+    stoneCenterUnit: 0,
+    stoneSub1Unit: 0,
+    stoneSub2Unit: 0,
+    platingUnit: 0,
+    etcUnit: 0,
+    baseLabor: 0,
+    stoneCenter: 0,
+    stoneSub1: 0,
+    stoneSub2: 0,
+    plating: 0,
+    etc: 0,
+    total: 0,
+  };
+}
+
+function computeAbsorbImpactSummary(
+  items: MasterAbsorbLaborItem[],
+  centerQty: number,
+  sub1Qty: number,
+  sub2Qty: number
+): AbsorbImpactSummary {
+  const centerQtySafe = Math.max(Number(centerQty || 0), 0);
+  const sub1QtySafe = Math.max(Number(sub1Qty || 0), 0);
+  const sub2QtySafe = Math.max(Number(sub2Qty || 0), 0);
+
+  const summary = createEmptyAbsorbSummary();
+  items.forEach((item) => {
+    if (!item.is_active) return;
+    const baseAmount = Number(item.amount_krw ?? 0);
+    if (!Number.isFinite(baseAmount) || baseAmount === 0) return;
+
+    let applied = baseAmount;
+    const role = parseAbsorbStoneRole(item.note);
+    if (item.bucket === "STONE_LABOR") {
+      if (role === "SUB1") applied = baseAmount * Math.max(sub1QtySafe, 1);
+      else if (role === "SUB2") applied = baseAmount * Math.max(sub2QtySafe, 1);
+      else applied = baseAmount * Math.max(centerQtySafe, 1);
+    }
+
+    if (item.bucket === "BASE_LABOR") {
+      summary.baseLaborUnit += baseAmount;
+      summary.baseLabor += applied;
+    }
+    else if (item.bucket === "STONE_LABOR") {
+      if (role === "SUB1") {
+        summary.stoneSub1Unit += baseAmount;
+        summary.stoneSub1 += applied;
+      }
+      else if (role === "SUB2") {
+        summary.stoneSub2Unit += baseAmount;
+        summary.stoneSub2 += applied;
+      }
+      else {
+        summary.stoneCenterUnit += baseAmount;
+        summary.stoneCenter += applied;
+      }
+    }
+    else if (item.bucket === "PLATING") {
+      summary.platingUnit += baseAmount;
+      summary.plating += applied;
+    }
+    else {
+      summary.etcUnit += baseAmount;
+      summary.etc += applied;
+    }
+    summary.total += applied;
+  });
+
+  return summary;
+}
 
 type FieldProps = {
   label: string;
@@ -213,6 +353,39 @@ function Field({ label, children }: FieldProps) {
     <div className="space-y-2">
       <p className="text-xs font-semibold text-[var(--muted)]">{label}</p>
       {children}
+    </div>
+  );
+}
+
+function ReadonlyNumberCell({
+  value,
+  suffix = "원",
+  extraText,
+  valueClassName,
+  extraTextClassName,
+  className,
+}: {
+  value: number;
+  suffix?: string;
+  extraText?: string;
+  valueClassName?: string;
+  extraTextClassName?: string;
+  className?: string;
+}) {
+  const displayValue = roundUpToUnit(value, 100);
+  return (
+    <div
+      className={cn(
+        "col-span-3 flex h-10 items-center justify-center rounded-[var(--radius)] border border-[var(--panel-border)] bg-[var(--panel)] px-3 text-center text-sm",
+        className
+      )}
+    >
+      <NumberText
+        value={displayValue}
+        className={cn("tabular-nums text-sm font-semibold text-[var(--foreground)]", valueClassName)}
+      />
+      {suffix ? <span className="ml-1 text-xs text-[var(--muted)]">{suffix}</span> : null}
+      {extraText ? <span className={cn("ml-1 text-sm text-[var(--muted)]", extraTextClassName)}>{extraText}</span> : null}
     </div>
   );
 }
@@ -245,8 +418,14 @@ function materialCodeFromLabel(label: string) {
   if (label.includes("18K")) return "18";
   if (label.includes("24K")) return "24";
   if (label.includes("925")) return "925";
+  if (label.includes("999")) return "999";
   if (label.includes("00")) return "00";
   return "";
+}
+
+function supportsChinaCostPanel(materialCode: string) {
+  void materialCode;
+  return true;
 }
 
 export default function CatalogPage() {
@@ -273,8 +452,8 @@ export default function CatalogPage() {
   const [deductionWeight, setDeductionWeight] = useState("");
   const [platingSell, setPlatingSell] = useState(0);
   const [platingCost, setPlatingCost] = useState(0);
-  const [laborProfileMode, setLaborProfileMode] = useState("MANUAL");
-  const [laborBandCode, setLaborBandCode] = useState("");
+  const [laborProfileMode, setLaborProfileMode] = useState(FORCED_LABOR_PROFILE_MODE);
+  const [laborBandCode, setLaborBandCode] = useState(FORCED_LABOR_BAND_CODE);
   const [settingAddonMarginKrwPerPiece, setSettingAddonMarginKrwPerPiece] = useState(0);
   const [stoneAddonMarginKrwPerPiece, setStoneAddonMarginKrwPerPiece] = useState(0);
   const [note, setNote] = useState("");
@@ -294,10 +473,9 @@ export default function CatalogPage() {
   const [centerStoneName, setCenterStoneName] = useState("");
   const [sub1StoneName, setSub1StoneName] = useState("");
   const [sub2StoneName, setSub2StoneName] = useState("");
-  const [centerStoneSourceDefault, setCenterStoneSourceDefault] = useState<"SELF" | "FACTORY" | "PROVIDED">("FACTORY");
-  const [sub1StoneSourceDefault, setSub1StoneSourceDefault] = useState<"SELF" | "FACTORY" | "PROVIDED">("FACTORY");
-  const [sub2StoneSourceDefault, setSub2StoneSourceDefault] = useState<"SELF" | "FACTORY" | "PROVIDED">("FACTORY");
-  const [buyMarginProfileId, setBuyMarginProfileId] = useState("");
+  const [centerStoneSourceDefault, setCenterStoneSourceDefault] = useState<CatalogStoneSource>("FACTORY");
+  const [sub1StoneSourceDefault, setSub1StoneSourceDefault] = useState<CatalogStoneSource>("FACTORY");
+  const [sub2StoneSourceDefault, setSub2StoneSourceDefault] = useState<CatalogStoneSource>("FACTORY");
   const [laborBaseSell, setLaborBaseSell] = useState(0);
   const [laborCenterSell, setLaborCenterSell] = useState(0);
   const [laborSub1Sell, setLaborSub1Sell] = useState(0);
@@ -306,60 +484,55 @@ export default function CatalogPage() {
   const [laborCenterCost, setLaborCenterCost] = useState(0);
   const [laborSub1Cost, setLaborSub1Cost] = useState(0);
   const [laborSub2Cost, setLaborSub2Cost] = useState(0);
-  const [laborBaseCostCny, setLaborBaseCostCny] = useState("");
-  const [laborCenterCostCny, setLaborCenterCostCny] = useState("");
-  const [laborSub1CostCny, setLaborSub1CostCny] = useState("");
-  const [laborSub2CostCny, setLaborSub2CostCny] = useState("");
-  const [platingCostCny, setPlatingCostCny] = useState("");
+  const [centerSelfMargin, setCenterSelfMargin] = useState(0);
+  const [sub1SelfMargin, setSub1SelfMargin] = useState(0);
+  const [sub2SelfMargin, setSub2SelfMargin] = useState(0);
+  const [showAdvancedPricing, setShowAdvancedPricing] = useState(false);
   const [previewImage, setPreviewImage] = useState<string | null>(null);
   const [absorbLaborItems, setAbsorbLaborItems] = useState<MasterAbsorbLaborItem[]>([]);
   const [absorbBucket, setAbsorbBucket] = useState<AbsorbLaborBucket>("BASE_LABOR");
+  const [absorbStoneRole, setAbsorbStoneRole] = useState<AbsorbStoneRole>("CENTER");
   const [absorbReason, setAbsorbReason] = useState("");
   const [absorbAmount, setAbsorbAmount] = useState("0");
   const [absorbIsPerPiece, setAbsorbIsPerPiece] = useState(true);
   const [absorbVendorId, setAbsorbVendorId] = useState("");
-  const [absorbPriority, setAbsorbPriority] = useState("100");
   const [absorbIsActive, setAbsorbIsActive] = useState(true);
-  const [absorbNote, setAbsorbNote] = useState("");
   const [editingAbsorbItemId, setEditingAbsorbItemId] = useState<string | null>(null);
   const [goldPrice, setGoldPrice] = useState(0);
   const [silverModifiedPrice, setSilverModifiedPrice] = useState(0);
   const [cnyAdRate, setCnyAdRate] = useState(0);
   const [csOriginalKrwPerG, setCsOriginalKrwPerG] = useState(0);
   const [cnLaborBasicCnyPerG, setCnLaborBasicCnyPerG] = useState("");
+  const [cnLaborBasicBasis, setCnLaborBasicBasis] = useState<"PER_G" | "PER_PIECE">("PER_G");
   const [cnLaborExtraItems, setCnLaborExtraItems] = useState<ChinaExtraLaborItem[]>([]);
   const [isUnitPricing, setIsUnitPricing] = useState(false);
 
   const [showBomPanel, setShowBomPanel] = useState(false);
+  const [showAbsorbPanel, setShowAbsorbPanel] = useState(false);
   const [recipeVariantKey, setRecipeVariantKey] = useState("");
   const [recipeNote, setRecipeNote] = useState("");
   const [recipeSellAdjustRate, setRecipeSellAdjustRate] = useState("1");
   const [recipeSellAdjustKrw, setRecipeSellAdjustKrw] = useState("0");
   const [recipeRoundUnitKrw, setRecipeRoundUnitKrw] = useState("1000");
   const [selectedRecipeId, setSelectedRecipeId] = useState<string | null>(null);
-  const [showFlattenDebug, setShowFlattenDebug] = useState(false);
   const [componentType, setComponentType] = useState<"PART" | "MASTER">("MASTER");
   const [showAdvancedComponents, setShowAdvancedComponents] = useState(false);
   const [componentQuery, setComponentQuery] = useState("");
+  const [debouncedComponentQuery, setDebouncedComponentQuery] = useState("");
   const [selectedComponentId, setSelectedComponentId] = useState<string | null>(null);
+  const [showComponentResults, setShowComponentResults] = useState(false);
   const [qtyPerUnit, setQtyPerUnit] = useState("1");
+  const [lastAddedLineHint, setLastAddedLineHint] = useState<{ componentMasterId: string; qty: number } | null>(null);
+  const [bomPreviewQtyInput, setBomPreviewQtyInput] = useState("1");
   const [unit, setUnit] = useState<"EA" | "G" | "M">("EA");
   const [lineNote, setLineNote] = useState("");
   const [voidConfirmId, setVoidConfirmId] = useState<string | null>(null);
   const bomToastRef = useRef(false);
+  const bomAutoSyncRef = useRef<string>("");
 
   const schema = getSchemaClient();
+  const queryClient = useQueryClient();
   const actorId = (process.env.NEXT_PUBLIC_CMS_ACTOR_ID || "").trim();
-
-  const buyProfilesQuery = useQuery({
-    queryKey: ["catalog-buy-margin-profiles"],
-    queryFn: async (): Promise<BuyMarginProfileOption[]> => {
-      const response = await fetch("/api/buy-margin-profiles", { cache: "no-store" });
-      const json = (await response.json()) as { data?: BuyMarginProfileOption[]; error?: string };
-      if (!response.ok) throw new Error(json.error ?? "BUY 프로파일 조회 실패");
-      return (json.data ?? []).filter((row) => row.is_active);
-    },
-  });
 
   const loadAbsorbLaborItems = useCallback(async (targetMasterId: string) => {
     if (!targetMasterId) {
@@ -383,7 +556,7 @@ export default function CatalogPage() {
         setGoldPrice(result.data.gold);
         setSilverModifiedPrice(result.data.silver);
         setCnyAdRate(Number(result.data.cnyAd ?? 0));
-        setCsOriginalKrwPerG(Number(result.data.csOriginal ?? 0));
+        setCsOriginalKrwPerG(Number(result.data.csTick ?? result.data.cs ?? 0));
       }
     } catch (error) {
       console.error("Failed to fetch market ticks:", error);
@@ -438,26 +611,55 @@ export default function CatalogPage() {
     laborBaseSell + laborCenterSell * centerQty + laborSub1Sell * sub1Qty + laborSub2Sell * sub2Qty;
   const totalLaborCost =
     laborBaseCost + laborCenterCost * centerQty + laborSub1Cost * sub1Qty + laborSub2Cost * sub2Qty;
-  const hasSelfStoneSource =
-    centerStoneSourceDefault === "SELF" ||
-    sub1StoneSourceDefault === "SELF" ||
-    sub2StoneSourceDefault === "SELF";
+  const manualAbsorbLaborItems = useMemo(
+    () =>
+      absorbLaborItems.filter(
+        (item) => !shouldExcludeEtcAbsorbItem(item)
+      ),
+    [absorbLaborItems]
+  );
+  const visibleAbsorbLaborItems = useMemo(
+    () => absorbLaborItems.filter((item) => !shouldExcludeEtcAbsorbItem(item)),
+    [absorbLaborItems]
+  );
 
-  useEffect(() => {
-    if (!hasSelfStoneSource && buyMarginProfileId) {
-      setBuyMarginProfileId("");
-    }
-  }, [buyMarginProfileId, hasSelfStoneSource]);
-
-
+  const absorbImpactSummary = useMemo(
+    () => computeAbsorbImpactSummary(manualAbsorbLaborItems, centerQty, sub1Qty, sub2Qty),
+    [manualAbsorbLaborItems, centerQty, sub1Qty, sub2Qty]
+  );
+  const laborBaseSellWithAbsorb = laborBaseSell + absorbImpactSummary.baseLaborUnit;
+  const laborCenterSellWithAbsorb = laborCenterSell + absorbImpactSummary.stoneCenterUnit;
+  const laborSub1SellWithAbsorb = laborSub1Sell + absorbImpactSummary.stoneSub1Unit;
+  const laborSub2SellWithAbsorb = laborSub2Sell + absorbImpactSummary.stoneSub2Unit;
+  const platingSellWithAbsorb = platingSell + absorbImpactSummary.platingUnit;
+  const totalLaborSellForEdit =
+    laborBaseSellWithAbsorb +
+    laborCenterSellWithAbsorb * centerQty +
+    laborSub1SellWithAbsorb * sub1Qty +
+    laborSub2SellWithAbsorb * sub2Qty +
+    platingSellWithAbsorb +
+    absorbImpactSummary.etc;
+  const totalLaborCostForEdit = totalLaborCost + platingCost;
+  const isCenterQtyZero = Number(centerQty || 0) === 0;
+  const isSub1QtyZero = Number(sub1Qty || 0) === 0;
+  const isSub2QtyZero = Number(sub2Qty || 0) === 0;
   // 1. 필터 상태 추가 (검색어, 재질, 카테고리)
   const [filterQuery, setFilterQuery] = useState("");
   const [filterMaterial, setFilterMaterial] = useState("");
   const [filterCategory, setFilterCategory] = useState("");
+  const [includeAccessory, setIncludeAccessory] = useState(false);
 
   // 2. 필터링 및 정렬 로직 구현 (기존 sortedCatalogItems 교체)
   const sortedCatalogItems = useMemo(() => {
     let filtered = [...catalogItemsState];
+
+    // (0) 부속(ACCESSORY) 기본 제외
+    if (!includeAccessory) {
+      filtered = filtered.filter((item) => {
+        const row = masterRowsById[item.id];
+        return String(row?.category_code ?? "") !== "ACCESSORY";
+      });
+    }
 
     // (1) 재질 필터
     if (filterMaterial) {
@@ -496,7 +698,7 @@ export default function CatalogPage() {
     });
 
     return filtered;
-  }, [catalogItemsState, sortBy, sortOrder, masterRowsById, filterMaterial, filterCategory, filterQuery]);
+  }, [catalogItemsState, sortBy, sortOrder, masterRowsById, filterMaterial, filterCategory, filterQuery, includeAccessory]);
   const activePageSize = view === "gallery" ? 24 : 20;
   const totalPages = Math.max(1, Math.ceil(sortedCatalogItems.length / activePageSize));
   const totalCount = sortedCatalogItems.length;
@@ -551,6 +753,25 @@ export default function CatalogPage() {
 
   function roundUpToThousand(value: number) {
     return Math.ceil(value / 1000) * 1000;
+  }
+
+  function roundUpDisplayHundred(value: number) {
+    if (!Number.isFinite(value)) return 0;
+    if (value <= 0) return Math.round(value);
+    return roundUpToUnit(value, 100);
+  }
+
+  function formatDisplayKrw(value: number) {
+    return new Intl.NumberFormat("ko-KR").format(Math.round(value));
+  }
+
+  function formatLaborDisplayKrw(value: number) {
+    return new Intl.NumberFormat("ko-KR").format(roundUpDisplayHundred(value));
+  }
+
+  function formatSharePercent(value: number, total: number) {
+    if (!Number.isFinite(value) || !Number.isFinite(total) || total <= 0) return "";
+    return `${((value / total) * 100).toFixed(1)}%`;
   }
 
 
@@ -756,9 +977,19 @@ export default function CatalogPage() {
     };
   }, [masterRowsById, selectedItem]);
 
+  const selectedMaterialLabel = useMemo(() => {
+    const code = String(selectedDetail?.materialCode ?? "");
+    if (!code) return "-";
+    return materialOptions.find((material) => material.value === code)?.label ?? code;
+  }, [selectedDetail?.materialCode]);
+  const selectedCategoryLabel = useMemo(() => {
+    const code = String(selectedDetail?.categoryCode ?? "");
+    if (!code) return "-";
+    return categoryOptions.find((category) => category.value === code)?.label ?? code;
+  }, [selectedDetail?.categoryCode]);
+
   useEffect(() => {
     setShowBomPanel(false);
-    setShowFlattenDebug(false);
     setSelectedRecipeId(null);
     setRecipeVariantKey("");
     setRecipeNote("");
@@ -767,9 +998,28 @@ export default function CatalogPage() {
     setRecipeRoundUnitKrw("1000");
     setComponentQuery("");
     setSelectedComponentId(null);
+    setShowComponentResults(false);
     setComponentType("MASTER");
     setShowAdvancedComponents(false);
+    setBomPreviewQtyInput("1");
   }, [selectedMasterId]);
+
+  useEffect(() => {
+    if (!selectedItemId) {
+      setAbsorbLaborItems([]);
+      return;
+    }
+    void loadAbsorbLaborItems(selectedItemId).catch((error) => {
+      const message = error instanceof Error ? error.message : "흡수공임 조회 실패";
+      toast.error("처리 실패", { description: message });
+    });
+  }, [loadAbsorbLaborItems, selectedItemId]);
+
+  const bomPreviewQty = useMemo(() => {
+    const parsed = Number(bomPreviewQtyInput);
+    if (!Number.isFinite(parsed) || parsed <= 0) return 1;
+    return Math.max(1, Math.floor(parsed));
+  }, [bomPreviewQtyInput]);
 
   useEffect(() => {
     if (masterKind !== "BUNDLE") return;
@@ -778,17 +1028,18 @@ export default function CatalogPage() {
 
   const recipesQuery = useQuery({
     queryKey: ["bom", "recipes", selectedMasterId],
-    enabled: Boolean(schema) && Boolean(selectedMasterId) && showBomPanel,
+    enabled: Boolean(selectedMasterId) && showBomPanel,
+    retry: false,
+    refetchOnWindowFocus: false,
     queryFn: async () => {
-      if (!schema || !selectedMasterId) return [];
-      const view = CONTRACTS.views.bomRecipeWorklist;
-      const { data, error } = await schema
-        .from(view)
-        .select("*")
-        .eq("product_master_id", selectedMasterId)
-        .order("variant_key", { ascending: true });
-      if (error) throw error;
-      return (data ?? []) as BomRecipeRow[];
+      if (!selectedMasterId) return [];
+      const response = await fetch(
+        `/api/bom-recipes?product_master_id=${encodeURIComponent(selectedMasterId)}`,
+        { cache: "no-store" }
+      );
+      const json = (await response.json()) as { data?: BomRecipeRow[]; error?: string };
+      if (!response.ok) throw new Error(json.error ?? "BOM 레시피 조회 실패");
+      return (json.data ?? []) as BomRecipeRow[];
     },
   });
 
@@ -804,6 +1055,19 @@ export default function CatalogPage() {
     if (!selectedRecipeId) return null;
     return (recipesQuery.data ?? []).find((recipe) => recipe.bom_id === selectedRecipeId) ?? null;
   }, [recipesQuery.data, selectedRecipeId]);
+
+  useEffect(() => {
+    if (!showBomPanel) return;
+    const rows = recipesQuery.data ?? [];
+    if (rows.length === 0) {
+      if (selectedRecipeId !== null) setSelectedRecipeId(null);
+      return;
+    }
+    const defaultRecipe = rows.find((row) => !row.variant_key || !row.variant_key.trim()) ?? rows[0];
+    if (defaultRecipe && selectedRecipeId !== defaultRecipe.bom_id) {
+      setSelectedRecipeId(defaultRecipe.bom_id);
+    }
+  }, [recipesQuery.data, selectedRecipeId, showBomPanel]);
 
   useEffect(() => {
     if (!selectedRecipe) return;
@@ -824,24 +1088,23 @@ export default function CatalogPage() {
 
   const linesQuery = useQuery({
     queryKey: ["bom", "lines", selectedRecipeId],
-    enabled: Boolean(schema) && Boolean(selectedRecipeId) && showBomPanel,
+    enabled: Boolean(selectedRecipeId) && showBomPanel,
+    retry: false,
+    refetchOnWindowFocus: false,
     queryFn: async () => {
-      if (!schema || !selectedRecipeId) return [];
-      const view = CONTRACTS.views.bomRecipeLinesEnriched;
-      const { data, error } = await schema
-        .from(view)
-        .select("*")
-        .eq("bom_id", selectedRecipeId)
-        .eq("is_void", false)
-        .order("line_no", { ascending: true });
-      if (error) throw error;
-      return (data ?? []) as BomLineRow[];
+      if (!selectedRecipeId) return [];
+      const response = await fetch(`/api/bom-lines?bom_id=${encodeURIComponent(selectedRecipeId)}`, {
+        cache: "no-store",
+      });
+      const json = (await response.json()) as { data?: BomLineRow[]; error?: string };
+      if (!response.ok) throw new Error(json.error ?? "BOM 라인 조회 실패");
+      return (json.data ?? []) as BomLineRow[];
     },
   });
 
   const flattenQuery = useQuery({
     queryKey: ["bom", "flatten", selectedMasterId, previewVariantKey],
-    enabled: Boolean(selectedMasterId) && showFlattenDebug,
+    enabled: Boolean(selectedMasterId),
     queryFn: async () => {
       if (!selectedMasterId) return [];
       const params = new URLSearchParams();
@@ -855,45 +1118,91 @@ export default function CatalogPage() {
   });
 
   const componentSearchQuery = useQuery({
-    queryKey: ["bom", "componentSearch", componentType, componentQuery],
-    enabled: showBomPanel && componentQuery.trim().length > 0,
+    queryKey: ["bom", "componentSearch", debouncedComponentQuery],
+    enabled: showBomPanel && debouncedComponentQuery.trim().length > 0,
+    retry: false,
+    refetchOnWindowFocus: false,
+    staleTime: 30_000,
     queryFn: async () => {
-      if (componentType === "PART") {
-        const res = await fetch(`/api/part-items?q=${encodeURIComponent(componentQuery.trim())}`);
-        const json = (await res.json()) as { data?: PartSummary[]; error?: string };
-        if (!res.ok) throw new Error(json.error ?? "부속 검색 실패");
-        return json.data ?? [];
-      }
-      const res = await fetch(`/api/master-items?model=${encodeURIComponent(componentQuery.trim())}`);
+      const res = await fetch(`/api/master-items?model=${encodeURIComponent(debouncedComponentQuery.trim())}`);
       const json = (await res.json()) as { data?: MasterSummary[]; error?: string };
       if (!res.ok) throw new Error(json.error ?? "마스터 검색 실패");
       return json.data ?? [];
     },
   });
 
-  const componentOptions = useMemo(() => {
-    const data = componentSearchQuery.data ?? [];
-    if (componentType === "PART") {
-      return (data as PartSummary[]).map((p) => ({
-        label: `${p.part_name}${p.spec_text ? ` (${p.spec_text})` : ""}`,
-        value: p.part_id,
-      }));
+  useEffect(() => {
+    if (componentQuery.trim().length > 0) {
+      setShowComponentResults(true);
     }
-    return (data as MasterSummary[]).map((m) => ({ label: m.model_name, value: m.master_id }));
-  }, [componentSearchQuery.data, componentType]);
+  }, [componentQuery]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setDebouncedComponentQuery(componentQuery);
+    }, 180);
+    return () => window.clearTimeout(timer);
+  }, [componentQuery]);
+
+  const componentSearchResults = useMemo(() => {
+    const query = componentQuery.trim().toLowerCase();
+    if (!query) return [] as MasterSummary[];
+
+    const apiRows = (componentSearchQuery.data ?? []) as MasterSummary[];
+    const localRows = Object.values(masterRowsById)
+      .map((row) => ({
+        master_id: String(row.master_id ?? ""),
+        model_name: String(row.model_name ?? ""),
+        category_code: row.category_code ? String(row.category_code) : null,
+        material_code_default: row.material_code_default ? String(row.material_code_default) : null,
+        image_url: row.image_url ? String(row.image_url) : null,
+      }))
+      .filter((row) => row.master_id && row.model_name);
+
+    const merged = [...apiRows, ...localRows];
+    const dedup = new Map<string, MasterSummary>();
+    merged.forEach((row) => {
+      const key = String(row.master_id ?? "");
+      if (!key) return;
+      if (!dedup.has(key)) dedup.set(key, row);
+    });
+
+    return [...dedup.values()]
+      .filter((row) => {
+        const model = String(row.model_name ?? "").toLowerCase();
+        const id = String(row.master_id ?? "").toLowerCase();
+        const category = String(row.category_code ?? "").toLowerCase();
+        return model.includes(query) || id.includes(query) || category.includes(query);
+      })
+      .sort((a, b) => {
+        const am = String(a.model_name ?? "").toLowerCase();
+        const bm = String(b.model_name ?? "").toLowerCase();
+        const aStarts = am.startsWith(query) ? 0 : 1;
+        const bStarts = bm.startsWith(query) ? 0 : 1;
+        if (aStarts !== bStarts) return aStarts - bStarts;
+        return am.localeCompare(bm, "ko");
+      })
+      .slice(0, 200);
+  }, [componentQuery, componentSearchQuery.data, masterRowsById]);
 
   const selectedComponent = useMemo(() => {
     if (!selectedComponentId) return null;
-    const data = componentSearchQuery.data ?? [];
-    if (componentType === "PART") {
-      return (data as PartSummary[]).find((p) => p.part_id === selectedComponentId) ?? null;
-    }
-    return (data as MasterSummary[]).find((m) => m.master_id === selectedComponentId) ?? null;
-  }, [componentSearchQuery.data, selectedComponentId, componentType]);
+    const matched = componentSearchResults.find((m) => m.master_id === selectedComponentId);
+    if (matched) return matched;
+    const row = masterRowsById[selectedComponentId] as Record<string, unknown> | undefined;
+    if (!row) return null;
+    return {
+      master_id: String(row.master_id ?? selectedComponentId),
+      model_name: String(row.model_name ?? ""),
+      category_code: row.category_code ? String(row.category_code) : null,
+      material_code_default: row.material_code_default ? String(row.material_code_default) : null,
+      image_url: row.image_url ? String(row.image_url) : null,
+    } as MasterSummary;
+  }, [componentSearchResults, masterRowsById, selectedComponentId]);
 
   const upsertRecipeMutation = useRpcMutation<string>({
     fn: CONTRACTS.functions.bomRecipeUpsert,
-    successMessage: "레시피 저장 완료",
+      successMessage: "구성 저장 완료",
     onSuccess: (result) => {
       if (typeof result === "string") setSelectedRecipeId(result);
       recipesQuery.refetch();
@@ -915,8 +1224,11 @@ export default function CatalogPage() {
       setSelectedComponentId(null);
       setQtyPerUnit("1");
       setLineNote("");
-      linesQuery.refetch();
-      recipesQuery.refetch();
+      setComponentQuery("");
+      setDebouncedComponentQuery("");
+      setShowComponentResults(false);
+      void queryClient.invalidateQueries({ queryKey: ["bom", "lines"] });
+      void queryClient.invalidateQueries({ queryKey: ["bom", "recipes", selectedMasterId] });
     },
   });
 
@@ -951,12 +1263,13 @@ export default function CatalogPage() {
     const safeD = Number.isFinite(d) ? d : 0;
     return Math.max(safeW - safeD, 0);
   }, [weightDefault, deductionWeight]);
+  const showChinaCostPanel = useMemo(() => supportsChinaCostPanel(materialCode), [materialCode]);
 
   const addCnExtraItem = useCallback(() => {
-    setCnLaborExtraItems((prev) => [...prev, { id: crypto.randomUUID(), label: "", cnyPerG: "" }]);
+    setCnLaborExtraItems((prev) => [...prev, { id: crypto.randomUUID(), label: "", basis: "PER_G", cnyAmount: "" }]);
   }, []);
 
-  const changeCnExtraItem = useCallback((id: string, patch: Partial<Pick<ChinaExtraLaborItem, "label" | "cnyPerG">>) => {
+  const changeCnExtraItem = useCallback((id: string, patch: Partial<Pick<ChinaExtraLaborItem, "label" | "basis" | "cnyAmount">>) => {
     setCnLaborExtraItems((prev) => prev.map((it) => (it.id === id ? { ...it, ...patch } : it)));
   }, []);
 
@@ -965,34 +1278,18 @@ export default function CatalogPage() {
   }, []);
 
 
-  const toKrwFromCny = (cny: number) => {
-    if (cnyAdRate <= 0) return 0;
-    return Math.round(cny * cnyAdRate);
-  };
-
-  const toCnyFromKrw = (krw: number) => {
-    if (cnyAdRate <= 0) return "";
-    return (krw / cnyAdRate).toFixed(2);
-  };
-
-  const updateKrwFromCnyInput = (
-    raw: string,
-    setCny: (next: string) => void,
-    setKrw: (next: number) => void
-  ) => {
-    setCny(raw);
-    const cny = Number(raw);
-    if (!Number.isFinite(cny) || cny < 0) {
-      setKrw(0);
-      return;
-    }
-    setKrw(toKrwFromCny(cny));
-  };
-
   const notifyWriteDisabled = () => {
     if (bomToastRef.current) return;
     toast.error("쓰기 비활성: NEXT_PUBLIC_CMS_ACTOR_ID 또는 RPC 설정을 확인하세요.");
     bomToastRef.current = true;
+  };
+
+  const isDefaultBomUniqueConflict = (error: unknown) => {
+    if (!error || typeof error !== "object") return false;
+    const payload = error as Record<string, unknown>;
+    const code = String(payload.code ?? "");
+    const message = String(payload.message ?? "");
+    return code === "23505" && message.includes("ux_cms_bom_recipe_default_active");
   };
 
   useEffect(() => {
@@ -1036,25 +1333,111 @@ export default function CatalogPage() {
   };
 
   const handleAddLine = async () => {
-    if (!selectedRecipeId) return toast.error("레시피를 먼저 선택해 주세요.");
     if (!selectedComponentId) return toast.error("구성품을 먼저 선택해 주세요.");
     if (!canWrite) return notifyWriteDisabled();
 
-    const qty = Number(qtyPerUnit);
-    if (Number.isNaN(qty) || qty <= 0) return toast.error("수량(1개당 사용량)은 0보다 커야 합니다.");
+    const getDefaultBomId = (rows: BomRecipeRow[]) => {
+      const defaultRow = rows.find((row) => !row.variant_key || !row.variant_key.trim()) ?? rows[0] ?? null;
+      return defaultRow?.bom_id ?? null;
+    };
 
-    await addLineMutation.mutateAsync({
-      p_bom_id: selectedRecipeId,
-      p_component_ref_type: componentType,
-      p_component_master_id: componentType === "MASTER" ? selectedComponentId : null,
-      p_component_part_id: componentType === "PART" ? selectedComponentId : null,
-      p_qty_per_unit: qty,
-      p_unit: unit,
-      p_note: lineNote.trim() ? lineNote.trim() : null,
-      p_meta: {},
-      p_actor_person_id: actorId,
-      p_note2: "add line from web",
-    });
+    const loadDefaultBomIdWithRetry = async (): Promise<string | null> => {
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        const refreshed = await recipesQuery.refetch();
+        const bomId = getDefaultBomId((refreshed.data ?? []) as BomRecipeRow[]);
+        if (bomId) return bomId;
+        await new Promise((resolve) => window.setTimeout(resolve, 120 * (attempt + 1)));
+      }
+      return null;
+    };
+
+    try {
+      let effectiveBomId: string | null = selectedRecipeId ?? getDefaultBomId(recipesQuery.data ?? []);
+      if (!effectiveBomId) {
+        effectiveBomId = await loadDefaultBomIdWithRetry();
+      }
+
+      if (!effectiveBomId && selectedMasterId) {
+        let upsertError: unknown = null;
+        try {
+          const created = await upsertRecipeMutation.mutateAsync({
+            p_product_master_id: selectedMasterId,
+            p_variant_key: null,
+            p_is_active: true,
+            p_note: null,
+            p_meta: {
+              sell_adjust_rate: 1,
+              sell_adjust_krw: 0,
+              round_unit_krw: 1000,
+            },
+            p_bom_id: null,
+            p_actor_person_id: actorId,
+            p_note2: "auto default set from web",
+          });
+          if (typeof created === "string" && created.trim()) {
+            effectiveBomId = created;
+            setSelectedRecipeId(created);
+          }
+        } catch (error) {
+          upsertError = error;
+        }
+
+        if (!effectiveBomId) {
+          effectiveBomId = await loadDefaultBomIdWithRetry();
+          if (effectiveBomId) {
+            setSelectedRecipeId(effectiveBomId);
+          } else if (upsertError && !isDefaultBomUniqueConflict(upsertError)) {
+            throw upsertError;
+          }
+        }
+      }
+
+      if (!effectiveBomId) {
+        return toast.error("기본 구성 정보를 찾지 못했습니다. 잠시 후 다시 시도해 주세요.");
+      }
+      if (selectedRecipeId !== effectiveBomId) {
+        setSelectedRecipeId(effectiveBomId);
+      }
+
+      const qty = Number(qtyPerUnit);
+      if (Number.isNaN(qty) || qty <= 0) return toast.error("수량(1개당 사용량)은 0보다 커야 합니다.");
+
+      const addedComponentId = selectedComponentId;
+      const addedQty = qty;
+
+      await addLineMutation.mutateAsync({
+        p_bom_id: effectiveBomId,
+        p_component_ref_type: "MASTER",
+        p_component_master_id: selectedComponentId,
+        p_component_part_id: null,
+        p_qty_per_unit: qty,
+        p_unit: "EA",
+        p_note: null,
+        p_meta: {},
+        p_actor_person_id: actorId,
+        p_note2: "add line from web",
+      });
+
+      await queryClient.invalidateQueries({ queryKey: ["bom", "lines", effectiveBomId] });
+      await queryClient.invalidateQueries({ queryKey: ["bom", "recipes", selectedMasterId] });
+
+      if (selectedMasterId) {
+        await syncBomAutoAbsorbLabor(selectedMasterId, bomTotals.laborTotal);
+      }
+
+      if (addedComponentId) {
+        setLastAddedLineHint({ componentMasterId: addedComponentId, qty: addedQty });
+      }
+    } catch (error) {
+      if (isDefaultBomUniqueConflict(error)) {
+        toast.error("동시에 저장된 기본 구성을 확인 중입니다. 다시 한번 추가해 주세요.");
+        await queryClient.invalidateQueries({ queryKey: ["bom", "recipes", selectedMasterId] });
+        return;
+      }
+      const message = error instanceof Error ? error.message : "구성품 추가 중 오류가 발생했습니다.";
+      toast.error("처리 실패", { description: message });
+      return;
+    }
   };
 
   const handleVoidConfirm = async () => {
@@ -1067,12 +1450,210 @@ export default function CatalogPage() {
       p_actor_person_id: actorId,
       p_note: "void from web",
     });
+
+    if (selectedMasterId) {
+      await syncBomAutoAbsorbLabor(selectedMasterId, bomTotals.laborTotal);
+    }
     setVoidConfirmId(null);
   };
 
+  const syncBomAutoAbsorbLabor = useCallback(
+    async (masterIdToSync: string, estimatedTotal: number) => {
+      const amount = Math.max(0, Math.round(estimatedTotal));
+      const getResponse = await fetch(
+        `/api/master-absorb-labor-items?master_id=${encodeURIComponent(masterIdToSync)}`,
+        { cache: "no-store" }
+      );
+      const getJson = (await getResponse.json()) as { data?: MasterAbsorbLaborItem[]; error?: string };
+      if (!getResponse.ok) {
+        throw new Error(getJson.error ?? "흡수공임 조회 실패");
+      }
+
+      const existing = (getJson.data ?? []).find(
+        (item) => item.bucket === "BASE_LABOR" && item.reason === ACCESSORY_BASE_REASON
+      );
+
+      const payload = {
+        absorb_item_id: existing?.absorb_item_id,
+        master_id: masterIdToSync,
+        bucket: "BASE_LABOR",
+        reason: ACCESSORY_BASE_REASON,
+        amount_krw: amount,
+        is_per_piece: true,
+        vendor_party_id: null,
+        is_active: amount > 0,
+      };
+
+      const postResponse = await fetch("/api/master-absorb-labor-items", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const postJson = (await postResponse.json()) as { error?: string };
+      if (!postResponse.ok) {
+        throw new Error(postJson.error ?? "흡수공임 저장 실패");
+      }
+
+      if (selectedItemId === masterIdToSync) {
+        await loadAbsorbLaborItems(masterIdToSync);
+      }
+    },
+    [loadAbsorbLaborItems, selectedItemId]
+  );
+
   const createRecipeDisabled = !selectedMasterId || upsertRecipeMutation.isPending || !canWrite;
-  const addLineDisabled = !selectedRecipeId || !selectedComponentId || addLineMutation.isPending || !canWrite;
+  const addLineDisabled = !selectedComponentId || addLineMutation.isPending || upsertRecipeMutation.isPending || !canWrite;
   const voidActionDisabled = voidLineMutation.isPending || !canWrite;
+
+  const bomLineMetrics = useMemo(() => {
+    const rows = linesQuery.data ?? [];
+    return rows.map((line) => {
+      const masterRow = line.component_master_id
+        ? (masterRowsById[line.component_master_id] as Record<string, unknown> | undefined)
+        : undefined;
+      const qty = Number(line.qty_per_unit ?? 0);
+      const grossPerUnit = Number(masterRow?.weight_default_g ?? 0);
+      const deductionPerUnit = Number(masterRow?.deduction_weight_default_g ?? 0);
+      const grossWeight = Number.isFinite(grossPerUnit) && Number.isFinite(qty) ? grossPerUnit * qty : 0;
+      const deductionWeight = Number.isFinite(deductionPerUnit) && Number.isFinite(qty) ? deductionPerUnit * qty : 0;
+      const netWeight = Math.max(grossWeight - deductionWeight, 0);
+
+      const centerQty = Number(masterRow?.center_qty_default ?? 0);
+      const sub1Qty = Number(masterRow?.sub1_qty_default ?? 0);
+      const sub2Qty = Number(masterRow?.sub2_qty_default ?? 0);
+      const laborPerUnit =
+        Number(masterRow?.labor_base_sell ?? 0) +
+        Number(masterRow?.labor_center_sell ?? 0) * centerQty +
+        Number(masterRow?.labor_sub1_sell ?? 0) * sub1Qty +
+        Number(masterRow?.labor_sub2_sell ?? 0) * sub2Qty;
+      const laborTotal = Number.isFinite(laborPerUnit) && Number.isFinite(qty) ? laborPerUnit * qty : 0;
+
+      const materialCode = String(masterRow?.material_code_default ?? "00");
+      const materialPerUnit = calculateMaterialPrice(materialCode, grossPerUnit, deductionPerUnit);
+      const materialTotal = Number.isFinite(materialPerUnit) && Number.isFinite(qty) ? materialPerUnit * qty : 0;
+      const estimatedTotal = roundUpToThousand(materialTotal + laborTotal);
+
+      return {
+        line,
+        grossWeight,
+        deductionWeight,
+        netWeight,
+        laborTotal,
+        materialTotal,
+        estimatedTotal,
+      };
+    });
+  }, [calculateMaterialPrice, linesQuery.data, masterRowsById]);
+
+  const bomTotals = useMemo(() => {
+    return bomLineMetrics.reduce(
+      (acc, row) => {
+        acc.grossWeight += row.grossWeight;
+        acc.deductionWeight += row.deductionWeight;
+        acc.netWeight += row.netWeight;
+        acc.laborTotal += row.laborTotal;
+        acc.materialTotal += row.materialTotal;
+        acc.estimatedTotal += row.estimatedTotal;
+        return acc;
+      },
+      { grossWeight: 0, deductionWeight: 0, netWeight: 0, laborTotal: 0, materialTotal: 0, estimatedTotal: 0 }
+    );
+  }, [bomLineMetrics]);
+
+  useEffect(() => {
+    if (!showBomPanel || !selectedMasterId) return;
+    const rounded = Math.max(0, Math.round(bomTotals.laborTotal));
+    const syncKey = `${selectedMasterId}:${rounded}`;
+    if (bomAutoSyncRef.current === syncKey) return;
+    bomAutoSyncRef.current = syncKey;
+
+    void syncBomAutoAbsorbLabor(selectedMasterId, bomTotals.laborTotal).catch((error) => {
+      const message = error instanceof Error ? error.message : "BOM 자동반영 실패";
+      toast.error("처리 실패", { description: message });
+    });
+  }, [bomTotals.laborTotal, selectedMasterId, showBomPanel, syncBomAutoAbsorbLabor]);
+
+  const displayedBomLineMetrics = useMemo(() => {
+    const rows = [...bomLineMetrics];
+    rows.sort((a, b) => Number(b.line.line_no ?? 0) - Number(a.line.line_no ?? 0));
+    return rows;
+  }, [bomLineMetrics]);
+
+  const flattenComponentMetrics = useMemo(() => {
+    const rows = (flattenQuery.data ?? []) as BomFlattenLeafRow[];
+    const mapped = rows.map((leaf, idx) => {
+      const qty = Math.max(0, Number(leaf.qty_per_product_unit ?? 0));
+      const masterRow = leaf.component_master_id
+        ? (masterRowsById[leaf.component_master_id] as Record<string, unknown> | undefined)
+        : undefined;
+      const grossPerUnit = Number(masterRow?.weight_default_g ?? 0);
+      const deductionPerUnit = Number(masterRow?.deduction_weight_default_g ?? 0);
+      const grossWeight = grossPerUnit * qty;
+
+      const centerQty = Number(masterRow?.center_qty_default ?? 0);
+      const sub1Qty = Number(masterRow?.sub1_qty_default ?? 0);
+      const sub2Qty = Number(masterRow?.sub2_qty_default ?? 0);
+      const laborPerUnit =
+        Number(masterRow?.labor_base_sell ?? 0) +
+        Number(masterRow?.labor_center_sell ?? 0) * centerQty +
+        Number(masterRow?.labor_sub1_sell ?? 0) * sub1Qty +
+        Number(masterRow?.labor_sub2_sell ?? 0) * sub2Qty;
+      const laborSellTotal = laborPerUnit * qty;
+      const laborCostPerUnit =
+        Number(masterRow?.labor_base_cost ?? 0) +
+        Number(masterRow?.labor_center_cost ?? 0) * centerQty +
+        Number(masterRow?.labor_sub1_cost ?? 0) * sub1Qty +
+        Number(masterRow?.labor_sub2_cost ?? 0) * sub2Qty;
+      const laborCostTotal = laborCostPerUnit * qty;
+
+      return {
+        key: `${leaf.component_master_id ?? leaf.component_part_id ?? "leaf"}-${idx}`,
+        imageUrl: masterRow?.image_url ? String(masterRow.image_url) : null,
+        name:
+          leaf.component_master_model_name ??
+          leaf.component_part_name ??
+          leaf.component_master_id ??
+          leaf.component_part_id ??
+          "-",
+        qty,
+        unit: leaf.unit ?? "EA",
+        grossWeight,
+        laborSellTotal,
+        laborCostTotal,
+      };
+    });
+
+    const totals = mapped.reduce(
+      (acc, row) => {
+        acc.grossWeight += row.grossWeight;
+        acc.laborSellTotal += row.laborSellTotal;
+        acc.laborCostTotal += row.laborCostTotal;
+        return acc;
+      },
+      { grossWeight: 0, laborSellTotal: 0, laborCostTotal: 0 }
+    );
+
+    return { rows: mapped, totals };
+  }, [flattenQuery.data, masterRowsById]);
+
+  const accessoryQtyTotal = useMemo(
+    () => flattenComponentMetrics.rows.reduce((sum, row) => sum + (Number.isFinite(row.qty) ? row.qty : 0), 0),
+    [flattenComponentMetrics.rows]
+  );
+  const accessoryLaborSellTotal = flattenComponentMetrics.totals.laborSellTotal;
+  const accessoryLaborCostTotal = flattenComponentMetrics.totals.laborCostTotal;
+  const laborBaseSellWithAccessoryForEdit = laborBaseSellWithAbsorb + accessoryLaborSellTotal;
+  const laborBaseCostWithAccessoryForEdit = laborBaseCost + accessoryLaborCostTotal;
+  const totalLaborSellWithAccessoryForEdit = totalLaborSellForEdit + accessoryLaborSellTotal;
+  const totalLaborCostWithAccessoryForEdit = totalLaborCostForEdit + accessoryLaborCostTotal;
+
+  useEffect(() => {
+    if (!lastAddedLineHint) return;
+    const timer = window.setTimeout(() => {
+      setLastAddedLineHint(null);
+    }, 2500);
+    return () => window.clearTimeout(timer);
+  }, [lastAddedLineHint]);
 
   const materialPrice = useMemo(() => {
     if (!selectedItem || !selectedDetail) return 0;
@@ -1081,20 +1662,140 @@ export default function CatalogPage() {
     return calculateMaterialPrice(selectedDetail.materialCode ?? "00", weight, deduction);
   }, [selectedItem, selectedDetail, calculateMaterialPrice]);
 
+  const detailAbsorbImpactSummary = useMemo(() => {
+    if (!selectedDetail) return createEmptyAbsorbSummary();
+    return computeAbsorbImpactSummary(
+      manualAbsorbLaborItems,
+      Number(selectedDetail.centerQty ?? 0),
+      Number(selectedDetail.sub1Qty ?? 0),
+      Number(selectedDetail.sub2Qty ?? 0)
+    );
+  }, [
+    manualAbsorbLaborItems,
+    selectedDetail?.centerQty,
+    selectedDetail?.sub1Qty,
+    selectedDetail?.sub2Qty,
+  ]);
+
+  const detailLaborBaseSellDisplay =
+    Number(selectedDetail?.laborBaseSell ?? 0) +
+    detailAbsorbImpactSummary.baseLaborUnit +
+    accessoryLaborSellTotal;
+  const detailLaborBaseCostDisplay = Number(selectedDetail?.laborBaseCost ?? 0) + accessoryLaborCostTotal;
+  const detailLaborCenterSellDisplay = Number(selectedDetail?.laborCenterSell ?? 0) + detailAbsorbImpactSummary.stoneCenterUnit;
+  const detailLaborSub1SellDisplay = Number(selectedDetail?.laborSub1Sell ?? 0) + detailAbsorbImpactSummary.stoneSub1Unit;
+  const detailLaborSub2SellDisplay = Number(selectedDetail?.laborSub2Sell ?? 0) + detailAbsorbImpactSummary.stoneSub2Unit;
+  const detailPlatingSellDisplay = Number(selectedDetail?.platingSell ?? 0) + detailAbsorbImpactSummary.platingUnit;
+  const detailPlatingCostDisplay = Number(selectedDetail?.platingCost ?? 0);
+
   const detailLaborSell = selectedDetail
-    ? selectedDetail.laborBaseSell +
-    selectedDetail.laborCenterSell * selectedDetail.centerQty +
-    selectedDetail.laborSub1Sell * selectedDetail.sub1Qty +
-    selectedDetail.laborSub2Sell * selectedDetail.sub2Qty
+    ? detailLaborBaseSellDisplay +
+    detailLaborCenterSellDisplay * selectedDetail.centerQty +
+    detailLaborSub1SellDisplay * selectedDetail.sub1Qty +
+    detailLaborSub2SellDisplay * selectedDetail.sub2Qty +
+    detailPlatingSellDisplay +
+    detailAbsorbImpactSummary.etc
     : totalLaborSell;
   const detailLaborCost = selectedDetail
-    ? selectedDetail.laborBaseCost +
+    ? detailLaborBaseCostDisplay +
     selectedDetail.laborCenterCost * selectedDetail.centerQty +
     selectedDetail.laborSub1Cost * selectedDetail.sub1Qty +
-    selectedDetail.laborSub2Cost * selectedDetail.sub2Qty
+    selectedDetail.laborSub2Cost * selectedDetail.sub2Qty +
+    detailPlatingCostDisplay
     : totalLaborCost;
-  const totalEstimatedCost = roundUpToThousand(materialPrice + detailLaborCost);
-  const totalEstimatedSell = roundUpToThousand(materialPrice + detailLaborSell);
+  const detailLaborSellWithAccessory = detailLaborSell;
+  const detailLaborCostWithAccessory = detailLaborCost;
+  const detailLaborMarginWithAccessory = detailLaborSellWithAccessory - detailLaborCostWithAccessory;
+  const totalEstimatedCost = roundUpToThousand(materialPrice + detailLaborCostWithAccessory);
+  const totalEstimatedSell = roundUpToThousand(materialPrice + detailLaborSellWithAccessory);
+
+  const showDetailBaseRow = detailLaborBaseSellDisplay !== 0 || detailLaborBaseCostDisplay !== 0;
+  const showDetailCenterRow =
+    detailLaborCenterSellDisplay !== 0 ||
+    Number(selectedDetail?.laborCenterCost ?? 0) !== 0 ||
+    Number(selectedDetail?.centerQty ?? 0) !== 0;
+  const showDetailSub1Row =
+    detailLaborSub1SellDisplay !== 0 ||
+    Number(selectedDetail?.laborSub1Cost ?? 0) !== 0 ||
+    Number(selectedDetail?.sub1Qty ?? 0) !== 0;
+  const showDetailSub2Row =
+    detailLaborSub2SellDisplay !== 0 ||
+    Number(selectedDetail?.laborSub2Cost ?? 0) !== 0 ||
+    Number(selectedDetail?.sub2Qty ?? 0) !== 0;
+  const detailEtcLaborSellDisplay = detailAbsorbImpactSummary.etc;
+  const detailEtcLaborCostDisplay = 0;
+  const showDetailEtcRow = detailEtcLaborSellDisplay !== 0 || detailEtcLaborCostDisplay !== 0;
+  const detailBaseLaborMargin = detailLaborBaseSellDisplay - detailLaborBaseCostDisplay;
+  const detailCenterLaborMargin = detailLaborCenterSellDisplay - Number(selectedDetail?.laborCenterCost ?? 0);
+  const detailSub1LaborMargin = detailLaborSub1SellDisplay - Number(selectedDetail?.laborSub1Cost ?? 0);
+  const detailSub2LaborMargin = detailLaborSub2SellDisplay - Number(selectedDetail?.laborSub2Cost ?? 0);
+  const detailPlatingLaborMargin = detailPlatingSellDisplay - detailPlatingCostDisplay;
+  const detailEtcLaborMargin = detailEtcLaborSellDisplay - detailEtcLaborCostDisplay;
+  const totalLaborMarginShare = formatSharePercent(detailLaborMarginWithAccessory, detailLaborSellWithAccessory);
+  const detailBaseLaborMarginShare = formatSharePercent(detailBaseLaborMargin, detailLaborBaseSellDisplay);
+  const detailCenterLaborSellTotal = detailLaborCenterSellDisplay * Number(selectedDetail?.centerQty ?? 0);
+  const detailSub1LaborSellTotal = detailLaborSub1SellDisplay * Number(selectedDetail?.sub1Qty ?? 0);
+  const detailSub2LaborSellTotal = detailLaborSub2SellDisplay * Number(selectedDetail?.sub2Qty ?? 0);
+  const detailCenterLaborMarginShare = formatSharePercent(detailCenterLaborMargin, detailCenterLaborSellTotal);
+  const detailSub1LaborMarginShare = formatSharePercent(detailSub1LaborMargin, detailSub1LaborSellTotal);
+  const detailSub2LaborMarginShare = formatSharePercent(detailSub2LaborMargin, detailSub2LaborSellTotal);
+  const detailPlatingLaborMarginShare = formatSharePercent(detailPlatingLaborMargin, detailPlatingSellDisplay);
+  const detailEtcLaborMarginShare = formatSharePercent(detailEtcLaborMargin, detailEtcLaborSellDisplay);
+
+  const chinaCostComparison = useMemo(() => {
+    if (!selectedMasterId) return null;
+    const row = masterRowsById[selectedMasterId] as Record<string, unknown> | undefined;
+    if (!row) return null;
+
+    const basicCny = Number(row.cn_labor_basic_cny_per_g) || 0;
+    const extrasRaw = (Array.isArray(row.cn_labor_extra_items) ? row.cn_labor_extra_items : []) as Array<{
+      label?: string;
+      basis?: string;
+      cny_per_g?: number;
+      cny_per_piece?: number;
+    }>;
+    const basicBasisMeta = extrasRaw.find((it) => String(it.label ?? "").trim() === CN_BASIC_BASIS_META_LABEL);
+    const basicBasis = String(basicBasisMeta?.basis ?? "PER_G").toUpperCase() === "PER_PIECE" ? "PER_PIECE" : "PER_G";
+    const extras = extrasRaw.filter((it) => String(it.label ?? "").trim() !== CN_BASIC_BASIS_META_LABEL);
+
+    const weight = parseFloat(String(row.weight_default_g ?? 0));
+    const deduction = parseFloat(String(row.deduction_weight_default_g ?? 0));
+    const netWeight = Number.isFinite(weight) ? Math.max(weight - (Number.isFinite(deduction) ? deduction : 0), 0) : 0;
+
+    const materialKrw = Math.round(netWeight * csOriginalKrwPerG);
+    const basicLaborKrw = basicBasis === "PER_PIECE"
+      ? Math.round(basicCny * cnyAdRate)
+      : Math.round(netWeight * basicCny * cnyAdRate);
+    const extraLaborKrw = extras.reduce((sum, it) => {
+      const basis = String(it.basis ?? "PER_G").toUpperCase();
+      if (basis === "PER_PIECE") {
+        return sum + Math.round((Number(it.cny_per_piece) || 0) * cnyAdRate);
+      }
+      return sum + Math.round(netWeight * (Number(it.cny_per_g) || 0) * cnyAdRate);
+    }, 0);
+    const laborKrw = basicLaborKrw + extraLaborKrw;
+    const totalKrw = materialKrw + laborKrw;
+    const hasData = basicCny > 0 || extras.length > 0;
+    const reasonCostMap = new Map<string, number>();
+    reasonCostMap.set("기본공임", basicLaborKrw);
+    extras.forEach((it) => {
+      const label = String(it.label ?? "").trim();
+      if (!label) return;
+      const basis = String(it.basis ?? "PER_G").toUpperCase();
+      const cost = basis === "PER_PIECE"
+        ? Math.round((Number(it.cny_per_piece) || 0) * cnyAdRate)
+        : Math.round(netWeight * (Number(it.cny_per_g) || 0) * cnyAdRate);
+      reasonCostMap.set(label, (reasonCostMap.get(label) ?? 0) + cost);
+    });
+
+    return {
+      hasData,
+      materialKrw,
+      laborKrw,
+      totalKrw,
+      reasonCostMap,
+    };
+  }, [selectedMasterId, masterRowsById, csOriginalKrwPerG, cnyAdRate]);
 
 
   const handleImageUpload = async (file: File) => {
@@ -1151,6 +1852,7 @@ export default function CatalogPage() {
   };
 
   const resetForm = () => {
+    setShowAdvancedPricing(false);
     setMasterId(crypto.randomUUID());
     setModelName("");
     setVendorId("");
@@ -1168,7 +1870,6 @@ export default function CatalogPage() {
     setCenterStoneSourceDefault("FACTORY");
     setSub1StoneSourceDefault("FACTORY");
     setSub2StoneSourceDefault("FACTORY");
-    setBuyMarginProfileId("");
     setLaborBaseSell(0);
     setLaborCenterSell(0);
     setLaborSub1Sell(0);
@@ -1177,15 +1878,13 @@ export default function CatalogPage() {
     setLaborCenterCost(0);
     setLaborSub1Cost(0);
     setLaborSub2Cost(0);
-    setLaborBaseCostCny("");
-    setLaborCenterCostCny("");
-    setLaborSub1CostCny("");
-    setLaborSub2CostCny("");
+    setCenterSelfMargin(0);
+    setSub1SelfMargin(0);
+    setSub2SelfMargin(0);
     setPlatingSell(0);
     setPlatingCost(0);
-    setPlatingCostCny("");
-    setLaborProfileMode("MANUAL");
-    setLaborBandCode("");
+    setLaborProfileMode(FORCED_LABOR_PROFILE_MODE);
+    setLaborBandCode(FORCED_LABOR_BAND_CODE);
     setSettingAddonMarginKrwPerPiece(0);
     setStoneAddonMarginKrwPerPiece(0);
     setNote("");
@@ -1194,6 +1893,7 @@ export default function CatalogPage() {
     setImageUrl(null);
     setImagePath(null);
     setCnLaborBasicCnyPerG("");
+    setCnLaborBasicBasis("PER_G");
     setCnLaborExtraItems([]);
     setIsUnitPricing(false);
     setAbsorbLaborItems([]);
@@ -1202,9 +1902,7 @@ export default function CatalogPage() {
     setAbsorbAmount("0");
     setAbsorbIsPerPiece(true);
     setAbsorbVendorId("");
-    setAbsorbPriority("100");
     setAbsorbIsActive(true);
-    setAbsorbNote("");
     setEditingAbsorbItemId(null);
   };
 
@@ -1216,6 +1914,7 @@ export default function CatalogPage() {
 
   const handleOpenEdit = () => {
     if (!selectedItem || !selectedItemId) return;
+    setShowAdvancedPricing(false);
     const detail = selectedDetail;
     const row = masterRowsById[selectedItemId];
 
@@ -1242,10 +1941,12 @@ export default function CatalogPage() {
     const rowCenterSource = String((row as Record<string, unknown>)?.center_stone_source_default ?? "FACTORY");
     const rowSub1Source = String((row as Record<string, unknown>)?.sub1_stone_source_default ?? "FACTORY");
     const rowSub2Source = String((row as Record<string, unknown>)?.sub2_stone_source_default ?? "FACTORY");
-    setCenterStoneSourceDefault(rowCenterSource === "SELF" || rowCenterSource === "PROVIDED" ? rowCenterSource : "FACTORY");
-    setSub1StoneSourceDefault(rowSub1Source === "SELF" || rowSub1Source === "PROVIDED" ? rowSub1Source : "FACTORY");
-    setSub2StoneSourceDefault(rowSub2Source === "SELF" || rowSub2Source === "PROVIDED" ? rowSub2Source : "FACTORY");
-    setBuyMarginProfileId(String((row as Record<string, unknown>)?.buy_margin_profile_id ?? ""));
+    const normalizedCenterSource: CatalogStoneSource = rowCenterSource === "SELF" ? "SELF" : "FACTORY";
+    const normalizedSub1Source: CatalogStoneSource = rowSub1Source === "SELF" ? "SELF" : "FACTORY";
+    const normalizedSub2Source: CatalogStoneSource = rowSub2Source === "SELF" ? "SELF" : "FACTORY";
+    setCenterStoneSourceDefault(normalizedCenterSource);
+    setSub1StoneSourceDefault(normalizedSub1Source);
+    setSub2StoneSourceDefault(normalizedSub2Source);
     setLaborBaseSell(detail?.laborBaseSell ?? 0);
     setLaborCenterSell(detail?.laborCenterSell ?? 0);
     setLaborSub1Sell(detail?.laborSub1Sell ?? 0);
@@ -1254,15 +1955,25 @@ export default function CatalogPage() {
     setLaborCenterCost(detail?.laborCenterCost ?? 0);
     setLaborSub1Cost(detail?.laborSub1Cost ?? 0);
     setLaborSub2Cost(detail?.laborSub2Cost ?? 0);
-    setLaborBaseCostCny(toCnyFromKrw(detail?.laborBaseCost ?? 0));
-    setLaborCenterCostCny(toCnyFromKrw(detail?.laborCenterCost ?? 0));
-    setLaborSub1CostCny(toCnyFromKrw(detail?.laborSub1Cost ?? 0));
-    setLaborSub2CostCny(toCnyFromKrw(detail?.laborSub2Cost ?? 0));
+    setCenterSelfMargin(
+      normalizedCenterSource === "SELF"
+        ? (detail?.laborCenterSell ?? 0) - (detail?.laborCenterCost ?? 0)
+        : 0
+    );
+    setSub1SelfMargin(
+      normalizedSub1Source === "SELF"
+        ? (detail?.laborSub1Sell ?? 0) - (detail?.laborSub1Cost ?? 0)
+        : 0
+    );
+    setSub2SelfMargin(
+      normalizedSub2Source === "SELF"
+        ? (detail?.laborSub2Sell ?? 0) - (detail?.laborSub2Cost ?? 0)
+        : 0
+    );
     setPlatingSell(detail?.platingSell ?? 0);
     setPlatingCost(detail?.platingCost ?? 0);
-    setPlatingCostCny(toCnyFromKrw(detail?.platingCost ?? 0));
-    setLaborProfileMode(detail?.laborProfileMode ?? "MANUAL");
-    setLaborBandCode(detail?.laborBandCode ?? "");
+    setLaborProfileMode(FORCED_LABOR_PROFILE_MODE);
+    setLaborBandCode(FORCED_LABOR_BAND_CODE);
     setSettingAddonMarginKrwPerPiece(detail?.settingAddonMarginKrwPerPiece ?? 0);
     setStoneAddonMarginKrwPerPiece(detail?.stoneAddonMarginKrwPerPiece ?? 0);
     setNote(detail?.note ?? "");
@@ -1278,21 +1989,38 @@ export default function CatalogPage() {
     const cnBasicRaw = (row as Record<string, unknown>)?.cn_labor_basic_cny_per_g;
     const cnBasicNum = typeof cnBasicRaw === "number" ? cnBasicRaw : Number(cnBasicRaw);
     setCnLaborBasicCnyPerG(Number.isFinite(cnBasicNum) && cnBasicNum > 0 ? String(cnBasicNum) : "");
+    setCnLaborBasicBasis("PER_G");
 
     const cnExtraRaw = (row as Record<string, unknown>)?.cn_labor_extra_items;
     if (Array.isArray(cnExtraRaw)) {
+      const basicBasisMeta = cnExtraRaw.find((it) => {
+        const raw = it as Record<string, unknown>;
+        return String(raw.label ?? "").trim() === CN_BASIC_BASIS_META_LABEL;
+      });
+      const basicBasisText = String((basicBasisMeta as Record<string, unknown> | undefined)?.basis ?? "PER_G").trim().toUpperCase();
+      setCnLaborBasicBasis(basicBasisText === "PER_PIECE" ? "PER_PIECE" : "PER_G");
+
       setCnLaborExtraItems(
         cnExtraRaw
-          .map((it) => ({
-            id: crypto.randomUUID(),
-            label: String((it as any)?.label ?? "").trim(),
-            cnyPerG: (it as any)?.cny_per_g === null || (it as any)?.cny_per_g === undefined
-              ? ""
-              : String((it as any)?.cny_per_g),
-          }))
-          .filter((it) => it.label)
+          .map((it) => {
+            const raw = it as Record<string, unknown>;
+            const basisText = String(raw.basis ?? "PER_G").trim().toUpperCase();
+            const basis: "PER_G" | "PER_PIECE" = basisText === "PER_PIECE" ? "PER_PIECE" : "PER_G";
+            const amountRaw = basis === "PER_PIECE" ? raw.cny_per_piece : raw.cny_per_g;
+            return {
+              id: crypto.randomUUID(),
+              label: String(raw.label ?? "").trim(),
+              basis,
+              cnyAmount:
+                amountRaw === null || amountRaw === undefined
+                  ? ""
+                  : String(amountRaw),
+            };
+          })
+          .filter((it) => it.label && it.label !== CN_BASIC_BASIS_META_LABEL)
       );
     } else {
+      setCnLaborBasicBasis("PER_G");
       setCnLaborExtraItems([]);
     }
 
@@ -1340,17 +2068,21 @@ export default function CatalogPage() {
       return;
     }
 
-    const normalizedLaborProfileMode =
-      laborProfileMode === "BAND" && !laborBandCode.trim() ? "MANUAL" : laborProfileMode;
-    const normalizedLaborBandCode =
-      normalizedLaborProfileMode === "BAND" ? laborBandCode.trim() || null : null;
+    const normalizedLaborProfileMode = FORCED_LABOR_PROFILE_MODE;
+    const normalizedLaborBandCode = FORCED_LABOR_BAND_CODE;
+    const normalizedMaterialCode =
+      masterKind === "MODEL" ? (materialCode || "00") : materialCode || null;
+
+    if (masterKind === "MODEL" && !materialCode) {
+      setMaterialCode("00");
+    }
 
     const payload = {
       master_id: masterId || null,
       model_name: modelName,
       master_kind: masterKind,
       category_code: categoryCode || null,
-      material_code_default: materialCode || null,
+      material_code_default: normalizedMaterialCode,
       weight_default_g: masterKind === "BUNDLE" ? null : weightDefault ? Number(weightDefault) : null,
       deduction_weight_default_g: masterKind === "BUNDLE" ? 0 : deductionWeight ? Number(deductionWeight) : 0,
       center_qty_default: masterKind === "BUNDLE" ? 0 : centerQty,
@@ -1362,7 +2094,7 @@ export default function CatalogPage() {
       center_stone_source_default: centerStoneSourceDefault,
       sub1_stone_source_default: sub1StoneSourceDefault,
       sub2_stone_source_default: sub2StoneSourceDefault,
-      buy_margin_profile_id: hasSelfStoneSource ? buyMarginProfileId || null : null,
+      buy_margin_profile_id: null,
       labor_base_sell: laborBaseSell,
       labor_center_sell: laborCenterSell,
       labor_sub1_sell: laborSub1Sell,
@@ -1399,11 +2131,40 @@ export default function CatalogPage() {
       if (savedId) {
         try {
           const extraPayload = cnLaborExtraItems
-            .map((it) => ({
-              label: it.label.trim(),
-              cny_per_g: Number(it.cnyPerG),
-            }))
-            .filter((it) => it.label && Number.isFinite(it.cny_per_g) && it.cny_per_g >= 0);
+            .map((it) => {
+              const amount = Number(it.cnyAmount);
+              if (it.basis === "PER_PIECE") {
+                return {
+                  label: it.label.trim(),
+                  basis: "PER_PIECE" as const,
+                  cny_per_piece: amount,
+                };
+              }
+              return {
+                label: it.label.trim(),
+                basis: "PER_G" as const,
+                cny_per_g: amount,
+              };
+            })
+            .filter((it) =>
+              it.label &&
+              (("cny_per_piece" in it && Number.isFinite(it.cny_per_piece ?? Number.NaN) && (it.cny_per_piece ?? -1) >= 0) ||
+                ("cny_per_g" in it && Number.isFinite(it.cny_per_g ?? Number.NaN) && (it.cny_per_g ?? -1) >= 0))
+            );
+
+          extraPayload.push(
+            cnLaborBasicBasis === "PER_PIECE"
+              ? {
+                label: CN_BASIC_BASIS_META_LABEL,
+                basis: "PER_PIECE" as const,
+                cny_per_piece: Number(cnLaborBasicCnyPerG || 0),
+              }
+              : {
+                label: CN_BASIC_BASIS_META_LABEL,
+                basis: "PER_G" as const,
+                cny_per_g: Number(cnLaborBasicCnyPerG || 0),
+              }
+          );
 
           const cnResp = await fetch("/api/master-item-cn-cost", {
             method: "POST",
@@ -1447,16 +2208,234 @@ export default function CatalogPage() {
     }
   };
 
+  const applyGlobalLaborSellFromCost = async (
+    laborComponent: "BASE_LABOR" | "STONE",
+    nextCost: number,
+    setSell: (value: number) => void
+  ) => {
+    const normalizedCost = Number(nextCost);
+    if (!Number.isFinite(normalizedCost) || normalizedCost < 0) return;
+
+    const attempts: Array<{ scope: "FACTORY"; vendor_party_id: string | null }> = [
+      { scope: "FACTORY", vendor_party_id: vendorId || null },
+      { scope: "FACTORY", vendor_party_id: null },
+    ];
+
+    try {
+      let pickedMarkup = 0;
+
+      for (const attempt of attempts) {
+        const response = await fetch("/api/pricing-rule-pick", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            component: laborComponent,
+            scope: attempt.scope,
+            apply_unit: "PER_PIECE",
+            stone_role: null,
+            vendor_party_id: attempt.vendor_party_id,
+            cost_basis_krw: normalizedCost,
+          }),
+        });
+
+        if (!response.ok) continue;
+
+        const payload = (await response.json()) as {
+          data?: { picked_rule_id?: string | null; markup_krw?: number | null } | Array<{ picked_rule_id?: string | null; markup_krw?: number | null }> | null;
+        };
+        const picked = Array.isArray(payload.data) ? payload.data[0] : payload.data;
+        const markup = Number(picked?.markup_krw ?? 0);
+        const hasPickedRule = Boolean(picked?.picked_rule_id);
+        if (Number.isFinite(markup) && hasPickedRule) {
+          pickedMarkup = Math.max(markup, 0);
+          break;
+        }
+      }
+
+      setSell(normalizedCost + pickedMarkup);
+    } catch {
+      // 룰 조회 실패 시 현재 입력값을 유지합니다.
+    }
+  };
+
+  const applyGlobalPlatingSellFromCost = async (nextCost: number, setSell: (value: number) => void) => {
+    const normalizedCost = Number(nextCost);
+    if (!Number.isFinite(normalizedCost) || normalizedCost < 0) return;
+
+    type PlatingRuleRow = {
+      is_active?: boolean;
+      vendor_party_id?: string | null;
+      min_cost_krw?: number | null;
+      max_cost_krw?: number | null;
+      markup_value_krw?: number | null;
+      margin_fixed_krw?: number | null;
+      margin_per_g_krw?: number | null;
+      category_code?: string | null;
+      material_code?: string | null;
+      priority?: number | null;
+    };
+
+    try {
+      const pricingRuleAttempts: Array<{ vendor_party_id: string | null }> = [
+        { vendor_party_id: isUuid(vendorId) ? vendorId : null },
+        { vendor_party_id: null },
+      ];
+
+      for (const attempt of pricingRuleAttempts) {
+        const pickResponse = await fetch("/api/pricing-rule-pick", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            component: "SETTING",
+            scope: "FACTORY",
+            apply_unit: "PER_PIECE",
+            stone_role: null,
+            vendor_party_id: attempt.vendor_party_id,
+            cost_basis_krw: normalizedCost,
+          }),
+        });
+
+        if (!pickResponse.ok) continue;
+        const pickPayload = (await pickResponse.json()) as {
+          data?: { picked_rule_id?: string | null; markup_krw?: number | null } | Array<{ picked_rule_id?: string | null; markup_krw?: number | null }> | null;
+        };
+        const picked = Array.isArray(pickPayload.data) ? pickPayload.data[0] : pickPayload.data;
+        const markup = Number(picked?.markup_krw ?? 0);
+        if (Number.isFinite(markup) && picked?.picked_rule_id) {
+          const nextSell = Math.max(roundUpDisplayHundred(normalizedCost + Math.max(markup, 0)), 0);
+          setSell(nextSell);
+          return;
+        }
+      }
+
+      // Legacy fallback: plating-markup-rules (variant/fixed/per-g)
+      const response = await fetch("/api/plating-markup-rules", { cache: "no-store" });
+      if (!response.ok) {
+        setSell(normalizedCost);
+        return;
+      }
+
+      const payload = (await response.json()) as { data?: PlatingRuleRow[] };
+      const rows = Array.isArray(payload.data) ? payload.data : [];
+      const vendorScope = isUuid(vendorId) ? vendorId : null;
+      const safeCategory = categoryCode || null;
+      const safeMaterial = materialCode || null;
+      const netWeight = Math.max(toNumber(weightDefault) - toNumber(deductionWeight), 0);
+
+      const matched = rows
+        .filter((rule) => rule.is_active !== false)
+        .filter((rule) => !rule.vendor_party_id || rule.vendor_party_id === vendorScope)
+        .filter((rule) => !rule.category_code || rule.category_code === safeCategory)
+        .filter((rule) => !rule.material_code || rule.material_code === safeMaterial)
+        .filter((rule) => {
+          const min = Number(rule.min_cost_krw ?? 0);
+          const max = rule.max_cost_krw === null || rule.max_cost_krw === undefined
+            ? Number.POSITIVE_INFINITY
+            : Number(rule.max_cost_krw);
+          return normalizedCost >= min && normalizedCost <= max;
+        })
+        .sort((a, b) => {
+          const aVendorScore = a.vendor_party_id ? 1 : 0;
+          const bVendorScore = b.vendor_party_id ? 1 : 0;
+          if (aVendorScore !== bVendorScore) return bVendorScore - aVendorScore;
+
+          const aCategoryScore = a.category_code ? 1 : 0;
+          const bCategoryScore = b.category_code ? 1 : 0;
+          if (aCategoryScore !== bCategoryScore) return bCategoryScore - aCategoryScore;
+
+          const aMaterialScore = a.material_code ? 1 : 0;
+          const bMaterialScore = b.material_code ? 1 : 0;
+          if (aMaterialScore !== bMaterialScore) return bMaterialScore - aMaterialScore;
+
+          const aPriority = Number(a.priority ?? 100);
+          const bPriority = Number(b.priority ?? 100);
+          return aPriority - bPriority;
+        });
+
+      const selected = matched[0];
+      if (!selected) {
+        setSell(normalizedCost);
+        return;
+      }
+
+      const fixed = Number(selected.markup_value_krw ?? selected.margin_fixed_krw ?? 0);
+      const perG = Number(selected.margin_per_g_krw ?? 0);
+      const safeFixed = Number.isFinite(fixed) ? Math.max(fixed, 0) : 0;
+      const safePerG = Number.isFinite(perG) ? Math.max(perG, 0) : 0;
+
+      const nextSell = Math.max(roundUpDisplayHundred(normalizedCost + safeFixed + safePerG * netWeight), 0);
+      setSell(nextSell);
+    } catch {
+      setSell(normalizedCost);
+    }
+  };
+
+  const applySelfStoneSellFromCost = (nextCost: number, margin: number, setSell: (value: number) => void) => {
+    const normalizedCost = Number(nextCost);
+    const normalizedMargin = Number(margin);
+    if (!Number.isFinite(normalizedCost) || normalizedCost < 0) return;
+    const safeMargin = Number.isFinite(normalizedMargin) ? normalizedMargin : 0;
+    setSell(Math.max(roundUpDisplayHundred(normalizedCost + safeMargin), 0));
+  };
+
+  const applyStoneSellBySource = async (
+    source: CatalogStoneSource,
+    nextCost: number,
+    margin: number,
+    setSell: (value: number) => void
+  ) => {
+    if (source === "SELF") {
+      applySelfStoneSellFromCost(nextCost, margin, setSell);
+      return;
+    }
+    await applyGlobalLaborSellFromCost("STONE", nextCost, setSell);
+  };
+
+  useEffect(() => {
+    if (centerStoneSourceDefault === "SELF") {
+      applySelfStoneSellFromCost(laborCenterCost, centerSelfMargin, setLaborCenterSell);
+    }
+  }, [centerSelfMargin, centerStoneSourceDefault, laborCenterCost]);
+
+  useEffect(() => {
+    if (centerStoneSourceDefault !== "SELF") {
+      void applyGlobalLaborSellFromCost("STONE", laborCenterCost, setLaborCenterSell);
+    }
+  }, [centerStoneSourceDefault, laborCenterCost]);
+
+  useEffect(() => {
+    if (sub1StoneSourceDefault === "SELF") {
+      applySelfStoneSellFromCost(laborSub1Cost, sub1SelfMargin, setLaborSub1Sell);
+    }
+  }, [laborSub1Cost, sub1SelfMargin, sub1StoneSourceDefault]);
+
+  useEffect(() => {
+    if (sub1StoneSourceDefault !== "SELF") {
+      void applyGlobalLaborSellFromCost("STONE", laborSub1Cost, setLaborSub1Sell);
+    }
+  }, [laborSub1Cost, sub1StoneSourceDefault]);
+
+  useEffect(() => {
+    if (sub2StoneSourceDefault === "SELF") {
+      applySelfStoneSellFromCost(laborSub2Cost, sub2SelfMargin, setLaborSub2Sell);
+    }
+  }, [laborSub2Cost, sub2SelfMargin, sub2StoneSourceDefault]);
+
+  useEffect(() => {
+    if (sub2StoneSourceDefault !== "SELF") {
+      void applyGlobalLaborSellFromCost("STONE", laborSub2Cost, setLaborSub2Sell);
+    }
+  }, [laborSub2Cost, sub2StoneSourceDefault]);
+
   const resetAbsorbForm = () => {
     setEditingAbsorbItemId(null);
     setAbsorbBucket("BASE_LABOR");
+    setAbsorbStoneRole("CENTER");
     setAbsorbReason("");
     setAbsorbAmount("0");
     setAbsorbIsPerPiece(true);
     setAbsorbVendorId("");
-    setAbsorbPriority("100");
     setAbsorbIsActive(true);
-    setAbsorbNote("");
   };
 
   const handleSaveAbsorbLaborItem = async () => {
@@ -1466,17 +2445,12 @@ export default function CatalogPage() {
       return;
     }
     const amount = Number(absorbAmount);
-    const priority = Number(absorbPriority);
     if (!absorbReason.trim()) {
       toast.error("처리 실패", { description: "사유를 입력해 주세요." });
       return;
     }
-    if (!Number.isFinite(amount) || amount < 0) {
-      toast.error("처리 실패", { description: "금액은 0 이상 숫자여야 합니다." });
-      return;
-    }
-    if (!Number.isInteger(priority)) {
-      toast.error("처리 실패", { description: "우선순위는 정수여야 합니다." });
+    if (!Number.isFinite(amount)) {
+      toast.error("처리 실패", { description: "금액은 숫자여야 합니다." });
       return;
     }
 
@@ -1488,13 +2462,12 @@ export default function CatalogPage() {
           absorb_item_id: editingAbsorbItemId,
           master_id: targetMasterId,
           bucket: absorbBucket,
+          note: buildAbsorbNote(absorbBucket, absorbStoneRole),
           reason: absorbReason.trim(),
           amount_krw: amount,
           is_per_piece: absorbIsPerPiece,
           vendor_party_id: absorbVendorId || null,
-          priority,
           is_active: absorbIsActive,
-          note: absorbNote.trim() || null,
         }),
       });
       const json = (await response.json()) as { error?: string };
@@ -1527,13 +2500,12 @@ export default function CatalogPage() {
   const handleEditAbsorbLaborItem = (item: MasterAbsorbLaborItem) => {
     setEditingAbsorbItemId(item.absorb_item_id);
     setAbsorbBucket(item.bucket);
+    setAbsorbStoneRole(parseAbsorbStoneRole(item.note) ?? "CENTER");
     setAbsorbReason(item.reason);
     setAbsorbAmount(String(item.amount_krw));
     setAbsorbIsPerPiece(Boolean(item.is_per_piece));
     setAbsorbVendorId(item.vendor_party_id ?? "");
-    setAbsorbPriority(String(item.priority));
     setAbsorbIsActive(Boolean(item.is_active));
-    setAbsorbNote(item.note ?? "");
   };
 
   const handleDeleteMaster = async () => {
@@ -1575,6 +2547,22 @@ export default function CatalogPage() {
     setIsDetailDrawerOpen(false);
   };
 
+  const openBomDrawer = () => {
+    setShowBomPanel(true);
+  };
+
+  const closeBomDrawer = () => {
+    setShowBomPanel(false);
+  };
+
+  const openAbsorbDrawer = () => {
+    setShowAbsorbPanel(true);
+  };
+
+  const closeAbsorbDrawer = () => {
+    setShowAbsorbPanel(false);
+  };
+
   useEffect(() => {
     if (view !== "gallery") setIsDetailDrawerOpen(false);
   }, [view]);
@@ -1594,11 +2582,11 @@ export default function CatalogPage() {
         setUploadingImage(false);
       }}
       title={isEditMode ? "마스터 수정" : "새 상품 등록"}
-      className="w-full lg:w-[1240px] sm:max-w-none"
+      className="w-full sm:w-[96vw] lg:w-[92vw] 2xl:w-[1500px] sm:max-w-none"
     >
       <div className="h-full overflow-y-auto p-6 scrollbar-hide">
         <div
-          className="grid gap-6 lg:grid-cols-[320px,1fr]"
+          className="grid gap-6 xl:grid-cols-[280px,minmax(0,1fr)] 2xl:grid-cols-[320px,minmax(0,1fr)]"
           // ✅ [유지] 내부 내용물을 더블클릭했을 때는 닫히지 않도록 이벤트 전파를 막습니다.
           onDoubleClickCapture={(e) => {
             e.stopPropagation();
@@ -1619,7 +2607,7 @@ export default function CatalogPage() {
               <label className="group relative flex h-56 w-56 mx-auto cursor-pointer flex-col items-center justify-center overflow-hidden rounded-[16px] border border-[var(--panel-border)] bg-[var(--panel)] text-center">
                 <input
                   type="file"
-                  accept="image/*"
+                    accept="image/*,.heic,.heif"
                   className="sr-only"
                   ref={fileInputRef}
                   onChange={(event) => {
@@ -1678,24 +2666,35 @@ export default function CatalogPage() {
 
           {/* 2. 우측 폼 영역 */}
           <form
-            className="flex flex-col"
+            className="flex min-w-0 flex-col"
             onSubmit={(event) => {
               event.preventDefault();
               handleSave();
             }}
           >
             <div className="pr-2">
-              <div className="grid gap-6 lg:grid-cols-[1fr_1fr_360px] h-full">
+              <div className="grid h-full grid-cols-1 gap-6 xl:grid-cols-2 2xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(320px,360px)]">
                 {/* 2-1. 좌측 열: 기본 정보 및 비고 */}
-                <div className="flex flex-col gap-4 h-full">
+                <div className="flex min-w-0 flex-col gap-4 h-full">
                   <div className="rounded-[18px] border border-[var(--panel-border)] bg-[var(--panel)] p-4">
                     <div className="mb-4 flex items-center justify-between">
-                      <p className="text-sm font-semibold text-[var(--foreground)]">
-                        기본 정보
-                      </p>
-                      <span className="text-xs text-[var(--muted)]">
-                        필수 항목 포함
-                      </span>
+                      <div className="flex items-center gap-3">
+                        <p className="text-sm font-semibold text-[var(--foreground)]">
+                          기본 정보
+                        </p>
+                        <label className="inline-flex items-center gap-2 text-xs text-[var(--foreground)]">
+                          <input
+                            type="checkbox"
+                            checked={isUnitPricing}
+                            onChange={handleToggleUnitPricing}
+                            disabled={!canToggleUnitPricing || setMasterUnitPricingMutation.isPending}
+                            title={unitPricingDisabledReason || undefined}
+                            className="h-4 w-4"
+                          />
+                          <span>단가제</span>
+                        </label>
+                      </div>
+                      <span className="text-xs text-[var(--muted)]">자동올림</span>
                     </div>
                     <div className="grid gap-4 md:grid-cols-2">
                       <Field label="모델명">
@@ -1741,17 +2740,6 @@ export default function CatalogPage() {
                           ))}
                         </Select>
                       </Field>
-                      <Field label="마스터 구분">
-                        <Select
-                          value={masterKind}
-                          onChange={(event) => setMasterKind(event.target.value as "MODEL" | "PART" | "STONE" | "BUNDLE")}
-                        >
-                          <option value="MODEL">MODEL</option>
-                          <option value="PART">PART</option>
-                          <option value="STONE">STONE</option>
-                          <option value="BUNDLE">BUNDLE</option>
-                        </Select>
-                      </Field>
                       <Field label="카테고리">
                         <Select
                           value={categoryCode}
@@ -1793,26 +2781,6 @@ export default function CatalogPage() {
                           disabled={masterKind === "BUNDLE"}
                         />
                       </Field>
-                      <Field label="단가제 (확정 시 RULE 올림 적용)">
-                        <div className="space-y-2">
-                          <label className="inline-flex items-center gap-2 text-sm">
-                            <input
-                              type="checkbox"
-                              checked={isUnitPricing}
-                              onChange={handleToggleUnitPricing}
-                              disabled={!canToggleUnitPricing || setMasterUnitPricingMutation.isPending}
-                              title={unitPricingDisabledReason || undefined}
-                              className="h-4 w-4"
-                            />
-                            <span>단가제</span>
-                          </label>
-                          <div className="text-[11px] text-[var(--muted)] leading-relaxed">
-                            <p>체크된 모델은 확정 시 RULE 계산 판매가가 설정된 올림 단위로 자동 올림됩니다.</p>
-                            <p>총액 덮어쓰기는 제외됩니다.</p>
-                            {!canToggleUnitPricing ? <p>저장 후 설정 가능</p> : null}
-                          </div>
-                        </div>
-                      </Field>
                     </div>
                   </div>
 
@@ -1830,13 +2798,22 @@ export default function CatalogPage() {
                 </div>
 
                 {/* 2-2. 우측 열: 공임 및 프로파일 설정 */}
-                <div className="space-y-4">
+                <div className="space-y-4 min-w-0">
                   <div className="rounded-[18px] border border-[var(--panel-border)] bg-[var(--panel)] p-4">
                     <div className="mb-4 flex items-center justify-between">
                       <p className="text-sm font-semibold text-[var(--foreground)]">
                         공임 및 구성
                       </p>
-                      <div className="flex gap-2">
+                      <div className="flex items-center gap-2">
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="secondary"
+                          className="h-7 px-2 text-[11px]"
+                          onClick={() => setShowAdvancedPricing((prev) => !prev)}
+                        >
+                          {showAdvancedPricing ? "고급 닫기" : "고급"}
+                        </Button>
                         <span className="text-[10px] bg-[var(--primary)]/10 text-[var(--primary)] px-2 py-0.5 rounded">
                           좌:판매
                         </span>
@@ -1845,12 +2822,6 @@ export default function CatalogPage() {
                         </span>
                       </div>
                     </div>
-                    {isAccessoryCategory ? (
-                      <div className="mb-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-[11px] text-red-900">
-                        CNY 환율 적용: 1 CNY = {cnyAdRate > 0 ? new Intl.NumberFormat("ko-KR", { maximumFractionDigits: 2 }).format(cnyAdRate) : "-"} KRW
-                      </div>
-                    ) : null}
-
                     <div className="grid grid-cols-[0.8fr_1fr_0.6fr_1fr] gap-x-2 gap-y-3 items-center text-xs">
                       <div className="text-center font-semibold text-[var(--muted)]">
                         항목
@@ -1861,276 +2832,310 @@ export default function CatalogPage() {
                       <div className="text-center font-semibold text-[var(--muted)]">
                         수량 (Qty)
                       </div>
-                      <div className="text-center font-semibold text-[var(--muted)]">
-                        원가 (Cost){isAccessoryCategory ? " KRW/CNY" : ""}
-                      </div>
+                      <div className="text-center font-semibold text-[var(--muted)]">원가 (Cost)</div>
 
                       {/* Base */}
-                      <div className="text-center font-medium text-[var(--foreground)]">
+                      <div className="text-center font-medium text-[var(--foreground)] bg-lime-50 rounded-[var(--radius)] py-2">
                         기본
                       </div>
-                      <Input
-                        type="number"
-                        min={0}
-                        value={laborBaseSell}
-                        onChange={(e) =>
-                          setLaborBaseSell(toNumber(e.target.value))
-                        }
-                      />
-                      <div className="text-center text-[var(--muted)]">-</div>
-                      {isAccessoryCategory ? (
-                        <div className="grid grid-cols-2 gap-1">
-                          <Input type="number" min={0} value={laborBaseCost} readOnly className="text-right" />
-                          <Input
-                            type="number"
-                            min={0}
-                            step="0.01"
-                            value={laborBaseCostCny}
-                            onChange={(e) =>
-                              updateKrwFromCnyInput(e.target.value, setLaborBaseCostCny, setLaborBaseCost)
-                            }
-                            className="border-red-300 focus-visible:ring-red-300"
-                            placeholder="CNY"
-                          />
-                        </div>
-                      ) : (
+                      <div className="relative">
+                        {absorbImpactSummary.baseLaborUnit !== 0 || accessoryLaborSellTotal !== 0 ? (
+                          <span className="absolute -top-1 -left-1 h-2.5 w-2.5 rounded-full bg-blue-500" title="흡수공임 반영" />
+                        ) : null}
                         <Input
                           type="number"
                           min={0}
-                          value={laborBaseCost}
-                          onChange={(e) => setLaborBaseCost(toNumber(e.target.value))}
+                          value={laborBaseSellWithAccessoryForEdit}
+                          onChange={(e) => {
+                            const nextDisplay = toNumber(e.target.value);
+                            const nextRaw = Math.max(0, nextDisplay - absorbImpactSummary.baseLaborUnit - accessoryLaborSellTotal);
+                            setLaborBaseSell(nextRaw);
+                          }}
+                          className="bg-lime-50"
                         />
-                      )}
+                      </div>
+                      <div className="text-center text-[var(--muted)] bg-lime-50 rounded-[var(--radius)] py-2">-</div>
+                      <Input
+                        type="number"
+                        min={0}
+                        value={laborBaseCostWithAccessoryForEdit}
+                        onChange={(e) => setLaborBaseCost(toNumber(e.target.value))}
+                        onBlur={() => {
+                          void applyGlobalLaborSellFromCost("BASE_LABOR", laborBaseCost, setLaborBaseSell);
+                        }}
+                        className="bg-lime-50"
+                      />
 
                       <div className="col-span-4 h-px bg-dashed border-t border-[var(--panel-border)]/70" />
 
                       {/* Center */}
-                      <div className="text-center text-[var(--muted)]">센터석</div>
-                      <Input
-                        className="col-span-3"
-                        placeholder="센터석 이름"
-                        value={centerStoneName}
-                        onChange={(e) => setCenterStoneName(e.target.value)}
-                        disabled={masterKind === "BUNDLE"}
-                      />
-                      <div className="text-center font-medium text-[var(--foreground)]">
+                      <div className="col-span-4 grid grid-cols-[minmax(0,1.8fr)_minmax(84px,0.6fr)_minmax(0,1fr)] gap-2">
+                        <Input
+                          className={cn(isCenterQtyZero && "bg-[var(--subtle-bg)]", "text-center")}
+                          placeholder="센터석 이름"
+                          value={centerStoneName}
+                          onChange={(e) => setCenterStoneName(e.target.value)}
+                          disabled={masterKind === "BUNDLE"}
+                        />
+                        <Select
+                          value={centerStoneSourceDefault}
+                          onChange={(e) => {
+                            const next = e.target.value as CatalogStoneSource;
+                            setCenterStoneSourceDefault(next);
+                            if (next !== "SELF") {
+                              setCenterSelfMargin(0);
+                              void applyGlobalLaborSellFromCost("STONE", laborCenterCost, setLaborCenterSell);
+                            }
+                          }}
+                          className={cn(isCenterQtyZero && "bg-[var(--subtle-bg)]")}
+                        >
+                          {stoneSourceOptions.map((option) => (
+                            <option key={option.value} value={option.value}>{option.label}</option>
+                          ))}
+                        </Select>
+                        {centerStoneSourceDefault === "SELF" ? (
+                          <Input type="number" value={centerSelfMargin} onChange={(e) => setCenterSelfMargin(toNumber(e.target.value))} className={cn(isCenterQtyZero && "bg-[var(--subtle-bg)]")} />
+                        ) : (
+                          <Input value="자입" readOnly className={cn(isCenterQtyZero && "bg-[var(--subtle-bg)]", "text-[var(--muted)] text-center")} />
+                        )}
+                      </div>
+                      <div className="text-center font-medium text-[var(--foreground)] bg-green-50 rounded-[var(--radius)] py-2">
                         센터
+                      </div>
+                      <div className="relative">
+                        {absorbImpactSummary.stoneCenterUnit !== 0 ? (
+                          <span className="absolute -top-1 -left-1 h-2.5 w-2.5 rounded-full bg-blue-500" title="흡수공임 반영" />
+                        ) : null}
+                        <Input
+                          type="number"
+                          min={0}
+                          value={laborCenterSellWithAbsorb}
+                          readOnly
+                          className="bg-green-50"
+                        />
                       </div>
                       <Input
                         type="number"
                         min={0}
-                        value={laborCenterSell}
-                        onChange={(e) =>
-                          setLaborCenterSell(toNumber(e.target.value))
-                        }
-                      />
-                      <Input
-                        type="number"
-                        min={0}
                         placeholder="수량"
-                        className="text-center bg-[var(--input-bg)]"
+                        className="text-center bg-green-50"
                         value={centerQty}
                         onChange={(e) => setCenterQty(toNumber(e.target.value))}
                         disabled={masterKind === "BUNDLE"}
                       />
-                      {isAccessoryCategory ? (
-                        <div className="grid grid-cols-2 gap-1">
-                          <Input type="number" min={0} value={laborCenterCost} readOnly className="text-right" />
-                          <Input
-                            type="number"
-                            min={0}
-                            step="0.01"
-                            value={laborCenterCostCny}
-                            onChange={(e) =>
-                              updateKrwFromCnyInput(e.target.value, setLaborCenterCostCny, setLaborCenterCost)
-                            }
-                            className="border-red-300 focus-visible:ring-red-300"
-                            placeholder="CNY"
-                          />
-                        </div>
-                      ) : (
-                        <Input
-                          type="number"
-                          min={0}
-                          value={laborCenterCost}
-                          onChange={(e) => setLaborCenterCost(toNumber(e.target.value))}
-                        />
-                      )}
+                      <Input
+                        type="number"
+                        min={0}
+                        value={laborCenterCost}
+                        onChange={(e) => setLaborCenterCost(toNumber(e.target.value))}
+                        onBlur={() => {
+                          void applyStoneSellBySource(centerStoneSourceDefault, laborCenterCost, centerSelfMargin, setLaborCenterSell);
+                        }}
+                        className="bg-green-50"
+                      />
                       <div className="col-span-4 h-px bg-dashed border-t border-[var(--panel-border)]/70" />
 
                       {/* Sub1 */}
-                      <div className="text-center text-[var(--muted)]">서브1석</div>
-                      <Input
-                        className="col-span-3"
-                        placeholder="서브1석 이름"
-                        value={sub1StoneName}
-                        onChange={(e) => setSub1StoneName(e.target.value)}
-                        disabled={masterKind === "BUNDLE"}
-                      />
-                      <div className="text-center font-medium text-[var(--foreground)]">
+                      <div className="col-span-4 grid grid-cols-[minmax(0,1.8fr)_minmax(84px,0.6fr)_minmax(0,1fr)] gap-2">
+                        <Input
+                          className={cn(isSub1QtyZero && "bg-[var(--subtle-bg)]", "text-center")}
+                          placeholder="서브1석 이름"
+                          value={sub1StoneName}
+                          onChange={(e) => setSub1StoneName(e.target.value)}
+                          disabled={masterKind === "BUNDLE"}
+                        />
+                        <Select
+                          value={sub1StoneSourceDefault}
+                          onChange={(e) => {
+                            const next = e.target.value as CatalogStoneSource;
+                            setSub1StoneSourceDefault(next);
+                            if (next !== "SELF") {
+                              setSub1SelfMargin(0);
+                              void applyGlobalLaborSellFromCost("STONE", laborSub1Cost, setLaborSub1Sell);
+                            }
+                          }}
+                          className={cn(isSub1QtyZero && "bg-[var(--subtle-bg)]")}
+                        >
+                          {stoneSourceOptions.map((option) => (
+                            <option key={option.value} value={option.value}>{option.label}</option>
+                          ))}
+                        </Select>
+                        {sub1StoneSourceDefault === "SELF" ? (
+                          <Input type="number" value={sub1SelfMargin} onChange={(e) => setSub1SelfMargin(toNumber(e.target.value))} className={cn(isSub1QtyZero && "bg-[var(--subtle-bg)]")} />
+                        ) : (
+                          <Input value="자입" readOnly className={cn(isSub1QtyZero && "bg-[var(--subtle-bg)]", "text-[var(--muted)] text-center")} />
+                        )}
+                      </div>
+                      <div className="text-center font-medium text-[var(--foreground)] bg-green-50 rounded-[var(--radius)] py-2">
                         서브1
+                      </div>
+                      <div className="relative">
+                        {absorbImpactSummary.stoneSub1Unit !== 0 ? (
+                          <span className="absolute -top-1 -left-1 h-2.5 w-2.5 rounded-full bg-blue-500" title="흡수공임 반영" />
+                        ) : null}
+                        <Input
+                          type="number"
+                          min={0}
+                          value={laborSub1SellWithAbsorb}
+                          readOnly
+                          className="bg-green-50"
+                        />
                       </div>
                       <Input
                         type="number"
                         min={0}
-                        value={laborSub1Sell}
-                        onChange={(e) =>
-                          setLaborSub1Sell(toNumber(e.target.value))
-                        }
-                      />
-                      <Input
-                        type="number"
-                        min={0}
                         placeholder="수량"
-                        className="text-center bg-[var(--input-bg)]"
+                        className="text-center bg-green-50"
                         value={sub1Qty}
                         onChange={(e) => setSub1Qty(toNumber(e.target.value))}
                         disabled={masterKind === "BUNDLE"}
                       />
-                      {isAccessoryCategory ? (
-                        <div className="grid grid-cols-2 gap-1">
-                          <Input type="number" min={0} value={laborSub1Cost} readOnly className="text-right" />
-                          <Input
-                            type="number"
-                            min={0}
-                            step="0.01"
-                            value={laborSub1CostCny}
-                            onChange={(e) =>
-                              updateKrwFromCnyInput(e.target.value, setLaborSub1CostCny, setLaborSub1Cost)
-                            }
-                            className="border-red-300 focus-visible:ring-red-300"
-                            placeholder="CNY"
-                          />
-                        </div>
-                      ) : (
-                        <Input
-                          type="number"
-                          min={0}
-                          value={laborSub1Cost}
-                          onChange={(e) => setLaborSub1Cost(toNumber(e.target.value))}
-                        />
-                      )}
-                      <div className="col-span-4 h-px bg-dashed border-t border-[var(--panel-border)]/70" />
-
-                      {/* Sub2 */}
-                      <div className="text-center text-[var(--muted)]">서브2석</div>
-                      <Input
-                        className="col-span-3"
-                        placeholder="서브2석 이름"
-                        value={sub2StoneName}
-                        onChange={(e) => setSub2StoneName(e.target.value)}
-                        disabled={masterKind === "BUNDLE"}
-                      />
-                      <div className="text-center font-medium text-[var(--foreground)]">
-                        서브2
-                      </div>
                       <Input
                         type="number"
                         min={0}
-                        value={laborSub2Sell}
-                        onChange={(e) =>
-                          setLaborSub2Sell(toNumber(e.target.value))
-                        }
+                        value={laborSub1Cost}
+                        onChange={(e) => setLaborSub1Cost(toNumber(e.target.value))}
+                        onBlur={() => {
+                          void applyStoneSellBySource(sub1StoneSourceDefault, laborSub1Cost, sub1SelfMargin, setLaborSub1Sell);
+                        }}
+                        className="bg-green-50"
                       />
+                      <div className="col-span-4 h-px bg-dashed border-t border-[var(--panel-border)]/70" />
+
+                      {/* Sub2 */}
+                      <div className="col-span-4 grid grid-cols-[minmax(0,1.8fr)_minmax(84px,0.6fr)_minmax(0,1fr)] gap-2">
+                        <Input
+                          className={cn(isSub2QtyZero && "bg-[var(--subtle-bg)]", "text-center")}
+                          placeholder="서브2석 이름"
+                          value={sub2StoneName}
+                          onChange={(e) => setSub2StoneName(e.target.value)}
+                          disabled={masterKind === "BUNDLE"}
+                        />
+                        <Select
+                          value={sub2StoneSourceDefault}
+                          onChange={(e) => {
+                            const next = e.target.value as CatalogStoneSource;
+                            setSub2StoneSourceDefault(next);
+                            if (next !== "SELF") {
+                              setSub2SelfMargin(0);
+                              void applyGlobalLaborSellFromCost("STONE", laborSub2Cost, setLaborSub2Sell);
+                            }
+                          }}
+                          className={cn(isSub2QtyZero && "bg-[var(--subtle-bg)]")}
+                        >
+                          {stoneSourceOptions.map((option) => (
+                            <option key={option.value} value={option.value}>{option.label}</option>
+                          ))}
+                        </Select>
+                        {sub2StoneSourceDefault === "SELF" ? (
+                          <Input type="number" value={sub2SelfMargin} onChange={(e) => setSub2SelfMargin(toNumber(e.target.value))} className={cn(isSub2QtyZero && "bg-[var(--subtle-bg)]")} />
+                        ) : (
+                          <Input value="자입" readOnly className={cn(isSub2QtyZero && "bg-[var(--subtle-bg)]", "text-[var(--muted)] text-center")} />
+                        )}
+                      </div>
+                      <div className="text-center font-medium text-[var(--foreground)] bg-green-50 rounded-[var(--radius)] py-2">
+                        서브2
+                      </div>
+                      <div className="relative">
+                        {absorbImpactSummary.stoneSub2Unit !== 0 ? (
+                          <span className="absolute -top-1 -left-1 h-2.5 w-2.5 rounded-full bg-blue-500" title="흡수공임 반영" />
+                        ) : null}
+                        <Input
+                          type="number"
+                          min={0}
+                          value={laborSub2SellWithAbsorb}
+                          readOnly
+                          className="bg-green-50"
+                        />
+                      </div>
                       <Input
                         type="number"
                         min={0}
                         placeholder="수량"
-                        className="text-center bg-[var(--input-bg)]"
+                        className="text-center bg-green-50"
                         value={sub2Qty}
                         onChange={(e) => setSub2Qty(toNumber(e.target.value))}
                         disabled={masterKind === "BUNDLE"}
                       />
-                      {isAccessoryCategory ? (
-                        <div className="grid grid-cols-2 gap-1">
-                          <Input type="number" min={0} value={laborSub2Cost} readOnly className="text-right" />
-                          <Input
-                            type="number"
-                            min={0}
-                            step="0.01"
-                            value={laborSub2CostCny}
-                            onChange={(e) =>
-                              updateKrwFromCnyInput(e.target.value, setLaborSub2CostCny, setLaborSub2Cost)
-                            }
-                            className="border-red-300 focus-visible:ring-red-300"
-                            placeholder="CNY"
-                          />
-                        </div>
-                      ) : (
-                        <Input
-                          type="number"
-                          min={0}
-                          value={laborSub2Cost}
-                          onChange={(e) => setLaborSub2Cost(toNumber(e.target.value))}
-                        />
-                      )}
+                      <Input
+                        type="number"
+                        min={0}
+                        value={laborSub2Cost}
+                        onChange={(e) => setLaborSub2Cost(toNumber(e.target.value))}
+                        onBlur={() => {
+                          void applyStoneSellBySource(sub2StoneSourceDefault, laborSub2Cost, sub2SelfMargin, setLaborSub2Sell);
+                        }}
+                        className="bg-green-50"
+                      />
 
                       <div className="col-span-4 h-px bg-dashed border-t border-[var(--panel-border)] my-2" />
 
                       {/* Plating */}
-                      <div className="text-center font-medium text-[var(--muted)]">
+                      <div className="text-center font-medium text-[var(--muted)] bg-[var(--subtle-bg)] rounded-[var(--radius)] py-2">
                         도금
                       </div>
-                      <Input
-                        type="number"
-                        min={0}
-                        value={platingSell}
-                        onChange={(e) =>
-                          setPlatingSell(toNumber(e.target.value))
-                        }
-                      />
-                      <div className="text-center text-[var(--muted)]">-</div>
-                      {isAccessoryCategory ? (
-                        <div className="grid grid-cols-2 gap-1">
-                          <Input type="number" min={0} value={platingCost} readOnly className="text-right" />
-                          <Input
-                            type="number"
-                            min={0}
-                            step="0.01"
-                            value={platingCostCny}
-                            onChange={(e) =>
-                              updateKrwFromCnyInput(e.target.value, setPlatingCostCny, setPlatingCost)
-                            }
-                            className="border-red-300 focus-visible:ring-red-300"
-                            placeholder="CNY"
-                          />
-                        </div>
-                      ) : (
+                      <div className="relative">
+                        {absorbImpactSummary.platingUnit !== 0 ? (
+                          <span className="absolute -top-1 -left-1 h-2.5 w-2.5 rounded-full bg-blue-500" title="흡수공임 반영" />
+                        ) : null}
                         <Input
                           type="number"
                           min={0}
-                          value={platingCost}
-                          onChange={(e) => setPlatingCost(toNumber(e.target.value))}
+                          value={platingSellWithAbsorb}
+                          className="bg-[var(--subtle-bg)]"
+                          onChange={(e) => {
+                            const nextDisplay = toNumber(e.target.value);
+                            const nextRaw = Math.max(0, nextDisplay - absorbImpactSummary.platingUnit);
+                            setPlatingSell(nextRaw);
+                          }}
                         />
-                      )}
-
-                      <div className="text-center font-medium text-[var(--muted)]">
-                        세팅 부가마진(개당)
                       </div>
+                      <div className="text-center text-[var(--muted)]">-</div>
                       <Input
                         type="number"
                         min={0}
-                        value={settingAddonMarginKrwPerPiece}
-                        onChange={(e) =>
-                          setSettingAddonMarginKrwPerPiece(toNumber(e.target.value))
-                        }
+                        value={platingCost}
+                        className="bg-[var(--subtle-bg)]"
+                        onChange={(e) => setPlatingCost(toNumber(e.target.value))}
+                        onBlur={(e) => {
+                          const nextCost = toNumber(e.target.value);
+                          void applyGlobalPlatingSellFromCost(nextCost, setPlatingSell);
+                        }}
                       />
-                      <div className="text-center text-[var(--muted)]">-</div>
-                      <div className="text-center text-[var(--muted)]">룰 외 추가</div>
 
-                      <div className="text-center font-medium text-[var(--muted)]">
-                        원석 부가마진(개당)
-                      </div>
-                      <Input
-                        type="number"
-                        min={0}
-                        value={stoneAddonMarginKrwPerPiece}
-                        onChange={(e) =>
-                          setStoneAddonMarginKrwPerPiece(toNumber(e.target.value))
-                        }
-                      />
-                      <div className="text-center text-[var(--muted)]">-</div>
-                      <div className="text-center text-[var(--muted)]">룰 외 추가</div>
+                      {showAdvancedPricing ? (
+                        <>
+                          <div className="text-center font-medium text-[var(--muted)] bg-[var(--subtle-bg)] rounded-[var(--radius)] py-2">
+                            세팅 부가마진(개당)
+                          </div>
+                          <Input
+                            type="number"
+                            min={0}
+                            value={settingAddonMarginKrwPerPiece}
+                            className="bg-[var(--subtle-bg)]"
+                            onChange={(e) =>
+                              setSettingAddonMarginKrwPerPiece(toNumber(e.target.value))
+                            }
+                          />
+                          <div className="text-center text-[var(--muted)]">-</div>
+                          <div className="text-center text-[var(--muted)]">룰 외 추가</div>
+
+                          <div className="text-center font-medium text-[var(--muted)] bg-[var(--subtle-bg)] rounded-[var(--radius)] py-2">
+                            원석 부가마진(개당)
+                          </div>
+                          <Input
+                            type="number"
+                            min={0}
+                            value={stoneAddonMarginKrwPerPiece}
+                            className="bg-[var(--subtle-bg)]"
+                            onChange={(e) =>
+                              setStoneAddonMarginKrwPerPiece(toNumber(e.target.value))
+                            }
+                          />
+                          <div className="text-center text-[var(--muted)]">-</div>
+                          <div className="text-center text-[var(--muted)]">룰 외 추가</div>
+                        </>
+                      ) : null}
 
                       <div className="col-span-4 h-px bg-dashed border-t border-[var(--panel-border)] my-2" />
 
@@ -2144,7 +3149,7 @@ export default function CatalogPage() {
                         readOnly
                         autoFormat={false}
                         className="text-right font-bold bg-[var(--input-bg)] text-[var(--primary)] border-[var(--panel-border)]"
-                        value={totalLaborSell}
+                        value={totalLaborSellWithAccessoryForEdit}
                       />
                       <div className="text-center text-[var(--muted)]">-</div>
                       <Input
@@ -2153,154 +3158,68 @@ export default function CatalogPage() {
                         readOnly
                         autoFormat={false}
                         className="text-right font-bold bg-[var(--input-bg)] text-[var(--foreground)] border-[var(--panel-border)]"
-                        value={totalLaborCost}
+                        value={totalLaborCostWithAccessoryForEdit}
                       />
-                    </div>
-                  </div>
-
-                  <div className="rounded-[18px] border border-[var(--panel-border)] bg-[var(--panel)] p-4 space-y-4">
-                    <p className="text-sm font-semibold text-[var(--foreground)]">알공임 정책 / 흡수공임</p>
-
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                      <Field label="센터석 소스 기본값">
-                        <Select value={centerStoneSourceDefault} onChange={(e) => setCenterStoneSourceDefault(e.target.value as "SELF" | "FACTORY" | "PROVIDED") }>
-                          {stoneSourceOptions.map((option) => (
-                            <option key={option.value} value={option.value}>{option.label}</option>
-                          ))}
-                        </Select>
-                      </Field>
-                      <Field label="보조1 소스 기본값">
-                        <Select value={sub1StoneSourceDefault} onChange={(e) => setSub1StoneSourceDefault(e.target.value as "SELF" | "FACTORY" | "PROVIDED") }>
-                          {stoneSourceOptions.map((option) => (
-                            <option key={option.value} value={option.value}>{option.label}</option>
-                          ))}
-                        </Select>
-                      </Field>
-                      <Field label="보조2 소스 기본값">
-                        <Select value={sub2StoneSourceDefault} onChange={(e) => setSub2StoneSourceDefault(e.target.value as "SELF" | "FACTORY" | "PROVIDED") }>
-                          {stoneSourceOptions.map((option) => (
-                            <option key={option.value} value={option.value}>{option.label}</option>
-                          ))}
-                        </Select>
-                      </Field>
-                      <Field label="BUY 마진 프로파일">
-                        <Select
-                          value={buyMarginProfileId}
-                          onChange={(e) => setBuyMarginProfileId(e.target.value)}
-                          disabled={!hasSelfStoneSource}
-                        >
-                          <option value="">{hasSelfStoneSource ? "프로파일 선택" : "SELF 소스에서만 선택 가능"}</option>
-                          {(buyProfilesQuery.data ?? []).map((profile) => (
-                            <option key={profile.profile_id} value={profile.profile_id}>{profile.profile_name}</option>
-                          ))}
-                        </Select>
-                      </Field>
-                    </div>
-
-                    <div className="rounded-md border border-[var(--panel-border)] bg-[var(--surface)] p-3 space-y-3">
-                      <div className="flex items-center justify-between gap-2">
-                        <div>
-                          <div className="text-sm font-semibold">흡수공임</div>
-                          <div className="text-xs text-[var(--muted)]">사유/금액/버킷/공장 스코프 기반 SKU 예외</div>
-                        </div>
-                        {masterId.trim() ? null : <span className="text-xs text-[var(--muted)]">저장 후 등록 가능</span>}
-                      </div>
-
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                        <Select value={absorbBucket} onChange={(e) => setAbsorbBucket(e.target.value as AbsorbLaborBucket)}>
-                          {absorbBucketOptions.map((option) => (
-                            <option key={option.value} value={option.value}>{option.label}</option>
-                          ))}
-                        </Select>
-                        <Input value={absorbReason} onChange={(e) => setAbsorbReason(e.target.value)} placeholder="사유" />
-                        <Input value={absorbAmount} onChange={(e) => setAbsorbAmount(e.target.value)} placeholder="금액" />
-                        <Select value={absorbVendorId} onChange={(e) => setAbsorbVendorId(e.target.value)}>
-                          <option value="">전체 공장</option>
-                          {vendorOptions.map((vendor) => (
-                            <option key={vendor.value} value={vendor.value}>{vendor.label}</option>
-                          ))}
-                        </Select>
-                        <Input value={absorbPriority} onChange={(e) => setAbsorbPriority(e.target.value)} placeholder="우선순위" />
-                        <Input value={absorbNote} onChange={(e) => setAbsorbNote(e.target.value)} placeholder="노트" />
-                        <label className="inline-flex items-center gap-2 text-xs">
-                          <input type="checkbox" checked={absorbIsPerPiece} onChange={(e) => setAbsorbIsPerPiece(e.target.checked)} className="h-4 w-4" />
-                          수량 곱(is_per_piece)
-                        </label>
-                        <label className="inline-flex items-center gap-2 text-xs">
-                          <input type="checkbox" checked={absorbIsActive} onChange={(e) => setAbsorbIsActive(e.target.checked)} className="h-4 w-4" />
-                          활성화
-                        </label>
-                      </div>
-
-                      <div className="flex items-center gap-2">
-                        <Button type="button" variant="secondary" onClick={handleSaveAbsorbLaborItem} disabled={!masterId.trim()}>
-                          {editingAbsorbItemId ? "흡수공임 수정" : "흡수공임 추가"}
-                        </Button>
-                        {editingAbsorbItemId ? (
-                          <Button type="button" variant="ghost" onClick={resetAbsorbForm}>취소</Button>
-                        ) : null}
-                      </div>
-
-                      <div className="overflow-x-auto">
-                        <table className="min-w-[920px] w-full text-xs">
-                          <thead className="text-[var(--muted)]">
-                            <tr>
-                              <th className="text-left py-1">Active</th>
-                              <th className="text-left py-1">Bucket</th>
-                              <th className="text-left py-1">Reason</th>
-                              <th className="text-left py-1">Amount</th>
-                              <th className="text-left py-1">Per-piece</th>
-                              <th className="text-left py-1">Vendor Scope</th>
-                              <th className="text-left py-1">Priority</th>
-                              <th className="text-left py-1">Actions</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {absorbLaborItems.length === 0 ? (
-                              <tr className="border-t border-[var(--panel-border)]">
-                                <td className="py-2 text-[var(--muted)]" colSpan={8}>등록된 흡수공임이 없습니다.</td>
-                              </tr>
-                            ) : (
-                              absorbLaborItems.map((item) => (
-                                <tr key={item.absorb_item_id} className="border-t border-[var(--panel-border)]">
-                                  <td className="py-1">{item.is_active ? "Y" : "N"}</td>
-                                  <td className="py-1">{item.bucket}</td>
-                                  <td className="py-1">{item.reason}</td>
-                                  <td className="py-1">+{Number(item.amount_krw).toLocaleString()}</td>
-                                  <td className="py-1">{item.is_per_piece ? "Y" : "N"}</td>
-                                  <td className="py-1">{vendorOptions.find((vendor) => vendor.value === item.vendor_party_id)?.label ?? "전체"}</td>
-                                  <td className="py-1">{item.priority}</td>
-                                  <td className="py-1">
-                                    <div className="flex items-center gap-1">
-                                      <Button type="button" size="sm" variant="secondary" onClick={() => handleEditAbsorbLaborItem(item)}>Edit</Button>
-                                      <Button type="button" size="sm" variant="secondary" onClick={() => handleDeleteAbsorbLaborItem(item.absorb_item_id)}>Delete</Button>
-                                    </div>
-                                  </td>
-                                </tr>
-                              ))
-                            )}
-                          </tbody>
-                        </table>
-                      </div>
                     </div>
                   </div>
 
                 </div>
 
                 {/* 2-3. 중국 원가 계산 */}
-                <div className="lg:sticky lg:top-4 space-y-4">
-                  <ChinaCostPanel
-                    csOriginalKrwPerG={csOriginalKrwPerG}
-                    cnyKrwPer1={cnyAdRate}
-                    onRefreshMarket={refreshMarketTicks}
-                    netWeightG={netWeightG}
-                    basicCnyPerG={cnLaborBasicCnyPerG}
-                    extraItems={cnLaborExtraItems}
-                    onChangeBasic={setCnLaborBasicCnyPerG}
-                    onAddExtra={addCnExtraItem}
-                    onChangeExtra={changeCnExtraItem}
-                    onRemoveExtra={removeCnExtraItem}
-                  />
+                <div className="space-y-4 min-w-0 2xl:sticky 2xl:top-4">
+                  {showChinaCostPanel ? (
+                    <ChinaCostPanel
+                      csOriginalKrwPerG={csOriginalKrwPerG}
+                      cnyKrwPer1={cnyAdRate}
+                      onRefreshMarket={refreshMarketTicks}
+                      netWeightG={netWeightG}
+                      basicCnyPerG={cnLaborBasicCnyPerG}
+                      basicBasis={cnLaborBasicBasis}
+                      extraItems={cnLaborExtraItems}
+                      onChangeBasic={setCnLaborBasicCnyPerG}
+                      onChangeBasicBasis={setCnLaborBasicBasis}
+                      onAddExtra={addCnExtraItem}
+                      onChangeExtra={changeCnExtraItem}
+                      onRemoveExtra={removeCnExtraItem}
+                    />
+                  ) : null}
+
+                  <div className="rounded-[18px] border border-[var(--panel-border)] bg-[var(--panel)] p-4">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="text-sm font-semibold text-[var(--foreground)]">
+                        흡수공임
+                        <span className="ml-2 text-xs text-[var(--muted)]">{masterId.trim() ? `${visibleAbsorbLaborItems.length}건` : "저장 후 등록 가능"}</span>
+                      </div>
+                      <Button type="button" variant="secondary" onClick={openAbsorbDrawer} disabled={!masterId.trim()}>
+                        흡수공임 추가
+                      </Button>
+                    </div>
+
+                    <div className="mt-3 overflow-x-auto rounded border border-[var(--panel-border)] bg-[var(--panel)]">
+                      <table className="w-full min-w-[280px] text-xs">
+                        <thead className="text-[var(--muted)]">
+                          <tr>
+                            <th className="px-3 py-2 text-left">버킷</th>
+                            <th className="px-3 py-2 text-left">개당 공임</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {visibleAbsorbLaborItems.length === 0 ? (
+                            <tr className="border-t border-[var(--panel-border)]">
+                              <td className="px-3 py-3 text-[var(--muted)]" colSpan={2}>등록된 흡수공임이 없습니다.</td>
+                            </tr>
+                          ) : (
+                            visibleAbsorbLaborItems.map((item) => (
+                              <tr key={item.absorb_item_id} className="border-t border-[var(--panel-border)]">
+                                <td className={cn("px-3 py-2", getAbsorbBucketToneClass(item.bucket))}>{getAbsorbBucketDisplayLabel(item)}</td>
+                                <td className={cn("px-3 py-2", getAbsorbBucketToneClass(item.bucket))}>₩{formatDisplayKrw(item.amount_krw)}</td>
+                              </tr>
+                            ))
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
@@ -2394,13 +3313,28 @@ export default function CatalogPage() {
 
       <Input
         placeholder="모델명, 태그 검색"
-        className="col-span-12 md:col-span-8"
+        className="col-span-12 md:col-span-6"
         value={filterQuery}
         onChange={(e) => {
           setFilterQuery(e.target.value);
           setPage(1);
         }}
       />
+
+      <Button
+        type="button"
+        variant="secondary"
+        className={cn(
+          "col-span-12 md:col-span-2",
+          includeAccessory && "border-[var(--primary)] text-[var(--primary)]"
+        )}
+        onClick={() => {
+          setIncludeAccessory((prev) => !prev);
+          setPage(1);
+        }}
+      >
+        부속 포함 {includeAccessory ? "ON" : "OFF"}
+      </Button>
     </div>
   );
 
@@ -2431,35 +3365,49 @@ export default function CatalogPage() {
             </div>
           )}
 
-          {/* 가격 통계 박스들 */}
-          <div className="grid grid-cols-2 gap-2 flex-1 min-w-0 xl:grid-cols-1">
-            <div className="flex flex-col items-center justify-center text-center rounded-[12px] border border-[var(--panel-border)] bg-[var(--panel)] px-3 py-2">
-              <p className="text-xs text-[var(--muted)]">
-                예상 총 금액 (판매)
-              </p>
-              <p className="text-sm font-semibold text-[var(--foreground)]">
-                <NumberText value={totalEstimatedSell} /> 원
-              </p>
+          <div className="flex-1 min-w-0 rounded-[12px] border border-[var(--panel-border)] bg-[var(--panel)] px-4 py-3 flex flex-col gap-3">
+            <div className="grid grid-cols-3 gap-2 text-xs">
+              <div className="rounded-[8px] border border-[var(--panel-border)] bg-[var(--subtle-bg)] px-2 py-2 text-center">{selectedVendorName || "-"}</div>
+              <div className="rounded-[8px] border border-[var(--panel-border)] bg-[var(--subtle-bg)] px-2 py-2 text-center">{selectedMaterialLabel}</div>
+              <div className="rounded-[8px] border border-[var(--panel-border)] bg-[var(--subtle-bg)] px-2 py-2 text-center">{selectedCategoryLabel}</div>
             </div>
-            <div className="flex flex-col items-center justify-center text-center rounded-[12px] border border-[var(--panel-border)] bg-[var(--panel)] px-3 py-2">
-              <p className="text-xs text-[var(--muted)]">
-                예상 총 금액 (원가)
-              </p>
-              <p className="text-sm font-semibold text-[var(--foreground)]">
-                <NumberText value={totalEstimatedCost} /> 원
-              </p>
+            <div className="rounded-[8px] border border-[var(--panel-border)] bg-blue-50 px-3 py-2 text-sm font-semibold text-[var(--foreground)] text-center">
+              {(() => {
+                const weight = parseFloat(String(selectedDetail?.weight ?? ""));
+                const deduction = parseFloat(String(selectedDetail?.deductionWeight ?? ""));
+                if (!Number.isFinite(weight)) return "총중량 -";
+                const safeDeduction = Number.isFinite(deduction) ? deduction : 0;
+                const netWeightText = formatWeightNumber(weight - safeDeduction);
+                const [intPart, decimalPart] = netWeightText.split(".");
+                return (
+                  <>
+                    총중량 {intPart}
+                    {decimalPart ? <><span className="decimal-point-emphasis">.</span>{decimalPart}</> : null} g
+                  </>
+                );
+              })()}
             </div>
-            <div className="flex flex-col items-center justify-center text-center rounded-[12px] border border-[var(--panel-border)] bg-[var(--panel)] px-3 py-2">
-              <p className="text-xs text-[var(--muted)]">판매 합계공임</p>
-              <p className="text-sm font-semibold text-[var(--foreground)]">
-                <NumberText value={detailLaborSell} /> 원
-              </p>
+            <div className="grid grid-cols-2 gap-2 text-xs">
+              <div className="rounded-[8px] border border-[var(--panel-border)] bg-[var(--subtle-bg)] px-3 py-2 text-center">
+                {(() => {
+                  const weight = parseFloat(String(selectedDetail?.weight ?? ""));
+                  if (!Number.isFinite(weight)) return <>중량 -</>;
+                  const weightText = formatWeightNumber(weight);
+                  const [intPart, decimalPart] = weightText.split(".");
+                  return (
+                    <>
+                      중량 {intPart}
+                      {decimalPart ? <><span className="decimal-point-emphasis">.</span>{decimalPart}</> : null} g
+                    </>
+                  );
+                })()}
+              </div>
+              <div className="rounded-[8px] border border-[var(--panel-border)] bg-[var(--subtle-bg)] px-3 py-2 text-center">
+                차감중량 {selectedDetail?.deductionWeight ? `${selectedDetail.deductionWeight} g` : "-"}
+              </div>
             </div>
-            <div className="flex flex-col items-center justify-center text-center rounded-[12px] border border-[var(--panel-border)] bg-[var(--panel)] px-3 py-2">
-              <p className="text-xs text-[var(--muted)]">원가 합계공임</p>
-              <p className="text-sm font-semibold text-[var(--foreground)]">
-                <NumberText value={detailLaborCost} /> 원
-              </p>
+            <div className="mt-auto rounded-[8px] border border-[var(--panel-border)] bg-blue-50 px-3 py-2 text-sm font-semibold leading-snug whitespace-normal break-words text-[var(--foreground)]">
+              {selectedItem?.model ?? "-"}
             </div>
           </div>
         </div>
@@ -2469,214 +3417,203 @@ export default function CatalogPage() {
           <CardHeader>
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">
-                <span className="text-lg font-bold text-[var(--foreground)]">
-                  상세 정보
+                <span className="shrink-0 whitespace-nowrap text-lg font-bold text-[var(--foreground)]">
+                  상세
                 </span>
                 <Button
                   variant="secondary"
                   size="sm"
                   onClick={handleOpenEdit}
                   disabled={!selectedItem}
+                  className="border-amber-600 bg-amber-500 text-white hover:bg-amber-600"
                 >
                   마스터 수정
                 </Button>
                 <Button
                   variant="secondary"
                   size="sm"
-                  onClick={() => setShowBomPanel((prev) => !prev)}
+                  onClick={openBomDrawer}
                   disabled={!selectedItem}
                   className={cn(
-                    showBomPanel && "border-[var(--primary)] text-[var(--primary)]"
+                    "border-amber-300 bg-amber-100 text-amber-900 hover:bg-amber-200",
+                    showBomPanel && "border-amber-500 bg-amber-200 text-amber-950"
                   )}
                 >
                   부속
                 </Button>
+                <div className="grid grid-cols-[auto_auto] items-center gap-2 rounded-[8px] border-2 border-red-400 bg-white px-3 py-1.5">
+                  <div className="text-xs text-[var(--muted)]">총중량</div>
+                  <div className="text-sm font-semibold text-[var(--foreground)]">
+                    {(() => {
+                      const weight = parseFloat(String(selectedDetail?.weight ?? ""));
+                      const deduction = parseFloat(String(selectedDetail?.deductionWeight ?? ""));
+                      if (!Number.isFinite(weight)) return "-";
+                      const safeDeduction = Number.isFinite(deduction) ? deduction : 0;
+                      const netWeightText = formatWeightNumber(weight - safeDeduction);
+                      const [intPart, decimalPart] = netWeightText.split(".");
+                      return (
+                        <>
+                          {intPart}
+                          {decimalPart ? <><span className="decimal-point-emphasis">.</span>{decimalPart}</> : null} g
+                        </>
+                      );
+                    })()}
+                  </div>
+                </div>
+                <div className="grid grid-cols-[auto_auto] items-center gap-2 rounded-[8px] border-2 border-[var(--primary)] bg-[var(--panel)] px-3 py-1.5">
+                  <div className="text-xs text-[var(--muted)]">총금액(판매)</div>
+                  <div className="text-sm font-semibold text-[var(--foreground)]">
+                    <NumberText value={totalEstimatedSell} /> 원
+                  </div>
+                </div>
               </div>
             </div>
           </CardHeader>
           <CardBody className="space-y-3">
-            <div className="grid grid-cols-6 gap-2">
-              <Input
-                className="col-span-3"
-                placeholder="모델명"
-                value={selectedItem?.model ?? ""}
-                readOnly
-              />
-              <Input
-                className="col-span-1"
-                placeholder="공급처"
-                value={selectedVendorName}
-                readOnly
-              />
-              <Select value={selectedDetail?.materialCode ?? ""} disabled>
-                <option value="">소재</option>
-                {materialOptions.map((material) => (
-                  <option key={material.value} value={material.value}>
-                    {material.label}
-                  </option>
-                ))}
-              </Select>
-              <Select value={selectedDetail?.categoryCode ?? ""} disabled>
-                <option value="">카테고리 코드</option>
-                {categoryOptions.map((category) => (
-                  <option key={category.value} value={category.value}>
-                    {category.label}
-                  </option>
-                ))}
-              </Select>
-              <Input
-                className="col-span-2"
-                placeholder="순중량 (g)"
-                value={(() => {
-                  const weight = parseFloat(String(selectedDetail?.weight ?? ""));
-                  const deduction = parseFloat(String(selectedDetail?.deductionWeight ?? ""));
-                  if (!Number.isFinite(weight)) return "";
-                  const safeDeduction = Number.isFinite(deduction) ? deduction : 0;
-                  return `${(weight - safeDeduction).toFixed(2)} g`;
-                })()}
-                readOnly
-              />
-              <Input
-                className="col-span-2"
-                placeholder="총중량 (g)"
-                value={selectedDetail?.weight ?? ""}
-                readOnly
-              />
-              <Input
-                className="col-span-2"
-                placeholder="차감 중량 (g)"
-                value={selectedDetail?.deductionWeight ?? ""}
-                readOnly
-              />
-            </div>
             <div>
               <div className="mb-2 grid grid-cols-10 gap-2 text-xs font-semibold text-[var(--muted)]">
                 <div className="col-span-2 text-center">항목</div>
-                <div className="col-span-3 text-center">공임 (판매)</div>
+                <div className="col-span-3 text-center">총공임 (판매)</div>
                 <div className="col-span-2 text-center">수량</div>
-                <div className="col-span-3 text-center">공임 (원가)</div>
+                <div className="col-span-3 text-center">마진(참고)</div>
               </div>
               <div className="space-y-2">
                 {/* 합계공임 */}
                 <div className="grid grid-cols-10 gap-2">
-                  <div className="col-span-2 flex items-center justify-center rounded-[8px] border border-[var(--panel-border)] bg-[var(--panel)] px-2 py-2">
-                    <span className="text-xs font-semibold text-[var(--foreground)]">
-                      합계공임
+                  <div className="col-span-2 flex items-center justify-center rounded-[8px] border border-[var(--panel-border)] bg-blue-50 px-2 py-2">
+                    <span className="text-xs font-bold text-[var(--foreground)]">
+                      총공임
                     </span>
                   </div>
-                  <Input
-                    className="col-span-3 text-center"
-                    placeholder="합계 (판매)"
-                    value={selectedDetail?.laborTotalSell ?? ""}
-                    readOnly
-                  />
+                  <ReadonlyNumberCell value={detailLaborSellWithAccessory} valueClassName="text-base font-bold" className="bg-blue-50 border-2 border-green-500" />
                   <div className="col-span-2" />
-                  <Input
-                    className="col-span-3 text-center"
-                    placeholder="합계 (원가)"
-                    value={selectedDetail?.laborTotalCost ?? ""}
-                    readOnly
-                  />
+                    <ReadonlyNumberCell
+                      value={detailLaborMarginWithAccessory}
+                      extraText={totalLaborMarginShare ? `(${totalLaborMarginShare})` : ""}
+                      valueClassName="text-sm font-semibold"
+                      className="bg-blue-50"
+                    />
                 </div>
+                <div className="border-t border-[var(--panel-border)]/60" />
                 {/* 기본공임 */}
-                <div className="grid grid-cols-10 gap-2">
-                  <div className="col-span-2 flex items-center justify-center rounded-[8px] border border-[var(--panel-border)] bg-[var(--panel)] px-2 py-2">
-                    <span className="text-xs font-semibold text-[var(--foreground)]">
-                      기본공임
-                    </span>
+                {showDetailBaseRow ? (
+                  <div className="grid grid-cols-10 gap-2">
+                    <div className="col-span-2 flex items-center justify-center rounded-[8px] border border-[var(--panel-border)] bg-lime-50 px-2 py-2">
+                      <span className="text-xs font-semibold text-[var(--foreground)]">
+                        기본공임
+                      </span>
+                    </div>
+                    <ReadonlyNumberCell value={detailLaborBaseSellDisplay} className="bg-lime-50" />
+                    <div className="col-span-2" />
+                    <ReadonlyNumberCell
+                      value={detailBaseLaborMargin}
+                      extraText={detailBaseLaborMarginShare ? `(${detailBaseLaborMarginShare})` : ""}
+                      valueClassName="text-sm font-medium"
+                      className="bg-lime-50"
+                    />
                   </div>
-                  <Input
-                    className="col-span-3 text-center"
-                    placeholder="기본 (판매)"
-                    value={selectedDetail?.laborBaseSell ?? ""}
-                    readOnly
-                  />
-                  <div className="col-span-2" />
-                  <Input
-                    className="col-span-3 text-center"
-                    placeholder="기본 (원가)"
-                    value={selectedDetail?.laborBaseCost ?? ""}
-                    readOnly
-                  />
-                </div>
+                ) : null}
                 {/* 중심공임 */}
-                <div className="grid grid-cols-10 gap-2">
-                  <div className="col-span-2 flex items-center justify-center rounded-[8px] border border-[var(--panel-border)] bg-[var(--panel)] px-2 py-2">
-                    <span className="text-xs font-semibold text-[var(--foreground)]">
-                      중심공임
-                    </span>
+                {showDetailCenterRow ? (
+                  <div className="grid grid-cols-10 gap-2">
+                    <div className="col-span-2 flex items-center justify-center rounded-[8px] border border-[var(--panel-border)] bg-green-50 px-2 py-2">
+                      <span className="text-xs font-semibold text-[var(--foreground)]">
+                        중심공임
+                      </span>
+                    </div>
+                    <ReadonlyNumberCell value={detailLaborCenterSellDisplay} className="bg-green-50" />
+                    <Input
+                      className="col-span-2 text-center bg-green-50"
+                      placeholder="중심석"
+                      value={Number(selectedDetail?.centerQty ?? 0) > 0 ? `${selectedDetail?.centerQty}개` : "-"}
+                      readOnly
+                    />
+                    <ReadonlyNumberCell
+                      value={detailCenterLaborMargin}
+                      extraText={detailCenterLaborMarginShare ? `(${detailCenterLaborMarginShare})` : ""}
+                      valueClassName="text-sm font-medium"
+                      className="bg-green-50"
+                    />
                   </div>
-                  <Input
-                    className="col-span-3 text-center"
-                    placeholder="센터 (판매)"
-                    value={selectedDetail?.laborCenterSell ?? ""}
-                    readOnly
-                  />
-                  <Input
-                    className="col-span-2 text-center"
-                    placeholder="중심석"
-                    value={selectedDetail?.centerQty ?? ""}
-                    readOnly
-                  />
-                  <Input
-                    className="col-span-3 text-center"
-                    placeholder="센터 (원가)"
-                    value={selectedDetail?.laborCenterCost ?? ""}
-                    readOnly
-                  />
-                </div>
+                ) : null}
                 {/* 보조1공임 */}
-                <div className="grid grid-cols-10 gap-2">
-                  <div className="col-span-2 flex items-center justify-center rounded-[8px] border border-[var(--panel-border)] bg-[var(--panel)] px-2 py-2">
-                    <span className="text-xs font-semibold text-[var(--foreground)]">
-                      보조1공임
-                    </span>
+                {showDetailSub1Row ? (
+                  <div className="grid grid-cols-10 gap-2">
+                    <div className="col-span-2 flex items-center justify-center rounded-[8px] border border-[var(--panel-border)] bg-green-50 px-2 py-2">
+                      <span className="text-xs font-semibold text-[var(--foreground)]">
+                        보조1공임
+                      </span>
+                    </div>
+                    <ReadonlyNumberCell value={detailLaborSub1SellDisplay} className="bg-green-50" />
+                    <Input
+                      className="col-span-2 text-center bg-green-50"
+                      placeholder="보조1석"
+                      value={Number(selectedDetail?.sub1Qty ?? 0) > 0 ? `${selectedDetail?.sub1Qty}개` : "-"}
+                      readOnly
+                    />
+                    <ReadonlyNumberCell
+                      value={detailSub1LaborMargin}
+                      extraText={detailSub1LaborMarginShare ? `(${detailSub1LaborMarginShare})` : ""}
+                      valueClassName="text-sm font-medium"
+                      className="bg-green-50"
+                    />
                   </div>
-                  <Input
-                    className="col-span-3 text-center"
-                    placeholder="서브1 (판매)"
-                    value={selectedDetail?.laborSub1Sell ?? ""}
-                    readOnly
-                  />
-                  <Input
-                    className="col-span-2 text-center"
-                    placeholder="보조1석"
-                    value={selectedDetail?.sub1Qty ?? ""}
-                    readOnly
-                  />
-                  <Input
-                    className="col-span-3 text-center"
-                    placeholder="서브1 (원가)"
-                    value={selectedDetail?.laborSub1Cost ?? ""}
-                    readOnly
-                  />
-                </div>
+                ) : null}
                 {/* 보조2공임 */}
-                <div className="grid grid-cols-10 gap-2">
-                  <div className="col-span-2 flex items-center justify-center rounded-[8px] border border-[var(--panel-border)] bg-[var(--panel)] px-2 py-2">
-                    <span className="text-xs font-semibold text-[var(--foreground)]">
-                      보조2공임
-                    </span>
+                {showDetailSub2Row ? (
+                  <div className="grid grid-cols-10 gap-2">
+                    <div className="col-span-2 flex items-center justify-center rounded-[8px] border border-[var(--panel-border)] bg-green-50 px-2 py-2">
+                      <span className="text-xs font-semibold text-[var(--foreground)]">
+                        보조2공임
+                      </span>
+                    </div>
+                    <ReadonlyNumberCell value={detailLaborSub2SellDisplay} className="bg-green-50" />
+                    <Input
+                      className="col-span-2 text-center bg-green-50"
+                      placeholder="보조2석"
+                      value={Number(selectedDetail?.sub2Qty ?? 0) > 0 ? `${selectedDetail?.sub2Qty}개` : "-"}
+                      readOnly
+                    />
+                    <ReadonlyNumberCell
+                      value={detailSub2LaborMargin}
+                      extraText={detailSub2LaborMarginShare ? `(${detailSub2LaborMarginShare})` : ""}
+                      valueClassName="text-sm font-medium"
+                      className="bg-green-50"
+                    />
                   </div>
-                  <Input
-                    className="col-span-3 text-center"
-                    placeholder="서브2 (판매)"
-                    value={selectedDetail?.laborSub2Sell ?? ""}
-                    readOnly
-                  />
-                  <Input
-                    className="col-span-2 text-center"
-                    placeholder="보조2석"
-                    value={selectedDetail?.sub2Qty ?? ""}
-                    readOnly
-                  />
-                  <Input
-                    className="col-span-3 text-center"
-                    placeholder="서브2 (원가)"
-                    value={selectedDetail?.laborSub2Cost ?? ""}
-                    readOnly
-                  />
-                </div>
+                ) : null}
+                {/* 도금공임 */}
+                {detailPlatingSellDisplay !== 0 || detailPlatingCostDisplay !== 0 ? (
+                  <div className="grid grid-cols-10 gap-2">
+                    <div className="col-span-2 flex items-center justify-center rounded-[8px] border border-[var(--panel-border)] bg-[var(--subtle-bg)] px-2 py-2">
+                      <span className="text-xs font-semibold text-[var(--foreground)]">도금공임</span>
+                    </div>
+                    <ReadonlyNumberCell value={detailPlatingSellDisplay} className="bg-[var(--subtle-bg)]" />
+                    <div className="col-span-2" />
+                    <ReadonlyNumberCell
+                      value={detailPlatingLaborMargin}
+                      extraText={detailPlatingLaborMarginShare ? `(${detailPlatingLaborMarginShare})` : ""}
+                      valueClassName="text-sm font-medium"
+                      className="bg-[var(--subtle-bg)]"
+                    />
+                  </div>
+                ) : null}
+                {/* 기타공임 */}
+                {showDetailEtcRow ? (
+                  <div className="grid grid-cols-10 gap-2">
+                    <div className="col-span-2 flex items-center justify-center rounded-[8px] border border-[var(--panel-border)] bg-[var(--subtle-bg)] px-2 py-2">
+                      <span className="text-xs font-semibold text-[var(--foreground)]">기타공임</span>
+                    </div>
+                    <ReadonlyNumberCell value={detailEtcLaborSellDisplay} className="bg-[var(--subtle-bg)]" />
+                    <div className="col-span-2" />
+                    <ReadonlyNumberCell
+                      value={detailEtcLaborMargin}
+                      extraText={detailEtcLaborMarginShare ? `(${detailEtcLaborMarginShare})` : ""}
+                      valueClassName="text-sm font-medium"
+                      className="bg-[var(--subtle-bg)]"
+                    />
+                  </div>
+                ) : null}
               </div>
             </div>
           </CardBody>
@@ -2703,464 +3640,567 @@ export default function CatalogPage() {
         {selectedMasterId ? (
           <Card>
             <CardBody className="space-y-3">
-              <EffectivePriceCard
-                masterId={selectedMasterId}
-                qty={1}
-                variantKey={previewVariantKey}
-                title="유효가격 프리뷰"
-                showBreakdown
-              />
+              <div className="rounded-[10px] border border-[var(--panel-border)] bg-[var(--panel)] p-3 space-y-3">
+                <div className="text-sm font-semibold">원가 비교</div>
+                <div className="rounded border border-[var(--panel-border)] bg-[var(--subtle-bg)]">
+                  <table className="w-full table-fixed text-[11px]">
+                    <colgroup>
+                      <col className="w-[74px]" />
+                      <col className="w-[34%]" />
+                      <col className="w-[32%]" />
+                      <col className="w-[34%]" />
+                    </colgroup>
+                    <thead className="text-[var(--muted)]">
+                      <tr>
+                        <th className="px-1.5 py-2 text-left">항목</th>
+                        <th className="px-2 py-2 text-right">우리 원가</th>
+                        <th className="px-2 py-2 text-right">중국원가</th>
+                        <th className="px-2 py-2 text-right">마진</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(() => {
+                        const ourReasonMap = new Map<string, number>([
+                          ["기본공임", detailLaborBaseCostDisplay + detailAbsorbImpactSummary.baseLabor],
+                          ["중심공임", Number(selectedDetail?.laborCenterCost ?? 0) * Number(selectedDetail?.centerQty ?? 0) + detailAbsorbImpactSummary.stoneCenter],
+                          ["보조1공임", Number(selectedDetail?.laborSub1Cost ?? 0) * Number(selectedDetail?.sub1Qty ?? 0) + detailAbsorbImpactSummary.stoneSub1],
+                          ["보조2공임", Number(selectedDetail?.laborSub2Cost ?? 0) * Number(selectedDetail?.sub2Qty ?? 0) + detailAbsorbImpactSummary.stoneSub2],
+                          ["도금공임", detailPlatingCostDisplay + detailAbsorbImpactSummary.plating],
+                          ["기타공임", detailAbsorbImpactSummary.etc],
+                        ]);
 
-              <div className="space-y-2">
-                <button
-                  type="button"
-                  onClick={() => setShowFlattenDebug((prev) => !prev)}
-                  className="text-xs font-semibold text-[var(--primary)]"
-                >
-                  {showFlattenDebug ? "Flatten 숨기기" : "Flatten 보기"}
-                </button>
+                        const ourLaborTotalWithAbsorb = detailLaborCostWithAccessory + detailAbsorbImpactSummary.total;
 
-                {showFlattenDebug ? (
-                  flattenQuery.isLoading ? (
-                    <div className="text-xs text-[var(--muted)]">Flatten 조회 중...</div>
-                  ) : flattenQuery.isError ? (
-                    <div className="rounded-[8px] border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-900">
-                      {flattenQuery.error instanceof Error ? flattenQuery.error.message : "Flatten 조회 실패"}
-                    </div>
-                  ) : (flattenQuery.data ?? []).length === 0 ? (
-                    <div className="text-xs text-[var(--muted)]">표시할 leaf가 없습니다.</div>
-                  ) : (
+                        const knownOrder = ["기본공임", "중심공임", "보조1공임", "보조2공임", "도금공임", "기타공임"];
+                        const chinaReasonMap = chinaCostComparison?.reasonCostMap ?? new Map<string, number>();
+                        const rows = knownOrder
+                          .map((label) => ({
+                            label,
+                            ours: ourReasonMap.get(label) ?? 0,
+                            china: chinaReasonMap.get(label) ?? 0,
+                          }))
+                          .filter((row) => row.ours !== 0 || row.china !== 0);
+                        const laborRowBgClassMap: Record<string, string> = {
+                          기본공임: "bg-lime-50",
+                          중심공임: "bg-green-50",
+                          보조1공임: "bg-green-50",
+                          보조2공임: "bg-green-50",
+                          도금공임: "bg-[var(--subtle-bg)]",
+                          기타공임: "bg-[var(--subtle-bg)]",
+                        };
+
+                        const shouldShowMaterialRow = materialPrice !== 0 || (chinaCostComparison?.materialKrw ?? 0) !== 0;
+                        const shouldShowTotalRow = ourLaborTotalWithAbsorb !== 0 || (chinaCostComparison?.laborKrw ?? 0) !== 0;
+
+                        return (
+                          <>
+                            {shouldShowMaterialRow ? (
+                              <tr className="border-t border-[var(--panel-border)]">
+                                <td className="px-1.5 py-2 whitespace-nowrap">소재</td>
+                                <td className="px-2 py-2 text-right">₩{formatDisplayKrw(materialPrice)}</td>
+                                <td className="px-2 py-2 text-right">{chinaCostComparison ? `₩${formatDisplayKrw(chinaCostComparison.materialKrw)}` : "-"}</td>
+                                <td className="px-2 py-2 text-right">
+                                  {chinaCostComparison
+                                    ? `₩${formatDisplayKrw(materialPrice - chinaCostComparison.materialKrw)}`
+                                    : "-"}
+                                </td>
+                              </tr>
+                            ) : null}
+                            {rows.map((row) => {
+                              const laborRowBgClass = laborRowBgClassMap[row.label] ?? "";
+                              return (
+                                <tr key={row.label} className="border-t border-[var(--panel-border)]">
+                                  <td className={cn("px-1.5 py-2 whitespace-nowrap", laborRowBgClass)}>{row.label}</td>
+                                  <td className={cn("px-2 py-2 text-right", laborRowBgClass)}>₩{formatLaborDisplayKrw(row.ours)}</td>
+                                  <td className={cn("px-2 py-2 text-right", laborRowBgClass)}>{chinaCostComparison ? `₩${formatLaborDisplayKrw(row.china)}` : "-"}</td>
+                                  <td className={cn("px-2 py-2 text-right", laborRowBgClass)}>
+                                  {chinaCostComparison
+                                    ? `₩${formatLaborDisplayKrw(row.ours - row.china)}`
+                                    : "-"}
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                            {shouldShowTotalRow ? (
+                              <tr className="border-t border-[var(--panel-border)] font-semibold">
+                                <td className="px-1.5 py-2 whitespace-nowrap">총공임</td>
+                                <td className="px-2 py-2 text-right">₩{formatLaborDisplayKrw(ourLaborTotalWithAbsorb)}</td>
+                                <td className="px-2 py-2 text-right">{chinaCostComparison ? `₩${formatLaborDisplayKrw(chinaCostComparison.laborKrw)}` : "-"}</td>
+                                <td className="px-2 py-2 text-right">
+                                  {chinaCostComparison
+                                    ? `₩${formatLaborDisplayKrw(ourLaborTotalWithAbsorb - chinaCostComparison.laborKrw)}`
+                                    : "-"}
+                                </td>
+                              </tr>
+                            ) : null}
+                            {(() => {
+                              const chinaTotalPrice = chinaCostComparison ? chinaCostComparison.materialKrw + chinaCostComparison.laborKrw : 0;
+                              const ourTotalPriceWithAbsorb = materialPrice + ourLaborTotalWithAbsorb;
+                              const shouldShowTotalPriceRow = ourTotalPriceWithAbsorb !== 0 || chinaTotalPrice !== 0;
+                              if (!shouldShowTotalPriceRow) return null;
+                              return (
+                                <tr className="border-t border-[var(--panel-border)] font-semibold">
+                                  <td className="px-1.5 py-2 whitespace-nowrap">총가격</td>
+                                  <td className="px-2 py-2 text-right">₩{formatDisplayKrw(ourTotalPriceWithAbsorb)}</td>
+                                  <td className="px-2 py-2 text-right">
+                                    {chinaCostComparison ? `₩${formatDisplayKrw(chinaTotalPrice)}` : "-"}
+                                  </td>
+                                  <td className="px-2 py-2 text-right">
+                                    {chinaCostComparison
+                                      ? `₩${formatDisplayKrw(ourTotalPriceWithAbsorb - chinaTotalPrice)}`
+                                      : "-"}
+                                  </td>
+                                </tr>
+                              );
+                            })()}
+                          </>
+                        );
+                      })()}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              <div className="rounded-[10px] border border-[var(--panel-border)] bg-[var(--panel)] p-3 space-y-3">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="text-sm font-semibold">부속 구성품 목록</div>
+                  <div className="grid grid-cols-[auto_auto] items-center gap-x-2 gap-y-1 text-xs tabular-nums">
+                    <span className="text-[var(--muted)]">총중량</span>
+                    <span className="font-semibold text-[var(--foreground)]">
+                      {flattenQuery.isLoading || flattenQuery.isError || flattenComponentMetrics.rows.length === 0
+                        ? "-"
+                        : `${formatWeightNumber(flattenComponentMetrics.totals.grossWeight)} g`}
+                    </span>
+                    <span className="text-[var(--muted)]">판매공임 합계</span>
+                    <span className="font-semibold text-[var(--foreground)]">
+                      {flattenQuery.isLoading || flattenQuery.isError || flattenComponentMetrics.rows.length === 0
+                        ? "-"
+                        : `₩${formatLaborDisplayKrw(flattenComponentMetrics.totals.laborSellTotal)}`}
+                    </span>
+                    <span className="text-[var(--muted)]">판매공임 원가</span>
+                    <span className="font-semibold text-[var(--foreground)]">
+                      {flattenQuery.isLoading || flattenQuery.isError || flattenComponentMetrics.rows.length === 0
+                        ? "-"
+                        : `₩${formatLaborDisplayKrw(flattenComponentMetrics.totals.laborCostTotal)}`}
+                    </span>
+                  </div>
+                </div>
+
+                {flattenQuery.isLoading ? (
+                  <div className="text-xs text-[var(--muted)]">구성품 계산 중...</div>
+                ) : flattenQuery.isError ? (
+                  <div className="rounded-[8px] border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-900">
+                    {flattenQuery.error instanceof Error ? flattenQuery.error.message : "구성품 조회 실패"}
+                  </div>
+                ) : flattenComponentMetrics.rows.length === 0 ? (
+                  <div className="text-xs text-[var(--muted)]">등록된 부속 구성품이 없습니다.</div>
+                ) : (
+                  <>
                     <div className="overflow-x-auto rounded-[10px] border border-[var(--panel-border)]">
                       <table className="min-w-full text-left text-xs">
                         <thead className="bg-[var(--subtle-bg)] text-[var(--muted)]">
                           <tr>
-                            <th className="px-3 py-2">깊이</th>
-                            <th className="px-3 py-2">타입</th>
-                            <th className="px-3 py-2">구성품</th>
-                            <th className="px-3 py-2">qty_per_product_unit</th>
-                            <th className="px-3 py-2">단위</th>
-                            <th className="px-3 py-2">경로</th>
+                            <th className="px-3 py-2">모델 사진</th>
+                            <th className="px-3 py-2">품목명</th>
+                            <th className="px-3 py-2">수량</th>
+                            <th className="px-3 py-2">총공임(판매)</th>
+                            <th className="px-3 py-2">총공임(원가)</th>
                           </tr>
                         </thead>
                         <tbody>
-                          {(flattenQuery.data ?? []).map((leaf, idx) => (
-                            <tr key={`flatten-${idx}`} className="border-t border-[var(--panel-border)]">
-                              <td className="px-3 py-2">{leaf.depth ?? "-"}</td>
-                              <td className="px-3 py-2">{leaf.component_ref_type ?? "-"}</td>
+                          {flattenComponentMetrics.rows.map((row) => (
+                            <tr key={row.key} className="border-t border-[var(--panel-border)]">
                               <td className="px-3 py-2">
-                                {leaf.component_master_model_name ?? leaf.component_part_name ?? leaf.component_master_id ?? leaf.component_part_id ?? "-"}
+                                {row.imageUrl ? (
+                                  <img src={row.imageUrl} alt={row.name} className="h-10 w-10 rounded-md border border-[var(--panel-border)] object-cover bg-[var(--subtle-bg)]" loading="lazy" />
+                                ) : (
+                                  <div className="flex h-10 w-10 items-center justify-center rounded-md border border-[var(--panel-border)] bg-[var(--subtle-bg)] text-[10px] text-[var(--muted)]">-</div>
+                                )}
                               </td>
-                              <td className="px-3 py-2 tabular-nums">{leaf.qty_per_product_unit ?? "-"}</td>
-                              <td className="px-3 py-2">{leaf.unit ?? "-"}</td>
-                              <td className="px-3 py-2">{leaf.path ?? "-"}</td>
+                              <td className="px-3 py-2">{row.name}</td>
+                              <td className="px-3 py-2 tabular-nums">{row.qty.toLocaleString("ko-KR")}</td>
+                              <td className="px-3 py-2 tabular-nums">₩{formatLaborDisplayKrw(row.laborSellTotal)}</td>
+                              <td className="px-3 py-2 tabular-nums">₩{formatLaborDisplayKrw(row.laborCostTotal)}</td>
                             </tr>
                           ))}
+                          <tr className="border-t border-[var(--panel-border)] bg-[var(--subtle-bg)] font-semibold">
+                            <td className="px-3 py-2" />
+                            <td className="px-3 py-2">합계</td>
+                            <td className="px-3 py-2 tabular-nums">{accessoryQtyTotal.toLocaleString("ko-KR")}</td>
+                            <td className="px-3 py-2 tabular-nums">₩{formatLaborDisplayKrw(flattenComponentMetrics.totals.laborSellTotal)}</td>
+                            <td className="px-3 py-2 tabular-nums">₩{formatLaborDisplayKrw(flattenComponentMetrics.totals.laborCostTotal)}</td>
+                          </tr>
                         </tbody>
                       </table>
                     </div>
-                  )
-                ) : null}
+                  </>
+                )}
               </div>
             </CardBody>
           </Card>
         ) : null}
 
-        {/* D. 중국 원가 (예약공간) 요약 */}
-        {(() => {
-          if (!selectedItem || !selectedMasterId) return null;
-          const row = masterRowsById[selectedMasterId] as Record<string, any>;
-          if (!row) return null;
 
-          const basicCny = Number(row.cn_labor_basic_cny_per_g) || 0;
-          const extras = (Array.isArray(row.cn_labor_extra_items) ? row.cn_labor_extra_items : []) as { label: string; cny_per_g: number }[];
-          const extraCny = extras.reduce((sum, it) => sum + (Number(it.cny_per_g) || 0), 0);
-          const totalCnyPerG = basicCny + extraCny;
-
-          const weight = parseFloat(String(row.weight_default_g ?? 0));
-          const deduction = parseFloat(String(row.deduction_weight_default_g ?? 0));
-          const netWeight = Number.isFinite(weight) ? Math.max(weight - (Number.isFinite(deduction) ? deduction : 0), 0) : 0;
-
-          const matKrw = Math.round(netWeight * csOriginalKrwPerG);
-          const laborKrw = Math.round(netWeight * totalCnyPerG * cnyAdRate);
-          const totKrw = matKrw + laborKrw;
-
-          const hasChinaData = basicCny > 0 || extras.length > 0;
-
-          return (
-            <Card id="catalog.detail.china" className="border-dashed border-[var(--panel-border)]">
-              <CardHeader>
-                <div className="flex items-center justify-between">
-                  <ActionBar title="중국 원가(예약)" subtitle={hasChinaData ? `시장값: 은 ${csOriginalKrwPerG.toLocaleString()} / 환율 ${cnyAdRate.toFixed(2)}` : "설정된 원가 데이터가 없습니다."} />
-                  <div className="text-xs font-mono text-[var(--muted)]">READ-ONLY</div>
-                </div>
-              </CardHeader>
-              <CardBody className="py-3 space-y-3 text-sm">
-                {!hasChinaData ? (
-                  <div className="text-center text-[var(--muted)] py-4 text-xs">
-                    (중국 원가 데이터가 설정되지 않은 모델입니다)
-                  </div>
-                ) : (
-                  <>
-                    <div className="grid grid-cols-2 gap-2">
-                      <div className="rounded border border-[var(--panel-border)] p-2">
-                        <p className="text-[10px] text-[var(--muted)]">기본 공임</p>
-                        <p className="font-semibold">{basicCny.toFixed(2)} <span className="text-[10px] text-[var(--muted)]">CNY/g</span></p>
-                      </div>
-                      <div className="rounded border border-[var(--panel-border)] p-2">
-                        <p className="text-[10px] text-[var(--muted)]">기타 공임 합계</p>
-                        <p className="font-semibold">{extraCny.toFixed(2)} <span className="text-[10px] text-[var(--muted)]">CNY/g</span></p>
-                      </div>
-                    </div>
-                    {extras.length > 0 && (
-                      <div className="bg-[var(--panel)] rounded p-2 text-xs text-[var(--muted)] space-y-1">
-                        {extras.map((it, idx) => (
-                          <div key={idx} className="flex justify-between">
-                            <span>{it.label}</span>
-                            <span>{Number(it.cny_per_g).toFixed(2)} CNY</span>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                    <div className="border-t border-dashed border-[var(--panel-border)] pt-2">
-                      <div className="flex justify-between items-center mb-1">
-                        <span className="text-xs text-[var(--muted)]">소재 비용</span>
-                        <span className="font-medium"><NumberText value={matKrw} /></span>
-                      </div>
-                      <div className="flex justify-between items-center mb-1">
-                        <span className="text-xs text-[var(--muted)]">총 공임(CNY환산)</span>
-                        <span className="font-medium"><NumberText value={laborKrw} /></span>
-                      </div>
-                      <div className="flex justify-between items-center pt-2 border-t border-[var(--panel-border)]">
-                        <span className="text-sm font-bold">총 원가 (KRW)</span>
-                        <span className="text-sm font-bold text-[var(--primary)]"><NumberText value={totKrw} /></span>
-                      </div>
-                    </div>
-                  </>
-                )}
-              </CardBody>
-            </Card>
-          );
-        })()}
-
-        {showBomPanel ? (
-          <div className="space-y-4" id="catalog.detail.bom">
-            <ActionBar
-              title="자재명세서(BOM)"
-              subtitle="부속/메달 구성품을 마스터 기준으로 관리합니다."
-              actions={
-                <span
-                  className="inline-flex"
-                  title={!selectedMasterId ? "마스터를 먼저 선택해 주세요." : !canWrite ? writeDisabledReason : undefined}
-                >
-                  <Button onClick={handleCreateRecipe} disabled={createRecipeDisabled}>
-                    레시피 저장
-                  </Button>
-                </span>
-              }
-            />
-
-            {isActorMissing ? (
-              <div className="rounded-[12px] border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-900">
-                환경 경고: NEXT_PUBLIC_CMS_ACTOR_ID 미설정으로 생성/추가/VOID가 차단됩니다.
-              </div>
-            ) : null}
-
-            {componentSearchQuery.error ? (
-              <Card className="border-red-200 bg-red-50">
-                <CardBody className="space-y-2 text-red-900">
-                  <div className="text-sm font-semibold">검색 오류</div>
-                  <div className="text-sm">
-                    {componentSearchQuery.error instanceof Error
-                      ? componentSearchQuery.error.message
-                      : "구성품 검색 오류"}
-                  </div>
-                </CardBody>
-              </Card>
-            ) : null}
-
-            {!selectedMasterId ? (
-              <Card>
-                <CardBody className="text-sm text-[var(--muted)]">
-                  마스터를 선택하면 BOM 관리가 가능합니다.
-                </CardBody>
-              </Card>
-            ) : (
-              <SplitLayout
-                left={
-                  <div className="space-y-4">
-                    <Card>
-                      <CardHeader>
-                        <div className="text-sm font-semibold">선택된 마스터</div>
-                      </CardHeader>
-                      <CardBody className="space-y-2">
-                        <div className="text-sm font-semibold text-[var(--foreground)]">
-                          {selectedItem?.model ?? "-"}
-                        </div>
-                        <div className="text-xs text-[var(--muted)]">master_id: {selectedMasterId}</div>
-                      </CardBody>
-                    </Card>
-
-                    <Card>
-                      <CardHeader>
-                        <div className="text-sm font-semibold">레시피(Variant) 선택</div>
-                      </CardHeader>
-                      <CardBody className="space-y-3">
-                        <SearchSelect
-                          label="레시피 선택"
-                          placeholder="레시피를 선택하세요"
-                          options={recipeOptions}
-                          value={selectedRecipeId ?? undefined}
-                          onChange={(v) => setSelectedRecipeId(v)}
-                        />
-                      </CardBody>
-                    </Card>
-                  </div>
-                }
-                right={
-                  <div className="space-y-4">
-                    <Card>
-                      <CardHeader>
-                        <div className="text-sm font-semibold">레시피 상세</div>
-                      </CardHeader>
-                      <CardBody className="space-y-3">
-                        <Input
-                          placeholder="variant_key (예: suffix|color|size). 비우면 DEFAULT"
-                          value={recipeVariantKey}
-                          onChange={(e) => setRecipeVariantKey(e.target.value)}
-                        />
-                        <Textarea
-                          placeholder="메모(선택)"
-                          value={recipeNote}
-                          onChange={(e) => setRecipeNote(e.target.value)}
-                        />
-                        <div className="grid grid-cols-3 gap-2">
-                          <Input
-                            aria-label="sell_adjust_rate"
-                            placeholder="sell_adjust_rate"
-                            value={recipeSellAdjustRate}
-                            onChange={(e) => setRecipeSellAdjustRate(e.target.value)}
-                            inputMode="decimal"
-                          />
-                          <Input
-                            aria-label="sell_adjust_krw"
-                            placeholder="sell_adjust_krw"
-                            value={recipeSellAdjustKrw}
-                            onChange={(e) => setRecipeSellAdjustKrw(e.target.value)}
-                            inputMode="numeric"
-                          />
-                          <Input
-                            aria-label="round_unit_krw"
-                            placeholder="round_unit_krw"
-                            value={recipeRoundUnitKrw}
-                            onChange={(e) => setRecipeRoundUnitKrw(e.target.value)}
-                            inputMode="numeric"
-                          />
-                        </div>
-                        <div className="text-xs text-[var(--muted)]">
-                          현재 선택 레시피가 있으면 업데이트, 없으면 신규 생성됩니다.
-                        </div>
-                      </CardBody>
-                    </Card>
-
-                    <Card>
-                      <CardHeader>
-                        <div className="flex items-center justify-between">
-                          <div className="text-sm font-semibold">구성품(부속/메달) 추가</div>
-                          <label className="flex items-center gap-2 text-xs text-[var(--muted)] cursor-pointer select-none hover:text-[var(--foreground)] transition-colors">
-                            <input
-                              type="checkbox"
-                              checked={showAdvancedComponents}
-                              onChange={(e) => {
-                                setShowAdvancedComponents(e.target.checked);
-                                if (!e.target.checked) {
-                                  setComponentType("MASTER");
-                                  setSelectedComponentId(null);
-                                  setComponentQuery("");
-                                }
-                              }}
-                              className="rounded border-[var(--panel-border)] text-[var(--primary)] focus:ring-[var(--primary)]"
-                            />
-                            Advanced: PART
-                          </label>
-                        </div>
-                      </CardHeader>
-                      <CardBody className="space-y-3">
-                        <div className="grid grid-cols-2 gap-2">
-                          {showAdvancedComponents ? (
-                            <Select
-                              aria-label="구성품 타입"
-                              value={componentType}
-                              onChange={(e) => {
-                                const v = (e.target.value as "PART" | "MASTER") ?? "MASTER";
-                                setComponentType(v);
-                                setSelectedComponentId(null);
-                                setComponentQuery("");
-                              }}
-                            >
-                              <option value="MASTER">MASTER (메달/완제품)</option>
-                              <option value="PART">PART (부속/스톤)</option>
-                            </Select>
-                          ) : (
-                            <div className="flex items-center px-3 text-sm font-medium text-[var(--muted-strong)] bg-[var(--subtle-bg)] border border-[var(--panel-border)] rounded-[var(--radius)] h-10 select-none">
-                              MASTER (메달/완제품)
-                            </div>
-                          )}
-
-                          <Select aria-label="단위" value={unit} onChange={(e) => setUnit(e.target.value as "EA" | "G" | "M")}>
-                            <option value="EA">EA</option>
-                            <option value="G">G</option>
-                            <option value="M">M</option>
-                          </Select>
-                        </div>
-
-                        <Input
-                          placeholder={componentType === "PART" ? "부속명 검색" : "마스터 모델명 검색"}
-                          value={componentQuery}
-                          onChange={(e) => setComponentQuery(e.target.value)}
-                        />
-
-                        <SearchSelect
-                          label="구성품 선택"
-                          placeholder="위에서 검색어 입력"
-                          options={componentOptions}
-                          value={selectedComponentId ?? undefined}
-                          onChange={(v) => setSelectedComponentId(v)}
-                        />
-
-                        {selectedComponent ? (
-                          <div className="rounded-[12px] border border-[var(--panel-border)] bg-[var(--subtle-bg)] p-3 text-sm animate-in fade-in slide-in-from-top-1 duration-200">
-                            <div className="flex items-center gap-2 mb-1.5">
-                              <Badge tone="neutral">{componentType}</Badge>
-                              {componentType === "MASTER" && (selectedComponent as MasterSummary).category_code ? (
-                                <Badge tone="primary">{(selectedComponent as MasterSummary).category_code}</Badge>
-                              ) : null}
-                              {componentType === "PART" && (selectedComponent as PartSummary).part_kind ? (
-                                <Badge tone="warning">{(selectedComponent as PartSummary).part_kind}</Badge>
-                              ) : null}
-                            </div>
-                            <div className="font-semibold text-[var(--foreground)]">
-                              {componentType === "MASTER"
-                                ? (selectedComponent as MasterSummary).model_name
-                                : (selectedComponent as PartSummary).part_name}
-                            </div>
-                            <div className="mt-1 grid grid-cols-2 gap-2 text-xs text-[var(--muted)]">
-                              <div>
-                                unit_default: {componentType === "PART" ? (selectedComponent as PartSummary).unit_default ?? "-" : "-"}
-                              </div>
-                              <div>
-                                spec_text: {componentType === "PART" ? (selectedComponent as PartSummary).spec_text ?? "-" : "-"}
-                              </div>
-                            </div>
-                          </div>
-                        ) : null}
-
-                        <div className="grid grid-cols-2 gap-2">
-                          <Input aria-label="1개당 사용량" value={qtyPerUnit} onChange={(e) => setQtyPerUnit(e.target.value)} />
-                          <Input aria-label="메모(선택)" value={lineNote} onChange={(e) => setLineNote(e.target.value)} />
-                        </div>
-
-                        <span className="inline-flex" title={!canWrite ? writeDisabledReason : undefined}>
-                          <Button onClick={handleAddLine} disabled={addLineDisabled}>
-                            구성품 추가
-                          </Button>
-                        </span>
-
-                        <div className="text-xs text-[var(--muted)]">
-                          출고 확정 시 레시피가 있으면 구성품이 자동 OUT 기록됩니다.
-                        </div>
-                      </CardBody>
-                    </Card>
-
-                    <Card>
-                      <CardHeader>
-                        <div className="text-sm font-semibold">현재 구성품 목록</div>
-                      </CardHeader>
-                      <CardBody className="space-y-2">
-                        {!selectedRecipeId ? (
-                          <p className="text-sm text-[var(--muted)]">레시피를 선택하면 구성품이 표시됩니다.</p>
-                        ) : linesQuery.isLoading ? (
-                          <p className="text-sm text-[var(--muted)]">불러오는 중...</p>
-                        ) : (linesQuery.data ?? []).length === 0 ? (
-                          <p className="text-sm text-[var(--muted)]">등록된 구성품이 없습니다.</p>
-                        ) : (
-                          <div className="space-y-2">
-                            <div className="grid grid-cols-12 gap-3 px-3 text-xs text-[var(--muted)]">
-                              <div className="col-span-5">구성품</div>
-                              <div className="col-span-2">qty_per_unit</div>
-                              <div className="col-span-1">unit</div>
-                              <div className="col-span-3">note</div>
-                              <div className="col-span-1 text-right">VOID</div>
-                            </div>
-                            {(linesQuery.data ?? []).map((line) => {
-                              const name =
-                                line.component_ref_type === "PART"
-                                  ? line.component_part_name ?? "(unknown part)"
-                                  : line.component_master_model_name ?? "(unknown master)";
-                              return (
-                                <div
-                                  key={line.bom_line_id}
-                                  className="grid grid-cols-12 gap-3 items-center rounded-[12px] border border-[var(--panel-border)] bg-[var(--panel)] px-3 py-2"
-                                >
-                                  <div className="col-span-5 min-w-0">
-                                    <div className="flex items-center gap-2 mb-0.5">
-                                      <Badge tone={line.component_ref_type === "MASTER" ? "primary" : "neutral"}>
-                                        {line.component_ref_type}
-                                      </Badge>
-                                      <div className="truncate text-sm font-semibold">{name}</div>
-                                    </div>
-                                    <div className="truncate text-xs text-[var(--muted)]">line_no={line.line_no}</div>
-                                  </div>
-                                  <div className="col-span-2 text-sm">{line.qty_per_unit}</div>
-                                  <div className="col-span-1 text-sm">{line.unit}</div>
-                                  <div className="col-span-3 text-xs text-[var(--muted)] truncate">
-                                    {line.note ? line.note : "-"}
-                                  </div>
-                                  <div className="col-span-1 flex justify-end">
-                                    <span className="inline-flex" title={!canWrite ? writeDisabledReason : undefined}>
-                                      <Button
-                                        variant="danger"
-                                        size="sm"
-                                        onClick={() => setVoidConfirmId(line.bom_line_id)}
-                                        disabled={voidActionDisabled}
-                                        className="shrink-0"
-                                      >
-                                        VOID
-                                      </Button>
-                                    </span>
-                                  </div>
-                                </div>
-                              );
-                            })}
-                          </div>
-                        )}
-                      </CardBody>
-                    </Card>
-                  </div>
-                }
-              />
-            )}
-
-            <Modal open={!!voidConfirmId} onClose={() => setVoidConfirmId(null)} title="구성품 VOID">
-              <div className="space-y-6">
-                <div className="text-sm text-[var(--foreground)]">
-                  <p>이 구성품 라인을 VOID 처리합니다. 되돌릴 수 없으며 감사/분석 로그로 유지됩니다.</p>
-                </div>
-                <div className="flex justify-end gap-2">
-                  <Button variant="secondary" onClick={() => setVoidConfirmId(null)}>취소</Button>
-                  <Button
-                    variant="danger"
-                    onClick={handleVoidConfirm}
-                    disabled={voidActionDisabled}
-                  >
-                    VOID 처리
-                  </Button>
-                </div>
-              </div>
-            </Modal>
-          </div>
-        ) : null}
       </div>
     </div>
+  );
+
+  const renderBomDrawer = () => (
+    <Sheet
+      open={showBomPanel}
+      onClose={closeBomDrawer}
+      title="자재명세서(BOM)"
+      className="left-0 right-auto w-full sm:w-[96vw] lg:w-[1200px] 2xl:w-[1440px] sm:max-w-none border-r border-[var(--panel-border)] border-l-0"
+    >
+      <div className="h-full overflow-y-auto p-6 scrollbar-hide">
+        <div className="space-y-4" id="catalog.detail.bom">
+          <ActionBar
+            title="자재명세서(BOM)"
+            subtitle="부속/메달 구성품을 마스터 기준으로 관리합니다."
+            actions={
+              <div className="flex items-center gap-2">
+                <Button variant="secondary" onClick={closeBomDrawer}>
+                  이전으로 돌아가기
+                </Button>
+              </div>
+            }
+          />
+
+          <Card>
+            <CardBody>
+              <div className="grid grid-cols-1 gap-2 text-xs md:grid-cols-4">
+                <div className="rounded-[8px] border border-[var(--panel-border)] bg-[var(--subtle-bg)] px-3 py-2">
+                  <span className="text-[var(--muted)]">총중량</span>
+                  <span className="ml-2 font-semibold text-[var(--foreground)]">{formatWeightNumber(bomTotals.netWeight)} g</span>
+                </div>
+                <div className="rounded-[8px] border border-[var(--panel-border)] bg-[var(--subtle-bg)] px-3 py-2">
+                  <span className="text-[var(--muted)]">총기타공</span>
+                  <span className="ml-2 font-semibold text-[var(--foreground)]">₩{formatLaborDisplayKrw(bomTotals.laborTotal)}</span>
+                </div>
+                <div className="rounded-[8px] border border-[var(--panel-border)] bg-[var(--subtle-bg)] px-3 py-2">
+                  <span className="text-[var(--muted)]">총소재비</span>
+                  <span className="ml-2 font-semibold text-[var(--foreground)]">₩{formatDisplayKrw(bomTotals.materialTotal)}</span>
+                </div>
+                <div className="rounded-[8px] border border-[var(--panel-border)] bg-[var(--primary-soft)] px-3 py-2">
+                  <span className="text-[var(--muted)]">합산가</span>
+                  <span className="ml-2 font-semibold text-[var(--primary)]">₩{formatDisplayKrw(bomTotals.estimatedTotal)}</span>
+                </div>
+              </div>
+            </CardBody>
+          </Card>
+
+          {isActorMissing ? (
+            <div className="rounded-[12px] border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-900">
+              환경 경고: NEXT_PUBLIC_CMS_ACTOR_ID 미설정으로 생성/추가/VOID가 차단됩니다.
+            </div>
+          ) : null}
+
+          {componentSearchQuery.error ? (
+            <Card className="border-red-200 bg-red-50">
+              <CardBody className="space-y-2 text-red-900">
+                <div className="text-sm font-semibold">검색 오류</div>
+                <div className="text-sm">
+                  {componentSearchQuery.error instanceof Error
+                    ? componentSearchQuery.error.message
+                    : "구성품 검색 오류"}
+                </div>
+              </CardBody>
+            </Card>
+          ) : null}
+
+          {!selectedMasterId ? (
+            <Card>
+              <CardBody className="text-sm text-[var(--muted)]">
+                마스터를 선택하면 BOM 관리가 가능합니다.
+              </CardBody>
+            </Card>
+          ) : (
+            <div className="space-y-4">
+              <Card>
+                <CardHeader>
+                  <div className="text-sm font-semibold">구성품 추가</div>
+                </CardHeader>
+                <CardBody className="space-y-3">
+                      <div className="relative space-y-2">
+                        <div className="grid grid-cols-1 gap-2 md:grid-cols-[minmax(0,1fr)_120px_auto]">
+                          <Input
+                            aria-label="품목명 검색"
+                            placeholder="품목명 검색"
+                            value={componentQuery}
+                            onFocus={() => setShowComponentResults(true)}
+                            onBlur={() => window.setTimeout(() => setShowComponentResults(false), 220)}
+                            onChange={(e) => {
+                              setComponentQuery(e.target.value);
+                              setShowComponentResults(true);
+                            }}
+                          />
+                          <Input
+                            aria-label="수량"
+                            placeholder="수량"
+                            value={qtyPerUnit}
+                            onChange={(e) => setQtyPerUnit(e.target.value)}
+                          />
+                          <span className="inline-flex" title={!canWrite ? writeDisabledReason : undefined}>
+                            <Button onClick={handleAddLine} disabled={addLineDisabled}>
+                              추가
+                            </Button>
+                          </span>
+                        </div>
+
+                        {showComponentResults || componentQuery.trim().length > 0 ? (
+                          <div className="max-h-56 overflow-y-auto rounded-[10px] border border-[var(--panel-border)] bg-[var(--panel)]">
+                            {componentSearchQuery.isLoading ? (
+                              <div className="px-3 py-2 text-xs text-[var(--muted)]">검색 중...</div>
+                            ) : componentSearchResults.length === 0 ? (
+                              <div className="px-3 py-2 text-xs text-[var(--muted)]">검색 결과가 없습니다.</div>
+                            ) : (
+                              componentSearchResults.map((item) => {
+                                const materialCode = String(masterRowsById[item.master_id]?.material_code_default ?? item.material_code_default ?? "-");
+                                const isSelected = selectedComponentId === item.master_id;
+                                return (
+                                  <button
+                                    key={item.master_id}
+                                    type="button"
+                                    onMouseDown={(e) => e.preventDefault()}
+                                    onClick={() => {
+                                      setSelectedComponentId(item.master_id);
+                                      setComponentQuery(item.model_name);
+                                      setShowComponentResults(false);
+                                    }}
+                                    className={cn(
+                                      "w-full border-b border-[var(--panel-border)] px-3 py-2 text-left text-sm last:border-b-0 hover:bg-[var(--subtle-bg)]",
+                                      isSelected && "bg-[var(--subtle-bg)]"
+                                    )}
+                                  >
+                                    <div className="font-medium text-[var(--foreground)]">{item.model_name}</div>
+                                    <div className="text-xs text-[var(--muted)]">소재: {materialCode}</div>
+                                  </button>
+                                );
+                              })
+                            )}
+                          </div>
+                        ) : null}
+                      </div>
+
+                      <div className="text-xs text-[var(--muted)]">선택한 품목의 소재는 마스터에 저장된 소재가 기본으로 적용됩니다.</div>
+                    </CardBody>
+                  </Card>
+
+                  <Card>
+                    <CardHeader>
+                      <div className="text-sm font-semibold">현재 구성품 목록</div>
+                    </CardHeader>
+                    <CardBody className="space-y-2">
+                      {linesQuery.isLoading ? (
+                        <p className="text-sm text-[var(--muted)]">불러오는 중...</p>
+                      ) : (linesQuery.data ?? []).length === 0 ? (
+                        <p className="text-sm text-[var(--muted)]">등록된 구성품이 없습니다.</p>
+                      ) : (
+                        <div className="overflow-x-auto rounded-[10px] border border-[var(--panel-border)]">
+                          <table className="min-w-full text-left text-xs">
+                            <thead className="bg-[var(--subtle-bg)] text-[var(--muted)]">
+                              <tr>
+                                <th className="px-3 py-2">사진</th>
+                                <th className="px-3 py-2">품목명</th>
+                                <th className="px-3 py-2">수량</th>
+                                <th className="px-3 py-2">총공임</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {displayedBomLineMetrics.map(({ line, laborTotal }) => {
+                                const name = line.component_master_model_name ?? line.component_part_name ?? "(unknown item)";
+                                const imageUrl = line.component_master_id
+                                  ? String(masterRowsById[line.component_master_id]?.image_url ?? "")
+                                  : "";
+                                return (
+                                  <tr key={line.bom_line_id} className="border-t border-[var(--panel-border)]">
+                                    <td className="px-3 py-2">
+                                      {imageUrl ? (
+                                        <img src={imageUrl} alt={name} className="h-10 w-10 rounded-md border border-[var(--panel-border)] object-cover bg-[var(--subtle-bg)]" loading="lazy" />
+                                      ) : (
+                                        <div className="flex h-10 w-10 items-center justify-center rounded-md border border-[var(--panel-border)] bg-[var(--subtle-bg)] text-[10px] text-[var(--muted)]">-</div>
+                                      )}
+                                    </td>
+                                    <td className="px-3 py-2">{name}</td>
+                                    <td className="px-3 py-2 tabular-nums">{Number(line.qty_per_unit ?? 0).toLocaleString("ko-KR")}</td>
+                                    <td className="px-3 py-2 tabular-nums">₩{formatLaborDisplayKrw(laborTotal)}</td>
+                                  </tr>
+                                );
+                              })}
+                              <tr className="border-t border-[var(--panel-border)] bg-[var(--subtle-bg)] font-semibold">
+                                <td className="px-3 py-2" />
+                                <td className="px-3 py-2">합계</td>
+                                <td className="px-3 py-2 tabular-nums">
+                                  {displayedBomLineMetrics.reduce((sum, { line }) => sum + Number(line.qty_per_unit ?? 0), 0).toLocaleString("ko-KR")}
+                                </td>
+                                <td className="px-3 py-2 tabular-nums">₩{formatLaborDisplayKrw(bomTotals.laborTotal)}</td>
+                              </tr>
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                    </CardBody>
+                  </Card>
+                </div>
+          )}
+
+          <Modal open={!!voidConfirmId} onClose={() => setVoidConfirmId(null)} title="구성품 VOID">
+            <div className="space-y-6">
+              <div className="text-sm text-[var(--foreground)]">
+                <p>이 구성품 라인을 VOID 처리합니다. 되돌릴 수 없으며 감사/분석 로그로 유지됩니다.</p>
+              </div>
+              <div className="flex justify-end gap-2">
+                <Button variant="secondary" onClick={() => setVoidConfirmId(null)}>취소</Button>
+                <Button
+                  variant="danger"
+                  onClick={handleVoidConfirm}
+                  disabled={voidActionDisabled}
+                >
+                  VOID 처리
+                </Button>
+              </div>
+            </div>
+          </Modal>
+        </div>
+      </div>
+    </Sheet>
+  );
+
+  const renderAbsorbDrawer = () => (
+    <Sheet
+      open={showAbsorbPanel}
+      onClose={closeAbsorbDrawer}
+      title="흡수공임"
+      className="left-0 right-auto w-full sm:w-[90vw] lg:w-[760px] sm:max-w-none border-r border-[var(--panel-border)] border-l-0"
+    >
+      <div className="h-full overflow-y-auto p-6 scrollbar-hide">
+        <div className="space-y-4">
+          <ActionBar
+            title="흡수공임"
+            subtitle="버킷/사유/금액/공장 스코프 기준으로 추가 공임을 관리합니다."
+            actions={
+              <div className="flex items-center gap-2">
+                <Button variant="secondary" onClick={closeAbsorbDrawer}>
+                  이전으로 돌아가기
+                </Button>
+              </div>
+            }
+          />
+
+          <Card>
+            <CardHeader>
+              <div className="text-sm font-semibold">흡수공임 추가/수정</div>
+            </CardHeader>
+            <CardBody className="space-y-3">
+              <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+                <Select value={absorbBucket} onChange={(e) => setAbsorbBucket(e.target.value as AbsorbLaborBucket)}>
+                  {absorbBucketOptions.map((option) => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
+                </Select>
+                {absorbBucket === "STONE_LABOR" ? (
+                  <Select value={absorbStoneRole} onChange={(e) => setAbsorbStoneRole(e.target.value as AbsorbStoneRole)}>
+                    {absorbStoneRoleOptions.map((option) => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
+                  </Select>
+                ) : (
+                  <Input value="알공임 선택 시 중심/보조 선택 가능" readOnly className="text-[var(--muted)] bg-[var(--input-bg)]" />
+                )}
+                <Input value={absorbReason} onChange={(e) => setAbsorbReason(e.target.value)} placeholder="사유" />
+                <Input
+                  value={absorbAmount}
+                  onChange={(e) => setAbsorbAmount(e.target.value)}
+                  placeholder="예: -3000 또는 5000"
+                />
+                <Select value={absorbVendorId} onChange={(e) => setAbsorbVendorId(e.target.value)}>
+                  <option value="">전체 공장</option>
+                  {vendorOptions.map((vendor) => (
+                    <option key={vendor.value} value={vendor.value}>{vendor.label}</option>
+                  ))}
+                </Select>
+                <label className="inline-flex items-center gap-2 text-xs">
+                  <input type="checkbox" checked={absorbIsPerPiece} onChange={(e) => setAbsorbIsPerPiece(e.target.checked)} className="h-4 w-4" />
+                  수량 곱(is_per_piece)
+                </label>
+                <label className="inline-flex items-center gap-2 text-xs">
+                  <input type="checkbox" checked={absorbIsActive} onChange={(e) => setAbsorbIsActive(e.target.checked)} className="h-4 w-4" />
+                  활성화
+                </label>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <Button type="button" variant="secondary" onClick={handleSaveAbsorbLaborItem} disabled={!masterId.trim()}>
+                  {editingAbsorbItemId ? "흡수공임 수정" : "흡수공임 추가"}
+                </Button>
+                {editingAbsorbItemId ? (
+                  <Button type="button" variant="ghost" onClick={resetAbsorbForm}>취소</Button>
+                ) : null}
+              </div>
+
+              <div className="grid grid-cols-2 gap-2 text-xs md:grid-cols-4">
+                <div className="rounded border border-[var(--panel-border)] bg-[var(--panel)] px-2 py-1">기본공임 +{formatDisplayKrw(absorbImpactSummary.baseLabor)}</div>
+                <div className="rounded border border-[var(--panel-border)] bg-[var(--panel)] px-2 py-1">알공임(중심) +{formatDisplayKrw(absorbImpactSummary.stoneCenter)}</div>
+                <div className="rounded border border-[var(--panel-border)] bg-[var(--panel)] px-2 py-1">알공임(보조1) +{formatDisplayKrw(absorbImpactSummary.stoneSub1)}</div>
+                <div className="rounded border border-[var(--panel-border)] bg-[var(--panel)] px-2 py-1">알공임(보조2) +{formatDisplayKrw(absorbImpactSummary.stoneSub2)}</div>
+                <div className="rounded border border-[var(--panel-border)] bg-[var(--panel)] px-2 py-1">도금 +{formatDisplayKrw(absorbImpactSummary.plating)}</div>
+                <div className="rounded border border-[var(--panel-border)] bg-[var(--panel)] px-2 py-1">기타(수동흡수) +{formatDisplayKrw(absorbImpactSummary.etc)}</div>
+                <div className="col-span-2 rounded border border-[var(--panel-border)] bg-[var(--warning-soft)] px-2 py-1 font-semibold">총 추가 +{formatDisplayKrw(absorbImpactSummary.total)}</div>
+              </div>
+            </CardBody>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <div className="text-sm font-semibold">흡수공임 목록</div>
+            </CardHeader>
+            <CardBody>
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[760px] text-xs">
+                  <thead className="text-[var(--muted)]">
+                    <tr>
+                      <th className="text-left py-1">활성</th>
+                      <th className="text-left py-1">버킷</th>
+                      <th className="text-left py-1">알공임 위치</th>
+                      <th className="text-left py-1">사유</th>
+                      <th className="text-left py-1">금액</th>
+                      <th className="text-left py-1">수량 곱</th>
+                      <th className="text-left py-1">공장 범위</th>
+                      <th className="text-left py-1">작업</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {visibleAbsorbLaborItems.length === 0 ? (
+                      <tr className="border-t border-[var(--panel-border)]">
+                        <td className="py-2 text-[var(--muted)]" colSpan={8}>등록된 흡수공임이 없습니다.</td>
+                      </tr>
+                    ) : (
+                      visibleAbsorbLaborItems.map((item) => (
+                        <tr key={item.absorb_item_id} className="border-t border-[var(--panel-border)]">
+                          <td className="py-1">{item.is_active ? "Y" : "N"}</td>
+                          <td className={cn("py-1", getAbsorbBucketToneClass(item.bucket))}>{getAbsorbBucketDisplayLabel(item)}</td>
+                          <td className="py-1">{getAbsorbStoneRoleLabel(item.note)}</td>
+                          <td className="py-1">{item.reason}</td>
+                          <td className="py-1">{Number(item.amount_krw).toLocaleString()}</td>
+                          <td className="py-1">{item.is_per_piece ? "Y" : "N"}</td>
+                          <td className="py-1">{vendorOptions.find((vendor) => vendor.value === item.vendor_party_id)?.label ?? "전체"}</td>
+                          <td className="py-1">
+                            <div className="flex items-center gap-1">
+                              <Button type="button" size="sm" variant="secondary" onClick={() => handleEditAbsorbLaborItem(item)}>수정</Button>
+                              <Button type="button" size="sm" variant="secondary" onClick={() => handleDeleteAbsorbLaborItem(item.absorb_item_id)}>삭제</Button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </CardBody>
+          </Card>
+        </div>
+      </div>
+    </Sheet>
   );
 
   const renderListLeftPanel = () => (
@@ -3384,7 +4424,7 @@ export default function CatalogPage() {
           <>
             {renderFilterBar()}
 
-            <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-7" id="catalog.galleryGrid">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6" id="catalog.galleryGrid">
               {isCatalogLoading && pageItems.length === 0 ? (
                 Array.from({ length: 12 }).map((_, i) => (
                   <div
@@ -3397,43 +4437,95 @@ export default function CatalogPage() {
                   등록된 상품이 없습니다.
                 </div>
               ) : (
-                pageItems.map((item) => (
-                  <div
-                    key={item.id}
-                    className={cn(
-                      "group relative aspect-[3/4] cursor-pointer overflow-hidden rounded-[16px] border border-[var(--panel-border)] bg-[var(--panel)] transition-all hover:ring-2 hover:ring-[var(--primary)]",
-                      getMaterialBgColor(
-                        String(masterRowsById[item.id]?.material_code_default ?? "00")
-                      ),
-                      selectedItemId === item.id && "ring-2 ring-[var(--primary)]"
-                    )}
-                    onClick={() => openDetailDrawer(item.id)}
-                  >
-                    {/* Image */}
-                    <div className="absolute inset-x-0 top-0 bottom-20 bg-[var(--white)] dark:bg-[var(--black)]">
-                      {item.imageUrl ? (
-                        <img
-                          src={item.imageUrl}
-                          alt={item.model}
-                          className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-105"
-                          loading="lazy"
-                        />
-                      ) : (
-                        <div className="flex h-full w-full items-center justify-center bg-[var(--subtle-bg)] text-[var(--muted)]">
-                          <span className="text-xs">No Image</span>
-                        </div>
+                pageItems.map((item) => {
+                  const row = masterRowsById[item.id];
+                  const weight = parseFloat(item.weight);
+                  const hasWeight = Number.isFinite(weight);
+                  const deduction = parseFloat(String(row?.deduction_weight_default_g ?? 0)) || 0;
+                  const netWeight = hasWeight ? weight - deduction : null;
+                  const centerQty = Number(row?.center_qty_default ?? 0);
+                  const sub1Qty = Number(row?.sub1_qty_default ?? 0);
+                  const sub2Qty = Number(row?.sub2_qty_default ?? 0);
+                  const laborSell =
+                    (row?.labor_total_sell as number | undefined) ??
+                    (Number(row?.labor_base_sell ?? 0) +
+                      Number(row?.labor_center_sell ?? 0) * centerQty +
+                      Number(row?.labor_sub1_sell ?? 0) * sub1Qty +
+                      Number(row?.labor_sub2_sell ?? 0) * sub2Qty);
+                  const materialCode = String(row?.material_code_default ?? "00");
+                  const materialLabel =
+                    materialOptions.find((material) => material.value === materialCode)?.label ?? materialCode;
+                  const categoryCode = String(row?.category_code ?? "");
+                  const categoryLabel =
+                    categoryOptions.find((category) => category.value === categoryCode)?.label ??
+                    (categoryCode || "-");
+                  const totalPrice = hasWeight
+                    ? roundUpToThousand(calculateMaterialPrice(materialCode, weight, deduction) + laborSell)
+                    : null;
+
+                  return (
+                    <div
+                      key={item.id}
+                      className={cn(
+                        "group relative aspect-[3/4] cursor-pointer overflow-hidden rounded-[16px] border border-[var(--panel-border)] bg-[var(--panel)] transition-all hover:ring-2 hover:ring-[var(--primary)]",
+                        getMaterialBgColor(
+                          String(masterRowsById[item.id]?.material_code_default ?? "00")
+                        ),
+                        selectedItemId === item.id && "ring-2 ring-[var(--primary)]"
                       )}
-                    </div>
-                    {/* Content */}
-                    <div className="absolute bottom-0 left-0 right-0 h-20 bg-[var(--panel)] p-3 pt-3 border-t border-[var(--panel-border)]">
-                      <div className="font-semibold text-[var(--foreground)] truncate">{item.model}</div>
-                      <div className="mt-1 flex items-center justify-between">
-                        <span className="text-xs text-[var(--muted)] truncate max-w-[60%]">{item.name}</span>
-                        <span className="font-mono text-sm font-bold text-[var(--foreground)]">{item.cost}</span>
+                      onClick={() => openDetailDrawer(item.id)}
+                    >
+                      {/* Image */}
+                      <div className="absolute inset-x-0 top-0 bottom-28 bg-[var(--white)] dark:bg-[var(--black)]">
+                        {item.imageUrl ? (
+                          <img
+                            src={item.imageUrl}
+                            alt={item.model}
+                            className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-105"
+                            loading="lazy"
+                          />
+                        ) : (
+                          <div className="flex h-full w-full items-center justify-center bg-[var(--subtle-bg)] text-[var(--muted)]">
+                            <span className="text-xs">No Image</span>
+                          </div>
+                        )}
+                      </div>
+                      {/* Content */}
+                      <div className="absolute bottom-0 left-0 right-0 h-28 border-t border-[var(--panel-border)] bg-[var(--panel)] p-2.5">
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="font-semibold text-[var(--foreground)] truncate">{item.model}</div>
+                          <div className="flex items-center gap-1 text-[10px] text-[var(--muted)] shrink-0">
+                            <span className="rounded bg-[var(--chip)] px-1.5 py-0.5">{materialLabel}</span>
+                            <span className="rounded bg-[var(--chip)] px-1.5 py-0.5">{categoryLabel}</span>
+                          </div>
+                        </div>
+                        <div
+                          className="mt-1 space-y-1 text-[11px] text-[var(--foreground)]"
+                          style={{ fontFamily: "'Malgun Gothic', '맑은 고딕', sans-serif" }}
+                        >
+                          <div className="grid grid-cols-[auto_1fr] items-baseline gap-2">
+                            <span className="text-[var(--muted)]">총중량</span>
+                            <span className="truncate text-right font-normal">
+                              {netWeight === null ? "-" : <><NumberText value={netWeight} /> g</>}
+                            </span>
+                          </div>
+                          <div className="grid grid-cols-[auto_1fr] items-baseline gap-2">
+                            <span className="text-[var(--muted)]">총공임</span>
+                            <span className="truncate text-right font-normal">
+                              {laborSell > 0 ? <><NumberText value={laborSell} /> 원</> : "-"}
+                            </span>
+                          </div>
+                          <div className="grid grid-cols-[auto_1fr] items-baseline gap-2">
+                            <span className="text-[var(--muted)]">총가격</span>
+                            <span className="truncate text-right font-bold">
+                              {totalPrice === null ? "-" : <><NumberText value={totalPrice} /> 원</>}
+                            </span>
+                          </div>
+                        </div>
                       </div>
                     </div>
-                  </div>
-                ))
+                  );
+                })
               )}
             </div>
 
@@ -3473,7 +4565,9 @@ export default function CatalogPage() {
         )}
       </div>
 
+      {renderBomDrawer()}
       {renderRegisterDrawer()}
+      {renderAbsorbDrawer()}
       {renderImageOverlay()}
 
       <Modal open={deleteConfirmOpen} onClose={() => setDeleteConfirmOpen(false)} title="마스터 삭제">

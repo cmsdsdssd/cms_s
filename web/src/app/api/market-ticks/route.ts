@@ -125,8 +125,10 @@ export async function GET() {
         const csPriceRaw = toNum(csRowData?.price_krw_per_g);
         const csMeta = csRowData?.meta ?? null;
 
+        const csNoCorrStrict = readMetaNumber(csMeta, "silver_cn_krw_per_g_no_corr");
+
         const csNoCorr =
-            readMetaNumber(csMeta, "silver_cn_krw_per_g_no_corr") ?? // ✅ NEW: 너가 요구한 키
+            csNoCorrStrict ??
             readMetaNumber(csMeta, "cs_no_corr_krw_per_g") ??        // ✅ 기존 키(호환)
             (() => {
                 const f = readMetaNumber(csMeta, "cs_correction_factor");
@@ -158,7 +160,9 @@ export async function GET() {
                 ks925,
                 ksOriginal: silverBasePrice,
                 cs,
+                csTick: csPriceRaw,
                 csOriginal: csNoCorr,
+                csOriginalStrict: csNoCorrStrict,
                 cnyAd,
                 // 디버깅/가시성용(원하면 유지, 싫으면 삭제 가능)
                 _config: { fxMarkup, csFactor, silverKrFactor },

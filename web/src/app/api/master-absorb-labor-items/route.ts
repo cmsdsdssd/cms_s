@@ -77,7 +77,6 @@ export async function POST(request: Request) {
   const bucket = String(body.bucket ?? "").trim() as AbsorbBucket;
   const reason = String(body.reason ?? "").trim();
   const amount = toNumber(body.amount_krw);
-  const priorityValue = toNumber(body.priority);
 
   if (!masterId) {
     return NextResponse.json({ error: "master_id 값이 필요합니다." }, { status: 400 });
@@ -88,8 +87,8 @@ export async function POST(request: Request) {
   if (!reason) {
     return NextResponse.json({ error: "reason 값이 필요합니다." }, { status: 400 });
   }
-  if (amount === null || amount < 0) {
-    return NextResponse.json({ error: "amount_krw는 0 이상이어야 합니다." }, { status: 400 });
+  if (amount === null) {
+    return NextResponse.json({ error: "amount_krw는 숫자여야 합니다." }, { status: 400 });
   }
 
   const absorbItemId = toNullableText(body.absorb_item_id) ?? crypto.randomUUID();
@@ -101,7 +100,7 @@ export async function POST(request: Request) {
     amount_krw: amount,
     is_per_piece: body.is_per_piece === false ? false : true,
     vendor_party_id: toNullableText(body.vendor_party_id),
-    priority: Number.isInteger(priorityValue) ? Number(priorityValue) : 100,
+    priority: 100,
     is_active: body.is_active === false ? false : true,
     note: toNullableText(body.note),
   };

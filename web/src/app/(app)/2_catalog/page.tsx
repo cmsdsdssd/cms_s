@@ -280,46 +280,45 @@ function ProductCard({
 
         {/* Content */}
         <div className="p-4 space-y-3">
-          <div>
-            <h3 className="font-semibold text-[var(--foreground)] truncate text-base">
-              {item.model}
-            </h3>
-            <p className="text-sm text-[var(--muted)] truncate">{item.name}</p>
-          </div>
+          <h3 className="font-semibold text-[var(--foreground)] truncate text-base">
+            {item.model}
+          </h3>
 
-          {/* Price info */}
-          <div className="grid grid-cols-2 gap-2">
-            <div className="rounded-lg bg-[var(--chip)] p-2">
-              <p className="text-[10px] font-medium text-[var(--muted)] uppercase tracking-wider">판매가</p>
-              <p className="text-sm font-bold text-[var(--foreground)]">
-                {totalPrice > 0 ? (
-                  <span>
-                    ₩<NumberText value={totalPrice} />
-                  </span>
-                ) : (
-                  "-"
-                )}
-              </p>
-            </div>
-            <div className="rounded-lg bg-[var(--chip)] p-2">
-              <p className="text-[10px] font-medium text-[var(--muted)] uppercase tracking-wider">공임</p>
-              <p className="text-sm font-bold text-[var(--foreground)]">
+          <div
+            className="space-y-1.5 rounded-lg border border-[var(--panel-border)] bg-[var(--panel)]/88 px-3 py-2 text-xs text-[var(--foreground)]"
+            style={{ fontFamily: "'Malgun Gothic', '맑은 고딕', sans-serif" }}
+          >
+            <p className="grid grid-cols-[auto_1fr] items-baseline gap-2">
+              <span className="text-[var(--muted)]">총중량</span>
+              <span className="text-right font-normal">{item.weight?.trim() ? item.weight : "-"}</span>
+            </p>
+            <p className="grid grid-cols-[auto_1fr] items-baseline gap-2">
+              <span className="text-[var(--muted)]">총공임</span>
+              <span className="text-right font-normal">
                 {laborSell > 0 ? (
-                  <span>
+                  <>
                     ₩<NumberText value={laborSell} />
-                  </span>
+                  </>
                 ) : (
                   "-"
                 )}
-              </p>
-            </div>
+              </span>
+            </p>
+            <p className="grid grid-cols-[auto_1fr] items-baseline gap-2">
+              <span className="text-[var(--muted)]">총가격</span>
+              <span className="text-right font-bold">
+                {totalPrice > 0 ? (
+                  <>
+                    ₩<NumberText value={totalPrice} />
+                  </>
+                ) : (
+                  "-"
+                )}
+              </span>
+            </p>
           </div>
 
-          {/* Meta info */}
-          <div className="flex items-center justify-between text-xs text-[var(--muted)]">
-            <span>{item.weight}</span>
-            <span>{item.vendor}</span>
-          </div>
+          <div className="text-[11px] text-[var(--muted)] truncate">{item.vendor}</div>
         </div>
       </div>
     </div>
@@ -772,7 +771,7 @@ function ProductFormModal({
                 <X size={14} />
               </button>
             )}
-            <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handleImageUpload} disabled={uploadingImage} />
+            <input ref={fileInputRef} type="file" accept="image/*,.heic,.heif" className="hidden" onChange={handleImageUpload} disabled={uploadingImage} />
           </div>
 
           <div className="flex-1 grid grid-cols-2 gap-3">

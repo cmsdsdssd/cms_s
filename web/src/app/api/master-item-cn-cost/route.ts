@@ -10,8 +10,14 @@ function getSupabaseAdmin() {
 
 type ExtraItemInput = {
   label?: unknown;
+  basis?: unknown;
   cny_per_g?: unknown;
+  cny_per_piece?: unknown;
 };
+
+type ExtraItemNormalized =
+  | { label: string; basis: "PER_G"; cny_per_g: number }
+  | { label: string; basis: "PER_PIECE"; cny_per_piece: number };
 
 const isUuid = (value: string) =>
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
@@ -24,15 +30,25 @@ const toNum = (v: unknown): number | null => {
 
 const normalizeExtraItems = (raw: unknown) => {
   if (!Array.isArray(raw)) return [];
-  const out: Array<{ label: string; cny_per_g: number }> = [];
+  const out: ExtraItemNormalized[] = [];
   for (const it of raw as ExtraItemInput[]) {
     const label = String(it?.label ?? "").trim();
-    const cny = toNum(it?.cny_per_g);
     if (!label) continue;
     if (label.length > 40) continue;
-    if (cny === null) continue;
-    if (cny < 0) continue;
-    out.push({ label, cny_per_g: cny });
+
+    const basisRaw = String(it?.basis ?? "PER_G").trim().toUpperCase();
+    const basis = basisRaw === "PER_PIECE" ? "PER_PIECE" : "PER_G";
+
+    if (basis === "PER_PIECE") {
+      const cny = toNum(it?.cny_per_piece);
+      if (cny === null || cny < 0) continue;
+      out.push({ label, basis: "PER_PIECE", cny_per_piece: cny });
+    } else {
+      const cny = toNum(it?.cny_per_g);
+      if (cny === null || cny < 0) continue;
+      out.push({ label, basis: "PER_G", cny_per_g: cny });
+    }
+
     if (out.length >= 12) break;
   }
   return out;

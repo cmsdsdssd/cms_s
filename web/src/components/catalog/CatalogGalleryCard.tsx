@@ -243,39 +243,39 @@ function CatalogGalleryCardComponent({
         <p className="text-[clamp(0.8rem,0.76rem+0.26vw,0.9rem)] font-semibold text-[var(--foreground)] truncate leading-tight">
           {model}
         </p>
-        <div className="grid gap-1 text-[clamp(0.66rem,0.62rem+0.22vw,0.76rem)] [grid-template-columns:repeat(auto-fit,minmax(140px,1fr))] min-w-0">
-          <div className="min-w-0">
-            <p className="text-[clamp(0.56rem,0.52rem+0.18vw,0.66rem)] font-semibold uppercase tracking-wider text-[var(--muted)] mb-0.5 leading-tight">
-              예상 총 금액
-            </p>
-            <p className="font-semibold text-[var(--foreground)] truncate leading-tight">
-              {estimatedTotalPrice === null ? "-" : <NumberText value={estimatedTotalPrice} />} 원
-            </p>
-          </div>
-          <div className="min-w-0">
-            <p className="text-[clamp(0.56rem,0.52rem+0.18vw,0.66rem)] font-semibold uppercase tracking-wider text-[var(--muted)] mb-0.5 leading-tight">
-              예상 중량 · 공임
-            </p>
-            <div className="grid grid-cols-2 gap-2 text-[var(--foreground)] font-semibold leading-tight">
-              <span className="truncate">
-                {estimatedWeight ? (
-                  <>
-                    <NumberText value={estimatedWeight.weight} />g
-                    {estimatedWeight.deduction > 0 ? (
-                      <span className="ml-1 text-[var(--muted)]">
-                        (-<NumberText value={estimatedWeight.deduction} />)
-                      </span>
-                    ) : null}
-                  </>
-                ) : (
-                  "-"
-                )}
-              </span>
-              <span className="truncate text-right">
-                {laborSell === null ? "-" : <NumberText value={laborSell} />} 원
-              </span>
-            </div>
-          </div>
+        <div
+          className="grid gap-1 rounded-md border border-[var(--panel-border)] bg-[var(--panel)]/82 px-2.5 py-2 text-[clamp(0.66rem,0.62rem+0.22vw,0.76rem)] min-w-0"
+          style={{ fontFamily: "'Malgun Gothic', '맑은 고딕', sans-serif" }}
+        >
+          <p className="grid grid-cols-[auto_1fr] items-baseline gap-2 text-[var(--foreground)] leading-tight">
+            <span className="text-[var(--muted)]">총중량</span>
+            <span className="truncate text-right font-normal">
+              {estimatedWeight ? (
+                <>
+                  <NumberText value={estimatedWeight.weight} />g
+                  {estimatedWeight.deduction > 0 ? (
+                    <span className="ml-1 text-[var(--muted)]">
+                      (-<NumberText value={estimatedWeight.deduction} />)
+                    </span>
+                  ) : null}
+                </>
+              ) : (
+                "-"
+              )}
+            </span>
+          </p>
+          <p className="grid grid-cols-[auto_1fr] items-baseline gap-2 text-[var(--foreground)] leading-tight">
+            <span className="text-[var(--muted)]">총공임</span>
+            <span className="truncate text-right font-normal">
+              {laborSell === null ? "-" : <><NumberText value={laborSell} /> 원</>}
+            </span>
+          </p>
+          <p className="grid grid-cols-[auto_1fr] items-baseline gap-2 text-[var(--foreground)] leading-tight">
+            <span className="text-[var(--muted)]">총가격</span>
+            <span className="truncate text-right font-bold">
+              {estimatedTotalPrice === null ? "-" : <><NumberText value={estimatedTotalPrice} /> 원</>}
+            </span>
+          </p>
         </div>
       </div>
       </Card>

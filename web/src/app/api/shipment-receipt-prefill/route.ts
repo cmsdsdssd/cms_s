@@ -34,7 +34,7 @@ export async function GET(request: Request) {
   const { data, error } = await supabase
     .from("cms_receipt_line_match")
     .select(
-      "receipt_id, receipt_line_uuid, order_line_id, shipment_line_id, status, selected_weight_g, selected_material_code, selected_factory_labor_basic_cost_krw, selected_factory_labor_other_cost_krw, selected_factory_total_cost_krw, overridden_fields, confirmed_at"
+      "receipt_id, receipt_line_uuid, order_line_id, shipment_line_id, status, selected_weight_g, selected_material_code, selected_factory_labor_basic_cost_krw, selected_factory_labor_other_cost_krw, selected_factory_total_cost_krw, overridden_fields, pricing_policy_version, pricing_policy_meta, confirmed_at"
     )
     .eq("order_line_id", orderLineId)
     .eq("status", "CONFIRMED")
@@ -55,6 +55,7 @@ export async function GET(request: Request) {
   let shipmentBaseLaborKrw: number | null = null;
   let shipmentExtraLaborKrw: number | null = null;
   let shipmentExtraLaborItems: unknown = null;
+  let shipmentMasterId: string | null = null;
   let stoneCenterQty: number | null = null;
   let stoneSub1Qty: number | null = null;
   let stoneSub2Qty: number | null = null;
@@ -104,9 +105,11 @@ export async function GET(request: Request) {
   if (data.shipment_line_id) {
     const { data: shipmentLineRow } = await supabase
       .from("cms_shipment_line")
-      .select("base_labor_krw, extra_labor_krw, extra_labor_items")
+      .select("master_id, base_labor_krw, extra_labor_krw, extra_labor_items")
       .eq("shipment_line_id", data.shipment_line_id)
       .maybeSingle();
+
+    shipmentMasterId = shipmentLineRow?.master_id ? String(shipmentLineRow.master_id) : null;
 
     if (shipmentLineRow?.base_labor_krw !== null && shipmentLineRow?.base_labor_krw !== undefined) {
       shipmentBaseLaborKrw = Number(shipmentLineRow.base_labor_krw);
@@ -125,6 +128,7 @@ export async function GET(request: Request) {
       shipment_base_labor_krw: shipmentBaseLaborKrw,
       shipment_extra_labor_krw: shipmentExtraLaborKrw,
       shipment_extra_labor_items: shipmentExtraLaborItems,
+      shipment_master_id: shipmentMasterId,
       receipt_match_overridden_fields: data.overridden_fields ?? null,
       stone_center_qty: stoneCenterQty,
       stone_sub1_qty: stoneSub1Qty,

@@ -33,6 +33,8 @@ export async function POST(request: Request) {
   const buyMarginProfileId = typeof body.buy_margin_profile_id === "string"
     ? body.buy_margin_profile_id.trim() || null
     : null;
+  const forcedLaborProfileMode = "BAND";
+  const forcedLaborBandCode = "DEFAULT";
 
   // ✅ WRITE는 RPC만
   const rpcPayload = {
@@ -64,8 +66,8 @@ export async function POST(request: Request) {
     p_plating_price_cost_default: (body.plating_price_cost_default as number | null) ?? 0,
 
     // band mode
-    p_labor_profile_mode: (body.labor_profile_mode as string | null) ?? "MANUAL",
-    p_labor_band_code: (body.labor_band_code as string | null) ?? null,
+    p_labor_profile_mode: forcedLaborProfileMode,
+    p_labor_band_code: forcedLaborBandCode,
 
     p_vendor_party_id: (body.vendor_party_id as string | null) ?? null,
     p_note: (body.note as string | null) ?? null,
@@ -90,8 +92,8 @@ export async function POST(request: Request) {
   const laborCenterCost = typeof body.labor_center_cost === "number" ? body.labor_center_cost : undefined;
   const laborSub1Cost = typeof body.labor_sub1_cost === "number" ? body.labor_sub1_cost : undefined;
   const laborSub2Cost = typeof body.labor_sub2_cost === "number" ? body.labor_sub2_cost : undefined;
-  const laborProfileMode = typeof body.labor_profile_mode === "string" ? body.labor_profile_mode : undefined;
-  const laborBandCode = typeof body.labor_band_code === "string" ? body.labor_band_code : undefined;
+  const laborProfileMode = forcedLaborProfileMode;
+  const laborBandCode = forcedLaborBandCode;
   const settingAddonMargin = typeof body.setting_addon_margin_krw_per_piece === "number"
     ? body.setting_addon_margin_krw_per_piece
     : undefined;
@@ -117,8 +119,8 @@ export async function POST(request: Request) {
     if (laborCenterCost !== undefined) updatePayload.labor_center_cost = laborCenterCost;
     if (laborSub1Cost !== undefined) updatePayload.labor_sub1_cost = laborSub1Cost;
     if (laborSub2Cost !== undefined) updatePayload.labor_sub2_cost = laborSub2Cost;
-    if (laborProfileMode !== undefined) updatePayload.labor_profile_mode = laborProfileMode;
-    if (laborBandCode !== undefined) updatePayload.labor_band_code = laborBandCode;
+    updatePayload.labor_profile_mode = laborProfileMode;
+    updatePayload.labor_band_code = laborBandCode;
     if (settingAddonMargin !== undefined) {
       updatePayload.setting_addon_margin_krw_per_piece = Math.max(settingAddonMargin, 0);
     }

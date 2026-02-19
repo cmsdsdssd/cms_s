@@ -18,6 +18,7 @@ import { Input } from "@/components/ui/field";
 import { getSchemaClient } from "@/lib/supabase/client";
 import { callRpc } from "@/lib/supabase/rpc";
 import { CONTRACTS } from "@/lib/contracts";
+import { roundUpToUnit } from "@/lib/number";
 
 interface InlineShipmentPanelProps {
   orderLineId: string;
@@ -65,6 +66,12 @@ const parseNumberInput = (value: string) => {
   if (!normalized) return 0;
   const parsed = Number(normalized);
   return Number.isFinite(parsed) ? parsed : 0;
+};
+
+const roundLaborMarginToHundred = (value: number) => {
+  if (!Number.isFinite(value)) return 0;
+  if (value <= 0) return Math.round(value);
+  return roundUpToUnit(value, 100);
 };
 
 export function InlineShipmentPanel({
@@ -282,8 +289,9 @@ export function InlineShipmentPanel({
         throw new Error("총액이 재료비보다 작습니다.");
       }
 
-      const laborTotalForSave =
+      const laborTotalRaw =
         isManualTotalOverride && manualTotalValue > 0 ? manualTotalValue - materialCost : laborTotal;
+      const laborTotalForSave = isManualTotalOverride ? laborTotalRaw : roundLaborMarginToHundred(laborTotalRaw);
 
       const updatePayload: Record<string, unknown> = {
         p_shipment_line_id: lineData.shipment_line_id,

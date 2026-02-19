@@ -47,14 +47,24 @@ export async function GET(request: Request) {
 
   const { searchParams } = new URL(request.url);
   const model = String(searchParams.get("model") ?? "").trim();
+  const isUuidQuery = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(model);
 
-  let query = supabase.from("cms_master_item").select("*");
   if (model) {
-    query = query.ilike("model_name", `%${model}%`).limit(5);
-  } else {
-    query = query.limit(100);
+    const baseQuery = supabase
+      .from("cms_master_item")
+      .select("master_id,model_name,category_code,material_code_default");
+
+    const { data, error } = isUuidQuery
+      ? await baseQuery.eq("master_id", model).limit(20)
+      : await baseQuery.ilike("model_name", `%${model}%`).limit(120);
+
+    if (error) {
+      return NextResponse.json({ error: error.message ?? "데이터 조회 실패" }, { status: 500 });
+    }
+    return NextResponse.json({ data: data ?? [] }, { headers: { "Cache-Control": "no-store" } });
   }
-  const { data, error } = await query;
+
+  const { data, error } = await supabase.from("cms_master_item").select("*").limit(100);
   if (error) {
     return NextResponse.json({ error: error.message ?? "데이터 조회 실패" }, { status: 500 });
   }

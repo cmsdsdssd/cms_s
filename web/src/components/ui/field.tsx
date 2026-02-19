@@ -95,7 +95,7 @@ export const Input = React.forwardRef<HTMLInputElement, React.InputHTMLAttribute
           >
             {hasComma ? <span className="text-[color:var(--primary)]">{displayParts.prefix}</span> : displayParts.prefix}
             {displayParts.rest}
-            {displayParts.decimal ? <span className="text-[#fca5a5]">{displayParts.decimal}</span> : null}
+            {displayParts.decimal ? <><span className="decimal-point-emphasis">.</span>{displayParts.decimal.slice(1)}</> : null}
           </div>
         ) : null}
       </div>
