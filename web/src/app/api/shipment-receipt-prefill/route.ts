@@ -120,6 +120,32 @@ export async function GET(request: Request) {
     shipmentExtraLaborItems = shipmentLineRow?.extra_labor_items ?? null;
   }
 
+  const policyMeta =
+    data.pricing_policy_meta && typeof data.pricing_policy_meta === "object" && !Array.isArray(data.pricing_policy_meta)
+      ? (data.pricing_policy_meta as Record<string, unknown>)
+      : null;
+  const shipmentExtraItemsArray = Array.isArray(shipmentExtraLaborItems)
+    ? (shipmentExtraLaborItems as Array<Record<string, unknown>>)
+    : [];
+  const shipmentPlatingItems = shipmentExtraItemsArray.filter((item) => {
+    const type = String(item.type ?? "").toUpperCase();
+    const label = String(item.label ?? "");
+    return type.includes("PLATING") || label.includes("도금");
+  });
+
+  console.log("[PLATING_DEBUG][API_PREFILL]", {
+    orderLineId,
+    shipmentLineId: data.shipment_line_id,
+    selectedFactoryLaborOtherCostKrw: data.selected_factory_labor_other_cost_krw,
+    shipmentExtraLaborKrw,
+    pricingPolicyVersion: data.pricing_policy_version,
+    policyPlatingSellKrw: parseNumeric(policyMeta?.plating_sell_krw ?? null),
+    policyPlatingCostKrw: parseNumeric(policyMeta?.plating_cost_krw ?? null),
+    policyAbsorbPlatingKrw: parseNumeric(policyMeta?.absorb_plating_krw ?? null),
+    policyAbsorbEtcTotalKrw: parseNumeric(policyMeta?.absorb_etc_total_krw ?? null),
+    shipmentPlatingItems,
+  });
+
   return NextResponse.json({
     data: {
       ...data,

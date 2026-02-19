@@ -1146,6 +1146,35 @@ export default function ShipmentsPage() {
     },
   });
 
+  useEffect(() => {
+    if (!selectedOrderLineId) return;
+    const data = receiptMatchPrefillQuery.data;
+    if (!data) return;
+    const policyMeta =
+      data.pricing_policy_meta && typeof data.pricing_policy_meta === "object" && !Array.isArray(data.pricing_policy_meta)
+        ? (data.pricing_policy_meta as Record<string, unknown>)
+        : null;
+    const rawItems = Array.isArray(data.shipment_extra_labor_items)
+      ? (data.shipment_extra_labor_items as Array<Record<string, unknown>>)
+      : [];
+    const rawPlatingItems = rawItems.filter((item) => {
+      const type = String(item.type ?? "").toUpperCase();
+      const label = String(item.label ?? "");
+      return type.includes("PLATING") || label.includes("도금");
+    });
+
+    console.log("[PLATING_DEBUG][PREFILL]", {
+      orderLineId: selectedOrderLineId,
+      shipmentLineId: data.shipment_line_id,
+      policyPlatingSellKrw: parseNumberish(policyMeta?.plating_sell_krw),
+      policyPlatingCostKrw: parseNumberish(policyMeta?.plating_cost_krw),
+      policyAbsorbPlatingKrw: parseNumberish(policyMeta?.absorb_plating_krw),
+      policyAbsorbEtcTotalKrw: parseNumberish(policyMeta?.absorb_etc_total_krw),
+      shipmentExtraLaborKrw: data.shipment_extra_labor_krw,
+      rawPlatingItems,
+    });
+  }, [receiptMatchPrefillQuery.data, selectedOrderLineId]);
+
   const isInventoryIssueSource = useMemo(
     () => Boolean(orderLineDetailQuery.data?.selected_inventory_move_line_id),
     [orderLineDetailQuery.data?.selected_inventory_move_line_id]
@@ -3140,30 +3169,63 @@ export default function ShipmentsPage() {
     const absorbPlating = Math.max(absorbEvidenceResolved.plating, 0);
     const masterSell = Math.max(masterPlatingSell, 0);
     const masterCost = Math.max(masterPlatingCost, 0);
-    const hasMasterPricing = Boolean(matchedMasterPricingQuery.data) || Boolean(masterLookupQuery.data);
-    const hasPolicy = policyPlatingSellKrw > 0 || policyPlatingCostKrw > 0;
+    const policySell = Math.max(policyPlatingSellKrw, 0);
+    const policyCost = Math.max(policyPlatingCostKrw, 0);
 
-    if (hasMasterPricing) {
-      const sell = masterSell + absorbPlating;
-      const cost = masterCost;
-      return { sell, cost, margin: sell - cost, isAvailable: sell > 0 || cost > 0 };
-    }
+    // NOTE:
+    // - sell: 마스터 판매가(+흡수공임) 우선
+    // - cost: 영수증/정책 원가(policy) 우선
+    // 이렇게 하면 UI에서 마진이 항상 sell-cost로 일관 계산된다.
+    const masterSellWithAbsorb = masterSell + absorbPlating;
+    const sell = masterSellWithAbsorb > 0 ? masterSellWithAbsorb : policySell;
+    const cost = policyCost > 0 ? policyCost : masterCost;
+    const margin = sell - cost;
+    const isAvailable = sell > 0 || cost > 0;
 
-    if (hasPolicy) {
-      const sell = policyPlatingSellKrw;
-      const cost = policyPlatingCostKrw;
-      return { sell, cost, margin: sell - cost, isAvailable: sell > 0 || cost > 0 };
-    }
-
-    return { sell: 0, cost: 0, margin: 0, isAvailable: false };
+    return { sell, cost, margin, isAvailable };
   }, [
     absorbEvidenceResolved.plating,
-    masterLookupQuery.data,
     masterPlatingCost,
     masterPlatingSell,
-    matchedMasterPricingQuery.data,
     policyPlatingCostKrw,
     policyPlatingSellKrw,
+  ]);
+
+  useEffect(() => {
+    if (!selectedOrderLineId) return;
+    const platingItem = extraLaborItems.find(
+      (item) => item.type === EXTRA_TYPE_PLATING_MASTER || String(item.label ?? "").includes("도금")
+    );
+    if (!platingItem) return;
+    const resolvedCost = getExtraLaborCost(platingItem);
+    const resolvedMargin = getExtraLaborMargin(platingItem);
+    const resolvedFinal = getExtraLaborFinal(platingItem);
+
+    console.log("[PLATING_DEBUG][RESOLVED]", {
+      orderLineId: selectedOrderLineId,
+      itemType: platingItem.type,
+      itemLabel: platingItem.label,
+      itemAmount: platingItem.amount,
+      itemMeta: platingItem.meta ?? null,
+      masterPlatingSell,
+      masterPlatingCost,
+      absorbPlating: absorbEvidenceResolved.plating,
+      policyPlatingSellKrw,
+      policyPlatingCostKrw,
+      platingMasterResolved,
+      resolvedCost,
+      resolvedMargin,
+      resolvedFinal,
+    });
+  }, [
+    absorbEvidenceResolved.plating,
+    extraLaborItems,
+    masterPlatingCost,
+    masterPlatingSell,
+    platingMasterResolved,
+    policyPlatingCostKrw,
+    policyPlatingSellKrw,
+    selectedOrderLineId,
   ]);
 
   const masterCenterQtyDefault = useMemo(() => {
