@@ -43,6 +43,10 @@ interface MasterInfo {
   labor_center_sell?: number;
   labor_sub1_sell?: number;
   labor_sub2_sell?: number;
+  labor_basic?: number;
+  labor_center?: number;
+  labor_side1?: number;
+  labor_side2?: number;
   material_price?: number;
   category_code?: string;
 }
@@ -107,7 +111,9 @@ export function InlineShipmentPanel({
       if (!schemaClient) return null;
       const { data, error } = await schemaClient
         .from(CONTRACTS.views.masterItemLookup)
-        .select("master_item_id, weight_default_g, deduction_weight_default_g, labor_basic, labor_center, labor_side1, labor_side2, material_price, category_code")
+        .select(
+          "master_item_id, weight_default_g, deduction_weight_default_g, labor_base_sell, labor_center_sell, labor_sub1_sell, labor_sub2_sell, labor_basic, labor_center, labor_side1, labor_side2, material_price, category_code"
+        )
         .ilike("model_name", orderData.modelName)
         .limit(1)
         .maybeSingle();
@@ -206,10 +212,10 @@ export function InlineShipmentPanel({
   const defaultLaborCost = masterInfo
     ? String(
       (
-        (masterInfo.labor_base_sell || 0) +
-        (masterInfo.labor_center_sell || 0) +
-        (masterInfo.labor_sub1_sell || 0) +
-        (masterInfo.labor_sub2_sell || 0)
+        (masterInfo.labor_base_sell ?? masterInfo.labor_basic ?? 0) +
+        (masterInfo.labor_center_sell ?? masterInfo.labor_center ?? 0) +
+        (masterInfo.labor_sub1_sell ?? masterInfo.labor_side1 ?? 0) +
+        (masterInfo.labor_sub2_sell ?? masterInfo.labor_side2 ?? 0)
       ) * orderData.qty
     )
     : "";

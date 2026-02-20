@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getSchemaClient } from "@/lib/supabase/client";
+import { getMaterialFactor } from "@/lib/material-factors";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -109,10 +110,10 @@ export async function GET() {
                     ? silverPriceMaybe / silverFactorInMeta
                     : silverPriceMaybe;
 
-        // ✅ KS 계산: Settings 값(silver_kr_correction_factor)에 “연동”
-        // (기존 UI 의미 유지: KS = 원시세 * 보정계수 * 0.925)
+        // ✅ KS 계산: Settings 값(silver_kr_correction_factor)에 연동
         const ks = silverBasePrice === null ? null : Number(silverBasePrice) * silverKrFactor;
-        const ks925 = ks === null ? null : ks * 0.925; // ✅ 표시용만
+        const silver925Purity = getMaterialFactor({ materialCode: "925", silverAdjustApplied: 1 }).purityRate;
+        const ks925 = ks === null ? null : ks * silver925Purity; // ✅ 표시용만
 
         // 4) CN Silver (CS)
         const { data: csRow } = await sb

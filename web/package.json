@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test:shipments-regression": "node --test tests/shipments-labor-rules.test.mjs"
+    "test:shipments-regression": "node --test tests/shipments-labor-rules.test.mjs tests/shipments-prefill-snapshot.test.mjs"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.2.2",

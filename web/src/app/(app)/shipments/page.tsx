@@ -22,6 +22,14 @@ import { type StoneSource } from "@/lib/stone-source";
 import { hasVariationTag } from "@/lib/variation-tag";
 import { roundUpToUnit } from "@/lib/number";
 import {
+  applyLaborHydrationPatch,
+  buildLaborSnapshotHash,
+  materializeSnapshotPolicyItems,
+  SNAPSHOT_META_SOURCE,
+  sumRoundedExtraLaborAmounts,
+  toStableExtraLaborItemId,
+} from "@/lib/shipments-prefill-snapshot";
+import {
   isAdjustmentTypeValue,
   isCoreVisibleEtcItem,
   isEtcSummaryEligibleItem,
@@ -79,6 +87,7 @@ type ShipmentPrefillRow = {
   client_id?: string;
   client_name?: string;
   model_no?: string;
+  model_name?: string | null;
   material_code?: string | null;
   color?: string;
   plating_status?: boolean | null;
@@ -130,6 +139,7 @@ type ReceiptMatchPrefillRow = {
   receipt_id?: string | null;
   receipt_line_uuid?: string | null;
   order_line_id?: string | null;
+  shipment_line_id?: string | null;
   status?: string | null;
   selected_weight_g?: number | null;
   selected_material_code?: string | null;
@@ -155,6 +165,24 @@ type ReceiptMatchPrefillRow = {
   stone_labor_krw?: number | null;
   receipt_labor_basic_cost_krw?: number | null;
   receipt_labor_other_cost_krw?: number | null;
+  labor_prefill_snapshot?: LaborPrefillSnapshot | null;
+};
+
+type LaborPrefillSnapshot = {
+  snapshot_version?: number | null;
+  snapshot_source?: string | null;
+  snapshot_hash?: string | null;
+  base_labor_sell_krw?: number | null;
+  base_labor_cost_krw?: number | null;
+  extra_labor_sell_krw?: number | null;
+  extra_labor_cost_krw?: number | null;
+  policy_plating_sell_krw?: number | null;
+  policy_plating_cost_krw?: number | null;
+  policy_absorb_plating_krw?: number | null;
+  policy_absorb_etc_total_krw?: number | null;
+  policy_absorb_decor_total_krw?: number | null;
+  policy_absorb_other_total_krw?: number | null;
+  extra_labor_items?: unknown;
 };
 
 type MasterLookupRow = {
@@ -365,6 +393,15 @@ const parseNumberish = (value: unknown): number => {
   return 0;
 };
 
+const parseNullableNumber = (value: unknown): number | null => {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim() !== "") {
+    const parsed = Number(value.replaceAll(",", "").trim());
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return null;
+};
+
 const roundKrw = (value: number) => {
   if (!Number.isFinite(value)) return 0;
   return roundLaborMarginToHundred(value);
@@ -389,6 +426,9 @@ const sanitizeExtraLaborMeta = (meta: unknown): Record<string, unknown> | null =
 
 const parseAbsorbStoneRole = (note: unknown): "CENTER" | "SUB1" | "SUB2" => {
   const normalized = String(note ?? "").toUpperCase();
+  if (normalized.includes("보조1".toUpperCase())) return "SUB1";
+  if (normalized.includes("보조2".toUpperCase())) return "SUB2";
+  if (normalized.includes("중심".toUpperCase())) return "CENTER";
   if (normalized.includes("SUB1")) return "SUB1";
   if (normalized.includes("SUB2")) return "SUB2";
   return "CENTER";
@@ -440,6 +480,38 @@ const extractDecorReasonKey = (reason: unknown): string | null => {
     return key || null;
   }
   return null;
+};
+
+const isStoneLaborItem = (item: ExtraLaborItem) => {
+  const type = String(item.type ?? "").trim().toUpperCase();
+  const label = String(item.label ?? "").trim();
+  return type === "STONE_LABOR" || label.includes("알공임");
+};
+
+const ensureSnapshotStoneLaborItem = ({
+  items,
+  amount,
+  orderLineId,
+}: {
+  items: ExtraLaborItem[];
+  amount: number;
+  orderLineId: string;
+}): ExtraLaborItem[] => {
+  const roundedAmount = Math.max(roundKrw(amount), 0);
+  if (roundedAmount <= 0) return items;
+  if (items.some((item) => isStoneLaborItem(item))) return items;
+  return [
+    ...items,
+    {
+      id: `prefill-stone-labor-${orderLineId}`,
+      type: "STONE_LABOR",
+      label: "알공임",
+      amount: String(roundedAmount),
+      meta: {
+        source: SNAPSHOT_META_SOURCE,
+      },
+    },
+  ];
 };
 
 const normalizeStoneSource = (value: unknown): StoneSource | null => {
@@ -528,7 +600,14 @@ const EXTRA_TYPE_MATERIAL_MASTER_PREFIX = "MATERIAL_MASTER:";
 const EXTRA_TYPE_BOM_DEFAULT = "BOM_DEFAULT";
 const EXTRA_TYPE_BOM_COMPONENT_PREFIX = "BOM_COMPONENT:";
 const EXTRA_TYPE_ABSORB_PREFIX = "ABSORB:";
+const LEGACY_POLICY_ABSORB_TYPES = new Set([
+  "OTHER_ABSORB:POLICY_ETC",
+  "OTHER_ABSORB:POLICY_DECOR",
+  "OTHER_ABSORB:POLICY_OTHER",
+]);
+const AUTO_REMAINDER_ADJUSTMENT_SOURCE = "REMAINDER_BRIDGE";
 const BOM_AUTO_TOTAL_REASON = "BOM_AUTO_TOTAL";
+const ACCESSORY_BASE_REASON = "ACCESSORY_LABOR";
 const BOM_DECOR_NOTE_PREFIX = "BOM_DECOR_LINE:";
 const BOM_MATERIAL_NOTE_PREFIX = "BOM_MATERIAL_LINE:";
 const BOM_DECOR_REASON_PREFIX = "장식:";
@@ -536,9 +615,13 @@ const BOM_MATERIAL_REASON_PREFIX = "기타-소재:";
 const ACCESSORY_ETC_REASON_KEYWORD = "부속공임";
 const AUTO_EVIDENCE_TYPES = new Set(["COST_BASIS", "MARGINS", "WARN"]);
 
+const isAutoExcludedAbsorbReason = (reason: unknown) => {
+  const normalized = String(reason ?? "").trim().toUpperCase();
+  return normalized === BOM_AUTO_TOTAL_REASON || normalized === ACCESSORY_BASE_REASON;
+};
+
 const shouldExcludeCatalogEtcAbsorbItem = (row: MasterAbsorbLaborItemRow): boolean => {
-  const normalizedReason = String(row.reason ?? "").trim().toUpperCase();
-  if (normalizedReason === BOM_AUTO_TOTAL_REASON) return true;
+  if (isAutoExcludedAbsorbReason(row.reason)) return true;
   if (String(row.bucket ?? "").trim().toUpperCase() !== "ETC") return false;
   const rawReason = String(row.reason ?? "").trim();
   const rawNote = String(row.note ?? "").trim();
@@ -667,6 +750,87 @@ const isMaterialMasterType = (type: string) => {
   return normalized.startsWith(EXTRA_TYPE_MATERIAL_MASTER_PREFIX);
 };
 
+const isLegacyPolicyAbsorbType = (type: string) => {
+  const normalized = String(type ?? "").trim().toUpperCase();
+  return LEGACY_POLICY_ABSORB_TYPES.has(normalized);
+};
+
+const isLegacyEtcRemainderItem = (item: {
+  type?: unknown;
+  meta?: Record<string, unknown> | null;
+}) => {
+  const type = String(item?.type ?? "").trim().toUpperCase();
+  if (type === "LEGACY_ETC_REMAINDER") return true;
+  const meta = item?.meta && typeof item.meta === "object" && !Array.isArray(item.meta) ? item.meta : null;
+  const policyKey = String(meta?.policy_key ?? "").trim().toUpperCase();
+  return policyKey === "LEGACY_ETC_REMAINDER";
+};
+
+const isAutoRemainderAdjustmentItem = (item: ExtraLaborItem) => {
+  if (String(item.type ?? "").trim().toUpperCase() !== EXTRA_TYPE_ADJUSTMENT) return false;
+  const meta = (item.meta as Record<string, unknown> | null) ?? null;
+  const source = String(meta?.source ?? "").trim().toUpperCase();
+  return source === AUTO_REMAINDER_ADJUSTMENT_SOURCE;
+};
+
+const upsertAutoRemainderAdjustmentItem = ({
+  items,
+  amount,
+  indexSeed = 0,
+}: {
+  items: ExtraLaborItem[];
+  amount: number;
+  indexSeed?: number;
+}) => {
+  const rounded = roundKrw(Math.max(Number.isFinite(amount) ? amount : 0, 0));
+  const findIndex = items.findIndex((item) => {
+    if (String(item.type ?? "").trim().toUpperCase() !== EXTRA_TYPE_ADJUSTMENT) return false;
+    const meta = (item.meta as Record<string, unknown> | null) ?? null;
+    const source = String(meta?.source ?? "").trim().toUpperCase();
+    return source === AUTO_REMAINDER_ADJUSTMENT_SOURCE;
+  });
+
+  if (rounded <= 0) {
+    if (findIndex < 0) return items;
+    const next = [...items];
+    next.splice(findIndex, 1);
+    return next;
+  }
+
+  const nextMeta: Record<string, unknown> = {
+    source: AUTO_REMAINDER_ADJUSTMENT_SOURCE,
+    item_type: "OTHER",
+    item_label: "",
+    cost_krw: rounded,
+    margin_krw: 0,
+    sell_krw: rounded,
+  };
+
+  const nextItem: ExtraLaborItem = {
+    id:
+      findIndex >= 0
+        ? items[findIndex].id
+        : toStableExtraLaborItemId(
+            {
+              type: EXTRA_TYPE_ADJUSTMENT,
+              label: "기타(직접작성)",
+              amount: String(rounded),
+              meta: nextMeta,
+            },
+            Math.max(indexSeed, items.length)
+          ),
+    type: EXTRA_TYPE_ADJUSTMENT,
+    label: "기타(직접작성)",
+    amount: String(rounded),
+    meta: nextMeta,
+  };
+
+  if (findIndex < 0) return [...items, nextItem];
+  const next = [...items];
+  next[findIndex] = nextItem;
+  return next;
+};
+
 // Helper function to convert relative photo path to full Supabase Storage URL
 const getMasterPhotoUrl = (photoUrl: string | null | undefined): string | null => {
   if (!photoUrl || photoUrl.trim() === "") return null;
@@ -763,6 +927,12 @@ export default function ShipmentsPage() {
   const [manualTotalAmountKrw, setManualTotalAmountKrw] = useState("");
   const [isManualTotalOverride, setIsManualTotalOverride] = useState(false);
   const [extraLaborItems, setExtraLaborItems] = useState<ExtraLaborItem[]>([]);
+  const laborDirtyRef = useRef<{ base: boolean; other: boolean; extra: boolean }>({
+    base: false,
+    other: false,
+    extra: false,
+  });
+  const appliedLaborSnapshotKeyRef = useRef<string | null>(null);
   const [selectedExtraLaborItemType, setSelectedExtraLaborItemType] = useState<string>("OTHER");
   const bomLinePrefillAppliedRef = useRef<Set<string>>(new Set());
   const [useManualLabor, setUseManualLabor] = useState(false);
@@ -777,6 +947,20 @@ export default function ShipmentsPage() {
   const [stoneAdjustmentReason, setStoneAdjustmentReason] =
     useState<StoneAdjustmentReason>("FACTORY_MISTAKE");
   const [stoneAdjustmentNote, setStoneAdjustmentNote] = useState("");
+
+  const resetLaborDirtyState = useCallback(() => {
+    laborDirtyRef.current = { base: false, other: false, extra: false };
+    appliedLaborSnapshotKeyRef.current = null;
+  }, []);
+
+  const markLaborBaseDirty = useCallback(() => {
+    laborDirtyRef.current.base = true;
+  }, []);
+
+  const markLaborExtraDirty = useCallback(() => {
+    laborDirtyRef.current.extra = true;
+    laborDirtyRef.current.other = true;
+  }, []);
 
   const resolveDeductionValue = (
     deductionText: string,
@@ -841,7 +1025,7 @@ export default function ShipmentsPage() {
           meta?: Record<string, unknown> | null;
         };
         const type = String(record?.type ?? "").trim();
-        const label = String(record?.label ?? type ?? "기타").trim() || "기타";
+        const baseLabel = String(record?.label ?? type ?? "기타").trim() || "기타";
         const amount = record?.amount === null || record?.amount === undefined
           ? ""
           : String(record.amount);
@@ -850,6 +1034,9 @@ export default function ShipmentsPage() {
             ? record.meta
             : null;
         const normalizedType = type.toUpperCase();
+        const isLegacyRemainderType = isLegacyEtcRemainderItem({ type, meta: rawMeta });
+        const normalizedTypeForItem = isLegacyRemainderType ? EXTRA_TYPE_ADJUSTMENT : type;
+        const normalizedLabelForItem = isLegacyRemainderType ? "기타(직접작성)" : baseLabel;
         const isPlatingMaster = normalizedType === EXTRA_TYPE_PLATING_MASTER;
         const isMaterialMaster = normalizedType.startsWith(EXTRA_TYPE_MATERIAL_MASTER_PREFIX);
         const sellFromMeta =
@@ -865,8 +1052,8 @@ export default function ShipmentsPage() {
           normalizedType.includes("ABSORB") ||
           normalizedType.startsWith(EXTRA_TYPE_ABSORB_PREFIX) ||
           normalizedType.startsWith("OTHER_ABSORB") ||
-          label.includes("흡수") ||
-          label.includes("공임-마스터") ||
+          baseLabel.includes("흡수") ||
+          baseLabel.includes("공임-마스터") ||
           metaSource === "MASTER_ABSORB_LABOR" ||
           metaBucket === "ETC" ||
           metaBucket === "BASE_LABOR" ||
@@ -876,7 +1063,7 @@ export default function ShipmentsPage() {
           normalizedType.startsWith(EXTRA_TYPE_ABSORB_PREFIX) ||
           normalizedType.startsWith("DECOR:") ||
           normalizedType.startsWith("OTHER_ABSORB:") ||
-          label.includes("장식");
+          baseLabel.includes("장식");
         const metaMargin =
           rawMeta && (rawMeta.margin_krw !== null && rawMeta.margin_krw !== undefined)
             ? parseNumberish(rawMeta.margin_krw)
@@ -928,18 +1115,30 @@ export default function ShipmentsPage() {
               margin_krw: margin,
             };
           }
+          if (isLegacyRemainderType) {
+            const roundedAmount = roundKrw(parsedAmount);
+            return {
+              item_type: "OTHER",
+              item_label: "",
+              source: AUTO_REMAINDER_ADJUSTMENT_SOURCE,
+              cost_krw: roundedAmount,
+              margin_krw: 0,
+              sell_krw: roundedAmount,
+            };
+          }
           return rawMeta;
         })();
         return {
-          id: String(record?.id ?? `extra-${Date.now()}-${index}`),
-          type,
-          label,
+          id: toStableExtraLaborItemId(record, index),
+          type: normalizedTypeForItem,
+          label: normalizedLabelForItem,
           amount: roundedAmount,
           meta: normalizedMeta,
         };
       })
       .filter((item) => {
         if (!item.label) return false;
+        if (isLegacyPolicyAbsorbType(item.type)) return false;
         const amount = parseNumberInput(item.amount);
         return Number.isFinite(amount) && amount !== 0;
       });
@@ -976,41 +1175,45 @@ const extractEtcLaborAmount = (value: unknown): number => {
 
   const handleAddExtraLabor = (value: string | null, adjustmentItemType?: string) => {
     if (!value) return;
+    markLaborExtraDirty();
     const itemType = value === EXTRA_TYPE_ADJUSTMENT
       ? String(adjustmentItemType ?? "OTHER").trim().toUpperCase()
       : String(value).trim().toUpperCase();
     const option = EXTRA_LABOR_ITEM_TYPE_OPTIONS.find((item) => item.value === itemType);
     const label = option?.label ?? value;
-    const nextId = typeof crypto !== "undefined" && "randomUUID" in crypto
-      ? crypto.randomUUID()
-      : `extra-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const seedRecord = {
+      type: value,
+      label,
+      amount: "",
+      meta:
+        value === EXTRA_TYPE_ADJUSTMENT
+          ? {
+            item_type: itemType,
+            item_label: itemType === "OTHER" ? "" : null,
+            cost_krw: 0,
+            margin_krw: 0,
+          }
+          : null,
+    };
+    const nextId = toStableExtraLaborItemId(seedRecord, extraLaborItems.length);
     setExtraLaborItems((prev) => [
       ...prev,
       {
         id: nextId,
-        type: value,
-        label,
-        amount: "",
-        meta:
-          value === EXTRA_TYPE_ADJUSTMENT
-            ? {
-              item_type: itemType,
-              item_label: itemType === "OTHER" ? "" : null,
-              cost_krw: 0,
-              margin_krw: 0,
-            }
-            : null,
+        ...seedRecord,
       },
     ]);
   };
 
   const handleExtraLaborAmountChange = (id: string, amount: string) => {
+    markLaborExtraDirty();
     setExtraLaborItems((prev) =>
       prev.map((item) => (item.id === id ? { ...item, amount } : item))
     );
   };
 
   const handleExtraLaborMetaChange = (id: string, key: string, value: string) => {
+    markLaborExtraDirty();
     setExtraLaborItems((prev) =>
       prev.map((item) =>
         item.id === id
@@ -1027,6 +1230,7 @@ const extractEtcLaborAmount = (value: unknown): number => {
   };
 
   const handleExtraLaborQtyChange = (id: string, value: string) => {
+    markLaborExtraDirty();
     const nextQty = Math.max(Math.round(parseNumberish(value)), 0);
     setExtraLaborItems((prev) =>
       prev.map((item) => {
@@ -1070,6 +1274,9 @@ const extractEtcLaborAmount = (value: unknown): number => {
   };
 
   const handleRemoveExtraLabor = (id: string) => {
+    const target = extraLaborItems.find((item) => item.id === id);
+    if (target && isLockedExtraLaborItem(target)) return;
+    markLaborExtraDirty();
     setExtraLaborItems((prev) => prev.filter((item) => item.id !== id));
   };
 
@@ -1155,6 +1362,7 @@ const extractEtcLaborAmount = (value: unknown): number => {
   };
 
   const setExtraLaborCostMargin = (id: string, nextCost: number, nextMargin: number) => {
+    markLaborExtraDirty();
     setExtraLaborItems((prev) =>
       prev.map((item) => {
         if (item.id !== id) return item;
@@ -1207,9 +1415,7 @@ const extractEtcLaborAmount = (value: unknown): number => {
           id:
             index >= 0
               ? prev[index].id
-              : typeof crypto !== "undefined" && "randomUUID" in crypto
-                ? crypto.randomUUID()
-                : `extra-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+              : toStableExtraLaborItemId({ type, label, amount: normalized, meta: meta ?? null }, prev.length),
           type,
           label,
           amount: normalized,
@@ -1514,145 +1720,274 @@ const extractEtcLaborAmount = (value: unknown): number => {
     }
   }, [prefillQuery.data]);
 
-  useEffect(() => {
+  const receiptLaborSnapshot = useMemo(() => {
     const data = receiptMatchPrefillQuery.data;
-    if (!data) return;
+    if (!data) return null;
+    const policyMeta =
+      data.pricing_policy_meta && typeof data.pricing_policy_meta === "object" && !Array.isArray(data.pricing_policy_meta)
+        ? (data.pricing_policy_meta as Record<string, unknown>)
+        : null;
+    const rawSnapshot =
+      data.labor_prefill_snapshot &&
+      typeof data.labor_prefill_snapshot === "object" &&
+      !Array.isArray(data.labor_prefill_snapshot)
+        ? (data.labor_prefill_snapshot as LaborPrefillSnapshot)
+        : null;
+    const baseLaborSell =
+      parseNullableNumber(rawSnapshot?.base_labor_sell_krw) ??
+      parseNullableNumber(data.shipment_base_labor_krw);
+    const baseLaborCost =
+      parseNullableNumber(rawSnapshot?.base_labor_cost_krw) ??
+      parseNullableNumber(data.selected_factory_labor_basic_cost_krw) ??
+      parseNullableNumber(data.receipt_labor_basic_cost_krw);
+    const extraLaborSell =
+      parseNullableNumber(rawSnapshot?.extra_labor_sell_krw) ??
+      parseNullableNumber(data.shipment_extra_labor_krw);
+    const extraLaborCost =
+      parseNullableNumber(rawSnapshot?.extra_labor_cost_krw) ??
+      parseNullableNumber(data.selected_factory_labor_other_cost_krw) ??
+      parseNullableNumber(data.receipt_labor_other_cost_krw);
+    const extraLaborRaw = rawSnapshot?.extra_labor_items ?? data.shipment_extra_labor_items;
+    const snapshotBase = {
+      snapshot_version: Number(rawSnapshot?.snapshot_version ?? data.pricing_policy_version ?? 1),
+      snapshot_source: String(rawSnapshot?.snapshot_source ?? (data.shipment_line_id ? "SHIPMENT_LINE" : "RECEIPT_MATCH")),
+      base_labor_sell_krw: baseLaborSell,
+      base_labor_cost_krw: baseLaborCost,
+      extra_labor_sell_krw: extraLaborSell,
+      extra_labor_cost_krw: extraLaborCost,
+      policy_plating_sell_krw:
+        parseNullableNumber(rawSnapshot?.policy_plating_sell_krw) ?? parseNullableNumber(policyMeta?.plating_sell_krw),
+      policy_plating_cost_krw:
+        parseNullableNumber(rawSnapshot?.policy_plating_cost_krw) ?? parseNullableNumber(policyMeta?.plating_cost_krw),
+      policy_absorb_plating_krw:
+        parseNullableNumber(rawSnapshot?.policy_absorb_plating_krw) ?? parseNullableNumber(policyMeta?.absorb_plating_krw),
+      policy_absorb_etc_total_krw:
+        parseNullableNumber(rawSnapshot?.policy_absorb_etc_total_krw) ?? parseNullableNumber(policyMeta?.absorb_etc_total_krw),
+      policy_absorb_decor_total_krw:
+        parseNullableNumber(rawSnapshot?.policy_absorb_decor_total_krw) ?? parseNullableNumber(policyMeta?.absorb_decor_total_krw),
+      policy_absorb_other_total_krw:
+        parseNullableNumber(rawSnapshot?.policy_absorb_other_total_krw) ?? parseNullableNumber(policyMeta?.absorb_other_total_krw),
+      extra_labor_items: extraLaborRaw,
+    };
+    return {
+      ...snapshotBase,
+      snapshot_hash: String(rawSnapshot?.snapshot_hash ?? buildLaborSnapshotHash(snapshotBase)),
+    };
+  }, [receiptMatchPrefillQuery.data]);
+
+  useEffect(() => {
     if (!selectedOrderLineId) return;
 
-    const receiptWeight = data.receipt_weight_g ?? data.selected_weight_g;
-    if (receiptWeight !== null && receiptWeight !== undefined) {
-      setWeightG(String(receiptWeight));
-    }
-    if (data.receipt_deduction_weight_g !== null && data.receipt_deduction_weight_g !== undefined) {
-      setDeductionWeightG(String(data.receipt_deduction_weight_g));
-      setApplyMasterDeductionWhenEmpty(false);
+    const receiptData = receiptMatchPrefillQuery.data;
+    const detail = orderLineDetailQuery.data;
+    if (!receiptData && !receiptMatchPrefillQuery.isFetched) return;
+
+    const patch: {
+      baseLabor?: string;
+      otherLaborCost?: string;
+      extraLaborItems?: ExtraLaborItem[];
+    } = {};
+
+    let nextWeight: string | null = null;
+    let nextDeduction: string | null = null;
+    let nextApplyMasterDeductionWhenEmpty: boolean | null = null;
+    let snapshotSource = "ORDER_LINE_FALLBACK";
+    let snapshotSeed: unknown = null;
+
+    if (receiptData) {
+      snapshotSource = String(receiptLaborSnapshot?.snapshot_source ?? "RECEIPT_MATCH");
+      const receiptWeight = receiptData.receipt_weight_g ?? receiptData.selected_weight_g;
+      if (receiptWeight !== null && receiptWeight !== undefined) {
+        nextWeight = String(receiptWeight);
+      }
+
+      if (receiptData.receipt_deduction_weight_g !== null && receiptData.receipt_deduction_weight_g !== undefined) {
+        nextDeduction = String(receiptData.receipt_deduction_weight_g);
+        nextApplyMasterDeductionWhenEmpty = false;
+      } else {
+        nextApplyMasterDeductionWhenEmpty = true;
+      }
+
+      const baseLaborSell = parseNullableNumber(receiptLaborSnapshot?.base_labor_sell_krw);
+      const baseLaborCost = parseNullableNumber(receiptLaborSnapshot?.base_labor_cost_krw);
+      const receiptBase = baseLaborSell ?? baseLaborCost;
+      if (receiptBase !== null) patch.baseLabor = String(receiptBase);
+
+      const normalizedItems = normalizeExtraLaborItems(receiptLaborSnapshot?.extra_labor_items).filter(
+        (item) =>
+          !isBomReferenceType(item.type) &&
+          !isMaterialMasterType(item.type) &&
+          !isLegacyPolicyAbsorbType(item.type)
+      );
+
+      const normalizedStoneLabor = (() => {
+        const direct = Number(receiptData.stone_labor_krw ?? 0);
+        if (Number.isFinite(direct) && direct > 0) return direct;
+        const centerQty = Number(receiptData.stone_center_qty ?? 0);
+        const sub1Qty = Number(receiptData.stone_sub1_qty ?? 0);
+        const sub2Qty = Number(receiptData.stone_sub2_qty ?? 0);
+        const centerUnit = Number(receiptData.stone_center_unit_cost_krw ?? 0);
+        const sub1Unit = Number(receiptData.stone_sub1_unit_cost_krw ?? 0);
+        const sub2Unit = Number(receiptData.stone_sub2_unit_cost_krw ?? 0);
+        const byReceipt =
+          Math.max(centerQty, 0) * Math.max(centerUnit, 0) +
+          Math.max(sub1Qty, 0) * Math.max(sub1Unit, 0) +
+          Math.max(sub2Qty, 0) * Math.max(sub2Unit, 0);
+        if (byReceipt > 0) return byReceipt;
+        return extractStoneLaborAmount(receiptLaborSnapshot?.extra_labor_items);
+      })();
+
+      const snapshotPolicyMeta: Record<string, unknown> = {
+        plating_sell_krw: receiptLaborSnapshot?.policy_plating_sell_krw,
+        plating_cost_krw: receiptLaborSnapshot?.policy_plating_cost_krw,
+        absorb_plating_krw: receiptLaborSnapshot?.policy_absorb_plating_krw,
+        absorb_etc_total_krw: receiptLaborSnapshot?.policy_absorb_etc_total_krw,
+        absorb_decor_total_krw: receiptLaborSnapshot?.policy_absorb_decor_total_krw,
+        absorb_other_total_krw: receiptLaborSnapshot?.policy_absorb_other_total_krw,
+      };
+
+      let snapshotItems = materializeSnapshotPolicyItems({
+        items: normalizedItems,
+        policyMeta: snapshotPolicyMeta,
+      }) as ExtraLaborItem[];
+
+      snapshotItems = ensureSnapshotStoneLaborItem({
+        items: snapshotItems,
+        amount: normalizedStoneLabor,
+        orderLineId: selectedOrderLineId,
+      });
+
+      const snapshotTotalSell = parseNullableNumber(receiptLaborSnapshot?.extra_labor_sell_krw);
+      if (snapshotTotalSell !== null) {
+          const currentTotal = sumRoundedExtraLaborAmounts(snapshotItems);
+          const remainder = Math.max(roundKrw(snapshotTotalSell - currentTotal), 0);
+          snapshotItems = upsertAutoRemainderAdjustmentItem({
+            items: snapshotItems,
+            amount: remainder,
+            indexSeed: snapshotItems.length,
+          });
+        }
+
+      if (
+        snapshotItems.length === 0 &&
+        receiptLaborSnapshot?.extra_labor_cost_krw !== null &&
+        receiptLaborSnapshot?.extra_labor_cost_krw !== undefined
+      ) {
+        snapshotItems = upsertAutoRemainderAdjustmentItem({
+          items: snapshotItems,
+          amount: Number(receiptLaborSnapshot.extra_labor_cost_krw ?? 0),
+          indexSeed: snapshotItems.length,
+        });
+      }
+
+      patch.extraLaborItems = snapshotItems;
+      if (snapshotItems.length > 0) {
+        patch.otherLaborCost = "0";
+      }
+
+      snapshotSeed = {
+        hash: receiptLaborSnapshot?.snapshot_hash,
+        weight: nextWeight,
+        deduction: nextDeduction,
+        patch,
+      };
     } else {
-      setApplyMasterDeductionWhenEmpty(true);
-    }
-    const receiptBaseCost =
-      data.selected_factory_labor_basic_cost_krw ??
-      data.receipt_labor_basic_cost_krw ??
-      null;
-    if (data.shipment_base_labor_krw !== null && data.shipment_base_labor_krw !== undefined) {
-      setBaseLabor(String(data.shipment_base_labor_krw));
-    } else if (receiptBaseCost !== null && receiptBaseCost !== undefined) {
-      setBaseLabor(String(receiptBaseCost));
+      if (!detail) return;
+
+      if (detail.selected_base_weight_g !== null && detail.selected_base_weight_g !== undefined) {
+        nextWeight = String(detail.selected_base_weight_g);
+      }
+
+      if (detail.selected_deduction_weight_g !== null && detail.selected_deduction_weight_g !== undefined) {
+        nextDeduction = String(detail.selected_deduction_weight_g);
+        nextApplyMasterDeductionWhenEmpty = false;
+      }
+
+      if (detail.selected_labor_base_sell_krw !== null && detail.selected_labor_base_sell_krw !== undefined) {
+        patch.baseLabor = String(detail.selected_labor_base_sell_krw);
+      }
+
+      if (detail.selected_labor_other_sell_krw !== null && detail.selected_labor_other_sell_krw !== undefined) {
+        patch.otherLaborCost = String(detail.selected_labor_other_sell_krw);
+      }
+
+      snapshotSeed = {
+        selected_base_weight_g: detail.selected_base_weight_g,
+        selected_deduction_weight_g: detail.selected_deduction_weight_g,
+        selected_labor_base_sell_krw: detail.selected_labor_base_sell_krw,
+        selected_labor_other_sell_krw: detail.selected_labor_other_sell_krw,
+      };
     }
 
-    const normalizedItems = normalizeExtraLaborItems(data.shipment_extra_labor_items).filter(
-      (item) => !isBomReferenceType(item.type) && !isMaterialMasterType(item.type)
-    );
+    const snapshotKey = `${selectedOrderLineId}:${snapshotSource}:${buildLaborSnapshotHash(snapshotSeed)}`;
+    if (appliedLaborSnapshotKeyRef.current === snapshotKey) return;
 
-    const normalizedItemsWithoutPolicy = normalizedItems.filter((item) => {
-      const type = String(item.type ?? "").trim().toUpperCase();
-      const meta = (item.meta as Record<string, unknown> | null) ?? null;
-      const source = String(meta?.source ?? "").trim().toUpperCase();
-      if (type === "OTHER_ABSORB:POLICY_META") return false;
-      if (source === "PRICING_POLICY_META") return false;
-      return true;
+    if (nextWeight !== null) setWeightG(nextWeight);
+    if (nextDeduction !== null) setDeductionWeightG(nextDeduction);
+    if (nextApplyMasterDeductionWhenEmpty !== null) {
+      setApplyMasterDeductionWhenEmpty(nextApplyMasterDeductionWhenEmpty);
+    }
+
+    const nextLaborState = applyLaborHydrationPatch({
+      current: {
+        baseLabor,
+        otherLaborCost,
+        extraLaborItems,
+      },
+      patch,
+      dirty: laborDirtyRef.current,
     });
 
-    // NOTE: POLICY_META fallback row is intentionally disabled.
-    // Absorb labor must come from actual mapped absorb rows only,
-    // otherwise hidden synthetic '공임-마스터' causes mismatched totals.
-
-    const normalizedStoneLabor = (() => {
-      const direct = Number(data.stone_labor_krw ?? 0);
-      if (Number.isFinite(direct) && direct > 0) return direct;
-      const centerQty = Number(data.stone_center_qty ?? 0);
-      const sub1Qty = Number(data.stone_sub1_qty ?? 0);
-      const sub2Qty = Number(data.stone_sub2_qty ?? 0);
-      const centerUnit = Number(data.stone_center_unit_cost_krw ?? 0);
-      const sub1Unit = Number(data.stone_sub1_unit_cost_krw ?? 0);
-      const sub2Unit = Number(data.stone_sub2_unit_cost_krw ?? 0);
-      const byReceipt =
-        Math.max(centerQty, 0) * Math.max(centerUnit, 0) +
-        Math.max(sub1Qty, 0) * Math.max(sub1Unit, 0) +
-        Math.max(sub2Qty, 0) * Math.max(sub2Unit, 0);
-      if (byReceipt > 0) return byReceipt;
-      return extractStoneLaborAmount(data.shipment_extra_labor_items);
-    })();
-    if (normalizedItemsWithoutPolicy.length > 0) {
-      setExtraLaborItems(normalizedItemsWithoutPolicy);
-      setOtherLaborCost("0");
-    } else {
-      setExtraLaborItems([]);
-      const etcFromItems = extractEtcLaborAmount(data.shipment_extra_labor_items);
-      if (etcFromItems > 0) {
-        setOtherLaborCost(String(etcFromItems));
-      } else if (data.shipment_extra_labor_krw !== null && data.shipment_extra_labor_krw !== undefined) {
-        const shipmentExtraTotal = Number(data.shipment_extra_labor_krw ?? 0);
-        const etcOnly = Math.max(shipmentExtraTotal - normalizedStoneLabor, 0);
-        setOtherLaborCost(String(etcOnly));
-      } else if (data.selected_factory_labor_other_cost_krw !== null && data.selected_factory_labor_other_cost_krw !== undefined) {
-        const receiptOther = Number(data.selected_factory_labor_other_cost_krw ?? 0);
-        setOtherLaborCost(String(Math.max(receiptOther, 0)));
-      } else if (data.receipt_labor_other_cost_krw !== null && data.receipt_labor_other_cost_krw !== undefined) {
-        const receiptOther = Number(data.receipt_labor_other_cost_krw ?? 0);
-        setOtherLaborCost(String(Math.max(receiptOther, 0)));
-      }
-
-      const amount = String(extractStoneLaborAmount(data.shipment_extra_labor_items));
-      if (amount && Number(amount) > 0) {
-        setExtraLaborItems([
-          {
-            id: `prefill-stone-labor-${selectedOrderLineId}`,
-            type: "STONE_LABOR",
-            label: "알공임",
-            amount,
-          },
-        ]);
-      }
-    }
+    if (nextLaborState.baseLabor !== baseLabor) setBaseLabor(nextLaborState.baseLabor);
+    if (nextLaborState.otherLaborCost !== otherLaborCost) setOtherLaborCost(nextLaborState.otherLaborCost);
+    if (nextLaborState.extraLaborItems !== extraLaborItems) setExtraLaborItems(nextLaborState.extraLaborItems);
 
     setPrefillHydratedOrderLineId(selectedOrderLineId);
-  }, [receiptMatchPrefillQuery.data, selectedOrderLineId]);
-
-  useEffect(() => {
-    if (!selectedOrderLineId) return;
-    if (prefillHydratedOrderLineId === selectedOrderLineId) return;
-    if (!receiptMatchPrefillQuery.isFetched) return;
-    if (receiptMatchPrefillQuery.data) return;
-
-    const detail = orderLineDetailQuery.data;
-    if (!detail) return;
-
-    if (detail.selected_base_weight_g !== null && detail.selected_base_weight_g !== undefined) {
-      setWeightG(String(detail.selected_base_weight_g));
-    }
-
-    if (detail.selected_deduction_weight_g !== null && detail.selected_deduction_weight_g !== undefined) {
-      setDeductionWeightG(String(detail.selected_deduction_weight_g));
-      setApplyMasterDeductionWhenEmpty(false);
-    }
-
-    if (detail.selected_labor_base_sell_krw !== null && detail.selected_labor_base_sell_krw !== undefined) {
-      setBaseLabor(String(detail.selected_labor_base_sell_krw));
-    }
-
-    if (detail.selected_labor_other_sell_krw !== null && detail.selected_labor_other_sell_krw !== undefined) {
-      setOtherLaborCost(String(detail.selected_labor_other_sell_krw));
-    }
-
-    setPrefillHydratedOrderLineId(selectedOrderLineId);
+    appliedLaborSnapshotKeyRef.current = snapshotKey;
   }, [
+    baseLabor,
+    extraLaborItems,
     orderLineDetailQuery.data,
-    prefillHydratedOrderLineId,
+    otherLaborCost,
+    receiptLaborSnapshot,
     receiptMatchPrefillQuery.data,
     receiptMatchPrefillQuery.isFetched,
     selectedOrderLineId,
   ]);
 
-  // ✅ 선택된 주문의 model_no로 마스터 정보 조회
+  const masterLookupIdHint = useMemo(
+    () =>
+      normalizeId(orderLineDetailQuery.data?.matched_master_id) ??
+      normalizeId(receiptMatchPrefillQuery.data?.shipment_master_id),
+    [orderLineDetailQuery.data?.matched_master_id, receiptMatchPrefillQuery.data?.shipment_master_id]
+  );
+
+  // ✅ 선택된 주문의 매칭 마스터 ID 우선으로 마스터 정보 조회
   const masterLookupQuery = useQuery({
-    queryKey: ["master-lookup", prefill?.model_no],
-    enabled: Boolean(prefill?.model_no),
+    queryKey: ["master-lookup", masterLookupIdHint, prefill?.model_no, prefill?.model_name],
+    enabled: Boolean(masterLookupIdHint || prefill?.model_no || prefill?.model_name),
     queryFn: async () => {
-      const model = String(prefill?.model_no ?? "");
-      const rows = await readView<MasterLookupRow>(CONTRACTS.views.masterItemLookup, 1, {
-        filter: { column: "model_name", op: "eq", value: model },
-      });
-      return rows?.[0] ?? null;
+      if (masterLookupIdHint) {
+        const byId = await readView<MasterLookupRow>(CONTRACTS.views.masterItemLookup, 1, {
+          filter: { column: "master_id", op: "eq", value: masterLookupIdHint },
+        });
+        if (byId?.[0]) return byId[0];
+      }
+
+      const modelCandidates = [
+        String(prefill?.model_no ?? "").trim(),
+        String(prefill?.model_name ?? "").trim(),
+        String(orderLineDetailQuery.data?.model_name ?? "").trim(),
+      ].filter(Boolean);
+
+      for (const model of modelCandidates) {
+        const rows = await readView<MasterLookupRow>(CONTRACTS.views.masterItemLookup, 1, {
+          filter: { column: "model_name", op: "eq", value: model },
+        });
+        if (rows?.[0]) return rows[0];
+      }
+
+      return null;
     },
   });
 
@@ -1767,13 +2102,51 @@ const extractEtcLaborAmount = (value: unknown): number => {
   useEffect(() => {
     if (!selectedOrderLineId) return;
     if (prefillHydratedOrderLineId !== selectedOrderLineId) return;
+    if (laborDirtyRef.current.extra) return;
+    // Freeze to receipt-match snapshot SOT when snapshot exists.
+    if (receiptLaborSnapshot) return;
 
     const persistedItems = normalizeExtraLaborItems(receiptMatchPrefillQuery.data?.shipment_extra_labor_items);
+    const decorReferenceByReasonKey = (() => {
+      const map = new Map<string, { qtyPerUnit: number; sellPerUnit: number; costPerUnit: number }>();
+      const breakdown = Array.isArray(effectivePriceData?.breakdown)
+        ? (effectivePriceData.breakdown as Array<Record<string, unknown>>)
+        : [];
+      if (effectivePriceData?.pricing_method !== "BUNDLE_ROLLUP" || breakdown.length === 0) return map;
+      breakdown.forEach((row, index) => {
+        const name = String(
+          row.component_master_model_name ??
+            row.component_part_name ??
+            row.component_master_id ??
+            row.component_part_id ??
+            `부속 ${index + 1}`
+        ).trim();
+        if (!name) return;
+        const qtyRaw = Number(row.qty_per_product_unit ?? row.qty ?? 0);
+        const qtyPerUnit = Number.isFinite(qtyRaw) && qtyRaw > 0 ? qtyRaw : 1;
+        const sellTotalRaw = Number(row.total_sell_krw ?? NaN);
+        const sellUnitRaw = Number(row.unit_sell_krw ?? NaN);
+        const costTotalRaw = Number(row.total_cost_krw ?? NaN);
+        const costUnitRaw = Number(row.unit_cost_krw ?? NaN);
+        const sellPerUnit = Number.isFinite(sellTotalRaw)
+          ? Math.max(sellTotalRaw, 0)
+          : Number.isFinite(sellUnitRaw)
+            ? Math.max(sellUnitRaw * qtyPerUnit, 0)
+            : 0;
+        const costPerUnit = Number.isFinite(costTotalRaw)
+          ? Math.max(costTotalRaw, 0)
+          : Number.isFinite(costUnitRaw)
+            ? Math.max(costUnitRaw * qtyPerUnit, 0)
+            : 0;
+        map.set(name, { qtyPerUnit, sellPerUnit, costPerUnit });
+      });
+      return map;
+    })();
 
     const mappingRows = (masterAbsorbLaborQuery.data ?? []).filter((row) => {
       if (row.is_active === false) return false;
       if (row.bucket !== "ETC") return false;
-      if (String(row.reason ?? "").trim().toUpperCase() === BOM_AUTO_TOTAL_REASON) return false;
+        if (isAutoExcludedAbsorbReason(row.reason)) return false;
       const id = String(row.absorb_item_id ?? "").trim();
       if (!id) return false;
       return true;
@@ -1796,24 +2169,38 @@ const extractEtcLaborAmount = (value: unknown): number => {
         if (!Number.isFinite(unitAmountRaw) || unitAmountRaw === 0) return acc;
         const perPiece = row.is_per_piece !== false;
         const qtyPerUnitFromNote = parseManagedAbsorbQtyPerUnit(row.note, BOM_DECOR_NOTE_PREFIX);
-        const sellMultiplier = perPiece ? orderQty : 1;
-        const qtyApplied = Math.max(Math.round(sellMultiplier * qtyPerUnitFromNote), 1);
         const reasonKey = extractDecorReasonKey(reason);
+        const reference = reasonKey ? decorReferenceByReasonKey.get(reasonKey) : undefined;
+        const qtyPerUnitResolved = Math.max(qtyPerUnitFromNote, reference?.qtyPerUnit ?? 0, 1);
+        const sellMultiplier = perPiece ? orderQty : 1;
+        const qtyApplied = Math.max(Math.round(sellMultiplier * qtyPerUnitResolved), 1);
         const directCost = Number(row.material_cost_krw ?? 0);
         const resolvedCost = (() => {
-          if (Number.isFinite(directCost) && directCost > 0) return roundLaborMarginToHundred(directCost * sellMultiplier);
+          if (reference && reference.costPerUnit > 0) {
+            return roundLaborMarginToHundred(reference.costPerUnit * sellMultiplier);
+          }
+          if (Number.isFinite(directCost) && directCost > 0) return roundLaborMarginToHundred(directCost * qtyApplied);
           return 0;
         })();
-        const resolvedSell = roundLaborMarginToHundred(unitAmountRaw * sellMultiplier);
+        const resolvedSell =
+          reference && reference.sellPerUnit > 0
+            ? roundLaborMarginToHundred(reference.sellPerUnit * sellMultiplier)
+            : roundLaborMarginToHundred(unitAmountRaw * qtyApplied);
         acc.set(absorbId, { cost: resolvedCost, sell: resolvedSell, qtyApplied, reasonKey });
         return acc;
       }, new Map<string, { cost: number; sell: number; qtyApplied: number; reasonKey: string | null }>());
-      const absorbResolvedByReason = Array.from(absorbResolvedById.values()).reduce<Map<string, { cost: number; sell: number; qtyApplied: number }>>((acc, row) => {
-        if (!row.reasonKey) return acc;
-        acc.set(row.reasonKey, { cost: row.cost, sell: row.sell, qtyApplied: row.qtyApplied });
-        return acc;
-      }, new Map<string, { cost: number; sell: number; qtyApplied: number }>());
-
+      const absorbResolvedByReasonKey = new Map<string, { cost: number; sell: number; qtyApplied: number }>();
+      absorbResolvedById.forEach((value) => {
+        if (!value.reasonKey) return;
+        const existing = absorbResolvedByReasonKey.get(value.reasonKey);
+        if (!existing || value.sell > existing.sell) {
+          absorbResolvedByReasonKey.set(value.reasonKey, {
+            cost: value.cost,
+            sell: value.sell,
+            qtyApplied: value.qtyApplied,
+          });
+        }
+      });
       if (persistedItems.length > 0) {
         const persistedScoped = persistedItems.filter((item) => {
           const meta = (item.meta as Record<string, unknown> | null) ?? null;
@@ -1852,35 +2239,28 @@ const extractEtcLaborAmount = (value: unknown): number => {
           const label = String(item.label ?? "");
           const isDecorLikeItem = type.startsWith("DECOR:") || type.startsWith(EXTRA_TYPE_ABSORB_PREFIX) || label.includes("장식");
           if (!isDecorLikeItem) return item;
-
           const absorbId =
             String((item.meta as Record<string, unknown> | null)?.absorb_item_id ?? "").trim() ||
             parseAbsorbItemIdFromType(item.type);
-          if (!absorbId) return item;
-          const itemMeta = (item.meta as Record<string, unknown> | null) ?? null;
-          const fromAbsorbId = absorbResolvedById.get(absorbId);
-          const labelReasonKey = extractDecorReasonKey(item.label);
-          const fromReason = labelReasonKey ? absorbResolvedByReason.get(labelReasonKey) : undefined;
-          const resolved = fromAbsorbId ?? fromReason;
-          if (!resolved) return item;
-
-          const sell = Math.max(parseNumberish(itemMeta?.sell_krw), parseNumberInput(item.amount), resolved.sell, 0);
-          const cost = Math.max(roundLaborMarginToHundred(resolved.cost), 0);
-          const qtyApplied = Math.max(Math.round(resolved.qtyApplied), 1);
-          const margin = sell - cost;
+          const reasonKey = extractDecorReasonKey(item.label);
+          const resolved =
+            (absorbId ? absorbResolvedById.get(absorbId) : null) ??
+            (reasonKey ? absorbResolvedByReasonKey.get(reasonKey) : null);
+          if (!resolved || resolved.sell <= 0) return item;
+          const nextSell = Math.max(roundLaborMarginToHundred(resolved.sell), 0);
+          const nextCost = Math.max(roundLaborMarginToHundred(resolved.cost), 0);
+          const nextQty = Math.max(Math.round(resolved.qtyApplied), 1);
           return {
             ...item,
-            amount: String(sell),
+            amount: String(nextSell),
             meta: {
-              ...(itemMeta ?? {}),
-              source: "master_absorb_labor",
-              absorb_item_id: absorbId,
-              qty_applied: qtyApplied,
-              unit_amount_krw: qtyApplied > 0 ? sell / qtyApplied : sell,
-              unit_cost_krw: qtyApplied > 0 ? cost / qtyApplied : cost,
-              cost_krw: cost,
-              sell_krw: sell,
-              margin_krw: margin,
+              ...((item.meta as Record<string, unknown> | null) ?? {}),
+              qty_applied: nextQty,
+              unit_amount_krw: nextQty > 0 ? nextSell / nextQty : nextSell,
+              unit_cost_krw: nextQty > 0 ? nextCost / nextQty : nextCost,
+              cost_krw: nextCost,
+              sell_krw: nextSell,
+              margin_krw: nextSell - nextCost,
             },
           };
         });
@@ -1932,7 +2312,7 @@ const extractEtcLaborAmount = (value: unknown): number => {
           return acc;
         }, []);
 
-        return mergeDecorEditableRows([...merged, ...missingRows]);
+        return [...merged, ...missingRows];
       }
 
       const built = rows.reduce<ExtraLaborItem[]>((acc, row) => {
@@ -1944,20 +2324,27 @@ const extractEtcLaborAmount = (value: unknown): number => {
           if (!Number.isFinite(unitAmountRaw) || unitAmountRaw === 0) return acc;
           const perPiece = row.is_per_piece !== false;
           const qtyPerUnitFromNote = parseManagedAbsorbQtyPerUnit(row.note, BOM_DECOR_NOTE_PREFIX);
+          const reasonKey = extractDecorReasonKey(reason);
+          const reference = reasonKey ? decorReferenceByReasonKey.get(reasonKey) : undefined;
+          const qtyPerUnitResolved = Math.max(qtyPerUnitFromNote, reference?.qtyPerUnit ?? 0, 1);
           const sellMultiplier = perPiece ? orderQty : 1;
-          const qtyApplied = Math.max(Math.round(sellMultiplier * qtyPerUnitFromNote), 1);
-          const amount = unitAmountRaw * sellMultiplier;
+          const qtyApplied = Math.max(Math.round(sellMultiplier * qtyPerUnitResolved), 1);
+          const amount =
+            reference && reference.sellPerUnit > 0
+              ? reference.sellPerUnit * sellMultiplier
+              : unitAmountRaw * qtyApplied;
           if (!Number.isFinite(amount) || amount === 0) return acc;
 
           const isMaterialLike = laborClass === "MATERIAL" || reason.startsWith(BOM_MATERIAL_REASON_PREFIX);
 
-          if (isMaterialLike) {
-            return acc;
-          }
+          if (isMaterialLike) return acc;
 
           const resolvedCost = (() => {
+            if (reference && reference.costPerUnit > 0) {
+              return roundLaborMarginToHundred(reference.costPerUnit * sellMultiplier);
+            }
             const directCost = Number(row.material_cost_krw ?? 0);
-            if (Number.isFinite(directCost) && directCost > 0) return roundLaborMarginToHundred(directCost * sellMultiplier);
+            if (Number.isFinite(directCost) && directCost > 0) return roundLaborMarginToHundred(directCost * qtyApplied);
             return 0;
           })();
           const resolvedSell = roundLaborMarginToHundred(amount);
@@ -1986,6 +2373,7 @@ const extractEtcLaborAmount = (value: unknown): number => {
       return mergeDecorEditableRows([...keep, ...built]);
     });
   }, [
+    effectivePriceData,
     masterAbsorbLaborQuery.data,
     orderLineDetailQuery.data?.center_stone_qty,
     orderLineDetailQuery.data?.qty,
@@ -1993,6 +2381,7 @@ const extractEtcLaborAmount = (value: unknown): number => {
     orderLineDetailQuery.data?.sub2_stone_qty,
     prefillHydratedOrderLineId,
     receiptMatchPrefillQuery.data?.shipment_extra_labor_items,
+    receiptLaborSnapshot,
     selectedOrderLineId,
   ]);
 
@@ -2101,6 +2490,7 @@ const extractEtcLaborAmount = (value: unknown): number => {
     const id = row.order_line_id;
     if (!id) return;
 
+    resetLaborDirtyState();
     setSelectedOrderLineId(String(id));
     setPrefillHydratedOrderLineId(null);
     setSelectedOrderStatus(row.status ? String(row.status) : null);
@@ -2180,15 +2570,30 @@ const extractEtcLaborAmount = (value: unknown): number => {
     } else if (!hasReceiptDeduction && !hasReceiptPrefillForSelected) {
       setApplyMasterDeductionWhenEmpty(true);
     }
-    if (!hasReceiptPrefillForSelected && currentLine.base_labor_krw !== null && currentLine.base_labor_krw !== undefined) {
+    if (
+      !hasReceiptPrefillForSelected &&
+      !laborDirtyRef.current.base &&
+      currentLine.base_labor_krw !== null &&
+      currentLine.base_labor_krw !== undefined
+    ) {
       setBaseLabor(String(currentLine.base_labor_krw));
     }
     if (currentLine.manual_labor_krw !== null && currentLine.manual_labor_krw !== undefined) {
       setManualLabor(String(currentLine.manual_labor_krw));
     }
-    if (!hasReceiptPrefillForSelected && currentLine.extra_labor_items !== null && currentLine.extra_labor_items !== undefined) {
+    if (
+      !hasReceiptPrefillForSelected &&
+      !laborDirtyRef.current.extra &&
+      currentLine.extra_labor_items !== null &&
+      currentLine.extra_labor_items !== undefined
+    ) {
       setExtraLaborItems(normalizeExtraLaborItems(currentLine.extra_labor_items));
-    } else if (!hasReceiptPrefillForSelected && currentLine.extra_labor_krw !== null && currentLine.extra_labor_krw !== undefined) {
+    } else if (
+      !hasReceiptPrefillForSelected &&
+      !laborDirtyRef.current.other &&
+      currentLine.extra_labor_krw !== null &&
+      currentLine.extra_labor_krw !== undefined
+    ) {
       setOtherLaborCost(String(currentLine.extra_labor_krw ?? ""));
     }
 
@@ -2462,13 +2867,20 @@ const extractEtcLaborAmount = (value: unknown): number => {
       return;
     }
 
+    if (hasExtraLaborPayloadMismatch) {
+      toast.error("기타공임 정합성 오류", {
+        description: extraLaborPayloadMismatchDetail,
+      });
+      return;
+    }
+
     const baseLaborRawForSave =
       manualLaborBase !== null
         ? manualLaborBase
         : Number.isFinite(baseValue)
           ? baseValue
           : 0;
-    const extraLaborRawForSave = resolvedExtraLaborTotal;
+    const extraLaborRawForSave = extraLaborPayloadTotalKrw;
     const baseLaborForSave = isManualTotalOverride
       ? baseLaborRawForSave
       : roundLaborMarginToHundred(baseLaborRawForSave);
@@ -2524,7 +2936,7 @@ const extractEtcLaborAmount = (value: unknown): number => {
     const manualTotalValue = isManualTotalOverride ? parseNumberInput(manualTotalAmountKrw) : 0;
     const materialAmount = Number(lineData?.material_amount_sell_krw ?? 0);
     const baseLaborOverride = isManualTotalOverride && manualTotalValue > 0
-      ? manualTotalValue - materialAmount - resolvedExtraLaborTotal
+      ? manualTotalValue - materialAmount - extraLaborPayloadTotalKrw
       : null;
     if (isManualTotalOverride && manualTotalValue <= 0) {
       toast.error("총액 덮어쓰기 금액을 입력해주세요.");
@@ -2543,7 +2955,7 @@ const extractEtcLaborAmount = (value: unknown): number => {
           : Number.isFinite(baseValue)
             ? baseValue
             : 0;
-    const updateExtraLaborRaw = resolvedExtraLaborTotal;
+    const updateExtraLaborRaw = extraLaborPayloadTotalKrw;
     const updateBaseLabor = isManualTotalOverride
       ? updateBaseLaborRaw
       : roundLaborMarginToHundred(updateBaseLaborRaw);
@@ -2841,6 +3253,7 @@ const extractEtcLaborAmount = (value: unknown): number => {
   const resetShipmentForm = (options?: { keepStorePickup?: boolean }) => {
     const keepStorePickup = options?.keepStorePickup ?? false;
 
+    resetLaborDirtyState();
     setConfirmModalOpen(false);
     setCurrentShipmentId(null);
     setCurrentShipmentLineId(null);
@@ -2914,6 +3327,12 @@ const extractEtcLaborAmount = (value: unknown): number => {
     }
     const shipmentId = normalizeId(currentShipmentId);
     if (!shipmentId) return;
+    if (hasExtraLaborPayloadMismatch) {
+      toast.error("기타공임 정합성 오류", {
+        description: extraLaborPayloadMismatchDetail,
+      });
+      return;
+    }
     const currentLines = currentLinesQuery.data ?? [];
     const currentLine = currentShipmentLineId
       ? currentLines.find((line) => String(line.shipment_line_id) === String(currentShipmentLineId))
@@ -2945,9 +3364,9 @@ const extractEtcLaborAmount = (value: unknown): number => {
 
       const manualTotalValue = isManualTotalOverride ? parseNumberInput(manualTotalAmountKrw) : 0;
       const materialAmount = Number(currentLine?.material_amount_sell_krw ?? 0);
-      const manualLaborBase = useManualLabor ? resolvedTotalLabor - resolvedExtraLaborTotal : null;
+      const manualLaborBase = useManualLabor ? resolvedTotalLabor - extraLaborPayloadTotalKrw : null;
       const baseLaborOverride = isManualTotalOverride && manualTotalValue > 0
-        ? manualTotalValue - materialAmount - resolvedExtraLaborTotal
+        ? manualTotalValue - materialAmount - extraLaborPayloadTotalKrw
         : null;
       if (isManualTotalOverride && manualTotalValue <= 0) {
         toast.error("총액 덮어쓰기 금액을 입력해주세요.");
@@ -2968,7 +3387,7 @@ const extractEtcLaborAmount = (value: unknown): number => {
           : manualLaborBase !== null
             ? manualLaborBase
             : resolvedBaseLabor;
-      const updateExtraLaborRaw = resolvedExtraLaborTotal;
+      const updateExtraLaborRaw = extraLaborPayloadTotalKrw;
       const updateBaseLaborForConfirm = isManualTotalOverride
         ? updateBaseLaborRaw
         : roundLaborMarginToHundred(updateBaseLaborRaw);
@@ -3216,6 +3635,11 @@ const extractEtcLaborAmount = (value: unknown): number => {
     [extraLaborItems]
   );
 
+  const autoRemainderAdjustmentItems = useMemo(
+    () => extraLaborItems.filter((item) => isAutoRemainderAdjustmentItem(item)),
+    [extraLaborItems]
+  );
+
   const displayedExtraLaborItems = useMemo(
     () => extraLaborItems.filter((item) => isCoreVisibleEtcItem(item) && !isAdjustmentTypeValue(item.type)),
     [extraLaborItems]
@@ -3225,7 +3649,15 @@ const extractEtcLaborAmount = (value: unknown): number => {
 
   useEffect(() => {
     if (!hasDetailedExtraLaborItems) return;
-    if (roundKrw(parseNumberInput(otherLaborCost)) === 0) return;
+    const legacyRemainder = roundKrw(parseNumberInput(otherLaborCost));
+    if (legacyRemainder === 0) return;
+    setExtraLaborItems((prev) =>
+      upsertAutoRemainderAdjustmentItem({
+        items: prev,
+        amount: legacyRemainder,
+        indexSeed: prev.length,
+      })
+    );
     setOtherLaborCost("0");
   }, [hasDetailedExtraLaborItems, otherLaborCost]);
 
@@ -3240,7 +3672,7 @@ const extractEtcLaborAmount = (value: unknown): number => {
     return (masterAbsorbLaborQuery.data ?? []).reduce((acc, row) => {
       if (row.is_active === false) return acc;
       if (String(row.bucket ?? "").trim().toUpperCase() !== "STONE_LABOR") return acc;
-      if (String(row.reason ?? "").trim().toUpperCase() === BOM_AUTO_TOTAL_REASON) return acc;
+          if (isAutoExcludedAbsorbReason(row.reason)) return acc;
       const unitAbsorb = Math.max(roundLaborMarginToHundred(Number(row.amount_krw ?? 0)), 0);
       if (unitAbsorb <= 0) return acc;
       const role = parseAbsorbStoneRole(row.note);
@@ -3375,8 +3807,27 @@ const extractEtcLaborAmount = (value: unknown): number => {
     [stoneAdjustmentAmount]
   );
 
-  const pricingPolicyMeta =
-    (receiptMatchPrefillQuery.data?.pricing_policy_meta as Record<string, unknown> | null) ?? null;
+  const pricingPolicyMeta = useMemo(() => {
+    const fromSnapshot: Record<string, unknown> = {
+      plating_sell_krw: receiptLaborSnapshot?.policy_plating_sell_krw,
+      plating_cost_krw: receiptLaborSnapshot?.policy_plating_cost_krw,
+      absorb_plating_krw: receiptLaborSnapshot?.policy_absorb_plating_krw,
+      absorb_etc_total_krw: receiptLaborSnapshot?.policy_absorb_etc_total_krw,
+      absorb_decor_total_krw: receiptLaborSnapshot?.policy_absorb_decor_total_krw,
+      absorb_other_total_krw: receiptLaborSnapshot?.policy_absorb_other_total_krw,
+    };
+    const hasSnapshotPolicy = Object.values(fromSnapshot).some((value) => value !== null && value !== undefined);
+    if (hasSnapshotPolicy) return fromSnapshot;
+    return (receiptMatchPrefillQuery.data?.pricing_policy_meta as Record<string, unknown> | null) ?? null;
+  }, [
+    receiptLaborSnapshot?.policy_absorb_decor_total_krw,
+    receiptLaborSnapshot?.policy_absorb_etc_total_krw,
+    receiptLaborSnapshot?.policy_absorb_other_total_krw,
+    receiptLaborSnapshot?.policy_absorb_plating_krw,
+    receiptLaborSnapshot?.policy_plating_cost_krw,
+    receiptLaborSnapshot?.policy_plating_sell_krw,
+    receiptMatchPrefillQuery.data?.pricing_policy_meta,
+  ]);
 
   const absorbEvidence = useMemo(() => {
     const base = Math.max(roundLaborMarginToHundred(parseNumberish(pricingPolicyMeta?.absorb_base_to_base_krw)), 0);
@@ -3419,7 +3870,7 @@ const extractEtcLaborAmount = (value: unknown): number => {
     return (masterAbsorbLaborQuery.data ?? []).reduce(
       (acc, row) => {
         if (row.is_active === false) return acc;
-        if (String(row.reason ?? "").trim().toUpperCase() === BOM_AUTO_TOTAL_REASON) return acc;
+          if (isAutoExcludedAbsorbReason(row.reason)) return acc;
         const amountPerUnit = Number(row.amount_krw ?? 0);
         if (!Number.isFinite(amountPerUnit) || amountPerUnit <= 0) return acc;
         const perPiece = row.is_per_piece !== false;
@@ -3606,6 +4057,33 @@ const extractEtcLaborAmount = (value: unknown): number => {
     return map;
   }, [masterAbsorbLaborQuery.data, orderLineDetailQuery.data?.qty]);
 
+  const decorResolvedFromAbsorbByReasonKey = useMemo(() => {
+    const map = new Map<string, { sell: number; qtyApplied: number }>();
+    const orderQty = Math.max(1, Number(orderLineDetailQuery.data?.qty ?? 1));
+    (masterAbsorbLaborQuery.data ?? []).forEach((row) => {
+      if (row.is_active === false) return;
+      if (shouldExcludeCatalogEtcAbsorbItem(row)) return;
+      if (String(row.bucket ?? "").trim().toUpperCase() !== "ETC") return;
+      const reason = String(row.reason ?? "장식공임").trim() || "장식공임";
+      const laborClass = String(row.labor_class ?? "GENERAL").trim().toUpperCase();
+      if (laborClass === "MATERIAL" || reason.startsWith(BOM_MATERIAL_REASON_PREFIX)) return;
+      const reasonKey = extractDecorReasonKey(reason);
+      if (!reasonKey) return;
+      const amountRaw = Number(row.amount_krw ?? 0);
+      if (!Number.isFinite(amountRaw) || amountRaw <= 0) return;
+      const perPiece = row.is_per_piece !== false;
+      const qtyPerUnit = parseManagedAbsorbQtyPerUnit(row.note, BOM_DECOR_NOTE_PREFIX);
+      const multiplier = perPiece ? orderQty : 1;
+      const qtyApplied = Math.max(Math.round(multiplier * qtyPerUnit), 1);
+      const sell = Math.max(roundLaborMarginToHundred(amountRaw * multiplier), 0);
+      const prev = map.get(reasonKey);
+      if (!prev || sell > prev.sell) {
+        map.set(reasonKey, { sell, qtyApplied });
+      }
+    });
+    return map;
+  }, [masterAbsorbLaborQuery.data, orderLineDetailQuery.data?.qty]);
+
   useEffect(() => {
     let disposed = false;
     if (!selectedOrderLineId || decorReasonKeys.length === 0) {
@@ -3662,45 +4140,72 @@ const extractEtcLaborAmount = (value: unknown): number => {
     };
   }, [decorReasonKeys, selectedOrderLineId]);
 
-  useEffect(() => {
+  const handleRecalculateDecorLabor = useCallback((options?: { silent?: boolean; markDirty?: boolean }) => {
+    const silent = options?.silent === true;
+    const markDirty = options?.markDirty !== false;
     if (
       decorReferenceUnitCostByName.size === 0 &&
       decorReferenceSellByName.size === 0 &&
+      decorResolvedFromAbsorbByReasonKey.size === 0 &&
       Object.keys(decorMasterUnitCostByName).length === 0 &&
       Object.keys(decorMasterUnitSellByName).length === 0
-    ) return;
-    setExtraLaborItems((prev) =>
-      prev.map((item) => {
+    ) {
+      if (!silent) toast.message("재계산할 장식 기준 데이터가 없습니다.");
+      return;
+    }
+
+    if (markDirty) markLaborExtraDirty();
+    setExtraLaborItems((prev) => {
+      let changedAny = false;
+      const next = prev.map((item) => {
         if (!isDecorEditableAbsorbItem(item)) return item;
         const reasonKey = extractDecorReasonKey(item.label);
         if (!reasonKey) return item;
         const unitCostFromRef = decorReferenceUnitCostByName.get(reasonKey) ?? decorMasterUnitCostByName[reasonKey] ?? 0;
         const sellFromRef = decorReferenceSellByName.get(reasonKey) ?? 0;
+        const resolvedFromAbsorb = decorResolvedFromAbsorbByReasonKey.get(reasonKey);
+        const sellFromAbsorb = resolvedFromAbsorb?.sell ?? 0;
         const unitSellFromMaster = decorMasterUnitSellByName[reasonKey] ?? 0;
-        if ((!unitCostFromRef || unitCostFromRef <= 0) && (!sellFromRef || sellFromRef <= 0) && (!unitSellFromMaster || unitSellFromMaster <= 0)) return item;
+        if (
+          (!unitCostFromRef || unitCostFromRef <= 0) &&
+          (!sellFromRef || sellFromRef <= 0) &&
+          (!sellFromAbsorb || sellFromAbsorb <= 0) &&
+          (!unitSellFromMaster || unitSellFromMaster <= 0)
+        ) {
+          return item;
+        }
 
         const meta = (item.meta as Record<string, unknown> | null) ?? null;
         const currentUnitCost = Math.max(parseNumberish(meta?.unit_cost_krw), 0);
         const currentCost = Math.max(parseNumberish(meta?.cost_krw), 0);
         const isQtyManual = meta?.qty_manual_override === true;
         const qtyFromMeta = parseNumberish(meta?.qty_applied);
+        const qtyFromAbsorb = resolvedFromAbsorb?.qtyApplied ?? 0;
         const qty = Math.max(
           isQtyManual && qtyFromMeta > 0
             ? qtyFromMeta
-            : decorQtyAppliedByReasonKey.get(reasonKey) ?? qtyFromMeta,
+            : qtyFromAbsorb > 0
+              ? qtyFromAbsorb
+              : decorQtyAppliedByReasonKey.get(reasonKey) ?? qtyFromMeta,
           1
         );
         const currentSell = Math.max(parseNumberish(meta?.sell_krw), parseNumberInput(item.amount), 0);
 
+        const unitSellFromAbsorb = qtyFromAbsorb > 0 && sellFromAbsorb > 0 ? sellFromAbsorb / qtyFromAbsorb : 0;
+        const sellFromAbsorbByQty = unitSellFromAbsorb > 0 ? roundLaborMarginToHundred(unitSellFromAbsorb * qty) : 0;
         const sellFromMaster =
           unitSellFromMaster > 0 ? roundLaborMarginToHundred(unitSellFromMaster * qty) : 0;
 
         const nextSell =
           isQtyManual
-            ? sellFromMaster > 0
-              ? sellFromMaster
-              : roundLaborMarginToHundred(currentSell)
-            : sellFromRef > 0
+            ? sellFromAbsorbByQty > 0
+              ? sellFromAbsorbByQty
+              : sellFromMaster > 0
+                ? sellFromMaster
+                : roundLaborMarginToHundred(currentSell)
+            : sellFromAbsorbByQty > 0
+              ? sellFromAbsorbByQty
+              : sellFromRef > 0
               ? roundLaborMarginToHundred(sellFromRef)
               : sellFromMaster > 0
                 ? sellFromMaster
@@ -3718,7 +4223,9 @@ const extractEtcLaborAmount = (value: unknown): number => {
 
         const changedSell = roundLaborMarginToHundred(currentSell) !== nextSell;
         const changedCost = roundLaborMarginToHundred(currentCost) !== nextCost || (!hasCost && nextCost > 0);
-        if (!changedSell && !changedCost) return item;
+        const changedQty = roundLaborMarginToHundred(parseNumberish(meta?.qty_applied)) !== roundLaborMarginToHundred(qty);
+        if (!changedSell && !changedCost && !changedQty) return item;
+        changedAny = true;
 
         return {
           ...item,
@@ -3733,19 +4240,37 @@ const extractEtcLaborAmount = (value: unknown): number => {
             margin_krw: margin,
           },
         };
-      })
-    );
+      });
+      return changedAny ? next : prev;
+    });
+    if (!silent) toast.success("장식공임을 마스터 기준으로 재계산했습니다.");
   }, [
     decorMasterUnitCostByName,
     decorMasterUnitSellByName,
     decorQtyAppliedByReasonKey,
+    decorResolvedFromAbsorbByReasonKey,
     decorReferenceSellByName,
     decorReferenceUnitCostByName,
+    markLaborExtraDirty,
   ]);
+
+  useEffect(() => {
+    if (!selectedOrderLineId) return;
+    if (laborDirtyRef.current.extra) return;
+    const hasDecorRows = extraLaborItems.some((item) => isDecorEditableAbsorbItem(item));
+    if (!hasDecorRows) return;
+    handleRecalculateDecorLabor({ silent: true, markDirty: false });
+  }, [extraLaborItems, handleRecalculateDecorLabor, selectedOrderLineId]);
 
   const resolvedAutoAbsorbLaborTotal = useMemo(
     () => roundKrw(autoAbsorbItems.reduce((sum, item) => sum + roundKrw(parseNumberInput(item.amount)), 0)),
     [autoAbsorbItems]
+  );
+
+  const resolvedAutoRemainderAdjustmentTotal = useMemo(
+    () =>
+      roundKrw(autoRemainderAdjustmentItems.reduce((sum, item) => sum + roundKrw(parseNumberInput(item.amount)), 0)),
+    [autoRemainderAdjustmentItems]
   );
 
   const resolvedOtherLaborCost = useMemo(
@@ -3754,8 +4279,19 @@ const extractEtcLaborAmount = (value: unknown): number => {
   );
 
   const resolvedEtcLaborTotal = useMemo(
-    () => resolvedEtcLaborItemsTotal + resolvedOtherLaborCost + resolvedAutoAbsorbLaborTotal,
-    [resolvedAutoAbsorbLaborTotal, resolvedEtcLaborItemsTotal, resolvedOtherLaborCost]
+    () =>
+      roundKrw(
+        resolvedEtcLaborItemsTotal +
+          resolvedOtherLaborCost +
+          resolvedAutoAbsorbLaborTotal +
+          resolvedAutoRemainderAdjustmentTotal
+      ),
+    [
+      resolvedAutoAbsorbLaborTotal,
+      resolvedAutoRemainderAdjustmentTotal,
+      resolvedEtcLaborItemsTotal,
+      resolvedOtherLaborCost,
+    ]
   );
 
   const resolvedEtcLaborItemsCostTotal = userEditableExtraLaborItems.reduce(
@@ -3768,10 +4304,20 @@ const extractEtcLaborAmount = (value: unknown): number => {
     0
   );
 
-  const resolvedEtcLaborCostTotal =
-    resolvedEtcLaborItemsCostTotal + resolvedOtherLaborCost + resolvedAutoAbsorbLaborCostTotal;
+  const resolvedAutoRemainderAdjustmentCostTotal = autoRemainderAdjustmentItems.reduce(
+    (sum, item) => sum + getExtraLaborCost(item),
+    0
+  );
 
-  const resolvedEtcLaborMarginTotal = resolvedEtcLaborTotal - resolvedEtcLaborCostTotal;
+  const resolvedEtcLaborCostTotal =
+    roundKrw(
+      resolvedEtcLaborItemsCostTotal +
+        resolvedOtherLaborCost +
+        resolvedAutoAbsorbLaborCostTotal +
+        resolvedAutoRemainderAdjustmentCostTotal
+    );
+
+  const resolvedEtcLaborMarginTotal = roundKrw(resolvedEtcLaborTotal - resolvedEtcLaborCostTotal);
 
   const resolvedAbsorbDecorOtherCostForSummary = useMemo(
     () =>
@@ -3788,19 +4334,23 @@ const extractEtcLaborAmount = (value: unknown): number => {
   );
 
   const resolvedExtraLaborTotal = useMemo(
-    () => resolvedEtcLaborTotal + effectiveStoneLabor,
+    () => roundKrw(resolvedEtcLaborTotal + effectiveStoneLabor),
     [effectiveStoneLabor, resolvedEtcLaborTotal]
   );
 
   const resolvedBaseLaborCost = useMemo(() => {
     const value =
+      receiptLaborSnapshot?.base_labor_cost_krw ??
       receiptMatchPrefillQuery.data?.selected_factory_labor_basic_cost_krw ??
       receiptMatchPrefillQuery.data?.receipt_labor_basic_cost_krw ??
       receiptMatchPrefillQuery.data?.shipment_base_labor_krw;
     return value === null || value === undefined ? null : Number(value);
-  }, [receiptMatchPrefillQuery.data]);
+  }, [receiptLaborSnapshot?.base_labor_cost_krw, receiptMatchPrefillQuery.data]);
 
   const baseLaborCostSource = useMemo(() => {
+    if (receiptLaborSnapshot?.base_labor_cost_krw !== null && receiptLaborSnapshot?.base_labor_cost_krw !== undefined) {
+      return "receipt" as const;
+    }
     if (receiptMatchPrefillQuery.data?.selected_factory_labor_basic_cost_krw !== null && receiptMatchPrefillQuery.data?.selected_factory_labor_basic_cost_krw !== undefined) {
       return "receipt" as const;
     }
@@ -3812,6 +4362,7 @@ const extractEtcLaborAmount = (value: unknown): number => {
     }
     return "none" as const;
   }, [
+    receiptLaborSnapshot?.base_labor_cost_krw,
     receiptMatchPrefillQuery.data?.selected_factory_labor_basic_cost_krw,
     receiptMatchPrefillQuery.data?.receipt_labor_basic_cost_krw,
     receiptMatchPrefillQuery.data?.shipment_base_labor_krw,
@@ -3998,13 +4549,18 @@ const extractEtcLaborAmount = (value: unknown): number => {
       (acc, row) => {
         if (row.is_active === false) return acc;
         const reasonUpper = String(row.reason ?? "").trim().toUpperCase();
-        if (reasonUpper === BOM_AUTO_TOTAL_REASON) return acc;
+        if (isAutoExcludedAbsorbReason(reasonUpper)) return acc;
 
         const amountRaw = Number(row.amount_krw ?? 0);
         if (!Number.isFinite(amountRaw) || amountRaw === 0) return acc;
         const amount = roundLaborMarginToHundred(amountRaw);
         const bucket = String(row.bucket ?? "ETC").trim().toUpperCase();
         if (bucket === "ETC" && shouldExcludeCatalogEtcAbsorbItem(row)) return acc;
+        if (bucket === "BASE_LABOR") {
+          const noteUpper = String(row.note ?? "").trim().toUpperCase();
+          const isBaseAbsorbLike = reasonUpper.includes("흡수") || noteUpper.includes("ABSORB");
+          if (!isBaseAbsorbLike) return acc;
+        }
 
         let applied = amount;
         const role = parseAbsorbStoneRole(row.note);
@@ -4072,12 +4628,18 @@ const extractEtcLaborAmount = (value: unknown): number => {
         (acc, row) => {
           if (row.is_active === false) return acc;
           const reasonUpper = String(row.reason ?? "").trim().toUpperCase();
-          if (reasonUpper === BOM_AUTO_TOTAL_REASON) return acc;
+          if (isAutoExcludedAbsorbReason(reasonUpper)) return acc;
           if (String(row.bucket ?? "").trim().toUpperCase() !== "ETC") return acc;
           if (!shouldExcludeCatalogEtcAbsorbItem(row)) return acc;
 
-          const sell = Math.max(roundLaborMarginToHundred(Number(row.amount_krw ?? 0)), 0);
-          const cost = Math.max(roundLaborMarginToHundred(Number(row.material_cost_krw ?? 0)), 0);
+          const qtyPerUnit = Math.max(
+            parseManagedAbsorbQtyPerUnit(row.note, BOM_DECOR_NOTE_PREFIX),
+            parseManagedAbsorbQtyPerUnit(row.note, BOM_MATERIAL_NOTE_PREFIX),
+            1
+          );
+
+          const sell = Math.max(roundLaborMarginToHundred(Number(row.amount_krw ?? 0) * qtyPerUnit), 0);
+          const cost = Math.max(roundLaborMarginToHundred(Number(row.material_cost_krw ?? 0) * qtyPerUnit), 0);
           acc.sell += sell;
           acc.cost += cost;
           return acc;
@@ -4087,33 +4649,39 @@ const extractEtcLaborAmount = (value: unknown): number => {
     [masterAbsorbLaborQuery.data]
   );
 
+  const masterPlatingSellWithAbsorb = useMemo(
+    () => roundLaborMarginToHundred(Math.max(masterPlatingSell, 0) + Math.max(masterCatalogAbsorbSummary.plating, 0)),
+    [masterCatalogAbsorbSummary.plating, masterPlatingSell]
+  );
+
   const masterBaseSellWithAbsorb = useMemo(() => {
-    const value = (masterBaseSell ?? 0) + masterCatalogAbsorbSummary.baseLaborUnit;
-    if (masterBaseSell === null && masterCatalogAbsorbSummary.baseLaborUnit <= 0) return null;
-    return roundLaborMarginToHundred(value);
-  }, [masterBaseSell, masterCatalogAbsorbSummary.baseLaborUnit]);
+    const absorbBase = Math.max(masterCatalogAbsorbSummary.baseLaborUnit, 0);
+    if (masterBaseCost !== null && masterBaseSell !== null) {
+      const baseMargin = Math.max(roundLaborMarginToHundred(masterBaseSell - masterBaseCost), 0);
+      return roundLaborMarginToHundred(Math.max(masterBaseCost, 0) + baseMargin + absorbBase);
+    }
+    if (masterBaseSell !== null) {
+      return roundLaborMarginToHundred(Math.max(masterBaseSell, 0) + absorbBase);
+    }
+    if (masterBaseCost !== null) {
+      return roundLaborMarginToHundred(Math.max(masterBaseCost, 0) + absorbBase);
+    }
+    if (absorbBase <= 0) return null;
+    return roundLaborMarginToHundred(absorbBase);
+  }, [masterBaseCost, masterBaseSell, masterCatalogAbsorbSummary.baseLaborUnit]);
 
   const masterStoneLaborSellWithAbsorb = useMemo(() => {
     const hasAnyStoneSell =
       masterCenterSell !== null ||
       masterSub1Sell !== null ||
-      masterSub2Sell !== null ||
-      masterCatalogAbsorbSummary.stoneCenter > 0 ||
-      masterCatalogAbsorbSummary.stoneSub1 > 0 ||
-      masterCatalogAbsorbSummary.stoneSub2 > 0;
+      masterSub2Sell !== null;
     if (!hasAnyStoneSell) return null;
     return roundLaborMarginToHundred(
       (masterCenterSell ?? 0) * Math.max(masterCenterQtyDefault ?? 0, 0) +
       (masterSub1Sell ?? 0) * Math.max(masterSub1QtyDefault ?? 0, 0) +
-      (masterSub2Sell ?? 0) * Math.max(masterSub2QtyDefault ?? 0, 0) +
-      masterCatalogAbsorbSummary.stoneCenter +
-      masterCatalogAbsorbSummary.stoneSub1 +
-      masterCatalogAbsorbSummary.stoneSub2
+      (masterSub2Sell ?? 0) * Math.max(masterSub2QtyDefault ?? 0, 0)
     );
   }, [
-    masterCatalogAbsorbSummary.stoneCenter,
-    masterCatalogAbsorbSummary.stoneSub1,
-    masterCatalogAbsorbSummary.stoneSub2,
     masterCenterQtyDefault,
     masterCenterSell,
     masterSub1QtyDefault,
@@ -4124,16 +4692,12 @@ const extractEtcLaborAmount = (value: unknown): number => {
 
   const masterEtcLaborSellWithAbsorb = useMemo(() => {
     const value =
-      Math.max(masterPlatingSell, 0) +
-      masterCatalogAbsorbSummary.plating +
-      masterCatalogAbsorbSummary.etc +
+      masterPlatingSellWithAbsorb +
       masterCatalogDecorSummary.sell;
     return value > 0 ? roundLaborMarginToHundred(value) : null;
   }, [
-    masterCatalogAbsorbSummary.etc,
-    masterCatalogAbsorbSummary.plating,
     masterCatalogDecorSummary.sell,
-    masterPlatingSell,
+    masterPlatingSellWithAbsorb,
   ]);
 
   const masterTotalLaborSellWithAbsorb = useMemo(() => {
@@ -4154,25 +4718,25 @@ const extractEtcLaborAmount = (value: unknown): number => {
   const masterCenterSellWithAbsorb = useMemo(
     () =>
       roundLaborMarginToHundred(
-        (masterCenterSell ?? 0) * Math.max(masterCenterQtyDefault ?? 0, 0) + Math.max(masterCatalogAbsorbSummary.stoneCenter, 0)
+        (masterCenterSell ?? 0) * Math.max(masterCenterQtyDefault ?? 0, 0)
       ),
-    [masterCatalogAbsorbSummary.stoneCenter, masterCenterQtyDefault, masterCenterSell]
+    [masterCenterQtyDefault, masterCenterSell]
   );
 
   const masterSub1SellWithAbsorb = useMemo(
     () =>
       roundLaborMarginToHundred(
-        (masterSub1Sell ?? 0) * Math.max(masterSub1QtyDefault ?? 0, 0) + Math.max(masterCatalogAbsorbSummary.stoneSub1, 0)
+        (masterSub1Sell ?? 0) * Math.max(masterSub1QtyDefault ?? 0, 0)
       ),
-    [masterCatalogAbsorbSummary.stoneSub1, masterSub1QtyDefault, masterSub1Sell]
+    [masterSub1QtyDefault, masterSub1Sell]
   );
 
   const masterSub2SellWithAbsorb = useMemo(
     () =>
       roundLaborMarginToHundred(
-        (masterSub2Sell ?? 0) * Math.max(masterSub2QtyDefault ?? 0, 0) + Math.max(masterCatalogAbsorbSummary.stoneSub2, 0)
+        (masterSub2Sell ?? 0) * Math.max(masterSub2QtyDefault ?? 0, 0)
       ),
-    [masterCatalogAbsorbSummary.stoneSub2, masterSub2QtyDefault, masterSub2Sell]
+    [masterSub2QtyDefault, masterSub2Sell]
   );
 
   const masterCenterCostForCore = useMemo(
@@ -4236,28 +4800,25 @@ const extractEtcLaborAmount = (value: unknown): number => {
         key: "center",
         label: "중심",
         qty: masterCenterQtyDefault ?? 0,
-        sell: masterCenterSell === null && masterCatalogAbsorbSummary.stoneCenter <= 0 ? null : masterCenterSellWithAbsorb,
+        sell: masterCenterSell === null ? null : masterCenterSellWithAbsorb,
         cost: masterCenterCost === null ? null : masterCenterCostForCore,
       },
       {
         key: "sub1",
         label: "보조1",
         qty: masterSub1QtyDefault ?? 0,
-        sell: masterSub1Sell === null && masterCatalogAbsorbSummary.stoneSub1 <= 0 ? null : masterSub1SellWithAbsorb,
+        sell: masterSub1Sell === null ? null : masterSub1SellWithAbsorb,
         cost: masterSub1Cost === null ? null : masterSub1CostForCore,
       },
       {
         key: "sub2",
         label: "보조2",
         qty: masterSub2QtyDefault ?? 0,
-        sell: masterSub2Sell === null && masterCatalogAbsorbSummary.stoneSub2 <= 0 ? null : masterSub2SellWithAbsorb,
+        sell: masterSub2Sell === null ? null : masterSub2SellWithAbsorb,
         cost: masterSub2Cost === null ? null : masterSub2CostForCore,
       },
     ],
     [
-      masterCatalogAbsorbSummary.stoneCenter,
-      masterCatalogAbsorbSummary.stoneSub1,
-      masterCatalogAbsorbSummary.stoneSub2,
       masterBaseCost,
       masterBaseSellWithAbsorb,
       masterCenterCost,
@@ -4294,9 +4855,17 @@ const extractEtcLaborAmount = (value: unknown): number => {
   }, [masterDeductionDefaultG, masterWeightDefaultG]);
 
   const masterBaseMargin = useMemo(() => {
+    if (masterBaseSell !== null && masterBaseCost !== null) {
+      return roundLaborMarginToHundred(
+        Math.max(masterBaseSell - masterBaseCost, 0) + Math.max(masterCatalogAbsorbSummary.baseLaborUnit, 0)
+      );
+    }
+    if (masterBaseCost !== null) {
+      return roundLaborMarginToHundred(Math.max(masterCatalogAbsorbSummary.baseLaborUnit, 0));
+    }
     if (masterBaseSell === null || masterBaseCost === null) return null;
     return roundLaborMarginToHundred(masterBaseSell - masterBaseCost);
-  }, [masterBaseSell, masterBaseCost]);
+  }, [masterBaseCost, masterBaseSell, masterCatalogAbsorbSummary.baseLaborUnit]);
 
   const baseMarginSource = useMemo(
     () => (masterBaseMargin === null ? "none" as const : "master" as const),
@@ -4320,7 +4889,12 @@ const extractEtcLaborAmount = (value: unknown): number => {
 
   const extraLaborPayload = useMemo(() => {
     const payload = extraLaborItems
-      .filter((item) => !isBomReferenceType(item.type) && !isMaterialMasterType(item.type))
+      .filter(
+        (item) =>
+          !isBomReferenceType(item.type) &&
+          !isMaterialMasterType(item.type) &&
+          !isLegacyPolicyAbsorbType(item.type)
+      )
       .map((item) => {
         const baseAmount = roundKrw(parseNumberInput(item.amount));
         const sanitizedMeta = sanitizeExtraLaborMeta(item.meta);
@@ -4336,21 +4910,9 @@ const extractEtcLaborAmount = (value: unknown): number => {
           };
         }
 
-        const reasonKey = extractDecorReasonKey(item.label);
-        const unitSellFromMaster = reasonKey ? (decorMasterUnitSellByName[reasonKey] ?? 0) : 0;
-        const isQtyManual = meta?.qty_manual_override === true;
-        const qtyFromMeta = parseNumberish(meta?.qty_applied);
-        const qtyApplied = Math.max(
-          reasonKey
-            ? isQtyManual && qtyFromMeta > 0
-              ? qtyFromMeta
-              : decorQtyAppliedByReasonKey.get(reasonKey) ?? qtyFromMeta
-            : qtyFromMeta,
-          1
-        );
-        const sellFromMaster =
-          unitSellFromMaster > 0 ? roundLaborMarginToHundred(unitSellFromMaster * qtyApplied) : 0;
-        const amount = sellFromMaster > 0 ? sellFromMaster : baseAmount;
+        const qtyApplied = Math.max(parseNumberish(meta?.qty_applied), 1);
+        const sellFromMeta = roundKrw(parseNumberish(meta?.sell_krw));
+        const amount = sellFromMeta > 0 ? sellFromMeta : baseAmount;
         const cost = roundKrw(parseNumberish(meta?.cost_krw));
 
         return {
@@ -4389,14 +4951,47 @@ const extractEtcLaborAmount = (value: unknown): number => {
 
     return payload;
   }, [
-    decorMasterUnitSellByName,
-    decorQtyAppliedByReasonKey,
     extraLaborItems,
     isVariationMode,
     stoneAdjustmentAmount,
     stoneAdjustmentReason,
     stoneRecommendation.recommended,
   ]);
+
+  const extraLaborPayloadTotalKrw = useMemo(
+    () => sumRoundedExtraLaborAmounts(extraLaborPayload),
+    [extraLaborPayload]
+  );
+
+  const hasExtraLaborPayloadMismatch = useMemo(
+    () => Math.round(extraLaborPayloadTotalKrw) !== Math.round(roundKrw(resolvedExtraLaborTotal)),
+    [extraLaborPayloadTotalKrw, resolvedExtraLaborTotal]
+  );
+
+  const extraLaborPayloadMismatchDetail = useMemo(() => {
+    const uiTotal = roundKrw(resolvedExtraLaborTotal);
+    const payloadTotal = extraLaborPayloadTotalKrw;
+    const payloadById = new Map(
+      extraLaborPayload.map((item) => [String(item.id ?? ""), roundKrw(parseNumberish(item.amount))])
+    );
+    const driftRows = extraLaborItems
+      .map((item) => {
+        const id = String(item.id ?? "");
+        if (!id || !payloadById.has(id)) return null;
+        const uiAmount = roundKrw(parseNumberInput(item.amount));
+        const payloadAmount = payloadById.get(id) ?? 0;
+        if (Math.round(uiAmount) === Math.round(payloadAmount)) return null;
+        return `${item.label}: ${uiAmount.toLocaleString()} -> ${payloadAmount.toLocaleString()}`;
+      })
+      .filter((value): value is string => Boolean(value))
+      .slice(0, 3);
+
+    if (driftRows.length === 0) {
+      return `화면 합계(${uiTotal.toLocaleString()}원)와 저장 합계(${payloadTotal.toLocaleString()}원)가 일치하지 않습니다.`;
+    }
+
+    return `화면/저장 합계 불일치 (${uiTotal.toLocaleString()}원 vs ${payloadTotal.toLocaleString()}원). ${driftRows.join(", ")}`;
+  }, [extraLaborItems, extraLaborPayload, extraLaborPayloadTotalKrw, resolvedExtraLaborTotal]);
 
   const stoneEvidenceRows = useMemo(
     () => [
@@ -4578,13 +5173,18 @@ const extractEtcLaborAmount = (value: unknown): number => {
   }, [extraLaborItems, isVariationMode, selectedOrderLineId, stoneRecommendation.recommended]);
 
   useEffect(() => {
-    if (!selectedOrderLineId) return;
+    if (!selectedOrderLineId || isVariationMode) return;
+    if (laborDirtyRef.current.extra) return;
     const stoneItem = extraLaborItems.find((item) => item.type === "STONE_LABOR");
     const engine = String((stoneItem?.meta as Record<string, unknown> | null)?.engine ?? "");
-    if (!stoneItem || engine !== "stone_sell_from_master_v1") return;
+    if (!stoneItem || engine !== "stone_sell_from_master_v1") {
+      applyRecommendedStoneLabor(true);
+      return;
+    }
     applyRecommendedStoneLabor(true);
   }, [
     extraLaborItems,
+    isVariationMode,
     selectedOrderLineId,
     stoneAdjustmentAmount,
     stoneAdjustmentNote,
@@ -5141,11 +5741,19 @@ const extractEtcLaborAmount = (value: unknown): number => {
                                   </div>
                                 ))}
                               </div>
-                              <div className="mt-1.5 grid grid-cols-12 items-center gap-x-2 border-t border-amber-200 px-1 pt-1.5 text-[10px]">
-                                <div className="col-span-3 font-semibold text-[var(--muted)]">기타/도금</div>
-                                <div className="col-span-3 text-right tabular-nums text-[var(--foreground)]">{renderNumber(masterEtcLaborSellWithAbsorb, "원")}</div>
-                                <div className="col-span-2 text-right text-[var(--muted)]">-</div>
-                                <div className="col-span-4 text-right tabular-nums text-[var(--foreground)]">{renderNumber(masterEtcLaborCostWithAbsorb, "원")}</div>
+                              <div className="mt-1.5 space-y-1.5 border-t border-amber-200 px-1 pt-1.5 text-[10px]">
+                                <div className="grid grid-cols-12 items-center gap-x-2">
+                                  <div className="col-span-3 font-semibold text-[var(--muted)]">도금</div>
+                                  <div className="col-span-3 text-right tabular-nums text-[var(--foreground)]">{renderNumber(masterPlatingSellWithAbsorb, "원")}</div>
+                                  <div className="col-span-2 text-right text-[var(--muted)]">-</div>
+                                  <div className="col-span-4 text-right tabular-nums text-[var(--foreground)]">{renderNumber(masterPlatingCost, "원")}</div>
+                                </div>
+                                <div className="grid grid-cols-12 items-center gap-x-2 border-t border-amber-200 pt-1">
+                                  <div className="col-span-3 font-semibold text-[var(--muted)]">장식 합계</div>
+                                  <div className="col-span-3 text-right tabular-nums text-[var(--foreground)]">{renderNumber(masterCatalogDecorSummary.sell, "원")}</div>
+                                  <div className="col-span-2 text-right text-[var(--muted)]">-</div>
+                                  <div className="col-span-4 text-right tabular-nums text-[var(--foreground)]">{renderNumber(masterCatalogDecorSummary.cost, "원")}</div>
+                                </div>
                               </div>
                             </div>
                           </div>
@@ -5349,7 +5957,10 @@ const extractEtcLaborAmount = (value: unknown): number => {
                                   <input
                                     type="checkbox"
                                     checked={isVariationMode}
-                                    onChange={(event) => setIsVariationMode(event.target.checked)}
+                                    onChange={(event) => {
+                                      markLaborExtraDirty();
+                                      setIsVariationMode(event.target.checked);
+                                    }}
                                     className="h-4 w-4 accent-[var(--brand)]"
                                   />
                                   변형 모드
@@ -5357,7 +5968,14 @@ const extractEtcLaborAmount = (value: unknown): number => {
                                 {isVariationMode ? (
                                   <Badge tone="warning" className="text-[10px]">자동추천 비활성</Badge>
                                 ) : null}
-                                <Button size="sm" variant="secondary" onClick={() => applyRecommendedStoneLabor(true)}>
+                                <Button
+                                  size="sm"
+                                  variant="secondary"
+                                  onClick={() => {
+                                    markLaborExtraDirty();
+                                    applyRecommendedStoneLabor(true);
+                                  }}
+                                >
                                   추천 적용
                                 </Button>
                               </div>
@@ -5371,7 +5989,10 @@ const extractEtcLaborAmount = (value: unknown): number => {
                                   <div className="text-[var(--muted)]">조정(±)</div>
                                   <Input
                                     value={stoneAdjustmentAmount}
-                                    onChange={(e) => setStoneAdjustmentAmount(e.target.value)}
+                                    onChange={(e) => {
+                                      markLaborExtraDirty();
+                                      setStoneAdjustmentAmount(e.target.value);
+                                    }}
                                     inputMode="numeric"
                                     className="h-7 tabular-nums text-xs"
                                   />
@@ -5388,13 +6009,14 @@ const extractEtcLaborAmount = (value: unknown): number => {
                                   <select
                                     className="h-8 w-full rounded-md border border-[var(--panel-border)] bg-[var(--input-bg)] px-2 text-xs"
                                     value={stoneAdjustmentReason}
-                                    onChange={(e) =>
+                                    onChange={(e) => {
+                                      markLaborExtraDirty();
                                       setStoneAdjustmentReason(
                                         ["FACTORY_MISTAKE", "PRICE_UP", "VARIANT", "OTHER"].includes(e.target.value)
                                           ? (e.target.value as StoneAdjustmentReason)
                                           : "OTHER"
-                                      )
-                                    }
+                                      );
+                                    }}
                                   >
                                     <option value="FACTORY_MISTAKE">공장 오차/실수</option>
                                     <option value="PRICE_UP">단가 인상</option>
@@ -5407,7 +6029,10 @@ const extractEtcLaborAmount = (value: unknown): number => {
                                   <Input
                                     placeholder="조정 사유 메모"
                                     value={stoneAdjustmentNote}
-                                    onChange={(e) => setStoneAdjustmentNote(e.target.value)}
+                                    onChange={(e) => {
+                                      markLaborExtraDirty();
+                                      setStoneAdjustmentNote(e.target.value);
+                                    }}
                                     className="h-8 text-xs"
                                   />
                                 </div>
@@ -5523,7 +6148,10 @@ const extractEtcLaborAmount = (value: unknown): number => {
                             <Input
                               placeholder="0"
                               value={baseLabor}
-                              onChange={(e) => setBaseLabor(e.target.value)}
+                              onChange={(e) => {
+                                markLaborBaseDirty();
+                                setBaseLabor(e.target.value);
+                              }}
                               inputMode="numeric"
                               className="tabular-nums text-lg h-12"
                             />
@@ -5531,9 +6159,7 @@ const extractEtcLaborAmount = (value: unknown): number => {
                           <div className="space-y-2">
                             <div className="flex items-center justify-between text-sm font-medium text-[var(--foreground)]">
                               <span>기타공임 (판매)</span>
-                              <span className="text-xs text-[var(--muted)]">
-                                원가 {renderNumber(resolvedEtcLaborCostTotal)} · 마진 {renderNumber(resolvedEtcLaborMarginTotal)}
-                              </span>
+                                  <span className="text-xs text-[var(--muted)]">마진 {renderNumber(resolvedEtcLaborMarginTotal)}</span>
                             </div>
                             <Input
                               placeholder="0"
@@ -5552,6 +6178,7 @@ const extractEtcLaborAmount = (value: unknown): number => {
                               placeholder="0"
                               value={String(finalStoneSell)}
                               onChange={(e) => {
+                                markLaborExtraDirty();
                                 const nextFinal = parseNumberInput(e.target.value);
                                 const nextAdjustment = nextFinal - stoneRecommendation.recommended;
                                 setStoneAdjustmentAmount(String(nextAdjustment));
@@ -5584,6 +6211,15 @@ const extractEtcLaborAmount = (value: unknown): number => {
                                 className="whitespace-nowrap"
                               >
                                 기타공임 추가
+                              </Button>
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="secondary"
+                                  onClick={() => handleRecalculateDecorLabor()}
+                                className="whitespace-nowrap"
+                              >
+                                장식공임 재계산
                               </Button>
                             </div>
                             <div className="flex items-center gap-2 rounded-full border border-[var(--panel-border)] bg-[var(--panel)] px-2 py-1">
@@ -5642,6 +6278,7 @@ const extractEtcLaborAmount = (value: unknown): number => {
                                               className="h-9 w-full rounded-md border border-[var(--panel-border)] bg-[var(--input-bg)] px-2 text-xs"
                                               value={itemType}
                                               onChange={(e) => {
+                                                markLaborExtraDirty();
                                                 const nextType = e.target.value;
                                                 const nextLabel = getExtraLaborItemLabel(nextType);
                                                 setExtraLaborItems((prev) =>
@@ -5746,6 +6383,7 @@ const extractEtcLaborAmount = (value: unknown): number => {
                                           variant="ghost"
                                           size="sm"
                                           onClick={() => handleRemoveExtraLabor(item.id)}
+                                          disabled={isLockedMaster}
                                           className="text-[var(--muted)]"
                                         >
                                           삭제
@@ -5764,6 +6402,7 @@ const extractEtcLaborAmount = (value: unknown): number => {
                         <Button
                           variant="ghost"
                           onClick={() => {
+                            resetLaborDirtyState();
                             setSelectedOrderLineId(null);
                             setPrefillHydratedOrderLineId(null);
                             setSelectedOrderMaterialCode(null);
@@ -5983,15 +6622,16 @@ const extractEtcLaborAmount = (value: unknown): number => {
                     className="h-7 text-xs w-24 bg-[var(--input-bg)] tabular-nums"
                     placeholder="0"
                     value={baseLabor}
-                    onChange={(e) => setBaseLabor(e.target.value)}
+                    onChange={(e) => {
+                      markLaborBaseDirty();
+                      setBaseLabor(e.target.value);
+                    }}
                     inputMode="numeric"
                   />
                 </div>
                 <div>
                   <span className="text-xs text-[var(--primary)] block mb-1">기타공임 (판매)</span>
-                  <span className="text-[10px] text-[var(--muted)] block">
-                    원가 {renderNumber(resolvedEtcLaborCostTotal)} · 마진 {renderNumber(resolvedEtcLaborMarginTotal)}
-                  </span>
+                                <span className="text-[10px] text-[var(--muted)] block">마진 {renderNumber(resolvedEtcLaborMarginTotal)}</span>
                   <Input
                     className="h-7 text-xs w-24 bg-[var(--input-bg)] tabular-nums"
                     placeholder="0"
@@ -6008,6 +6648,7 @@ const extractEtcLaborAmount = (value: unknown): number => {
                     placeholder="0"
                     value={String(finalStoneSell)}
                     onChange={(e) => {
+                      markLaborExtraDirty();
                       const nextFinal = parseNumberInput(e.target.value);
                       const nextAdjustment = nextFinal - stoneRecommendation.recommended;
                       setStoneAdjustmentAmount(String(nextAdjustment));
@@ -6072,6 +6713,15 @@ const extractEtcLaborAmount = (value: unknown): number => {
                     >
                       기타공임 추가
                     </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="secondary"
+                    onClick={() => handleRecalculateDecorLabor()}
+                      className="whitespace-nowrap"
+                    >
+                      장식공임 재계산
+                    </Button>
                   </div>
                   <div className="flex items-center gap-2 rounded-full border border-[var(--panel-border)] bg-[var(--panel)] px-2 py-1">
                     <span className="text-[10px] text-[var(--primary)]">기타원가(합계)</span>
@@ -6129,6 +6779,7 @@ const extractEtcLaborAmount = (value: unknown): number => {
                                     className="h-7 w-full rounded-md border border-[var(--panel-border)] bg-[var(--input-bg)] px-2 text-[10px]"
                                     value={itemType}
                                     onChange={(e) => {
+                                      markLaborExtraDirty();
                                       const nextType = e.target.value;
                                       const nextLabel = getExtraLaborItemLabel(nextType);
                                       setExtraLaborItems((prev) =>
@@ -6233,6 +6884,7 @@ const extractEtcLaborAmount = (value: unknown): number => {
                                 variant="ghost"
                                 size="sm"
                                 onClick={() => handleRemoveExtraLabor(item.id)}
+                                disabled={isLockedMaster}
                                 className="text-[var(--muted)]"
                               >
                                 삭제

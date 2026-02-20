@@ -1,5 +1,6 @@
 import { Fragment, useMemo } from "react";
 import { cn } from "@/lib/utils";
+import { calcCommodityDueG } from "@/lib/material-factors";
 
 export type ReceiptAmounts = {
   gold: number;
@@ -275,11 +276,15 @@ export const ReceiptPrintHalf = ({
                 }
 
                 let pureWeight = 0;
-                if (code === "14") pureWeight = weight * 0.6435;
-                else if (code === "18") pureWeight = weight * 0.825;
-                else if (code === "24") pureWeight = weight;
-                else if (code === "925") pureWeight = weight * silverFactor * 0.925;
-                else if (code === "999") pureWeight = weight * silverFactor;
+                if (code === "14" || code === "18" || code === "24") {
+                  pureWeight = calcCommodityDueG({ netWeightG: weight, materialCode: code });
+                } else if (code === "925" || code === "999") {
+                  pureWeight = calcCommodityDueG({
+                    netWeightG: weight,
+                    materialCode: code,
+                    silverAdjustApplied: silverFactor,
+                  });
+                }
 
                 const explicitRate =
                   code === "925" || code === "999"

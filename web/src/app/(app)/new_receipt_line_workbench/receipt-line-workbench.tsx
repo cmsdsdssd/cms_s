@@ -32,6 +32,7 @@ import { CONTRACTS } from "@/lib/contracts";
 import { callRpc } from "@/lib/supabase/rpc";
 import { getSchemaClient } from "@/lib/supabase/client";
 import { roundUpToUnit } from "@/lib/number";
+import { calcCommodityDueG } from "@/lib/material-factors";
 import { cn } from "@/lib/utils";
 
 type ReceiptInboxRow = {
@@ -2727,23 +2728,23 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
         switch (item.material_code) {
           case "14":
             acc.rawGold += weight;
-            acc.convertedGold += weight * 0.6435;
+            acc.convertedGold += calcCommodityDueG({ netWeightG: weight, materialCode: "14" });
             break;
           case "18":
             acc.rawGold += weight;
-            acc.convertedGold += weight * 0.825;
+            acc.convertedGold += calcCommodityDueG({ netWeightG: weight, materialCode: "18" });
             break;
           case "24":
             acc.rawGold += weight;
-            acc.convertedGold += weight;
+            acc.convertedGold += calcCommodityDueG({ netWeightG: weight, materialCode: "24" });
             break;
           case "925":
             acc.rawSilver += weight;
-            acc.convertedSilver += weight * 0.925;
+            acc.convertedSilver += calcCommodityDueG({ netWeightG: weight, materialCode: "925", silverAdjustApplied: 1 });
             break;
           case "999":
             acc.rawSilver += weight;
-            acc.convertedSilver += weight;
+            acc.convertedSilver += calcCommodityDueG({ netWeightG: weight, materialCode: "999", silverAdjustApplied: 1 });
             break;
           default:
             break;

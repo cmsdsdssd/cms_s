@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
+import { buildMaterialFactorMap, calcMaterialAmountSellKrw } from "@/lib/material-factors";
 
 export const dynamic = "force-dynamic";
 
@@ -101,23 +102,55 @@ export async function POST(request: Request) {
     const goldPrice = Number(valuation?.gold_krw_per_g_snapshot ?? 0);
     const silverPrice = Number(valuation?.silver_krw_per_g_snapshot ?? 0);
 
+    const { data: factorRows } = await supabase
+      .from("cms_material_factor_config")
+      .select("material_code, purity_rate, gold_adjust_factor");
+    const factors = buildMaterialFactorMap((factorRows ?? []) as never[]);
+
     let materialAmount = 0;
     let goldTick: number | null = null;
     let silverTick: number | null = null;
     if (nextMaterial === "14") {
-      materialAmount = Math.round(netWeight * 0.6435 * goldPrice);
+      materialAmount = calcMaterialAmountSellKrw({
+        netWeightG: netWeight,
+        tickPriceKrwPerG: goldPrice,
+        materialCode: nextMaterial,
+        factors,
+      });
       goldTick = goldPrice;
     } else if (nextMaterial === "18") {
-      materialAmount = Math.round(netWeight * 0.825 * goldPrice);
+      materialAmount = calcMaterialAmountSellKrw({
+        netWeightG: netWeight,
+        tickPriceKrwPerG: goldPrice,
+        materialCode: nextMaterial,
+        factors,
+      });
       goldTick = goldPrice;
     } else if (nextMaterial === "24") {
-      materialAmount = Math.round(netWeight * goldPrice);
+      materialAmount = calcMaterialAmountSellKrw({
+        netWeightG: netWeight,
+        tickPriceKrwPerG: goldPrice,
+        materialCode: nextMaterial,
+        factors,
+      });
       goldTick = goldPrice;
     } else if (nextMaterial === "925") {
-      materialAmount = Math.round(netWeight * 0.925 * silverAdjust * silverPrice);
+      materialAmount = calcMaterialAmountSellKrw({
+        netWeightG: netWeight,
+        tickPriceKrwPerG: silverPrice,
+        materialCode: nextMaterial,
+        factors,
+        silverAdjustApplied: silverAdjust,
+      });
       silverTick = silverPrice;
     } else if (nextMaterial === "999") {
-      materialAmount = Math.round(netWeight * silverAdjust * silverPrice);
+      materialAmount = calcMaterialAmountSellKrw({
+        netWeightG: netWeight,
+        tickPriceKrwPerG: silverPrice,
+        materialCode: nextMaterial,
+        factors,
+        silverAdjustApplied: silverAdjust,
+      });
       silverTick = silverPrice;
     }
 

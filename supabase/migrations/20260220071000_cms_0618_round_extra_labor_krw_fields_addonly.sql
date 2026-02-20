@@ -73,35 +73,48 @@ with shipment_items as (
     sl.shipment_line_id,
     case
       when jsonb_typeof(sl.pricing_policy_meta) = 'object' then
-        jsonb_set(
-          jsonb_set(
-            jsonb_set(
-              sl.pricing_policy_meta,
-              '{absorb_decor_total_krw}',
+        (
+          with p1 as (
+            select
               case
                 when coalesce(sl.pricing_policy_meta->>'absorb_decor_total_krw', '') ~ '^[+-]?[0-9]+([.][0-9]+)?$'
-                  then to_jsonb(round((sl.pricing_policy_meta->>'absorb_decor_total_krw')::numeric, 0))
-                else sl.pricing_policy_meta->'absorb_decor_total_krw'
-              end,
-              true
-            ),
-            '{absorb_etc_total_krw}',
-            case
-              when coalesce(sl.pricing_policy_meta->>'absorb_etc_total_krw', '') ~ '^[+-]?[0-9]+([.][0-9]+)?$'
-                then to_jsonb(round((sl.pricing_policy_meta->>'absorb_etc_total_krw')::numeric, 0))
-              else sl.pricing_policy_meta->'absorb_etc_total_krw'
-            end,
-            true
+                  then jsonb_set(
+                    sl.pricing_policy_meta,
+                    '{absorb_decor_total_krw}',
+                    to_jsonb(round((sl.pricing_policy_meta->>'absorb_decor_total_krw')::numeric, 0)),
+                    true
+                  )
+                else sl.pricing_policy_meta
+              end as m
           ),
-          '{absorb_plating_krw}',
-          case
-            when coalesce(sl.pricing_policy_meta->>'absorb_plating_krw', '') ~ '^[+-]?[0-9]+([.][0-9]+)?$'
-              then to_jsonb(round((sl.pricing_policy_meta->>'absorb_plating_krw')::numeric, 0))
-            else sl.pricing_policy_meta->'absorb_plating_krw'
-          end,
-          true
+          p2 as (
+            select
+              case
+                when coalesce(p1.m->>'absorb_etc_total_krw', '') ~ '^[+-]?[0-9]+([.][0-9]+)?$'
+                  then jsonb_set(
+                    p1.m,
+                    '{absorb_etc_total_krw}',
+                    to_jsonb(round((p1.m->>'absorb_etc_total_krw')::numeric, 0)),
+                    true
+                  )
+                else p1.m
+              end as m
+            from p1
+          )
+          select
+            case
+              when coalesce(p2.m->>'absorb_plating_krw', '') ~ '^[+-]?[0-9]+([.][0-9]+)?$'
+                then jsonb_set(
+                  p2.m,
+                  '{absorb_plating_krw}',
+                  to_jsonb(round((p2.m->>'absorb_plating_krw')::numeric, 0)),
+                  true
+                )
+              else p2.m
+            end
+          from p2
         )
-      else sl.pricing_policy_meta
+      else coalesce(sl.pricing_policy_meta, '{}'::jsonb)
     end as next_pricing_policy_meta
   from public.cms_shipment_line sl
 )
@@ -126,35 +139,48 @@ with match_meta as (
     m.order_line_id,
     case
       when jsonb_typeof(m.pricing_policy_meta) = 'object' then
-        jsonb_set(
-          jsonb_set(
-            jsonb_set(
-              m.pricing_policy_meta,
-              '{absorb_decor_total_krw}',
+        (
+          with p1 as (
+            select
               case
                 when coalesce(m.pricing_policy_meta->>'absorb_decor_total_krw', '') ~ '^[+-]?[0-9]+([.][0-9]+)?$'
-                  then to_jsonb(round((m.pricing_policy_meta->>'absorb_decor_total_krw')::numeric, 0))
-                else m.pricing_policy_meta->'absorb_decor_total_krw'
-              end,
-              true
-            ),
-            '{absorb_etc_total_krw}',
-            case
-              when coalesce(m.pricing_policy_meta->>'absorb_etc_total_krw', '') ~ '^[+-]?[0-9]+([.][0-9]+)?$'
-                then to_jsonb(round((m.pricing_policy_meta->>'absorb_etc_total_krw')::numeric, 0))
-              else m.pricing_policy_meta->'absorb_etc_total_krw'
-            end,
-            true
+                  then jsonb_set(
+                    m.pricing_policy_meta,
+                    '{absorb_decor_total_krw}',
+                    to_jsonb(round((m.pricing_policy_meta->>'absorb_decor_total_krw')::numeric, 0)),
+                    true
+                  )
+                else m.pricing_policy_meta
+              end as x
           ),
-          '{absorb_plating_krw}',
-          case
-            when coalesce(m.pricing_policy_meta->>'absorb_plating_krw', '') ~ '^[+-]?[0-9]+([.][0-9]+)?$'
-              then to_jsonb(round((m.pricing_policy_meta->>'absorb_plating_krw')::numeric, 0))
-            else m.pricing_policy_meta->'absorb_plating_krw'
-          end,
-          true
+          p2 as (
+            select
+              case
+                when coalesce(p1.x->>'absorb_etc_total_krw', '') ~ '^[+-]?[0-9]+([.][0-9]+)?$'
+                  then jsonb_set(
+                    p1.x,
+                    '{absorb_etc_total_krw}',
+                    to_jsonb(round((p1.x->>'absorb_etc_total_krw')::numeric, 0)),
+                    true
+                  )
+                else p1.x
+              end as x
+            from p1
+          )
+          select
+            case
+              when coalesce(p2.x->>'absorb_plating_krw', '') ~ '^[+-]?[0-9]+([.][0-9]+)?$'
+                then jsonb_set(
+                  p2.x,
+                  '{absorb_plating_krw}',
+                  to_jsonb(round((p2.x->>'absorb_plating_krw')::numeric, 0)),
+                  true
+                )
+              else p2.x
+            end
+          from p2
         )
-      else m.pricing_policy_meta
+      else coalesce(m.pricing_policy_meta, '{}'::jsonb)
     end as next_pricing_policy_meta
   from public.cms_receipt_line_match m
 )

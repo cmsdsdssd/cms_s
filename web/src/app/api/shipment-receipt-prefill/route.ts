@@ -1,5 +1,9 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
+import {
+  buildLaborSnapshotHash,
+  normalizeExtraLaborItemsWithStableIds,
+} from "@/lib/shipments-prefill-snapshot";
 
 function getSupabaseAdmin() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
@@ -17,6 +21,11 @@ const parseNumeric = (value: unknown) => {
     }
   }
   return null;
+};
+
+const parseNumericOrNull = (value: unknown) => {
+  const parsed = parseNumeric(value);
+  return parsed === null ? null : Number(parsed);
 };
 
 export async function GET(request: Request) {
@@ -120,18 +129,42 @@ export async function GET(request: Request) {
     shipmentExtraLaborItems = shipmentLineRow?.extra_labor_items ?? null;
   }
 
+  const normalizedShipmentExtraLaborItems = normalizeExtraLaborItemsWithStableIds(shipmentExtraLaborItems);
+
   const policyMeta =
     data.pricing_policy_meta && typeof data.pricing_policy_meta === "object" && !Array.isArray(data.pricing_policy_meta)
       ? (data.pricing_policy_meta as Record<string, unknown>)
       : null;
-  const shipmentExtraItemsArray = Array.isArray(shipmentExtraLaborItems)
-    ? (shipmentExtraLaborItems as Array<Record<string, unknown>>)
-    : [];
+  const shipmentExtraItemsArray = normalizedShipmentExtraLaborItems as Array<Record<string, unknown>>;
   const shipmentPlatingItems = shipmentExtraItemsArray.filter((item) => {
     const type = String(item.type ?? "").toUpperCase();
     const label = String(item.label ?? "");
     return type.includes("PLATING") || label.includes("도금");
   });
+
+  const laborPrefillSnapshotBase = {
+    snapshot_version: Number(data.pricing_policy_version ?? 1),
+    snapshot_source: data.shipment_line_id ? "SHIPMENT_LINE" : "RECEIPT_MATCH",
+    base_labor_sell_krw: shipmentBaseLaborKrw,
+    base_labor_cost_krw:
+      parseNumericOrNull(data.selected_factory_labor_basic_cost_krw) ??
+      parseNumericOrNull(receiptLaborBasicCostKrw),
+    extra_labor_sell_krw: shipmentExtraLaborKrw,
+    extra_labor_cost_krw:
+      parseNumericOrNull(data.selected_factory_labor_other_cost_krw) ??
+      parseNumericOrNull(receiptLaborOtherCostKrw),
+    policy_plating_sell_krw: parseNumericOrNull(policyMeta?.plating_sell_krw ?? null),
+    policy_plating_cost_krw: parseNumericOrNull(policyMeta?.plating_cost_krw ?? null),
+    policy_absorb_plating_krw: parseNumericOrNull(policyMeta?.absorb_plating_krw ?? null),
+    policy_absorb_etc_total_krw: parseNumericOrNull(policyMeta?.absorb_etc_total_krw ?? null),
+    policy_absorb_decor_total_krw: parseNumericOrNull(policyMeta?.absorb_decor_total_krw ?? null),
+    policy_absorb_other_total_krw: parseNumericOrNull(policyMeta?.absorb_other_total_krw ?? null),
+    extra_labor_items: normalizedShipmentExtraLaborItems,
+  };
+  const laborPrefillSnapshot = {
+    ...laborPrefillSnapshotBase,
+    snapshot_hash: buildLaborSnapshotHash(laborPrefillSnapshotBase),
+  };
 
   console.log("[PLATING_DEBUG][API_PREFILL]", {
     orderLineId,
@@ -153,7 +186,7 @@ export async function GET(request: Request) {
       receipt_deduction_weight_g: receiptDeductionWeightG,
       shipment_base_labor_krw: shipmentBaseLaborKrw,
       shipment_extra_labor_krw: shipmentExtraLaborKrw,
-      shipment_extra_labor_items: shipmentExtraLaborItems,
+      shipment_extra_labor_items: normalizedShipmentExtraLaborItems,
       shipment_master_id: shipmentMasterId,
       receipt_match_overridden_fields: data.overridden_fields ?? null,
       stone_center_qty: stoneCenterQty,
@@ -165,6 +198,7 @@ export async function GET(request: Request) {
       stone_labor_krw: stoneLaborKrw,
       receipt_labor_basic_cost_krw: receiptLaborBasicCostKrw,
       receipt_labor_other_cost_krw: receiptLaborOtherCostKrw,
+      labor_prefill_snapshot: laborPrefillSnapshot,
     },
   });
 }

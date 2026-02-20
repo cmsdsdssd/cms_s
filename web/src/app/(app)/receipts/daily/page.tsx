@@ -7,6 +7,7 @@ import { ReceiptPrintHalf, type ReceiptAmounts } from "@/components/receipt/rece
 import { Button } from "@/components/ui/button";
 import { ListCard } from "@/components/ui/list-card";
 import { getSchemaClient } from "@/lib/supabase/client";
+import { getMaterialFactor } from "@/lib/material-factors";
 import { cn } from "@/lib/utils";
 
 type ShipmentLineRow = {
@@ -70,11 +71,15 @@ const subtractAmounts = (base: Amounts, sub: Amounts) => ({
 const getMaterialBucket = (code?: string | null) => {
   const material = (code ?? "").trim();
   if (!material || material === "00") return { kind: "none" as const, factor: 0 };
-  if (material === "14") return { kind: "gold" as const, factor: 0.6435 };
-  if (material === "18") return { kind: "gold" as const, factor: 0.825 };
-  if (material === "24") return { kind: "gold" as const, factor: 1 };
-  if (material === "925") return { kind: "silver" as const, factor: 0.925 };
-  if (material === "999") return { kind: "silver" as const, factor: 1 };
+  if (material === "14" || material === "18" || material === "24") {
+    return { kind: "gold" as const, factor: getMaterialFactor({ materialCode: material }).effectiveFactor };
+  }
+  if (material === "925" || material === "999") {
+    return {
+      kind: "silver" as const,
+      factor: getMaterialFactor({ materialCode: material, silverAdjustApplied: 1 }).effectiveFactor,
+    };
+  }
   return { kind: "none" as const, factor: 0 };
 };
 

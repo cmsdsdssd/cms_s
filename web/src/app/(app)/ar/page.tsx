@@ -14,6 +14,7 @@ import { useRpcMutation } from "@/hooks/use-rpc-mutation";
 import { CONTRACTS, isFnConfigured } from "@/lib/contracts";
 import { callRpc } from "@/lib/supabase/rpc";
 import { getSchemaClient } from "@/lib/supabase/client";
+import { getMaterialFactor, normalizeMaterialCode } from "@/lib/material-factors";
 import { cn } from "@/lib/utils";
 import { Modal } from "@/components/ui/modal";
 
@@ -2535,18 +2536,17 @@ function LineCalculation({
   // Logic: Use authoritative weight from Invoice if available, else calc
   let purity = 1.0;
   let loss = 1.0;
+  const normalizedMat = normalizeMaterialCode(mat);
 
   if (isSilver) {
-    purity = mat.includes("925") ? 0.925 : 1.0;
+    purity = getMaterialFactor({ materialCode: normalizedMat, silverAdjustApplied: 1 }).purityRate;
     loss = valuation?.silver_adjust_factor_snapshot ?? line.silver_adjust_factor ?? 1.0;
   } else {
-    if (mat.includes("14K")) {
-      purity = 0.6435;
-      loss = 1.0;
-    } else if (mat.includes("18K")) {
-      purity = 0.825;
-      loss = 1.0;
-    } else if (mat.includes("24K") || mat.includes("PURE")) {
+    if (normalizedMat === "14" || normalizedMat === "18" || normalizedMat === "24") {
+      const factor = getMaterialFactor({ materialCode: normalizedMat, silverAdjustApplied: 1 });
+      purity = factor.purityRate;
+      loss = factor.adjustApplied;
+    } else {
       purity = 1.0;
       loss = 1.0;
     }

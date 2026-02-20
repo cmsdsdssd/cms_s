@@ -10,6 +10,7 @@ import { CONTRACTS } from "@/lib/contracts";
 import { getSchemaClient } from "@/lib/supabase/client";
 import { useRpcMutation } from "@/hooks/use-rpc-mutation";
 import { cn } from "@/lib/utils";
+import { buildMaterialFactorMap, type MaterialCode } from "@/lib/material-factors";
 import {
   applyVendorImmediateSettleTag,
   hasVendorImmediateSettleTag,
@@ -43,6 +44,16 @@ type VendorFaxConfig = {
   fax_provider: 'mock' | 'twilio' | 'sendpulse' | 'custom' | 'apiplex' | 'uplus_print';
   no_factory_receipt_vendor: boolean;
 };
+
+type MaterialFactorConfigRow = {
+  material_code: MaterialCode;
+  purity_rate: number;
+  gold_adjust_factor: number;
+  updated_at?: string | null;
+  note?: string | null;
+};
+
+const MATERIAL_FACTOR_CODES: MaterialCode[] = ["14", "18", "24", "925", "999"];
 
 const FAX_PROVIDERS = ['mock', 'twilio', 'sendpulse', 'custom', 'apiplex', 'uplus_print'] as const;
 type FaxProvider = typeof FAX_PROVIDERS[number];
@@ -184,6 +195,9 @@ export default function SettingsPage() {
   const [csFactor, setCsFactor] = useState<string | null>(null);
   const [silverKrFactor, setSilverKrFactor] = useState<string | null>(null);
   const [ruleRoundingUnit, setRuleRoundingUnit] = useState<string | null>(null);
+  const [materialFactorEdits, setMaterialFactorEdits] = useState<
+    Partial<Record<MaterialCode, { purity_rate: string; gold_adjust_factor: string }>>
+  >({});
   const [isMarketAdvancedOpen, setIsMarketAdvancedOpen] = useState(false);
 
   const displayFxMarkup = fxMarkup ?? String(cfgQuery.data?.fx_markup ?? 1.03);
@@ -214,6 +228,65 @@ export default function SettingsPage() {
       cfgQuery.refetch();
     },
   });
+
+  const materialFactorsQuery = useQuery({
+    queryKey: ["cms_material_factor_config"],
+    queryFn: async (): Promise<MaterialFactorConfigRow[]> => {
+      if (!sb) throw new Error("Supabase env is missing");
+      const { data, error } = await sb
+        .from("cms_material_factor_config")
+        .select("material_code, purity_rate, gold_adjust_factor, updated_at, note")
+        .order("material_code", { ascending: true });
+      if (error) throw error;
+      const map = buildMaterialFactorMap((data ?? []) as MaterialFactorConfigRow[]);
+      return MATERIAL_FACTOR_CODES.map((code) => ({
+        ...map[code],
+        updated_at: (data ?? []).find((row) => row.material_code === code)?.updated_at ?? null,
+        note: (data ?? []).find((row) => row.material_code === code)?.note ?? null,
+      }));
+    },
+  });
+
+  const upsertMaterialFactors = useRpcMutation<{ ok?: boolean }>({
+    fn: CONTRACTS.functions.materialFactorConfigUpsert,
+    successMessage: "소재 함량/보정 저장 완료",
+    onSuccess: () => {
+      materialFactorsQuery.refetch();
+      setMaterialFactorEdits({});
+    },
+  });
+
+  const defaultFactorMap = buildMaterialFactorMap(null);
+  const factorRows = materialFactorsQuery.data ?? MATERIAL_FACTOR_CODES.map((code) => ({
+    ...defaultFactorMap[code],
+    updated_at: null,
+    note: null,
+  }));
+  const getFactorInputValue = (
+    code: MaterialCode,
+    field: "purity_rate" | "gold_adjust_factor",
+    fallback: number
+  ) => {
+    const edited = materialFactorEdits[code]?.[field];
+    return edited ?? String(fallback);
+  };
+
+  const setFactorInputValue = (
+    code: MaterialCode,
+    field: "purity_rate" | "gold_adjust_factor",
+    value: string
+  ) => {
+    setMaterialFactorEdits((prev) => ({
+      ...prev,
+      [code]: {
+        purity_rate: prev[code]?.purity_rate ?? String(factorRows.find((row) => row.material_code === code)?.purity_rate ?? 0),
+        gold_adjust_factor:
+          prev[code]?.gold_adjust_factor ??
+          String(factorRows.find((row) => row.material_code === code)?.gold_adjust_factor ?? 1),
+        [field]: value,
+      },
+    }));
+  };
 
   const onSave = async () => {
     const fx = Number(displayFxMarkup);
@@ -249,6 +322,42 @@ export default function SettingsPage() {
       // useRpcMutation.onError에서 토스트 처리됨
     }
 
+  };
+
+  const onSaveMaterialFactors = async () => {
+    const rows = factorRows.map((row) => {
+      const purity = Number(getFactorInputValue(row.material_code, "purity_rate", row.purity_rate));
+      const goldAdjust = Number(
+        getFactorInputValue(row.material_code, "gold_adjust_factor", row.gold_adjust_factor)
+      );
+      return {
+        material_code: row.material_code,
+        purity_rate: purity,
+        gold_adjust_factor: goldAdjust,
+      };
+    });
+
+    for (const row of rows) {
+      if (!Number.isFinite(row.purity_rate) || row.purity_rate < 0 || row.purity_rate > 1) {
+        toast.error(`${row.material_code}: 함량은 0~1 범위여야 합니다.`);
+        return;
+      }
+      if (!Number.isFinite(row.gold_adjust_factor) || row.gold_adjust_factor < 0.5 || row.gold_adjust_factor > 2) {
+        toast.error(`${row.material_code}: 금 보정계수는 0.5~2.0 범위여야 합니다.`);
+        return;
+      }
+    }
+
+    try {
+      await upsertMaterialFactors.mutateAsync({
+        p_rows: rows,
+        p_actor_person_id: process.env.NEXT_PUBLIC_CMS_ACTOR_ID ?? null,
+        p_session_id: null,
+        p_memo: "settings: material factor upsert",
+      });
+    } catch {
+      // useRpcMutation.onError handles toast
+    }
   };
 
   const currentRoundingUnit = Number(cfgQuery.data?.rule_rounding_unit_krw ?? 0);
@@ -1815,6 +1924,88 @@ export default function SettingsPage() {
                     </p>
                   </div>
                 ) : null}
+              </div>
+
+              {/* RULE 올림단위 */}
+              <div className="rounded-lg border border-[var(--panel-border)] bg-[var(--panel)] p-4 space-y-3">
+                <div>
+                  <div className="text-sm font-semibold">소재 함량/보정계수</div>
+                  <div className="text-xs text-[var(--muted)]">
+                    소재 SoT: purity x adjust. 은 보정계수는 Market Tick Config(한국 실버 해리)를 따릅니다.
+                  </div>
+                </div>
+
+                <div className="overflow-x-auto">
+                  <table className="min-w-[760px] w-full text-xs">
+                    <thead className="text-[var(--muted)]">
+                      <tr>
+                        <th className="text-left py-1">Material</th>
+                        <th className="text-left py-1">Purity</th>
+                        <th className="text-left py-1">Gold Adjust</th>
+                        <th className="text-left py-1">Silver Adjust</th>
+                        <th className="text-left py-1">Effective Preview</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {factorRows.map((row) => {
+                        const purityValue = getFactorInputValue(row.material_code, "purity_rate", row.purity_rate);
+                        const goldAdjustValue = getFactorInputValue(
+                          row.material_code,
+                          "gold_adjust_factor",
+                          row.gold_adjust_factor
+                        );
+                        const purity = Number(purityValue);
+                        const goldAdjust = Number(goldAdjustValue);
+                        const isSilver = row.material_code === "925" || row.material_code === "999";
+                        const effective = isSilver
+                          ? purity * Number(displaySilverKrFactor || "1")
+                          : purity * goldAdjust;
+                        return (
+                          <tr key={row.material_code} className="border-t border-[var(--panel-border)]">
+                            <td className="py-1">{row.material_code}</td>
+                            <td className="py-1">
+                              <Input
+                                value={purityValue}
+                                onChange={(event) =>
+                                  setFactorInputValue(row.material_code, "purity_rate", event.target.value)
+                                }
+                                className="h-7"
+                              />
+                            </td>
+                            <td className="py-1">
+                              <Input
+                                value={goldAdjustValue}
+                                disabled={isSilver}
+                                onChange={(event) =>
+                                  setFactorInputValue(
+                                    row.material_code,
+                                    "gold_adjust_factor",
+                                    event.target.value
+                                  )
+                                }
+                                className="h-7"
+                              />
+                            </td>
+                            <td className="py-1 tabular-nums">{isSilver ? displaySilverKrFactor : "1.0"}</td>
+                            <td className="py-1 tabular-nums">{Number.isFinite(effective) ? effective.toFixed(6) : "0.000000"}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <Button
+                    onClick={onSaveMaterialFactors}
+                    disabled={upsertMaterialFactors.isPending || materialFactorsQuery.isFetching}
+                  >
+                    저장
+                  </Button>
+                  <span className="text-xs text-[var(--muted)]">
+                    저장 시 소재 계산 전역(출고/AR/미리보기)에 동일 SoT가 적용됩니다.
+                  </span>
+                </div>
               </div>
 
               {/* RULE 올림단위 */}

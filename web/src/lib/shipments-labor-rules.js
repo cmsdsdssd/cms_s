@@ -29,7 +29,6 @@ export const isCoreVisibleEtcItem = (item) => {
   const type = toType(item?.type);
   const label = String(item?.label ?? "");
   if (isBomReferenceTypeValue(type)) return false;
-  if (isMaterialMasterTypeValue(type)) return false;
   if (type === "STONE_LABOR") return false;
   if (type === "VENDOR_DELTA") return false;
   if (type === "CUSTOM_VARIATION") return false;

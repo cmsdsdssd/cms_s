@@ -20,6 +20,7 @@ import { SearchSelect } from "@/components/ui/search-select";
 import { useRpcMutation } from "@/hooks/use-rpc-mutation";
 import { CONTRACTS } from "@/lib/contracts";
 import { getSchemaClient } from "@/lib/supabase/client";
+import { getMaterialFactor as getMaterialFactorFromConfig } from "@/lib/material-factors";
 
 type LinkedShipment = {
   shipment_id: string;
@@ -162,12 +163,7 @@ function calcAllocations(totalKrw: number | null, linked: LinkedShipment[]) {
 }
 
 function getMaterialFactor(code?: string | null) {
-  const normalized = (code ?? "").trim().toUpperCase();
-  if (normalized === "14" || normalized === "14K") return 0.6435;
-  if (normalized === "18" || normalized === "18K") return 0.825;
-  if (normalized === "24" || normalized === "24K") return 1;
-  if (normalized === "925" || normalized === "S925") return 0.925;
-  return 1;
+  return getMaterialFactorFromConfig({ materialCode: code, silverAdjustApplied: 1 }).effectiveFactor;
 }
 
 function getMaterialBucket(code?: string | null) {

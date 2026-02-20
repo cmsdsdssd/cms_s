@@ -11,6 +11,7 @@ import { Grid2x2, List, Search, X, Filter, Download, Plus, Eye, Edit2, Trash2, C
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { compressImage } from "@/lib/image-utils";
+import { calcMaterialAmountSellKrw } from "@/lib/material-factors";
 /* eslint-disable @next/next/no-img-element */
 
 // Types
@@ -1375,12 +1376,13 @@ export default function Catalog2Page() {
   // Calculate material price
   const calculateMaterialPrice = useCallback((material: string, weight: number, deduction: number) => {
     const netWeight = weight - (deduction || 0);
-    if (material === "925") return silverPrice * netWeight;
-    if (material === "14" || material === "14K") return goldPrice * netWeight * 0.6435;
-    if (material === "18" || material === "18K") return goldPrice * netWeight * 0.825;
-    if (material === "24" || material === "24K") return goldPrice * netWeight;
-    if (material === "00") return 0;
-    return 0;
+    const isSilver = material === "925" || material === "999";
+    return calcMaterialAmountSellKrw({
+      netWeightG: netWeight,
+      tickPriceKrwPerG: isSilver ? silverPrice : goldPrice,
+      materialCode: material,
+      silverAdjustApplied: isSilver ? 1 : null,
+    });
   }, [goldPrice, silverPrice]);
 
   // Filtered and sorted items

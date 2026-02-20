@@ -155,6 +155,7 @@ export const CONTRACTS = {
 
     // ✅ Settings(시세 파이프라인 설정) 저장용 RPC
     marketTickConfigUpsert: "cms_fn_upsert_market_tick_config_v1",
+    materialFactorConfigUpsert: "cms_fn_upsert_material_factor_config_v1",
     vendorFaxConfigUpsert: "cms_fn_vendor_fax_config_upsert_v1",
 
     quickInventoryMove: "cms_fn_quick_inventory_move_v2",

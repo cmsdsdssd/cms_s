@@ -20,6 +20,7 @@ import { getSchemaClient } from "@/lib/supabase/client";
 import { compressImage } from "@/lib/image-utils";
 import { deriveCategoryCodeFromModelName } from "@/lib/model-name";
 import { roundUpToUnit } from "@/lib/number";
+import { calcMaterialAmountSellKrw } from "@/lib/material-factors";
 import { CatalogGalleryGrid } from "@/components/catalog/CatalogGalleryGrid";
 import { ChinaCostPanel, type ChinaExtraLaborItem } from "../../../components/catalog/ChinaCostPanel";
 /* eslint-disable @next/next/no-img-element */
@@ -1145,19 +1146,14 @@ export default function CatalogPage() {
 
   // Calculate material price based on material code
   const calculateMaterialPrice = useCallback((material: string, weight: number, deduction: number) => {
-    const netWeight = weight - deduction;
-    if (material === "925") {
-      return silverModifiedPrice * netWeight * 0.925;
-    } else if (material === "14K" || material === "14") {
-      return goldPrice * netWeight * 0.6435;
-    } else if (material === "18K" || material === "18") {
-      return goldPrice * netWeight * 0.825;
-    } else if (material === "24K" || material === "24") {
-      return goldPrice * netWeight;
-    } else if (material === "00") {
-      return 0;
-    }
-    return 0;
+    const netWeight = Math.max(0, weight - deduction);
+    const isSilver = material === "925" || material === "999";
+    return calcMaterialAmountSellKrw({
+      netWeightG: netWeight,
+      tickPriceKrwPerG: isSilver ? silverModifiedPrice : goldPrice,
+      materialCode: material,
+      silverAdjustApplied: isSilver ? 1 : null,
+    });
   }, [goldPrice, silverModifiedPrice]);
 
   function roundUpToThousand(value: number) {
