@@ -19,3 +19,9 @@ nul
 # Supabase db pull remote schema dumps
 /supabase/migrations/*_remote_schema.sql
 
+
+tmp/
+.tmp/
+_external/
+_evidence_sources/
+postgrest-js-temp/
