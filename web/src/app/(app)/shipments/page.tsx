@@ -507,8 +507,102 @@ const isAutoEvidenceItem = (item: ExtraLaborItem) => {
 const isAutoAbsorbItem = (item: ExtraLaborItem) => {
   const type = String(item.type ?? "").trim().toUpperCase();
   const label = String(item.label ?? "").trim().toUpperCase();
+  const meta = (item.meta as Record<string, unknown> | null) ?? null;
+  const source = String(meta?.source ?? "").trim().toUpperCase();
+  const bucket = String(meta?.bucket ?? "").trim().toUpperCase();
   if (type === "ABSORB") return true;
-  return label.includes("ABSORB") || label.includes("흡수");
+  if (type.startsWith(EXTRA_TYPE_ABSORB_PREFIX) || type.startsWith("DECOR:") || type.startsWith("OTHER_ABSORB:")) return true;
+  if (source === "MASTER_ABSORB_LABOR" || source === "PRICING_POLICY_META") return true;
+  if (bucket === "ETC" || bucket === "BASE_LABOR" || bucket === "STONE_LABOR" || bucket === "PLATING") return true;
+  return label.includes("ABSORB") || label.includes("흡수") || label.includes("공임-마스터");
+};
+
+const isAutoManagedExtraLaborItem = (item: ExtraLaborItem) => {
+  const type = String(item.type ?? "").trim().toUpperCase();
+  if (isBomReferenceType(type)) return true;
+  if (isMaterialMasterType(type)) return true;
+  if (type === EXTRA_TYPE_PLATING_MASTER) return true;
+  if (isAutoAbsorbItem(item)) return true;
+  if (isAutoEvidenceItem(item)) return true;
+  return false;
+};
+
+const isDecorEditableAbsorbItem = (item: ExtraLaborItem) => {
+  const type = String(item.type ?? "").trim().toUpperCase();
+  const meta = (item.meta as Record<string, unknown> | null) ?? null;
+  const source = String(meta?.source ?? "").trim().toUpperCase();
+  if (type.startsWith("OTHER_ABSORB:")) return false;
+  if (type.startsWith(EXTRA_TYPE_ABSORB_PREFIX) || type.startsWith("DECOR:")) return true;
+  return source === "MASTER_ABSORB_LABOR" && String(item.label ?? "").includes("장식");
+};
+
+const mergeDecorEditableRows = (items: ExtraLaborItem[]): ExtraLaborItem[] => {
+  const result: ExtraLaborItem[] = [];
+  const groupIndexByKey = new Map<string, number>();
+
+  const toDecorKey = (item: ExtraLaborItem) => {
+    const reasonKey = extractDecorReasonKey(item.label);
+    if (reasonKey) return `decor:${reasonKey}`;
+    const label = String(item.label ?? "").trim();
+    return `decor:${label}`;
+  };
+
+  items.forEach((item) => {
+    if (!isDecorEditableAbsorbItem(item)) {
+      result.push(item);
+      return;
+    }
+
+    const key = toDecorKey(item);
+    const currentMeta = (item.meta as Record<string, unknown> | null) ?? null;
+    const qty = Math.max(Math.round(parseNumberish(currentMeta?.qty_applied)), 0);
+    const normalizedQty = qty > 0 ? qty : 1;
+    const sell = Math.max(parseNumberish(currentMeta?.sell_krw), parseNumberInput(item.amount), 0);
+    const cost = Math.max(parseNumberish(currentMeta?.cost_krw), 0);
+
+    const existingIndex = groupIndexByKey.get(key);
+    if (existingIndex === undefined) {
+      const margin = sell - cost;
+      result.push({
+        ...item,
+        amount: String(Math.round(sell)),
+        meta: {
+          ...(currentMeta ?? {}),
+          qty_applied: normalizedQty,
+          sell_krw: Math.round(sell),
+          cost_krw: Math.round(cost),
+          margin_krw: Math.round(margin),
+          unit_amount_krw: normalizedQty > 0 ? sell / normalizedQty : sell,
+          unit_cost_krw: normalizedQty > 0 ? cost / normalizedQty : cost,
+        },
+      });
+      groupIndexByKey.set(key, result.length - 1);
+      return;
+    }
+
+    const existing = result[existingIndex];
+    const existingMeta = (existing.meta as Record<string, unknown> | null) ?? null;
+    const nextQty = Math.max(Math.round(parseNumberish(existingMeta?.qty_applied)), 0) + normalizedQty;
+    const nextSell = Math.max(parseNumberish(existingMeta?.sell_krw), parseNumberInput(existing.amount), 0) + sell;
+    const nextCost = Math.max(parseNumberish(existingMeta?.cost_krw), 0) + cost;
+    const nextMargin = nextSell - nextCost;
+
+    result[existingIndex] = {
+      ...existing,
+      amount: String(Math.round(nextSell)),
+      meta: {
+        ...(existingMeta ?? {}),
+        qty_applied: nextQty,
+        sell_krw: Math.round(nextSell),
+        cost_krw: Math.round(nextCost),
+        margin_krw: Math.round(nextMargin),
+        unit_amount_krw: nextQty > 0 ? nextSell / nextQty : nextSell,
+        unit_cost_krw: nextQty > 0 ? nextCost / nextQty : nextCost,
+      },
+    };
+  });
+
+  return result;
 };
 
 const isBomReferenceType = (type: string) => {
@@ -672,8 +766,6 @@ export default function ShipmentsPage() {
 
   // UI State
   const [activeTab, setActiveTab] = useState<"create" | "confirmed">("create");
-  const [isAutoEvidenceOpen, setIsAutoEvidenceOpen] = useState(false);
-  const [isAutoAbsorbOpen, setIsAutoAbsorbOpen] = useState(false);
   const [isPricingEvidenceOpen, setIsPricingEvidenceOpen] = useState(false);
   const [effectivePriceData, setEffectivePriceData] = useState<EffectivePriceResponse | null>(null);
   const [effectivePriceState, setEffectivePriceState] = useState<{
@@ -681,6 +773,7 @@ export default function ShipmentsPage() {
     isError: boolean;
     errorMessage: string | null;
   } | null>(null);
+  const [decorMasterUnitCostByName, setDecorMasterUnitCostByName] = useState<Record<string, number>>({});
   const bundleBlockToastRef = useRef<string | null>(null);
 
   const normalizeExtraLaborItems = (value: unknown): ExtraLaborItem[] => {
@@ -725,7 +818,11 @@ export default function ShipmentsPage() {
           metaBucket === "BASE_LABOR" ||
           metaBucket === "STONE_LABOR" ||
           metaBucket === "PLATING";
-        const isDecorLike = normalizedType.startsWith(EXTRA_TYPE_ABSORB_PREFIX) || label.includes("장식");
+        const isDecorLike =
+          normalizedType.startsWith(EXTRA_TYPE_ABSORB_PREFIX) ||
+          normalizedType.startsWith("DECOR:") ||
+          normalizedType.startsWith("OTHER_ABSORB:") ||
+          label.includes("장식");
         const metaMargin =
           rawMeta && (rawMeta.margin_krw !== null && rawMeta.margin_krw !== undefined)
             ? parseNumberish(rawMeta.margin_krw)
@@ -873,6 +970,48 @@ const extractEtcLaborAmount = (value: unknown): number => {
     );
   };
 
+  const handleExtraLaborQtyChange = (id: string, value: string) => {
+    const nextQty = Math.max(Math.round(parseNumberish(value)), 0);
+    setExtraLaborItems((prev) =>
+      prev.map((item) => {
+        if (item.id !== id) return item;
+        if (!isDecorEditableAbsorbItem(item)) return item;
+
+        const meta = (item.meta as Record<string, unknown> | null) ?? null;
+        const currentQtyRaw = parseNumberish(meta?.qty_applied);
+        const currentQty = currentQtyRaw > 0 ? currentQtyRaw : 1;
+
+        const currentSell = Math.max(parseNumberish(meta?.sell_krw), parseNumberInput(item.amount));
+        const currentCost = Math.max(parseNumberish(meta?.cost_krw), 0);
+
+        const baseUnitSellRaw = parseNumberish(meta?.unit_amount_krw);
+        const baseUnitCostRaw = parseNumberish(meta?.unit_cost_krw);
+        const unitSell = baseUnitSellRaw > 0 ? baseUnitSellRaw : currentSell / currentQty;
+        const unitCost = baseUnitCostRaw > 0 ? baseUnitCostRaw : currentCost / currentQty;
+
+        const safeUnitSell = Number.isFinite(unitSell) ? Math.max(unitSell, 0) : 0;
+        const safeUnitCost = Number.isFinite(unitCost) ? Math.max(unitCost, 0) : 0;
+        const sell = Math.round(safeUnitSell * nextQty);
+        const cost = Math.round(safeUnitCost * nextQty);
+        const margin = sell - cost;
+
+        return {
+          ...item,
+          amount: String(sell),
+          meta: {
+            ...(meta ?? {}),
+            qty_applied: nextQty,
+            unit_amount_krw: safeUnitSell,
+            unit_cost_krw: safeUnitCost,
+            sell_krw: sell,
+            cost_krw: cost,
+            margin_krw: margin,
+          },
+        };
+      })
+    );
+  };
+
   const handleRemoveExtraLabor = (id: string) => {
     setExtraLaborItems((prev) => prev.filter((item) => item.id !== id));
   };
@@ -908,7 +1047,11 @@ const extractEtcLaborAmount = (value: unknown): number => {
     }
     const type = String(item.type ?? "").toUpperCase();
     const label = String(item.label ?? "");
-    const isDecorLike = type.startsWith(EXTRA_TYPE_ABSORB_PREFIX) || label.includes("장식");
+    const isDecorLike =
+      type.startsWith(EXTRA_TYPE_ABSORB_PREFIX) ||
+      type.startsWith("DECOR:") ||
+      type.startsWith("OTHER_ABSORB:") ||
+      label.includes("장식");
     if (isDecorLike) return 0;
     return parseNumberInput(item.amount);
   };
@@ -929,7 +1072,11 @@ const extractEtcLaborAmount = (value: unknown): number => {
     }
     const type = String(item.type ?? "").toUpperCase();
     const label = String(item.label ?? "");
-    const isDecorLike = type.startsWith(EXTRA_TYPE_ABSORB_PREFIX) || label.includes("장식");
+    const isDecorLike =
+      type.startsWith(EXTRA_TYPE_ABSORB_PREFIX) ||
+      type.startsWith("DECOR:") ||
+      type.startsWith("OTHER_ABSORB:") ||
+      label.includes("장식");
     if (isDecorLike) return parseNumberInput(item.amount);
     return 0;
   };
@@ -940,6 +1087,13 @@ const extractEtcLaborAmount = (value: unknown): number => {
     const meta = (item.meta as Record<string, unknown> | null) ?? null;
     const qty = parseNumberish(meta?.qty_applied);
     return qty > 0 ? qty : null;
+  };
+
+  const getExtraLaborQtyDisplay = (item: ExtraLaborItem) => {
+    const qty = getExtraLaborQtyApplied(item);
+    if (qty !== null) return qty;
+    if (String(item.type ?? "").trim().toUpperCase() === EXTRA_TYPE_PLATING_MASTER) return 1;
+    return null;
   };
 
   const setExtraLaborCostMargin = (id: string, nextCost: number, nextMargin: number) => {
@@ -1382,6 +1536,7 @@ const extractEtcLaborAmount = (value: unknown): number => {
       setExtraLaborItems(normalizedItems);
       setOtherLaborCost("0");
     } else {
+      setExtraLaborItems([]);
       const etcFromItems = extractEtcLaborAmount(data.shipment_extra_labor_items);
       if (etcFromItems > 0) {
         setOtherLaborCost(String(etcFromItems));
@@ -1586,10 +1741,7 @@ const extractEtcLaborAmount = (value: unknown): number => {
     const rows = mappingRows.filter((row) => String(row.vendor_party_id ?? "").trim() === "");
 
     setExtraLaborItems((prev) => {
-      const keep = prev.filter((item) => {
-        const type = String(item.type ?? "").toUpperCase();
-        return !type.startsWith(EXTRA_TYPE_ABSORB_PREFIX) && !type.startsWith(EXTRA_TYPE_MATERIAL_MASTER_PREFIX);
-      });
+      const keep = prev.filter((item) => !isAutoManagedExtraLaborItem(item));
       if (rows.length === 0) return keep;
 
       const orderQty = Math.max(1, Number(orderLineDetailQuery.data?.qty ?? 1));
@@ -1608,7 +1760,7 @@ const extractEtcLaborAmount = (value: unknown): number => {
         const directCost = Number(row.material_cost_krw ?? 0);
         const resolvedCost = (() => {
           if (Number.isFinite(directCost) && directCost > 0) return Math.round(directCost * qtyApplied);
-          return Math.round(unitAmountRaw * qtyApplied);
+          return 0;
         })();
         const resolvedSell = Math.round(unitAmountRaw * qtyApplied);
         acc.set(absorbId, { cost: resolvedCost, sell: resolvedSell, reasonKey });
@@ -1621,7 +1773,32 @@ const extractEtcLaborAmount = (value: unknown): number => {
       }, new Map<string, { cost: number; sell: number }>());
 
       if (persistedItems.length > 0) {
-        const merged = prev.map((item) => {
+        const persistedScoped = persistedItems.filter((item) => {
+          if (rows.length <= 0) return true;
+          const type = String(item.type ?? "").trim().toUpperCase();
+          const meta = (item.meta as Record<string, unknown> | null) ?? null;
+          const source = String(meta?.source ?? "").trim().toUpperCase();
+          if (type.startsWith("OTHER_ABSORB:")) return false;
+          if (source === "PRICING_POLICY_META") return false;
+          return true;
+        });
+
+        const mergedById = new Map<string, ExtraLaborItem>();
+        keep.forEach((item) => {
+          mergedById.set(String(item.id), item);
+        });
+        persistedScoped.forEach((item) => {
+          const id = String(item.id ?? "").trim();
+          if (!id) return;
+          const isAuto = isAutoManagedExtraLaborItem(item);
+          if (isAuto) {
+            mergedById.set(id, item);
+            return;
+          }
+          if (!mergedById.has(id)) mergedById.set(id, item);
+        });
+
+        const merged = Array.from(mergedById.values()).map((item) => {
           const type = String(item.type ?? "").trim().toUpperCase();
           const label = String(item.label ?? "");
           const isDecorLikeItem = type.startsWith("DECOR:") || type.startsWith(EXTRA_TYPE_ABSORB_PREFIX) || label.includes("장식");
@@ -1632,17 +1809,14 @@ const extractEtcLaborAmount = (value: unknown): number => {
             parseAbsorbItemIdFromType(item.type);
           if (!absorbId) return item;
           const itemMeta = (item.meta as Record<string, unknown> | null) ?? null;
-          const currentCost = parseNumberish(itemMeta?.cost_krw);
-          if (currentCost > 0) return item;
-
           const fromAbsorbId = absorbResolvedById.get(absorbId);
           const labelReasonKey = extractDecorReasonKey(item.label);
           const fromReason = labelReasonKey ? absorbResolvedByReason.get(labelReasonKey) : undefined;
           const resolved = fromAbsorbId ?? fromReason;
-          if (!resolved || resolved.cost <= 0) return item;
+          if (!resolved) return item;
 
           const sell = Math.max(parseNumberish(itemMeta?.sell_krw), parseNumberInput(item.amount), resolved.sell, 0);
-          const cost = Math.round(resolved.cost);
+          const cost = Math.max(Math.round(resolved.cost), 0);
           const margin = sell - cost;
           return {
             ...item,
@@ -1657,7 +1831,7 @@ const extractEtcLaborAmount = (value: unknown): number => {
             },
           };
         });
-        return merged;
+        return mergeDecorEditableRows(merged);
       }
 
       const built = rows.reduce<ExtraLaborItem[]>((acc, row) => {
@@ -1684,7 +1858,7 @@ const extractEtcLaborAmount = (value: unknown): number => {
           const resolvedCost = (() => {
             const directCost = Number(row.material_cost_krw ?? 0);
             if (Number.isFinite(directCost) && directCost > 0) return Math.round(directCost * qtyApplied);
-            return Math.round(amount);
+            return 0;
           })();
           const resolvedSell = Math.round(amount);
 
@@ -1708,7 +1882,7 @@ const extractEtcLaborAmount = (value: unknown): number => {
           return acc;
         }, []);
 
-      return [...keep, ...built];
+      return mergeDecorEditableRows([...keep, ...built]);
     });
   }, [
     masterAbsorbLaborQuery.data,
@@ -2931,18 +3105,13 @@ const extractEtcLaborAmount = (value: unknown): number => {
           item.type !== EXTRA_TYPE_VENDOR_DELTA &&
           item.type !== EXTRA_TYPE_CUSTOM_VARIATION &&
           !isAutoEvidenceItem(item) &&
-          !isAutoAbsorbItem(item)
+          (!isAutoAbsorbItem(item) || isDecorEditableAbsorbItem(item))
       ),
     [extraLaborItems]
   );
 
-  const autoEvidenceItems = useMemo(
-    () => extraLaborItems.filter((item) => isAutoEvidenceItem(item)),
-    [extraLaborItems]
-  );
-
   const autoAbsorbItems = useMemo(
-    () => extraLaborItems.filter((item) => isAutoAbsorbItem(item)),
+    () => extraLaborItems.filter((item) => isAutoAbsorbItem(item) && !isDecorEditableAbsorbItem(item)),
     [extraLaborItems]
   );
 
@@ -3231,6 +3400,111 @@ const extractEtcLaborAmount = (value: unknown): number => {
     });
   }, [effectivePriceData]);
 
+  const decorReferenceUnitCostByName = useMemo(() => {
+    const map = new Map<string, number>();
+    componentReferenceRows.forEach((row) => {
+      const name = String(row.name ?? "").trim();
+      if (!name) return;
+      const qty = Number.isFinite(row.qty) && row.qty > 0 ? row.qty : 1;
+      const totalCost = Number.isFinite(row.cost) ? Math.max(row.cost, 0) : 0;
+      if (totalCost <= 0) return;
+      map.set(name, totalCost / qty);
+    });
+    return map;
+  }, [componentReferenceRows]);
+
+  const decorReasonKeys = useMemo(() => {
+    const keys = new Set<string>();
+    extraLaborItems.forEach((item) => {
+      if (!isDecorEditableAbsorbItem(item)) return;
+      const reasonKey = extractDecorReasonKey(item.label);
+      if (!reasonKey) return;
+      keys.add(reasonKey);
+    });
+    return [...keys];
+  }, [extraLaborItems]);
+
+  useEffect(() => {
+    let disposed = false;
+    if (!selectedOrderLineId || decorReasonKeys.length === 0) {
+      setDecorMasterUnitCostByName({});
+      return () => {
+        disposed = true;
+      };
+    }
+
+    (async () => {
+      const entries = await Promise.all(
+        decorReasonKeys.map(async (name) => {
+          try {
+            const response = await fetch(`/api/master-pricing?model_name=${encodeURIComponent(name)}`, { cache: "no-store" });
+            const json = (await response.json()) as { data?: Record<string, unknown> | null; error?: string };
+            if (!response.ok || !json.data) return [name, 0] as const;
+            const row = json.data;
+            const centerQty = Math.max(parseNumberish(row.center_qty_default), 0);
+            const sub1Qty = Math.max(parseNumberish(row.sub1_qty_default), 0);
+            const sub2Qty = Math.max(parseNumberish(row.sub2_qty_default), 0);
+            const unitCost =
+              Math.max(parseNumberish(row.labor_base_cost), 0) +
+              Math.max(parseNumberish(row.labor_center_cost), 0) * centerQty +
+              Math.max(parseNumberish(row.labor_sub1_cost), 0) * sub1Qty +
+              Math.max(parseNumberish(row.labor_sub2_cost), 0) * sub2Qty +
+              Math.max(parseNumberish(row.plating_price_cost_default), 0);
+            return [name, unitCost] as const;
+          } catch {
+            return [name, 0] as const;
+          }
+        })
+      );
+
+      if (disposed) return;
+      const next: Record<string, number> = {};
+      entries.forEach(([name, unitCost]) => {
+        if (unitCost > 0) next[name] = unitCost;
+      });
+      setDecorMasterUnitCostByName(next);
+    })();
+
+    return () => {
+      disposed = true;
+    };
+  }, [decorReasonKeys, selectedOrderLineId]);
+
+  useEffect(() => {
+    if (decorReferenceUnitCostByName.size === 0 && Object.keys(decorMasterUnitCostByName).length === 0) return;
+    setExtraLaborItems((prev) =>
+      prev.map((item) => {
+        if (!isDecorEditableAbsorbItem(item)) return item;
+        const reasonKey = extractDecorReasonKey(item.label);
+        if (!reasonKey) return item;
+        const unitCostFromRef = decorReferenceUnitCostByName.get(reasonKey) ?? decorMasterUnitCostByName[reasonKey] ?? 0;
+        if (!unitCostFromRef || unitCostFromRef <= 0) return item;
+
+        const meta = (item.meta as Record<string, unknown> | null) ?? null;
+        const currentUnitCost = Math.max(parseNumberish(meta?.unit_cost_krw), 0);
+        const currentCost = Math.max(parseNumberish(meta?.cost_krw), 0);
+        if (currentUnitCost > 0 || currentCost > 0) return item;
+
+        const qty = Math.max(parseNumberish(meta?.qty_applied), 1);
+        const sell = Math.max(parseNumberish(meta?.sell_krw), parseNumberInput(item.amount), 0);
+        const unitCost = Math.max(unitCostFromRef, 0);
+        const cost = Math.round(unitCost * qty);
+        const margin = sell - cost;
+        return {
+          ...item,
+          meta: {
+            ...(meta ?? {}),
+            qty_applied: qty,
+            unit_cost_krw: unitCost,
+            cost_krw: cost,
+            sell_krw: sell,
+            margin_krw: margin,
+          },
+        };
+      })
+    );
+  }, [decorMasterUnitCostByName, decorReferenceUnitCostByName]);
+
   const resolvedAutoAbsorbLaborTotal = useMemo(
     () => autoAbsorbItems.reduce((sum, item) => sum + parseNumberInput(item.amount), 0),
     [autoAbsorbItems]
@@ -3242,6 +3516,21 @@ const extractEtcLaborAmount = (value: unknown): number => {
     () => resolvedEtcLaborItemsTotal + resolvedOtherLaborCost + resolvedAutoAbsorbLaborTotal,
     [resolvedAutoAbsorbLaborTotal, resolvedEtcLaborItemsTotal, resolvedOtherLaborCost]
   );
+
+  const resolvedEtcLaborItemsCostTotal = userEditableExtraLaborItems.reduce(
+    (sum, item) => sum + getExtraLaborCost(item),
+    0
+  );
+
+  const resolvedAutoAbsorbLaborCostTotal = autoAbsorbItems.reduce(
+    (sum, item) => sum + getExtraLaborCost(item),
+    0
+  );
+
+  const resolvedEtcLaborCostTotal =
+    resolvedEtcLaborItemsCostTotal + resolvedOtherLaborCost + resolvedAutoAbsorbLaborCostTotal;
+
+  const resolvedEtcLaborMarginTotal = resolvedEtcLaborTotal - resolvedEtcLaborCostTotal;
 
   const resolvedExtraLaborTotal = useMemo(
     () => resolvedEtcLaborTotal + effectiveStoneLabor,
@@ -4724,8 +5013,10 @@ const extractEtcLaborAmount = (value: unknown): number => {
                           </div>
                           <div className="space-y-2">
                             <div className="flex items-center justify-between text-sm font-medium text-[var(--foreground)]">
-                              <span>기타공임 (원)+마진</span>
-                              <span className="text-xs text-[var(--muted)]">마진 {renderNumber(resolvedEtcLaborTotal - resolvedOtherLaborCost)}</span>
+                              <span>기타공임 (판매)</span>
+                              <span className="text-xs text-[var(--muted)]">
+                                원가 {renderNumber(resolvedEtcLaborCostTotal)} · 마진 {renderNumber(resolvedEtcLaborMarginTotal)}
+                              </span>
                             </div>
                             <Input
                               placeholder="0"
@@ -4779,9 +5070,9 @@ const extractEtcLaborAmount = (value: unknown): number => {
                               </Button>
                             </div>
                             <div className="flex items-center gap-2 rounded-full border border-[var(--panel-border)] bg-[var(--panel)] px-2 py-1">
-                              <span className="text-xs text-[var(--muted)]">기타원가</span>
+                              <span className="text-xs text-[var(--muted)]">기타원가(합계)</span>
                               <div className="tabular-nums h-7 w-24 flex items-center justify-end">
-                                {renderNumber(resolvedOtherLaborCost)}
+                                {renderNumber(resolvedEtcLaborCostTotal)}
                               </div>
                             </div>
                           </div>
@@ -4808,29 +5099,26 @@ const extractEtcLaborAmount = (value: unknown): number => {
                             ) : (
                               <>
                                 <div className="grid grid-cols-12 gap-2 px-1 text-[11px] font-semibold text-[var(--muted)]">
-                                  <div className="col-span-4">항목</div>
+                                  <div className="col-span-3">항목</div>
+                                  <div className="col-span-2 text-right">수량</div>
                                   <div className="col-span-2 text-right">원가</div>
                                   <div className="col-span-2 text-right">마진</div>
-                                  <div className="col-span-3 text-right">최종합</div>
+                                  <div className="col-span-2 text-right">최종합</div>
                                   <div className="col-span-1 text-right">삭제</div>
                                 </div>
                                 {userEditableExtraLaborItems.map((item) => {
                                   const itemType = getExtraLaborItemType(item);
                                   const isAdjustment = item.type === EXTRA_TYPE_ADJUSTMENT;
                                   const isLockedMaster = isLockedExtraLaborItem(item);
+                                  const isQtyEditableDecor = isDecorEditableAbsorbItem(item);
+                                  const qtyApplied = getExtraLaborQtyApplied(item);
                                   const customItemLabel = String((item.meta as Record<string, unknown> | null)?.item_label ?? "");
                                   const costValue = getExtraLaborCost(item);
                                   const marginValue = getExtraLaborMargin(item);
                                   const finalValue = getExtraLaborFinal(item);
                                   return (
                                     <div key={item.id} className="grid grid-cols-12 items-center gap-2">
-                                      <div className="col-span-4">
-                                        {(() => {
-                                          const qtyApplied = getExtraLaborQtyApplied(item);
-                                          return qtyApplied ? (
-                                            <div className="mb-1 text-[10px] text-[var(--muted)]">수량 {renderNumber(qtyApplied)}</div>
-                                          ) : null;
-                                        })()}
+                                      <div className="col-span-3">
                                         {isAdjustment ? (
                                           <div className="space-y-1">
                                             <select
@@ -4877,6 +5165,41 @@ const extractEtcLaborAmount = (value: unknown): number => {
                                         )}
                                       </div>
                                       <div className="col-span-2">
+                                        {isQtyEditableDecor ? (
+                                          <div className="flex items-center justify-end gap-1 text-[10px] text-[var(--muted)]">
+                                            <Button
+                                              type="button"
+                                              variant="ghost"
+                                              size="sm"
+                                              className="h-7 w-7 px-0"
+                                              onClick={() => handleExtraLaborQtyChange(item.id, String(Math.max((qtyApplied ?? 0) - 1, 0)))}
+                                            >
+                                              -
+                                            </Button>
+                                            <Input
+                                              placeholder="0"
+                                              value={String(qtyApplied ?? 0)}
+                                              onChange={(e) => handleExtraLaborQtyChange(item.id, e.target.value)}
+                                              inputMode="numeric"
+                                              className="h-7 w-14 tabular-nums text-right"
+                                            />
+                                            <Button
+                                              type="button"
+                                              variant="ghost"
+                                              size="sm"
+                                              className="h-7 w-7 px-0"
+                                              onClick={() => handleExtraLaborQtyChange(item.id, String((qtyApplied ?? 0) + 1))}
+                                            >
+                                              +
+                                            </Button>
+                                          </div>
+                                        ) : (
+                                          <div className="text-right tabular-nums text-xs text-[var(--muted)]">
+                                            {getExtraLaborQtyDisplay(item) !== null ? renderNumber(getExtraLaborQtyDisplay(item)) : "-"}
+                                          </div>
+                                        )}
+                                      </div>
+                                      <div className="col-span-2">
                                         <Input
                                           placeholder="0"
                                           value={String(costValue)}
@@ -4898,7 +5221,7 @@ const extractEtcLaborAmount = (value: unknown): number => {
                                           readOnly={isLockedMaster}
                                         />
                                       </div>
-                                      <div className="col-span-3 text-right tabular-nums text-sm font-semibold">
+                                      <div className="col-span-2 text-right tabular-nums text-sm font-semibold">
                                         {renderNumber(finalValue)}
                                       </div>
                                       <div className="col-span-1 flex justify-end">
@@ -4916,55 +5239,6 @@ const extractEtcLaborAmount = (value: unknown): number => {
                                 })}
                               </>
                             )}
-                          </div>
-                          <div className="rounded-md border border-[var(--panel-border)] bg-[var(--panel)] p-2">
-                            <button
-                              type="button"
-                              className="w-full text-left text-xs font-semibold"
-                              onClick={() => setIsAutoEvidenceOpen((prev) => !prev)}
-                            >
-                              자동 계산 내역(고급) {isAutoEvidenceOpen ? "접기" : `펼치기 (${autoEvidenceItems.length})`}
-                            </button>
-                            {isAutoEvidenceOpen ? (
-                              <div className="mt-2 space-y-1">
-                                {autoEvidenceItems.length === 0 ? (
-                                  <div className="text-xs text-[var(--muted)]">자동 증빙 라인이 없습니다.</div>
-                                ) : (
-                                  autoEvidenceItems.map((item) => (
-                                    <div key={item.id} className="flex items-center justify-between gap-2 text-xs">
-                                      <span className="text-[var(--foreground)]">{item.label}</span>
-                                      <span className="tabular-nums text-[var(--muted)]">{renderNumber(parseNumberInput(item.amount))}</span>
-                                    </div>
-                                  ))
-                                )}
-                              </div>
-                            ) : null}
-                          </div>
-                          <div className="rounded-md border border-[var(--panel-border)] bg-[var(--panel)] p-2">
-                            <button
-                              type="button"
-                              className="w-full text-left text-xs font-semibold"
-                              onClick={() => setIsAutoAbsorbOpen((prev) => !prev)}
-                            >
-                              자동 흡수공임(고급) {isAutoAbsorbOpen ? "접기" : `펼치기 (${autoAbsorbItems.length})`}
-                            </button>
-                            {isAutoAbsorbOpen ? (
-                              <div className="mt-2 space-y-1">
-                                {autoAbsorbItems.length === 0 ? (
-                                  <div className="text-xs text-[var(--muted)]">자동 흡수공임 라인이 없습니다.</div>
-                                ) : (
-                                  autoAbsorbItems.map((item) => (
-                                    <div key={item.id} className="flex items-center justify-between gap-2 text-xs">
-                                      <span className="text-[var(--foreground)]">
-                                        {item.label}
-                                        {getExtraLaborQtyApplied(item) ? ` · 수량 ${renderNumber(getExtraLaborQtyApplied(item))}` : ""}
-                                      </span>
-                                      <span className="tabular-nums text-[var(--muted)]">{renderNumber(parseNumberInput(item.amount))}</span>
-                                    </div>
-                                  ))
-                                )}
-                              </div>
-                            ) : null}
                           </div>
                         </div>
                       </div>
@@ -5197,8 +5471,10 @@ const extractEtcLaborAmount = (value: unknown): number => {
                   />
                 </div>
                 <div>
-                  <span className="text-xs text-[var(--primary)] block mb-1">기타공임 (원)+마진</span>
-                  <span className="text-[10px] text-[var(--muted)] block">마진 {renderNumber(resolvedEtcLaborTotal - resolvedOtherLaborCost)}</span>
+                  <span className="text-xs text-[var(--primary)] block mb-1">기타공임 (판매)</span>
+                  <span className="text-[10px] text-[var(--muted)] block">
+                    원가 {renderNumber(resolvedEtcLaborCostTotal)} · 마진 {renderNumber(resolvedEtcLaborMarginTotal)}
+                  </span>
                   <Input
                     className="h-7 text-xs w-24 bg-[var(--input-bg)] tabular-nums"
                     placeholder="0"
@@ -5281,9 +5557,9 @@ const extractEtcLaborAmount = (value: unknown): number => {
                     </Button>
                   </div>
                   <div className="flex items-center gap-2 rounded-full border border-[var(--panel-border)] bg-[var(--panel)] px-2 py-1">
-                    <span className="text-[10px] text-[var(--primary)]">기타원가</span>
+                    <span className="text-[10px] text-[var(--primary)]">기타원가(합계)</span>
                     <div className="h-7 text-xs w-20 bg-[var(--input-bg)] tabular-nums flex items-center justify-end">
-                      {renderNumber(resolvedOtherLaborCost)}
+                      {renderNumber(resolvedEtcLaborCostTotal)}
                     </div>
                   </div>
                 </div>
@@ -5310,29 +5586,26 @@ const extractEtcLaborAmount = (value: unknown): number => {
                   ) : (
                     <>
                       <div className="grid grid-cols-12 gap-2 px-1 text-[10px] font-semibold text-[var(--muted)]">
-                        <div className="col-span-4">항목</div>
+                        <div className="col-span-3">항목</div>
+                        <div className="col-span-2 text-right">수량</div>
                         <div className="col-span-2 text-right">원가</div>
                         <div className="col-span-2 text-right">마진</div>
-                        <div className="col-span-3 text-right">최종합</div>
+                        <div className="col-span-2 text-right">최종합</div>
                         <div className="col-span-1 text-right">삭제</div>
                       </div>
                       {userEditableExtraLaborItems.map((item) => {
                         const itemType = getExtraLaborItemType(item);
                         const isAdjustment = item.type === EXTRA_TYPE_ADJUSTMENT;
                         const isLockedMaster = isLockedExtraLaborItem(item);
+                        const isQtyEditableDecor = isDecorEditableAbsorbItem(item);
+                        const qtyApplied = getExtraLaborQtyApplied(item);
                         const customItemLabel = String((item.meta as Record<string, unknown> | null)?.item_label ?? "");
                         const costValue = getExtraLaborCost(item);
                         const marginValue = getExtraLaborMargin(item);
                         const finalValue = getExtraLaborFinal(item);
                         return (
                           <div key={item.id} className="grid grid-cols-12 items-center gap-2">
-                            <div className="col-span-4">
-                              {(() => {
-                                const qtyApplied = getExtraLaborQtyApplied(item);
-                                return qtyApplied ? (
-                                  <div className="mb-1 text-[9px] text-[var(--muted)]">수량 {renderNumber(qtyApplied)}</div>
-                                ) : null;
-                              })()}
+                            <div className="col-span-3">
                               {isAdjustment ? (
                                 <div className="space-y-1">
                                   <select
@@ -5379,6 +5652,41 @@ const extractEtcLaborAmount = (value: unknown): number => {
                               )}
                             </div>
                             <div className="col-span-2">
+                              {isQtyEditableDecor ? (
+                                <div className="flex items-center justify-end gap-1 text-[9px] text-[var(--muted)]">
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="sm"
+                                    className="h-6 w-6 px-0 text-[10px]"
+                                    onClick={() => handleExtraLaborQtyChange(item.id, String(Math.max((qtyApplied ?? 0) - 1, 0)))}
+                                  >
+                                    -
+                                  </Button>
+                                  <Input
+                                    className="h-6 w-12 text-[10px] tabular-nums"
+                                    placeholder="0"
+                                    value={String(qtyApplied ?? 0)}
+                                    onChange={(e) => handleExtraLaborQtyChange(item.id, e.target.value)}
+                                    inputMode="numeric"
+                                  />
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="sm"
+                                    className="h-6 w-6 px-0 text-[10px]"
+                                    onClick={() => handleExtraLaborQtyChange(item.id, String((qtyApplied ?? 0) + 1))}
+                                  >
+                                    +
+                                  </Button>
+                                </div>
+                              ) : (
+                                <div className="text-right tabular-nums text-[10px] text-[var(--muted)]">
+                                  {getExtraLaborQtyDisplay(item) !== null ? renderNumber(getExtraLaborQtyDisplay(item)) : "-"}
+                                </div>
+                              )}
+                            </div>
+                            <div className="col-span-2">
                               <Input
                                 className="h-7 text-xs bg-[var(--input-bg)] tabular-nums"
                                 placeholder="0"
@@ -5400,7 +5708,7 @@ const extractEtcLaborAmount = (value: unknown): number => {
                                 readOnly={isLockedMaster}
                               />
                             </div>
-                            <div className="col-span-3 text-right tabular-nums text-xs font-semibold text-[var(--primary)]">
+                            <div className="col-span-2 text-right tabular-nums text-xs font-semibold text-[var(--primary)]">
                               {renderNumber(finalValue)}
                             </div>
                             <div className="col-span-1 flex justify-end">
@@ -5418,55 +5726,6 @@ const extractEtcLaborAmount = (value: unknown): number => {
                       })}
                     </>
                   )}
-                </div>
-                <div className="rounded-md border border-[var(--panel-border)] bg-[var(--panel)] p-2">
-                  <button
-                    type="button"
-                    className="w-full text-left text-[10px] font-semibold"
-                    onClick={() => setIsAutoEvidenceOpen((prev) => !prev)}
-                  >
-                    자동 계산 내역(고급) {isAutoEvidenceOpen ? "접기" : `펼치기 (${autoEvidenceItems.length})`}
-                  </button>
-                  {isAutoEvidenceOpen ? (
-                    <div className="mt-2 space-y-1">
-                      {autoEvidenceItems.length === 0 ? (
-                        <div className="text-[10px] text-[var(--muted)]">자동 증빙 라인이 없습니다.</div>
-                      ) : (
-                        autoEvidenceItems.map((item) => (
-                          <div key={item.id} className="flex items-center justify-between gap-2 text-[10px]">
-                            <span>{item.label}</span>
-                            <span className="tabular-nums text-[var(--muted)]">{renderNumber(parseNumberInput(item.amount))}</span>
-                          </div>
-                        ))
-                      )}
-                    </div>
-                  ) : null}
-                </div>
-                <div className="rounded-md border border-[var(--panel-border)] bg-[var(--panel)] p-2">
-                  <button
-                    type="button"
-                    className="w-full text-left text-[10px] font-semibold"
-                    onClick={() => setIsAutoAbsorbOpen((prev) => !prev)}
-                  >
-                    자동 흡수공임(고급) {isAutoAbsorbOpen ? "접기" : `펼치기 (${autoAbsorbItems.length})`}
-                  </button>
-                  {isAutoAbsorbOpen ? (
-                    <div className="mt-2 space-y-1">
-                      {autoAbsorbItems.length === 0 ? (
-                        <div className="text-[10px] text-[var(--muted)]">자동 흡수공임 라인이 없습니다.</div>
-                      ) : (
-                        autoAbsorbItems.map((item) => (
-                          <div key={item.id} className="flex items-center justify-between gap-2 text-[10px]">
-                            <span>
-                              {item.label}
-                              {getExtraLaborQtyApplied(item) ? ` · 수량 ${renderNumber(getExtraLaborQtyApplied(item))}` : ""}
-                            </span>
-                            <span className="tabular-nums text-[var(--muted)]">{renderNumber(parseNumberInput(item.amount))}</span>
-                          </div>
-                        ))
-                      )}
-                    </div>
-                  ) : null}
                 </div>
               </div>
             </div>

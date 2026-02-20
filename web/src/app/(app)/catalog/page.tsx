@@ -379,6 +379,8 @@ function shouldExcludeEtcAbsorbItem(item: MasterAbsorbLaborItem): boolean {
   if (item.bucket !== "ETC") return false;
   const rawReason = String(item.reason ?? "").trim();
   const rawNote = String(item.note ?? "").trim();
+  if (rawNote.startsWith(BOM_DECOR_NOTE_PREFIX)) return true;
+  if (rawReason.startsWith(BOM_DECOR_REASON_PREFIX)) return true;
   if (rawNote.startsWith(BOM_MATERIAL_NOTE_PREFIX)) return true;
   if (rawReason.startsWith(BOM_MATERIAL_REASON_PREFIX)) return true;
   return rawReason.includes(ACCESSORY_ETC_REASON_KEYWORD);
@@ -555,11 +557,7 @@ function computeMasterLaborTotalsWithAbsorb(
   const activeAbsorbItems = absorbItems.filter((item) => {
     if (item.is_active === false) return false;
     if (String(item.vendor_party_id ?? "").trim() !== "") return false;
-    const normalizedReason = String(item.reason ?? "").trim().toUpperCase();
-    if (ABSORB_AUTO_EXCLUDED_REASONS.has(normalizedReason)) return false;
-    if (item.bucket === "ETC" && String(item.reason ?? "").trim().includes(ACCESSORY_ETC_REASON_KEYWORD)) {
-      return false;
-    }
+    if (shouldExcludeEtcAbsorbItem(item)) return false;
     return true;
   });
 
@@ -780,28 +778,63 @@ export default function CatalogPage() {
   const bomAutoSyncRef = useRef<string>("");
   const cnRawAutoSaveBusyRef = useRef(false);
   const absorbLaborCacheRef = useRef<Map<string, MasterAbsorbLaborItem[]>>(new Map());
+  const selectedItemIdRef = useRef<string | null>(null);
+  const absorbLaborAbortRef = useRef<AbortController | null>(null);
+  const absorbLaborRequestSeqRef = useRef(0);
 
   const schema = getSchemaClient();
   const queryClient = useQueryClient();
   const actorId = (process.env.NEXT_PUBLIC_CMS_ACTOR_ID || "").trim();
 
+  useEffect(() => {
+    selectedItemIdRef.current = selectedItemId;
+  }, [selectedItemId]);
+
+  useEffect(() => {
+    return () => {
+      absorbLaborAbortRef.current?.abort();
+    };
+  }, []);
+
   const loadAbsorbLaborItems = useCallback(async (targetMasterId: string, options?: { forceRefresh?: boolean }) => {
     if (!targetMasterId) {
+      absorbLaborAbortRef.current?.abort();
       setAbsorbLaborItems([]);
       return;
     }
     if (!options?.forceRefresh && absorbLaborCacheRef.current.has(targetMasterId)) {
-      setAbsorbLaborItems(absorbLaborCacheRef.current.get(targetMasterId) ?? []);
+      if (selectedItemIdRef.current === targetMasterId) {
+        setAbsorbLaborItems(absorbLaborCacheRef.current.get(targetMasterId) ?? []);
+      }
       return;
     }
-    const response = await fetch(`/api/master-absorb-labor-items?master_id=${encodeURIComponent(targetMasterId)}`, {
-      cache: "no-store",
-    });
+
+    absorbLaborAbortRef.current?.abort();
+    const requestSeq = absorbLaborRequestSeqRef.current + 1;
+    absorbLaborRequestSeqRef.current = requestSeq;
+    const controller = new AbortController();
+    absorbLaborAbortRef.current = controller;
+
+    let response: Response;
+    try {
+      response = await fetch(`/api/master-absorb-labor-items?master_id=${encodeURIComponent(targetMasterId)}`, {
+        cache: "no-store",
+        signal: controller.signal,
+      });
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") return;
+      throw error;
+    }
     const json = (await response.json()) as { data?: MasterAbsorbLaborItem[]; error?: string };
     if (!response.ok) throw new Error(json.error ?? "흡수공임 조회 실패");
+    if (controller.signal.aborted) return;
+    if (requestSeq !== absorbLaborRequestSeqRef.current) return;
+
     const rows = json.data ?? [];
     absorbLaborCacheRef.current.set(targetMasterId, rows);
-    setAbsorbLaborItems(rows);
+    if (selectedItemIdRef.current === targetMasterId) {
+      setAbsorbLaborItems(rows);
+    }
   }, []);
 
   const fetchFlattenRows = useCallback(async (targetMasterId: string, variantKey?: string | null) => {
@@ -1411,6 +1444,7 @@ export default function CatalogPage() {
   }, [selectedDetail?.categoryCode]);
 
   useEffect(() => {
+    bomAutoSyncRef.current = "";
     setShowBomPanel(false);
     setSelectedRecipeId(null);
     setRecipeVariantKey("");
@@ -1428,10 +1462,13 @@ export default function CatalogPage() {
 
   useEffect(() => {
     if (!selectedItemId) {
+      absorbLaborAbortRef.current?.abort();
       setAbsorbLaborItems([]);
       return;
     }
+    setAbsorbLaborItems([]);
     void loadAbsorbLaborItems(selectedItemId).catch((error) => {
+      if (error instanceof DOMException && error.name === "AbortError") return;
       const message = error instanceof Error ? error.message : "흡수공임 조회 실패";
       toast.error("처리 실패", { description: message });
     });
@@ -1454,7 +1491,6 @@ export default function CatalogPage() {
     retry: false,
     refetchOnWindowFocus: false,
     staleTime: 60_000,
-    placeholderData: (previousData) => previousData,
     queryFn: () => fetchBomRecipes(selectedMasterId ?? ""),
   });
 
@@ -1506,7 +1542,6 @@ export default function CatalogPage() {
     retry: false,
     refetchOnWindowFocus: false,
     staleTime: 60_000,
-    placeholderData: (previousData) => previousData,
     queryFn: () => fetchBomLines(selectedRecipeId ?? ""),
   });
 
@@ -1527,7 +1562,6 @@ export default function CatalogPage() {
     retry: false,
     refetchOnWindowFocus: false,
     staleTime: 60_000,
-    placeholderData: (previousData) => previousData,
     queryFn: async () => {
       if (decorComponentMasterIds.length === 0) return [] as MasterAbsorbLaborItem[];
       const response = await fetch(
@@ -1547,7 +1581,6 @@ export default function CatalogPage() {
     gcTime: 300_000,
     refetchOnWindowFocus: false,
     queryFn: () => fetchFlattenRows(selectedMasterId ?? "", previewVariantKey),
-    placeholderData: (previousData) => previousData,
   });
 
   const componentSearchQuery = useQuery({
@@ -2335,8 +2368,8 @@ export default function CatalogPage() {
         }
       }
 
+      absorbLaborCacheRef.current.delete(masterIdToSync);
       if (selectedItemId === masterIdToSync) {
-        absorbLaborCacheRef.current.delete(masterIdToSync);
         await loadAbsorbLaborItems(masterIdToSync, { forceRefresh: true });
       }
     },
@@ -2403,13 +2436,27 @@ export default function CatalogPage() {
   }, [bomLineMetrics]);
 
   useEffect(() => {
-    if (!showBomPanel || !selectedMasterId) return;
-    const lineSignature = ((linesQuery.data ?? []) as BomLineRow[])
+    if (!showBomPanel || !selectedMasterId || !selectedRecipeId) return;
+    if (!linesQuery.isSuccess || linesQuery.isFetching) return;
+
+    const currentRecipeSet = new Set((recipesQuery.data ?? []).map((row) => String(row.bom_id ?? "").trim()));
+    if (!currentRecipeSet.has(String(selectedRecipeId))) return;
+
+    const lines = (linesQuery.data ?? []) as BomLineRow[];
+    const hasForeignLines = lines.some((line) => {
+      const bomId = String((line as Record<string, unknown>).bom_id ?? "").trim();
+      return bomId.length > 0 && bomId !== String(selectedRecipeId);
+    });
+    if (hasForeignLines) return;
+
+    const lineSignature = lines
       .map((line) => {
         const id = String(line.bom_line_id ?? "").trim();
         const kind = parseBomLineKind(line.note);
         const qty = Number(line.qty_per_unit ?? 0);
-        return `${id}:${kind}:${qty}`;
+        const componentMasterId = String(line.component_master_id ?? "").trim();
+        const componentPartId = String(line.component_part_id ?? "").trim();
+        return `${id}:${kind}:${qty}:${componentMasterId}:${componentPartId}`;
       })
       .sort()
       .join("|");
@@ -2417,11 +2464,20 @@ export default function CatalogPage() {
     if (bomAutoSyncRef.current === syncKey) return;
     bomAutoSyncRef.current = syncKey;
 
-    void syncBomAutoAbsorbLabor(selectedMasterId, (linesQuery.data ?? []) as BomLineRow[]).catch((error) => {
+    void syncBomAutoAbsorbLabor(selectedMasterId, lines).catch((error) => {
       const message = error instanceof Error ? error.message : "BOM 자동반영 실패";
       toast.error("처리 실패", { description: message });
     });
-  }, [linesQuery.data, selectedMasterId, showBomPanel, syncBomAutoAbsorbLabor]);
+  }, [
+    linesQuery.data,
+    linesQuery.isFetching,
+    linesQuery.isSuccess,
+    recipesQuery.data,
+    selectedMasterId,
+    selectedRecipeId,
+    showBomPanel,
+    syncBomAutoAbsorbLabor,
+  ]);
 
   const displayedBomLineMetrics = useMemo(() => {
     const rows = [...bomLineMetrics];
