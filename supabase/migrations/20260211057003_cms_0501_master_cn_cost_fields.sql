@@ -4,16 +4,12 @@
 
 alter table public.cms_master_item
   add column if not exists cn_labor_basic_cny_per_g numeric not null default 0;
-
 alter table public.cms_master_item
   add column if not exists cn_labor_extra_items jsonb not null default '[]'::jsonb;
-
 comment on column public.cms_master_item.cn_labor_basic_cny_per_g
   is 'China cost input: base labor in CNY per gram (CNY/g)';
-
 comment on column public.cms_master_item.cn_labor_extra_items
   is 'China cost input: extra labor items array. Each: {label: text, cny_per_g: number}';
-
 -- Constraints (idempotent)
 do $$
 begin
@@ -23,7 +19,6 @@ begin
 exception
   when duplicate_object then null;
 end $$;
-
 do $$
 begin
   alter table public.cms_master_item

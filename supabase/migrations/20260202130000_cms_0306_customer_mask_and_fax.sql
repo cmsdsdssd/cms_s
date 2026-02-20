@@ -28,7 +28,6 @@ BEGIN
         ALTER TABLE cms_vendor_prefix_map ADD COLUMN fax_sender_name text;
     END IF;
 END $$;
-
 -- ============================================
 -- 2. Update RS and MS with fax info
 -- ============================================
@@ -38,14 +37,12 @@ SET
     fax_provider = 'twilio',
     fax_sender_name = '주식회사 쥬얼리'
 WHERE prefix = 'RS';
-
 UPDATE cms_vendor_prefix_map 
 SET 
     fax_number = '+82-2-9876-5432', 
     fax_provider = 'twilio',
     fax_sender_name = '주식회사 쥬얼리'
 WHERE prefix = 'MS';
-
 -- ============================================
 -- 3. Ensure customer_mask_code exists on order_line
 -- ============================================
@@ -59,7 +56,6 @@ BEGIN
         CREATE INDEX IF NOT EXISTS idx_cms_order_line_customer_mask ON cms_order_line(customer_mask_code);
     END IF;
 END $$;
-
 -- ============================================
 -- 4. Function to generate random mask code (6 chars, no confusing chars)
 -- ============================================
@@ -79,7 +75,6 @@ BEGIN
     RETURN result;
 END;
 $$ LANGUAGE plpgsql;
-
 -- ============================================
 -- 5. Trigger to auto-generate mask code on order_line insert
 -- ============================================
@@ -114,18 +109,15 @@ BEGIN
     RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
-
 DROP TRIGGER IF EXISTS cms_trg_order_line_set_mask ON cms_order_line;
 CREATE TRIGGER cms_trg_order_line_set_mask
     BEFORE INSERT ON cms_order_line
     FOR EACH ROW
     EXECUTE FUNCTION cms_fn_set_customer_mask_code();
-
 -- ============================================
 -- 6. Backfill existing order lines with mask codes
 -- ============================================
 UPDATE cms_order_line
 SET customer_mask_code = cms_fn_generate_mask_code()
 WHERE customer_mask_code IS NULL;
-
 COMMIT;

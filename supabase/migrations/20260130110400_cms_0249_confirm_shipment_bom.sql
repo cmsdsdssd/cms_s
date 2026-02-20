@@ -1,5 +1,4 @@
 set search_path = public, pg_temp;
-
 -- v2: shipment confirmed -> inventory ISSUE + BOM components(optional, best-effort)
 create or replace function public.cms_fn_emit_inventory_issue_from_shipment_confirmed_v2(
   p_shipment_id uuid,
@@ -226,14 +225,11 @@ begin
 
   return v_move_id;
 end $$;
-
 alter function public.cms_fn_emit_inventory_issue_from_shipment_confirmed_v2(uuid,uuid,text,uuid)
   security definer
   set search_path = public, pg_temp;
-
 grant execute on function public.cms_fn_emit_inventory_issue_from_shipment_confirmed_v2(uuid,uuid,text,uuid)
   to authenticated, service_role;
-
 -- confirm_shipment_v2: emit function을 v2로 교체
 create or replace function public.cms_fn_confirm_shipment_v2(
   p_shipment_id uuid,
@@ -269,10 +265,8 @@ begin
 
   return v_result;
 end $$;
-
 alter function public.cms_fn_confirm_shipment_v2(uuid,uuid,text,boolean,uuid)
   security definer
   set search_path = public, pg_temp;
-
 grant execute on function public.cms_fn_confirm_shipment_v2(uuid,uuid,text,boolean,uuid)
   to authenticated;

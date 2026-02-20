@@ -1,5 +1,4 @@
 begin;
-
 create or replace function public.cms_fn_send_repair_to_shipment_v2(
   p_repair_id uuid,
   p_target_shipment_id uuid default null,
@@ -131,12 +130,9 @@ begin
 
   return v_shipment_id;
 end $$;
-
 alter function public.cms_fn_send_repair_to_shipment_v2(uuid,uuid,numeric,text,uuid,text,uuid)
   security definer
   set search_path = public, pg_temp;
-
 grant execute on function public.cms_fn_send_repair_to_shipment_v2(uuid,uuid,numeric,text,uuid,text,uuid)
   to authenticated, service_role;
-
 commit;

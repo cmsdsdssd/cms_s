@@ -1,8 +1,7 @@
 set search_path = public, pg_temp;
-
 -- 0007: functions (RPC)
 -- Phase1 紐⑺몴: "遺꾩꽍 1?쒖쐞 + ?댁쁺 ?덉젙??2?쒖쐞"瑜??꾪빐
--- 異쒓퀬?뺤젙/寃곗젣/諛섑뭹? 諛섎뱶???⑥닔濡????몃옖??뀡 泥섎━
+-- 異쒓퀬?뺤젙/寃곗젣/諛섑뭹? 諛섎뱶???⑥닔濡????몃옖??뀡 泥섎━
 
 -- ------------------------------------------------------------
 -- Helper: latest tick
@@ -16,7 +15,6 @@ language sql stable as $$
   order by t.observed_at desc
   limit 1;
 $$;
-
 -- ------------------------------------------------------------
 -- Helper: pick plating rule (most specific first, then priority)
 -- ------------------------------------------------------------
@@ -53,7 +51,6 @@ language sql stable as $$
     r.effective_from desc
   limit 1;
 $$;
-
 -- ------------------------------------------------------------
 -- Helper: pick labor band rule
 -- ------------------------------------------------------------
@@ -96,9 +93,8 @@ language sql stable as $$
   order by b.effective_from desc
   limit 1;
 $$;
-
 -- ------------------------------------------------------------
--- RPC #1: 異쒓퀬 ?뺤젙 (媛寃??ㅻ깄???좉툑 + AR ?먯옣 + ?곹깭 ?낅뜲?댄듃)
+-- RPC #1: 異쒓퀬 ?뺤젙 (媛寃??ㅻ깄???좉툑 + AR ?먯옣 + ?곹깭 ?낅뜲?댄듃)
 -- ------------------------------------------------------------
 create or replace function cms_fn_confirm_shipment(
   p_shipment_id uuid,
@@ -627,7 +623,6 @@ begin
     'total_cost_krw', v_total_cost
   );
 end $$;
-
 -- ------------------------------------------------------------
 -- RPC #2: 寃곗젣 ?깅줉 (蹂듭닔 ?섎떒) + AR ?먯옣(PAYMENT)
 -- p_tenders: jsonb array [{method:'BANK', amount_krw:12345, meta:{...}}, ...]
@@ -686,9 +681,8 @@ begin
     'total_amount_krw', round(v_total,0)
   );
 end $$;
-
 -- ------------------------------------------------------------
--- RPC #3: 諛섑뭹 ?깅줉(遺遺꾨컲??+ override) + AR ?먯옣(RETURN)
+-- RPC #3: 諛섑뭹 ?깅줉(遺遺꾨컲??+ override) + AR ?먯옣(RETURN)
 -- override ?놁쑝硫? (異쒓퀬?쇱씤湲덉븸/異쒓퀬?쇱씤?섎웾)*諛섑뭹?섎웾
 -- ------------------------------------------------------------
 create or replace function cms_fn_record_return(

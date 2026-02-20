@@ -1,27 +1,23 @@
 -- cms_0012: fix repair weight column usage + plating_code derivation
--- 筌뤴뫗??
--- 1) cms_fn_upsert_repair_line_v1: measured_weight_g ???뵬沃섎챸苑ｇ몴???쇱젫 ?뚎됱쓥 weight_received_g?????
--- 2) repair view?癒?퐣 pv.code 揶쏆늿? ??용뮉 ?뚎됱쓥 筌〓챷????볤탢??랁?plating_code ???문
+-- 紐⑹쟻:
+-- 1) cms_fn_upsert_repair_line_v1: measured_weight_g ?뚮씪誘명꽣瑜??ㅼ젣 而щ읆 weight_received_g?????
+-- 2) repair view?먯꽌 pv.code 媛숈? ?녿뒗 而щ읆 李몄“ ?쒓굅?섍퀬 plating_code ?뚯깮
 
 begin;
-
 -- ------------------------------------------------------------
--- 2-1) DROP + CREATE (default ?얜챷????곕돗)
---   - ?⑥눊援???뺣즲/??뽮퐣 癰귛칰?뚯몵嚥???????볥젃??됱퓗揶???λ툡??됱뱽 ????됰선 獄쎻뫗堉?怨몄몵嚥?DROP ????첎?
+-- 2-1) DROP + CREATE (default 臾몄젣 ?뚰뵾)
+--   - 怨쇨굅 ?쒕룄/?쒖꽌 蹂寃쎌쑝濡??щ윭 ?쒓렇?덉쿂媛 ?⑥븘?덉쓣 ???덉뼱 諛⑹뼱?곸쑝濡?DROP ?щ윭媛?
 -- ------------------------------------------------------------
 drop function if exists public.cms_fn_upsert_repair_line_v1(
   uuid, uuid, text, text, text, cms_e_material_code, integer, numeric, boolean, uuid, numeric, date, text
 );
-
 drop function if exists public.cms_fn_upsert_repair_line_v1(
   uuid, text, text, text, cms_e_material_code, integer, numeric, boolean, uuid, numeric, date, text, uuid
 );
-
--- (?袁⑹삺 ?袁⑥쨮??븍뱜揶??怨뺣뮉 ??? ??볥젃??됱퓗: customer_party_id嚥???뽰삂)
+-- (?꾩옱 ?꾨줈?앺듃媛 ?곕뒗 ?쒖? ?쒓렇?덉쿂: customer_party_id濡??쒖옉)
 drop function if exists public.cms_fn_upsert_repair_line_v1(
   uuid, text, text, text, cms_e_material_code, integer, numeric, boolean, uuid, numeric, date, text, uuid
 );
-
 create function public.cms_fn_upsert_repair_line_v1(
   p_customer_party_id uuid,
   p_model_name text,
@@ -54,7 +50,7 @@ begin
 
   v_id := coalesce(p_repair_line_id, gen_random_uuid());
 
-  -- ??? SHIPPED/CANCELLED筌???륁젟 筌△뫀??(enum ??됱읈: text ??쑨??
+  -- ?대? SHIPPED/CANCELLED硫??섏젙 李⑤떒 (enum ?덉쟾: text 鍮꾧탳)
   select r.status::text
     into v_status_text
   from public.cms_repair_line r
@@ -74,7 +70,7 @@ begin
     material_code,
     color,
     qty,
-    weight_received_g,      -- ????쇱젫 ?뚎됱쓥
+    weight_received_g,      -- ???ㅼ젣 而щ읆
     is_plated,
     plating_variant_id,
     repair_fee_krw,
@@ -90,7 +86,7 @@ begin
     p_material_code,
     trim(p_color),
     p_qty,
-    p_measured_weight_g,    -- ?????뵬沃섎챸苑ｏ쭗?? ?醫?(?紐꾪뀱???紐낆넎), ??關? weight_received_g
+    p_measured_weight_g,    -- ???뚮씪誘명꽣紐낆? ?좎?(?몄텧遺 ?명솚), ??μ? weight_received_g
     coalesce(p_is_plated,false),
     p_plating_variant_id,
     coalesce(p_repair_fee_krw,0),
@@ -114,19 +110,16 @@ begin
 
   return v_id;
 end $$;
-
--- 亦낅슦釉??袁⑥쨮??븍뱜 ?類ㅼ퐠?嚥?authenticated筌?
+-- 沅뚰븳(?꾨줈?앺듃 ?뺤콉?濡?authenticated留?
 grant execute on function public.cms_fn_upsert_repair_line_v1(
   uuid, text, text, text, cms_e_material_code, integer, numeric, boolean, uuid, numeric, date, text, uuid
 ) to authenticated;
-
 -- ------------------------------------------------------------
--- 2-2) Repair view (enriched) - pv.code ??볤탢 / measured_weight_g alias ??볥궗
---   - 疫꿸퀣???繹먥뫁彛?????已???類ㅼ젟 筌륁궢六??곕빍, ?브쑴苑?UI????? ?됯퀡? ??롪돌 ??볥궗
---   - ??덈뮉 ??롮몵嚥?Repair 筌뤴뫖以? ???됯퀡? ?怨뺛늺 ??
+-- 2-2) Repair view (enriched) - pv.code ?쒓굅 / measured_weight_g alias ?쒓났
+--   - 湲곗〈??源⑥쭊 酉??대쫫???뺤젙 紐삵뻽?쇰땲, 遺꾩꽍/UI???쒖? 酉곕? ?섎굹 ?쒓났
+--   - ?덈뒗 ?욎쑝濡?Repair 紐⑸줉? ??酉곕? ?곕㈃ ??
 -- ------------------------------------------------------------
-drop view if exists public.cms_v_repair_line_enriched_v1;
-create view public.cms_v_repair_line_enriched_v1 as
+create or replace view public.cms_v_repair_line_enriched_v1 as
 select
   r.repair_line_id,
   r.customer_party_id,
@@ -138,7 +131,7 @@ select
   r.material_code,
   r.color,
   r.qty,
-  r.weight_received_g as measured_weight_g, -- ??alias嚥???볥궗
+  r.weight_received_g as measured_weight_g, -- ??alias濡??쒓났
   r.is_plated,
   r.plating_variant_id,
   concat_ws('-', rtrim(pv.plating_type::text), nullif(pv.color_code,''), nullif(pv.thickness_code,'')) as plating_code,
@@ -153,8 +146,5 @@ select
 from public.cms_repair_line r
 left join public.cms_party p on p.party_id = r.customer_party_id
 left join public.cms_plating_variant pv on pv.plating_variant_id = r.plating_variant_id;
-
 grant select on public.cms_v_repair_line_enriched_v1 to authenticated;
-
 commit;
- 

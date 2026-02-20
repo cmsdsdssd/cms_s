@@ -226,7 +226,6 @@ begin
     'inserted', v_inserted
   );
 end $$;
-
 -- Safe backfill for existing repair invoices (no alloc, no returns)
 -- so previously zeroed material/commodity due can be corrected.
 with calc as (

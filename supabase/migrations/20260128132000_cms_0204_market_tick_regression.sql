@@ -2,7 +2,6 @@
 -- Regression v2 (uses role mapping).
 
 set search_path = public;
-
 do $$
 declare
   -- variables

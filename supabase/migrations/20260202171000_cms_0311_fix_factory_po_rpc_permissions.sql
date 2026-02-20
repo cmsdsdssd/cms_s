@@ -99,20 +99,17 @@ BEGIN
       AND factory_po_id IS NOT NULL;
 
     RETURN jsonb_build_object(
-        'ok', true,
-        'po_count', jsonb_array_length(v_po_ids),
-        'processed_lines', v_processed_count,
-        'already_in_po_lines', v_already_po_count,
-        'pos', v_po_ids
+        'success', true,
+        'pos', v_po_ids,
+        'processed_groups', v_processed_count,
+        'already_in_po_count', v_already_po_count
     );
 END;
 $$;
-
 -- Grant execute permissions
 GRANT EXECUTE ON FUNCTION cms_fn_factory_po_create_from_order_lines(uuid[], uuid) TO authenticated;
 GRANT EXECUTE ON FUNCTION cms_fn_factory_po_create_from_order_lines(uuid[], uuid) TO service_role;
 GRANT EXECUTE ON FUNCTION cms_fn_factory_po_create_from_order_lines(uuid[], uuid) TO anon;
-
 -- Also fix other factory PO functions to use SECURITY DEFINER
 
 -- Fix: cms_fn_factory_po_mark_sent
@@ -167,9 +164,7 @@ BEGIN
     );
 END;
 $$;
-
 GRANT EXECUTE ON FUNCTION cms_fn_factory_po_mark_sent(uuid, jsonb) TO authenticated;
 GRANT EXECUTE ON FUNCTION cms_fn_factory_po_mark_sent(uuid, jsonb) TO service_role;
 GRANT EXECUTE ON FUNCTION cms_fn_factory_po_mark_sent(uuid, jsonb) TO anon;
-
 COMMIT;

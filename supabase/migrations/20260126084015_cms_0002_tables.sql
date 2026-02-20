@@ -9,7 +9,6 @@ create table if not exists cms_person (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
-
 -- 2) party
 create table if not exists cms_party (
   party_id uuid primary key default gen_random_uuid(),
@@ -22,7 +21,6 @@ create table if not exists cms_party (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
-
 -- 3) party-person link (N:M)
 create table if not exists cms_party_person_link (
   party_id uuid not null references cms_party(party_id) on delete cascade,
@@ -32,7 +30,6 @@ create table if not exists cms_party_person_link (
   created_at timestamptz not null default now(),
   primary key (party_id, person_id)
 );
-
 -- 4) party address
 create table if not exists cms_party_address (
   address_id uuid primary key default gen_random_uuid(),
@@ -43,7 +40,6 @@ create table if not exists cms_party_address (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
-
 -- 5) vendor prefix map (공장이니셜 → vendor_party_id)
 create table if not exists cms_vendor_prefix_map (
   prefix text primary key,
@@ -51,7 +47,6 @@ create table if not exists cms_vendor_prefix_map (
   note text,
   created_at timestamptz not null default now()
 );
-
 -- 6) master item
 create table if not exists cms_master_item (
   master_id uuid primary key default gen_random_uuid(),
@@ -92,7 +87,6 @@ create table if not exists cms_master_item (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
-
 -- 7) labor band rule
 create table if not exists cms_labor_band_rule (
   band_id uuid primary key default gen_random_uuid(),
@@ -119,7 +113,6 @@ create table if not exists cms_labor_band_rule (
 
   created_at timestamptz not null default now()
 );
-
 -- 8) plating variant
 create table if not exists cms_plating_variant (
   plating_variant_id uuid primary key default gen_random_uuid(),
@@ -130,7 +123,6 @@ create table if not exists cms_plating_variant (
   is_active boolean not null default true,
   created_at timestamptz not null default now()
 );
-
 -- 9) plating price rule (B + C 동시 지원)
 create table if not exists cms_plating_price_rule (
   rule_id uuid primary key default gen_random_uuid(),
@@ -150,7 +142,6 @@ create table if not exists cms_plating_price_rule (
   note text,
   created_at timestamptz not null default now()
 );
-
 -- 10) market tick
 create table if not exists cms_market_tick (
   tick_id uuid primary key default gen_random_uuid(),
@@ -161,7 +152,6 @@ create table if not exists cms_market_tick (
   meta jsonb not null default '{}'::jsonb,
   created_at timestamptz not null default now()
 );
-
 -- 11) order line (라인 중심)
 create table if not exists cms_order_line (
   order_line_id uuid primary key default gen_random_uuid(),
@@ -192,7 +182,6 @@ create table if not exists cms_order_line (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
-
 -- 12) repair line
 create table if not exists cms_repair_line (
   repair_line_id uuid primary key default gen_random_uuid(),
@@ -225,7 +214,6 @@ create table if not exists cms_repair_line (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
-
 -- 13) shipment header
 create table if not exists cms_shipment_header (
   shipment_id uuid primary key default gen_random_uuid(),
@@ -238,7 +226,6 @@ create table if not exists cms_shipment_header (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
-
 -- 14) shipment line (스냅샷 잠금)
 create table if not exists cms_shipment_line (
   shipment_line_id uuid primary key default gen_random_uuid(),
@@ -317,7 +304,6 @@ create table if not exists cms_shipment_line (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
-
 -- 15) payment header + tender lines
 create table if not exists cms_payment_header (
   payment_id uuid primary key default gen_random_uuid(),
@@ -327,7 +313,6 @@ create table if not exists cms_payment_header (
   total_amount_krw numeric not null default 0,
   created_at timestamptz not null default now()
 );
-
 create table if not exists cms_payment_tender_line (
   tender_line_id uuid primary key default gen_random_uuid(),
   payment_id uuid not null references cms_payment_header(payment_id) on delete cascade,
@@ -336,7 +321,6 @@ create table if not exists cms_payment_tender_line (
   meta jsonb not null default '{}'::jsonb,
   created_at timestamptz not null default now()
 );
-
 -- 16) return line
 create table if not exists cms_return_line (
   return_line_id uuid primary key default gen_random_uuid(),
@@ -349,7 +333,6 @@ create table if not exists cms_return_line (
   occurred_at timestamptz not null,
   created_at timestamptz not null default now()
 );
-
 -- 17) AR ledger
 create table if not exists cms_ar_ledger (
   ar_ledger_id uuid primary key default gen_random_uuid(),
@@ -366,7 +349,6 @@ create table if not exists cms_ar_ledger (
   memo text,
   created_at timestamptz not null default now()
 );
-
 -- 18) status event
 create table if not exists cms_status_event (
   event_id uuid primary key default gen_random_uuid(),
@@ -379,7 +361,6 @@ create table if not exists cms_status_event (
   reason text,
   correlation_id uuid
 );
-
 -- 19) decision log
 create table if not exists cms_decision_log (
   decision_id uuid primary key default gen_random_uuid(),

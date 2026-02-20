@@ -4,20 +4,15 @@
 --          with OTHER residual so that sum(category deltas) == (end_position - prev_position) ALWAYS.
 
 set search_path = public, pg_temp;
-
 -- Optional perf indexes (safe)
 create index if not exists idx_cms_ar_invoice_party_occurred_at
   on public.cms_ar_invoice(party_id, occurred_at);
-
 create index if not exists idx_cms_return_line_occurred_at_shipment_line_id
   on public.cms_return_line(occurred_at, shipment_line_id);
-
 create index if not exists idx_cms_ar_payment_party_paid_at
   on public.cms_ar_payment(party_id, paid_at);
-
 create index if not exists idx_cms_ar_payment_alloc_payment_id
   on public.cms_ar_payment_alloc(payment_id);
-
 do $do$
 begin
   -- guard: do not overwrite if already exists (add-only)
@@ -358,6 +353,5 @@ begin
 
 end
 $do$;
-
 grant execute on function public.cms_fn_shipments_print_ledger_statement_v3(uuid[], date)
   to authenticated;

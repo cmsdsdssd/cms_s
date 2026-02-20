@@ -1,9 +1,7 @@
 set search_path = public, pg_temp;
-
 alter table public.cms_ar_payment_alloc
   add column if not exists alloc_labor_krw numeric not null default 0,
   add column if not exists alloc_material_krw numeric not null default 0;
-
 create or replace view public.cms_v_ar_payment_alloc_detail_v1
 with (security_invoker = true)
 as
@@ -38,10 +36,8 @@ from public.cms_ar_payment p
 left join public.cms_ar_payment_alloc a on a.payment_id = p.payment_id
 left join public.cms_ar_invoice i on i.ar_id = a.ar_id
 left join public.cms_shipment_line sl on sl.shipment_line_id = i.shipment_line_id;
-
 grant select on public.cms_v_ar_payment_alloc_detail_v1 to authenticated;
 grant select on public.cms_v_ar_payment_alloc_detail_v1 to anon;
-
 create or replace function public.cms_fn_ar_apply_payment_fifo_v1(
   p_party_id uuid,
   p_idempotency_key text,
@@ -295,10 +291,8 @@ begin
     'remaining_cash_krw', v_cash_remaining
   );
 end $$;
-
 alter function public.cms_fn_ar_apply_payment_fifo_v1(uuid,text,numeric,numeric,numeric,timestamptz,text)
   security definer
   set search_path = public, pg_temp;
-
 grant execute on function public.cms_fn_ar_apply_payment_fifo_v1(uuid,text,numeric,numeric,numeric,timestamptz,text)
   to authenticated;

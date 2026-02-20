@@ -1,5 +1,4 @@
 set search_path = public, pg_temp;
-
 create or replace function public.cms_fn_apply_silver_factor_fix_v1(
   p_shipment_id uuid
 )
@@ -120,7 +119,6 @@ begin
     'total_cost_krw', v_total_cost
   );
 end $$;
-
 create or replace function public.cms_fn_confirm_shipment_v3_cost_v1(
   p_shipment_id uuid,
   p_actor_person_id uuid default null,

@@ -14,7 +14,6 @@ language sql stable as $$
   order by t.observed_at desc
   limit 1;
 $$;
-
 -- ------------------------------------------------------------
 -- Helper: pick plating rule (most specific first, then priority)
 -- ------------------------------------------------------------
@@ -51,7 +50,6 @@ language sql stable as $$
     r.effective_from desc
   limit 1;
 $$;
-
 -- ------------------------------------------------------------
 -- Helper: pick labor band rule
 -- ------------------------------------------------------------
@@ -94,7 +92,6 @@ language sql stable as $$
   order by b.effective_from desc
   limit 1;
 $$;
-
 -- ------------------------------------------------------------
 -- RPC #1: 출고 확정 (가격 스냅샷 잠금 + AR 원장 + 상태 업데이트)
 -- ------------------------------------------------------------
@@ -625,7 +622,6 @@ begin
     'total_cost_krw', v_total_cost
   );
 end $$;
-
 -- ------------------------------------------------------------
 -- RPC #2: 결제 등록 (복수 수단) + AR 원장(PAYMENT)
 -- p_tenders: jsonb array [{method:'BANK', amount_krw:12345, meta:{...}}, ...]
@@ -684,7 +680,6 @@ begin
     'total_amount_krw', round(v_total,0)
   );
 end $$;
-
 -- ------------------------------------------------------------
 -- RPC #3: 반품 등록(부분반품 + override) + AR 원장(RETURN)
 -- override 없으면: (출고라인금액/출고라인수량)*반품수량

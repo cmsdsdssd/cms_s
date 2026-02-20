@@ -1,7 +1,5 @@
 set search_path = public, pg_temp;
-
 begin;
-
 -- ============================================================
 -- 0) Patch: cms_fn_add_shipment_line_from_repair_v1
 --    (record field access was using r.measured_weight_g; repair_line uses weight_received_g)
@@ -75,19 +73,16 @@ begin
 
   return v_id;
 end $$;
-
 alter function public.cms_fn_add_shipment_line_from_repair_v1(
   uuid, uuid, int, cms_e_pricing_mode, cms_e_category_code, cms_e_material_code,
   boolean, uuid, numeric, numeric, numeric, text
 )
   security definer
   set search_path = public, pg_temp;
-
 grant execute on function public.cms_fn_add_shipment_line_from_repair_v1(
   uuid, uuid, int, cms_e_pricing_mode, cms_e_category_code, cms_e_material_code,
   boolean, uuid, numeric, numeric, numeric, text
 ) to authenticated, service_role;
-
 -- ============================================================
 -- 1) View: cms_v_repair_workbench_v1
 -- ============================================================
@@ -174,14 +169,11 @@ left join lateral (
   order by sh.created_at desc
   limit 1
 ) link on true;
-
 grant select on public.cms_v_repair_workbench_v1 to authenticated, service_role;
-
 -- ============================================================
 -- 2) RPC: cms_fn_create_repair_v2 (fields 확장)
 -- ============================================================
 drop function if exists public.cms_fn_create_repair_v2(uuid,text,jsonb,uuid,uuid);
-
 create function public.cms_fn_create_repair_v2(
   p_party_id uuid,
   p_notes text default null,
@@ -329,14 +321,11 @@ begin
 
   return v_first_id;
 end $$;
-
 alter function public.cms_fn_create_repair_v2(uuid,text,jsonb,uuid,uuid)
   security definer
   set search_path = public, pg_temp;
-
 grant execute on function public.cms_fn_create_repair_v2(uuid,text,jsonb,uuid,uuid)
   to authenticated, service_role;
-
 -- ============================================================
 -- 3) RPC: cms_fn_update_repair_line_v2
 -- ============================================================
@@ -350,7 +339,6 @@ drop function if exists public.cms_fn_update_repair_line_v2(
   boolean,
   uuid, text, uuid
 );
-
 create function public.cms_fn_update_repair_line_v2(
   p_repair_line_id uuid,
   p_received_at date default null,
@@ -462,7 +450,6 @@ begin
 
   return p_repair_line_id;
 end $$;
-
 alter function public.cms_fn_update_repair_line_v2(
   uuid, date, date, public.cms_e_priority_code,
   text, text, public.cms_e_material_code, text,
@@ -475,7 +462,6 @@ alter function public.cms_fn_update_repair_line_v2(
 )
   security definer
   set search_path = public, pg_temp;
-
 grant execute on function public.cms_fn_update_repair_line_v2(
   uuid, date, date, public.cms_e_priority_code,
   text, text, public.cms_e_material_code, text,
@@ -486,12 +472,10 @@ grant execute on function public.cms_fn_update_repair_line_v2(
   boolean,
   uuid, text, uuid
 ) to authenticated, service_role;
-
 -- ============================================================
 -- 4) RPC: cms_fn_set_repair_status_v2 (memo 덮어쓰기 방지)
 -- ============================================================
 drop function if exists public.cms_fn_set_repair_status_v2(uuid,public.cms_e_repair_status,uuid,text,uuid);
-
 create function public.cms_fn_set_repair_status_v2(
   p_repair_id uuid,
   p_status public.cms_e_repair_status,
@@ -543,19 +527,15 @@ begin
     p_reason
   );
 end $$;
-
 alter function public.cms_fn_set_repair_status_v2(uuid,public.cms_e_repair_status,uuid,text,uuid)
   security definer
   set search_path = public, pg_temp;
-
 grant execute on function public.cms_fn_set_repair_status_v2(uuid,public.cms_e_repair_status,uuid,text,uuid)
   to authenticated, service_role;
-
 -- ============================================================
 -- 5) RPC: cms_fn_send_repair_to_shipment_v2 (기존 DRAFT 출고에 붙이기 가능)
 -- ============================================================
 drop function if exists public.cms_fn_send_repair_to_shipment_v2(uuid,uuid,numeric,text,uuid,text,uuid);
-
 create function public.cms_fn_send_repair_to_shipment_v2(
   p_repair_id uuid,
   p_target_shipment_id uuid default null,
@@ -686,12 +666,9 @@ begin
 
   return v_shipment_id;
 end $$;
-
 alter function public.cms_fn_send_repair_to_shipment_v2(uuid,uuid,numeric,text,uuid,text,uuid)
   security definer
   set search_path = public, pg_temp;
-
 grant execute on function public.cms_fn_send_repair_to_shipment_v2(uuid,uuid,numeric,text,uuid,text,uuid)
   to authenticated, service_role;
-
 commit;

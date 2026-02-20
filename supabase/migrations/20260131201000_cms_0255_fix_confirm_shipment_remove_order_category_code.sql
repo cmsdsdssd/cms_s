@@ -1,5 +1,4 @@
 set search_path = public, pg_temp;
-
 -- ------------------------------------------------------------
 -- cms_0255: fix confirm_shipment schema mismatch
 --

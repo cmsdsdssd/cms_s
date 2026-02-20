@@ -1,5 +1,4 @@
 set search_path = public, pg_temp;
-
 -- cms_0259: fix enum mismatch in cms_fn_confirm_shipment
 -- symptom:
 --   22P02 invalid input value for enum cms_e_pricing_mode: "MANUAL"
@@ -38,6 +37,5 @@ begin
 
   execute v_def;
 end $$;
-
 -- (옵션) 실행권한 보강: 로그인 없이 쓰는 동안 막히지 않게
 grant execute on function public.cms_fn_confirm_shipment(uuid,uuid,text) to anon, authenticated;

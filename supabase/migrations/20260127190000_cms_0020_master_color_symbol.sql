@@ -1,11 +1,8 @@
 set search_path = public, pg_temp;
-
 alter table if exists public.cms_master_item
   add column if not exists color text,
   add column if not exists symbol text;
-
 drop view if exists public.v_cms_master_item_lookup;
-
 create view public.v_cms_master_item_lookup
 with (security_invoker = true)
 as
@@ -55,5 +52,4 @@ select
 from public.cms_master_item m
 left join public.cms_party p on p.party_id = m.vendor_party_id
 cross join ticks t;
-
 grant select on public.v_cms_master_item_lookup to anon, authenticated;

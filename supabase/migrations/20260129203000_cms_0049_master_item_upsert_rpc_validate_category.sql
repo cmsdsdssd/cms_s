@@ -1,5 +1,4 @@
 set search_path = public, pg_temp;
-
 create or replace function public.cms_fn_upsert_master_item_v1(
   p_master_id uuid default null,
   p_model_name text default null,  -- ✅ 여기만 추가
@@ -97,7 +96,6 @@ begin
 
   return v_id;
 end $$;
-
 grant execute on function public.cms_fn_upsert_master_item_v1(
   uuid, text, public.cms_e_master_kind, public.cms_e_category_code,
   public.cms_e_material_code, numeric, numeric, int, int, int, uuid, text, text, uuid

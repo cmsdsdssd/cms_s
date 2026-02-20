@@ -1,9 +1,7 @@
 set search_path = public, pg_temp;
-
 do $$ begin
   create type public.cms_e_ap_entry_type as enum ('BILL','PAYMENT','OFFSET','ADJUST');
 exception when duplicate_object then null; end $$;
-
 create table if not exists public.cms_ap_ledger (
   ap_ledger_id uuid primary key default gen_random_uuid(),
   vendor_party_id uuid not null references public.cms_party(party_id),
@@ -15,25 +13,19 @@ create table if not exists public.cms_ap_ledger (
   memo text,
   created_at timestamptz not null default now()
 );
-
 create index if not exists idx_cms_ap_ledger_vendor_occurred
   on public.cms_ap_ledger(vendor_party_id, occurred_at desc);
-
 create unique index if not exists uq_cms_ap_ledger_bill_receipt
   on public.cms_ap_ledger(receipt_id)
   where receipt_id is not null and entry_type = 'BILL'::public.cms_e_ap_entry_type;
-
 alter table public.cms_ap_ledger enable row level security;
 drop policy if exists cms_select_authenticated on public.cms_ap_ledger;
 create policy cms_select_authenticated on public.cms_ap_ledger for select to authenticated using (true);
-
 alter table public.cms_receipt_inbox
   add column if not exists bill_no text;
-
 create unique index if not exists uq_cms_receipt_inbox_vendor_bill_no
   on public.cms_receipt_inbox(vendor_party_id, bill_no)
   where bill_no is not null;
-
 create table if not exists public.cms_vendor_bill_allocation (
   allocation_id uuid primary key default gen_random_uuid(),
   bill_id uuid not null references public.cms_receipt_inbox(receipt_id) on delete cascade,
@@ -43,30 +35,22 @@ create table if not exists public.cms_vendor_bill_allocation (
   created_at timestamptz not null default now(),
   created_by uuid references public.cms_person(person_id)
 );
-
 create unique index if not exists uq_cms_vendor_bill_allocation
   on public.cms_vendor_bill_allocation(bill_id, shipment_id);
-
 create index if not exists idx_cms_vendor_bill_allocation_bill
   on public.cms_vendor_bill_allocation(bill_id);
-
 alter table public.cms_vendor_bill_allocation enable row level security;
 drop policy if exists cms_select_authenticated on public.cms_vendor_bill_allocation;
 create policy cms_select_authenticated on public.cms_vendor_bill_allocation for select to authenticated using (true);
-
 alter table public.cms_repair_line
   add column if not exists issue_desc text,
   add column if not exists repair_fee_reason text;
-
 alter table public.cms_shipment_header
   add column if not exists source_type text,
   add column if not exists source_id uuid;
-
 alter table public.cms_shipment_line
   add column if not exists repair_fee_reason text;
-
 drop view if exists public.cms_v_repair_line_enriched_v1 cascade;
-
 create view public.cms_v_repair_line_enriched_v1 as
 select
   r.repair_line_id,
@@ -96,9 +80,7 @@ select
 from public.cms_repair_line r
 left join public.cms_party p on p.party_id = r.customer_party_id
 left join public.cms_plating_variant pv on pv.plating_variant_id = r.plating_variant_id;
-
 grant select on public.cms_v_repair_line_enriched_v1 to authenticated;
-
 create or replace view public.cms_v_shipment_cost_apply_candidates_v1 as
 select
   sh.shipment_id,
@@ -119,11 +101,8 @@ from public.cms_shipment_header sh
 join public.cms_shipment_line sl on sl.shipment_id = sh.shipment_id
 left join public.cms_party cp on cp.party_id = sh.customer_party_id
 group by sh.shipment_id, sh.ship_date, sh.status, sh.customer_party_id, cp.name;
-
 grant select on public.cms_v_shipment_cost_apply_candidates_v1 to authenticated, service_role;
-
 drop view if exists public.cms_v_receipt_inbox_open_v1 cascade;
-
 create view public.cms_v_receipt_inbox_open_v1 as
 with linked_sh as (
   select distinct
@@ -215,9 +194,7 @@ left join public.cms_party vp on vp.party_id = r.vendor_party_id
 left join public.cms_receipt_pricing_snapshot s on s.receipt_id = r.receipt_id
 left join ship_agg a on a.receipt_id = r.receipt_id
 where r.status <> 'ARCHIVED'::public.cms_e_receipt_status;
-
 grant select on public.cms_v_receipt_inbox_open_v1 to authenticated, service_role;
-
 create or replace function public.cms_fn_upsert_receipt_usage_alloc_v1(
   p_receipt_id uuid,
   p_entity_type text,
@@ -250,14 +227,11 @@ begin
   set status = 'LINKED'::public.cms_e_receipt_status
   where receipt_id = p_receipt_id;
 end $$;
-
 alter function public.cms_fn_upsert_receipt_usage_alloc_v1(uuid,text,uuid,uuid,text,uuid)
   security definer
   set search_path = public, pg_temp;
-
 grant execute on function public.cms_fn_upsert_receipt_usage_alloc_v1(uuid,text,uuid,uuid,text,uuid)
   to authenticated, service_role;
-
 create or replace function public.cms_fn_create_vendor_bill_v1(
   p_vendor_party_id uuid,
   p_bill_no text default null,
@@ -378,14 +352,11 @@ begin
 
   return v_id;
 end $$;
-
 alter function public.cms_fn_create_vendor_bill_v1(uuid,text,date,text,numeric,jsonb,uuid,uuid)
   security definer
   set search_path = public, pg_temp;
-
 grant execute on function public.cms_fn_create_vendor_bill_v1(uuid,text,date,text,numeric,jsonb,uuid,uuid)
   to authenticated, service_role;
-
 create or replace function public.cms_fn_update_vendor_bill_header_v1(
   p_receipt_id uuid,
   p_vendor_party_id uuid default null,
@@ -426,14 +397,11 @@ begin
     raise exception using errcode='P0001', message='receipt not found';
   end if;
 end $$;
-
 alter function public.cms_fn_update_vendor_bill_header_v1(uuid,uuid,text,date,text,jsonb)
   security definer
   set search_path = public, pg_temp;
-
 grant execute on function public.cms_fn_update_vendor_bill_header_v1(uuid,uuid,text,date,text,jsonb)
   to authenticated, service_role;
-
 create or replace function public.cms_fn_apply_vendor_bill_to_shipments_v1(
   p_bill_id uuid,
   p_allocations jsonb,
@@ -628,14 +596,11 @@ begin
     'allocations', v_results
   );
 end $$;
-
 alter function public.cms_fn_apply_vendor_bill_to_shipments_v1(uuid,jsonb,uuid,text,uuid,boolean,text)
   security definer
   set search_path = public, pg_temp;
-
 grant execute on function public.cms_fn_apply_vendor_bill_to_shipments_v1(uuid,jsonb,uuid,text,uuid,boolean,text)
   to authenticated, service_role;
-
 create or replace function public.cms_fn_create_repair_v1(
   p_party_id uuid,
   p_notes text default null,
@@ -717,16 +682,12 @@ begin
 
   return v_first_id;
 end $$;
-
 alter function public.cms_fn_create_repair_v1(uuid,text,jsonb,uuid,uuid)
   security definer
   set search_path = public, pg_temp;
-
 grant execute on function public.cms_fn_create_repair_v1(uuid,text,jsonb,uuid,uuid)
   to authenticated, service_role;
-
 drop function if exists public.cms_fn_set_repair_status_v1(uuid,public.cms_e_repair_status,uuid,text,uuid);
-
 create function public.cms_fn_set_repair_status_v1(
   p_repair_id uuid,
   p_status public.cms_e_repair_status,
@@ -756,14 +717,11 @@ begin
     raise exception using errcode='P0001', message='repair not found';
   end if;
 end $$;
-
 alter function public.cms_fn_set_repair_status_v1(uuid,public.cms_e_repair_status,uuid,text,uuid)
   security definer
   set search_path = public, pg_temp;
-
 grant execute on function public.cms_fn_set_repair_status_v1(uuid,public.cms_e_repair_status,uuid,text,uuid)
   to authenticated, service_role;
-
 create or replace function public.cms_fn_send_repair_to_shipment_v1(
   p_repair_id uuid,
   p_extra_fee_krw numeric default 0,
@@ -861,10 +819,8 @@ begin
 
   return v_shipment_id;
 end $$;
-
 alter function public.cms_fn_send_repair_to_shipment_v1(uuid,numeric,text,uuid,text,uuid)
   security definer
   set search_path = public, pg_temp;
-
 grant execute on function public.cms_fn_send_repair_to_shipment_v1(uuid,numeric,text,uuid,text,uuid)
   to authenticated, service_role;

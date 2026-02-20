@@ -4,7 +4,6 @@
 -- ADD-ONLY. public.cms_* only.
 
 set search_path = public;
-
 create table if not exists public.cms_market_symbol_role (
   role_code text primary key, -- e.g. 'GOLD', 'SILVER'
   symbol public.cms_e_market_symbol not null unique,
@@ -16,13 +15,10 @@ create table if not exists public.cms_market_symbol_role (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
-
 create index if not exists idx_cms_market_symbol_role_active
 on public.cms_market_symbol_role(is_active, role_code);
-
 comment on table public.cms_market_symbol_role
 is 'Maps business roles (GOLD/SILVER) to actual cms_e_market_symbol enum labels.';
-
 -- Role view
 drop view if exists public.cms_v_market_symbol_role_v1;
 create view public.cms_v_market_symbol_role_v1 as
@@ -37,10 +33,8 @@ select
   created_at,
   updated_at
 from public.cms_market_symbol_role;
-
 comment on view public.cms_v_market_symbol_role_v1
 is 'Read view for market symbol role mapping.';
-
 -- Set role mapping (RPC)
 create or replace function public.cms_fn_set_market_symbol_role_v1(
   p_role_code text,
@@ -107,10 +101,8 @@ begin
   );
 end;
 $$;
-
 comment on function public.cms_fn_set_market_symbol_role_v1(text, public.cms_e_market_symbol, uuid, uuid, text)
 is 'Set mapping: role_code (GOLD/SILVER) -> cms_e_market_symbol. Writes cms_decision_log.';
-
 -- Upsert tick (RPC)
 create or replace function public.cms_fn_upsert_market_tick_v1(
   p_symbol public.cms_e_market_symbol,
@@ -151,10 +143,8 @@ begin
   return v_id;
 end;
 $$;
-
 comment on function public.cms_fn_upsert_market_tick_v1(public.cms_e_market_symbol, numeric, timestamptz, text, jsonb, uuid, uuid, text)
 is 'Upsert market tick. De-duplicates by (symbol, observed_at, source) for active ticks.';
-
 -- Get symbol by role (RPC)
 create or replace function public.cms_fn_get_market_symbol_by_role_v1(
   p_role_code text
@@ -180,10 +170,8 @@ begin
   return v_symbol;
 end;
 $$;
-
 comment on function public.cms_fn_get_market_symbol_by_role_v1(text)
 is 'Resolve role_code (GOLD/SILVER) to actual cms_e_market_symbol enum label.';
-
 -- Convenience: upsert tick by role (RPC)
 create or replace function public.cms_fn_upsert_market_tick_by_role_v1(
   p_role_code text,
@@ -215,10 +203,8 @@ begin
   );
 end;
 $$;
-
 comment on function public.cms_fn_upsert_market_tick_by_role_v1(text, numeric, timestamptz, text, jsonb, uuid, uuid, text)
 is 'Upsert tick using role_code (GOLD/SILVER) instead of enum label. price is KRW per g.';
-
 -- Convenience: latest tick by role (RPC)
 create or replace function public.cms_fn_latest_tick_by_role_v1(
   p_role_code text
@@ -242,10 +228,8 @@ begin
   from public.cms_fn_latest_tick(v_symbol) t;
 end;
 $$;
-
 comment on function public.cms_fn_latest_tick_by_role_v1(text)
 is 'Latest tick by role_code (GOLD/SILVER).';
-
 -- Auto-init mapping
 do $$
 begin

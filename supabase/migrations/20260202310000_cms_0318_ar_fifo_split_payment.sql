@@ -1,9 +1,7 @@
 set search_path = public, pg_temp;
-
 do $$ begin
   create type cms_e_commodity_type as enum ('gold','silver');
 exception when duplicate_object then null; end $$;
-
 create table if not exists public.cms_ar_invoice (
   ar_id uuid primary key default gen_random_uuid(),
   party_id uuid not null references public.cms_party(party_id),
@@ -20,13 +18,10 @@ create table if not exists public.cms_ar_invoice (
 
   created_at timestamptz not null default now()
 );
-
 create index if not exists idx_cms_ar_invoice_party_occurred
   on public.cms_ar_invoice(party_id, occurred_at);
-
 create index if not exists idx_cms_ar_invoice_shipment_line
   on public.cms_ar_invoice(shipment_line_id);
-
 create table if not exists public.cms_ar_payment (
   payment_id uuid primary key default gen_random_uuid(),
   party_id uuid not null references public.cms_party(party_id),
@@ -42,13 +37,10 @@ create table if not exists public.cms_ar_payment (
   constraint cms_ar_payment_gold_nonnegative check (gold_g >= 0),
   constraint cms_ar_payment_silver_nonnegative check (silver_g >= 0)
 );
-
 create unique index if not exists idx_cms_ar_payment_party_idempotency
   on public.cms_ar_payment(party_id, idempotency_key);
-
 create index if not exists idx_cms_ar_payment_party_paid_at
   on public.cms_ar_payment(party_id, paid_at desc);
-
 create table if not exists public.cms_ar_payment_alloc (
   alloc_id uuid primary key default gen_random_uuid(),
   payment_id uuid not null references public.cms_ar_payment(payment_id) on delete cascade,
@@ -63,47 +55,25 @@ create table if not exists public.cms_ar_payment_alloc (
   constraint cms_ar_payment_alloc_silver_nonnegative check (alloc_silver_g >= 0),
   constraint cms_ar_payment_alloc_value_nonnegative check (alloc_value_krw >= 0)
 );
-
 create index if not exists idx_cms_ar_payment_alloc_payment
   on public.cms_ar_payment_alloc(payment_id);
-
 create index if not exists idx_cms_ar_payment_alloc_ar
   on public.cms_ar_payment_alloc(ar_id);
-
 alter table public.cms_ar_invoice enable row level security;
 alter table public.cms_ar_payment enable row level security;
 alter table public.cms_ar_payment_alloc enable row level security;
-
 drop policy if exists cms_select_authenticated on public.cms_ar_invoice;
 drop policy if exists cms_select_authenticated on public.cms_ar_payment;
 drop policy if exists cms_select_authenticated on public.cms_ar_payment_alloc;
-
 create policy cms_select_authenticated on public.cms_ar_invoice
   for select to authenticated using (true);
-
-create policy cms_select_anon on public.cms_ar_invoice
-  for select to anon using (true);
-
 create policy cms_select_authenticated on public.cms_ar_payment
   for select to authenticated using (true);
-
-create policy cms_select_anon on public.cms_ar_payment
-  for select to anon using (true);
-
 create policy cms_select_authenticated on public.cms_ar_payment_alloc
   for select to authenticated using (true);
-
-create policy cms_select_anon on public.cms_ar_payment_alloc
-  for select to anon using (true);
-
 grant select on public.cms_ar_invoice to authenticated;
 grant select on public.cms_ar_payment to authenticated;
 grant select on public.cms_ar_payment_alloc to authenticated;
-
-grant select on public.cms_ar_invoice to anon;
-grant select on public.cms_ar_payment to anon;
-grant select on public.cms_ar_payment_alloc to anon;
-
 create or replace view public.cms_v_ar_invoice_position_v1
 with (security_invoker = true)
 as
@@ -265,7 +235,6 @@ from public.cms_ar_invoice i
 left join alloc a on a.ar_id = i.ar_id
 left join returns r on r.shipment_line_id = i.shipment_line_id
 left join public.cms_shipment_line sl on sl.shipment_line_id = i.shipment_line_id;
-
 create or replace view public.cms_v_ar_position_by_party_v2
 with (security_invoker = true)
 as
@@ -285,7 +254,6 @@ select
 from public.cms_v_ar_balance_by_party b
 left join public.cms_v_ar_invoice_position_v1 p on p.party_id = b.party_id
 group by b.party_id, b.party_type, b.name, b.balance_krw, b.last_activity_at;
-
 create or replace view public.cms_v_ar_payment_alloc_detail_v1
 with (security_invoker = true)
 as
@@ -318,15 +286,9 @@ from public.cms_ar_payment p
 left join public.cms_ar_payment_alloc a on a.payment_id = p.payment_id
 left join public.cms_ar_invoice i on i.ar_id = a.ar_id
 left join public.cms_shipment_line sl on sl.shipment_line_id = i.shipment_line_id;
-
 grant select on public.cms_v_ar_invoice_position_v1 to authenticated;
 grant select on public.cms_v_ar_position_by_party_v2 to authenticated;
 grant select on public.cms_v_ar_payment_alloc_detail_v1 to authenticated;
-
-grant select on public.cms_v_ar_invoice_position_v1 to anon;
-grant select on public.cms_v_ar_position_by_party_v2 to anon;
-grant select on public.cms_v_ar_payment_alloc_detail_v1 to anon;
-
 create or replace function public.cms_fn_ar_create_from_shipment_confirm_v1(
   p_shipment_id uuid
 )
@@ -444,13 +406,10 @@ begin
     'inserted', v_inserted
   );
 end $$;
-
 alter function public.cms_fn_ar_create_from_shipment_confirm_v1(uuid)
   security definer
   set search_path = public, pg_temp;
-
 grant execute on function public.cms_fn_ar_create_from_shipment_confirm_v1(uuid) to authenticated;
-
 create or replace function public.cms_fn_confirm_shipment_v2(
   p_shipment_id uuid,
   p_actor_person_id uuid default null,
@@ -487,14 +446,11 @@ begin
 
   return v_result;
 end $$;
-
 alter function public.cms_fn_confirm_shipment_v2(uuid,uuid,text,boolean,uuid)
   security definer
   set search_path = public, pg_temp;
-
 grant execute on function public.cms_fn_confirm_shipment_v2(uuid,uuid,text,boolean,uuid)
   to authenticated;
-
 create or replace function public.cms_fn_ar_apply_payment_fifo_v1(
   p_party_id uuid,
   p_idempotency_key text,
@@ -702,10 +658,8 @@ begin
     'remaining_cash_krw', v_cash_remaining
   );
 end $$;
-
 alter function public.cms_fn_ar_apply_payment_fifo_v1(uuid,text,numeric,numeric,numeric,timestamptz,text)
   security definer
   set search_path = public, pg_temp;
-
 grant execute on function public.cms_fn_ar_apply_payment_fifo_v1(uuid,text,numeric,numeric,numeric,timestamptz,text)
   to authenticated;

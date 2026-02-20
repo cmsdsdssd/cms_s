@@ -1,5 +1,4 @@
 set search_path = public, pg_temp;
-
 create or replace function public.cms_fn_confirm_shipment_v3_cost_v1(
   p_shipment_id uuid,
   p_actor_person_id uuid default null,
@@ -79,10 +78,8 @@ begin
   return v_confirm
     || jsonb_build_object('correlation_id', v_corr);
 end $$;
-
 alter function public.cms_fn_confirm_shipment_v3_cost_v1(uuid,uuid,text,boolean,uuid,text,uuid,jsonb,boolean)
   security definer
   set search_path = public, pg_temp;
-
 grant execute on function public.cms_fn_confirm_shipment_v3_cost_v1(uuid,uuid,text,boolean,uuid,text,uuid,jsonb,boolean)
   to authenticated;

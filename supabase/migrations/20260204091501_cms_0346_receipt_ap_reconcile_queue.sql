@@ -9,7 +9,6 @@
 -- - asset_code는 확장 대비 enum으로 두되, 필요 시 type 확장 가능합니다.
 
 begin;
-
 -- ================
 -- 0) ENUM TYPES
 -- ================
@@ -59,8 +58,6 @@ begin
     create type cms_reconcile_issue_status as enum ('OPEN','ACKED','RESOLVED','IGNORED');
   end if;
 end $$;
-
-
 -- =========================
 -- 1) FACTORY RECEIPT SNAPSHOT
 -- =========================
@@ -80,15 +77,12 @@ create table if not exists cms_factory_receipt_snapshot (
 
   primary key (receipt_id, snapshot_version)
 );
-
 -- receipt_id별 current 1개 강제
 create unique index if not exists cms_factory_receipt_snapshot_one_current_per_receipt
   on cms_factory_receipt_snapshot (receipt_id)
   where is_current = true;
-
 create index if not exists cms_factory_receipt_snapshot_vendor_issued_at_idx
   on cms_factory_receipt_snapshot (vendor_party_id, issued_at desc);
-
 -- 하단 4행 row
 create table if not exists cms_factory_receipt_statement_row (
   receipt_id uuid not null,
@@ -105,7 +99,6 @@ create table if not exists cms_factory_receipt_statement_row (
 
   primary key (receipt_id, snapshot_version, row_code)
 );
-
 -- 하단 4행 legs(자산별 값)
 create table if not exists cms_factory_receipt_statement_leg (
   receipt_id uuid not null,
@@ -123,7 +116,6 @@ create table if not exists cms_factory_receipt_statement_leg (
 
   primary key (receipt_id, snapshot_version, row_code, asset_code)
 );
-
 -- 공장 본문 라인(환산 전: 제품중량)
 create table if not exists cms_factory_receipt_item_line (
   receipt_id uuid not null,
@@ -145,11 +137,8 @@ create table if not exists cms_factory_receipt_item_line (
 
   primary key (receipt_id, snapshot_version, line_no)
 );
-
 create index if not exists cms_factory_receipt_item_line_uuid_idx
   on cms_factory_receipt_item_line (line_uuid);
-
-
 -- ==================================
 -- 2) INTERNAL CALC SNAPSHOT (검증용)
 -- ==================================
@@ -169,12 +158,9 @@ create table if not exists cms_ap_internal_calc_snapshot (
 
   primary key (receipt_id, calc_version)
 );
-
 create unique index if not exists cms_ap_internal_calc_one_current_per_receipt
   on cms_ap_internal_calc_snapshot (receipt_id)
   where is_current = true;
-
-
 -- =========================
 -- 3) AP LEDGER (AR-like SoT)
 -- =========================
@@ -193,13 +179,10 @@ create table if not exists cms_ap_invoice (
   created_at timestamptz not null default now(),
   created_by uuid
 );
-
 create index if not exists cms_ap_invoice_vendor_time_idx
   on cms_ap_invoice (vendor_party_id, occurred_at asc);
-
 create index if not exists cms_ap_invoice_receipt_idx
   on cms_ap_invoice (receipt_id);
-
 create table if not exists cms_ap_invoice_leg (
   ap_id uuid not null,
   asset_code cms_asset_code not null,
@@ -207,7 +190,6 @@ create table if not exists cms_ap_invoice_leg (
 
   primary key (ap_id, asset_code)
 );
-
 create table if not exists cms_ap_payment (
   payment_id uuid primary key default gen_random_uuid(),
   vendor_party_id uuid not null,
@@ -219,14 +201,11 @@ create table if not exists cms_ap_payment (
   created_at timestamptz not null default now(),
   created_by uuid
 );
-
 create unique index if not exists cms_ap_payment_idem_unique
   on cms_ap_payment (vendor_party_id, idempotency_key)
   where idempotency_key is not null;
-
 create index if not exists cms_ap_payment_vendor_paid_at_idx
   on cms_ap_payment (vendor_party_id, paid_at desc);
-
 create table if not exists cms_ap_payment_leg (
   payment_id uuid not null,
   asset_code cms_asset_code not null,
@@ -234,7 +213,6 @@ create table if not exists cms_ap_payment_leg (
 
   primary key (payment_id, asset_code)
 );
-
 create table if not exists cms_ap_alloc (
   alloc_id uuid primary key default gen_random_uuid(),
   payment_id uuid not null,
@@ -243,13 +221,10 @@ create table if not exists cms_ap_alloc (
   created_at timestamptz not null default now(),
   created_by uuid
 );
-
 create index if not exists cms_ap_alloc_payment_idx
   on cms_ap_alloc (payment_id);
-
 create index if not exists cms_ap_alloc_ap_idx
   on cms_ap_alloc (ap_id);
-
 create table if not exists cms_ap_alloc_leg (
   alloc_id uuid not null,
   asset_code cms_asset_code not null,
@@ -257,8 +232,6 @@ create table if not exists cms_ap_alloc_leg (
 
   primary key (alloc_id, asset_code)
 );
-
-
 -- =========================
 -- 4) RECONCILE RUN / ISSUE QUEUE
 -- =========================
@@ -273,10 +246,8 @@ create table if not exists cms_ap_reconcile_run (
   created_at timestamptz not null default now(),
   created_by uuid
 );
-
 create index if not exists cms_ap_reconcile_run_vendor_created_idx
   on cms_ap_reconcile_run (vendor_party_id, created_at desc);
-
 create table if not exists cms_ap_reconcile_issue (
   issue_id uuid primary key default gen_random_uuid(),
   run_id uuid not null,
@@ -297,13 +268,10 @@ create table if not exists cms_ap_reconcile_issue (
   resolved_by uuid,
   resolution_note text
 );
-
 create index if not exists cms_ap_reconcile_issue_vendor_status_idx
   on cms_ap_reconcile_issue (vendor_party_id, status, severity, created_at desc);
-
 create index if not exists cms_ap_reconcile_issue_receipt_idx
   on cms_ap_reconcile_issue (receipt_id);
-
 create table if not exists cms_ap_reconcile_issue_leg (
   issue_id uuid not null,
   asset_code cms_asset_code not null,
@@ -314,7 +282,6 @@ create table if not exists cms_ap_reconcile_issue_leg (
 
   primary key (issue_id, asset_code)
 );
-
 -- 이슈 해결(조정 invoice) 연결
 create table if not exists cms_ap_adjustment_link (
   issue_id uuid not null,
@@ -323,8 +290,6 @@ create table if not exists cms_ap_adjustment_link (
   created_by uuid,
   primary key (issue_id, ap_id)
 );
-
-
 -- =========================
 -- 5) CONDITIONAL FKs (존재할 때만 붙이기)
 -- =========================
@@ -458,8 +423,6 @@ begin
   exception when duplicate_object then null;
   end;
 end $$;
-
-
 -- =========================
 -- 6) VIEWS FOR QUEUE/UX
 -- =========================
@@ -474,7 +437,6 @@ select
   max(created_at) filter (where status in ('OPEN','ACKED')) as last_open_at
 from cms_ap_reconcile_issue
 group by vendor_party_id;
-
 -- (B) 오픈 이슈 리스트(테이블)
 create or replace view cms_v_ap_reconcile_issue_list_v1 as
 select
@@ -491,5 +453,4 @@ select
   r.calc_version
 from cms_ap_reconcile_issue i
 join cms_ap_reconcile_run r on r.run_id = i.run_id;
-
 commit;

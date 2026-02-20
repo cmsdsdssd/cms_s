@@ -1,8 +1,6 @@
 -- 20260209151000_cms_0370_ap_pay_and_fifo_v2_lock.sql
 set search_path = public, pg_temp;
-
 begin;
-
 -- ============================================================
 -- v2: vendor 단위 advisory lock으로 FIFO 레이스 방지
 -- - v1은 그대로 둔다(호환/무충돌).
@@ -184,12 +182,9 @@ begin
     'unallocated', coalesce(v_unallocated,'[]'::jsonb)
   );
 end $$;
-
 alter function public.cms_fn_ap2_pay_and_fifo_v2(uuid,timestamptz,jsonb,text,text)
   security definer
   set search_path = public, pg_temp;
-
 grant execute on function public.cms_fn_ap2_pay_and_fifo_v2(uuid,timestamptz,jsonb,text,text)
   to authenticated, service_role;
-
 commit;

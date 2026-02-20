@@ -12,8 +12,6 @@ SELECT
   prosrc::text LIKE '%total_amount_sell_krw = COALESCE%' as total_계산_포함
 FROM pg_proc
 WHERE proname = 'cms_fn_shipment_upsert_from_order_line';
-
-
 -- 2️⃣ 테스트용 데이터 준비 (기존 DRAFT 출고 헤더 사용 또는 새로 생성)
 -- 실제 테스트 시 기존 customer_party_id와 order_line_id로 대체하세요
 DO $$
@@ -84,8 +82,6 @@ BEGIN
   END IF;
   
 END $$;
-
-
 -- 4️⃣ 최근 생성된 출고 데이터 확인 (수동 검증용)
 -- 최근 5건의 출고 라인을 확인하여 공임이 올바르게 저장되었는지 체크
 SELECT 
@@ -106,8 +102,6 @@ SELECT
 FROM cms_shipment_line sl
 ORDER BY sl.created_at DESC
 LIMIT 5;
-
-
 -- 5️⃣ AR 생성 테스트 (수동 트리거 테스트)
 -- 주의: 이 쿼리는 실제 출고를 CONFIRMED로 변경하므로 주의해서 사용!
 /*
@@ -143,7 +137,8 @@ SELECT
   MAX(created_at) as 최근누락일
 FROM cms_shipment_line
 WHERE (labor_total_sell_krw IS NULL OR labor_total_sell_krw = 0)
-  AND manual_labor_krw > 0;  -- 수동공임은 있는데 총공임이 없는 경우
+  AND manual_labor_krw > 0;
+-- 수동공임은 있는데 총공임이 없는 경우
 
 
 -- 7️⃣ 마이그레이션 적용 상태 확인

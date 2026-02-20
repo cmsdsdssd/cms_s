@@ -1,5 +1,4 @@
 set search_path = public, pg_temp;
-
 create or replace function public.cms_fn_category_code_from_model_name(p_model_name text)
 returns public.cms_e_category_code
 language plpgsql

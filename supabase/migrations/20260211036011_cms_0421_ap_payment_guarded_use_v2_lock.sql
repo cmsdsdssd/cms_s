@@ -1,8 +1,6 @@
 -- 20260211037010_cms_0421_ap_payment_guarded_use_v2_lock.sql
 set search_path = public, pg_temp;
-
 begin;
-
 -- ------------------------------------------------------------
 -- 결제 안전 가드 RPC 수정(ADD-ONLY):
 -- - 기존 시그니처/권한/리턴 형태 유지
@@ -45,12 +43,9 @@ begin
     p_idempotency_key
   );
 end $$;
-
 alter function public.cms_fn_ap2_pay_and_fifo_guarded_v1(uuid,timestamptz,jsonb,text,text)
   security definer
   set search_path = public, pg_temp;
-
 grant execute on function public.cms_fn_ap2_pay_and_fifo_guarded_v1(uuid,timestamptz,jsonb,text,text)
   to authenticated, service_role;
-
 commit;

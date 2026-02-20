@@ -1,4 +1,3 @@
-
 create or replace function cms_fn_upsert_vendor_prefix(
     p_vendor_party_id uuid,
     p_prefix text,

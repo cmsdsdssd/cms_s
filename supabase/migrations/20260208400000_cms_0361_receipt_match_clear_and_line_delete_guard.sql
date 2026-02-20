@@ -5,7 +5,6 @@
 -- 3) (안전장치) upsert_receipt_pricing_snapshot_v2: line_items=NULL로 덮어쓰기 방지
 
 set search_path = public, pg_temp;
-
 -- =========================================================
 -- 0) audit columns for match clear (ADD-ONLY)
 -- =========================================================
@@ -13,7 +12,6 @@ alter table public.cms_receipt_line_match
   add column if not exists cleared_at timestamptz,
   add column if not exists cleared_by uuid references public.cms_person(person_id),
   add column if not exists cleared_reason text;
-
 -- =========================================================
 -- 1) RPC: match clear (CONFIRMED -> CLEARED)
 -- =========================================================
@@ -313,14 +311,11 @@ begin
     'correlation_id', v_corr
   );
 end $$;
-
 alter function public.cms_fn_receipt_line_match_clear_v1(uuid,uuid,text,uuid,text,uuid)
   security definer
   set search_path = public, pg_temp;
-
 grant execute on function public.cms_fn_receipt_line_match_clear_v1(uuid,uuid,text,uuid,text,uuid)
 to authenticated, service_role;
-
 -- =========================================================
 -- 2) receipt line delete: core + wrapper (재귀 없이 가드)
 -- =========================================================
@@ -487,7 +482,6 @@ begin
     'ap', v_ap
   );
 end $$;
-
 -- 2-2) wrapper: "매칭/다운스트림 존재 시 삭제 금지" 가드 후 core 호출
 create or replace function public.cms_fn_receipt_line_delete_v1(
   p_receipt_id uuid,
@@ -586,18 +580,14 @@ begin
     p_correlation_id
   );
 end $$;
-
 alter function public.cms_fn_receipt_line_delete_core_v1(uuid,uuid,text,uuid,text,uuid)
   security definer
   set search_path = public, pg_temp;
-
 alter function public.cms_fn_receipt_line_delete_v1(uuid,uuid,text,uuid,text,uuid)
   security definer
   set search_path = public, pg_temp;
-
 grant execute on function public.cms_fn_receipt_line_delete_v1(uuid,uuid,text,uuid,text,uuid)
 to authenticated, service_role;
-
 -- =========================================================
 -- 3) Safety patch: prevent line_items NULL overwrite in upsert v2
 -- =========================================================
@@ -725,6 +715,5 @@ begin
     'fx_rate_krw_per_unit', v_fx_rate
   ));
 end $$;
-
 grant execute on function public.cms_fn_upsert_receipt_pricing_snapshot_v2(uuid,text,numeric,numeric,numeric,numeric,jsonb,uuid,text,uuid)
   to anon, authenticated, service_role;

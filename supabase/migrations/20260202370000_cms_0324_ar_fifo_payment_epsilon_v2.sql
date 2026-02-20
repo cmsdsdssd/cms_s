@@ -1,5 +1,4 @@
 set search_path = public, pg_temp;
-
 create or replace function public.cms_fn_ar_apply_payment_fifo_v1(
   p_party_id uuid,
   p_idempotency_key text,
@@ -245,10 +244,8 @@ begin
     'remaining_cash_krw', v_cash_remaining
   );
 end $$;
-
 alter function public.cms_fn_ar_apply_payment_fifo_v1(uuid,text,numeric,numeric,numeric,timestamptz,text)
   security definer
   set search_path = public, pg_temp;
-
 grant execute on function public.cms_fn_ar_apply_payment_fifo_v1(uuid,text,numeric,numeric,numeric,timestamptz,text)
   to authenticated;

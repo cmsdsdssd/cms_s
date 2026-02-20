@@ -6,7 +6,6 @@
 --    => v_material (enum: cms_e_material_code)로 판별하도록 수정.
 
 set search_path = public, pg_temp;
-
 create or replace function public.cms_fn_confirm_shipment(
   p_shipment_id uuid,
   p_actor_person_id uuid default null::uuid,

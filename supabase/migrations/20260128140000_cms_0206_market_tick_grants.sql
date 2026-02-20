@@ -3,13 +3,10 @@
 -- ADD-ONLY. public.cms_* only.
 
 set search_path = public;
-
 -- Grant SELECT on base table
 grant select on public.cms_market_tick to anon, authenticated;
-
 -- Grant SELECT on role mapping table
 grant select on public.cms_market_symbol_role to anon, authenticated;
-
 -- Grant SELECT on all market tick views
 grant select on public.cms_v_market_tick_latest_by_symbol_v1 to anon, authenticated;
 grant select on public.cms_v_market_tick_latest_gold_silver_v1 to anon, authenticated;
@@ -19,13 +16,11 @@ grant select on public.cms_v_market_tick_series_v1 to anon, authenticated;
 grant select on public.cms_v_market_tick_daily_ohlc_v1 to anon, authenticated;
 grant select on public.cms_v_market_tick_health_v1 to anon, authenticated;
 grant select on public.cms_v_market_symbol_role_v1 to anon, authenticated;
-
 -- Grant EXECUTE on RPC functions
 grant execute on function public.cms_fn_upsert_market_tick_by_role_v1(text, numeric, timestamptz, text, jsonb, uuid, uuid, text) to anon, authenticated;
 grant execute on function public.cms_fn_get_market_symbol_by_role_v1(text) to anon, authenticated;
 grant execute on function public.cms_fn_latest_tick_by_role_v1(text) to anon, authenticated;
 grant execute on function public.cms_fn_set_market_symbol_role_v1(text, public.cms_e_market_symbol, uuid, uuid, text) to anon, authenticated;
-
 -- Grant on underlying market tick functions (if they exist)
 do $$
 begin
@@ -45,6 +40,5 @@ begin
     grant execute on function public.cms_fn_seed_market_tick_demo_v1(uuid, uuid, boolean) to anon, authenticated;
   end if;
 end$$;
-
 comment on table public.cms_market_tick is 'Market tick data with anon/authenticated SELECT access';
 comment on table public.cms_market_symbol_role is 'Role mapping with anon/authenticated SELECT access';

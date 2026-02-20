@@ -1,5 +1,4 @@
 set search_path = public, pg_temp;
-
 -- ---------------------------------------------------------------------
 -- Receipt match <-> inventory receipt bridge
 -- - CONFIRMED transition  : emit inventory RECEIPT(+)
@@ -32,7 +31,6 @@ create table if not exists public.cms_receipt_match_inventory_link (
   unique (receipt_move_id),
   unique (reverse_move_id)
 );
-
 do $$
 begin
   create trigger trg_cms_receipt_match_inventory_link_updated_at
@@ -40,12 +38,9 @@ begin
   for each row execute function public.cms_fn_set_updated_at();
 exception when duplicate_object then null;
 end $$;
-
 create index if not exists idx_cms_receipt_match_inventory_link_active
   on public.cms_receipt_match_inventory_link(active);
-
 grant select on public.cms_receipt_match_inventory_link to authenticated, service_role;
-
 create or replace function public.cms_fn_emit_inventory_receipt_from_match_v1(
   p_receipt_id uuid,
   p_receipt_line_uuid uuid,
@@ -254,10 +249,8 @@ begin
 
   return v_move_id;
 end $$;
-
 grant execute on function public.cms_fn_emit_inventory_receipt_from_match_v1(uuid, uuid, uuid, uuid, uuid, text, uuid)
   to authenticated, service_role;
-
 create or replace function public.cms_fn_reverse_inventory_receipt_from_match_v1(
   p_receipt_id uuid,
   p_receipt_line_uuid uuid,
@@ -366,10 +359,8 @@ begin
 
   return v_move_id;
 end $$;
-
 grant execute on function public.cms_fn_reverse_inventory_receipt_from_match_v1(uuid, uuid, uuid, uuid, text, uuid)
   to authenticated, service_role;
-
 create or replace function public.cms_fn_receipt_match_inventory_sync_trg_v1()
 returns trigger
 language plpgsql
@@ -434,9 +425,7 @@ begin
 
   return null;
 end $$;
-
 drop trigger if exists trg_cms_receipt_match_inventory_sync on public.cms_receipt_line_match;
-
 create trigger trg_cms_receipt_match_inventory_sync
 after insert or update of status or delete
 on public.cms_receipt_line_match

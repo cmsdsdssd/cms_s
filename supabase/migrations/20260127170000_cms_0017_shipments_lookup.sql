@@ -1,5 +1,4 @@
 set search_path = public, pg_temp;
-
 -- 0017: shipment lookup + prefill + manual labor
 
 alter table if exists public.cms_shipment_line
@@ -44,7 +43,6 @@ select
 from public.cms_order_line o
 join public.cms_party p on p.party_id = o.customer_party_id
 left join public.cms_master_item m on m.model_name = o.model_name;
-
 create or replace function public.cms_fn_shipment_upsert_from_order_line(
   p_order_line_id uuid,
   p_weight_g numeric,
@@ -105,9 +103,7 @@ begin
 
   update public.cms_shipment_line
   set measured_weight_g = p_weight_g,
-      manual_labor_krw = p_total_labor,
-      labor_total_sell_krw = p_total_labor,
-      total_amount_sell_krw = COALESCE(material_amount_sell_krw, 0) + p_total_labor
+      manual_labor_krw = p_total_labor
   where shipment_line_id = v_line_id;
 
   return jsonb_build_object(
@@ -116,7 +112,6 @@ begin
     'status', 'DRAFT'
   );
 end $$;
-
 grant select on public.v_cms_order_lookup to anon, authenticated;
 grant select on public.v_cms_shipment_prefill to anon, authenticated;
 grant execute on function public.cms_fn_shipment_upsert_from_order_line(uuid, numeric, numeric, uuid, uuid) to authenticated;

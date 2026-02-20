@@ -1,28 +1,23 @@
 -- cms_0009: INPUT RPCs (create/update drafts) + grants
--- ?먯튃: DRAFT?먯꽌留??섏젙 媛?? CONFIRMED硫?李⑤떒
--- 紐⑹쟻: UI?먯꽌 "INSERT/UPDATE 吏곸젒" ?섏? ?딄퀬, RPC濡쒕쭔 ?낅젰/?섏젙 媛?ν븯寃?
+-- ?먯튃: DRAFT?먯꽌留??섏젙 媛?? CONFIRMED硫?李⑤떒
+-- 紐⑹쟻: UI?먯꽌 "INSERT/UPDATE 吏곸젒" ?섏? ?딄퀬, RPC濡쒕쭔 ?낅젰/?섏젙 媛?ν븯寃?
 
 -- ============================================================
--- 0) DROP (?쒓렇?덉쿂 蹂寃?以묐났 ?앹꽦 諛⑹?)
+-- 0) DROP (?쒓렇?덉쿂 蹂寃?以묐났 ?앹꽦 諛⑹?)
 -- ============================================================
 
 -- party/order/repair upsert (怨쇨굅 ?섎せ???쒓렇?덉쿂???ы븿)
 drop function if exists public.cms_fn_upsert_party_v1(uuid, cms_e_party_type, text, text, text, text, text);
 drop function if exists public.cms_fn_upsert_party_v1(cms_e_party_type, text, text, text, text, text, uuid);
-
 drop function if exists public.cms_fn_upsert_order_line_v1(uuid, uuid, text, text, text, int, text, boolean, uuid, text);
 drop function if exists public.cms_fn_upsert_order_line_v1(uuid, text, text, text, int, text, boolean, uuid, text, uuid);
-
 drop function if exists public.cms_fn_upsert_repair_line_v1(uuid, uuid, text, text, text, cms_e_material_code, int, numeric, boolean, uuid, numeric, date, text);
 drop function if exists public.cms_fn_upsert_repair_line_v1(uuid, text, text, text, cms_e_material_code, int, numeric, boolean, uuid, numeric, date, text, uuid);
-
 -- shipment draft helpers / inputs
 drop function if exists public.cms_fn_create_shipment_header_v1(uuid, date, text);
 drop function if exists public.cms_fn__assert_shipment_draft(uuid);
-
 drop function if exists public.cms_fn_add_shipment_line_from_order_v1(uuid, uuid, int, cms_e_pricing_mode, cms_e_category_code, cms_e_material_code, boolean, uuid, numeric, numeric, text);
 drop function if exists public.cms_fn_add_shipment_line_from_repair_v1(uuid, uuid, int, cms_e_pricing_mode, cms_e_category_code, cms_e_material_code, boolean, uuid, numeric, numeric, numeric, text);
-
 -- ad_hoc: (?대쾲???먮윭?щ뜕 ?쒓렇?덉쿂 ?ы븿?댁꽌) ?꾨? ?뺣━
 drop function if exists public.cms_fn_add_shipment_line_ad_hoc_v1(
   uuid, text, text, text,
@@ -37,10 +32,8 @@ drop function if exists public.cms_fn_add_shipment_line_ad_hoc_v1(
   cms_e_material_code, boolean, uuid,
   numeric, numeric, numeric, numeric, numeric, text
 );
-
 drop function if exists public.cms_fn_update_shipment_line_v1(uuid, int, cms_e_category_code, cms_e_material_code, numeric, numeric, boolean, uuid, cms_e_pricing_mode, numeric, numeric, numeric, text);
 drop function if exists public.cms_fn_delete_shipment_line_v1(uuid, text);
-
 -- ============================================================
 -- 1) 嫄곕옒泥?upsert (customer/vendor 怨듭슜)
 --    ??default???ㅼそ?쇰줈留?
@@ -79,7 +72,6 @@ begin
 
   return v_id;
 end $$;
-
 -- ============================================================
 -- 2) 二쇰Ц ?쇱씤 upsert (?ㅻ뜑 ?놁씠 ?쇱씤 ?⑥쐞)
 -- ============================================================
@@ -142,9 +134,8 @@ begin
 
   return v_id;
 end $$;
-
 -- ============================================================
--- 3) ?섎━ ?쇱씤 upsert (臾댁긽/?좎긽 + ?꾧툑 媛??
+-- 3) ?섎━ ?쇱씤 upsert (臾댁긽/?좎긽 + ?꾧툑 媛??
 -- ============================================================
 create or replace function public.cms_fn_upsert_repair_line_v1(
   p_customer_party_id uuid,
@@ -218,7 +209,6 @@ begin
 
   return v_id;
 end $$;
-
 -- ============================================================
 -- 4) 異쒓퀬臾몄꽌(DRAFT) ?앹꽦
 -- ============================================================
@@ -251,7 +241,6 @@ begin
 
   return v_id;
 end $$;
-
 -- ------------------------------------------------------------
 -- ?대? ?ы띁: 異쒓퀬臾몄꽌 DRAFT ?좉툑 泥댄겕
 -- ------------------------------------------------------------
@@ -276,7 +265,6 @@ begin
     raise exception 'shipment not DRAFT: %, status=%', p_shipment_id, v_status;
   end if;
 end $$;
-
 -- ============================================================
 -- 5) 異쒓퀬?쇱씤 異붽?: 二쇰Ц 湲곕컲
 -- ============================================================
@@ -343,7 +331,6 @@ begin
 
   return v_id;
 end $$;
-
 -- ============================================================
 -- 6) 異쒓퀬?쇱씤 異붽?: ?섎━ 湲곕컲
 -- ============================================================
@@ -413,7 +400,6 @@ begin
 
   return v_id;
 end $$;
-
 -- ============================================================
 -- 7) 異쒓퀬?쇱씤 異붽?: ?⑤룆(AD-HOC)
 --    ??(?대쾲 ?먮윭) ?꾩닔 p_category_code瑜?default???욎뿉 諛곗튂
@@ -487,7 +473,6 @@ begin
 
   return v_id;
 end $$;
-
 -- ============================================================
 -- 8) 異쒓퀬?쇱씤 ?섏젙 (DRAFT?먯꽌留?
 -- ============================================================
@@ -541,7 +526,6 @@ begin
 
   return jsonb_build_object('ok', true, 'shipment_line_id', p_shipment_line_id);
 end $$;
-
 -- ============================================================
 -- 9) 異쒓퀬?쇱씤 ??젣 (DRAFT?먯꽌留?
 -- ============================================================
@@ -572,7 +556,6 @@ begin
 
   return jsonb_build_object('ok', true, 'deleted', true, 'shipment_line_id', p_shipment_line_id);
 end $$;
-
 -- ============================================================
 -- 10) GRANTS: cms_fn_* ?꾨? authenticated EXEC ?덉슜
 -- ============================================================

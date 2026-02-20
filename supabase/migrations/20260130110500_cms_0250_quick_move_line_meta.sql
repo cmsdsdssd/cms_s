@@ -1,5 +1,4 @@
 set search_path = public, pg_temp;
-
 -- quick move: line.meta를 비우지 말고 header meta(예: session_id) + kind를 함께 기록
 create or replace function public.cms_fn_quick_inventory_move_v2(
   p_move_type public.cms_e_inventory_move_type,
@@ -102,7 +101,6 @@ begin
 
   return v_move_id;
 end $$;
-
 grant execute on function public.cms_fn_quick_inventory_move_v2(
   public.cms_e_inventory_move_type, text, numeric, timestamptz, uuid, text, text, text, text, text, jsonb, text, uuid, text, uuid, uuid
 ) to authenticated;

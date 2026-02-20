@@ -1,5 +1,4 @@
 set search_path = public, pg_temp;
-
 -- restore to the canonical (0225) implementations
 -- IMPORTANT: use party_id (header has no vendor_party_id)
 
@@ -146,8 +145,6 @@ begin
 
   return v_move_id;
 end $$;
-
-
 create or replace function public.cms_fn_record_part_usage_v1(
   p_lines jsonb,
   p_occurred_at timestamptz default now(),

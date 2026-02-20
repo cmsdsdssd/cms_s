@@ -3,11 +3,9 @@
 -- 핵심 원칙: "무엇이 당일 포함인가"는 cms_ar_ledger.occurred_at(KST day bounds)만 사용
 
 set search_path = public, pg_temp;
-
 -- (옵션) 성능 보강 인덱스 (이미 있으면 스킵)
 create index if not exists idx_cms_ar_ledger_type_party_occurred
   on public.cms_ar_ledger(entry_type, party_id, occurred_at desc);
-
 -- 메인 RPC: party_ids + kst_date 로 "원장 기준 완벽 정합" 일일 스테이트먼트 반환
 create or replace function public.cms_fn_shipments_print_ledger_statement_v1(
   p_party_ids uuid[] default null,
@@ -443,10 +441,8 @@ left join day_ledger dl on dl.party_id = ps.party_id
 left join details_json dj on dj.party_id = ps.party_id
 order by ps.party_id;
 $$;
-
 alter function public.cms_fn_shipments_print_ledger_statement_v1(uuid[], date)
   security definer
   set search_path = public, pg_temp;
-
 grant execute on function public.cms_fn_shipments_print_ledger_statement_v1(uuid[], date)
   to authenticated;

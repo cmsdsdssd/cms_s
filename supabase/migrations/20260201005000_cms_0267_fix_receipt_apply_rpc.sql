@@ -1,5 +1,4 @@
 set search_path = public, pg_temp;
-
 -- cms_0267: Fix apply RPC (shipment_id alias bug) + write allocation back to cms_receipt_usage
 
 create or replace function public.cms_fn_apply_receipt_pricing_snapshot_v1(
@@ -271,10 +270,8 @@ begin
     'allocations', v_allocations
   ));
 end $$;
-
 alter function public.cms_fn_apply_receipt_pricing_snapshot_v1(uuid,uuid,text,uuid,boolean)
   security definer
   set search_path = public, pg_temp;
-
 grant execute on function public.cms_fn_apply_receipt_pricing_snapshot_v1(uuid,uuid,text,uuid,boolean)
   to anon, authenticated, service_role;

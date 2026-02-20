@@ -21,11 +21,9 @@ CREATE TABLE IF NOT EXISTS cms_factory_po (
     updated_at timestamptz NOT NULL DEFAULT now(),
     memo text
 );
-
 CREATE INDEX IF NOT EXISTS idx_cms_factory_po_vendor_prefix ON cms_factory_po(vendor_prefix);
 CREATE INDEX IF NOT EXISTS idx_cms_factory_po_status ON cms_factory_po(status);
 CREATE INDEX IF NOT EXISTS idx_cms_factory_po_created_at ON cms_factory_po(created_at);
-
 -- ============================================
 -- 2. Create PO Line Items table
 -- ============================================
@@ -36,10 +34,8 @@ CREATE TABLE IF NOT EXISTS cms_factory_po_line (
     created_at timestamptz NOT NULL DEFAULT now(),
     UNIQUE(po_id, order_line_id)
 );
-
 CREATE INDEX IF NOT EXISTS idx_cms_factory_po_line_po_id ON cms_factory_po_line(po_id);
 CREATE INDEX IF NOT EXISTS idx_cms_factory_po_line_order_line_id ON cms_factory_po_line(order_line_id);
-
 -- ============================================
 -- 3. Create Fax Transmission Log table
 -- ============================================
@@ -55,10 +51,8 @@ CREATE TABLE IF NOT EXISTS cms_fax_log (
     created_at timestamptz NOT NULL DEFAULT now(),
     created_by uuid REFERENCES cms_person(person_id)
 );
-
 CREATE INDEX IF NOT EXISTS idx_cms_fax_log_po_id ON cms_fax_log(po_id);
 CREATE INDEX IF NOT EXISTS idx_cms_fax_log_created_at ON cms_fax_log(created_at);
-
 -- ============================================
 -- 4. Create Vendor Settings table for fax configuration
 -- ============================================
@@ -76,9 +70,7 @@ CREATE TABLE IF NOT EXISTS cms_vendor_fax_config (
     updated_at timestamptz NOT NULL DEFAULT now(),
     meta jsonb DEFAULT '{}'::jsonb
 );
-
 CREATE INDEX IF NOT EXISTS idx_cms_vendor_fax_config_vendor_party_id ON cms_vendor_fax_config(vendor_party_id);
-
 -- ============================================
 -- 5. Add columns to cms_order_line
 -- ============================================
@@ -100,11 +92,9 @@ BEGIN
         ALTER TABLE cms_order_line ADD COLUMN vendor_prefix text;
     END IF;
 END $$;
-
 CREATE INDEX IF NOT EXISTS idx_cms_order_line_vendor_prefix ON cms_order_line(vendor_prefix);
 CREATE INDEX IF NOT EXISTS idx_cms_order_line_factory_po_id ON cms_order_line(factory_po_id);
 CREATE INDEX IF NOT EXISTS idx_cms_order_line_status_sent_at ON cms_order_line(status, sent_to_vendor_at);
-
 -- ============================================
 -- 6. Create View for Unshipped Order Lines
 -- ============================================
@@ -157,7 +147,6 @@ LEFT JOIN cms_vendor_prefix_map vp ON ol.vendor_prefix = vp.prefix
 LEFT JOIN cms_party v ON vp.vendor_party_id = v.party_id
 WHERE ol.status IN ('SENT_TO_VENDOR', 'WAITING_INBOUND', 'READY_TO_SHIP')
   AND ol.status <> 'CANCELLED';
-
 -- ============================================
 -- 7. Create View for Factory PO Summary
 -- ============================================
@@ -188,7 +177,6 @@ LEFT JOIN cms_vendor_fax_config vc ON po.vendor_party_id = vc.vendor_party_id
 GROUP BY po.po_id, po.vendor_prefix, po.vendor_party_id, v.name, po.status,
     po.fax_number, po.fax_provider, po.fax_sent_at, po.fax_payload_url,
     po.created_at, po.created_by, po.memo, vc.fax_number, vc.is_active;
-
 -- ============================================
 -- 8. Create trigger for vendor_prefix extraction
 -- ============================================
@@ -206,13 +194,11 @@ BEGIN
     RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
-
 DROP TRIGGER IF EXISTS cms_trg_order_line_extract_prefix ON cms_order_line;
 CREATE TRIGGER cms_trg_order_line_extract_prefix
     BEFORE INSERT OR UPDATE OF model_name ON cms_order_line
     FOR EACH ROW
     EXECUTE FUNCTION cms_fn_extract_vendor_prefix();
-
 -- ============================================
 -- 9. Backfill vendor_prefix
 -- ============================================
@@ -221,7 +207,6 @@ SET vendor_prefix = upper(split_part(model_name, '-', 1))
 WHERE model_name IS NOT NULL 
   AND vendor_prefix IS NULL
   AND split_part(model_name, '-', 1) ~ '^[A-Za-z0-9]+$';
-
 -- ============================================
 -- 10. SEED DATA: RyanSilver (RS) & MS Factory
 -- ============================================
@@ -230,24 +215,20 @@ WHERE model_name IS NOT NULL
 INSERT INTO cms_party (party_id, name, party_type, is_active, created_at)
 VALUES (gen_random_uuid(), 'RyanSilver', 'vendor', true, now())
 ON CONFLICT DO NOTHING;
-
 -- MS vendor party 등록  
 INSERT INTO cms_party (party_id, name, party_type, is_active, created_at)
 VALUES (gen_random_uuid(), 'MS공장', 'vendor', true, now())
 ON CONFLICT DO NOTHING;
-
 -- RS prefix 매핑
 INSERT INTO cms_vendor_prefix_map (prefix, vendor_party_id, note)
 SELECT 'RS', party_id, 'RyanSilver 공장'
 FROM cms_party WHERE name = 'RyanSilver' AND party_type = 'vendor'
 ON CONFLICT (prefix) DO NOTHING;
-
 -- MS prefix 매핑
 INSERT INTO cms_vendor_prefix_map (prefix, vendor_party_id, note)
 SELECT 'MS', party_id, 'MS 공장'
 FROM cms_party WHERE name = 'MS공장' AND party_type = 'vendor'
 ON CONFLICT (prefix) DO NOTHING;
-
 -- ============================================
 -- 11. Grants
 -- ============================================
@@ -257,12 +238,10 @@ GRANT SELECT, INSERT ON cms_fax_log TO authenticated;
 GRANT SELECT, INSERT, UPDATE ON cms_vendor_fax_config TO authenticated;
 GRANT SELECT ON cms_v_unshipped_order_lines TO authenticated;
 GRANT SELECT ON cms_v_factory_po_summary TO authenticated;
-
 GRANT SELECT, INSERT, UPDATE ON cms_factory_po TO service_role;
 GRANT SELECT, INSERT, DELETE ON cms_factory_po_line TO service_role;
 GRANT SELECT, INSERT ON cms_fax_log TO service_role;
 GRANT SELECT, INSERT, UPDATE ON cms_vendor_fax_config TO service_role;
 GRANT SELECT ON cms_v_unshipped_order_lines TO service_role;
 GRANT SELECT ON cms_v_factory_po_summary TO service_role;
-
 COMMIT;

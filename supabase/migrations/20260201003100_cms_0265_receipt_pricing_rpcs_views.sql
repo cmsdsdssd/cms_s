@@ -1,5 +1,4 @@
 set search_path = public, pg_temp;
-
 -- =============================================================
 -- 0265: Receipt pricing snapshot + allocation RPCs & Views (repo-aligned)
 --
@@ -88,18 +87,13 @@ begin
 
   return null;
 end $$;
-
 alter function public.cms_fn_suggest_fx_rate_to_krw_v1(text, date)
   security definer
   set search_path = public, pg_temp;
-
 grant execute on function public.cms_fn_suggest_fx_rate_to_krw_v1(text, date)
   to anon, authenticated, service_role;
-
 comment on function public.cms_fn_suggest_fx_rate_to_krw_v1(text, date)
 is 'Best-effort: suggest FX rate (KRW per 1 currency unit). Uses latest SILVER tick meta keys like krw_per_1_adj/raw.';
-
-
 -- -------------------------------------------------------------
 -- 2) Patch receipt pricing snapshot (non-destructive patch semantics)
 -- -------------------------------------------------------------
@@ -239,18 +233,13 @@ begin
 
   return jsonb_build_object('ok', true, 'receipt_id', p_receipt_id, 'receipt', coalesce(v_after,'{}'::jsonb));
 end $$;
-
 alter function public.cms_fn_patch_receipt_pricing_v1(uuid, uuid, date, text, numeric, numeric, text, date, numeric, text)
   security definer
   set search_path = public, pg_temp;
-
 grant execute on function public.cms_fn_patch_receipt_pricing_v1(uuid, uuid, date, text, numeric, numeric, text, date, numeric, text)
   to anon, authenticated, service_role;
-
 comment on function public.cms_fn_patch_receipt_pricing_v1(uuid, uuid, date, text, numeric, numeric, text, date, numeric, text)
 is 'Patch receipt pricing snapshot fields (original total + FX + KRW snapshot). Writes cms_decision_log.';
-
-
 -- -------------------------------------------------------------
 -- 3) Upsert receipt_usage allocation/breakdown (patch semantics)
 -- -------------------------------------------------------------
@@ -363,18 +352,13 @@ begin
     'usage', coalesce(v_after,'{}'::jsonb)
   );
 end $$;
-
 alter function public.cms_fn_upsert_receipt_usage_alloc_v1(uuid, text, uuid, uuid, text, uuid, numeric, numeric, text, text, numeric, numeric, numeric)
   security definer
   set search_path = public, pg_temp;
-
 grant execute on function public.cms_fn_upsert_receipt_usage_alloc_v1(uuid, text, uuid, uuid, text, uuid, numeric, numeric, text, text, numeric, numeric, numeric)
   to anon, authenticated, service_role;
-
 comment on function public.cms_fn_upsert_receipt_usage_alloc_v1(uuid, text, uuid, uuid, text, uuid, numeric, numeric, text, text, numeric, numeric, numeric)
 is 'Upsert allocation/breakdown fields on cms_receipt_usage (shipment-level allocation). Writes cms_decision_log.';
-
-
 -- -------------------------------------------------------------
 -- 4) Views
 -- -------------------------------------------------------------
@@ -474,11 +458,8 @@ join public.cms_receipt_inbox r on r.receipt_id = sc.receipt_id
 left join usage_ship us on us.receipt_id = sc.receipt_id and us.shipment_id = sc.shipment_id
 left join ship_count cnt on cnt.receipt_id = sc.receipt_id
 left join ship_cost_sum sumc on sumc.receipt_id = sc.receipt_id;
-
 grant select on public.cms_v_receipt_allocation_vs_shipment_cost_v1
   to anon, authenticated, service_role;
-
-
 -- 4-2) Quality flags for ops (missing snapshot / allocation issues)
 create or replace view public.cms_v_receipt_pricing_quality_v1
 as
@@ -533,6 +514,5 @@ select
 from public.cms_receipt_inbox r
 left join linked_ship ls on ls.receipt_id = r.receipt_id
 left join usage_alloc ua on ua.receipt_id = r.receipt_id;
-
 grant select on public.cms_v_receipt_pricing_quality_v1
   to anon, authenticated, service_role;

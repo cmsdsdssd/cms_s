@@ -1,5 +1,4 @@
 set search_path = public, pg_temp;
-
 -- 0039: fix NOT NULL violation on cms_order_line.suffix
 -- - suffix/color를 (1) 요청값(p_suffix/p_color) -> (2) master fallback -> (3) 최종 기본값으로 보장
 -- - 기존 호출 호환을 위해 p_suffix/p_color는 "맨 끝"에 default null로 추가

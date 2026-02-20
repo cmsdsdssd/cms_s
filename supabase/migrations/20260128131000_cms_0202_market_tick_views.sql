@@ -2,7 +2,6 @@
 -- MARKET TICK read views (v2) - no hardcoded enum labels.
 
 set search_path = public;
-
 -- Latest per symbol
 drop view if exists public.cms_v_market_tick_latest_by_symbol_v1 cascade;
 create view public.cms_v_market_tick_latest_by_symbol_v1 as
@@ -34,11 +33,8 @@ select
   updated_at
 from ranked
 where rn = 1;
-
 comment on view public.cms_v_market_tick_latest_by_symbol_v1
 is 'Latest active tick per symbol (KRW per g).';
-
-
 -- GOLD/SILVER one-row view via role mapping table
 drop view if exists public.cms_v_market_tick_latest_gold_silver_v1;
 create view public.cms_v_market_tick_latest_gold_silver_v1 as
@@ -71,11 +67,8 @@ from rg
 left join latest g on g.symbol = rg.symbol
 cross join rs
 left join latest s on s.symbol = rs.symbol;
-
 comment on view public.cms_v_market_tick_latest_gold_silver_v1
 is 'Single-row latest GOLD/SILVER using cms_market_symbol_role mapping (KRW per g).';
-
-
 -- Series
 drop view if exists public.cms_v_market_tick_series_v1;
 create view public.cms_v_market_tick_series_v1 as
@@ -91,11 +84,8 @@ select
   t.updated_at
 from public.cms_market_tick t
 where t.is_void = false;
-
 comment on view public.cms_v_market_tick_series_v1
 is 'Active tick time-series (KRW per g).';
-
-
 -- Daily OHLC
 drop view if exists public.cms_v_market_tick_daily_ohlc_v1;
 create view public.cms_v_market_tick_daily_ohlc_v1 as
@@ -128,11 +118,8 @@ select
   count(*) as tick_count
 from base
 group by day, symbol;
-
 comment on view public.cms_v_market_tick_daily_ohlc_v1
 is 'Daily OHLC+avg for ticks (KRW per g).';
-
-
 -- Health (no hardcoded labels)
 drop view if exists public.cms_v_market_tick_health_v1;
 create view public.cms_v_market_tick_health_v1 as
@@ -157,6 +144,5 @@ select
   end as is_stale
 from symbols s
 left join latest l on l.symbol = s.symbol;
-
 comment on view public.cms_v_market_tick_health_v1
 is 'Tick freshness view. is_stale=true if missing or older than 6 hours.';

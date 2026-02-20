@@ -1,5 +1,4 @@
 set search_path = public, pg_temp;
-
 -- 0035: strict master match enforcement for shipment lines from orders
 
 -- 1. Update View to use strict matching logic
@@ -24,7 +23,8 @@ select
   o.matched_master_id -- Expose this if helpful (optional, view doesn't change schema much)
 from public.cms_order_line o
 join public.cms_party p on p.party_id = o.customer_party_id
-left join public.cms_master_item m on m.master_id = o.matched_master_id; -- Strict Join
+left join public.cms_master_item m on m.master_id = o.matched_master_id;
+-- Strict Join
 
 -- 2. Update Function to use strict matching logic
 create or replace function public.cms_fn_shipment_upsert_from_order_line(
@@ -123,6 +123,5 @@ begin
     'status', 'DRAFT'
   );
 end $$;
-
 grant select on public.v_cms_shipment_prefill to anon, authenticated;
 grant execute on function public.cms_fn_shipment_upsert_from_order_line(uuid, numeric, numeric, uuid, text) to authenticated;

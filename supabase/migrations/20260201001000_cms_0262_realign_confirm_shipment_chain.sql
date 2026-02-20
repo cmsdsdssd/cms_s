@@ -1,5 +1,4 @@
 set search_path = public, pg_temp;
-
 -- Reapply confirm shipment RPC chain to repo versions
 
 create or replace function public.cms_fn_confirm_shipment(
@@ -318,30 +317,19 @@ begin
     end if;
 
     -- labor (master columns are labor_base_sell / labor_base_cost ...)
-    -- 🔥 FIX: manual_labor_krw가 있으면 우선 사용, 없으면 마스터 기본값 사용
-    if coalesce(r_line.manual_labor_krw, 0) > 0 then
-      -- 사용자가 입력한 수동 공임 사용
-      v_labor_base_sell := 0;
-      v_labor_center_sell := 0;
-      v_labor_sub1_sell := 0;
-      v_labor_sub2_sell := 0;
-      v_labor_bead_sell := 0;
-      v_labor_total_sell := r_line.manual_labor_krw;
-    else
-      -- 마스터 기본 공임 사용
-      v_labor_base_sell := coalesce(r_master.labor_base_sell, 0);
-      v_labor_center_sell := coalesce(r_master.labor_center_sell, 0);
-      v_labor_sub1_sell := coalesce(r_master.labor_sub1_sell, 0);
-      v_labor_sub2_sell := coalesce(r_master.labor_sub2_sell, 0);
-      v_labor_bead_sell := coalesce(r_master.labor_bead_sell, 0);
-      v_labor_total_sell := v_labor_base_sell + v_labor_center_sell + v_labor_sub1_sell + v_labor_sub2_sell + v_labor_bead_sell;
-    end if;
+    v_labor_base_sell := coalesce(r_master.labor_base_sell, 0);
+    v_labor_center_sell := coalesce(r_master.labor_center_sell, 0);
+    v_labor_sub1_sell := coalesce(r_master.labor_sub1_sell, 0);
+    v_labor_sub2_sell := coalesce(r_master.labor_sub2_sell, 0);
+    v_labor_bead_sell := coalesce(r_master.labor_bead_sell, 0);
 
     v_labor_base_cost := coalesce(r_master.labor_base_cost, 0);
     v_labor_center_cost := coalesce(r_master.labor_center_cost, 0);
     v_labor_sub1_cost := coalesce(r_master.labor_sub1_cost, 0);
     v_labor_sub2_cost := coalesce(r_master.labor_sub2_cost, 0);
     v_labor_bead_cost := coalesce(r_master.labor_bead_cost, 0);
+
+    v_labor_total_sell := v_labor_base_sell + v_labor_center_sell + v_labor_sub1_sell + v_labor_sub2_sell + v_labor_bead_sell;
     v_labor_total_cost := v_labor_base_cost + v_labor_center_cost + v_labor_sub1_cost + v_labor_sub2_cost + v_labor_bead_cost;
 
     -- material sell/cost (same policy as repo)
@@ -465,13 +453,10 @@ begin
     'total_cost_krw', v_total_cost
   );
 end $function$;
-
 alter function public.cms_fn_confirm_shipment(uuid, uuid, text)
   security definer
   set search_path = public, pg_temp;
-
 grant execute on function public.cms_fn_confirm_shipment(uuid, uuid, text) to authenticated;
-
 create or replace function public.cms_fn_emit_inventory_issue_from_shipment_confirmed_v2(
   p_shipment_id uuid,
   p_actor_person_id uuid default null,
@@ -697,14 +682,11 @@ begin
 
   return v_move_id;
 end $$;
-
 alter function public.cms_fn_emit_inventory_issue_from_shipment_confirmed_v2(uuid,uuid,text,uuid)
   security definer
   set search_path = public, pg_temp;
-
 grant execute on function public.cms_fn_emit_inventory_issue_from_shipment_confirmed_v2(uuid,uuid,text,uuid)
   to authenticated, service_role;
-
 create or replace function public.cms_fn_confirm_shipment_v2(
   p_shipment_id uuid,
   p_actor_person_id uuid default null,
@@ -739,14 +721,11 @@ begin
 
   return v_result;
 end $$;
-
 alter function public.cms_fn_confirm_shipment_v2(uuid,uuid,text,boolean,uuid)
   security definer
   set search_path = public, pg_temp;
-
 grant execute on function public.cms_fn_confirm_shipment_v2(uuid,uuid,text,boolean,uuid)
   to authenticated;
-
 create or replace function public.cms_fn_confirm_shipment_v3_cost_v1(
   p_shipment_id uuid,
   p_actor_person_id uuid default null,
@@ -797,10 +776,8 @@ begin
   return v_confirm
     || jsonb_build_object('correlation_id', v_corr);
 end $$;
-
 alter function public.cms_fn_confirm_shipment_v3_cost_v1(uuid,uuid,text,boolean,uuid,text,uuid,jsonb,boolean)
   security definer
   set search_path = public, pg_temp;
-
 grant execute on function public.cms_fn_confirm_shipment_v3_cost_v1(uuid,uuid,text,boolean,uuid,text,uuid,jsonb,boolean)
   to authenticated, service_role;

@@ -6,18 +6,14 @@
 -- ============================================
 ALTER TABLE cms_factory_po
     DROP CONSTRAINT IF EXISTS cms_factory_po_fax_provider_check;
-
 ALTER TABLE cms_factory_po
     ADD CONSTRAINT cms_factory_po_fax_provider_check
     CHECK (fax_provider IN ('mock', 'twilio', 'sendpulse', 'custom', 'apiplex'));
-
 ALTER TABLE cms_vendor_fax_config
     DROP CONSTRAINT IF EXISTS cms_vendor_fax_config_fax_provider_check;
-
 ALTER TABLE cms_vendor_fax_config
     ADD CONSTRAINT cms_vendor_fax_config_fax_provider_check
     CHECK (fax_provider IN ('mock', 'twilio', 'sendpulse', 'custom', 'apiplex'));
-
 -- ============================================
 -- 2. Vendor fax config upsert RPC
 -- ============================================
@@ -66,7 +62,6 @@ BEGIN
     );
 END;
 $$;
-
 -- ============================================
 -- 3. Fax log record RPC
 -- ============================================
@@ -115,7 +110,6 @@ BEGIN
     );
 END;
 $$;
-
 -- ============================================
 -- 4. Webhook update RPC (by provider_message_id)
 -- ============================================
@@ -189,14 +183,12 @@ BEGIN
     );
 END;
 $$;
-
 -- ============================================
 -- 5. Grants
 -- ============================================
 GRANT EXECUTE ON FUNCTION cms_fn_vendor_fax_config_upsert_v1(uuid, text, text, boolean, uuid) TO authenticated;
 GRANT EXECUTE ON FUNCTION cms_fn_fax_log_record_v1(uuid, text, jsonb, jsonb, boolean, text, text, uuid) TO authenticated;
 GRANT EXECUTE ON FUNCTION cms_fn_fax_log_update_by_provider_message_id_v1(text, jsonb, boolean, text, text, uuid) TO authenticated;
-
 GRANT EXECUTE ON FUNCTION cms_fn_vendor_fax_config_upsert_v1(uuid, text, text, boolean, uuid) TO service_role;
 GRANT EXECUTE ON FUNCTION cms_fn_fax_log_record_v1(uuid, text, jsonb, jsonb, boolean, text, text, uuid) TO service_role;
 GRANT EXECUTE ON FUNCTION cms_fn_fax_log_update_by_provider_message_id_v1(text, jsonb, boolean, text, text, uuid) TO service_role;

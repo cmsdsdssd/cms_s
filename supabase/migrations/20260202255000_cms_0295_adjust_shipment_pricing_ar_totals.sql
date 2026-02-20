@@ -1,9 +1,7 @@
 set search_path = public, pg_temp;
-
 alter table public.cms_ar_ledger
   add column if not exists total_weight_g numeric null,
   add column if not exists total_labor_krw numeric null;
-
 create or replace function public.cms_fn_confirm_shipment(
   p_shipment_id uuid,
   p_actor_person_id uuid default null::uuid,
@@ -542,10 +540,8 @@ begin
     'total_cost_krw', v_total_cost
   );
 end $function$;
-
 alter function public.cms_fn_confirm_shipment(uuid, uuid, text) security definer;
 grant execute on function public.cms_fn_confirm_shipment(uuid, uuid, text) to authenticated;
-
 create or replace function public.create_ar_from_shipment()
 returns trigger as $$
 begin

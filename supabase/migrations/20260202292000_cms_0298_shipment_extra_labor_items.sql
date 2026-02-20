@@ -1,10 +1,8 @@
 set search_path = public, pg_temp;
-
 alter table public.cms_shipment_line
   add column if not exists base_labor_krw numeric not null default 0,
   add column if not exists extra_labor_krw numeric not null default 0,
   add column if not exists extra_labor_items jsonb not null default '[]'::jsonb;
-
 create or replace function public.cms_fn_shipment_upsert_from_order_line(
   p_order_line_id uuid,
   p_weight_g numeric,
@@ -82,10 +80,8 @@ begin
     'status', 'DRAFT'
   );
 end $$;
-
 grant execute on function public.cms_fn_shipment_upsert_from_order_line(uuid, numeric, numeric, uuid, uuid, numeric, numeric, jsonb) to authenticated;
 grant execute on function public.cms_fn_shipment_upsert_from_order_line(uuid, numeric, numeric, uuid, uuid, numeric, numeric, jsonb) to anon;
-
 create or replace function public.cms_fn_shipment_update_line_v1(
   p_shipment_line_id uuid,
   p_measured_weight_g numeric default null,
@@ -158,5 +154,4 @@ begin
 
   return jsonb_build_object('ok', true, 'shipment_line_id', p_shipment_line_id);
 end $$;
-
 grant execute on function public.cms_fn_shipment_update_line_v1(uuid, numeric, numeric, numeric, numeric, jsonb) to authenticated;

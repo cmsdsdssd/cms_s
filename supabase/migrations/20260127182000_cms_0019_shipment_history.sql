@@ -19,5 +19,4 @@ select
   l.created_at
 from public.cms_shipment_line l
 join public.cms_shipment_header h on h.shipment_id = l.shipment_id;
-
 grant select on public.v_cms_shipment_history_by_model to anon, authenticated;

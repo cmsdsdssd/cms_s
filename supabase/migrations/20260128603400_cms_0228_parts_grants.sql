@@ -1,5 +1,4 @@
 set search_path = public, pg_temp;
-
 do $$
 begin
   -- parts views: 존재할 때만 grant

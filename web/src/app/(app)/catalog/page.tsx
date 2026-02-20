@@ -76,6 +76,7 @@ type CatalogDetail = {
 };
 
 type AbsorbLaborBucket = "BASE_LABOR" | "STONE_LABOR" | "PLATING" | "ETC";
+type AbsorbLaborClass = "GENERAL" | "MATERIAL";
 
 type MasterAbsorbLaborItem = {
   absorb_item_id: string;
@@ -88,12 +89,171 @@ type MasterAbsorbLaborItem = {
   priority: number;
   is_active: boolean;
   note: string | null;
+  labor_class?: AbsorbLaborClass | null;
+  material_qty_per_unit?: number | null;
+  material_cost_krw?: number | null;
 };
 
 type AbsorbStoneRole = "CENTER" | "SUB1" | "SUB2";
+type BomLineKind = "ACCESSORY" | "DECOR";
 
 const ACCESSORY_BASE_REASON = "ACCESSORY_LABOR";
+const BOM_LINE_KIND_PREFIX = "LINE_KIND:";
+const BOM_DECOR_NOTE_PREFIX = "BOM_DECOR_LINE:";
+const BOM_MATERIAL_NOTE_PREFIX = "BOM_MATERIAL_LINE:";
+const BOM_DECOR_REASON_PREFIX = "장식:";
+const BOM_MATERIAL_REASON_PREFIX = "기타-소재:";
 const CN_BASIC_BASIS_META_LABEL = "__CN_BASIC_BASIS__";
+
+type CnRawLaborBasis = "PER_G" | "PER_PIECE";
+
+type CnRawEntryState = {
+  id: string;
+  analysisDate: string;
+  totalPriceCny: string;
+  silverPriceCny: string;
+  laborBasis: CnRawLaborBasis;
+};
+
+type CnRawEntryComputed = {
+  id: string;
+  analysisDate: string;
+  laborBasis: CnRawLaborBasis;
+  totalPriceCny: number;
+  silverPriceCny: number;
+  silverAmountCny: number;
+  laborBaseCny: number;
+  laborCny: number;
+  totalCostKrw: number;
+  silverPriceKrwPerG: number;
+  laborKrw: number;
+};
+
+type CnRawSnapshotRow = {
+  snapshot_id?: string;
+  analysis_date?: string | null;
+  labor_basis?: string | null;
+  total_price_cny?: number | null;
+  silver_price_cny_per_g?: number | null;
+  labor_cny_snapshot?: number | null;
+  total_cost_krw_snapshot?: number | null;
+  cny_krw_rate_snapshot?: number | null;
+  silver_price_krw_per_g_snapshot?: number | null;
+  labor_krw_snapshot?: number | null;
+  created_at?: string | null;
+};
+
+type CnRawHistoryRow = {
+  id: string;
+  analysisDate: string;
+  laborBasis: CnRawLaborBasis;
+  totalPriceCny: number;
+  silverPriceCny: number;
+  laborCny: number;
+  totalCostKrw: number;
+  silverPriceKrwPerG: number;
+  laborKrw: number;
+  createdAt: string;
+};
+
+function createEmptyCnRawEntry(overrides?: Partial<CnRawEntryState>): CnRawEntryState {
+  return {
+    id: overrides?.id ?? crypto.randomUUID(),
+    analysisDate: overrides?.analysisDate ?? "",
+    totalPriceCny: overrides?.totalPriceCny ?? "",
+    silverPriceCny: overrides?.silverPriceCny ?? "",
+    laborBasis: overrides?.laborBasis ?? "PER_G",
+  };
+}
+
+function normalizeCnRawLaborBasis(value: unknown): CnRawLaborBasis {
+  return String(value ?? "PER_G").trim().toUpperCase() === "PER_PIECE" ? "PER_PIECE" : "PER_G";
+}
+
+function sortCnRawEntriesAsc<T extends { analysisDate: string; id: string }>(rows: T[]) {
+  return [...rows].sort((a, b) => {
+    const aDate = /^\d{4}-\d{2}-\d{2}$/.test(a.analysisDate) ? a.analysisDate : "9999-12-31";
+    const bDate = /^\d{4}-\d{2}-\d{2}$/.test(b.analysisDate) ? b.analysisDate : "9999-12-31";
+    if (aDate !== bDate) return aDate.localeCompare(bDate);
+    return a.id.localeCompare(b.id);
+  });
+}
+
+function normalizeCnRawHistoryRows(rows: CnRawSnapshotRow[]): CnRawHistoryRow[] {
+  return rows
+    .map((row) => {
+      const analysisDate = String(row.analysis_date ?? "").trim();
+      const laborBasis = normalizeCnRawLaborBasis(row.labor_basis);
+      const totalPriceCny = Math.max(Number(row.total_price_cny ?? 0), 0);
+      const silverPriceCny = Math.max(Number(row.silver_price_cny_per_g ?? 0), 0);
+      const laborCny = Number(row.labor_cny_snapshot ?? 0);
+      const totalCostKrw = Math.max(Number(row.total_cost_krw_snapshot ?? 0), 0);
+      const cnyRate = Math.max(Number(row.cny_krw_rate_snapshot ?? 0), 0);
+      const silverPriceKrwPerG =
+        Math.max(Number(row.silver_price_krw_per_g_snapshot ?? Number.NaN), 0) || silverPriceCny * cnyRate;
+      const laborKrw = Number(row.labor_krw_snapshot ?? Number.NaN);
+      const resolvedLaborKrw = Number.isFinite(laborKrw) ? laborKrw : laborCny * cnyRate;
+      const createdAt = String(row.created_at ?? "").trim();
+      return {
+        id: String(row.snapshot_id ?? crypto.randomUUID()),
+        analysisDate,
+        laborBasis,
+        totalPriceCny,
+        silverPriceCny,
+        laborCny,
+        totalCostKrw,
+        silverPriceKrwPerG,
+        laborKrw: resolvedLaborKrw,
+        createdAt,
+      };
+    })
+    .sort((a, b) => {
+      const aDate = /^\d{4}-\d{2}-\d{2}$/.test(a.analysisDate) ? a.analysisDate : "9999-12-31";
+      const bDate = /^\d{4}-\d{2}-\d{2}$/.test(b.analysisDate) ? b.analysisDate : "9999-12-31";
+      if (aDate !== bDate) return aDate.localeCompare(bDate);
+      const aCreatedAt = a.createdAt || "9999-12-31T23:59:59.999Z";
+      const bCreatedAt = b.createdAt || "9999-12-31T23:59:59.999Z";
+      if (aCreatedAt !== bCreatedAt) return aCreatedAt.localeCompare(bCreatedAt);
+      return a.id.localeCompare(b.id);
+    });
+}
+
+function parseBomLineKind(note: string | null | undefined): BomLineKind {
+  const text = String(note ?? "").trim().toUpperCase();
+  if (text.startsWith(`${BOM_LINE_KIND_PREFIX}DECOR`)) return "DECOR";
+  return "ACCESSORY";
+}
+
+function buildBomLineKindNote(kind: BomLineKind): string {
+  return `${BOM_LINE_KIND_PREFIX}${kind}`;
+}
+
+function buildDecorAbsorbNote(bomLineId: string, qtyPerUnit: number): string {
+  return `${BOM_DECOR_NOTE_PREFIX}${bomLineId};QTY_PER_UNIT:${qtyPerUnit}`;
+}
+
+function buildMaterialAbsorbNote(bomLineId: string, qtyPerUnit: number): string {
+  return `${BOM_MATERIAL_NOTE_PREFIX}${bomLineId};QTY_PER_UNIT:${qtyPerUnit}`;
+}
+
+function parseManagedAbsorbSourceLineId(note: string | null | undefined, prefix: string): string | null {
+  const text = String(note ?? "").trim();
+  if (!text.startsWith(prefix)) return null;
+  const body = text.slice(prefix.length);
+  const [lineId] = body.split(";", 1);
+  const normalized = String(lineId ?? "").trim();
+  return normalized || null;
+}
+
+function isManagedDecorAbsorbItem(item: MasterAbsorbLaborItem): boolean {
+  const note = String(item.note ?? "").trim();
+  return note.startsWith(BOM_DECOR_NOTE_PREFIX);
+}
+
+function isManagedMaterialAbsorbItem(item: MasterAbsorbLaborItem): boolean {
+  const note = String(item.note ?? "").trim();
+  return note.startsWith(BOM_MATERIAL_NOTE_PREFIX);
+}
 
 type MasterSummary = {
   master_id: string;
@@ -203,6 +363,11 @@ const absorbStoneRoleOptions: Array<{ label: string; value: AbsorbStoneRole }> =
   { label: "보조2", value: "SUB2" },
 ];
 
+const absorbLaborClassOptions: Array<{ label: string; value: AbsorbLaborClass }> = [
+  { label: "일반", value: "GENERAL" },
+  { label: "소재", value: "MATERIAL" },
+];
+
 const ABSORB_STONE_ROLE_PREFIX = "STONE_ROLE:";
 const LEGACY_BOM_AUTO_REASON = "BOM_AUTO_TOTAL";
 const ACCESSORY_ETC_REASON_KEYWORD = "부속공임";
@@ -213,6 +378,9 @@ function shouldExcludeEtcAbsorbItem(item: MasterAbsorbLaborItem): boolean {
   if (ABSORB_AUTO_EXCLUDED_REASONS.has(normalizedReason)) return true;
   if (item.bucket !== "ETC") return false;
   const rawReason = String(item.reason ?? "").trim();
+  const rawNote = String(item.note ?? "").trim();
+  if (rawNote.startsWith(BOM_MATERIAL_NOTE_PREFIX)) return true;
+  if (rawReason.startsWith(BOM_MATERIAL_REASON_PREFIX)) return true;
   return rawReason.includes(ACCESSORY_ETC_REASON_KEYWORD);
 }
 
@@ -251,6 +419,14 @@ function getAbsorbStoneRoleLabel(note: string | null | undefined): string {
   const role = parseAbsorbStoneRole(note);
   if (!role) return "-";
   return absorbStoneRoleOptions.find((option) => option.value === role)?.label ?? role;
+}
+
+function normalizeAbsorbLaborClass(value: unknown): AbsorbLaborClass {
+  return String(value ?? "GENERAL").trim().toUpperCase() === "MATERIAL" ? "MATERIAL" : "GENERAL";
+}
+
+function isMaterialAbsorbItem(item: MasterAbsorbLaborItem): boolean {
+  return item.bucket === "ETC" && normalizeAbsorbLaborClass(item.labor_class) === "MATERIAL";
 }
 
 type AbsorbImpactSummary = {
@@ -334,13 +510,79 @@ function computeAbsorbImpactSummary(
       summary.plating += applied;
     }
     else {
-      summary.etcUnit += baseAmount;
-      summary.etc += applied;
+      if (isMaterialAbsorbItem(item)) {
+        const qtyPerUnit = Math.max(Number(item.material_qty_per_unit ?? 1), 0);
+        const materialApplied = applied * qtyPerUnit;
+        summary.etcUnit += baseAmount * qtyPerUnit;
+        summary.etc += materialApplied;
+      } else {
+        summary.etcUnit += baseAmount;
+        summary.etc += applied;
+      }
     }
     summary.total += applied;
   });
 
   return summary;
+}
+
+function computeMasterLaborTotalsWithAbsorb(
+  masterRow: Record<string, unknown> | undefined,
+  absorbItems: MasterAbsorbLaborItem[]
+): { sellPerUnit: number; costPerUnit: number } {
+  if (!masterRow) {
+    return { sellPerUnit: 0, costPerUnit: 0 };
+  }
+
+  const centerQty = Math.max(Number(masterRow.center_qty_default ?? 0), 0);
+  const sub1Qty = Math.max(Number(masterRow.sub1_qty_default ?? 0), 0);
+  const sub2Qty = Math.max(Number(masterRow.sub2_qty_default ?? 0), 0);
+
+  const baseSell =
+    Number(masterRow.labor_base_sell ?? 0) +
+    Number(masterRow.labor_center_sell ?? 0) * centerQty +
+    Number(masterRow.labor_sub1_sell ?? 0) * sub1Qty +
+    Number(masterRow.labor_sub2_sell ?? 0) * sub2Qty +
+    Number(masterRow.plating_price_sell_default ?? 0);
+
+  const baseCost =
+    Number(masterRow.labor_base_cost ?? 0) +
+    Number(masterRow.labor_center_cost ?? 0) * centerQty +
+    Number(masterRow.labor_sub1_cost ?? 0) * sub1Qty +
+    Number(masterRow.labor_sub2_cost ?? 0) * sub2Qty +
+    Number(masterRow.plating_price_cost_default ?? 0);
+
+  const activeAbsorbItems = absorbItems.filter((item) => {
+    if (item.is_active === false) return false;
+    if (String(item.vendor_party_id ?? "").trim() !== "") return false;
+    const normalizedReason = String(item.reason ?? "").trim().toUpperCase();
+    if (ABSORB_AUTO_EXCLUDED_REASONS.has(normalizedReason)) return false;
+    if (item.bucket === "ETC" && String(item.reason ?? "").trim().includes(ACCESSORY_ETC_REASON_KEYWORD)) {
+      return false;
+    }
+    return true;
+  });
+
+  const absorbSummary = computeAbsorbImpactSummary(activeAbsorbItems, centerQty, sub1Qty, sub2Qty);
+  const absorbMaterialCost = activeAbsorbItems.reduce((sum, item) => {
+    if (!isMaterialAbsorbItem(item)) return sum;
+    const qtyPerUnit = Math.max(Number(item.material_qty_per_unit ?? 1), 0);
+    const costPerMaterial = Math.max(Number(item.material_cost_krw ?? 0), 0);
+    return sum + costPerMaterial * qtyPerUnit;
+  }, 0);
+
+  const absorbSell =
+    absorbSummary.baseLaborUnit +
+    absorbSummary.stoneCenterUnit * centerQty +
+    absorbSummary.stoneSub1Unit * sub1Qty +
+    absorbSummary.stoneSub2Unit * sub2Qty +
+    absorbSummary.platingUnit +
+    absorbSummary.etc;
+
+  return {
+    sellPerUnit: baseSell + absorbSell,
+    costPerUnit: baseCost + absorbMaterialCost,
+  };
 }
 
 type FieldProps = {
@@ -491,9 +733,12 @@ export default function CatalogPage() {
   const [previewImage, setPreviewImage] = useState<string | null>(null);
   const [absorbLaborItems, setAbsorbLaborItems] = useState<MasterAbsorbLaborItem[]>([]);
   const [absorbBucket, setAbsorbBucket] = useState<AbsorbLaborBucket>("BASE_LABOR");
+  const [absorbLaborClass, setAbsorbLaborClass] = useState<AbsorbLaborClass>("GENERAL");
   const [absorbStoneRole, setAbsorbStoneRole] = useState<AbsorbStoneRole>("CENTER");
   const [absorbReason, setAbsorbReason] = useState("");
   const [absorbAmount, setAbsorbAmount] = useState("0");
+  const [absorbMaterialQtyPerUnit, setAbsorbMaterialQtyPerUnit] = useState("1");
+  const [absorbMaterialCostKrw, setAbsorbMaterialCostKrw] = useState("0");
   const [absorbIsPerPiece, setAbsorbIsPerPiece] = useState(true);
   const [absorbVendorId, setAbsorbVendorId] = useState("");
   const [absorbIsActive, setAbsorbIsActive] = useState(true);
@@ -501,10 +746,13 @@ export default function CatalogPage() {
   const [goldPrice, setGoldPrice] = useState(0);
   const [silverModifiedPrice, setSilverModifiedPrice] = useState(0);
   const [cnyAdRate, setCnyAdRate] = useState(0);
+  const [cnyFxAsOf, setCnyFxAsOf] = useState("");
   const [csOriginalKrwPerG, setCsOriginalKrwPerG] = useState(0);
   const [cnLaborBasicCnyPerG, setCnLaborBasicCnyPerG] = useState("");
   const [cnLaborBasicBasis, setCnLaborBasicBasis] = useState<"PER_G" | "PER_PIECE">("PER_G");
   const [cnLaborExtraItems, setCnLaborExtraItems] = useState<ChinaExtraLaborItem[]>([]);
+  const [cnRawEntries, setCnRawEntries] = useState<CnRawEntryState[]>([createEmptyCnRawEntry()]);
+  const [cnRawHistoryByMasterId, setCnRawHistoryByMasterId] = useState<Record<string, CnRawHistoryRow[]>>({});
   const [isUnitPricing, setIsUnitPricing] = useState(false);
 
   const [showBomPanel, setShowBomPanel] = useState(false);
@@ -520,6 +768,7 @@ export default function CatalogPage() {
   const [componentQuery, setComponentQuery] = useState("");
   const [debouncedComponentQuery, setDebouncedComponentQuery] = useState("");
   const [selectedComponentId, setSelectedComponentId] = useState<string | null>(null);
+  const [componentLineKind, setComponentLineKind] = useState<BomLineKind>("ACCESSORY");
   const [showComponentResults, setShowComponentResults] = useState(false);
   const [qtyPerUnit, setQtyPerUnit] = useState("1");
   const [lastAddedLineHint, setLastAddedLineHint] = useState<{ componentMasterId: string; qty: number } | null>(null);
@@ -529,14 +778,20 @@ export default function CatalogPage() {
   const [voidConfirmId, setVoidConfirmId] = useState<string | null>(null);
   const bomToastRef = useRef(false);
   const bomAutoSyncRef = useRef<string>("");
+  const cnRawAutoSaveBusyRef = useRef(false);
+  const absorbLaborCacheRef = useRef<Map<string, MasterAbsorbLaborItem[]>>(new Map());
 
   const schema = getSchemaClient();
   const queryClient = useQueryClient();
   const actorId = (process.env.NEXT_PUBLIC_CMS_ACTOR_ID || "").trim();
 
-  const loadAbsorbLaborItems = useCallback(async (targetMasterId: string) => {
+  const loadAbsorbLaborItems = useCallback(async (targetMasterId: string, options?: { forceRefresh?: boolean }) => {
     if (!targetMasterId) {
       setAbsorbLaborItems([]);
+      return;
+    }
+    if (!options?.forceRefresh && absorbLaborCacheRef.current.has(targetMasterId)) {
+      setAbsorbLaborItems(absorbLaborCacheRef.current.get(targetMasterId) ?? []);
       return;
     }
     const response = await fetch(`/api/master-absorb-labor-items?master_id=${encodeURIComponent(targetMasterId)}`, {
@@ -544,7 +799,115 @@ export default function CatalogPage() {
     });
     const json = (await response.json()) as { data?: MasterAbsorbLaborItem[]; error?: string };
     if (!response.ok) throw new Error(json.error ?? "흡수공임 조회 실패");
-    setAbsorbLaborItems(json.data ?? []);
+    const rows = json.data ?? [];
+    absorbLaborCacheRef.current.set(targetMasterId, rows);
+    setAbsorbLaborItems(rows);
+  }, []);
+
+  const fetchFlattenRows = useCallback(async (targetMasterId: string, variantKey?: string | null) => {
+    if (!targetMasterId) return [] as BomFlattenLeafRow[];
+    const params = new URLSearchParams();
+    params.set("product_master_id", targetMasterId);
+    if (variantKey) params.set("variant_key", variantKey);
+    const response = await fetch(`/api/bom-flatten?${params.toString()}`, { cache: "no-store" });
+    const json = (await response.json()) as BomFlattenLeafRow[] | { error?: string };
+    if (!response.ok) throw new Error((json as { error?: string }).error ?? "BOM 펼침 조회 실패");
+    return (Array.isArray(json) ? json : []) as BomFlattenLeafRow[];
+  }, []);
+
+  const fetchBomRecipes = useCallback(async (targetMasterId: string) => {
+    if (!targetMasterId) return [] as BomRecipeRow[];
+    const response = await fetch(
+      `/api/bom-recipes?product_master_id=${encodeURIComponent(targetMasterId)}`,
+      { cache: "no-store" }
+    );
+    const json = (await response.json()) as { data?: BomRecipeRow[]; error?: string };
+    if (!response.ok) throw new Error(json.error ?? "BOM 레시피 조회 실패");
+    return (json.data ?? []) as BomRecipeRow[];
+  }, []);
+
+  const fetchBomLines = useCallback(async (targetBomId: string) => {
+    if (!targetBomId) return [] as BomLineRow[];
+    const response = await fetch(`/api/bom-lines?bom_id=${encodeURIComponent(targetBomId)}`, {
+      cache: "no-store",
+    });
+    const json = (await response.json()) as { data?: BomLineRow[]; error?: string };
+    if (!response.ok) throw new Error(json.error ?? "BOM 라인 조회 실패");
+    return (json.data ?? []) as BomLineRow[];
+  }, []);
+
+  const prefetchMasterDetailFastPath = useCallback((targetMasterId: string) => {
+    if (!targetMasterId) return;
+    void queryClient.prefetchQuery({
+      queryKey: ["bom", "flatten", targetMasterId, null],
+      queryFn: () => fetchFlattenRows(targetMasterId, null),
+      staleTime: 60_000,
+      gcTime: 300_000,
+    });
+    void queryClient
+      .prefetchQuery({
+        queryKey: ["bom", "recipes", targetMasterId],
+        queryFn: () => fetchBomRecipes(targetMasterId),
+        staleTime: 60_000,
+        gcTime: 300_000,
+      })
+      .then(async () => {
+        const recipes = (queryClient.getQueryData(["bom", "recipes", targetMasterId]) ?? []) as BomRecipeRow[];
+        const defaultRecipe = recipes.find((row) => !String(row.variant_key ?? "").trim()) ?? recipes[0];
+        const bomId = String(defaultRecipe?.bom_id ?? "").trim();
+        if (!bomId) return;
+        await queryClient.prefetchQuery({
+          queryKey: ["bom", "lines", bomId],
+          queryFn: () => fetchBomLines(bomId),
+          staleTime: 60_000,
+          gcTime: 300_000,
+        });
+      })
+      .catch(() => undefined);
+    if (!absorbLaborCacheRef.current.has(targetMasterId)) {
+      void fetch(`/api/master-absorb-labor-items?master_id=${encodeURIComponent(targetMasterId)}`, {
+        cache: "no-store",
+      })
+        .then(async (response) => {
+          const json = (await response.json()) as { data?: MasterAbsorbLaborItem[]; error?: string };
+          if (!response.ok) return;
+          absorbLaborCacheRef.current.set(targetMasterId, json.data ?? []);
+        })
+        .catch(() => undefined);
+    }
+  }, [fetchBomLines, fetchBomRecipes, fetchFlattenRows, queryClient]);
+
+  const loadCnRawHistory = useCallback(async (targetMasterId: string, options?: { syncEditor?: boolean }) => {
+    if (!targetMasterId || !isUuid(targetMasterId)) return;
+    const response = await fetch(`/api/master-item-cn-cost?master_id=${encodeURIComponent(targetMasterId)}`, {
+      cache: "no-store",
+    });
+    const json = (await response.json()) as { data?: CnRawSnapshotRow[]; error?: string };
+    if (!response.ok) {
+      throw new Error(json.error ?? "RAW 분석 이력 조회 실패");
+    }
+
+    const normalizedRows = normalizeCnRawHistoryRows(Array.isArray(json.data) ? json.data : []);
+    setCnRawHistoryByMasterId((prev) => ({
+      ...prev,
+      [targetMasterId]: normalizedRows,
+    }));
+
+    if (options?.syncEditor && normalizedRows.length > 0) {
+      setCnRawEntries(
+        sortCnRawEntriesAsc(
+          normalizedRows.map((row) =>
+            createEmptyCnRawEntry({
+              id: row.id,
+              analysisDate: toIsoDateInputValue(row.analysisDate),
+              totalPriceCny: row.totalPriceCny > 0 ? String(row.totalPriceCny) : "",
+              silverPriceCny: row.silverPriceCny > 0 ? String(row.silverPriceCny) : "",
+              laborBasis: row.laborBasis,
+            })
+          )
+        )
+      );
+    }
   }, []);
 
   // Fetch market prices
@@ -556,6 +919,7 @@ export default function CatalogPage() {
         setGoldPrice(result.data.gold);
         setSilverModifiedPrice(result.data.silver);
         setCnyAdRate(Number(result.data.cnyAd ?? 0));
+        setCnyFxAsOf(String(result.data.fxAsOf ?? result.data.asof ?? new Date().toISOString()));
         setCsOriginalKrwPerG(Number(result.data.csTick ?? result.data.cs ?? 0));
       }
     } catch (error) {
@@ -614,12 +978,12 @@ export default function CatalogPage() {
   const manualAbsorbLaborItems = useMemo(
     () =>
       absorbLaborItems.filter(
-        (item) => !shouldExcludeEtcAbsorbItem(item)
+        (item) => item.is_active !== false && !shouldExcludeEtcAbsorbItem(item)
       ),
     [absorbLaborItems]
   );
   const visibleAbsorbLaborItems = useMemo(
-    () => absorbLaborItems.filter((item) => !shouldExcludeEtcAbsorbItem(item)),
+    () => absorbLaborItems.filter((item) => item.is_active !== false && !shouldExcludeEtcAbsorbItem(item)),
     [absorbLaborItems]
   );
 
@@ -632,6 +996,7 @@ export default function CatalogPage() {
   const laborSub1SellWithAbsorb = laborSub1Sell + absorbImpactSummary.stoneSub1Unit;
   const laborSub2SellWithAbsorb = laborSub2Sell + absorbImpactSummary.stoneSub2Unit;
   const platingSellWithAbsorb = platingSell + absorbImpactSummary.platingUnit;
+
   const totalLaborSellForEdit =
     laborBaseSellWithAbsorb +
     laborCenterSellWithAbsorb * centerQty +
@@ -709,6 +1074,18 @@ export default function CatalogPage() {
     return sortedCatalogItems.slice(start, start + activePageSize);
   }, [sortedCatalogItems, page, activePageSize]);
 
+  useEffect(() => {
+    if (pageItems.length === 0) return;
+    const ids = pageItems.slice(0, 8).map((item) => item.id).filter(Boolean);
+    if (ids.length === 0) return;
+
+    const timer = window.setTimeout(() => {
+      ids.forEach((id) => prefetchMasterDetailFastPath(id));
+    }, 60);
+
+    return () => window.clearTimeout(timer);
+  }, [pageItems, prefetchMasterDetailFastPath]);
+
 
   useEffect(() => {
     if (page > totalPages) setPage(totalPages);
@@ -767,6 +1144,51 @@ export default function CatalogPage() {
 
   function formatLaborDisplayKrw(value: number) {
     return new Intl.NumberFormat("ko-KR").format(roundUpDisplayHundred(value));
+  }
+
+  function formatDisplayCny(value: number) {
+    if (!Number.isFinite(value)) return "0";
+    return new Intl.NumberFormat("ko-KR", {
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 2,
+    }).format(value);
+  }
+
+  function toCompactYyMmDd(value: string | null | undefined) {
+    const text = String(value ?? "").trim();
+    const isoMatch = text.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (isoMatch) return `${isoMatch[1].slice(2)}${isoMatch[2]}${isoMatch[3]}`;
+    const compactMatch = text.match(/^\d{6}$/);
+    if (compactMatch) return text;
+    return "";
+  }
+
+  function toIsoDateInputValue(value: string | null | undefined) {
+    const text = String(value ?? "").trim();
+    const isoMatch = text.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (isoMatch) return text;
+    const compactMatch = text.match(/^\d{6}$/);
+    if (compactMatch) {
+      const yy = Number(text.slice(0, 2));
+      const mm = Number(text.slice(2, 4));
+      const dd = Number(text.slice(4, 6));
+      if (!Number.isFinite(yy) || !Number.isFinite(mm) || !Number.isFinite(dd)) return "";
+      if (mm < 1 || mm > 12 || dd < 1 || dd > 31) return "";
+      return `20${String(yy).padStart(2, "0")}-${String(mm).padStart(2, "0")}-${String(dd).padStart(2, "0")}`;
+    }
+    return "";
+  }
+
+  function toIsoDateFromCompact(value: string) {
+    const digits = value.replace(/\D/g, "").slice(0, 6);
+    if (digits.length !== 6) return null;
+    const yy = Number(digits.slice(0, 2));
+    const mm = Number(digits.slice(2, 4));
+    const dd = Number(digits.slice(4, 6));
+    if (!Number.isFinite(yy) || !Number.isFinite(mm) || !Number.isFinite(dd)) return null;
+    if (mm < 1 || mm > 12 || dd < 1 || dd > 31) return null;
+    const yyyy = 2000 + yy;
+    return `${String(yyyy)}-${String(mm).padStart(2, "0")}-${String(dd).padStart(2, "0")}`;
   }
 
   function formatSharePercent(value: number, total: number) {
@@ -1028,19 +1450,12 @@ export default function CatalogPage() {
 
   const recipesQuery = useQuery({
     queryKey: ["bom", "recipes", selectedMasterId],
-    enabled: Boolean(selectedMasterId) && showBomPanel,
+    enabled: Boolean(selectedMasterId),
     retry: false,
     refetchOnWindowFocus: false,
-    queryFn: async () => {
-      if (!selectedMasterId) return [];
-      const response = await fetch(
-        `/api/bom-recipes?product_master_id=${encodeURIComponent(selectedMasterId)}`,
-        { cache: "no-store" }
-      );
-      const json = (await response.json()) as { data?: BomRecipeRow[]; error?: string };
-      if (!response.ok) throw new Error(json.error ?? "BOM 레시피 조회 실패");
-      return (json.data ?? []) as BomRecipeRow[];
-    },
+    staleTime: 60_000,
+    placeholderData: (previousData) => previousData,
+    queryFn: () => fetchBomRecipes(selectedMasterId ?? ""),
   });
 
   const recipeOptions = useMemo(() => {
@@ -1057,7 +1472,6 @@ export default function CatalogPage() {
   }, [recipesQuery.data, selectedRecipeId]);
 
   useEffect(() => {
-    if (!showBomPanel) return;
     const rows = recipesQuery.data ?? [];
     if (rows.length === 0) {
       if (selectedRecipeId !== null) setSelectedRecipeId(null);
@@ -1067,7 +1481,7 @@ export default function CatalogPage() {
     if (defaultRecipe && selectedRecipeId !== defaultRecipe.bom_id) {
       setSelectedRecipeId(defaultRecipe.bom_id);
     }
-  }, [recipesQuery.data, selectedRecipeId, showBomPanel]);
+  }, [recipesQuery.data, selectedRecipeId]);
 
   useEffect(() => {
     if (!selectedRecipe) return;
@@ -1088,33 +1502,52 @@ export default function CatalogPage() {
 
   const linesQuery = useQuery({
     queryKey: ["bom", "lines", selectedRecipeId],
-    enabled: Boolean(selectedRecipeId) && showBomPanel,
+    enabled: Boolean(selectedRecipeId),
     retry: false,
     refetchOnWindowFocus: false,
+    staleTime: 60_000,
+    placeholderData: (previousData) => previousData,
+    queryFn: () => fetchBomLines(selectedRecipeId ?? ""),
+  });
+
+  const decorComponentMasterIds = useMemo(() => {
+    const ids = new Set<string>();
+    ((linesQuery.data ?? []) as BomLineRow[]).forEach((line) => {
+      if (parseBomLineKind(line.note) !== "DECOR") return;
+      const masterId = String(line.component_master_id ?? "").trim();
+      if (!masterId) return;
+      ids.add(masterId);
+    });
+    return [...ids];
+  }, [linesQuery.data]);
+
+  const decorComponentAbsorbQuery = useQuery({
+    queryKey: ["master-absorb-labor-items", "batch", [...decorComponentMasterIds].sort().join("|")],
+    enabled: decorComponentMasterIds.length > 0,
+    retry: false,
+    refetchOnWindowFocus: false,
+    staleTime: 60_000,
+    placeholderData: (previousData) => previousData,
     queryFn: async () => {
-      if (!selectedRecipeId) return [];
-      const response = await fetch(`/api/bom-lines?bom_id=${encodeURIComponent(selectedRecipeId)}`, {
-        cache: "no-store",
-      });
-      const json = (await response.json()) as { data?: BomLineRow[]; error?: string };
-      if (!response.ok) throw new Error(json.error ?? "BOM 라인 조회 실패");
-      return (json.data ?? []) as BomLineRow[];
+      if (decorComponentMasterIds.length === 0) return [] as MasterAbsorbLaborItem[];
+      const response = await fetch(
+        `/api/master-absorb-labor-items?master_ids=${encodeURIComponent(decorComponentMasterIds.join(","))}`,
+        { cache: "no-store" }
+      );
+      const json = (await response.json()) as { data?: MasterAbsorbLaborItem[]; error?: string };
+      if (!response.ok) throw new Error(json.error ?? "장식 마스터 흡수공임 조회 실패");
+      return (json.data ?? []) as MasterAbsorbLaborItem[];
     },
   });
 
   const flattenQuery = useQuery({
     queryKey: ["bom", "flatten", selectedMasterId, previewVariantKey],
     enabled: Boolean(selectedMasterId),
-    queryFn: async () => {
-      if (!selectedMasterId) return [];
-      const params = new URLSearchParams();
-      params.set("product_master_id", selectedMasterId);
-      if (previewVariantKey) params.set("variant_key", previewVariantKey);
-      const response = await fetch(`/api/bom-flatten?${params.toString()}`, { cache: "no-store" });
-      const json = (await response.json()) as BomFlattenLeafRow[] | { error?: string };
-      if (!response.ok) throw new Error((json as { error?: string }).error ?? "BOM 펼침 조회 실패");
-      return (Array.isArray(json) ? json : []) as BomFlattenLeafRow[];
-    },
+    staleTime: 60_000,
+    gcTime: 300_000,
+    refetchOnWindowFocus: false,
+    queryFn: () => fetchFlattenRows(selectedMasterId ?? "", previewVariantKey),
+    placeholderData: (previousData) => previousData,
   });
 
   const componentSearchQuery = useQuery({
@@ -1263,6 +1696,37 @@ export default function CatalogPage() {
     const safeD = Number.isFinite(d) ? d : 0;
     return Math.max(safeW - safeD, 0);
   }, [weightDefault, deductionWeight]);
+  const cnRawEntriesSorted = useMemo(() => sortCnRawEntriesAsc(cnRawEntries), [cnRawEntries]);
+  const cnRawEntriesComputed = useMemo<CnRawEntryComputed[]>(() => {
+    return cnRawEntriesSorted.map((entry) => {
+      const totalPriceCny = Math.max(toNumber(entry.totalPriceCny), 0);
+      const silverPriceCny = Math.max(toNumber(entry.silverPriceCny), 0);
+      const silverAmountCny = netWeightG * silverPriceCny;
+      const laborBaseCny = totalPriceCny - silverAmountCny;
+      const laborCny =
+        entry.laborBasis === "PER_PIECE"
+          ? laborBaseCny
+          : netWeightG > 0
+            ? laborBaseCny / netWeightG
+            : 0;
+      const totalCostKrw = totalPriceCny * (Number.isFinite(cnyAdRate) ? cnyAdRate : 0);
+      const silverPriceKrwPerG = silverPriceCny * (Number.isFinite(cnyAdRate) ? cnyAdRate : 0);
+      const laborKrw = laborCny * (Number.isFinite(cnyAdRate) ? cnyAdRate : 0);
+      return {
+        id: entry.id,
+        analysisDate: entry.analysisDate,
+        laborBasis: entry.laborBasis,
+        totalPriceCny,
+        silverPriceCny,
+        silverAmountCny,
+        laborBaseCny,
+        laborCny,
+        totalCostKrw,
+        silverPriceKrwPerG,
+        laborKrw,
+      };
+    });
+  }, [cnRawEntriesSorted, cnyAdRate, netWeightG]);
   const showChinaCostPanel = useMemo(() => supportsChinaCostPanel(materialCode), [materialCode]);
 
   const addCnExtraItem = useCallback(() => {
@@ -1276,6 +1740,200 @@ export default function CatalogPage() {
   const removeCnExtraItem = useCallback((id: string) => {
     setCnLaborExtraItems((prev) => prev.filter((it) => it.id !== id));
   }, []);
+
+  const addCnRawEntry = useCallback(() => {
+    setCnRawEntries((prev) => sortCnRawEntriesAsc([...prev, createEmptyCnRawEntry()]));
+  }, []);
+
+  const changeCnRawEntry = useCallback((id: string, patch: Partial<Omit<CnRawEntryState, "id">>) => {
+    setCnRawEntries((prev) => sortCnRawEntriesAsc(prev.map((entry) => (entry.id === id ? { ...entry, ...patch } : entry))));
+  }, []);
+
+  const removeCnRawEntry = useCallback((id: string) => {
+    setCnRawEntries((prev) => {
+      const next = prev.filter((entry) => entry.id !== id);
+      return sortCnRawEntriesAsc(next.length > 0 ? next : [createEmptyCnRawEntry()]);
+    });
+  }, []);
+
+  const buildCnExtraPayload = useCallback(() => {
+    const extraPayload = cnLaborExtraItems
+      .map((it) => {
+        const amount = Number(it.cnyAmount);
+        if (it.basis === "PER_PIECE") {
+          return {
+            label: it.label.trim(),
+            basis: "PER_PIECE" as const,
+            cny_per_piece: amount,
+          };
+        }
+        return {
+          label: it.label.trim(),
+          basis: "PER_G" as const,
+          cny_per_g: amount,
+        };
+      })
+      .filter((it) =>
+        it.label &&
+        (("cny_per_piece" in it && Number.isFinite(it.cny_per_piece ?? Number.NaN) && (it.cny_per_piece ?? -1) >= 0) ||
+          ("cny_per_g" in it && Number.isFinite(it.cny_per_g ?? Number.NaN) && (it.cny_per_g ?? -1) >= 0))
+      );
+
+    extraPayload.push(
+      cnLaborBasicBasis === "PER_PIECE"
+        ? {
+          label: CN_BASIC_BASIS_META_LABEL,
+          basis: "PER_PIECE" as const,
+          cny_per_piece: Number(cnLaborBasicCnyPerG || 0),
+        }
+        : {
+          label: CN_BASIC_BASIS_META_LABEL,
+          basis: "PER_G" as const,
+          cny_per_g: Number(cnLaborBasicCnyPerG || 0),
+        }
+    );
+
+    return extraPayload;
+  }, [cnLaborBasicBasis, cnLaborBasicCnyPerG, cnLaborExtraItems]);
+
+  const buildCnRawEntriesPayload = useCallback(() => {
+    return cnRawEntriesComputed
+      .map((entry) => {
+        const analysisDateIso =
+          /^\d{4}-\d{2}-\d{2}$/.test(entry.analysisDate)
+            ? entry.analysisDate
+            : toIsoDateFromCompact(entry.analysisDate);
+        return {
+          request_id: entry.id,
+          analysis_date: analysisDateIso,
+          total_price_cny: entry.totalPriceCny,
+          silver_price_cny_per_g: entry.silverPriceCny,
+          labor_basis: entry.laborBasis,
+          net_weight_g_snapshot: netWeightG,
+          silver_amount_cny_snapshot: entry.silverAmountCny,
+          labor_base_cny_snapshot: entry.laborBaseCny,
+          labor_cny_snapshot: entry.laborCny,
+          cny_krw_rate_snapshot: cnyAdRate,
+          fx_asof: cnyFxAsOf || new Date().toISOString(),
+          silver_price_krw_per_g_snapshot: entry.silverPriceKrwPerG,
+          labor_krw_snapshot: entry.laborKrw,
+          total_cost_krw_snapshot: entry.totalCostKrw,
+        };
+      })
+      .filter((entry) => Boolean(entry.analysis_date) || entry.total_price_cny > 0 || entry.silver_price_cny_per_g > 0);
+  }, [cnRawEntriesComputed, cnyAdRate, cnyFxAsOf, netWeightG]);
+
+  const saveCnCostPayload = useCallback(async (targetMasterId: string, options?: { silent?: boolean }) => {
+    if (!targetMasterId || !isUuid(targetMasterId)) return;
+    if (options?.silent && cnRawAutoSaveBusyRef.current) return;
+
+    const extraPayload = buildCnExtraPayload();
+    const cnRawEntriesPayload = buildCnRawEntriesPayload();
+    const latestCnRawPayload = cnRawEntriesPayload[cnRawEntriesPayload.length - 1] ?? null;
+
+    if (options?.silent) {
+      cnRawAutoSaveBusyRef.current = true;
+    }
+
+    try {
+      const cnResp = await fetch("/api/master-item-cn-cost", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          cn_request_id: latestCnRawPayload?.request_id ?? crypto.randomUUID(),
+          cn_source: "catalog:web",
+          cn_formula_version: 1,
+          master_id: targetMasterId,
+          cn_labor_basic_cny_per_g: Number(cnLaborBasicCnyPerG || 0),
+          cn_labor_extra_items: extraPayload,
+          cn_raw_cost_date: latestCnRawPayload?.analysis_date ?? null,
+          cn_raw_total_price_cny: latestCnRawPayload?.total_price_cny ?? 0,
+          cn_raw_silver_price_cny: latestCnRawPayload?.silver_price_cny_per_g ?? 0,
+          cn_raw_labor_basis: latestCnRawPayload?.labor_basis ?? "PER_G",
+          cn_cny_krw_rate_snapshot: cnyAdRate,
+          cn_fx_asof: cnyFxAsOf || new Date().toISOString(),
+          cn_net_weight_g_snapshot: netWeightG,
+          cn_silver_amount_cny_snapshot: latestCnRawPayload?.silver_amount_cny_snapshot ?? 0,
+          cn_labor_base_cny_snapshot: latestCnRawPayload?.labor_base_cny_snapshot ?? 0,
+          cn_labor_cny_snapshot: latestCnRawPayload?.labor_cny_snapshot ?? 0,
+          cn_silver_price_krw_per_g_snapshot: latestCnRawPayload?.silver_price_krw_per_g_snapshot ?? 0,
+          cn_labor_krw_snapshot: latestCnRawPayload?.labor_krw_snapshot ?? 0,
+          cn_total_cost_krw_snapshot: latestCnRawPayload?.total_cost_krw_snapshot ?? 0,
+          cn_raw_entries: cnRawEntriesPayload,
+          cn_raw_input: {
+            analysis_date: latestCnRawPayload?.analysis_date ?? null,
+            total_price_cny: latestCnRawPayload?.total_price_cny ?? 0,
+            silver_price_cny_per_g: latestCnRawPayload?.silver_price_cny_per_g ?? 0,
+            labor_basis: latestCnRawPayload?.labor_basis ?? "PER_G",
+            net_weight_g: netWeightG,
+          },
+          cn_raw_computed: {
+            formula_version: 1,
+            silver_amount_cny: latestCnRawPayload?.silver_amount_cny_snapshot ?? 0,
+            labor_base_cny: latestCnRawPayload?.labor_base_cny_snapshot ?? 0,
+            labor_cny: latestCnRawPayload?.labor_cny_snapshot ?? 0,
+            cny_krw_rate: cnyAdRate,
+            silver_price_krw_per_g: latestCnRawPayload?.silver_price_krw_per_g_snapshot ?? 0,
+            labor_krw: latestCnRawPayload?.labor_krw_snapshot ?? 0,
+            total_cost_krw: latestCnRawPayload?.total_cost_krw_snapshot ?? 0,
+          },
+        }),
+      });
+
+      const cnResult = (await cnResp.json()) as {
+        error?: string;
+        raw_saved?: boolean;
+        current_rows_saved?: boolean;
+        snapshot_saved?: boolean;
+        snapshot_inserted?: number;
+        hint?: string;
+        current_rows_hint?: string;
+        snapshot_hint?: string;
+      };
+
+      if (!cnResp.ok) {
+        if (!options?.silent) {
+          const desc = cnResult.error ? `중국 원가 저장 실패: ${cnResult.error}` : "중국 원가 저장에 실패했습니다.";
+          toast.error("부가 저장 실패", { description: desc });
+        }
+        return;
+      }
+
+      if (!options?.silent && cnResult.raw_saved === false && cnResult.hint) {
+        toast.warning("중국 원가 부분 저장", { description: cnResult.hint });
+      }
+      if (!options?.silent && cnResult.current_rows_saved === false && cnResult.current_rows_hint) {
+        toast.info("RAW 현재행 저장 안내", { description: cnResult.current_rows_hint });
+      }
+      if (!options?.silent && cnResult.snapshot_saved === false && cnResult.snapshot_hint) {
+        toast.info("RAW 분석 이력 저장 안내", { description: cnResult.snapshot_hint });
+      }
+
+      await loadCnRawHistory(targetMasterId, {
+        syncEditor: isEditMode && (selectedItemId === targetMasterId || masterId === targetMasterId),
+      });
+    } catch (err) {
+      if (!options?.silent) {
+        const desc = err instanceof Error ? err.message : "중국 원가 저장에 실패했습니다.";
+        toast.error("부가 저장 실패", { description: desc });
+      }
+    } finally {
+      if (options?.silent) {
+        cnRawAutoSaveBusyRef.current = false;
+      }
+    }
+  }, [
+    buildCnExtraPayload,
+    buildCnRawEntriesPayload,
+    cnLaborBasicCnyPerG,
+    cnyAdRate,
+    cnyFxAsOf,
+    isEditMode,
+    loadCnRawHistory,
+    masterId,
+    netWeightG,
+    selectedItemId,
+  ]);
 
 
   const notifyWriteDisabled = () => {
@@ -1412,7 +2070,7 @@ export default function CatalogPage() {
         p_component_part_id: null,
         p_qty_per_unit: qty,
         p_unit: "EA",
-        p_note: null,
+        p_note: buildBomLineKindNote(componentLineKind),
         p_meta: {},
         p_actor_person_id: actorId,
         p_note2: "add line from web",
@@ -1420,9 +2078,11 @@ export default function CatalogPage() {
 
       await queryClient.invalidateQueries({ queryKey: ["bom", "lines", effectiveBomId] });
       await queryClient.invalidateQueries({ queryKey: ["bom", "recipes", selectedMasterId] });
+      await queryClient.invalidateQueries({ queryKey: ["bom", "flatten", selectedMasterId] });
 
       if (selectedMasterId) {
-        await syncBomAutoAbsorbLabor(selectedMasterId, bomTotals.laborTotal);
+        const refreshedLines = await linesQuery.refetch();
+        await syncBomAutoAbsorbLabor(selectedMasterId, (refreshedLines.data ?? []) as BomLineRow[]);
       }
 
       if (addedComponentId) {
@@ -1452,14 +2112,66 @@ export default function CatalogPage() {
     });
 
     if (selectedMasterId) {
-      await syncBomAutoAbsorbLabor(selectedMasterId, bomTotals.laborTotal);
+      await queryClient.invalidateQueries({ queryKey: ["bom", "flatten", selectedMasterId] });
+      const refreshedLines = await linesQuery.refetch();
+      await syncBomAutoAbsorbLabor(selectedMasterId, (refreshedLines.data ?? []) as BomLineRow[]);
     }
     setVoidConfirmId(null);
   };
 
   const syncBomAutoAbsorbLabor = useCallback(
-    async (masterIdToSync: string, estimatedTotal: number) => {
-      const amount = Math.max(0, Math.round(estimatedTotal));
+    async (masterIdToSync: string, lines: BomLineRow[]) => {
+      const calcLineLaborTotal = (line: BomLineRow) => {
+        const masterRow = line.component_master_id
+          ? (masterRowsById[line.component_master_id] as Record<string, unknown> | undefined)
+          : undefined;
+        if (!masterRow) return 0;
+        const qty = Number(line.qty_per_unit ?? 0);
+        const centerQty = Number(masterRow.center_qty_default ?? 0);
+        const sub1Qty = Number(masterRow.sub1_qty_default ?? 0);
+        const sub2Qty = Number(masterRow.sub2_qty_default ?? 0);
+        const laborPerUnit =
+          Number(masterRow.labor_base_sell ?? 0) +
+          Number(masterRow.labor_center_sell ?? 0) * centerQty +
+          Number(masterRow.labor_sub1_sell ?? 0) * sub1Qty +
+          Number(masterRow.labor_sub2_sell ?? 0) * sub2Qty;
+        const total = laborPerUnit * qty;
+        return Number.isFinite(total) ? Math.max(0, Math.round(total)) : 0;
+      };
+
+      const lineRows = lines.map((line) => {
+        const kind = parseBomLineKind(line.note);
+        const laborTotal = calcLineLaborTotal(line);
+        const name = line.component_master_model_name ?? line.component_part_name ?? "장식";
+        const qtyPerUnit = Math.max(0, Number(line.qty_per_unit ?? 0));
+        const masterRow = line.component_master_id
+          ? (masterRowsById[line.component_master_id] as Record<string, unknown> | undefined)
+          : undefined;
+        const grossPerUnit = Number(masterRow?.weight_default_g ?? 0);
+        const deductionPerUnit = Number(masterRow?.deduction_weight_default_g ?? 0);
+        const materialCode = String(masterRow?.material_code_default ?? "00");
+        const materialPerUnit = calculateMaterialPrice(materialCode, grossPerUnit, deductionPerUnit);
+        const materialTotal = Number.isFinite(materialPerUnit) ? Math.max(materialPerUnit * qtyPerUnit, 0) : 0;
+        return {
+          bomLineId: String(line.bom_line_id ?? "").trim(),
+          kind,
+          laborTotal,
+          materialPerUnit: Number.isFinite(materialPerUnit) ? Math.max(materialPerUnit, 0) : 0,
+          materialTotal,
+          name,
+          qtyPerUnit,
+        };
+      });
+
+      const accessoryAmount = Math.max(
+        0,
+        lineRows
+          .filter((row) => row.kind === "ACCESSORY")
+          .reduce((sum, row) => sum + row.laborTotal, 0)
+      );
+      const decorRows = lineRows.filter((row) => row.kind === "DECOR" && row.laborTotal > 0 && row.bomLineId);
+      const materialRows = lineRows.filter((row) => row.kind === "DECOR" && row.materialPerUnit > 0 && row.bomLineId);
+
       const getResponse = await fetch(
         `/api/master-absorb-labor-items?master_id=${encodeURIComponent(masterIdToSync)}`,
         { cache: "no-store" }
@@ -1478,10 +2190,10 @@ export default function CatalogPage() {
         master_id: masterIdToSync,
         bucket: "BASE_LABOR",
         reason: ACCESSORY_BASE_REASON,
-        amount_krw: amount,
+        amount_krw: accessoryAmount,
         is_per_piece: true,
         vendor_party_id: null,
-        is_active: amount > 0,
+        is_active: accessoryAmount > 0,
       };
 
       const postResponse = await fetch("/api/master-absorb-labor-items", {
@@ -1494,11 +2206,141 @@ export default function CatalogPage() {
         throw new Error(postJson.error ?? "흡수공임 저장 실패");
       }
 
+      const managedDecorItems = (getJson.data ?? []).filter((item) => {
+        const reason = String(item.reason ?? "").trim();
+        return isManagedDecorAbsorbItem(item) || reason.startsWith(BOM_DECOR_REASON_PREFIX);
+      });
+      const decorItemsByLineId = new Map<string, MasterAbsorbLaborItem>();
+      managedDecorItems.forEach((item) => {
+        const sourceLineId = parseManagedAbsorbSourceLineId(item.note, BOM_DECOR_NOTE_PREFIX);
+        if (!sourceLineId) return;
+        decorItemsByLineId.set(sourceLineId, item);
+      });
+      const activeDecorLineIds = new Set(decorRows.map((row) => row.bomLineId));
+      const staleDecorItems = managedDecorItems.filter((item) => {
+        const sourceLineId = parseManagedAbsorbSourceLineId(item.note, BOM_DECOR_NOTE_PREFIX);
+        if (!sourceLineId) return item.is_active !== false;
+        if (!activeDecorLineIds.has(sourceLineId)) return item.is_active !== false;
+        const activeItem = decorItemsByLineId.get(sourceLineId);
+        return String(item.absorb_item_id ?? "").trim() !== String(activeItem?.absorb_item_id ?? "").trim() && item.is_active !== false;
+      });
+      const managedMaterialItems = (getJson.data ?? []).filter((item) => isManagedMaterialAbsorbItem(item));
+      const activeMaterialLineIds = new Set(materialRows.map((row) => row.bomLineId));
+      const staleMaterialItems = managedMaterialItems.filter((item) => {
+        const sourceLineId = parseManagedAbsorbSourceLineId(item.note, BOM_MATERIAL_NOTE_PREFIX);
+        if (!sourceLineId) return item.is_active !== false;
+        if (!activeMaterialLineIds.has(sourceLineId)) return item.is_active !== false;
+        return String(item.absorb_item_id ?? "").trim() !== sourceLineId && item.is_active !== false;
+      });
+
+      for (const row of decorRows) {
+        const existingDecor = decorItemsByLineId.get(row.bomLineId);
+        const decorPayload = {
+          absorb_item_id: existingDecor?.absorb_item_id,
+          master_id: masterIdToSync,
+          bucket: "ETC",
+          reason: `${BOM_DECOR_REASON_PREFIX}${row.name}`,
+          amount_krw: row.laborTotal,
+          labor_class: "GENERAL",
+          material_qty_per_unit: 1,
+          material_cost_krw: 0,
+          is_per_piece: true,
+          vendor_party_id: null,
+          is_active: true,
+          note: buildDecorAbsorbNote(row.bomLineId, row.qtyPerUnit),
+        };
+        const response = await fetch("/api/master-absorb-labor-items", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(decorPayload),
+        });
+        const json = (await response.json()) as { error?: string };
+        if (!response.ok) {
+          throw new Error(json.error ?? "장식 흡수공임 저장 실패");
+        }
+      }
+
+      for (const row of materialRows) {
+        const materialPayload = {
+          absorb_item_id: row.bomLineId,
+          master_id: masterIdToSync,
+          bucket: "ETC",
+          reason: `${BOM_MATERIAL_REASON_PREFIX}${row.name}`,
+          amount_krw: row.materialPerUnit,
+          labor_class: "MATERIAL",
+          material_qty_per_unit: row.qtyPerUnit,
+          material_cost_krw: row.materialPerUnit,
+          is_per_piece: true,
+          vendor_party_id: null,
+          is_active: true,
+          note: buildMaterialAbsorbNote(row.bomLineId, row.qtyPerUnit),
+        };
+        const response = await fetch("/api/master-absorb-labor-items", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(materialPayload),
+        });
+        const json = (await response.json()) as { error?: string };
+        if (!response.ok) {
+          throw new Error(json.error ?? "소재 흡수공임 저장 실패");
+        }
+      }
+
+      for (const staleItem of staleDecorItems) {
+        const deactivatePayload = {
+          absorb_item_id: staleItem.absorb_item_id,
+          master_id: masterIdToSync,
+          bucket: staleItem.bucket,
+          reason: staleItem.reason,
+          amount_krw: staleItem.amount_krw,
+          is_per_piece: staleItem.is_per_piece,
+          vendor_party_id: staleItem.vendor_party_id,
+          is_active: false,
+          note: staleItem.note,
+        };
+        const response = await fetch("/api/master-absorb-labor-items", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(deactivatePayload),
+        });
+        const json = (await response.json()) as { error?: string };
+        if (!response.ok) {
+          throw new Error(json.error ?? "기존 장식 흡수공임 비활성화 실패");
+        }
+      }
+
+      for (const staleItem of staleMaterialItems) {
+        const deactivatePayload = {
+          absorb_item_id: staleItem.absorb_item_id,
+          master_id: masterIdToSync,
+          bucket: staleItem.bucket,
+          reason: staleItem.reason,
+          amount_krw: staleItem.amount_krw,
+          labor_class: normalizeAbsorbLaborClass(staleItem.labor_class),
+          material_qty_per_unit: Math.max(Number(staleItem.material_qty_per_unit ?? 1), 0),
+          material_cost_krw: Math.max(Number(staleItem.material_cost_krw ?? 0), 0),
+          is_per_piece: staleItem.is_per_piece,
+          vendor_party_id: staleItem.vendor_party_id,
+          is_active: false,
+          note: staleItem.note,
+        };
+        const response = await fetch("/api/master-absorb-labor-items", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(deactivatePayload),
+        });
+        const json = (await response.json()) as { error?: string };
+        if (!response.ok) {
+          throw new Error(json.error ?? "기존 소재 흡수공임 비활성화 실패");
+        }
+      }
+
       if (selectedItemId === masterIdToSync) {
-        await loadAbsorbLaborItems(masterIdToSync);
+        absorbLaborCacheRef.current.delete(masterIdToSync);
+        await loadAbsorbLaborItems(masterIdToSync, { forceRefresh: true });
       }
     },
-    [loadAbsorbLaborItems, selectedItemId]
+    [calculateMaterialPrice, loadAbsorbLaborItems, masterRowsById, selectedItemId]
   );
 
   const createRecipeDisabled = !selectedMasterId || upsertRecipeMutation.isPending || !canWrite;
@@ -1562,22 +2404,77 @@ export default function CatalogPage() {
 
   useEffect(() => {
     if (!showBomPanel || !selectedMasterId) return;
-    const rounded = Math.max(0, Math.round(bomTotals.laborTotal));
-    const syncKey = `${selectedMasterId}:${rounded}`;
+    const lineSignature = ((linesQuery.data ?? []) as BomLineRow[])
+      .map((line) => {
+        const id = String(line.bom_line_id ?? "").trim();
+        const kind = parseBomLineKind(line.note);
+        const qty = Number(line.qty_per_unit ?? 0);
+        return `${id}:${kind}:${qty}`;
+      })
+      .sort()
+      .join("|");
+    const syncKey = `${selectedMasterId}:${lineSignature}`;
     if (bomAutoSyncRef.current === syncKey) return;
     bomAutoSyncRef.current = syncKey;
 
-    void syncBomAutoAbsorbLabor(selectedMasterId, bomTotals.laborTotal).catch((error) => {
+    void syncBomAutoAbsorbLabor(selectedMasterId, (linesQuery.data ?? []) as BomLineRow[]).catch((error) => {
       const message = error instanceof Error ? error.message : "BOM 자동반영 실패";
       toast.error("처리 실패", { description: message });
     });
-  }, [bomTotals.laborTotal, selectedMasterId, showBomPanel, syncBomAutoAbsorbLabor]);
+  }, [linesQuery.data, selectedMasterId, showBomPanel, syncBomAutoAbsorbLabor]);
 
   const displayedBomLineMetrics = useMemo(() => {
     const rows = [...bomLineMetrics];
     rows.sort((a, b) => Number(b.line.line_no ?? 0) - Number(a.line.line_no ?? 0));
     return rows;
   }, [bomLineMetrics]);
+
+  const decorComponentAbsorbByMasterId = useMemo(() => {
+    const map = new Map<string, MasterAbsorbLaborItem[]>();
+    (decorComponentAbsorbQuery.data ?? []).forEach((row) => {
+      const masterId = String(row.master_id ?? "").trim();
+      if (!masterId) return;
+      const existing = map.get(masterId) ?? [];
+      existing.push(row);
+      map.set(masterId, existing);
+    });
+    return map;
+  }, [decorComponentAbsorbQuery.data]);
+
+  const decorLaborRows = useMemo(() => {
+    const rows = displayedBomLineMetrics
+      .filter(({ line }) => parseBomLineKind(line.note) === "DECOR")
+      .map(({ line }, index) => {
+        const componentMasterId = String(line.component_master_id ?? "").trim();
+        if (!componentMasterId) return null;
+        const componentMaster = masterRowsById[componentMasterId] as Record<string, unknown> | undefined;
+        if (!componentMaster) return null;
+        const qty = Math.max(Number(line.qty_per_unit ?? 0), 0);
+        if (!Number.isFinite(qty) || qty <= 0) return null;
+        const perUnitTotals = computeMasterLaborTotalsWithAbsorb(
+          componentMaster,
+          decorComponentAbsorbByMasterId.get(componentMasterId) ?? []
+        );
+        const sellTotal = perUnitTotals.sellPerUnit * qty;
+        const costTotal = perUnitTotals.costPerUnit * qty;
+        return {
+          id: String(line.bom_line_id ?? `${componentMasterId}-${index}`),
+          label: `장식${index + 1}`,
+          componentName: String(line.component_master_model_name ?? line.component_part_name ?? "장식"),
+          qty,
+          sellTotal,
+          costTotal,
+          marginTotal: sellTotal - costTotal,
+        };
+      })
+      .filter((row): row is NonNullable<typeof row> => row !== null);
+
+    return {
+      rows,
+      sellTotal: rows.reduce((sum, row) => sum + row.sellTotal, 0),
+      costTotal: rows.reduce((sum, row) => sum + row.costTotal, 0),
+    };
+  }, [decorComponentAbsorbByMasterId, displayedBomLineMetrics, masterRowsById]);
 
   const flattenComponentMetrics = useMemo(() => {
     const rows = (flattenQuery.data ?? []) as BomFlattenLeafRow[];
@@ -1636,16 +2533,12 @@ export default function CatalogPage() {
     return { rows: mapped, totals };
   }, [flattenQuery.data, masterRowsById]);
 
-  const accessoryQtyTotal = useMemo(
-    () => flattenComponentMetrics.rows.reduce((sum, row) => sum + (Number.isFinite(row.qty) ? row.qty : 0), 0),
-    [flattenComponentMetrics.rows]
-  );
-  const accessoryLaborSellTotal = flattenComponentMetrics.totals.laborSellTotal;
-  const accessoryLaborCostTotal = flattenComponentMetrics.totals.laborCostTotal;
-  const laborBaseSellWithAccessoryForEdit = laborBaseSellWithAbsorb + accessoryLaborSellTotal;
-  const laborBaseCostWithAccessoryForEdit = laborBaseCost + accessoryLaborCostTotal;
-  const totalLaborSellWithAccessoryForEdit = totalLaborSellForEdit + accessoryLaborSellTotal;
-  const totalLaborCostWithAccessoryForEdit = totalLaborCostForEdit + accessoryLaborCostTotal;
+  const decorLaborSellTotal = decorLaborRows.sellTotal;
+  const decorLaborCostTotal = decorLaborRows.costTotal;
+  const laborBaseSellWithAccessoryForEdit = laborBaseSellWithAbsorb;
+  const laborBaseCostWithAccessoryForEdit = laborBaseCost;
+  const totalLaborSellWithAccessoryForEdit = totalLaborSellForEdit + decorLaborSellTotal;
+  const totalLaborCostWithAccessoryForEdit = totalLaborCostForEdit + decorLaborCostTotal;
 
   useEffect(() => {
     if (!lastAddedLineHint) return;
@@ -1679,9 +2572,8 @@ export default function CatalogPage() {
 
   const detailLaborBaseSellDisplay =
     Number(selectedDetail?.laborBaseSell ?? 0) +
-    detailAbsorbImpactSummary.baseLaborUnit +
-    accessoryLaborSellTotal;
-  const detailLaborBaseCostDisplay = Number(selectedDetail?.laborBaseCost ?? 0) + accessoryLaborCostTotal;
+    detailAbsorbImpactSummary.baseLaborUnit;
+  const detailLaborBaseCostDisplay = Number(selectedDetail?.laborBaseCost ?? 0);
   const detailLaborCenterSellDisplay = Number(selectedDetail?.laborCenterSell ?? 0) + detailAbsorbImpactSummary.stoneCenterUnit;
   const detailLaborSub1SellDisplay = Number(selectedDetail?.laborSub1Sell ?? 0) + detailAbsorbImpactSummary.stoneSub1Unit;
   const detailLaborSub2SellDisplay = Number(selectedDetail?.laborSub2Sell ?? 0) + detailAbsorbImpactSummary.stoneSub2Unit;
@@ -1694,14 +2586,16 @@ export default function CatalogPage() {
     detailLaborSub1SellDisplay * selectedDetail.sub1Qty +
     detailLaborSub2SellDisplay * selectedDetail.sub2Qty +
     detailPlatingSellDisplay +
-    detailAbsorbImpactSummary.etc
+    detailAbsorbImpactSummary.etc +
+    decorLaborSellTotal
     : totalLaborSell;
   const detailLaborCost = selectedDetail
     ? detailLaborBaseCostDisplay +
     selectedDetail.laborCenterCost * selectedDetail.centerQty +
     selectedDetail.laborSub1Cost * selectedDetail.sub1Qty +
     selectedDetail.laborSub2Cost * selectedDetail.sub2Qty +
-    detailPlatingCostDisplay
+    detailPlatingCostDisplay +
+    decorLaborCostTotal
     : totalLaborCost;
   const detailLaborSellWithAccessory = detailLaborSell;
   const detailLaborCostWithAccessory = detailLaborCost;
@@ -1725,6 +2619,7 @@ export default function CatalogPage() {
   const detailEtcLaborSellDisplay = detailAbsorbImpactSummary.etc;
   const detailEtcLaborCostDisplay = 0;
   const showDetailEtcRow = detailEtcLaborSellDisplay !== 0 || detailEtcLaborCostDisplay !== 0;
+  const detailDecorLaborRows = decorLaborRows.rows;
   const detailBaseLaborMargin = detailLaborBaseSellDisplay - detailLaborBaseCostDisplay;
   const detailCenterLaborMargin = detailLaborCenterSellDisplay - Number(selectedDetail?.laborCenterCost ?? 0);
   const detailSub1LaborMargin = detailLaborSub1SellDisplay - Number(selectedDetail?.laborSub1Cost ?? 0);
@@ -1796,6 +2691,50 @@ export default function CatalogPage() {
       reasonCostMap,
     };
   }, [selectedMasterId, masterRowsById, csOriginalKrwPerG, cnyAdRate]);
+
+  const detailRawNetWeight = useMemo(() => {
+    const weight = parseFloat(String(selectedDetail?.weight ?? ""));
+    const deduction = parseFloat(String(selectedDetail?.deductionWeight ?? ""));
+    const safeWeight = Number.isFinite(weight) ? weight : 0;
+    const safeDeduction = Number.isFinite(deduction) ? deduction : 0;
+    return Math.max(safeWeight - safeDeduction, 0);
+  }, [selectedDetail?.deductionWeight, selectedDetail?.weight]);
+
+  const detailRawHistoryRows = useMemo<CnRawHistoryRow[]>(() => {
+    if (!selectedMasterId) return [];
+    const historyRows = cnRawHistoryByMasterId[selectedMasterId] ?? [];
+    if (historyRows.length > 0) return historyRows;
+
+    const row = masterRowsById[selectedMasterId] as Record<string, unknown> | undefined;
+    if (!row) return [];
+
+    const totalPriceCny = Math.max(Number(row.cn_raw_total_price_cny ?? 0), 0);
+    const silverPriceCny = Math.max(Number(row.cn_raw_silver_price_cny ?? 0), 0);
+    const laborBasis = normalizeCnRawLaborBasis(row.cn_raw_labor_basis);
+    const laborBaseCny = totalPriceCny - detailRawNetWeight * silverPriceCny;
+    const laborCny = laborBasis === "PER_PIECE"
+      ? laborBaseCny
+      : detailRawNetWeight > 0
+        ? laborBaseCny / detailRawNetWeight
+        : 0;
+    const analysisDate = String(row.cn_raw_cost_date ?? "").trim();
+    if (!analysisDate && totalPriceCny <= 0 && silverPriceCny <= 0) return [];
+    const appliedRate = Number.isFinite(cnyAdRate) ? cnyAdRate : 0;
+    return [
+      {
+        id: `legacy-${selectedMasterId}`,
+        analysisDate,
+        laborBasis,
+        totalPriceCny,
+        silverPriceCny,
+        laborCny,
+        totalCostKrw: totalPriceCny * appliedRate,
+        silverPriceKrwPerG: silverPriceCny * appliedRate,
+        laborKrw: laborCny * appliedRate,
+        createdAt: "",
+      },
+    ];
+  }, [cnRawHistoryByMasterId, cnyAdRate, detailRawNetWeight, masterRowsById, selectedMasterId]);
 
 
   const handleImageUpload = async (file: File) => {
@@ -1895,11 +2834,15 @@ export default function CatalogPage() {
     setCnLaborBasicCnyPerG("");
     setCnLaborBasicBasis("PER_G");
     setCnLaborExtraItems([]);
+    setCnRawEntries([createEmptyCnRawEntry()]);
     setIsUnitPricing(false);
     setAbsorbLaborItems([]);
     setAbsorbBucket("BASE_LABOR");
+    setAbsorbLaborClass("GENERAL");
     setAbsorbReason("");
     setAbsorbAmount("0");
+    setAbsorbMaterialQtyPerUnit("1");
+    setAbsorbMaterialCostKrw("0");
     setAbsorbIsPerPiece(true);
     setAbsorbVendorId("");
     setAbsorbIsActive(true);
@@ -2024,10 +2967,29 @@ export default function CatalogPage() {
       setCnLaborExtraItems([]);
     }
 
+    const cnRawCostDateValue = String((row as Record<string, unknown>)?.cn_raw_cost_date ?? "").trim();
+    const cnRawTotalPriceValue = Number((row as Record<string, unknown>)?.cn_raw_total_price_cny ?? 0);
+    const cnRawSilverPriceValue = Number((row as Record<string, unknown>)?.cn_raw_silver_price_cny ?? 0);
+    const cnRawLaborBasisValue =
+      String((row as Record<string, unknown>)?.cn_raw_labor_basis ?? "PER_G").trim().toUpperCase() === "PER_PIECE"
+        ? "PER_PIECE"
+        : "PER_G";
+    setCnRawEntries([
+      createEmptyCnRawEntry({
+        analysisDate: toIsoDateInputValue(cnRawCostDateValue),
+        totalPriceCny: Number.isFinite(cnRawTotalPriceValue) && cnRawTotalPriceValue > 0 ? String(cnRawTotalPriceValue) : "",
+        silverPriceCny: Number.isFinite(cnRawSilverPriceValue) && cnRawSilverPriceValue > 0 ? String(cnRawSilverPriceValue) : "",
+        laborBasis: cnRawLaborBasisValue,
+      }),
+    ]);
+
     if (selectedItem.id) {
       void loadAbsorbLaborItems(selectedItem.id).catch((error) => {
         const message = error instanceof Error ? error.message : "흡수공임 조회 실패";
         toast.error("처리 실패", { description: message });
+      });
+      void loadCnRawHistory(selectedItem.id, { syncEditor: true }).catch((error) => {
+        console.error("Failed to load RAW history for editor:", error);
       });
     }
 
@@ -2129,62 +3091,7 @@ export default function CatalogPage() {
 
       // China cost inputs: add-only backend endpoint
       if (savedId) {
-        try {
-          const extraPayload = cnLaborExtraItems
-            .map((it) => {
-              const amount = Number(it.cnyAmount);
-              if (it.basis === "PER_PIECE") {
-                return {
-                  label: it.label.trim(),
-                  basis: "PER_PIECE" as const,
-                  cny_per_piece: amount,
-                };
-              }
-              return {
-                label: it.label.trim(),
-                basis: "PER_G" as const,
-                cny_per_g: amount,
-              };
-            })
-            .filter((it) =>
-              it.label &&
-              (("cny_per_piece" in it && Number.isFinite(it.cny_per_piece ?? Number.NaN) && (it.cny_per_piece ?? -1) >= 0) ||
-                ("cny_per_g" in it && Number.isFinite(it.cny_per_g ?? Number.NaN) && (it.cny_per_g ?? -1) >= 0))
-            );
-
-          extraPayload.push(
-            cnLaborBasicBasis === "PER_PIECE"
-              ? {
-                label: CN_BASIC_BASIS_META_LABEL,
-                basis: "PER_PIECE" as const,
-                cny_per_piece: Number(cnLaborBasicCnyPerG || 0),
-              }
-              : {
-                label: CN_BASIC_BASIS_META_LABEL,
-                basis: "PER_G" as const,
-                cny_per_g: Number(cnLaborBasicCnyPerG || 0),
-              }
-          );
-
-          const cnResp = await fetch("/api/master-item-cn-cost", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              master_id: savedId,
-              cn_labor_basic_cny_per_g: Number(cnLaborBasicCnyPerG || 0),
-              cn_labor_extra_items: extraPayload,
-            }),
-          });
-
-          if (!cnResp.ok) {
-            const cnResult = (await cnResp.json()) as { error?: string };
-            const desc = cnResult.error ? `중국 원가 저장 실패: ${cnResult.error}` : "중국 원가 저장에 실패했습니다.";
-            toast.error("부가 저장 실패", { description: desc });
-          }
-        } catch (err) {
-          const desc = err instanceof Error ? err.message : "중국 원가 저장에 실패했습니다.";
-          toast.error("부가 저장 실패", { description: desc });
-        }
+        await saveCnCostPayload(savedId, { silent: false });
       }
 
       toast.success("저장 완료");
@@ -2427,12 +3334,21 @@ export default function CatalogPage() {
     }
   }, [laborSub2Cost, sub2StoneSourceDefault]);
 
+  useEffect(() => {
+    if (absorbBucket !== "ETC" && absorbLaborClass !== "GENERAL") {
+      setAbsorbLaborClass("GENERAL");
+    }
+  }, [absorbBucket, absorbLaborClass]);
+
   const resetAbsorbForm = () => {
     setEditingAbsorbItemId(null);
     setAbsorbBucket("BASE_LABOR");
+    setAbsorbLaborClass("GENERAL");
     setAbsorbStoneRole("CENTER");
     setAbsorbReason("");
     setAbsorbAmount("0");
+    setAbsorbMaterialQtyPerUnit("1");
+    setAbsorbMaterialCostKrw("0");
     setAbsorbIsPerPiece(true);
     setAbsorbVendorId("");
     setAbsorbIsActive(true);
@@ -2445,12 +3361,22 @@ export default function CatalogPage() {
       return;
     }
     const amount = Number(absorbAmount);
+    const materialQtyPerUnit = Number(absorbMaterialQtyPerUnit);
+    const materialCostKrw = Number(absorbMaterialCostKrw);
     if (!absorbReason.trim()) {
       toast.error("처리 실패", { description: "사유를 입력해 주세요." });
       return;
     }
     if (!Number.isFinite(amount)) {
       toast.error("처리 실패", { description: "금액은 숫자여야 합니다." });
+      return;
+    }
+    if (absorbLaborClass === "MATERIAL" && (!Number.isFinite(materialQtyPerUnit) || materialQtyPerUnit <= 0)) {
+      toast.error("처리 실패", { description: "소재 개수는 0보다 커야 합니다." });
+      return;
+    }
+    if (absorbLaborClass === "MATERIAL" && (!Number.isFinite(materialCostKrw) || materialCostKrw < 0)) {
+      toast.error("처리 실패", { description: "소재 원가는 0 이상 숫자여야 합니다." });
       return;
     }
 
@@ -2462,9 +3388,12 @@ export default function CatalogPage() {
           absorb_item_id: editingAbsorbItemId,
           master_id: targetMasterId,
           bucket: absorbBucket,
+          labor_class: absorbLaborClass,
           note: buildAbsorbNote(absorbBucket, absorbStoneRole),
           reason: absorbReason.trim(),
           amount_krw: amount,
+          material_qty_per_unit: absorbLaborClass === "MATERIAL" ? materialQtyPerUnit : 1,
+          material_cost_krw: absorbLaborClass === "MATERIAL" ? materialCostKrw : 0,
           is_per_piece: absorbIsPerPiece,
           vendor_party_id: absorbVendorId || null,
           is_active: absorbIsActive,
@@ -2472,7 +3401,8 @@ export default function CatalogPage() {
       });
       const json = (await response.json()) as { error?: string };
       if (!response.ok) throw new Error(json.error ?? "흡수공임 저장 실패");
-      await loadAbsorbLaborItems(targetMasterId);
+      absorbLaborCacheRef.current.delete(targetMasterId);
+      await loadAbsorbLaborItems(targetMasterId, { forceRefresh: true });
       resetAbsorbForm();
       toast.success("흡수공임 저장 완료");
     } catch (error) {
@@ -2489,7 +3419,10 @@ export default function CatalogPage() {
       });
       const json = (await response.json()) as { error?: string };
       if (!response.ok) throw new Error(json.error ?? "흡수공임 삭제 실패");
-      if (targetMasterId) await loadAbsorbLaborItems(targetMasterId);
+      if (targetMasterId) {
+        absorbLaborCacheRef.current.delete(targetMasterId);
+        await loadAbsorbLaborItems(targetMasterId, { forceRefresh: true });
+      }
       toast.success("흡수공임 삭제 완료");
     } catch (error) {
       const message = error instanceof Error ? error.message : "흡수공임 삭제 실패";
@@ -2500,9 +3433,12 @@ export default function CatalogPage() {
   const handleEditAbsorbLaborItem = (item: MasterAbsorbLaborItem) => {
     setEditingAbsorbItemId(item.absorb_item_id);
     setAbsorbBucket(item.bucket);
+    setAbsorbLaborClass(normalizeAbsorbLaborClass(item.labor_class));
     setAbsorbStoneRole(parseAbsorbStoneRole(item.note) ?? "CENTER");
     setAbsorbReason(item.reason);
     setAbsorbAmount(String(item.amount_krw));
+    setAbsorbMaterialQtyPerUnit(String(Math.max(Number(item.material_qty_per_unit ?? 1), 0)));
+    setAbsorbMaterialCostKrw(String(Math.max(Number(item.material_cost_krw ?? 0), 0)));
     setAbsorbIsPerPiece(Boolean(item.is_per_piece));
     setAbsorbVendorId(item.vendor_party_id ?? "");
     setAbsorbIsActive(Boolean(item.is_active));
@@ -2539,6 +3475,7 @@ export default function CatalogPage() {
   };
 
   const openDetailDrawer = (id: string) => {
+    prefetchMasterDetailFastPath(id);
     setSelectedItemId(id);
     setIsDetailDrawerOpen(true);
   };
@@ -2784,7 +3721,7 @@ export default function CatalogPage() {
                     </div>
                   </div>
 
-                  <div className="rounded-[18px] border border-[var(--panel-border)] bg-[var(--panel)] p-4 flex flex-col">
+                  <div className="rounded-[18px] border border-[var(--panel-border)] bg-[var(--panel)] p-4 flex flex-col space-y-3">
                     <p className="mb-3 text-sm font-semibold text-[var(--foreground)]">
                       비고
                     </p>
@@ -2792,8 +3729,129 @@ export default function CatalogPage() {
                       placeholder="상품에 대한 상세 정보를 입력하세요."
                       value={note}
                       onChange={(event) => setNote(event.target.value)}
-                      className="resize-none h-[17rem]"
+                      className="resize-none h-[11rem]"
                     />
+
+                    <div className="rounded-[12px] border border-[var(--panel-border)] bg-[var(--subtle-bg)] p-3 space-y-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="text-sm font-semibold text-[var(--foreground)]">RAW원가 분석</div>
+                        <div className="flex items-center gap-2">
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="secondary"
+                            className="h-6 px-2 text-[11px]"
+                            onClick={addCnRawEntry}
+                          >
+                            + 행추가
+                          </Button>
+                          <div className="text-[11px] text-[var(--muted)]">총중량 {formatWeightNumber(netWeightG)} g</div>
+                        </div>
+                      </div>
+                      <div className="space-y-1">
+                        <div className="grid grid-cols-[116px_68px_68px_76px_72px_auto] items-center gap-1 text-[10px] text-[var(--muted)] px-1">
+                          <div>날짜</div>
+                          <div className="text-right">총(CNY)</div>
+                          <div className="text-right">은(CNY/g)</div>
+                          <div>공임기준</div>
+                          <div className="text-right">공임</div>
+                          <div className="text-right">추가/삭제</div>
+                        </div>
+                        {cnRawEntriesSorted.map((rawEntry, idx) => {
+                          const entry = cnRawEntriesComputed[idx];
+                          if (!entry) return null;
+                          return (
+                            <div
+                              key={entry.id}
+                              className="space-y-0.5"
+                              onBlurCapture={(event) => {
+                                const next = event.relatedTarget as Node | null;
+                                if (next && event.currentTarget.contains(next)) return;
+                                if (!isEditMode) return;
+                                const targetMasterId = selectedItemId || masterId;
+                                if (!targetMasterId) return;
+                                void saveCnCostPayload(targetMasterId, { silent: true });
+                              }}
+                            >
+                              <div className="grid grid-cols-[116px_68px_68px_76px_72px_auto] items-center gap-1">
+                                <Input
+                                  type="date"
+                                  value={rawEntry.analysisDate}
+                                  onChange={(event) => changeCnRawEntry(entry.id, { analysisDate: event.target.value })}
+                                  className="h-8 px-2 text-[11px]"
+                                />
+                                <Input
+                                  type="number"
+                                  min={0}
+                                  step="0.01"
+                                  value={rawEntry.totalPriceCny}
+                                  onChange={(event) => changeCnRawEntry(entry.id, { totalPriceCny: event.target.value })}
+                                  className="h-8 px-2 text-[11px] text-right"
+                                />
+                                <Input
+                                  type="number"
+                                  min={0}
+                                  step="0.01"
+                                  value={rawEntry.silverPriceCny}
+                                  onChange={(event) => changeCnRawEntry(entry.id, { silverPriceCny: event.target.value })}
+                                  className="h-8 px-2 text-[11px] text-right"
+                                />
+                                <Select
+                                  value={rawEntry.laborBasis}
+                                  onChange={(event) => changeCnRawEntry(entry.id, { laborBasis: normalizeCnRawLaborBasis(event.target.value) })}
+                                  className="h-8 px-1 text-[11px]"
+                                >
+                                  <option value="PER_G">g당</option>
+                                  <option value="PER_PIECE">개당</option>
+                                </Select>
+                                <Input
+                                  readOnly
+                                  value={formatDisplayCny(entry.laborCny)}
+                                  className="h-8 px-2 text-[11px] text-right"
+                                />
+                                <div className="flex items-center justify-end gap-1">
+                                  {idx === cnRawEntriesSorted.length - 1 ? (
+                                    <Button
+                                      type="button"
+                                      size="sm"
+                                      variant="secondary"
+                                      className="h-7 px-2 text-[11px]"
+                                      onClick={addCnRawEntry}
+                                    >
+                                      +
+                                    </Button>
+                                  ) : null}
+                                  {cnRawEntriesSorted.length > 1 ? (
+                                  <Button
+                                    type="button"
+                                    size="sm"
+                                    variant="ghost"
+                                    className="h-7 px-2 text-[11px] text-[var(--danger)]"
+                                    onClick={() => {
+                                      removeCnRawEntry(entry.id);
+                                      if (!isEditMode) return;
+                                      const targetMasterId = selectedItemId || masterId;
+                                      if (!targetMasterId) return;
+                                      window.setTimeout(() => {
+                                        void saveCnCostPayload(targetMasterId, { silent: true });
+                                      }, 0);
+                                    }}
+                                  >
+                                    삭제
+                                  </Button>
+                                ) : null}
+                                </div>
+                              </div>
+                              <div className="pl-1 text-[10px] text-[var(--muted)] tabular-nums overflow-x-auto whitespace-nowrap">
+                                {`<${toCompactYyMmDd(entry.analysisDate) || "-"}>총${formatDisplayCny(entry.totalPriceCny)} /은:${formatDisplayCny(entry.silverPriceCny)} /공임 ${formatDisplayCny(entry.laborCny)}${entry.laborBasis === "PER_G" ? "/g" : "/ea"}(`}
+                                <span className="font-semibold text-blue-600">{`원가${formatDisplayKrw(entry.totalCostKrw)}원`}</span>
+                                {`) | KRW 총: ₩${formatDisplayKrw(entry.totalPriceCny * cnyAdRate)} | 은: ₩${formatDisplayKrw(entry.silverPriceKrwPerG)}/g | 공임: ₩${formatDisplayKrw(entry.laborKrw)}${entry.laborBasis === "PER_G" ? "/g" : "/ea"}`}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
                   </div>
                 </div>
 
@@ -2839,7 +3897,7 @@ export default function CatalogPage() {
                         기본
                       </div>
                       <div className="relative">
-                        {absorbImpactSummary.baseLaborUnit !== 0 || accessoryLaborSellTotal !== 0 ? (
+                        {absorbImpactSummary.baseLaborUnit !== 0 ? (
                           <span className="absolute -top-1 -left-1 h-2.5 w-2.5 rounded-full bg-blue-500" title="흡수공임 반영" />
                         ) : null}
                         <Input
@@ -2848,7 +3906,7 @@ export default function CatalogPage() {
                           value={laborBaseSellWithAccessoryForEdit}
                           onChange={(e) => {
                             const nextDisplay = toNumber(e.target.value);
-                            const nextRaw = Math.max(0, nextDisplay - absorbImpactSummary.baseLaborUnit - accessoryLaborSellTotal);
+                            const nextRaw = Math.max(0, nextDisplay - absorbImpactSummary.baseLaborUnit);
                             setLaborBaseSell(nextRaw);
                           }}
                           className="bg-lime-50"
@@ -3160,6 +4218,35 @@ export default function CatalogPage() {
                         className="text-right font-bold bg-[var(--input-bg)] text-[var(--foreground)] border-[var(--panel-border)]"
                         value={totalLaborCostWithAccessoryForEdit}
                       />
+
+                      {decorLaborRows.rows.length > 0 ? (
+                        <>
+                          <div className="col-span-4 h-px bg-dashed border-t border-[var(--panel-border)] my-2" />
+                          <div className="col-span-4 rounded-[10px] border border-[var(--panel-border)] bg-[var(--subtle-bg)] p-2">
+                            <div className="mb-2 text-[11px] font-semibold text-[var(--foreground)]">장식n (마스터 고정)</div>
+                            <table className="w-full text-[11px]">
+                              <thead className="text-[var(--muted)]">
+                                <tr>
+                                  <th className="px-2 py-1 text-left">항목</th>
+                                  <th className="px-2 py-1 text-right">총공임(판매)</th>
+                                  <th className="px-2 py-1 text-right">개수</th>
+                                  <th className="px-2 py-1 text-right">총공임(원가)</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {decorLaborRows.rows.map((row) => (
+                                  <tr key={row.id} className="border-t border-[var(--panel-border)]">
+                                    <td className="px-2 py-1">{row.label}</td>
+                                    <td className="px-2 py-1 text-right tabular-nums">₩{formatDisplayKrw(row.sellTotal)}</td>
+                                    <td className="px-2 py-1 text-right tabular-nums">{row.qty.toLocaleString("ko-KR")}</td>
+                                    <td className="px-2 py-1 text-right tabular-nums">₩{formatDisplayKrw(row.costTotal)}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        </>
+                      ) : null}
                     </div>
                   </div>
 
@@ -3614,6 +4701,23 @@ export default function CatalogPage() {
                     />
                   </div>
                 ) : null}
+                {detailDecorLaborRows.map((row) => (
+                  <div key={row.id} className="grid grid-cols-10 gap-2">
+                    <div className="col-span-2 flex items-center justify-center rounded-[8px] border border-[var(--panel-border)] bg-[var(--subtle-bg)] px-2 py-2">
+                      <span className="text-xs font-semibold text-[var(--foreground)]">{row.label}</span>
+                    </div>
+                    <ReadonlyNumberCell value={row.sellTotal} className="bg-[var(--subtle-bg)]" />
+                    <div className="col-span-2 flex items-center justify-center rounded-[8px] border border-[var(--panel-border)] bg-[var(--subtle-bg)] px-2 py-2 text-xs tabular-nums text-[var(--foreground)]">
+                      {row.qty.toLocaleString("ko-KR")}
+                    </div>
+                    <ReadonlyNumberCell
+                      value={row.marginTotal}
+                      extraText={formatSharePercent(row.marginTotal, row.sellTotal) ? `(${formatSharePercent(row.marginTotal, row.sellTotal)})` : ""}
+                      valueClassName="text-sm font-medium"
+                      className="bg-[var(--subtle-bg)]"
+                    />
+                  </div>
+                ))}
               </div>
             </div>
           </CardBody>
@@ -3624,12 +4728,35 @@ export default function CatalogPage() {
           <CardHeader>
             <ActionBar title="추가 메모" />
           </CardHeader>
-          <CardBody className="py-3">
+          <CardBody className="py-3 space-y-3">
             <Textarea
               placeholder="내부 메모"
               value={selectedDetail?.note ?? ""}
               readOnly
             />
+            <div className="rounded-[10px] border border-[var(--panel-border)] bg-[var(--subtle-bg)] p-3 space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <div className="text-sm font-semibold">RAW원가 분석</div>
+                <div className="text-[11px] text-[var(--muted)]">
+                  총중량 {formatWeightNumber(detailRawNetWeight)} g
+                </div>
+              </div>
+              {detailRawHistoryRows.length === 0 ? (
+                <div className="rounded border border-[var(--panel-border)] bg-[var(--panel)] px-3 py-2 text-[11px] text-[var(--muted)]">기록 없음</div>
+              ) : (
+                <div className="space-y-1">
+                  {detailRawHistoryRows.map((entry) => (
+                    <div key={entry.id} className="rounded border border-[var(--panel-border)] bg-[var(--panel)] px-2.5 py-1.5">
+                      <div className="text-[10px] text-[var(--muted)] tabular-nums">
+                        {`<${toCompactYyMmDd(entry.analysisDate) || "-"}>총${formatDisplayCny(entry.totalPriceCny)} /은:${formatDisplayCny(entry.silverPriceCny)} /공임 ${formatDisplayCny(entry.laborCny)}${entry.laborBasis === "PER_PIECE" ? "/ea" : "/g"}(`}
+                        <span className="font-semibold text-blue-600">{`원가${formatDisplayKrw(entry.totalCostKrw)}원`}</span>
+                        {`) | KRW 총: ₩${formatDisplayKrw(entry.totalCostKrw)} | 은: ₩${formatDisplayKrw(entry.silverPriceKrwPerG)}/g | 공임: ₩${formatDisplayKrw(entry.laborKrw)}${entry.laborBasis === "PER_G" ? "/g" : "/ea"}`}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </CardBody>
         </Card>
 
@@ -3763,7 +4890,7 @@ export default function CatalogPage() {
 
               <div className="rounded-[10px] border border-[var(--panel-border)] bg-[var(--panel)] p-3 space-y-3">
                 <div className="flex items-center justify-between gap-3">
-                  <div className="text-sm font-semibold">부속 구성품 목록</div>
+                  <div className="text-sm font-semibold">구성품 목록</div>
                   <div className="grid grid-cols-[auto_auto] items-center gap-x-2 gap-y-1 text-xs tabular-nums">
                     <span className="text-[var(--muted)]">총중량</span>
                     <span className="font-semibold text-[var(--foreground)]">
@@ -3794,48 +4921,97 @@ export default function CatalogPage() {
                   </div>
                 ) : flattenComponentMetrics.rows.length === 0 ? (
                   <div className="text-xs text-[var(--muted)]">등록된 부속 구성품이 없습니다.</div>
-                ) : (
-                  <>
-                    <div className="overflow-x-auto rounded-[10px] border border-[var(--panel-border)]">
-                      <table className="min-w-full text-left text-xs">
-                        <thead className="bg-[var(--subtle-bg)] text-[var(--muted)]">
-                          <tr>
-                            <th className="px-3 py-2">모델 사진</th>
-                            <th className="px-3 py-2">품목명</th>
-                            <th className="px-3 py-2">수량</th>
-                            <th className="px-3 py-2">총공임(판매)</th>
-                            <th className="px-3 py-2">총공임(원가)</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {flattenComponentMetrics.rows.map((row) => (
-                            <tr key={row.key} className="border-t border-[var(--panel-border)]">
-                              <td className="px-3 py-2">
-                                {row.imageUrl ? (
-                                  <img src={row.imageUrl} alt={row.name} className="h-10 w-10 rounded-md border border-[var(--panel-border)] object-cover bg-[var(--subtle-bg)]" loading="lazy" />
-                                ) : (
-                                  <div className="flex h-10 w-10 items-center justify-center rounded-md border border-[var(--panel-border)] bg-[var(--subtle-bg)] text-[10px] text-[var(--muted)]">-</div>
-                                )}
-                              </td>
-                              <td className="px-3 py-2">{row.name}</td>
-                              <td className="px-3 py-2 tabular-nums">{row.qty.toLocaleString("ko-KR")}</td>
-                              <td className="px-3 py-2 tabular-nums">₩{formatLaborDisplayKrw(row.laborSellTotal)}</td>
-                              <td className="px-3 py-2 tabular-nums">₩{formatLaborDisplayKrw(row.laborCostTotal)}</td>
-                            </tr>
-                          ))}
-                          <tr className="border-t border-[var(--panel-border)] bg-[var(--subtle-bg)] font-semibold">
-                            <td className="px-3 py-2" />
-                            <td className="px-3 py-2">합계</td>
-                            <td className="px-3 py-2 tabular-nums">{accessoryQtyTotal.toLocaleString("ko-KR")}</td>
-                            <td className="px-3 py-2 tabular-nums">₩{formatLaborDisplayKrw(flattenComponentMetrics.totals.laborSellTotal)}</td>
-                            <td className="px-3 py-2 tabular-nums">₩{formatLaborDisplayKrw(flattenComponentMetrics.totals.laborCostTotal)}</td>
-                          </tr>
-                        </tbody>
-                      </table>
-                    </div>
-                  </>
-                )}
-              </div>
+                  ) : (
+                    <>
+                      {(() => {
+                        if (displayedBomLineMetrics.length === 0) {
+                          return (
+                            <div className="rounded-[10px] border border-[var(--panel-border)] bg-[var(--panel)] p-2">
+                              <div className="mb-2 text-xs font-semibold text-[var(--foreground)]">구성품(빠른 로딩)</div>
+                              <div className="overflow-x-auto rounded-[8px] border border-[var(--panel-border)]">
+                                <table className="min-w-full text-left text-xs">
+                                  <thead className="bg-[var(--subtle-bg)] text-[var(--muted)]">
+                                    <tr>
+                                      <th className="px-3 py-2">품목명</th>
+                                      <th className="px-3 py-2">수량</th>
+                                      <th className="px-3 py-2">총공임(판매)</th>
+                                      <th className="px-3 py-2">총공임(원가)</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {flattenComponentMetrics.rows.map((row) => (
+                                      <tr key={row.key} className="border-t border-[var(--panel-border)]">
+                                        <td className="px-3 py-2">{row.name}</td>
+                                        <td className="px-3 py-2 tabular-nums">{row.qty.toLocaleString("ko-KR")}</td>
+                                        <td className="px-3 py-2 tabular-nums">₩{formatLaborDisplayKrw(row.laborSellTotal)}</td>
+                                        <td className="px-3 py-2 tabular-nums">₩{formatLaborDisplayKrw(row.laborCostTotal)}</td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                            </div>
+                          );
+                        }
+
+                        const accessoryRows = displayedBomLineMetrics.filter(({ line }) => parseBomLineKind(line.note) === "ACCESSORY");
+                        const decorRows = displayedBomLineMetrics.filter(({ line }) => parseBomLineKind(line.note) === "DECOR");
+
+                        const renderGroupTable = (groupTitle: string, rows: typeof displayedBomLineMetrics) => (
+                          <div className="rounded-[10px] border border-[var(--panel-border)] bg-[var(--panel)] p-2">
+                            <div className="mb-2 text-xs font-semibold text-[var(--foreground)]">{groupTitle}</div>
+                            {rows.length === 0 ? (
+                              <div className="px-2 py-3 text-xs text-[var(--muted)]">등록된 항목이 없습니다.</div>
+                            ) : (
+                              <div className="overflow-x-auto rounded-[8px] border border-[var(--panel-border)]">
+                                <table className="min-w-full text-left text-xs">
+                                  <thead className="bg-[var(--subtle-bg)] text-[var(--muted)]">
+                                    <tr>
+                                      <th className="px-3 py-2">사진</th>
+                                      <th className="px-3 py-2">품목명</th>
+                                      <th className="px-3 py-2">수량</th>
+                                      <th className="px-3 py-2">총공임(판매)</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {rows.map(({ line, laborTotal }) => {
+                                      const name = line.component_master_model_name ?? line.component_part_name ?? "(unknown item)";
+                                      const imageUrl = line.component_master_id
+                                        ? String(masterRowsById[line.component_master_id]?.image_url ?? "")
+                                        : "";
+                                      const qty = Number(line.qty_per_unit ?? 0);
+                                      return (
+                                        <tr key={`${groupTitle}-${line.bom_line_id}`} className="border-t border-[var(--panel-border)]">
+                                          <td className="px-3 py-2">
+                                            {imageUrl ? (
+                                              <img src={imageUrl} alt={name} className="h-10 w-10 rounded-md border border-[var(--panel-border)] object-cover bg-[var(--subtle-bg)]" loading="lazy" />
+                                            ) : (
+                                              <div className="flex h-10 w-10 items-center justify-center rounded-md border border-[var(--panel-border)] bg-[var(--subtle-bg)] text-[10px] text-[var(--muted)]">-</div>
+                                            )}
+                                          </td>
+                                          <td className="px-3 py-2">{name}</td>
+                                          <td className="px-3 py-2 tabular-nums">{qty.toLocaleString("ko-KR")}</td>
+                                          <td className="px-3 py-2 tabular-nums">₩{formatLaborDisplayKrw(laborTotal)}</td>
+                                        </tr>
+                                      );
+                                    })}
+                                  </tbody>
+                                </table>
+                              </div>
+                            )}
+                          </div>
+                        );
+
+                        return (
+                          <div className="grid grid-cols-1 gap-3">
+                            {renderGroupTable("부품", accessoryRows)}
+                            {renderGroupTable("장식", decorRows)}
+                          </div>
+                        );
+                      })()}
+                    </>
+                  )}
+                </div>
             </CardBody>
           </Card>
         ) : null}
@@ -3922,7 +5098,15 @@ export default function CatalogPage() {
                 </CardHeader>
                 <CardBody className="space-y-3">
                       <div className="relative space-y-2">
-                        <div className="grid grid-cols-1 gap-2 md:grid-cols-[minmax(0,1fr)_120px_auto]">
+                        <div className="grid grid-cols-1 gap-2 md:grid-cols-[140px_minmax(0,1fr)_120px_auto]">
+                          <Select
+                            aria-label="구분"
+                            value={componentLineKind}
+                            onChange={(e) => setComponentLineKind(e.target.value as BomLineKind)}
+                          >
+                            <option value="ACCESSORY">부속</option>
+                            <option value="DECOR">장식(기타공임)</option>
+                          </Select>
                           <Input
                             aria-label="품목명 검색"
                             placeholder="품목명 검색"
@@ -3996,48 +5180,72 @@ export default function CatalogPage() {
                       ) : (linesQuery.data ?? []).length === 0 ? (
                         <p className="text-sm text-[var(--muted)]">등록된 구성품이 없습니다.</p>
                       ) : (
-                        <div className="overflow-x-auto rounded-[10px] border border-[var(--panel-border)]">
-                          <table className="min-w-full text-left text-xs">
-                            <thead className="bg-[var(--subtle-bg)] text-[var(--muted)]">
-                              <tr>
-                                <th className="px-3 py-2">사진</th>
-                                <th className="px-3 py-2">품목명</th>
-                                <th className="px-3 py-2">수량</th>
-                                <th className="px-3 py-2">총공임</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {displayedBomLineMetrics.map(({ line, laborTotal }) => {
-                                const name = line.component_master_model_name ?? line.component_part_name ?? "(unknown item)";
-                                const imageUrl = line.component_master_id
-                                  ? String(masterRowsById[line.component_master_id]?.image_url ?? "")
-                                  : "";
-                                return (
-                                  <tr key={line.bom_line_id} className="border-t border-[var(--panel-border)]">
-                                    <td className="px-3 py-2">
-                                      {imageUrl ? (
-                                        <img src={imageUrl} alt={name} className="h-10 w-10 rounded-md border border-[var(--panel-border)] object-cover bg-[var(--subtle-bg)]" loading="lazy" />
-                                      ) : (
-                                        <div className="flex h-10 w-10 items-center justify-center rounded-md border border-[var(--panel-border)] bg-[var(--subtle-bg)] text-[10px] text-[var(--muted)]">-</div>
-                                      )}
-                                    </td>
-                                    <td className="px-3 py-2">{name}</td>
-                                    <td className="px-3 py-2 tabular-nums">{Number(line.qty_per_unit ?? 0).toLocaleString("ko-KR")}</td>
-                                    <td className="px-3 py-2 tabular-nums">₩{formatLaborDisplayKrw(laborTotal)}</td>
-                                  </tr>
-                                );
-                              })}
-                              <tr className="border-t border-[var(--panel-border)] bg-[var(--subtle-bg)] font-semibold">
-                                <td className="px-3 py-2" />
-                                <td className="px-3 py-2">합계</td>
-                                <td className="px-3 py-2 tabular-nums">
-                                  {displayedBomLineMetrics.reduce((sum, { line }) => sum + Number(line.qty_per_unit ?? 0), 0).toLocaleString("ko-KR")}
-                                </td>
-                                <td className="px-3 py-2 tabular-nums">₩{formatLaborDisplayKrw(bomTotals.laborTotal)}</td>
-                              </tr>
-                            </tbody>
-                          </table>
-                        </div>
+                        (() => {
+                          const accessoryRows = displayedBomLineMetrics.filter(({ line }) => parseBomLineKind(line.note) === "ACCESSORY");
+                          const decorRows = displayedBomLineMetrics.filter(({ line }) => parseBomLineKind(line.note) === "DECOR");
+
+                          const renderTable = (title: string, rows: typeof displayedBomLineMetrics) => {
+                            const qtySum = rows.reduce((sum, { line }) => sum + Number(line.qty_per_unit ?? 0), 0);
+                            const laborSum = rows.reduce((sum, { laborTotal }) => sum + Number(laborTotal ?? 0), 0);
+
+                            return (
+                              <div className="rounded-[10px] border border-[var(--panel-border)] bg-[var(--panel)] p-2">
+                                <div className="mb-2 text-xs font-semibold text-[var(--foreground)]">{title}</div>
+                                {rows.length === 0 ? (
+                                  <div className="px-2 py-3 text-xs text-[var(--muted)]">등록된 항목이 없습니다.</div>
+                                ) : (
+                                  <div className="overflow-x-auto rounded-[8px] border border-[var(--panel-border)]">
+                                    <table className="min-w-full text-left text-xs">
+                                      <thead className="bg-[var(--subtle-bg)] text-[var(--muted)]">
+                                        <tr>
+                                          <th className="px-3 py-2">사진</th>
+                                          <th className="px-3 py-2">품목명</th>
+                                          <th className="px-3 py-2">수량</th>
+                                          <th className="px-3 py-2">총공임</th>
+                                        </tr>
+                                      </thead>
+                                      <tbody>
+                                        {rows.map(({ line, laborTotal }) => {
+                                          const name = line.component_master_model_name ?? line.component_part_name ?? "(unknown item)";
+                                          const imageUrl = line.component_master_id
+                                            ? String(masterRowsById[line.component_master_id]?.image_url ?? "")
+                                            : "";
+                                          return (
+                                            <tr key={`${title}-${line.bom_line_id}`} className="border-t border-[var(--panel-border)]">
+                                              <td className="px-3 py-2">
+                                                {imageUrl ? (
+                                                  <img src={imageUrl} alt={name} className="h-10 w-10 rounded-md border border-[var(--panel-border)] object-cover bg-[var(--subtle-bg)]" loading="lazy" />
+                                                ) : (
+                                                  <div className="flex h-10 w-10 items-center justify-center rounded-md border border-[var(--panel-border)] bg-[var(--subtle-bg)] text-[10px] text-[var(--muted)]">-</div>
+                                                )}
+                                              </td>
+                                              <td className="px-3 py-2">{name}</td>
+                                              <td className="px-3 py-2 tabular-nums">{Number(line.qty_per_unit ?? 0).toLocaleString("ko-KR")}</td>
+                                              <td className="px-3 py-2 tabular-nums">₩{formatLaborDisplayKrw(laborTotal)}</td>
+                                            </tr>
+                                          );
+                                        })}
+                                        <tr className="border-t border-[var(--panel-border)] bg-[var(--subtle-bg)] font-semibold">
+                                          <td className="px-3 py-2" />
+                                          <td className="px-3 py-2">합계</td>
+                                          <td className="px-3 py-2 tabular-nums">{qtySum.toLocaleString("ko-KR")}</td>
+                                          <td className="px-3 py-2 tabular-nums">₩{formatLaborDisplayKrw(laborSum)}</td>
+                                        </tr>
+                                      </tbody>
+                                    </table>
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          };
+
+                          return (
+                            <div className="grid grid-cols-1 gap-3">
+                              {renderTable("부품", accessoryRows)}
+                              {renderTable("장식", decorRows)}
+                            </div>
+                          );
+                        })()
                       )}
                     </CardBody>
                   </Card>
@@ -4098,6 +5306,15 @@ export default function CatalogPage() {
                     <option key={option.value} value={option.value}>{option.label}</option>
                   ))}
                 </Select>
+                {absorbBucket === "ETC" ? (
+                  <Select value={absorbLaborClass} onChange={(e) => setAbsorbLaborClass(e.target.value as AbsorbLaborClass)}>
+                    {absorbLaborClassOptions.map((option) => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
+                  </Select>
+                ) : (
+                  <Input value="일반" readOnly className="text-[var(--muted)] bg-[var(--input-bg)]" />
+                )}
                 {absorbBucket === "STONE_LABOR" ? (
                   <Select value={absorbStoneRole} onChange={(e) => setAbsorbStoneRole(e.target.value as AbsorbStoneRole)}>
                     {absorbStoneRoleOptions.map((option) => (
@@ -4113,6 +5330,20 @@ export default function CatalogPage() {
                   onChange={(e) => setAbsorbAmount(e.target.value)}
                   placeholder="예: -3000 또는 5000"
                 />
+                {absorbBucket === "ETC" && absorbLaborClass === "MATERIAL" ? (
+                  <>
+                    <Input
+                      value={absorbMaterialQtyPerUnit}
+                      onChange={(e) => setAbsorbMaterialQtyPerUnit(e.target.value)}
+                      placeholder="소재 개수 (개당)"
+                    />
+                    <Input
+                      value={absorbMaterialCostKrw}
+                      onChange={(e) => setAbsorbMaterialCostKrw(e.target.value)}
+                      placeholder="소재 원가 (개당)"
+                    />
+                  </>
+                ) : null}
                 <Select value={absorbVendorId} onChange={(e) => setAbsorbVendorId(e.target.value)}>
                   <option value="">전체 공장</option>
                   {vendorOptions.map((vendor) => (
@@ -4161,9 +5392,12 @@ export default function CatalogPage() {
                     <tr>
                       <th className="text-left py-1">활성</th>
                       <th className="text-left py-1">버킷</th>
+                      <th className="text-left py-1">분류</th>
                       <th className="text-left py-1">알공임 위치</th>
                       <th className="text-left py-1">사유</th>
                       <th className="text-left py-1">금액</th>
+                      <th className="text-left py-1">소재개수</th>
+                      <th className="text-left py-1">소재원가</th>
                       <th className="text-left py-1">수량 곱</th>
                       <th className="text-left py-1">공장 범위</th>
                       <th className="text-left py-1">작업</th>
@@ -4172,16 +5406,19 @@ export default function CatalogPage() {
                   <tbody>
                     {visibleAbsorbLaborItems.length === 0 ? (
                       <tr className="border-t border-[var(--panel-border)]">
-                        <td className="py-2 text-[var(--muted)]" colSpan={8}>등록된 흡수공임이 없습니다.</td>
+                        <td className="py-2 text-[var(--muted)]" colSpan={11}>등록된 흡수공임이 없습니다.</td>
                       </tr>
                     ) : (
                       visibleAbsorbLaborItems.map((item) => (
                         <tr key={item.absorb_item_id} className="border-t border-[var(--panel-border)]">
                           <td className="py-1">{item.is_active ? "Y" : "N"}</td>
                           <td className={cn("py-1", getAbsorbBucketToneClass(item.bucket))}>{getAbsorbBucketDisplayLabel(item)}</td>
+                          <td className="py-1">{normalizeAbsorbLaborClass(item.labor_class) === "MATERIAL" ? "소재" : "일반"}</td>
                           <td className="py-1">{getAbsorbStoneRoleLabel(item.note)}</td>
                           <td className="py-1">{item.reason}</td>
                           <td className="py-1">{Number(item.amount_krw).toLocaleString()}</td>
+                          <td className="py-1">{Math.max(Number(item.material_qty_per_unit ?? 1), 0).toLocaleString()}</td>
+                          <td className="py-1">{Math.max(Number(item.material_cost_krw ?? 0), 0).toLocaleString()}</td>
                           <td className="py-1">{item.is_per_piece ? "Y" : "N"}</td>
                           <td className="py-1">{vendorOptions.find((vendor) => vendor.value === item.vendor_party_id)?.label ?? "전체"}</td>
                           <td className="py-1">
@@ -4240,7 +5477,7 @@ export default function CatalogPage() {
         ) : (
           <div className="space-y-3">
             {pageItems.map((item) => (
-              <Card
+                <Card
                 key={item.id}
                 className={cn(
                   "cursor-pointer p-3 transition",
@@ -4252,10 +5489,15 @@ export default function CatalogPage() {
                   item.id === selectedItemId
                     ? "ring-2 ring-[var(--primary)]"
                     : "hover:opacity-90"
-                )}
-                onClick={() => setSelectedItemId(item.id)}
-                onDoubleClick={handleOpenEdit}
-              >
+                  )}
+                  onClick={() => {
+                    prefetchMasterDetailFastPath(item.id);
+                    setSelectedItemId(item.id);
+                  }}
+                  onMouseEnter={() => prefetchMasterDetailFastPath(item.id)}
+                  onFocus={() => prefetchMasterDetailFastPath(item.id)}
+                  onDoubleClick={handleOpenEdit}
+                >
                 <div className="flex gap-4">
                   <div
                     className="relative h-28 w-28 shrink-0 overflow-hidden rounded-[14px] bg-gradient-to-br from-[var(--panel)] to-[var(--background)]"
@@ -4474,6 +5716,8 @@ export default function CatalogPage() {
                         selectedItemId === item.id && "ring-2 ring-[var(--primary)]"
                       )}
                       onClick={() => openDetailDrawer(item.id)}
+                      onMouseEnter={() => prefetchMasterDetailFastPath(item.id)}
+                      onFocus={() => prefetchMasterDetailFastPath(item.id)}
                     >
                       {/* Image */}
                       <div className="absolute inset-x-0 top-0 bottom-28 bg-[var(--white)] dark:bg-[var(--black)]">

@@ -49,10 +49,8 @@ begin
   -- ※ 여기 아래는 이미 네가 넣어둔 본문을 그대로 유지하면 됨
   return public.cms_fn_receipt_line_delete_v1(p_receipt_id, p_line_uuid, p_reason, v_actor, p_note, p_correlation_id);
 end $$;
-
 alter function public.cms_fn_receipt_line_delete_v1(uuid,uuid,text,uuid,text,uuid)
   security definer
   set search_path = public, pg_temp;
-
 grant execute on function public.cms_fn_receipt_line_delete_v1(uuid,uuid,text,uuid,text,uuid)
   to authenticated, service_role;

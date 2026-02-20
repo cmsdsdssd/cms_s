@@ -1,5 +1,4 @@
 set search_path = public, pg_temp;
-
 create or replace function public.cms_fn_ar_apply_service_writeoff_under_limit_v1(
   p_party_id uuid,
   p_idempotency_key text,

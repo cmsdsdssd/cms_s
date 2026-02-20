@@ -8,11 +8,9 @@ alter table if exists public.cms_return_line
   add column if not exists void_note text null,
   add column if not exists void_actor_person_id uuid null,
   add column if not exists void_correlation_id uuid null;
-
 create index if not exists cms_return_line_active_by_shipment_line_idx
   on public.cms_return_line (shipment_line_id, occurred_at desc)
   where voided_at is null;
-
 -- 2) record_return_v2: remaining_qty 계산 시 voided 제외 (핵심 1줄)
 create or replace function public.cms_fn_record_return_v2(
   p_shipment_line_id uuid,
@@ -137,10 +135,8 @@ begin
     'final_amount_krw', v_final_amount
   );
 end $$;
-
 alter function public.cms_fn_record_return_v2(uuid, integer, text, timestamptz, uuid) security definer;
 grant execute on function public.cms_fn_record_return_v2(uuid, integer, text, timestamptz, uuid) to authenticated;
-
 -- 3) unconfirm v2: 반품 + 재고이동 VOID/무효화까지 같이 처리
 create or replace function public.cms_fn_unconfirm_shipment_v2(
   p_shipment_id uuid,
@@ -348,6 +344,5 @@ begin
     'deleted_allocs', v_deleted_allocs
   );
 end $$;
-
 alter function public.cms_fn_unconfirm_shipment_v2(uuid, text, uuid, text) security definer;
 grant execute on function public.cms_fn_unconfirm_shipment_v2(uuid, text, uuid, text) to authenticated;

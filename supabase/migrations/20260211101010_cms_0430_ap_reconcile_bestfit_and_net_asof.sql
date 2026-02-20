@@ -9,15 +9,12 @@
 -- 6) Payment guard blocks only on truly blocking ERROR issue-types.
 
 set search_path = public, pg_temp;
-
 begin;
-
 -- ============================================================
 -- 0) Optional debug payload column (non-breaking)
 -- ============================================================
 alter table public.cms_ap_reconcile_issue
   add column if not exists details jsonb;
-
 -- refresh list view to expose details (adding a column is non-breaking)
 create or replace view public.cms_v_ap_reconcile_issue_list_v1
 with (security_invoker = true)
@@ -37,10 +34,8 @@ select
   i.details
 from public.cms_ap_reconcile_issue i
 join public.cms_ap_reconcile_run r on r.run_id = i.run_id;
-
 grant select on public.cms_v_ap_reconcile_issue_list_v1 to authenticated;
 grant select on public.cms_v_ap_reconcile_issue_list_v1 to anon;
-
 -- refresh named list view to expose details (adding a column is non-breaking)
 create or replace view public.cms_v_ap_reconcile_issue_list_named_v1
 with (security_invoker = true)
@@ -65,10 +60,8 @@ select
 from public.cms_v_ap_reconcile_issue_list_v1 i
 left join public.cms_party p
   on p.party_id = i.vendor_party_id;
-
 grant select on public.cms_v_ap_reconcile_issue_list_named_v1 to authenticated;
 grant select on public.cms_v_ap_reconcile_issue_list_named_v1 to anon;
-
 -- ============================================================
 -- 1) System position (NET) as-of timestamp (multi-receipt safe)
 --    - due: invoices up to occurred_at
@@ -149,15 +142,11 @@ begin
   left join alloc x on x.asset_code = a.asset_code
   order by a.asset_code;
 end $$;
-
 alter function public.cms_fn_ap_get_system_position_asof_v2(uuid,timestamptz)
   security definer
   set search_path = public, pg_temp;
-
 grant execute on function public.cms_fn_ap_get_system_position_asof_v2(uuid,timestamptz)
   to authenticated, service_role;
-
-
 -- ============================================================
 -- 2) Reconcile v2 patch (signature 유지) : best-fit + NET as-of
 --    NOTE: enum/issue_type는 추가하지 않음(프론트 충돌 방지)
@@ -1085,15 +1074,11 @@ begin
     )
   );
 end $$;
-
 alter function public.cms_fn_ap_run_reconcile_for_receipt_v2(uuid)
   security definer
   set search_path = public, pg_temp;
-
 grant execute on function public.cms_fn_ap_run_reconcile_for_receipt_v2(uuid)
   to authenticated, service_role;
-
-
 -- ============================================================
 -- 3) 4행 저장 RPC v2: sync/reconcile 실패해도 snapshot은 남긴다
 -- ============================================================
@@ -1237,15 +1222,11 @@ begin
     'reconcile', v_recon
   );
 end $$;
-
 alter function public.cms_fn_upsert_factory_receipt_statement_v2(uuid,jsonb,text)
   security definer
   set search_path = public, pg_temp;
-
 grant execute on function public.cms_fn_upsert_factory_receipt_statement_v2(uuid,jsonb,text)
   to authenticated, service_role;
-
-
 -- ============================================================
 -- 4) Payment guard: block only on truly blocking ERRORs
 --    (allocation mismatch / internal-calc mismatch는 결제까지 막지 않음)
@@ -1294,12 +1275,9 @@ begin
     p_idempotency_key
   );
 end $$;
-
 alter function public.cms_fn_ap2_pay_and_fifo_guarded_v1(uuid,timestamptz,jsonb,text,text)
   security definer
   set search_path = public, pg_temp;
-
 grant execute on function public.cms_fn_ap2_pay_and_fifo_guarded_v1(uuid,timestamptz,jsonb,text,text)
   to authenticated, service_role;
-
 commit;

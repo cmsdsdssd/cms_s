@@ -2,7 +2,6 @@
 -- ADD-ONLY. timestamp MUST be > 20260206000000_...
 
 begin;
-
 create or replace function public.cms_fn_ar_create_from_shipment_confirm_v1(
   p_shipment_id uuid
 )
@@ -234,12 +233,9 @@ begin
     'inserted', v_inserted
   );
 end $$;
-
 alter function public.cms_fn_ar_create_from_shipment_confirm_v1(uuid)
   security definer
   set search_path = public, pg_temp;
-
 grant execute on function public.cms_fn_ar_create_from_shipment_confirm_v1(uuid) to authenticated;
 grant execute on function public.cms_fn_ar_create_from_shipment_confirm_v1(uuid) to service_role;
-
 commit;

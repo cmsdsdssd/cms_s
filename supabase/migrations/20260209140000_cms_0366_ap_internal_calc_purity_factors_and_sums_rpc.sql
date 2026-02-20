@@ -1,8 +1,6 @@
 -- 20260209140000_cms_0366_ap_internal_calc_purity_factors_and_sums_rpc.sql
 set search_path = public, pg_temp;
-
 begin;
-
 -- ============================================================
 -- 1) Receipt line 기반 "공식 합계" 계산 RPC (gross + eq + cash)
 --    - factory_weight_g는 "총중량(gross)" 전제
@@ -141,15 +139,11 @@ begin
     'computed_at', now()
   );
 end $$;
-
 alter function public.cms_fn_receipt_compute_weight_sums_v1(uuid)
   security definer
   set search_path = public, pg_temp;
-
 grant execute on function public.cms_fn_receipt_compute_weight_sums_v1(uuid)
   to authenticated, service_role;
-
-
 -- ============================================================
 -- 2) Internal calc snapshot 업서트 함수 계수 수정 + 공식합계 RPC 사용
 --    (기존 시그니처/리턴 유지: (uuid,text)->jsonb)
@@ -241,12 +235,9 @@ begin
     'line_cnt', v_cnt
   );
 end $$;
-
 alter function public.cms_fn_ap2_upsert_internal_calc_snapshot_from_receipt_lines_v1(uuid,text)
   security definer
   set search_path = public, pg_temp;
-
 grant execute on function public.cms_fn_ap2_upsert_internal_calc_snapshot_from_receipt_lines_v1(uuid,text)
   to authenticated, service_role;
-
 commit;

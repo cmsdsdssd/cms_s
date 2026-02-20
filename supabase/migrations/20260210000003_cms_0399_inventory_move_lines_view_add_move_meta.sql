@@ -1,8 +1,6 @@
 set search_path = public, pg_temp;
-
 -- add-only: expose header meta on inventory move lines view
 drop view if exists public.cms_v_inventory_move_lines_enriched_v1;
-
 create view public.cms_v_inventory_move_lines_enriched_v1
 with (security_invoker = true)
 as
@@ -44,5 +42,4 @@ from public.cms_inventory_move_header h
 join public.cms_inventory_move_line l on l.move_id = h.move_id
 left join public.cms_party p on p.party_id = h.party_id
 left join public.cms_master_item m on m.master_id = l.master_id;
-
 grant select on public.cms_v_inventory_move_lines_enriched_v1 to anon, authenticated;

@@ -1,5 +1,4 @@
 set search_path = public, pg_temp;
-
 -- ------------------------------------------------------------
 -- cms_0247: split silver correction factors (CN tick vs KR silver)
 --
@@ -11,7 +10,6 @@ set search_path = public, pg_temp;
 
 alter table public.cms_market_tick_config
   add column if not exists silver_kr_correction_factor numeric(18,6) not null default 1.200000;
-
 do $$
 begin
   if not exists (
@@ -23,20 +21,16 @@ begin
       check (silver_kr_correction_factor > 0.000000 and silver_kr_correction_factor <= 3.000000);
   end if;
 end $$;
-
 -- Backfill DEFAULT row (keep behavior: if missing, mirror cs_correction_factor)
 update public.cms_market_tick_config
 set silver_kr_correction_factor = coalesce(silver_kr_correction_factor, cs_correction_factor, 1.200000),
     updated_at = now()
 where config_key = 'DEFAULT'
   and (silver_kr_correction_factor is null);
-
 comment on column public.cms_market_tick_config.silver_kr_correction_factor is
   'KR silver correction factor used by SILVER_KRW_PER_G pipeline (and shipment pricing snapshots when tick meta does not embed the factor).';
-
 -- Recreate RPC with an optional KR factor parameter (avoid overload ambiguity)
 drop function if exists public.cms_fn_upsert_market_tick_config_v1(numeric, numeric, uuid, uuid, text);
-
 create or replace function public.cms_fn_upsert_market_tick_config_v1(
   p_fx_markup numeric,
   p_cs_correction_factor numeric,
@@ -104,5 +98,4 @@ begin
   );
 end;
 $$;
-
 grant execute on function public.cms_fn_upsert_market_tick_config_v1(numeric, numeric, numeric, uuid, uuid, text) to anon, authenticated;

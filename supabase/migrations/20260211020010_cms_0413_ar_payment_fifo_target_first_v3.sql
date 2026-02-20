@@ -373,10 +373,8 @@ begin
     'target_count', coalesce(cardinality(p_target_ar_ids), 0)
   );
 end $$;
-
 alter function public.cms_fn_ar_apply_payment_fifo_v3(uuid,text,numeric,numeric,numeric,boolean,text,uuid[],timestamptz,text)
   security definer
   set search_path = public, pg_temp;
-
 grant execute on function public.cms_fn_ar_apply_payment_fifo_v3(uuid,text,numeric,numeric,numeric,boolean,text,uuid[],timestamptz,text)
   to authenticated;

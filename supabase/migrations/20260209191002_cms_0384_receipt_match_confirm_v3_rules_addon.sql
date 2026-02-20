@@ -1,5 +1,4 @@
 set search_path = public, pg_temp;
-
 -- ============================================================
 -- 0382: receipt match confirm v3 (rules: SETTING/STONE/PACKAGE + master addon margins)
 -- - ADD ONLY: does not touch v2
@@ -700,7 +699,6 @@ begin
     'missing_factory_cost_warn', v_missing_factory_cost_warn
   );
 end $$;
-
 -- ------------------------------------------------------------
 -- Safe grants (only if roles exist)
 -- ------------------------------------------------------------

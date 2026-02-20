@@ -1,10 +1,8 @@
 -- Fix category_code null issue in shipment upsert from order
 -- ADD-ONLY migration: patches cms_fn_shipment_upsert_from_order_line to lookup category_code
 set search_path = public, pg_temp;
-
 -- Drop the old uuid version to avoid function overloading conflict
 drop function if exists public.cms_fn_shipment_upsert_from_order_line(uuid, numeric, numeric, uuid, uuid);
-
 create or replace function public.cms_fn_shipment_upsert_from_order_line(
   p_order_line_id uuid,
   p_weight_g numeric,
@@ -91,6 +89,5 @@ begin
     'status', 'DRAFT'
   );
 end $$;
-
 comment on function public.cms_fn_shipment_upsert_from_order_line(uuid, numeric, numeric, uuid, text)
 is 'Fixed: now properly looks up category_code from master_item before creating shipment line';

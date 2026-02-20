@@ -3,11 +3,9 @@
 -- Goal: Shipments_print matches cms_ar_ledger perfectly (0 KRW drift), KST-day based
 
 set search_path = public, pg_temp;
-
 -- Optional perf index (safe)
 create index if not exists idx_cms_ar_ledger_type_party_occurred_desc
   on public.cms_ar_ledger(entry_type, party_id, occurred_at desc);
-
 do $do$
 begin
   -- guard: do not overwrite if already exists (add-only)
@@ -586,6 +584,5 @@ begin
 
 end
 $do$;
-
 grant execute on function public.cms_fn_shipments_print_ledger_statement_v2(uuid[], date)
   to authenticated;

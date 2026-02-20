@@ -1,5 +1,4 @@
 set search_path = public, pg_temp;
-
 create or replace function public.cms_fn_confirm_shipment(
   p_shipment_id uuid,
   p_actor_person_id uuid default null::uuid,

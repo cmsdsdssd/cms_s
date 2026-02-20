@@ -1,8 +1,6 @@
 -- 20260209141000_cms_0367_ap_manual_alloc_vendor_guard.sql
 set search_path = public, pg_temp;
-
 begin;
-
 create or replace function public.cms_fn_ap2_manual_alloc_v1(
   p_payment_id uuid,
   p_ap_id uuid,
@@ -96,12 +94,9 @@ begin
     'note', p_note
   );
 end $$;
-
 alter function public.cms_fn_ap2_manual_alloc_v1(uuid,uuid,public.cms_asset_code,numeric,text)
   security definer
   set search_path = public, pg_temp;
-
 grant execute on function public.cms_fn_ap2_manual_alloc_v1(uuid,uuid,public.cms_asset_code,numeric,text)
   to authenticated, service_role;
-
 commit;

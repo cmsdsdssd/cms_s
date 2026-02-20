@@ -1,5 +1,4 @@
 set search_path = public, pg_temp;
-
 -- v6: supply_source만 받는 "단일" upsert entrypoint
 create or replace function public.cms_fn_upsert_order_line_v6(
   p_customer_party_id uuid,
@@ -95,7 +94,6 @@ begin
 
   return v_id;
 end $$;
-
 -- safe grants
 do $$
 begin

@@ -1,5 +1,4 @@
 set search_path = public, pg_temp;
-
 -- v2: confirm + (optional) emit inventory issue
 create or replace function public.cms_fn_confirm_shipment_v2(
   p_shipment_id uuid,
@@ -37,9 +36,7 @@ begin
 
   return v_result;
 end $$;
-
 alter function public.cms_fn_confirm_shipment_v2(uuid,uuid,text,boolean,uuid)
   security definer
   set search_path = public, pg_temp;
-
 grant execute on function public.cms_fn_confirm_shipment_v2(uuid,uuid,text,boolean,uuid) to authenticated;

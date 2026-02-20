@@ -49,8 +49,7 @@ begin
 
   return v_id;
 end $$;
-
 -- (선택) 권한: 기존 0008_security.sql에서 EXECUTE를 주고 있다면 생략 가능
 -- grant execute on function public.cms_fn_upsert_party_v1(
 --   cms_e_party_type, text, text, text, text, text, uuid
--- ) to authenticated;
+-- ) to authenticated;;

@@ -1,5 +1,4 @@
 set search_path = public, pg_temp;
-
 -- cms_0254: fix confirm function referencing non-existent field r_master.material
 -- symptom: 400 (Bad Request) / code 42703 / message: record "r_master" has no field "material"
 -- This patch rewrites the existing function definition in-place by replacing r_master.material -> v_material

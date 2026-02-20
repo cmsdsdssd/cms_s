@@ -3,7 +3,6 @@
 -- Fix: use the resolved v_material (cms_e_material_code) for the 925 check.
 
 set search_path = public, pg_temp;
-
 -- ------------------------------------------------------------
 -- cms_0248: confirm_shipment silver factor snapshot + no-double-apply
 --

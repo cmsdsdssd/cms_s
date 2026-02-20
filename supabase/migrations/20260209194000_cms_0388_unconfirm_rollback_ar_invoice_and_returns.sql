@@ -1,5 +1,4 @@
 set search_path = public, pg_temp;
-
 create or replace function public.cms_fn_unconfirm_shipment_v1(
   p_shipment_id uuid,
   p_reason text,
@@ -253,6 +252,5 @@ begin
     'correlation_id', v_corr
   );
 end $$;
-
 alter function public.cms_fn_unconfirm_shipment_v1(uuid, text, uuid, text) security definer;
 grant execute on function public.cms_fn_unconfirm_shipment_v1(uuid, text, uuid, text) to authenticated;

@@ -55,7 +55,6 @@ begin
 
   return v_id;
 end $$;
-
 -- grant execute on function public.cms_fn_upsert_party_v1(
 --   cms_e_party_type, text, text, text, text, text, uuid, boolean
--- ) to authenticated;
+-- ) to authenticated;;

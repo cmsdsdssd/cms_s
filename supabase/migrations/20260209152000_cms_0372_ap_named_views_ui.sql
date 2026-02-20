@@ -1,7 +1,5 @@
 set search_path = public, pg_temp;
-
 begin;
-
 -- ============================================================
 -- cms_0372: AP / AP Reconcile UI helper views (NAMED)
 -- 목적: 기존 v1 뷰는 그대로 두고, UI에서 필요한 vendor_name/region/is_active를
@@ -25,11 +23,8 @@ select
 from public.cms_v_ap_position_by_vendor_v1 v
 left join public.cms_party p
   on p.party_id = v.vendor_party_id;
-
 grant select on public.cms_v_ap_position_by_vendor_named_v1 to authenticated;
 grant select on public.cms_v_ap_position_by_vendor_named_v1 to anon;
-
-
 -- 2) AP reconcile open summary by vendor + vendor info
 drop view if exists public.cms_v_ap_reconcile_open_by_vendor_named_v1 cascade;
 create view public.cms_v_ap_reconcile_open_by_vendor_named_v1
@@ -48,11 +43,8 @@ select
 from public.cms_v_ap_reconcile_open_by_vendor_v1 v
 left join public.cms_party p
   on p.party_id = v.vendor_party_id;
-
 grant select on public.cms_v_ap_reconcile_open_by_vendor_named_v1 to authenticated;
 grant select on public.cms_v_ap_reconcile_open_by_vendor_named_v1 to anon;
-
-
 -- 3) AP reconcile issue list + vendor info
 drop view if exists public.cms_v_ap_reconcile_issue_list_named_v1 cascade;
 create view public.cms_v_ap_reconcile_issue_list_named_v1
@@ -77,8 +69,6 @@ select
 from public.cms_v_ap_reconcile_issue_list_v1 i
 left join public.cms_party p
   on p.party_id = i.vendor_party_id;
-
 grant select on public.cms_v_ap_reconcile_issue_list_named_v1 to authenticated;
 grant select on public.cms_v_ap_reconcile_issue_list_named_v1 to anon;
-
 commit;

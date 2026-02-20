@@ -1,10 +1,8 @@
 set search_path = public, pg_temp;
-
 -- 1) part kind enum
 do $$ begin
   create type public.cms_e_part_kind as enum ('PART','STONE');
 exception when duplicate_object then null; end $$;
-
 -- 2) part master
 create table if not exists public.cms_part_item (
   part_id uuid primary key default gen_random_uuid(),
@@ -39,11 +37,9 @@ create table if not exists public.cms_part_item (
   constraint chk_cms_part_unit_default
     check (unit_default in ('EA','G','M'))
 );
-
 create index if not exists idx_cms_part_kind on public.cms_part_item(part_kind);
 create index if not exists idx_cms_part_family on public.cms_part_item(family_name);
 create index if not exists idx_cms_part_active on public.cms_part_item(is_active);
-
 -- 3) part alias (입력 편의/향후 QR 확장)
 create table if not exists public.cms_part_alias (
   alias_id uuid primary key default gen_random_uuid(),
@@ -51,32 +47,26 @@ create table if not exists public.cms_part_alias (
   alias_name text not null unique,
   created_at timestamptz not null default now()
 );
-
 create index if not exists idx_cms_part_alias_part on public.cms_part_alias(part_id);
-
 -- 4) updated_at trigger
 do $$ begin
   create trigger trg_cms_part_updated_at
   before update on public.cms_part_item
   for each row execute function public.cms_fn_set_updated_at();
 exception when duplicate_object then null; end $$;
-
 -- 5) inventory_move_line에 단가 컬럼(없으면 추가)
 do $$ begin
   alter table public.cms_inventory_move_line add column unit_cost_krw numeric;
 exception when duplicate_column then null; end $$;
-
 do $$ begin
   alter table public.cms_inventory_move_line add column amount_krw numeric;
 exception when duplicate_column then null; end $$;
-
 -- 6) inventory_move_line.part_id FK 보강(있어도 안전)
 do $$ begin
   alter table public.cms_inventory_move_line
     add constraint fk_inventory_move_line_part
     foreign key (part_id) references public.cms_part_item(part_id) not valid;
 exception when duplicate_object then null; end $$;
-
 do $$ begin
   alter table public.cms_inventory_move_line validate constraint fk_inventory_move_line_part;
 exception when others then

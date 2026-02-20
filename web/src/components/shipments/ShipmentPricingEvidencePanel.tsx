@@ -370,7 +370,7 @@ export function ShipmentPricingEvidencePanel({
           <CardHeader className="py-2 px-3 border-b border-[var(--panel-border)]">
             <div className="flex items-center justify-between gap-2">
               <div className="flex items-center gap-2">
-                <span className="text-xs font-semibold">보석/기타공임 계산근거 (v3 evidence)</span>
+                <span className="text-xs font-semibold">알공임 계산근거</span>
                 <Badge tone={judgementTone(extraJudgement)} className="text-[10px]">판정 {extraJudgement}</Badge>
               </div>
               <Button size="sm" variant="secondary" onClick={() => setIsEvidenceOpen((prev) => !prev)}>

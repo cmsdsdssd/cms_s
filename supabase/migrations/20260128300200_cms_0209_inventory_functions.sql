@@ -2,7 +2,6 @@
 -- cms_0209: inventory RPCs (RPC-only writes) - FIX default-parameter ordering
 
 set search_path = public, pg_temp;
-
 -- ---------------------------------------------------------------------
 -- 공통 유틸: move_type에 따른 direction 규칙 (ADJUST는 자유)
 -- ---------------------------------------------------------------------
@@ -22,8 +21,6 @@ begin
     return 'IN'::public.cms_e_inventory_direction;
   end if;
 end $$;
-
-
 -- ---------------------------------------------------------------------
 -- 1) 헤더 upsert (멱등키 지원)
 -- ---------------------------------------------------------------------
@@ -173,8 +170,6 @@ begin
 
   return v_id;
 end $$;
-
-
 -- ---------------------------------------------------------------------
 -- 2) 라인 upsert (DRAFT에서만)  ★필수 파라미터를 앞에 배치(에러 fix)
 -- ---------------------------------------------------------------------
@@ -411,8 +406,6 @@ begin
 
   return v_id;
 end $$;
-
-
 -- ---------------------------------------------------------------------
 -- 2-1) 라인 추가(자동 line_no) - 운영 편의
 -- ---------------------------------------------------------------------
@@ -481,8 +474,6 @@ begin
     p_correlation_id := p_correlation_id
   );
 end $$;
-
-
 -- ---------------------------------------------------------------------
 -- 3) 라인 void(삭제 금지)
 -- ---------------------------------------------------------------------
@@ -539,8 +530,6 @@ begin
   insert into public.cms_decision_log(entity_type, entity_id, decision_kind, before, after, actor_person_id, occurred_at, note)
   values ('INVENTORY_MOVE', v_line.move_id, 'VOID_LINE', v_before, v_after, p_actor_person_id, now(), coalesce(p_note,'') || ' corr=' || p_correlation_id::text);
 end $$;
-
-
 -- ---------------------------------------------------------------------
 -- 4) POST(확정): DRAFT -> POSTED (불변 전환)
 -- ---------------------------------------------------------------------
@@ -632,8 +621,6 @@ begin
   insert into public.cms_status_event(entity_type, entity_id, from_status, to_status, occurred_at, actor_person_id, reason, correlation_id)
   values ('INVENTORY_MOVE', p_move_id, v_hdr.status::text, 'POSTED', now(), p_actor_person_id, p_reason, p_correlation_id);
 end $$;
-
-
 -- ---------------------------------------------------------------------
 -- 5) VOID(취소): POSTED/DRAFT -> VOID (기록은 남김)
 -- ---------------------------------------------------------------------
@@ -688,8 +675,6 @@ begin
   insert into public.cms_status_event(entity_type, entity_id, from_status, to_status, occurred_at, actor_person_id, reason, correlation_id)
   values ('INVENTORY_MOVE', p_move_id, v_hdr.status::text, 'VOID', now(), p_actor_person_id, p_reason, p_correlation_id);
 end $$;
-
-
 -- ---------------------------------------------------------------------
 -- 6) quick 기록(1줄짜리 입고/출고를 한 방에 POST까지)  ★필수 파라미터를 앞으로
 -- ---------------------------------------------------------------------
@@ -774,8 +759,6 @@ begin
 
   return v_move_id;
 end $$;
-
-
 -- ---------------------------------------------------------------------
 -- 7) 자동 트래킹(선택): shipment confirmed -> ISSUE 원장 생성/POST (멱등)
 -- ---------------------------------------------------------------------
@@ -825,7 +808,7 @@ begin
     p_ref_doc_type := 'SHIPMENT',
     p_ref_doc_id := p_shipment_id,
     p_memo := coalesce(p_note, 'auto issue from shipment confirmed'),
-    p_source := 'AUTO_SHIPMENT'::text,
+    p_source := 'AUTO_SHIPMENT',
     p_meta := jsonb_build_object('shipment_id', p_shipment_id),
     p_move_id := null,
     p_idempotency_key := v_key,
@@ -872,7 +855,7 @@ begin
       p_direction := 'OUT'::public.cms_e_inventory_direction,
       p_qty := r.qty,
       p_item_name := v_item_name,
-      p_unit := 'EA'::text,
+      p_unit := 'EA',
       p_item_ref_type := case when v_master_id is not null then 'MASTER'::public.cms_e_inventory_item_ref_type else 'UNLINKED'::public.cms_e_inventory_item_ref_type end,
       p_master_id := v_master_id,
       p_part_id := null,
@@ -892,8 +875,6 @@ begin
 
   return v_move_id;
 end $$;
-
-
 -- ---------------------------------------------------------------------
 -- 8) 자동 트래킹(선택): return_line -> RECEIPT 원장 생성/POST (멱등)
 -- ---------------------------------------------------------------------
@@ -942,7 +923,7 @@ begin
     p_ref_doc_type := 'RETURN_LINE',
     p_ref_doc_id := p_return_line_id,
     p_memo := coalesce(p_note, 'auto receipt from return'),
-    p_source := 'AUTO_RETURN'::text,
+    p_source := 'AUTO_RETURN',
     p_meta := jsonb_build_object('return_line_id', p_return_line_id, 'shipment_line_id', v_ret.shipment_line_id),
     p_move_id := null,
     p_idempotency_key := v_key,
@@ -980,7 +961,7 @@ begin
     p_direction := 'IN'::public.cms_e_inventory_direction,
     p_qty := v_ret.return_qty,
     p_item_name := v_item_name,
-    p_unit := 'EA'::text,
+    p_unit := 'EA',
     p_item_ref_type := case when v_master_id is not null then 'MASTER'::public.cms_e_inventory_item_ref_type else 'UNLINKED'::public.cms_e_inventory_item_ref_type end,
     p_master_id := v_master_id,
     p_part_id := null,
@@ -999,8 +980,6 @@ begin
 
   return v_move_id;
 end $$;
-
-
 -- ---------------------------------------------------------------------
 -- 9) 시드(재현 세트)
 -- ---------------------------------------------------------------------
@@ -1027,15 +1006,15 @@ begin
   end if;
 
   v_r1 := public.cms_fn_quick_inventory_move_v1(
-    p_move_type := 'RECEIPT'::public.cms_e_inventory_move_type,
+    p_move_type := 'RECEIPT',
     p_item_name := '샘플반지A',
-    p_qty := 10::numeric,
+    p_qty := 10,
     p_occurred_at := now(),
-    p_party_id := null::uuid,
+    p_party_id := null,
     p_variant_hint := 'seed',
-    p_unit := 'EA'::text,
-    p_source := 'TEST'::text,
-    p_memo := 'seed receipt'::text,
+    p_unit := 'EA',
+    p_source := 'TEST',
+    p_memo := 'seed receipt',
     p_meta := jsonb_build_object('seed', true),
     p_idempotency_key := 'SEED:RECEIPT:1',
     p_actor_person_id := p_actor_person_id,
@@ -1044,15 +1023,15 @@ begin
   );
 
   v_i1 := public.cms_fn_quick_inventory_move_v1(
-    p_move_type := 'ISSUE'::public.cms_e_inventory_move_type,
+    p_move_type := 'ISSUE',
     p_item_name := '샘플반지A',
-    p_qty := 3::numeric,
+    p_qty := 3,
     p_occurred_at := now(),
-    p_party_id := null::uuid,
+    p_party_id := null,
     p_variant_hint := 'seed',
-    p_unit := 'EA'::text,
-    p_source := 'TEST'::text,
-    p_memo := 'seed issue'::text,
+    p_unit := 'EA',
+    p_source := 'TEST',
+    p_memo := 'seed issue',
     p_meta := jsonb_build_object('seed', true),
     p_idempotency_key := 'SEED:ISSUE:1',
     p_actor_person_id := p_actor_person_id,
@@ -1061,15 +1040,15 @@ begin
   );
 
   v_a1 := public.cms_fn_quick_inventory_move_v1(
-    p_move_type := 'ADJUST'::public.cms_e_inventory_move_type,
+    p_move_type := 'ADJUST',
     p_item_name := '샘플목걸이B',
-    p_qty := 5::numeric,
+    p_qty := 5,
     p_occurred_at := now(),
-    p_party_id := null::uuid,
+    p_party_id := null,
     p_variant_hint := 'seed',
-    p_unit := 'EA'::text,
-    p_source := 'TEST'::text,
-    p_memo := 'seed adjust'::text,
+    p_unit := 'EA',
+    p_source := 'TEST',
+    p_memo := 'seed adjust',
     p_meta := jsonb_build_object('seed', true),
     p_idempotency_key := 'SEED:ADJUST:1',
     p_actor_person_id := p_actor_person_id,

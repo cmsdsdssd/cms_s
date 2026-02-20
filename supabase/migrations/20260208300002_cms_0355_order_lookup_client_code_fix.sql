@@ -1,5 +1,4 @@
 drop view if exists public.v_cms_order_lookup;
-
 create view public.v_cms_order_lookup
 with (security_invoker = true)
 as
@@ -21,5 +20,4 @@ select
   public.cms_fn_kor_initials(p.mask_code) as client_code_initials
 from public.cms_order_line o
 join public.cms_party p on p.party_id = o.customer_party_id;
-
 grant select on public.v_cms_order_lookup to anon, authenticated;

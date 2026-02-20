@@ -11,10 +11,8 @@ create table if not exists public.cms_receipt_line_event (
   created_by uuid null,
   correlation_id uuid not null
 );
-
 create index if not exists cms_receipt_line_event_receipt_idx
   on public.cms_receipt_line_event (receipt_id, created_at desc);
-
 -- 2) 라인 삭제 + snapshot 재저장 + AP 재동기화 RPC
 create or replace function public.cms_fn_receipt_line_delete_v1(
   p_receipt_id uuid,
@@ -154,6 +152,5 @@ begin
     'ap', v_ap
   );
 end $$;
-
 grant execute on function public.cms_fn_receipt_line_delete_v1(uuid,uuid,text,uuid,text,uuid)
 to authenticated, service_role;

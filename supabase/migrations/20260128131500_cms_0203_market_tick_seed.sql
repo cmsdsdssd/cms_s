@@ -2,7 +2,6 @@
 -- Seed/demo generator v2 (uses role mapping).
 
 set search_path = public;
-
 create or replace function public.cms_fn_seed_market_tick_demo_v1(
   p_actor_person_id uuid,
   p_correlation_id uuid,

@@ -202,7 +202,6 @@ begin
 
   return v_id;
 end $$;
-
 grant execute on function public.cms_fn_upsert_master_item_v1(
   uuid,text,public.cms_e_master_kind,public.cms_e_category_code,public.cms_e_material_code,
   numeric,numeric,integer,integer,integer,

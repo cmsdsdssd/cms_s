@@ -1,6 +1,5 @@
 begin;
 set search_path = public, pg_temp;
-
 -- ============================================================
 -- CMS 0601 BOM/BUNDLE Hotfix (db push 전용)
 --
@@ -37,7 +36,6 @@ as $$
       ''
     );
 $$;
-
 -- ============================================================
 -- 2) BOM recipe resolve patch
 --    - 우선순위: EXACT(raw) > EXACT(normalized) > DEFAULT
@@ -118,11 +116,9 @@ as $$
   order by q.pri
   limit 1;
 $$;
-
 alter function public.cms_fn_resolve_bom_recipe_v1(uuid,text)
   security definer
   set search_path = public, pg_temp;
-
 create or replace function public.cms_fn_calc_bundle_rollup_price_v1(
   p_bundle_master_id uuid,
   p_variant_key text default null,
@@ -460,7 +456,6 @@ begin
     v_breakdown;
 end;
 $$;
-
 create or replace function public.cms_fn_emit_inventory_issue_from_shipment_confirmed_v2(
   p_shipment_id uuid,
   p_actor_person_id uuid default null,
@@ -743,7 +738,6 @@ perform public.cms_fn_upsert_inventory_move_line_v1(
 
   return v_move_id;
 end $$;
-
 -- ============================================================
 -- 3) Safe grants (roles may not exist in local dev)
 -- ============================================================
@@ -757,5 +751,4 @@ begin
     execute 'grant execute on function public.cms_fn_normalize_variant_key_v1(text) to service_role';
   end if;
 end $$;
-
 commit;

@@ -1,6 +1,5 @@
 -- 20260209150000_cms_0366_ar_manual_offset_adjust.sql
 set search_path = public, pg_temp;
-
 --------------------------------------------------------------------------------
 -- 0) Admin whitelist table (누가 조정/상계 실행 가능한지)
 --------------------------------------------------------------------------------
@@ -9,17 +8,13 @@ create table if not exists public.cms_admin_user (
   note text,
   created_at timestamptz not null default now()
 );
-
 -- RLS: 본인 row만 select 가능(관리자 목록 노출 최소화)
 alter table public.cms_admin_user enable row level security;
-
 drop policy if exists cms_select_self on public.cms_admin_user;
 create policy cms_select_self on public.cms_admin_user
   for select to authenticated
   using (person_id = auth.uid());
-
 grant select on public.cms_admin_user to authenticated;
-
 --------------------------------------------------------------------------------
 -- 1) Manual action audit tables (상계/조정 “감사 로그”)
 --------------------------------------------------------------------------------
@@ -45,21 +40,15 @@ create table if not exists public.cms_ar_manual_action (
   created_by uuid references public.cms_person(person_id),
   created_at timestamptz not null default now()
 );
-
 create unique index if not exists idx_cms_ar_manual_action_party_idempotency
   on public.cms_ar_manual_action(party_id, idempotency_key);
-
 create index if not exists idx_cms_ar_manual_action_party_occurred
   on public.cms_ar_manual_action(party_id, occurred_at desc);
-
 alter table public.cms_ar_manual_action enable row level security;
-
 drop policy if exists cms_select_authenticated on public.cms_ar_manual_action;
 create policy cms_select_authenticated on public.cms_ar_manual_action
   for select to authenticated using (true);
-
 grant select on public.cms_ar_manual_action to authenticated;
-
 -- 상계/조정이 실제로 만든 alloc들을 “action”에 매핑해서 추적 가능하게
 create table if not exists public.cms_ar_manual_action_alloc (
   action_alloc_id uuid primary key default gen_random_uuid(),
@@ -75,18 +64,13 @@ create table if not exists public.cms_ar_manual_action_alloc (
 
   created_at timestamptz not null default now()
 );
-
 create index if not exists idx_cms_ar_manual_action_alloc_action
   on public.cms_ar_manual_action_alloc(action_id);
-
 alter table public.cms_ar_manual_action_alloc enable row level security;
-
 drop policy if exists cms_select_authenticated on public.cms_ar_manual_action_alloc;
 create policy cms_select_authenticated on public.cms_ar_manual_action_alloc
   for select to authenticated using (true);
-
 grant select on public.cms_ar_manual_action_alloc to authenticated;
-
 --------------------------------------------------------------------------------
 -- 2) Admin check helper (충돌 방지: “새 이름”)
 --------------------------------------------------------------------------------
@@ -102,7 +86,6 @@ begin
     raise exception 'Refusing to overwrite existing function: public.cms_fn_ar_require_admin_for_manual_ar_v1';
   end if;
 end $$;
-
 create function public.cms_fn_ar_require_admin_for_manual_ar_v1(
   p_actor_person_id uuid default null
 )
@@ -125,10 +108,8 @@ begin
     raise exception 'admin only';
   end if;
 end $$;
-
 grant execute on function public.cms_fn_ar_require_admin_for_manual_ar_v1(uuid)
   to authenticated;
-
 --------------------------------------------------------------------------------
 -- 3) OFFSET (상계): “미할당 선수금(현금)”을 기존 payment들에서 꺼내서 alloc만 추가
 --    - 새 payment 생성 X (돈을 새로 만들지 않음)
@@ -146,7 +127,6 @@ begin
     raise exception 'Refusing to overwrite existing function: public.cms_fn_ar_apply_offset_from_unallocated_cash_v1';
   end if;
 end $$;
-
 create function public.cms_fn_ar_apply_offset_from_unallocated_cash_v1(
   p_party_id uuid,
   p_idempotency_key text,
@@ -402,11 +382,9 @@ begin
     'applied_material_krw', round(v_applied_material, 0)
   );
 end $$;
-
 grant execute on function public.cms_fn_ar_apply_offset_from_unallocated_cash_v1(
   uuid, text, numeric, timestamptz, text, text, uuid
 ) to authenticated;
-
 --------------------------------------------------------------------------------
 -- 4) ADJUST_DOWN (조정-차감): 원장(-) + outstanding 감소(alloc) = “정정”
 --    - 실제 수금이 아니라 “회계/오류정정” 이므로 entry_type='ADJUST'
@@ -424,7 +402,6 @@ begin
     raise exception 'Refusing to overwrite existing function: public.cms_fn_ar_apply_adjustment_down_fifo_v1';
   end if;
 end $$;
-
 create function public.cms_fn_ar_apply_adjustment_down_fifo_v1(
   p_party_id uuid,
   p_idempotency_key text,
@@ -635,11 +612,9 @@ begin
     'applied_material_krw', round(v_applied_material, 0)
   );
 end $$;
-
 grant execute on function public.cms_fn_ar_apply_adjustment_down_fifo_v1(
   uuid, text, numeric, timestamptz, text, text, uuid
 ) to authenticated;
-
 --------------------------------------------------------------------------------
 -- 5) ADJUST_UP (조정-증가): synthetic invoice 생성 + ledger(+)로 receivable 증가
 --    - shipment/shipment_line 없이도 생성 가능 (정정용)
@@ -657,7 +632,6 @@ begin
     raise exception 'Refusing to overwrite existing function: public.cms_fn_ar_create_adjustment_up_invoice_v1';
   end if;
 end $$;
-
 create function public.cms_fn_ar_create_adjustment_up_invoice_v1(
   p_party_id uuid,
   p_idempotency_key text,
@@ -795,7 +769,6 @@ begin
     'total_cash_due_krw', round(v_total, 0)
   );
 end $$;
-
 grant execute on function public.cms_fn_ar_create_adjustment_up_invoice_v1(
   uuid, text, numeric, timestamptz, numeric, numeric, text, text, uuid
 ) to authenticated;

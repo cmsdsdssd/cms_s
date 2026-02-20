@@ -326,10 +326,8 @@ begin
     'allow_cash_for_material', p_allow_cash_for_material
   );
 end $$;
-
 alter function public.cms_fn_ar_apply_payment_fifo_v2(uuid,text,numeric,numeric,numeric,boolean,timestamptz,text)
   security definer
   set search_path = public, pg_temp;
-
 grant execute on function public.cms_fn_ar_apply_payment_fifo_v2(uuid,text,numeric,numeric,numeric,boolean,timestamptz,text)
   to authenticated;

@@ -15,7 +15,6 @@ BEGIN
         CREATE UNIQUE INDEX idx_cms_party_mask_code ON cms_party(mask_code);
     END IF;
 END $$;
-
 -- ============================================
 -- 2. Add customer_mask_code to order_line
 -- ============================================
@@ -29,7 +28,6 @@ BEGIN
         CREATE INDEX idx_cms_order_line_mask_lookup ON cms_order_line(customer_mask_code, customer_party_id);
     END IF;
 END $$;
-
 -- ============================================
 -- 3. Drop existing functions (clean slate for mask functions)
 -- ============================================
@@ -37,7 +35,6 @@ DROP FUNCTION IF EXISTS cms_fn_generate_party_mask_code();
 DROP FUNCTION IF EXISTS cms_fn_copy_mask_from_party();
 DROP FUNCTION IF EXISTS cms_fn_trigger_generate_party_mask();
 DROP FUNCTION IF EXISTS cms_fn_trigger_copy_mask_to_order();
-
 -- ============================================
 -- 4. Create function: Generate random mask code
 -- ============================================
@@ -68,7 +65,6 @@ BEGIN
     END LOOP;
 END;
 $$ LANGUAGE plpgsql;
-
 -- ============================================
 -- 5. Create TRIGGER function: Auto-generate mask on party insert
 -- ============================================
@@ -81,7 +77,6 @@ BEGIN
     RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
-
 -- ============================================
 -- 6. Create TRIGGER function: Copy mask from party to order
 -- ============================================
@@ -103,7 +98,6 @@ BEGIN
     RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
-
 -- ============================================
 -- 7. Create trigger: Auto-generate mask on party insert
 -- ============================================
@@ -118,7 +112,6 @@ BEGIN
             EXECUTE FUNCTION cms_fn_trigger_generate_party_mask();
     END IF;
 END $$;
-
 -- ============================================
 -- 8. Create trigger: Copy mask from party to order_line
 -- ============================================
@@ -133,14 +126,12 @@ BEGIN
             EXECUTE FUNCTION cms_fn_trigger_copy_mask_to_order();
     END IF;
 END $$;
-
 -- ============================================
 -- 9. Backfill parties with mask codes
 -- ============================================
 UPDATE cms_party
 SET mask_code = cms_fn_generate_party_mask_code()
 WHERE mask_code IS NULL;
-
 -- ============================================
 -- 10. Backfill order_lines
 -- ============================================
@@ -149,7 +140,6 @@ SET customer_mask_code = p.mask_code
 FROM cms_party p
 WHERE ol.customer_party_id = p.party_id
   AND (ol.customer_mask_code IS NULL OR ol.customer_mask_code LIKE 'TEMP%');
-
 -- ============================================
 -- 11. Create view for mask lookup
 -- ============================================

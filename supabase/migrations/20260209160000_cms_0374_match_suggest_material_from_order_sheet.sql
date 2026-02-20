@@ -236,10 +236,8 @@ begin
     'candidates', v_candidates
   );
 end $$;
-
 alter function public.cms_fn_receipt_line_match_suggest_v1(uuid,uuid,int)
   security definer
   set search_path = public, pg_temp;
-
 grant execute on function public.cms_fn_receipt_line_match_suggest_v1(uuid,uuid,int)
   to authenticated, service_role;

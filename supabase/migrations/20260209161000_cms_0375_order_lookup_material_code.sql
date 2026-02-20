@@ -1,5 +1,4 @@
 drop view if exists public.v_cms_order_lookup;
-
 create view public.v_cms_order_lookup
 with (security_invoker = true)
 as
@@ -23,5 +22,4 @@ select
 from public.cms_order_line o
 join public.cms_party p on p.party_id = o.customer_party_id
 left join public.cms_master_item m on m.master_id = o.matched_master_id;
-
 grant select on public.v_cms_order_lookup to anon, authenticated;

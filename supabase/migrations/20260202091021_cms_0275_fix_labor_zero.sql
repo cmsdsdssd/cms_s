@@ -14,7 +14,6 @@ WHERE (labor_total_sell_krw IS NULL OR labor_total_sell_krw = 0)
   AND created_at >= '2026-02-02'
 ORDER BY created_at DESC
 LIMIT 10;
-
 -- 2. 공임 보정 실행
 UPDATE cms_shipment_line
 SET 
@@ -26,7 +25,6 @@ SET
     GREATEST(ROUND(COALESCE(material_amount_sell_krw, 0) * 0.2), 5000)
 WHERE (labor_total_sell_krw IS NULL OR labor_total_sell_krw = 0)
   AND created_at >= '2026-02-02';
-
 -- 3. 결과 확인
 SELECT 
   '보정된 건수' as 항목,

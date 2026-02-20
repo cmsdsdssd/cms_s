@@ -1,8 +1,6 @@
 -- 20260205143001_cms_0349_ap_payment_fifo_alloc.sql
 set search_path = public, pg_temp;
-
 begin;
-
 -- ============================================================
 -- 1) Views: payment별 미배정(unallocated) 잔액 / alloc 상세
 -- ============================================================
@@ -33,10 +31,8 @@ from public.cms_ap_payment p
 join public.cms_ap_payment_leg pl on pl.payment_id = p.payment_id
 left join alloc_sum s
   on s.payment_id = p.payment_id and s.asset_code = pl.asset_code;
-
 grant select on public.cms_v_ap_payment_unallocated_v1 to authenticated;
 grant select on public.cms_v_ap_payment_unallocated_v1 to anon;
-
 -- payment -> alloc -> invoice -> receipt까지 내려주는 상세 뷰 (UI용)
 create or replace view public.cms_v_ap_payment_alloc_detail_v1
 with (security_invoker = true)
@@ -60,11 +56,8 @@ from public.cms_ap_payment p
 join public.cms_ap_alloc a on a.payment_id = p.payment_id
 join public.cms_ap_invoice i on i.ap_id = a.ap_id
 join public.cms_ap_alloc_leg al on al.alloc_id = a.alloc_id;
-
 grant select on public.cms_v_ap_payment_alloc_detail_v1 to authenticated;
 grant select on public.cms_v_ap_payment_alloc_detail_v1 to anon;
-
-
 -- ============================================================
 -- 2) RPC: 결제 생성 + FIFO 상계
 --    - 자산별 FIFO (XAU_G / XAG_G / KRW_LABOR / KRW_MATERIAL)
@@ -266,15 +259,11 @@ begin
     'unallocated', coalesce(v_unallocated,'[]'::jsonb)
   );
 end $$;
-
 alter function public.cms_fn_ap2_pay_and_fifo_v1(uuid,timestamptz,jsonb,text,text)
   security definer
   set search_path = public, pg_temp;
-
 grant execute on function public.cms_fn_ap2_pay_and_fifo_v1(uuid,timestamptz,jsonb,text,text)
   to authenticated, service_role;
-
-
 -- ============================================================
 -- 3) RPC: 결제의 "미배정"을 특정 invoice에 수동 배정 (옵션이지만 운영에 유용)
 --    - FIFO 이후 남은 크레딧을 특정 영수증에 붙이고 싶을 때 사용
@@ -352,12 +341,9 @@ begin
     'note', p_note
   );
 end $$;
-
 alter function public.cms_fn_ap2_manual_alloc_v1(uuid,uuid,public.cms_asset_code,numeric,text)
   security definer
   set search_path = public, pg_temp;
-
 grant execute on function public.cms_fn_ap2_manual_alloc_v1(uuid,uuid,public.cms_asset_code,numeric,text)
   to authenticated, service_role;
-
 commit;

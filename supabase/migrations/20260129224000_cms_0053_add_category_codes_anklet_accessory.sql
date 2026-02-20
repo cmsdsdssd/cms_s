@@ -1,6 +1,5 @@
 -- 20260129224000_cms_0053_add_category_codes_anklet_accessory.sql
 set search_path = public, pg_temp;
-
 do $$
 begin
   -- enum 존재 확인

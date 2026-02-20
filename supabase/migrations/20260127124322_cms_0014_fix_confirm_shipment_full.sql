@@ -1,6 +1,5 @@
 -- cms_0014: pricing policy defaults (labor/plating fallback) + repair cost policy trigger
 begin;
-
 -- 1) LABOR RULE PICKER: band_code null/empty => DEFAULT, ?놁쑝硫?category ??best fallback
 create or replace function public.cms_fn_pick_labor_band_rule(
   p_category_code cms_e_category_code,
@@ -66,7 +65,6 @@ begin
   return;
 end
 $$;
-
 -- 2) PLATING RULE PICKER:
 --    - input material_code=00?대㈃ material 臾댁떆(variant+category)
 --    - 洹???exact material ?곗꽑 -> material=00 猷?fallback
@@ -139,7 +137,6 @@ begin
   return;
 end
 $$;
-
 -- 3) REPAIR COST POLICY (BEFORE trigger濡??ш? ?낅뜲?댄듃 諛⑹?)
 create or replace function public.cms_fn__repair_cost_policy_trg()
 returns trigger
@@ -163,12 +160,9 @@ begin
   return new;
 end
 $$;
-
 drop trigger if exists cms_trg_repair_cost_policy on public.cms_shipment_line;
-
 create trigger cms_trg_repair_cost_policy
 before update of is_priced_final on public.cms_shipment_line
 for each row
 execute function public.cms_fn__repair_cost_policy_trg();
-
 commit;

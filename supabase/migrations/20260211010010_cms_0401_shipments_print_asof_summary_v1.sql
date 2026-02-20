@@ -134,10 +134,8 @@ left join ledger_asof l on l.party_id = p.party_id
 left join invoice_agg_asof i on i.party_id = p.party_id
 order by p.party_id;
 $$;
-
 alter function public.cms_fn_ar_position_asof_v1(uuid[], timestamptz)
   security definer
   set search_path = public, pg_temp;
-
 grant execute on function public.cms_fn_ar_position_asof_v1(uuid[], timestamptz)
   to authenticated;

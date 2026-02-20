@@ -7,7 +7,6 @@
 DROP FUNCTION IF EXISTS public.cms_fn_confirm_shipment_v3_cost_v1(uuid,uuid,text,boolean,uuid,text,uuid,jsonb,boolean) CASCADE;
 DROP FUNCTION IF EXISTS public.cms_fn_confirm_shipment_v2(uuid,uuid,text,boolean,uuid) CASCADE;
 DROP FUNCTION IF EXISTS public.cms_fn_confirm_shipment(uuid,uuid,text) CASCADE;
-
 -- 2. 수정된 cms_fn_confirm_shipment 생성
 CREATE OR REPLACE FUNCTION public.cms_fn_confirm_shipment(
   p_shipment_id uuid,
@@ -471,7 +470,6 @@ begin
     'total_cost_krw', v_total_cost
   );
 end $function$;
-
 -- 3. cms_fn_confirm_shipment_v2 재생성
 CREATE OR REPLACE FUNCTION public.cms_fn_confirm_shipment_v2(
   p_shipment_id uuid,
@@ -507,14 +505,11 @@ begin
 
   return v_result;
 end $$;
-
 alter function public.cms_fn_confirm_shipment_v2(uuid,uuid,text,boolean,uuid)
   security definer
   set search_path = public, pg_temp;
-
 grant execute on function public.cms_fn_confirm_shipment_v2(uuid,uuid,text,boolean,uuid)
   to authenticated;
-
 -- 4. cms_fn_confirm_shipment_v3_cost_v1 재생성
 CREATE OR REPLACE FUNCTION public.cms_fn_confirm_shipment_v3_cost_v1(
   p_shipment_id uuid,
@@ -566,14 +561,11 @@ begin
   return v_confirm
     || jsonb_build_object('correlation_id', v_corr);
 end $$;
-
 alter function public.cms_fn_confirm_shipment_v3_cost_v1(uuid,uuid,text,boolean,uuid,text,uuid,jsonb,boolean)
   security definer
   set search_path = public, pg_temp;
-
 grant execute on function public.cms_fn_confirm_shipment_v3_cost_v1(uuid,uuid,text,boolean,uuid,text,uuid,jsonb,boolean)
   to authenticated, service_role;
-
 -- 5. 수정 확인
 SELECT 
   '함수 수정 완료' as 결과,

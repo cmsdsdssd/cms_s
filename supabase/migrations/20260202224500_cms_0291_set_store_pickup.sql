@@ -1,5 +1,4 @@
 set search_path = public, pg_temp;
-
 create or replace function public.cms_fn_set_shipment_store_pickup_v1(
   p_shipment_id uuid,
   p_is_store_pickup boolean,
@@ -34,6 +33,5 @@ begin
     'note', p_note
   );
 end $$;
-
 alter function public.cms_fn_set_shipment_store_pickup_v1(uuid, boolean, uuid, text) security definer;
 grant execute on function public.cms_fn_set_shipment_store_pickup_v1(uuid, boolean, uuid, text) to authenticated;

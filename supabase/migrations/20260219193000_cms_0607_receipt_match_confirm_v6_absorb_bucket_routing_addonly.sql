@@ -1,5 +1,4 @@
 set search_path = public, pg_temp;
-
 -- cms_0607 (ADD-ONLY)
 -- v6 policy v2에서 흡수공임 버킷을 실제 반영 경로에 맞춰 라우팅
 -- - BASE_LABOR  -> base_labor_krw에 가산
@@ -502,7 +501,6 @@ begin
     );
 end;
 $$;
-
 do $$
 declare
   r record;

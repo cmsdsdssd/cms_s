@@ -39,7 +39,6 @@ BEGIN
     END LOOP;
 END;
 $$ LANGUAGE plpgsql;
-
 -- ============================================
 -- 2. Update existing parties with new readable format
 -- ============================================
@@ -47,7 +46,8 @@ $$ LANGUAGE plpgsql;
 UPDATE cms_party
 SET mask_code = cms_fn_generate_readable_mask_code()
 WHERE mask_code IS NULL 
-   OR mask_code NOT LIKE '_-___';  -- Not in A-001 format
+   OR mask_code NOT LIKE '_-___';
+-- Not in A-001 format
 
 -- ============================================
 -- 3. Update order_lines to match party's new format
@@ -59,7 +59,6 @@ WHERE ol.customer_party_id = p.party_id
   AND (ol.customer_mask_code IS NULL 
        OR ol.customer_mask_code NOT LIKE '_-___'
        OR ol.customer_mask_code != p.mask_code);
-
 -- ============================================
 -- 4. Update trigger function to use readable format
 -- ============================================
@@ -95,7 +94,6 @@ BEGIN
     RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
-
 -- ============================================
 -- 5. Create view for mask lookup with new format
 -- ============================================
@@ -115,15 +113,13 @@ LEFT JOIN cms_order_line ol ON p.party_id = ol.customer_party_id
 WHERE p.mask_code IS NOT NULL
 GROUP BY p.party_id, p.party_type, p.name, p.mask_code, p.phone
 ORDER BY mask_letter, mask_number;
-
 -- ============================================
 -- 6. Add helpful index for mask code ranges
 -- ============================================
 CREATE INDEX IF NOT EXISTS idx_cms_party_mask_letter 
 ON cms_party(substr(mask_code, 1, 1));
-
 -- ============================================
 -- 7. Sample data check
 -- ============================================
 -- SELECT 'Sample masking codes:' as info;
--- SELECT mask_code, name FROM cms_party WHERE mask_code LIKE '_-___' LIMIT 10;
+-- SELECT mask_code, name FROM cms_party WHERE mask_code LIKE '_-___' LIMIT 10;;

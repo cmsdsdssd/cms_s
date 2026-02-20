@@ -12,7 +12,6 @@ select
 from cms_party p
 left join cms_ar_ledger l on l.party_id = p.party_id
 group by p.party_id, p.party_type, p.name;
-
 create or replace view cms_v_order_worklist
 with (security_invoker = true)
 as

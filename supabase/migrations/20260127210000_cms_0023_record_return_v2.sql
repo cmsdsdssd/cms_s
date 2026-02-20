@@ -1,7 +1,6 @@
 -- 0023: record return v2 (remaining qty enforcement)
 
 set search_path = public, pg_temp;
-
 create or replace function cms_fn_record_return_v2(
   p_shipment_line_id uuid,
   p_return_qty int,
@@ -83,8 +82,6 @@ begin
     'remaining_qty', v_remaining_after
   );
 end $$;
-
 alter function public.cms_fn_record_return_v2(uuid,int,timestamptz,numeric,text)
   security definer set search_path=public,pg_temp;
-
 grant execute on function public.cms_fn_record_return_v2(uuid,int,timestamptz,numeric,text) to authenticated;

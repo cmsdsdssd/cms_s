@@ -231,10 +231,8 @@ begin
     'inventory_move_id', v_move_id
   );
 end $$;
-
 alter function public.cms_fn_apply_purchase_cost_to_shipment_v1(uuid,text,uuid,jsonb,uuid,text,uuid,boolean)
   security definer
   set search_path = public, pg_temp;
-
 grant execute on function public.cms_fn_apply_purchase_cost_to_shipment_v1(uuid,text,uuid,jsonb,uuid,text,uuid,boolean)
   to authenticated, service_role;

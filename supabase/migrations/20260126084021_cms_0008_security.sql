@@ -8,22 +8,17 @@
 revoke all on all tables    in schema public from anon, authenticated;
 revoke all on all sequences in schema public from anon, authenticated;
 revoke all on all functions in schema public from anon, authenticated;
-
 grant usage on schema public to anon, authenticated;
-
 -- Phase1: 내부 운영 우선(권한 깨짐 방지) → authenticated는 SELECT 허용
 -- (추후 필요하면 RLS 조건을 더 좁히는 방식으로 강화)
 grant select on all tables in schema public to authenticated;
-
 -- ------------------------------------------------------------
 -- 2) 기본 권한(미래 객체): 새 테이블/함수 생겨도 같은 룰 적용
 -- ------------------------------------------------------------
 alter default privileges in schema public revoke all on tables    from anon, authenticated;
 alter default privileges in schema public revoke all on sequences from anon, authenticated;
 alter default privileges in schema public revoke all on functions from anon, authenticated;
-
 alter default privileges in schema public grant select on tables to authenticated;
-
 -- ------------------------------------------------------------
 -- 3) RLS: cms_* 베이스테이블에만 enable + authenticated read 정책
 --    (pg_tables는 view 제외)
@@ -47,7 +42,6 @@ begin
     );
   end loop;
 end $$;
-
 -- ------------------------------------------------------------
 -- 4) 핵심 RPC 3종: SECURITY DEFINER + EXEC 허용(조건부)
 -- ------------------------------------------------------------

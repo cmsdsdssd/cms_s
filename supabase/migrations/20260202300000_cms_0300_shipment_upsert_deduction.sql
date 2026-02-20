@@ -1,5 +1,4 @@
 set search_path = public, pg_temp;
-
 create or replace function public.cms_fn_shipment_upsert_from_order_line(
   p_order_line_id uuid,
   p_weight_g numeric,
@@ -88,6 +87,5 @@ begin
     'status', 'DRAFT'
   );
 end $$;
-
 grant execute on function public.cms_fn_shipment_upsert_from_order_line(uuid, numeric, numeric, uuid, uuid, numeric, numeric, jsonb, numeric) to authenticated;
 grant execute on function public.cms_fn_shipment_upsert_from_order_line(uuid, numeric, numeric, uuid, uuid, numeric, numeric, jsonb, numeric) to anon;

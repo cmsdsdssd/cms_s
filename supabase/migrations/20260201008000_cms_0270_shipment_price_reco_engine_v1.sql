@@ -4,7 +4,6 @@
 -- 원칙: ADD-ONLY (새 오브젝트만 추가), 테이블 DML은 RPC로만
 
 begin;
-
 -- ------------------------------------------------------------
 -- 1) 추천 결과 저장 테이블 (히스토리 누적)
 -- ------------------------------------------------------------
@@ -42,20 +41,16 @@ create table if not exists public.cms_shipment_price_reco (
 
   created_at timestamptz not null default now()
 );
-
 create index if not exists cms_shipment_price_reco__shipment_line_id__idx
   on public.cms_shipment_price_reco (shipment_line_id, created_at desc);
-
 create index if not exists cms_shipment_price_reco__model_name__idx
   on public.cms_shipment_price_reco (model_name);
-
 -- ------------------------------------------------------------
 -- 2) RLS: read 정책만 (기존 cms_0008의 철학과 동일)
 --    - authenticated SELECT 허용
 --    - 쓰기(insert/update/delete)는 RPC에서 security definer로 처리
 -- ------------------------------------------------------------
 alter table public.cms_shipment_price_reco enable row level security;
-
 do $$
 begin
   if not exists (
@@ -74,10 +69,8 @@ begin
     ';
   end if;
 end $$;
-
 -- 명시적으로 select만 부여(기본권한/디폴트 권한이 있어도 안전하게)
 grant select on public.cms_shipment_price_reco to authenticated, service_role;
-
 -- ------------------------------------------------------------
 -- 3) 최신 추천 1건만 보는 뷰
 -- ------------------------------------------------------------
@@ -102,9 +95,7 @@ select distinct on (r.shipment_line_id)
   r.created_at
 from public.cms_shipment_price_reco r
 order by r.shipment_line_id, r.created_at desc;
-
 grant select on public.cms_v_shipment_price_reco_latest_v1 to authenticated, service_role;
-
 -- ------------------------------------------------------------
 -- 4) 추천 컨텍스트 JSON 생성 RPC (LLM 입력용)
 --    - 현재 라인/마스터/시세/최근 유사 출고/최근 동일 모델 출고를 한 번에 준다
@@ -293,10 +284,8 @@ begin
   );
 end;
 $$;
-
 grant execute on function public.cms_fn_get_shipment_price_reco_context_v1(uuid,int)
 to authenticated, service_role;
-
 -- ------------------------------------------------------------
 -- 5) 추천 저장 RPC (히스토리 누적 insert)
 -- ------------------------------------------------------------
@@ -370,11 +359,9 @@ begin
   return v_reco_id;
 end;
 $$;
-
 grant execute on function public.cms_fn_insert_shipment_price_reco_v1(
   uuid, public.cms_e_pricing_mode, numeric, numeric, numeric, numeric, numeric, text, jsonb, text, uuid
 ) to authenticated, service_role;
-
 -- ------------------------------------------------------------
 -- 6) (옵션) 추천을 shipment_line에 "적용"하는 RPC
 --    - DRAFT 상태의 shipment만 허용
@@ -428,8 +415,6 @@ begin
   return v_r.shipment_line_id;
 end;
 $$;
-
 grant execute on function public.cms_fn_apply_shipment_price_reco_v1(uuid,uuid)
 to authenticated, service_role;
-
 commit;

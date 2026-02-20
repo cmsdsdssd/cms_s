@@ -10,22 +10,18 @@
 
 begin;
 set search_path = public, pg_temp;
-
 ----------------------------------------------------------------------
 -- (A) Master flag: 단가제 체크 (RULE 올림 적용 대상)
 ----------------------------------------------------------------------
 alter table public.cms_master_item
   add column if not exists is_unit_pricing boolean not null default false;
-
 comment on column public.cms_master_item.is_unit_pricing is
   'When true, RULE pricing lines linked to this master will be rounded up at confirm time using configured rounding unit.';
-
 ----------------------------------------------------------------------
 -- (B) Global rounding unit config (DEFAULT row)
 ----------------------------------------------------------------------
 alter table public.cms_market_tick_config
   add column if not exists rule_rounding_unit_krw integer;
-
 do $$
 begin
   if not exists (select 1 from pg_constraint where conname = 'cms_market_tick_config_rule_rounding_unit_range') then
@@ -34,7 +30,6 @@ begin
       check (rule_rounding_unit_krw is null or (rule_rounding_unit_krw >= 0 and rule_rounding_unit_krw <= 1000000));
   end if;
 end $$;
-
 -- Seed DEFAULT row if missing (idempotent)
 insert into public.cms_market_tick_config(
   config_key,
@@ -56,14 +51,11 @@ select
   5000,
   now()
 where not exists (select 1 from public.cms_market_tick_config where config_key = 'DEFAULT');
-
 update public.cms_market_tick_config
 set rule_rounding_unit_krw = coalesce(rule_rounding_unit_krw, 5000)
 where config_key = 'DEFAULT';
-
 comment on column public.cms_market_tick_config.rule_rounding_unit_krw is
   'Rounding unit (KRW) applied to RULE lines at confirm time for masters with is_unit_pricing=true. 0 means disabled.';
-
 ----------------------------------------------------------------------
 -- (C) RPC: set global RULE rounding unit
 ----------------------------------------------------------------------
@@ -112,10 +104,8 @@ begin
 
   return jsonb_build_object('ok', true, 'config_key', 'DEFAULT', 'rule_rounding_unit_krw', v_unit);
 end $$;
-
 grant execute on function public.cms_fn_set_rule_rounding_unit_v1(integer, uuid, uuid, text)
   to authenticated, service_role;
-
 ----------------------------------------------------------------------
 -- (D) RPC: toggle master is_unit_pricing flag (no direct update from client)
 ----------------------------------------------------------------------
@@ -159,10 +149,8 @@ begin
 
   return jsonb_build_object('ok', true, 'master_id', p_master_id, 'is_unit_pricing', coalesce(p_is_unit_pricing,false));
 end $$;
-
 grant execute on function public.cms_fn_set_master_item_unit_pricing_v1(uuid, boolean, uuid, uuid, text)
   to authenticated, service_role;
-
 ----------------------------------------------------------------------
 -- (E) Apply RULE rounding for masters with is_unit_pricing=true
 --     - 대상: pricing_mode='RULE' AND master.is_unit_pricing=true
@@ -289,10 +277,8 @@ begin
     'total_cost_krw', v_total_cost
   );
 end $$;
-
 grant execute on function public.cms_fn_apply_rule_rounding_by_master_unit_pricing_v1(uuid, uuid, text)
   to authenticated, service_role;
-
 ----------------------------------------------------------------------
 -- (F) Hook into confirm chain (v3_cost): apply RULE rounding before AR upsert
 -- NOTE: This preserves existing chain (repair_fee -> purchase_cost -> silver_fix -> unit_floor -> RULE rounding -> AR create -> inventory emit)
@@ -374,12 +360,9 @@ begin
   return v_confirm
     || jsonb_build_object('correlation_id', v_corr);
 end $$;
-
 alter function public.cms_fn_confirm_shipment_v3_cost_v1(uuid,uuid,text,boolean,uuid,text,uuid,jsonb,boolean)
   security definer
   set search_path = public, pg_temp;
-
 grant execute on function public.cms_fn_confirm_shipment_v3_cost_v1(uuid,uuid,text,boolean,uuid,text,uuid,jsonb,boolean)
   to authenticated, service_role;
-
 commit;

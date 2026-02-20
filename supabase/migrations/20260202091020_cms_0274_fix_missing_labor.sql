@@ -8,7 +8,6 @@ SELECT
 FROM cms_shipment_line
 WHERE labor_total_sell_krw IS NULL
    OR labor_total_sell_krw = 0;
-
 -- 2. 마스터 정보 기반으로 공임 보정 (선택사항)
 -- 주의: 이 쿼리는 마스터의 공임 정보를 기반으로 추정치를 채웁니다.
 -- 실제 공임과 차이가 있을 수 있으므로 확인 후 실행하세요.

@@ -2,9 +2,7 @@
 -- cms_0350: AP(운영)용 공장 POST/결제 뷰 + Reconcile v2(결제반영/as-of 비교) + 결제 가드 RPC
 -- ============================================================
 set search_path = public, pg_temp;
-
 begin;
-
 -- ------------------------------------------------------------
 -- 0) Preflight: 필수 테이블/타입 존재 확인 (없으면 여기서 멈추는 게 안전)
 -- ------------------------------------------------------------
@@ -32,7 +30,6 @@ begin
     raise exception 'missing type cms_reconcile_issue_type (run cms_0346 first)';
   end if;
 end $$;
-
 -- ------------------------------------------------------------
 -- 1) ENUM 확장: 공장 POST vs 시스템(as-of) 불일치 이슈 타입 추가
 -- ------------------------------------------------------------
@@ -48,19 +45,15 @@ begin
     alter type public.cms_reconcile_issue_type add value 'FACTORY_POST_NEQ_SYSTEM_ASOF';
   end if;
 end $$;
-
 -- ------------------------------------------------------------
 -- 2) Index (있으면 스킵): 운영/대사 성능 안전장치
 -- ------------------------------------------------------------
 create index if not exists cms_ap_payment_vendor_paid_at_idx
   on public.cms_ap_payment (vendor_party_id, paid_at desc);
-
 create index if not exists cms_ap_invoice_vendor_occurred_at_idx
   on public.cms_ap_invoice (vendor_party_id, occurred_at asc);
-
 create index if not exists cms_factory_statement_leg_receipt_row_idx
   on public.cms_factory_receipt_statement_leg (receipt_id, snapshot_version, row_code);
-
 -- ------------------------------------------------------------
 -- 3) AP(운영) 화면용 "공장 최신 영수증 + POST/최근결제" 뷰
 --    - AP는 '증가분(SALE)'이 아니라 '잔액(POST)'과 '결제' 중심이어야 함
@@ -85,10 +78,8 @@ order by
   coalesce(r.bill_no,'') desc,
   s.receipt_id::text desc,
   s.snapshot_version desc;
-
 grant select on public.cms_v_ap_factory_latest_receipt_by_vendor_v1 to authenticated;
 grant select on public.cms_v_ap_factory_latest_receipt_by_vendor_v1 to anon;
-
 -- vendor별 "공장 POST 잔액(거래 후 미수)" (자산코드 전체를 고정 출력)
 create or replace view public.cms_v_ap_factory_post_balance_by_vendor_v1
 with (security_invoker = true)
@@ -114,10 +105,8 @@ left join public.cms_factory_receipt_statement_leg l
  and l.snapshot_version = last.snapshot_version
  and l.row_code = 'POST_BALANCE'
  and l.asset_code = a.asset_code;
-
 grant select on public.cms_v_ap_factory_post_balance_by_vendor_v1 to authenticated;
 grant select on public.cms_v_ap_factory_post_balance_by_vendor_v1 to anon;
-
 -- vendor별 "공장 RECENT_PAYMENT(최근결제)" (자산코드 전체 고정 출력)
 create or replace view public.cms_v_ap_factory_recent_payment_by_vendor_v1
 with (security_invoker = true)
@@ -143,10 +132,8 @@ left join public.cms_factory_receipt_statement_leg l
  and l.snapshot_version = last.snapshot_version
  and l.row_code = 'RECENT_PAYMENT'
  and l.asset_code = a.asset_code;
-
 grant select on public.cms_v_ap_factory_recent_payment_by_vendor_v1 to authenticated;
 grant select on public.cms_v_ap_factory_recent_payment_by_vendor_v1 to anon;
-
 -- ------------------------------------------------------------
 -- 4) AP(운영)용 결제 내역 뷰: payment + legs (AR처럼 날짜/자산별 조회 가능)
 -- ------------------------------------------------------------
@@ -162,10 +149,8 @@ select
   pl.qty
 from public.cms_ap_payment p
 join public.cms_ap_payment_leg pl on pl.payment_id = p.payment_id;
-
 grant select on public.cms_v_ap_payment_history_by_vendor_v1 to authenticated;
 grant select on public.cms_v_ap_payment_history_by_vendor_v1 to anon;
-
 -- ------------------------------------------------------------
 -- 5) 시스템 잔액(net balance) 뷰: due - alloc (outstanding/credit이 아니라 "순잔액")
 --    - 공장 POST(잔액)과 비교하려면 net balance가 필요
@@ -190,10 +175,8 @@ from public.cms_ap_invoice i
 join public.cms_ap_invoice_leg l on l.ap_id = i.ap_id
 left join alloc a on a.ap_id = i.ap_id and a.asset_code = l.asset_code
 group by i.vendor_party_id, l.asset_code;
-
 grant select on public.cms_v_ap_balance_by_vendor_v1 to authenticated;
 grant select on public.cms_v_ap_balance_by_vendor_v1 to anon;
-
 -- ------------------------------------------------------------
 -- 6) RPC: 시스템 잔액(as-of 특정 일자) 계산 (Reconcile v2의 핵심)
 --    - Asia/Seoul 기준 "해당 날짜의 23:59:59.999..."까지 반영
@@ -261,14 +244,11 @@ begin
   left join alloc x on x.asset_code = a.asset_code
   order by a.asset_code;
 end $$;
-
 alter function public.cms_fn_ap_get_system_position_asof_v1(uuid,date)
   security definer
   set search_path = public, pg_temp;
-
 grant execute on function public.cms_fn_ap_get_system_position_asof_v1(uuid,date)
   to authenticated, service_role;
-
 -- ------------------------------------------------------------
 -- 7) Reconcile v2:
 --    기존(v1) 3개 + 추가 2개
@@ -817,14 +797,11 @@ begin
     'issue_counts', jsonb_build_object('error', v_cnt_error, 'warn', v_cnt_warn, 'info', v_cnt_info)
   );
 end $$;
-
 alter function public.cms_fn_ap_run_reconcile_for_receipt_v2(uuid)
   security definer
   set search_path = public, pg_temp;
-
 grant execute on function public.cms_fn_ap_run_reconcile_for_receipt_v2(uuid)
   to authenticated, service_role;
-
 -- ------------------------------------------------------------
 -- 8) 4행 저장 RPC v2:
 --    - statement 저장 → (중요) AP2 sync(내부calc + SALE invoice upsert) → reconcile v2 실행
@@ -954,14 +931,11 @@ begin
     'reconcile', v_recon
   );
 end $$;
-
 alter function public.cms_fn_upsert_factory_receipt_statement_v2(uuid,jsonb,text)
   security definer
   set search_path = public, pg_temp;
-
 grant execute on function public.cms_fn_upsert_factory_receipt_statement_v2(uuid,jsonb,text)
   to authenticated, service_role;
-
 -- ------------------------------------------------------------
 -- 9) 결제 안전 가드 RPC:
 --    - vendor에 OPEN/ACKED 상태 ERROR 이슈가 있으면 결제 막기
@@ -1000,12 +974,9 @@ begin
     p_idempotency_key
   );
 end $$;
-
 alter function public.cms_fn_ap2_pay_and_fifo_guarded_v1(uuid,timestamptz,jsonb,text,text)
   security definer
   set search_path = public, pg_temp;
-
 grant execute on function public.cms_fn_ap2_pay_and_fifo_guarded_v1(uuid,timestamptz,jsonb,text,text)
   to authenticated, service_role;
-
 commit;

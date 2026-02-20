@@ -1,5 +1,4 @@
 set search_path = public, pg_temp;
-
 -- =========================================================
 -- Receipt Line Matching (Workbench) - RPCs
 --
@@ -36,7 +35,6 @@ immutable
 as $$
   select regexp_replace(upper(coalesce(p_text, '')), '[^A-Z0-9]+', '', 'g');
 $$;
-
 -- Backward compatible alias (kept because some code may call it)
 create or replace function public.cms_fn_norm_model_token_v1(p_text text)
 returns text
@@ -45,7 +43,6 @@ immutable
 as $$
   select public.cms_fn_norm_token_v1(p_text);
 $$;
-
 -- Infer vendor sequence number from order line fields
 -- Priority: order.vendor_seq_no > memo prefix '/12/' > memo prefix '/12' > numeric suffix
 create or replace function public.cms_fn_infer_vendor_seq_no_from_order_v1(
@@ -64,7 +61,6 @@ as $$
     nullif(regexp_replace(coalesce(p_suffix, ''), '[^0-9]+', '', 'g'), '')::int
   );
 $$;
-
 -- =========================================================
 -- Suggest candidates (top N)
 -- =========================================================
@@ -283,7 +279,6 @@ begin
     'candidates', v_candidates
   );
 end $$;
-
 -- =========================================================
 -- Confirm match -> create shipment draft immediately
 -- =========================================================
@@ -610,14 +605,12 @@ begin
     'weight_deviation_warn', v_weight_warn
   );
 end $$;
-
 -- Grants
 grant execute on function public.cms_fn_norm_token_v1(text) to authenticated;
 grant execute on function public.cms_fn_norm_model_token_v1(text) to authenticated;
 grant execute on function public.cms_fn_infer_vendor_seq_no_from_order_v1(int, text, text) to authenticated;
 grant execute on function public.cms_fn_receipt_line_match_suggest_v1(uuid, uuid, int) to authenticated;
 grant execute on function public.cms_fn_receipt_line_match_confirm_v1(uuid, uuid, uuid, numeric, public.cms_e_material_code, numeric, numeric, numeric, uuid, text) to authenticated;
-
 grant execute on function public.cms_fn_norm_token_v1(text) to service_role;
 grant execute on function public.cms_fn_norm_model_token_v1(text) to service_role;
 grant execute on function public.cms_fn_infer_vendor_seq_no_from_order_v1(int, text, text) to service_role;

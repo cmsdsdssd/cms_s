@@ -1,6 +1,5 @@
 -- 20260128302000_cms_0213_inventory_stocktake_tables.sql
 set search_path = public, pg_temp;
-
 -- ---------------------------------------------------------------------
 -- 0) ENUM: stocktake session status (ADD-ONLY)
 -- ---------------------------------------------------------------------
@@ -15,7 +14,6 @@ begin
     create type public.cms_e_inventory_count_status as enum ('DRAFT','FINALIZED','VOID');
   end if;
 end $$;
-
 -- ---------------------------------------------------------------------
 -- 1) SEQUENCE: session_no (human-friendly)
 -- ---------------------------------------------------------------------
@@ -33,7 +31,6 @@ begin
       minvalue 1;
   end if;
 end $$;
-
 -- ---------------------------------------------------------------------
 -- 2) updated_at touch trigger helper (local, safe)
 -- ---------------------------------------------------------------------
@@ -45,7 +42,6 @@ begin
   new.updated_at := now();
   return new;
 end $$;
-
 -- ---------------------------------------------------------------------
 -- 3) TABLE: inventory_count_session
 -- ---------------------------------------------------------------------
@@ -69,32 +65,24 @@ create table if not exists public.cms_inventory_count_session (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
-
 -- uniqueness
 create unique index if not exists cms_inventory_count_session_session_no_uq
   on public.cms_inventory_count_session(session_no);
-
 create unique index if not exists cms_inventory_count_session_session_code_uq
   on public.cms_inventory_count_session(session_code)
   where session_code is not null and length(trim(session_code))>0;
-
 create unique index if not exists cms_inventory_count_session_idempo_uq
   on public.cms_inventory_count_session(idempotency_key)
   where idempotency_key is not null and length(trim(idempotency_key))>0;
-
 create index if not exists cms_inventory_count_session_status_idx
   on public.cms_inventory_count_session(status, snapshot_at desc);
-
 create index if not exists cms_inventory_count_session_generated_move_idx
   on public.cms_inventory_count_session(generated_move_id);
-
 -- trigger
 drop trigger if exists trg_cms_inventory_count_session_touch on public.cms_inventory_count_session;
 create trigger trg_cms_inventory_count_session_touch
 before update on public.cms_inventory_count_session
 for each row execute function public.cms_fn__touch_updated_at_v1();
-
-
 -- ---------------------------------------------------------------------
 -- 4) TABLE: inventory_count_line
 -- ---------------------------------------------------------------------
@@ -126,42 +114,32 @@ create table if not exists public.cms_inventory_count_line (
   constraint cms_inventory_count_line_qty_chk check (counted_qty >= 0),
   constraint cms_inventory_count_line_line_no_chk check (line_no > 0)
 );
-
 -- partial uniqueness: same (session_id, line_no) for active lines
 create unique index if not exists cms_inventory_count_line_session_line_no_uq
   on public.cms_inventory_count_line(session_id, line_no)
   where is_void = false;
-
 create index if not exists cms_inventory_count_line_session_idx
   on public.cms_inventory_count_line(session_id, is_void, line_no);
-
 create index if not exists cms_inventory_count_line_master_idx
   on public.cms_inventory_count_line(master_id)
   where master_id is not null;
-
 -- trigger
 drop trigger if exists trg_cms_inventory_count_line_touch on public.cms_inventory_count_line;
 create trigger trg_cms_inventory_count_line_touch
 before update on public.cms_inventory_count_line
 for each row execute function public.cms_fn__touch_updated_at_v1();
-
-
 -- ---------------------------------------------------------------------
 -- 5) RLS + grants (Read는 view 중심이지만, 테이블 select도 authenticated에 허용)
 -- ---------------------------------------------------------------------
 revoke all on public.cms_inventory_count_session from anon, authenticated;
 revoke all on public.cms_inventory_count_line from anon, authenticated;
-
 grant select on public.cms_inventory_count_session to authenticated;
 grant select on public.cms_inventory_count_line to authenticated;
-
 alter table public.cms_inventory_count_session enable row level security;
 alter table public.cms_inventory_count_line enable row level security;
-
 drop policy if exists cms_select_authenticated on public.cms_inventory_count_session;
 create policy cms_select_authenticated on public.cms_inventory_count_session
 for select to authenticated using (true);
-
 drop policy if exists cms_select_authenticated on public.cms_inventory_count_line;
 create policy cms_select_authenticated on public.cms_inventory_count_line
 for select to authenticated using (true);

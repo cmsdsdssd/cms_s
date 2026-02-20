@@ -4,7 +4,6 @@
 -- 1. 기존 트리거 확인 (있으면 삭제 후 재생성)
 DROP TRIGGER IF EXISTS after_shipment_confirm ON cms_shipment_header;
 DROP FUNCTION IF EXISTS create_ar_from_shipment();
-
 -- 2. 함수 생성
 CREATE OR REPLACE FUNCTION create_ar_from_shipment()
 RETURNS TRIGGER AS $$
@@ -58,13 +57,11 @@ BEGIN
   RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
-
 -- 3. 트리거 생성
 CREATE TRIGGER after_shipment_confirm
 AFTER UPDATE ON cms_shipment_header
 FOR EACH ROW
 EXECUTE FUNCTION create_ar_from_shipment();
-
 -- 4. 생성 확인
 SELECT 
   '트리거 생성 완료' as 결과,

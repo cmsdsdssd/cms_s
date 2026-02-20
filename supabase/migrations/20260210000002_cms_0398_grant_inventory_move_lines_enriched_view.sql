@@ -1,5 +1,4 @@
 set search_path = public, pg_temp;
-
 -- add-only grant hotfix for orders_main inventory detail modal
 do $$
 begin

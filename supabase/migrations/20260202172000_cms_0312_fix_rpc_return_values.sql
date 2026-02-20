@@ -119,12 +119,10 @@ BEGIN
     );
 END;
 $$;
-
 -- ============================================
 -- Grants for the function
 -- ============================================
 GRANT EXECUTE ON FUNCTION cms_fn_factory_po_create_from_order_lines(uuid[], uuid) TO authenticated;
 GRANT EXECUTE ON FUNCTION cms_fn_factory_po_create_from_order_lines(uuid[], uuid) TO service_role;
 GRANT EXECUTE ON FUNCTION cms_fn_factory_po_create_from_order_lines(uuid[], uuid) TO anon;
-
 COMMIT;

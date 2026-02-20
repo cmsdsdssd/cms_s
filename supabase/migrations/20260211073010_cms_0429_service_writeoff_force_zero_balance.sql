@@ -1,5 +1,4 @@
 begin;
-
 create or replace function public.cms_fn_ar_apply_service_writeoff_under_limit_v1(
   p_party_id uuid,
   p_idempotency_key text,
@@ -293,9 +292,7 @@ begin
     'applied_silver_g', round(v_applied_silver_g, 6)
   );
 end $$;
-
 grant execute on function public.cms_fn_ar_apply_service_writeoff_under_limit_v1(
   uuid, text, numeric, timestamptz, text, uuid
 ) to authenticated;
-
 commit;

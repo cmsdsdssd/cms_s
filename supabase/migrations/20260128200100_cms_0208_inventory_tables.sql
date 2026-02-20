@@ -2,7 +2,6 @@
 -- cms_0027: inventory_move header/line tables + indexes + updated_at triggers
 
 set search_path = public, pg_temp;
-
 -- 1) header
 create table if not exists public.cms_inventory_move_header (
   move_id uuid primary key default gen_random_uuid(),
@@ -36,22 +35,16 @@ create table if not exists public.cms_inventory_move_header (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
-
 create unique index if not exists ux_cms_inventory_move_no
   on public.cms_inventory_move_header(move_no);
-
 create index if not exists idx_cms_inventory_move_status_time
   on public.cms_inventory_move_header(status, occurred_at desc);
-
 create index if not exists idx_cms_inventory_move_party_time
   on public.cms_inventory_move_header(party_id, occurred_at desc);
-
 create index if not exists idx_cms_inventory_move_ref_doc
   on public.cms_inventory_move_header(ref_doc_type, ref_doc_id);
-
 create index if not exists idx_cms_inventory_move_idempo
   on public.cms_inventory_move_header(idempotency_key);
-
 -- 2) line
 create table if not exists public.cms_inventory_move_line (
   move_line_id uuid primary key default gen_random_uuid(),
@@ -96,31 +89,24 @@ create table if not exists public.cms_inventory_move_line (
       or (item_ref_type = 'UNLINKED' and master_id is null and part_id is null)
     )
 );
-
 create unique index if not exists ux_cms_inventory_line_move_line_no_alive
   on public.cms_inventory_move_line(move_id, line_no)
   where is_void = false;
-
 create index if not exists idx_cms_inventory_line_move
   on public.cms_inventory_move_line(move_id, line_no);
-
 create index if not exists idx_cms_inventory_line_master
   on public.cms_inventory_move_line(master_id)
   where master_id is not null;
-
 create index if not exists idx_cms_inventory_line_item_name
   on public.cms_inventory_move_line(item_name);
-
 create index if not exists idx_cms_inventory_line_ref_entity
   on public.cms_inventory_move_line(ref_entity_type, ref_entity_id);
-
 -- updated_at triggers(기존 helper 사용)
 do $$ begin
   create trigger trg_cms_inventory_move_header_updated_at
   before update on public.cms_inventory_move_header
   for each row execute function public.cms_fn_set_updated_at();
 exception when duplicate_object then null; end $$;
-
 do $$ begin
   create trigger trg_cms_inventory_move_line_updated_at
   before update on public.cms_inventory_move_line

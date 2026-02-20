@@ -48,5 +48,4 @@ BEGIN
     );
 END;
 $$;
-
 GRANT EXECUTE ON FUNCTION cms_fn_vendor_fax_config_upsert_v1(uuid, text, text, boolean, uuid) TO anon;

@@ -11,17 +11,14 @@
 -- =============================================================
 
 set search_path = public, pg_temp;
-
 -- =============================================================
 -- A) cms_master_item: master_item_id 호환 컬럼 추가 (읽기/필터링용)
 -- =============================================================
 alter table public.cms_master_item
   add column if not exists master_item_id uuid
   generated always as (master_id) stored;
-
 create unique index if not exists uq_cms_master_item_master_item_id
   on public.cms_master_item(master_item_id);
-
 -- =============================================================
 -- B) cms_buy_margin_profile_v1: API 호환 컬럼 + profile_code default + sync trigger
 --    - API expects: margin_center_krw / margin_sub1_krw / margin_sub2_krw
@@ -31,11 +28,9 @@ alter table public.cms_buy_margin_profile_v1
   add column if not exists margin_center_krw numeric,
   add column if not exists margin_sub1_krw numeric,
   add column if not exists margin_sub2_krw numeric;
-
 -- API에서 profile_code를 주지 않아도 INSERT가 되도록 default 부여
 alter table public.cms_buy_margin_profile_v1
   alter column profile_code set default ('profile_' || substring(md5(gen_random_uuid()::text), 1, 8));
-
 -- API 컬럼 기본값(표시/정렬 편의)
 alter table public.cms_buy_margin_profile_v1
   alter column margin_center_krw set default 0;
@@ -43,7 +38,6 @@ alter table public.cms_buy_margin_profile_v1
   alter column margin_sub1_krw set default 0;
 alter table public.cms_buy_margin_profile_v1
   alter column margin_sub2_krw set default 0;
-
 -- 기존 row backfill
 update public.cms_buy_margin_profile_v1
 set
@@ -54,12 +48,10 @@ where
   margin_center_krw is null
   or margin_sub1_krw is null
   or margin_sub2_krw is null;
-
 -- profile_code가 비어있는 row가 혹시 있으면 채움(안전)
 update public.cms_buy_margin_profile_v1
 set profile_code = ('profile_' || substring(md5(gen_random_uuid()::text), 1, 8))
 where profile_code is null or btrim(profile_code) = '';
-
 create or replace function public.cms_fn_sync_buy_margin_profile_api_cols_v1()
 returns trigger
 language plpgsql
@@ -83,7 +75,6 @@ begin
   return new;
 end;
 $$;
-
 do $$
 begin
   create trigger trg_cms_buy_margin_profile_v1_api_sync
@@ -91,7 +82,6 @@ begin
   for each row execute function public.cms_fn_sync_buy_margin_profile_api_cols_v1();
 exception when duplicate_object then null;
 end $$;
-
 -- =============================================================
 -- C) cms_master_absorb_labor_item_v1: API 호환 컬럼 + vendor_party_id + sync trigger
 --    - API expects: absorb_item_id(또는 유사), reason, vendor_party_id
@@ -104,7 +94,6 @@ alter table public.cms_master_absorb_labor_item_v1
   add column if not exists absorb_labor_item_id uuid,
   add column if not exists master_absorb_labor_item_id uuid,
   add column if not exists item_id uuid;
-
 -- 기존 row backfill (id alias, reason)
 update public.cms_master_absorb_labor_item_v1
 set
@@ -119,7 +108,6 @@ where
   or master_absorb_labor_item_id is null
   or item_id is null
   or reason is null;
-
 create or replace function public.cms_fn_sync_master_absorb_labor_item_api_cols_v1()
 returns trigger
 language plpgsql
@@ -159,7 +147,6 @@ begin
   return new;
 end;
 $$;
-
 do $$
 begin
   create trigger trg_cms_master_absorb_labor_item_v1_api_sync
@@ -167,14 +154,11 @@ begin
   for each row execute function public.cms_fn_sync_master_absorb_labor_item_api_cols_v1();
 exception when duplicate_object then null;
 end $$;
-
 -- delete/filter 성능 + 중복 방지(사실상 PK와 동일 값)
 create unique index if not exists uq_cms_master_absorb_labor_item_v1_absorb_item_id
   on public.cms_master_absorb_labor_item_v1(absorb_item_id);
-
 create index if not exists idx_cms_master_absorb_labor_item_v1_vendor
   on public.cms_master_absorb_labor_item_v1(vendor_party_id);
-
 -- =============================================================
 -- D) vendor-aware 흡수공임 JSON 함수(v2)
 -- =============================================================
@@ -213,7 +197,6 @@ as $$
       )
   ) x;
 $$;
-
 do $$
 begin
   if exists (select 1 from pg_roles where rolname = 'authenticated') then
@@ -223,7 +206,6 @@ begin
     execute 'grant execute on function public.cms_fn_master_absorb_labor_items_json_v2(uuid, uuid, int) to service_role';
   end if;
 end $$;
-
 -- =============================================================
 -- E) receipt match confirm v5: vendor-aware absorb items 반영
 --    - 변경점:
@@ -1121,7 +1103,6 @@ begin
     'missing_base_rule_warn', v_missing_base_rule_warn
   );
 end $$;
-
 -- NOTE: v5 RPC는 파라미터가 많고(기본값 존재), 배포 브랜치마다 overload/시그니처가 달라질 수 있음.
 -- 따라서 특정 시그니처로 GRANT 하면 마이그레이션이 깨질 수 있어, 이름 기준으로 동적 GRANT 처리.
 do $$
@@ -1146,4 +1127,3 @@ begin
     end if;
   end loop;
 end $$;
-

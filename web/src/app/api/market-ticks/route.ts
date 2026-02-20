@@ -150,6 +150,7 @@ export async function GET() {
 
         return NextResponse.json({
             data: {
+                fxAsOf: new Date().toISOString(),
                 // legacy (catalog/page.tsx 등에서 사용)
                 gold: goldPrice,
                 silver: ks,

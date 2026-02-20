@@ -1,5 +1,4 @@
 set search_path = public, pg_temp;
-
 -- 0015: order page RPC extensions
 
 create or replace function public.cms_fn_upsert_order_line_v2(
@@ -92,7 +91,6 @@ begin
 
   return v_id;
 end $$;
-
 create or replace function public.cms_fn_set_order_line_status_v1(
   p_order_line_id uuid,
   p_to_status cms_e_order_status,
@@ -168,7 +166,6 @@ begin
     'to_status', p_to_status
   );
 end $$;
-
 create or replace function public.cms_fn_create_shipments_from_order_lines_v1(
   p_order_line_ids uuid[],
   p_ship_date date default null,
@@ -246,7 +243,6 @@ begin
     'shipments', v_created
   );
 end $$;
-
 create or replace function public.cms_fn_enum_values_v1(
   p_enum text
 )
@@ -266,7 +262,6 @@ begin
     raise exception 'unsupported enum: %', p_enum;
   end if;
 end $$;
-
 do $$
 declare r record;
 begin

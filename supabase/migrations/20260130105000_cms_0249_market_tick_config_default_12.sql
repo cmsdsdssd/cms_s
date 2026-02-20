@@ -1,5 +1,4 @@
 set search_path = public, pg_temp;
-
 -- ------------------------------------------------------------
 -- cms_0249: set default correction factors to 1.2
 --
@@ -16,7 +15,6 @@ select 'DEFAULT', 1.200000, now()
 where not exists (
   select 1 from public.cms_market_tick_config where config_key = 'DEFAULT'
 );
-
 -- If DEFAULT row exists but still has legacy 1.0, bump to 1.2 (only when it matches legacy default)
 update public.cms_market_tick_config
 set cs_correction_factor = 1.200000,

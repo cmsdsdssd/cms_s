@@ -1,5 +1,4 @@
 set search_path = public, pg_temp;
-
 -- ---------------------------------------------------------------------
 -- Enforce master.category_code from the LAST '-<LETTER>' suffix in model_name
 -- Policy (strict):
@@ -47,7 +46,6 @@ begin
 
   return 'ETC'::public.cms_e_category_code;
 end $$;
-
 create or replace function public.cms_fn_master_category_sync_from_model_name_trg_v1()
 returns trigger
 language plpgsql
@@ -58,15 +56,12 @@ begin
   new.category_code := public.cms_fn_master_category_from_model_name_v1(new.model_name);
   return new;
 end $$;
-
 drop trigger if exists trg_cms_master_category_sync_from_model_name on public.cms_master_item;
-
 create trigger trg_cms_master_category_sync_from_model_name
 before insert or update of model_name
 on public.cms_master_item
 for each row
 execute function public.cms_fn_master_category_sync_from_model_name_trg_v1();
-
 -- Backfill existing rows so historical data follows the same rule
 update public.cms_master_item m
 set category_code = public.cms_fn_master_category_from_model_name_v1(m.model_name)

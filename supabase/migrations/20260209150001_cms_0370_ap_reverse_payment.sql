@@ -1,8 +1,6 @@
 -- 20260209150000_cms_0369_ap_reverse_payment.sql
 set search_path = public, pg_temp;
-
 begin;
-
 -- ============================================================
 -- 0) Link table: 원 결제(payment) -> reverse 결제(payment)
 --    - 원 결제는 "한 번만" reverse 가능(유니크)
@@ -17,10 +15,8 @@ create table if not exists public.cms_ap_payment_reversal_link (
 
   primary key (original_payment_id)
 );
-
 create unique index if not exists cms_ap_payment_reversal_link_reversal_unique
   on public.cms_ap_payment_reversal_link (reversal_payment_id);
-
 do $$
 begin
   -- FK는 존재할 때만 (ADD-ONLY 안전)
@@ -40,8 +36,6 @@ begin
   exception when duplicate_object then null;
   end;
 end $$;
-
-
 -- ============================================================
 -- 1) Guard trigger: "reversed 된 original payment"에는 새 alloc 금지
 --    - 원 결제의 alloc이 역으로 되돌려진 이후, 실수로 추가 manual alloc 붙는 사고 차단
@@ -65,7 +59,6 @@ begin
 
   return new;
 end $$;
-
 do $$
 begin
   if to_regclass('public.cms_ap_alloc') is not null then
@@ -78,8 +71,6 @@ begin
     end;
   end if;
 end $$;
-
-
 -- ============================================================
 -- 2) RPC: Reverse payment (취소/정정)
 --    - 기존 payment / alloc / legs 를 수정/삭제하지 않음
@@ -224,12 +215,9 @@ begin
     'reversed_alloc_cnt', v_rev_alloc_cnt
   );
 end $$;
-
 alter function public.cms_fn_ap2_reverse_payment_v1(uuid,timestamptz,text,text)
   security definer
   set search_path = public, pg_temp;
-
 grant execute on function public.cms_fn_ap2_reverse_payment_v1(uuid,timestamptz,text,text)
   to authenticated, service_role;
-
 commit;

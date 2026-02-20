@@ -1,5 +1,4 @@
 set search_path = public, pg_temp;
-
 create or replace function public.cms_fn_confirm_store_pickup_v1(
   p_shipment_id uuid,
   p_actor_person_id uuid default null::uuid,
@@ -39,7 +38,6 @@ begin
 
   return v_result;
 end $$;
-
 alter function public.cms_fn_confirm_store_pickup_v1(uuid, uuid, text, boolean, uuid, text, uuid, jsonb, boolean) security definer;
 grant execute on function public.cms_fn_confirm_store_pickup_v1(uuid, uuid, text, boolean, uuid, text, uuid, jsonb, boolean)
   to anon, authenticated, service_role;

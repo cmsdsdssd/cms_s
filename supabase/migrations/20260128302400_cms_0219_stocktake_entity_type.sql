@@ -1,6 +1,5 @@
 -- 20260128302400_cms_0219_stocktake_entity_type.sql
 set search_path = public, pg_temp;
-
 do $$
 begin
   -- 타입 존재 확인

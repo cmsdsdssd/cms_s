@@ -8,11 +8,9 @@ ADD COLUMN IF NOT EXISTS actual_material_cost_krw INTEGER,
 ADD COLUMN IF NOT EXISTS actual_labor_cost_krw INTEGER,
 ADD COLUMN IF NOT EXISTS cost_note TEXT,
 ADD COLUMN IF NOT EXISTS receipt_id UUID REFERENCES cms_receipt_inbox(receipt_id);
-
 -- 1.2 인덱스 생성 (성능)
 CREATE INDEX IF NOT EXISTS idx_shipment_line_receipt_id ON cms_shipment_line(receipt_id);
 CREATE INDEX IF NOT EXISTS idx_shipment_line_actual_cost ON cms_shipment_line(actual_cost_krw);
-
 -- 2단계: 원가 계산 함수 생성
 
 -- 2.1 영수증에서 원가 추출 함수
@@ -47,7 +45,6 @@ BEGIN
     WHERE receipt_id = p_receipt_id;
 END;
 $$ LANGUAGE plpgsql;
-
 -- 2.2 마스터 기준가 조회 함수
 CREATE OR REPLACE FUNCTION get_master_pricing(p_order_line_id UUID)
 RETURNS TABLE(
@@ -66,7 +63,6 @@ BEGIN
     WHERE ol.order_line_id = p_order_line_id;
 END;
 $$ LANGUAGE plpgsql;
-
 -- 2.3 최종 출고가 계산 함수 (손해 방지 로직)
 CREATE OR REPLACE FUNCTION calculate_shipment_price(
     p_actual_material INTEGER,
@@ -111,7 +107,6 @@ BEGIN
         END;
 END;
 $$ LANGUAGE plpgsql;
-
 -- 3단계: 출고 확정 프로시저 (통합)
 
 CREATE OR REPLACE FUNCTION confirm_shipment_with_cost_v1(
@@ -215,7 +210,6 @@ BEGIN
     );
 END;
 $$ LANGUAGE plpgsql;
-
 -- 4단계: 기존 데이터 마이그레이션
 
 -- 4.1 현황 확인
@@ -233,7 +227,6 @@ SELECT
 FROM cms_shipment_line
 WHERE created_at >= '2026-02-02'
 AND actual_cost_krw IS NULL;
-
 -- 4.2 기존 데이터에 마스터 가격을 원가로 설정 (임시)
 UPDATE cms_shipment_line sl
 SET 

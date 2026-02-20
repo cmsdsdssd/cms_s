@@ -1,5 +1,4 @@
 set search_path = public, pg_temp;
-
 -- 0044: confirm_shipment_v2가 AR ledger(SHIPMENT)를 항상 찍도록 보강
 create or replace function public.cms_fn_confirm_shipment_v2(
   p_shipment_id uuid,
@@ -80,9 +79,7 @@ begin
 
   return v_result;
 end $$;
-
 alter function public.cms_fn_confirm_shipment_v2(uuid,uuid,text,boolean,uuid)
   security definer
   set search_path = public, pg_temp;
-
 grant execute on function public.cms_fn_confirm_shipment_v2(uuid,uuid,text,boolean,uuid) to authenticated;

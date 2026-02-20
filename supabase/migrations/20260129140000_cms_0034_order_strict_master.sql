@@ -1,14 +1,11 @@
 set search_path = public, pg_temp;
-
 -- 0034: strict master validation for orders
 
 -- 1) add updated_by to cms_order_line if not exists
 alter table if exists public.cms_order_line
   add column if not exists updated_by uuid references cms_person(person_id);
-
 -- 2) create v3 upsert function with strict master_id validation
 drop function if exists public.cms_fn_upsert_order_line_v3;
-
 create or replace function public.cms_fn_upsert_order_line_v3(
   p_customer_party_id uuid,
   p_master_id uuid,            -- STRICT: required
@@ -161,6 +158,5 @@ begin
 
   return v_id;
 end $$;
-
 -- Grant execution
 grant execute on function public.cms_fn_upsert_order_line_v3 to authenticated;

@@ -110,10 +110,8 @@ begin
     'total_sell_krw', v_total_sell
   );
 end $$;
-
 alter function public.cms_fn_sync_repair_line_sell_totals_v1(uuid,text)
   security definer
   set search_path = public, pg_temp;
-
 grant execute on function public.cms_fn_sync_repair_line_sell_totals_v1(uuid,text)
   to authenticated, service_role;

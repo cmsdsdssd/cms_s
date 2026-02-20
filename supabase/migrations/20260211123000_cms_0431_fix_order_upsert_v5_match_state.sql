@@ -1,5 +1,4 @@
 set search_path = public, pg_temp;
-
 -- ============================================================
 -- Hotfix: cms_fn_upsert_order_line_v5 was casting to a non-existent enum
 --   'MATCHED'::public.cms_e_order_match_state
@@ -232,7 +231,6 @@ begin
 
   return v_id;
 end $$;
-
 -- keep grants (explicit signature to avoid overload ambiguity)
 do $$
 begin

@@ -1,5 +1,4 @@
 set search_path = public, pg_temp;
-
 -- 0034d: fix NOT NULL violation on cms_order_line.suffix
 -- - suffix/color를 (1) 요청값(p_suffix/p_color) -> (2) master fallback -> (3) 최종 기본값 으로 보장
 -- - 기존 호출 호환을 위해 p_suffix/p_color는 "맨 끝"에 default null로 추가
@@ -95,7 +94,7 @@ begin
     from public.cms_order_line
     where order_line_id = p_order_line_id;
 
-    if found and v_old_status::text not in ('ORDER_PENDING', 'ORDER_ACCEPTED') then
+    if found and v_old_status not in ('ORDER_PENDING', 'ORDER_ACCEPTED') then
       -- keep going (existing behavior), but you can tighten later if needed
       null;
     end if;

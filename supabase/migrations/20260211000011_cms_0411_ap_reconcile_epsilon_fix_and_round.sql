@@ -8,9 +8,7 @@
 --      (0.000001g = 0.001mg is too tight for累積 rounding errors)
 
 set search_path = public, pg_temp;
-
 begin;
-
 -- =============================================================
 -- Preflight: make sure we have the v2 reconcile function
 -- =============================================================
@@ -20,7 +18,6 @@ begin
     raise exception 'cms_fn_ap_run_reconcile_for_receipt_v2 not found (run cms_0350 first)';
   end if;
 end $$;
-
 -- =============================================================
 -- Reconcile v2 with ROUND(diff_qty, 6) and adjusted epsilon
 -- =============================================================
@@ -583,12 +580,9 @@ begin
     )
   );
 end $$;
-
 alter function public.cms_fn_ap_run_reconcile_for_receipt_v2(uuid)
   security definer
   set search_path = public, pg_temp;
-
 grant execute on function public.cms_fn_ap_run_reconcile_for_receipt_v2(uuid)
   to authenticated, service_role;
-
 commit;

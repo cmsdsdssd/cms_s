@@ -1,5 +1,4 @@
 set search_path = public, pg_temp;
-
 -- cms_0268: fix 42P10 (DISTINCT + ORDER BY expression) in apply receipt pricing function
 
 create or replace function public.cms_fn_apply_receipt_pricing_snapshot_v1(
@@ -267,6 +266,5 @@ begin
     'allocations', v_allocations
   ));
 end $$;
-
 grant execute on function public.cms_fn_apply_receipt_pricing_snapshot_v1(uuid,uuid,text,uuid,boolean)
   to anon, authenticated, service_role;

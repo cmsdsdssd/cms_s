@@ -89,10 +89,8 @@ begin
     'ap2', v_ap2
   );
 end $$;
-
 alter function public.cms_fn_ensure_ap_from_receipt_v1(uuid,text)
   security definer
   set search_path = public, pg_temp;
-
 grant execute on function public.cms_fn_ensure_ap_from_receipt_v1(uuid,text)
   to authenticated, service_role;

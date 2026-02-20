@@ -1,9 +1,7 @@
 set search_path = public, pg_temp;
-
 -- 1) master에 임시원가(마스터 기준) 컬럼
 alter table public.cms_master_item
   add column if not exists provisional_unit_cost_krw numeric;
-
 -- 2) shipment_line에 "구매원가" 트래킹 컬럼(= 마진 분석 핵심)
 alter table public.cms_shipment_line
   add column if not exists purchase_unit_cost_krw numeric,
@@ -14,10 +12,8 @@ alter table public.cms_shipment_line
   add column if not exists purchase_cost_trace jsonb not null default '{}'::jsonb,
   add column if not exists purchase_cost_finalized_at timestamptz,
   add column if not exists purchase_cost_finalized_by uuid references public.cms_person(person_id);
-
 create index if not exists idx_cms_shipment_line_purchase_cost_status
   on public.cms_shipment_line(purchase_cost_status);
-
 -- 3) inventory_move_line에 cost 상태/출처/영수증 연결(재고원가 추적)
 alter table public.cms_inventory_move_line
   add column if not exists cost_status public.cms_e_cost_status not null default 'PROVISIONAL',
@@ -26,10 +22,8 @@ alter table public.cms_inventory_move_line
   add column if not exists cost_snapshot jsonb not null default '{}'::jsonb,
   add column if not exists cost_finalized_at timestamptz,
   add column if not exists cost_finalized_by uuid references public.cms_person(person_id);
-
 create index if not exists idx_cms_inventory_move_line_cost_status
   on public.cms_inventory_move_line(cost_status);
-
 -- 4) inventory_move_line 자동 보정 트리거
 create or replace function public.cms_fn_inventory_move_line_cost_autofill_v1()
 returns trigger
@@ -57,9 +51,7 @@ begin
 
   return new;
 end $$;
-
 drop trigger if exists trg_cms_inventory_move_line_cost_autofill on public.cms_inventory_move_line;
-
 create trigger trg_cms_inventory_move_line_cost_autofill
 before insert or update on public.cms_inventory_move_line
 for each row execute function public.cms_fn_inventory_move_line_cost_autofill_v1();

@@ -1,5 +1,4 @@
 set search_path = public, pg_temp;
-
 -- Fix cms_fn_upsert_order_line_v3:
 -- 1) Remove references to non-existent cms_order_line.created_by (42703)
 -- 2) Add optional p_suffix/p_color parameters for UI payload compatibility
@@ -10,7 +9,6 @@ set search_path = public, pg_temp;
 -- 0) Ensure updated_by column exists (used for auditing)
 alter table if exists public.cms_order_line
   add column if not exists updated_by uuid references public.cms_person(person_id);
-
 -- 1) Drop all overloads to prevent schema cache mismatch
 do $$
 declare
@@ -26,7 +24,6 @@ begin
     execute format('drop function if exists public.cms_fn_upsert_order_line_v3(%s);', r.args);
   end loop;
 end $$;
-
 -- 2) Recreate the function
 create or replace function public.cms_fn_upsert_order_line_v3(
   p_customer_party_id uuid,
@@ -186,5 +183,4 @@ begin
 
   return v_id;
 end $$;
-
 grant execute on function public.cms_fn_upsert_order_line_v3 to anon, authenticated, service_role;

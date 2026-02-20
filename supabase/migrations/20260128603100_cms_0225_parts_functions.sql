@@ -1,5 +1,4 @@
 set search_path = public, pg_temp;
-
 -- helper: normalize unit
 create or replace function public.cms_fn_part_normalize_unit_v1(p_unit text)
 returns text
@@ -15,7 +14,6 @@ begin
   end if;
   return v;
 end $$;
-
 -- helper: find part by name (exact) using master+alias
 create or replace function public.cms_fn_find_part_id_by_name_v1(p_name text)
 returns uuid
@@ -32,7 +30,6 @@ as $$
   join public.cms_part_alias a on a.alias_name = n.name
   limit 1;
 $$;
-
 -- 1) upsert part master (staff 가능)
 -- ⚠️ FIX: non-default params must come first (p_part_name first)
 create or replace function public.cms_fn_upsert_part_item_v1(
@@ -154,7 +151,6 @@ begin
 
   return v_id;
 end $$;
-
 -- 2) add alias
 create or replace function public.cms_fn_add_part_alias_v1(
   p_part_id uuid,
@@ -186,7 +182,6 @@ begin
 
   return v_id;
 end $$;
-
 -- 3) record receipt (IN) : move_type='RECEIPT'
 create or replace function public.cms_fn_record_part_receipt_v1(
   p_lines jsonb,
@@ -331,7 +326,6 @@ begin
 
   return v_move_id;
 end $$;
-
 -- 4) record usage (OUT) : move_type='ISSUE'
 create or replace function public.cms_fn_record_part_usage_v1(
   p_lines jsonb,
@@ -480,7 +474,6 @@ begin
 
   return v_move_id;
 end $$;
-
 -- grants (authenticated)
 grant execute on function public.cms_fn_find_part_id_by_name_v1(text) to authenticated;
 grant execute on function public.cms_fn_part_normalize_unit_v1(text) to authenticated;

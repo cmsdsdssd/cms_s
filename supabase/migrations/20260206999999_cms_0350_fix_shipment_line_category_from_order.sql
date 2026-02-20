@@ -1,5 +1,4 @@
 set search_path = public, pg_temp;
-
 create or replace function public.cms_fn_add_shipment_line_from_order_v1(
   p_shipment_id uuid,
   p_order_line_id uuid,

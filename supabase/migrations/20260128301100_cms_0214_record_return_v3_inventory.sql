@@ -1,5 +1,4 @@
 set search_path = public, pg_temp;
-
 -- v3: record_return_v2 + (optional) emit inventory receipt
 create or replace function public.cms_fn_record_return_v3(
   p_shipment_line_id uuid,
@@ -50,9 +49,7 @@ begin
 
   return v_result;
 end $$;
-
 alter function public.cms_fn_record_return_v3(uuid,int,timestamptz,numeric,text,boolean,uuid,text,uuid)
   security definer
   set search_path = public, pg_temp;
-
 grant execute on function public.cms_fn_record_return_v3(uuid,int,timestamptz,numeric,text,boolean,uuid,text,uuid) to authenticated;

@@ -1,5 +1,4 @@
 set search_path = public, pg_temp;
-
 -- 0005: reference data (must exist in every env)
 
 -- 湲곕낯 ?꾧툑 variant (P/W/G)

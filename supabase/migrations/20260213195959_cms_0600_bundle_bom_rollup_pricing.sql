@@ -27,7 +27,6 @@ begin
     end if;
   end if;
 end $$;
-
 -- ============================================================
 -- 1) Flatten active BOM for a product (recursively expands nested BUNDLE masters)
 -- ============================================================
@@ -164,7 +163,6 @@ begin
      );
 end;
 $$;
-
 -- ============================================================
 -- 2) Master RULE pricing preview (uses master defaults, latest ticks)
 -- ============================================================
@@ -305,7 +303,6 @@ begin
     (v_material_cost + v_labor_cost) as total_cost_krw;
 end;
 $$;
-
 -- ============================================================
 -- 3) Bundle rollup pricing (BUNDLE masters): sum leaf component RULE prices (uses latest ticks)
 --    - Uses flattened BOM leaves (masters + parts)
@@ -637,7 +634,6 @@ begin
     v_breakdown;
 end;
 $$;
-
 -- ============================================================
 -- 4) Safe effective price API (MASTER_RULE vs BUNDLE_ROLLUP)
 -- ============================================================
@@ -714,7 +710,6 @@ begin
   end;
 end;
 $$;
-
 -- ============================================================
 -- 5) Patch shipment confirm: support BUNDLE pricing via rollup
 -- ============================================================
@@ -1311,7 +1306,6 @@ else
     'total_cost_krw', v_total_cost
   );
 end $function$;
-
 -- ============================================================
 -- 6) Patch inventory issue: BUNDLE emits flattened BOM leaf components only
 -- ============================================================
@@ -1597,7 +1591,6 @@ perform public.cms_fn_upsert_inventory_move_line_v1(
 
   return v_move_id;
 end $$;
-
 -- ============================================================
 -- 7) Safe grants
 -- ============================================================
@@ -1617,5 +1610,4 @@ begin
     execute 'grant execute on function public.cms_fn_get_master_effective_price_v1(uuid,text,numeric) to service_role';
   end if;
 end $$;
-
 commit;

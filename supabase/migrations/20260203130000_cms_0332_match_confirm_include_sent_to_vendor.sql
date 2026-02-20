@@ -1,5 +1,4 @@
 set search_path = public, pg_temp;
-
 create or replace function public.cms_fn_receipt_line_match_confirm_v1(
   p_receipt_id uuid,
   p_receipt_line_uuid uuid,

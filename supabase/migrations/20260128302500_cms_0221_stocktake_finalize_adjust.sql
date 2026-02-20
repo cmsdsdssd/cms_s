@@ -1,6 +1,5 @@
 -- 20260128302500_cms_0219_stocktake_finalize_adjust.sql
 set search_path = public, pg_temp;
-
 create or replace function public.cms_fn_finalize_inventory_count_session_v1(
   p_session_id uuid,
   p_generate_adjust boolean default true,
@@ -301,6 +300,5 @@ begin
     'nonzero_delta_lines', v_nonzero
   );
 end $$;
-
 -- 권한(이미 grant 되어있어도 안전)
 grant execute on function public.cms_fn_finalize_inventory_count_session_v1(uuid,boolean,uuid,text,uuid) to authenticated;

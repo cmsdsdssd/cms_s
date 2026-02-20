@@ -1,5 +1,4 @@
 set search_path = public, pg_temp;
-
 -- 0051: fix cms_fn_upsert_order_line_v3 (remove non-existent created_by column)
 -- - 0047 버전이 cms_order_line.created_by를 insert 하여 42703 발생
 -- - 테이블 스키마(0002)에는 created_by 없음 → updated_by만 사용
@@ -8,7 +7,6 @@ set search_path = public, pg_temp;
 -- 0) 안전장치: updated_by 컬럼이 없다면 추가
 alter table if exists public.cms_order_line
   add column if not exists updated_by uuid references public.cms_person(person_id);
-
 -- 1) v3 오버로드 전부 제거
 do $$
 declare
@@ -24,7 +22,6 @@ begin
     execute format('drop function if exists public.cms_fn_upsert_order_line_v3(%s);', r.args);
   end loop;
 end $$;
-
 -- 2) 정식 v3 재생성 (created_by 제거 + suffix/color NOT NULL 보장)
 create or replace function public.cms_fn_upsert_order_line_v3(
   p_customer_party_id uuid,
@@ -180,5 +177,4 @@ begin
 
   return v_id;
 end $$;
-
 grant execute on function public.cms_fn_upsert_order_line_v3 to anon, authenticated, service_role;

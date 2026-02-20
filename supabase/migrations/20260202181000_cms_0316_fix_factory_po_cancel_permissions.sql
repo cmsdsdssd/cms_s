@@ -7,7 +7,6 @@
 -- Drop existing function (all signatures)
 DROP FUNCTION IF EXISTS cms_fn_factory_po_cancel(uuid, text, uuid);
 DROP FUNCTION IF EXISTS cms_fn_factory_po_cancel(uuid);
-
 -- Recreate with SECURITY DEFINER
 CREATE OR REPLACE FUNCTION cms_fn_factory_po_cancel(
     p_po_id uuid,
@@ -109,7 +108,6 @@ BEGIN
     );
 END;
 $$;
-
 -- Grants
 GRANT EXECUTE ON FUNCTION cms_fn_factory_po_cancel(uuid, text, uuid) TO authenticated;
 GRANT EXECUTE ON FUNCTION cms_fn_factory_po_cancel(uuid, text, uuid) TO service_role;

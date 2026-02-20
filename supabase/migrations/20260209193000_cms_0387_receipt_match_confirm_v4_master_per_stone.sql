@@ -1,5 +1,4 @@
 set search_path = public, pg_temp;
-
 create or replace function public.cms_fn_receipt_line_match_confirm_v4(
   p_receipt_id uuid,
   p_receipt_line_uuid uuid,
@@ -583,7 +582,6 @@ begin
     'missing_factory_cost_warn', v_missing_factory_cost_warn
   );
 end $$;
-
 do $$
 begin
   if exists (select 1 from pg_roles where rolname = 'authenticated') then

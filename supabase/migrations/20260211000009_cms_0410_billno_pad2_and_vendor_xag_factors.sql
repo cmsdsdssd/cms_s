@@ -6,9 +6,7 @@
 -- 4) 925/999(은) 보정계수 공장별 설정(meta) 적용
 
 set search_path = public, pg_temp;
-
 begin;
-
 -- =============================================================
 -- 1) bill_no suffix(마지막 _숫자) 파싱 + 2자리 패딩 정렬키
 -- =============================================================
@@ -25,10 +23,8 @@ as $$
       else null
     end;
 $$;
-
 grant execute on function public.cms_fn_bill_no_suffix_int_v1(text)
   to authenticated, anon, service_role;
-
 -- 프론트가 저장하는 규칙과 동일: 1자리면 2자리로(…_1 -> …_01)
 create or replace function public.cms_fn_bill_no_sort_key_pad2_v1(p_bill_no text)
 returns text
@@ -47,10 +43,8 @@ as $$
       else p_bill_no
     end;
 $$;
-
 grant execute on function public.cms_fn_bill_no_sort_key_pad2_v1(text)
   to authenticated, anon, service_role;
-
 -- 같은 날짜 다건 영수증의 "순서"를 DB에서 확정하기 위한 occurred_at 생성
 create or replace function public.cms_fn_receipt_occurred_at_kst_billno_v1(
   p_issued_at date,
@@ -64,10 +58,8 @@ as $$
     ((p_issued_at)::timestamp at time zone 'Asia/Seoul')
     + (coalesce(public.cms_fn_bill_no_suffix_int_v1(p_bill_no), 0) * interval '1 millisecond');
 $$;
-
 grant execute on function public.cms_fn_receipt_occurred_at_kst_billno_v1(date,text)
   to authenticated, service_role;
-
 -- =============================================================
 -- 2) 최신(confirmed) 공장 영수증 선택 view: bill_no 비교 안정화
 -- =============================================================
@@ -91,10 +83,8 @@ order by
   public.cms_fn_bill_no_sort_key_pad2_v1(coalesce(r.bill_no,'')) desc,
   s.receipt_id::text desc,
   s.snapshot_version desc;
-
 grant select on public.cms_v_ap_factory_latest_receipt_by_vendor_v1 to authenticated;
 grant select on public.cms_v_ap_factory_latest_receipt_by_vendor_v1 to anon;
-
 -- =============================================================
 -- 3) confirm/backdated guard: bill_no 비교 안정화(…_01 기준)
 -- =============================================================
@@ -277,14 +267,11 @@ begin
     'reconciled_receipt_count', v_affected_count
   );
 end $$;
-
 alter function public.cms_fn_factory_receipt_set_apply_status_v1(uuid,int,text,boolean,text)
   security definer
   set search_path = public, pg_temp;
-
 grant execute on function public.cms_fn_factory_receipt_set_apply_status_v1(uuid,int,text,boolean,text)
   to authenticated, service_role;
-
 -- =============================================================
 -- 4) SALE invoice occurred_at: 같은날 다건 순서 고정(KST 자정 + seq(ms))
 -- =============================================================
@@ -413,14 +400,11 @@ begin
     'calc_version', v_calc_ver
   );
 end $$;
-
 alter function public.cms_fn_ap2_upsert_sale_invoice_from_factory_snapshot_v1(uuid,text)
   security definer
   set search_path = public, pg_temp;
-
 grant execute on function public.cms_fn_ap2_upsert_sale_invoice_from_factory_snapshot_v1(uuid,text)
   to authenticated, service_role;
-
 -- =============================================================
 -- 5) 925/999 공장별 보정계수: cms_vendor_fax_config.meta에서 읽어 적용
 --    meta 권장 키:
@@ -592,12 +576,9 @@ begin
     'computed_at', now()
   );
 end $$;
-
 alter function public.cms_fn_receipt_compute_weight_sums_v1(uuid)
   security definer
   set search_path = public, pg_temp;
-
 grant execute on function public.cms_fn_receipt_compute_weight_sums_v1(uuid)
   to authenticated, service_role;
-
 commit;

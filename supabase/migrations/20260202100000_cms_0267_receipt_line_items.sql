@@ -1,7 +1,6 @@
 -- Add line_items column
 alter table public.cms_receipt_pricing_snapshot
   add column if not exists line_items jsonb;
-
 -- Create v2 function
 create or replace function public.cms_fn_upsert_receipt_pricing_snapshot_v2(
   p_receipt_id uuid,
@@ -126,13 +125,10 @@ begin
     'fx_rate_krw_per_unit', v_fx_rate
   ));
 end $$;
-
 grant execute on function public.cms_fn_upsert_receipt_pricing_snapshot_v2(uuid,text,numeric,numeric,numeric,numeric,jsonb,uuid,text,uuid)
   to anon, authenticated, service_role;
-
 -- Recreate view
 drop view if exists public.cms_v_receipt_inbox_open_v1 cascade;
-
 create view public.cms_v_receipt_inbox_open_v1 as
 with linked_sh as (
   select distinct
@@ -226,5 +222,4 @@ left join public.cms_party vp on vp.party_id = r.vendor_party_id
 left join public.cms_receipt_pricing_snapshot s on s.receipt_id = r.receipt_id
 left join ship_agg a on a.receipt_id = r.receipt_id
 where r.status <> 'ARCHIVED'::public.cms_e_receipt_status;
-
 grant select on public.cms_v_receipt_inbox_open_v1 to authenticated, service_role;

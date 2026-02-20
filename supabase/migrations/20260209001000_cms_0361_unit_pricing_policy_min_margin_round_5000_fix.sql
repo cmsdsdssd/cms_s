@@ -11,14 +11,12 @@
 
 begin;
 set search_path = public, pg_temp;
-
 -- ---------------------------------------------------------------------
 -- (A) Global policy config (DEFAULT row in cms_market_tick_config)
 -- ---------------------------------------------------------------------
 alter table public.cms_market_tick_config
   add column if not exists unit_pricing_min_margin_rate numeric(12,6),
   add column if not exists unit_pricing_rounding_unit_krw integer;
-
 do $$
 begin
   if not exists (select 1 from pg_constraint where conname = 'cms_market_tick_config_unit_pricing_min_margin_rate_range') then
@@ -33,7 +31,6 @@ begin
       check (unit_pricing_rounding_unit_krw is null or (unit_pricing_rounding_unit_krw > 0 and unit_pricing_rounding_unit_krw <= 1000000));
   end if;
 end $$;
-
 -- Seed defaults if missing (idempotent)
 insert into public.cms_market_tick_config(
   config_key,
@@ -53,18 +50,15 @@ select
   5000,
   now()
 where not exists (select 1 from public.cms_market_tick_config where config_key = 'DEFAULT');
-
 update public.cms_market_tick_config
 set
   unit_pricing_min_margin_rate = coalesce(unit_pricing_min_margin_rate, 0.200000),
   unit_pricing_rounding_unit_krw = coalesce(unit_pricing_rounding_unit_krw, 5000)
 where config_key = 'DEFAULT';
-
 comment on column public.cms_market_tick_config.unit_pricing_min_margin_rate is
   'Minimum margin rate used as floor for UNIT/MANUAL pricing: floor = cost_basis*(1+rate).';
 comment on column public.cms_market_tick_config.unit_pricing_rounding_unit_krw is
   'Rounding unit (KRW) for UNIT/MANUAL floor. Floor is rounded UP to nearest unit (e.g., 5000).';
-
 -- ---------------------------------------------------------------------
 -- (B) Helper: round UP to KRW unit
 -- ---------------------------------------------------------------------
@@ -82,10 +76,8 @@ as $$
       else ceil(p_amount / (p_unit_krw::numeric)) * (p_unit_krw::numeric)
     end;
 $$;
-
 grant execute on function public.cms_fn_round_up_krw_v1(numeric, integer)
   to authenticated, service_role;
-
 -- ---------------------------------------------------------------------
 -- (C) RPC: set global policy on DEFAULT row
 -- ---------------------------------------------------------------------
@@ -151,10 +143,8 @@ begin
     'unit_pricing_rounding_unit_krw', v_unit
   );
 end $$;
-
 grant execute on function public.cms_fn_set_unit_pricing_policy_v1(numeric, integer, uuid, uuid, text)
   to authenticated, service_role;
-
 -- ---------------------------------------------------------------------
 -- (D) Patch: silver factor fix must NOT clobber UNIT/MANUAL totals,
 --            and must NOT double-count repair_fee.
@@ -301,7 +291,6 @@ begin
     'total_cost_krw', v_total_cost
   );
 end $$;
-
 -- ---------------------------------------------------------------------
 -- (E) Apply UNIT/MANUAL pricing floor AFTER silver fix (so silver is correct),
 --     and BEFORE AR invoice upsert (so AR reflects final total).
@@ -487,10 +476,8 @@ begin
     'total_cost_krw', v_total_cost
   );
 end $$;
-
 grant execute on function public.cms_fn_apply_unit_pricing_floor_v1(uuid, uuid, text)
   to authenticated, service_role;
-
 -- ---------------------------------------------------------------------
 -- (F) Hook into confirm_shipment_v3_cost_v1 (single entrypoint)
 -- ---------------------------------------------------------------------
@@ -564,12 +551,9 @@ begin
   return v_confirm
     || jsonb_build_object('correlation_id', v_corr);
 end $$;
-
 alter function public.cms_fn_confirm_shipment_v3_cost_v1(uuid,uuid,text,boolean,uuid,text,uuid,jsonb,boolean)
   security definer
   set search_path = public, pg_temp;
-
 grant execute on function public.cms_fn_confirm_shipment_v3_cost_v1(uuid,uuid,text,boolean,uuid,text,uuid,jsonb,boolean)
   to authenticated, service_role;
-
 commit;

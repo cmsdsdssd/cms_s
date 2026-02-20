@@ -1,8 +1,6 @@
 set search_path = public, pg_temp;
-
 -- Allow anon to read shipment headers (used by shipments_print/workbench)
 alter table public.cms_shipment_header enable row level security;
-
 do $$
 begin
   if not exists (
@@ -15,5 +13,4 @@ begin
       for select to anon using (true);
   end if;
 end $$;
-
 grant select on public.cms_shipment_header to anon;

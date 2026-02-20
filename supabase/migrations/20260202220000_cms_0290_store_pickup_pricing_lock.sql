@@ -1,15 +1,12 @@
 set search_path = public, pg_temp;
-
 -- 1) shipment header: store pickup + pricing lock
 alter table public.cms_shipment_header
   add column if not exists is_store_pickup boolean not null default false,
   add column if not exists pricing_locked_at timestamptz null,
   add column if not exists pricing_source text null;
-
 comment on column public.cms_shipment_header.is_store_pickup is 'Store pickup (pricing locked at pickup confirm)';
 comment on column public.cms_shipment_header.pricing_locked_at is 'Pricing lock timestamp (tick snapshot)';
 comment on column public.cms_shipment_header.pricing_source is 'CONFIRM_SHIPMENT | STORE_PICKUP_CONFIRM';
-
 -- 2) shipment valuation snapshot (header-level)
 create table if not exists public.cms_shipment_valuation (
   shipment_id uuid primary key references public.cms_shipment_header(shipment_id) on delete cascade,
@@ -29,12 +26,9 @@ create table if not exists public.cms_shipment_valuation (
   breakdown jsonb not null default '{}'::jsonb,
   created_at timestamptz not null default now()
 );
-
 create index if not exists idx_cms_shipment_valuation_locked_at
   on public.cms_shipment_valuation(pricing_locked_at desc);
-
 grant select on public.cms_shipment_valuation to anon, authenticated;
-
 -- 3) payment tender line: metal settlement fields
 alter table public.cms_payment_tender_line
   add column if not exists weight_g numeric null,
@@ -43,9 +37,7 @@ alter table public.cms_payment_tender_line
   add column if not exists tick_id uuid null references public.cms_market_tick(tick_id),
   add column if not exists tick_krw_per_g numeric null,
   add column if not exists value_krw numeric null;
-
 comment on column public.cms_payment_tender_line.value_krw is 'Computed metal value in KRW (snapshot-based)';
-
 -- 4) confirm shipment (override): pricing lock + valuation snapshot
 create or replace function public.cms_fn_confirm_shipment(
   p_shipment_id uuid,
@@ -575,10 +567,8 @@ begin
     'total_cost_krw', v_total_cost
   );
 end $function$;
-
 alter function public.cms_fn_confirm_shipment(uuid, uuid, text) security definer;
 grant execute on function public.cms_fn_confirm_shipment(uuid, uuid, text) to authenticated;
-
 -- 5) store pickup confirm (pricing lock at pickup confirm)
 create or replace function public.cms_fn_confirm_store_pickup_v1(
   p_shipment_id uuid,
@@ -618,10 +608,8 @@ begin
 
   return v_result;
 end $$;
-
 alter function public.cms_fn_confirm_store_pickup_v1(uuid, uuid, text, boolean, uuid, text, uuid, jsonb, boolean) security definer;
 grant execute on function public.cms_fn_confirm_store_pickup_v1(uuid, uuid, text, boolean, uuid, text, uuid, jsonb, boolean) to authenticated;
-
 -- 6) payment record v2 (metal settlement with shipment snapshot)
 create or replace function public.cms_fn_record_payment_v2(
   p_party_id uuid,
@@ -745,6 +733,5 @@ begin
     'total_amount_krw', round(v_total,0)
   );
 end $$;
-
 alter function public.cms_fn_record_payment_v2(uuid,timestamptz,jsonb,text,uuid) security definer;
 grant execute on function public.cms_fn_record_payment_v2(uuid,timestamptz,jsonb,text,uuid) to authenticated;

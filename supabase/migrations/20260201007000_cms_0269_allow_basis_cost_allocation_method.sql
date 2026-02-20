@@ -1,5 +1,4 @@
 set search_path = public, pg_temp;
-
 -- cms_0269: allow 'BASIS_COST' in cms_receipt_usage_allocation_method_chk
 do $$
 declare

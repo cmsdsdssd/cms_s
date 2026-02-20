@@ -1,8 +1,6 @@
 -- 20260205123001_cms_0348_ap_sale_invoice_and_internal_calc.sql
 set search_path = public, pg_temp;
-
 begin;
-
 -- ============================================================
 -- 0) SALE invoice: receipt당 1개 강제 (중복 방지)
 -- ============================================================
@@ -19,8 +17,6 @@ begin
     end;
   end if;
 end $$;
-
-
 -- ============================================================
 -- 1) Internal calc snapshot 업서트 (receipt line_items 기반)
 --    - gold: 14/18/24 -> 순금환산 g
@@ -135,15 +131,11 @@ begin
     'line_cnt', v_cnt
   );
 end $$;
-
 alter function public.cms_fn_ap2_upsert_internal_calc_snapshot_from_receipt_lines_v1(uuid,text)
   security definer
   set search_path = public, pg_temp;
-
 grant execute on function public.cms_fn_ap2_upsert_internal_calc_snapshot_from_receipt_lines_v1(uuid,text)
   to authenticated, service_role;
-
-
 -- ============================================================
 -- 2) Factory 4행(SALE legs) -> AP SALE invoice 업서트
 --    - snapshot의 SALE row(자산별 qty)를 그대로 AP legs로 넣음
@@ -273,15 +265,11 @@ begin
     'calc_version', v_calc_ver
   );
 end $$;
-
 alter function public.cms_fn_ap2_upsert_sale_invoice_from_factory_snapshot_v1(uuid,text)
   security definer
   set search_path = public, pg_temp;
-
 grant execute on function public.cms_fn_ap2_upsert_sale_invoice_from_factory_snapshot_v1(uuid,text)
   to authenticated, service_role;
-
-
 -- ============================================================
 -- 3) Wrapper: receipt 저장 시점에 "AP2 동기화" 한방에
 --    - (1) internal calc upsert (가능할 때)
@@ -330,15 +318,11 @@ begin
     'reconcile', v_recon
   );
 end $$;
-
 alter function public.cms_fn_ap2_sync_from_receipt_v1(uuid,text)
   security definer
   set search_path = public, pg_temp;
-
 grant execute on function public.cms_fn_ap2_sync_from_receipt_v1(uuid,text)
   to authenticated, service_role;
-
-
 -- ============================================================
 -- 4) 기존 ensure_ap_from_receipt_v1 패치(호환 유지)
 --    - 기존 cms_ap_ledger(BILL/KRW) 업서트는 그대로
@@ -434,15 +418,11 @@ begin
     'ap2', v_ap2
   );
 end $$;
-
 alter function public.cms_fn_ensure_ap_from_receipt_v1(uuid,text)
   security definer
   set search_path = public, pg_temp;
-
 grant execute on function public.cms_fn_ensure_ap_from_receipt_v1(uuid,text)
   to authenticated, service_role;
-
-
 -- ============================================================
 -- 5) (중요) 347에서 만든 공장 4행 저장 함수도 패치:
 --    - 4행 저장 직후 AP SALE 업서트 + reconcile까지 보장
@@ -588,5 +568,4 @@ begin
     execute 'grant execute on function public.cms_fn_upsert_factory_receipt_statement_v1(uuid,jsonb,text) to authenticated, service_role';
   end if;
 end $$;
-
 commit;

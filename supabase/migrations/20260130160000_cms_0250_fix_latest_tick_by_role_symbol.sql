@@ -29,8 +29,6 @@ begin
   from public.cms_fn_latest_tick(v_symbol) t;
 end;
 $$;
-
 comment on function public.cms_fn_latest_tick_by_role_v1(text)
 is 'Latest tick by role_code (GOLD/SILVER).';
-
 grant execute on function public.cms_fn_latest_tick_by_role_v1(text) to anon, authenticated;

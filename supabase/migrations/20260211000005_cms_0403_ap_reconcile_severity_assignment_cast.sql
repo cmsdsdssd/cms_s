@@ -10,7 +10,6 @@ strict
 as $$
   select value::public.cms_reconcile_issue_severity
 $$;
-
 do $$
 begin
   if to_regtype('public.cms_reconcile_issue_severity') is null then

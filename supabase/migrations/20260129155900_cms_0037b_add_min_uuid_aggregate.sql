@@ -1,5 +1,4 @@
 set search_path = public, pg_temp;
-
 -- Provide min(uuid) aggregate for environments where it's missing.
 -- This unblocks 0038 which uses: min(m.master_id) where master_id is uuid.
 
@@ -15,7 +14,6 @@ as $$
     else b
   end;
 $$;
-
 do $$
 begin
   -- If public.min(uuid) aggregate doesn't exist, create it.

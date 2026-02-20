@@ -1,5 +1,4 @@
 set search_path = public, pg_temp;
-
 -- add-only: persist selected inventory snapshot fields on order line
 alter table public.cms_order_line
   add column if not exists selected_base_weight_g numeric,

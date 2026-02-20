@@ -1,5 +1,4 @@
 set search_path = public, pg_temp;
-
 -- ---------------------------------------------------------------------
 -- 1) Location / Bin master
 -- ---------------------------------------------------------------------
@@ -13,7 +12,6 @@ create table if not exists public.cms_location (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
-
 create table if not exists public.cms_location_bin (
   bin_code text primary key,
   location_code text not null references public.cms_location(location_code),
@@ -25,19 +23,16 @@ create table if not exists public.cms_location_bin (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
-
 do $$ begin
   create trigger trg_cms_location_updated_at
   before update on public.cms_location
   for each row execute function public.cms_fn_set_updated_at();
 exception when duplicate_object then null; end $$;
-
 do $$ begin
   create trigger trg_cms_location_bin_updated_at
   before update on public.cms_location_bin
   for each row execute function public.cms_fn_set_updated_at();
 exception when duplicate_object then null; end $$;
-
 insert into public.cms_location(location_code, location_name, is_active, sort_order, note)
 values
   ('OFFICE', '사무실', true, 10, '3F + B1 top-level'),
@@ -50,7 +45,6 @@ set
   sort_order = excluded.sort_order,
   note = excluded.note,
   updated_at = now();
-
 insert into public.cms_location_bin(bin_code, location_code, bin_name, is_active, sort_order)
 values
   ('F3', 'OFFICE', 'Office 3F', true, 10),
@@ -67,25 +61,19 @@ set
   is_active = excluded.is_active,
   sort_order = excluded.sort_order,
   updated_at = now();
-
 grant select on public.cms_location to anon, authenticated;
 grant select on public.cms_location_bin to anon, authenticated;
-
 -- ---------------------------------------------------------------------
 -- 2) Schema expansion + normalization/backfill
 -- ---------------------------------------------------------------------
 alter table public.cms_inventory_move_header
   add column if not exists bin_code text;
-
 alter table public.cms_inventory_count_session
   add column if not exists bin_code text;
-
 alter table public.cms_shipment_header
   add column if not exists source_location_code text;
-
 alter table public.cms_shipment_header
   add column if not exists source_bin_code text;
-
 update public.cms_inventory_move_header
 set location_code = case
   when location_code in ('MAIN', 'WAREHOUSE') then 'OFFICE'
@@ -94,7 +82,6 @@ set location_code = case
   else location_code
 end
 where location_code in ('MAIN', 'WAREHOUSE', 'SHOP', 'FACTORY');
-
 update public.cms_inventory_count_session
 set location_code = case
   when location_code in ('MAIN', 'WAREHOUSE') then 'OFFICE'
@@ -103,14 +90,12 @@ set location_code = case
   else location_code
 end
 where location_code in ('MAIN', 'WAREHOUSE', 'SHOP', 'FACTORY');
-
 update public.cms_shipment_header
 set source_location_code = case
   when is_store_pickup is true then 'STORE'
   else 'OFFICE'
 end
 where source_location_code is null;
-
 update public.cms_shipment_header
 set source_location_code = case
   when source_location_code in ('MAIN', 'WAREHOUSE') then 'OFFICE'
@@ -119,7 +104,6 @@ set source_location_code = case
   else source_location_code
 end
 where source_location_code in ('MAIN', 'WAREHOUSE', 'SHOP', 'FACTORY');
-
 update public.cms_inventory_move_header h
 set
   location_code = coalesce(
@@ -133,33 +117,25 @@ where h.status = 'POSTED'
   and h.location_code is null
   and h.ref_doc_type = 'SHIPMENT'
   and h.ref_doc_id = sh.shipment_id;
-
 update public.cms_inventory_move_header h
 set
   location_code = 'OFFICE',
   meta = coalesce(h.meta, '{}'::jsonb) || jsonb_build_object('backfilled', true, 'backfilled_at', now())
 where h.status = 'POSTED'
   and h.location_code is null;
-
 alter table public.cms_shipment_header
   alter column source_location_code set default 'OFFICE';
-
 update public.cms_shipment_header
 set source_location_code = 'OFFICE'
 where source_location_code is null;
-
 alter table public.cms_shipment_header
   alter column source_location_code set not null;
-
 create index if not exists idx_cms_inventory_move_header_location_bin
   on public.cms_inventory_move_header(location_code, bin_code);
-
 create index if not exists idx_cms_shipment_header_source_location
   on public.cms_shipment_header(source_location_code, source_bin_code);
-
 create index if not exists idx_cms_count_session_location_bin
   on public.cms_inventory_count_session(location_code, bin_code);
-
 -- ---------------------------------------------------------------------
 -- 3) Common location/bin guard
 -- ---------------------------------------------------------------------
@@ -201,9 +177,7 @@ begin
     raise exception 'inactive/unknown bin_code (%), location_code (%)', v_bin, v_loc;
   end if;
 end $$;
-
 grant execute on function public.cms_fn_assert_location_active_v1(text, text) to authenticated, service_role;
-
 -- ---------------------------------------------------------------------
 -- 3-1) Quick move v2 with bin support
 -- ---------------------------------------------------------------------
@@ -308,11 +282,9 @@ begin
 
   return v_move_id;
 end $$;
-
 grant execute on function public.cms_fn_quick_inventory_move_v2(
   public.cms_e_inventory_move_type, text, numeric, timestamptz, uuid, text, text, text, text, text, text, jsonb, text, uuid, text, uuid, uuid
 ) to authenticated;
-
 -- ---------------------------------------------------------------------
 -- 3-2) Stocktake session create with bin support
 -- ---------------------------------------------------------------------
@@ -395,11 +367,9 @@ begin
 
   return v_id;
 end $$;
-
 grant execute on function public.cms_fn_create_inventory_count_session_v1(
   timestamptz, text, text, text, text, jsonb, text, uuid, text, uuid
 ) to authenticated;
-
 -- ---------------------------------------------------------------------
 -- 4) POST guard: posted move requires valid location/bin
 -- ---------------------------------------------------------------------
@@ -497,7 +467,6 @@ begin
   insert into public.cms_status_event(entity_type, entity_id, from_status, to_status, occurred_at, actor_person_id, reason, correlation_id)
   values ('INVENTORY_MOVE', p_move_id, v_hdr.status::text, 'POSTED', now(), p_actor_person_id, p_reason, p_correlation_id);
 end $$;
-
 -- ---------------------------------------------------------------------
 -- 5) Shipment source location setter
 -- ---------------------------------------------------------------------
@@ -552,10 +521,8 @@ begin
     'note', p_note
   );
 end $$;
-
 grant execute on function public.cms_fn_set_shipment_source_location_v1(uuid, text, text, uuid, text)
   to anon, authenticated, service_role;
-
 -- ---------------------------------------------------------------------
 -- 6) Store pickup setter/confirm should force STORE source
 -- ---------------------------------------------------------------------
@@ -602,11 +569,9 @@ begin
     'note', p_note
   );
 end $$;
-
 alter function public.cms_fn_set_shipment_store_pickup_v1(uuid, boolean, uuid, text) security definer;
 grant execute on function public.cms_fn_set_shipment_store_pickup_v1(uuid, boolean, uuid, text)
   to anon, authenticated, service_role;
-
 create or replace function public.cms_fn_confirm_store_pickup_v1(
   p_shipment_id uuid,
   p_actor_person_id uuid default null::uuid,
@@ -647,12 +612,10 @@ begin
 
   return v_result;
 end $$;
-
 alter function public.cms_fn_confirm_store_pickup_v1(uuid, uuid, text, boolean, uuid, text, uuid, jsonb, boolean)
   security definer;
 grant execute on function public.cms_fn_confirm_store_pickup_v1(uuid, uuid, text, boolean, uuid, text, uuid, jsonb, boolean)
   to anon, authenticated, service_role;
-
 -- ---------------------------------------------------------------------
 -- 7) Shipment confirm -> inventory issue must use shipment source location/bin
 -- ---------------------------------------------------------------------
@@ -892,14 +855,11 @@ begin
 
   return v_move_id;
 end $$;
-
 alter function public.cms_fn_emit_inventory_issue_from_shipment_confirmed_v2(uuid,uuid,text,uuid)
   security definer
   set search_path = public, pg_temp;
-
 grant execute on function public.cms_fn_emit_inventory_issue_from_shipment_confirmed_v2(uuid,uuid,text,uuid)
   to authenticated, service_role;
-
 -- ---------------------------------------------------------------------
 -- 8) Count session views / move views include bin_code
 -- ---------------------------------------------------------------------
@@ -939,7 +899,6 @@ group by
   h.party_id, p.name, h.location_code, h.bin_code, h.ref_doc_type, h.ref_doc_id,
   h.memo, h.source, h.meta, h.idempotency_key, h.posted_at,
   h.voided_at, h.void_reason, h.created_at, h.updated_at;
-
 drop view if exists public.cms_v_inventory_move_lines_enriched_v1;
 create view public.cms_v_inventory_move_lines_enriched_v1
 with (security_invoker = true)
@@ -981,7 +940,6 @@ from public.cms_inventory_move_header h
 join public.cms_inventory_move_line l on l.move_id = h.move_id
 left join public.cms_party p on p.party_id = h.party_id
 left join public.cms_master_item m on m.master_id = l.master_id;
-
 drop view if exists public.cms_v_inventory_count_sessions_v1;
 create view public.cms_v_inventory_count_sessions_v1
 with (security_invoker = true)
@@ -1014,7 +972,6 @@ group by
   s.session_id, s.session_no, s.session_code, s.snapshot_at, s.location_code, s.bin_code, s.status,
   s.memo, s.meta, s.generated_move_id, mh.move_no, mh.status,
   s.finalized_at, s.voided_at, s.void_reason, s.created_at, s.updated_at;
-
 drop view if exists public.cms_v_inventory_count_lines_enriched_v1 cascade;
 create view public.cms_v_inventory_count_lines_enriched_v1
 with (security_invoker = true)
@@ -1049,7 +1006,6 @@ select
 from public.cms_inventory_count_session s
 join public.cms_inventory_count_line l on l.session_id = s.session_id
 left join public.cms_master_item m on m.master_id = l.master_id;
-
 drop view if exists public.cms_v_inventory_stocktake_variance_v1;
 create view public.cms_v_inventory_stocktake_variance_v1
 with (security_invoker = true)
@@ -1080,7 +1036,6 @@ select
 from public.cms_v_inventory_count_lines_enriched_v1
 where is_void = false
 order by abs_delta_qty desc, line_no asc;
-
 -- ---------------------------------------------------------------------
 -- 9) Inventory Health views
 -- ---------------------------------------------------------------------
@@ -1159,7 +1114,6 @@ select
   coalesce((select store_onhand from loc), 0) as store_onhand_qty,
   coalesce((select offsite_onhand from loc), 0) as offsite_onhand_qty,
   coalesce((select locations_with_stock from loc), 0) as locations_with_stock_count;
-
 drop view if exists public.cms_v_inventory_health_issues_v1;
 create view public.cms_v_inventory_health_issues_v1
 with (security_invoker = true)
@@ -1191,9 +1145,7 @@ select
 from public.cms_inventory_move_header h
 where h.status='POSTED'
   and h.location_code is null;
-
 grant select on public.cms_v_inventory_health_summary_v1 to anon, authenticated;
 grant select on public.cms_v_inventory_health_issues_v1 to anon, authenticated;
-
 -- keep older exceptions view available and readable
 grant select on public.cms_v_inventory_exceptions_v1 to anon, authenticated;

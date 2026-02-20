@@ -9,13 +9,10 @@
 --  - master_id가 없으면 trim(model_name)=master.model_name fallback (기존 백필 방식과 동일)
 
 set search_path = public, pg_temp;
-
 begin;
-
 -- 안전망(이미 있으면 아무 변화 없음)
 alter table public.cms_master_item
   add column if not exists is_unit_pricing boolean not null default false;
-
 create or replace function public.cms_fn_ar_create_from_shipment_confirm_v1(
   p_shipment_id uuid
 )
@@ -224,12 +221,9 @@ begin
     'inserted', v_inserted
   );
 end $$;
-
 alter function public.cms_fn_ar_create_from_shipment_confirm_v1(uuid)
   security definer
   set search_path = public, pg_temp;
-
 grant execute on function public.cms_fn_ar_create_from_shipment_confirm_v1(uuid) to authenticated;
 grant execute on function public.cms_fn_ar_create_from_shipment_confirm_v1(uuid) to service_role;
-
 commit;

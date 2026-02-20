@@ -1,23 +1,17 @@
 set search_path = public, pg_temp;
-
 -- ---------------------------------------------------------------------
 -- 1. Add indexes for performance optimization
 -- ---------------------------------------------------------------------
 create index if not exists idx_cms_inventory_move_header_status_occurred 
 on public.cms_inventory_move_header(status, occurred_at);
-
 create index if not exists idx_cms_inventory_move_line_move_id 
 on public.cms_inventory_move_line(move_id);
-
 create index if not exists idx_cms_inventory_move_line_master_id 
 on public.cms_inventory_move_line(master_id);
-
 create index if not exists idx_cms_inventory_move_line_item_name 
 on public.cms_inventory_move_line(item_name);
-
 create index if not exists idx_cms_inventory_move_line_variant_hint 
 on public.cms_inventory_move_line(variant_hint);
-
 -- ---------------------------------------------------------------------
 -- 2. Modify Quick Move function (Support Master ID)
 -- ---------------------------------------------------------------------
@@ -111,8 +105,6 @@ begin
 
   return v_move_id;
 end $$;
-
-
 -- ---------------------------------------------------------------------
 -- 3. Permissions and Security Policies (Allow Anon Access)
 -- ---------------------------------------------------------------------
@@ -122,16 +114,13 @@ end $$;
 grant select on public.cms_inventory_move_header to anon;
 grant select on public.cms_inventory_move_line to anon;
 grant select on public.cms_master_item to anon;
-
 -- 3-2) Add RLS Policies (Allow Anon Read)
 drop policy if exists cms_select_anon on public.cms_inventory_move_header;
 create policy cms_select_anon on public.cms_inventory_move_header
   for select to anon using (true);
-
 drop policy if exists cms_select_anon on public.cms_inventory_move_line;
 create policy cms_select_anon on public.cms_inventory_move_line
   for select to anon using (true);
-  
 -- Check and add existing master_item policy (if missing)
 do $$
 begin
@@ -139,15 +128,12 @@ begin
     create policy cms_select_anon on public.cms_master_item for select to anon using (true);
   end if;
 end $$;
-
 -- 3-3) Stocktake Tables 권한 및 정책 (Anon 접근 허용 - 세션/라인 조회)
 grant select on public.cms_inventory_count_session to anon;
 grant select on public.cms_inventory_count_line to anon;
-
 drop policy if exists cms_select_anon on public.cms_inventory_count_session;
 create policy cms_select_anon on public.cms_inventory_count_session
   for select to anon using (true);
-
 drop policy if exists cms_select_anon on public.cms_inventory_count_line;
 create policy cms_select_anon on public.cms_inventory_count_line
   for select to anon using (true);

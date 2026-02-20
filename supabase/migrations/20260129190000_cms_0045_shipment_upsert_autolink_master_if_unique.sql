@@ -1,5 +1,4 @@
 set search_path = public, pg_temp;
-
 -- (안전) helper가 없을 수도 있으니 create or replace로 보장
 create or replace function public.cms_fn_norm_model_name(p text)
 returns text
@@ -8,7 +7,6 @@ immutable
 as $$
   select nullif(regexp_replace(lower(trim(coalesce(p,''))), '\s+', ' ', 'g'), '');
 $$;
-
 create or replace function public.cms_fn_shipment_upsert_from_order_line(
   p_order_line_id uuid,
   p_weight_g numeric,
@@ -141,5 +139,4 @@ begin
   );
 end
 $function$;
-
 grant execute on function public.cms_fn_shipment_upsert_from_order_line(uuid,numeric,numeric,uuid,text) to authenticated;

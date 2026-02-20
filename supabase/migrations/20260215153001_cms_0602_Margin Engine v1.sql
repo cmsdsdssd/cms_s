@@ -1,5 +1,4 @@
 set search_path = public, pg_temp;
-
 -- ============================================================
 -- CMS Margin Engine v1 (ADD-ONLY)
 --  - Base labor margin via global pricing rules (BASE_LABOR)
@@ -39,7 +38,6 @@ begin
     end;
   end if;
 end $$;
-
 -- 0-2) pricing rule apply unit (per piece / per stone / per gram)
 do $$
 begin
@@ -47,7 +45,6 @@ begin
 exception when duplicate_object then
   null;
 end $$;
-
 -- 0-3) stone role enum (center/sub1/sub2/bead)
 do $$
 begin
@@ -55,7 +52,6 @@ begin
 exception when duplicate_object then
   null;
 end $$;
-
 -- 0-4) absorb labor bucket enum
 do $$
 begin
@@ -63,8 +59,6 @@ begin
 exception when duplicate_object then
   null;
 end $$;
-
-
 -- ============================================================
 -- 1) cms_pricing_rule_v1 확장 (ADD-ONLY)
 --    - apply_unit + stone_role
@@ -73,7 +67,6 @@ end $$;
 alter table if exists public.cms_pricing_rule_v1
   add column if not exists apply_unit public.cms_e_pricing_rule_apply_unit not null default 'PER_PIECE',
   add column if not exists stone_role public.cms_e_stone_role;
-
 -- per-stone 룰은 STONE + stone_role 필수 (신규 룰 품질 방어)
 do $$
 begin
@@ -85,13 +78,10 @@ begin
     );
 exception when duplicate_object then null;
 end $$;
-
 create index if not exists idx_cms_pricing_rule_v1_lookup_v2
   on public.cms_pricing_rule_v1(
     component, scope, apply_unit, stone_role, is_active, vendor_party_id, priority, min_cost_krw
   );
-
-
 -- ============================================================
 -- 2) BUY 마진 프로파일 (role별 per-stone 마진)
 -- ============================================================
@@ -116,11 +106,9 @@ create table if not exists public.cms_buy_margin_profile_v1 (
   updated_at timestamptz not null default now(),
   updated_by uuid references public.cms_person(person_id)
 );
-
 create unique index if not exists uq_cms_buy_margin_profile_v1_code
   on public.cms_buy_margin_profile_v1(profile_code)
   where profile_code is not null;
-
 do $$
 begin
   alter table public.cms_buy_margin_profile_v1
@@ -133,7 +121,6 @@ begin
     );
 exception when duplicate_object then null;
 end $$;
-
 do $$
 begin
   create trigger trg_cms_buy_margin_profile_v1_updated_at
@@ -141,7 +128,6 @@ begin
   for each row execute function public.cms_fn_set_updated_at();
 exception when duplicate_object then null;
 end $$;
-
 -- grants (role 존재할 때만)
 do $$
 begin
@@ -152,8 +138,6 @@ begin
     execute 'grant select, insert, update, delete on public.cms_buy_margin_profile_v1 to service_role';
   end if;
 end $$;
-
-
 -- ============================================================
 -- 3) 카탈로그(UI)에서 buy/factory 설정용: master + order 확장 (ADD-ONLY)
 --    - 기본은 NULL 허용, 계산 시 NULL => FACTORY 로 해석
@@ -164,17 +148,12 @@ alter table if exists public.cms_master_item
   add column if not exists sub1_stone_source_default   public.cms_e_stone_supply_source,
   add column if not exists sub2_stone_source_default   public.cms_e_stone_supply_source,
   add column if not exists buy_margin_profile_id uuid references public.cms_buy_margin_profile_v1(profile_id);
-
 create index if not exists idx_cms_master_item_buy_margin_profile_id
   on public.cms_master_item(buy_margin_profile_id);
-
 alter table if exists public.cms_order_line
   add column if not exists buy_margin_profile_id uuid references public.cms_buy_margin_profile_v1(profile_id);
-
 create index if not exists idx_cms_order_line_buy_margin_profile_id
   on public.cms_order_line(buy_margin_profile_id);
-
-
 -- ============================================================
 -- 4) SKU별 흡수공임(예외) 테이블 (ADD-ONLY)
 -- ============================================================
@@ -197,14 +176,11 @@ create table if not exists public.cms_master_absorb_labor_item_v1 (
   updated_at timestamptz not null default now(),
   updated_by uuid references public.cms_person(person_id)
 );
-
 create index if not exists idx_cms_master_absorb_labor_item_v1_master
   on public.cms_master_absorb_labor_item_v1(master_id);
-
 create index if not exists idx_cms_master_absorb_labor_item_v1_active
   on public.cms_master_absorb_labor_item_v1(master_id, is_active)
   where is_active = true;
-
 do $$
 begin
   alter table public.cms_master_absorb_labor_item_v1
@@ -212,7 +188,6 @@ begin
     check (amount_krw >= 0);
 exception when duplicate_object then null;
 end $$;
-
 do $$
 begin
   create trigger trg_cms_master_absorb_labor_item_v1_updated_at
@@ -220,7 +195,6 @@ begin
   for each row execute function public.cms_fn_set_updated_at();
 exception when duplicate_object then null;
 end $$;
-
 do $$
 begin
   if exists (select 1 from pg_roles where rolname = 'authenticated') then
@@ -230,7 +204,6 @@ begin
     execute 'grant select, insert, update, delete on public.cms_master_absorb_labor_item_v1 to service_role';
   end if;
 end $$;
-
 -- master_id + qty 기준으로 "shipment extra_labor_items에 바로 붙일 jsonb array" 생성
 create or replace function public.cms_fn_master_absorb_labor_items_json_v1(
   p_master_id uuid,
@@ -264,7 +237,6 @@ as $$
   where a.master_id = p_master_id
     and a.is_active = true;
 $$;
-
 do $$
 begin
   if exists (select 1 from pg_roles where rolname = 'authenticated') then
@@ -274,8 +246,6 @@ begin
     execute 'grant execute on function public.cms_fn_master_absorb_labor_items_json_v1(uuid,int) to service_role';
   end if;
 end $$;
-
-
 -- ============================================================
 -- 5) 도금 마진 룰 분리 (ADD-ONLY)
 --    - cost는 기존 cms_plating_price_rule의 cost_*를 사용
@@ -302,7 +272,6 @@ create table if not exists public.cms_plating_markup_rule_v1 (
   updated_at timestamptz not null default now(),
   updated_by uuid references public.cms_person(person_id)
 );
-
 do $$
 begin
   alter table public.cms_plating_markup_rule_v1
@@ -310,15 +279,12 @@ begin
     check (margin_fixed_krw >= 0 and margin_per_g_krw >= 0);
 exception when duplicate_object then null;
 end $$;
-
 create index if not exists idx_cms_plating_markup_rule_v1_lookup
   on public.cms_plating_markup_rule_v1(
     plating_variant_id, is_active, effective_from desc, priority asc
   );
-
 create index if not exists idx_cms_plating_markup_rule_v1_cat_mat
   on public.cms_plating_markup_rule_v1(plating_variant_id, category_code, material_code);
-
 do $$
 begin
   create trigger trg_cms_plating_markup_rule_v1_updated_at
@@ -326,7 +292,6 @@ begin
   for each row execute function public.cms_fn_set_updated_at();
 exception when duplicate_object then null;
 end $$;
-
 do $$
 begin
   if exists (select 1 from pg_roles where rolname = 'authenticated') then
@@ -336,7 +301,6 @@ begin
     execute 'grant select, insert, update, delete on public.cms_plating_markup_rule_v1 to service_role';
   end if;
 end $$;
-
 create or replace function public.cms_fn_pick_plating_markup_rule_v1(
   p_plating_variant_id uuid,
   p_category_code public.cms_e_category_code,
@@ -370,7 +334,6 @@ as $$
     r.effective_from desc
   limit 1;
 $$;
-
 do $$
 begin
   if exists (select 1 from pg_roles where rolname = 'authenticated') then
@@ -380,7 +343,6 @@ begin
     execute $g$grant execute on function public.cms_fn_pick_plating_markup_rule_v1(uuid,public.cms_e_category_code,public.cms_e_material_code,date) to service_role$g$;
   end if;
 end $$;
-
 -- plating sell = plating cost(from price_rule.cost_*) + plating margin(from markup_rule)
 create or replace function public.cms_fn_calc_plating_amounts_v2(
   p_plating_variant_id uuid,
@@ -456,7 +418,6 @@ begin
       'sell_amount_krw', v_sell
     );
 end $$;
-
 do $$
 begin
   if exists (select 1 from pg_roles where rolname = 'authenticated') then
@@ -466,8 +427,6 @@ begin
     execute $g$grant execute on function public.cms_fn_calc_plating_amounts_v2(uuid,public.cms_e_category_code,public.cms_e_material_code,date,numeric) to service_role$g$;
   end if;
 end $$;
-
-
 -- ============================================================
 -- 6) Pricing rule pick 함수 v2 (apply_unit + stone_role 지원)
 -- ============================================================
@@ -526,7 +485,6 @@ as $$
     c.min_cost_krw desc  -- 같은 priority면 더 높은 min_cost(더 타이트한 밴드) 우선
   limit 1;
 $$;
-
 do $$
 begin
   if exists (select 1 from pg_roles where rolname = 'authenticated') then
@@ -550,8 +508,6 @@ begin
     ) to service_role$g$;
   end if;
 end $$;
-
-
 -- ============================================================
 -- 7) (핵심) 영수증 라인 매칭 CONFIRM v5
 --    - base labor: receipt basic cost + BASE_LABOR 룰(Per-piece)
@@ -1452,7 +1408,6 @@ begin
     'missing_base_rule_warn', v_missing_base_rule_warn
   );
 end $$;
-
 do $$
 begin
   if exists (select 1 from pg_roles where rolname = 'authenticated') then
@@ -1475,8 +1430,6 @@ begin
     ) to service_role$g$;
   end if;
 end $$;
-
-
 -- ============================================================
 -- (선택) 초기 시드 예시 (원하는 값으로 직접 수정해서 쓰세요)
 -- ============================================================
@@ -1490,4 +1443,4 @@ end $$;
 -- insert into public.cms_pricing_rule_v1(component, scope, apply_unit, stone_role, vendor_party_id, min_cost_krw, max_cost_krw, markup_kind, markup_value_krw, priority, is_active, note)
 -- values
 -- ('STONE','FACTORY','PER_STONE','CENTER','<vendor_uuid>',0,2000,'ADD_KRW',200,10,true,'센터석 unit_cost 0~2000 => +200원/개'),
--- ('STONE','FACTORY','PER_STONE','CENTER','<vendor_uuid>',2000,999999999,'ADD_KRW',300,10,true,'센터석 unit_cost 2000+ => +300원/개');
+-- ('STONE','FACTORY','PER_STONE','CENTER','<vendor_uuid>',2000,999999999,'ADD_KRW',300,10,true,'센터석 unit_cost 2000+ => +300원/개');;

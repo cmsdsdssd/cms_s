@@ -1,5 +1,4 @@
 set search_path = public, pg_temp;
-
 create or replace function public.cms_fn_shipment_update_line_v1(
   p_shipment_line_id uuid,
   p_measured_weight_g numeric default null,
@@ -95,9 +94,7 @@ begin
 
   return jsonb_build_object('ok', true, 'shipment_line_id', p_shipment_line_id);
 end $$;
-
 grant execute on function public.cms_fn_shipment_update_line_v1(uuid, numeric, numeric, numeric, numeric, jsonb, cms_e_pricing_mode, numeric) to authenticated;
-
 create or replace function public.cms_fn_update_shipment_line_v1(
   p_shipment_line_id uuid,
   p_measured_weight_g numeric default null,
@@ -125,5 +122,4 @@ begin
     p_manual_total_amount_krw
   );
 end $$;
-
 grant execute on function public.cms_fn_update_shipment_line_v1(uuid, numeric, numeric, numeric, numeric, jsonb, cms_e_pricing_mode, numeric) to authenticated;

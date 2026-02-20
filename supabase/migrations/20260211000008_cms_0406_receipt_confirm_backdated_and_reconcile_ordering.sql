@@ -3,16 +3,13 @@
 -- and confirmed-only latest factory receipt selection for AP screens.
 
 set search_path = public, pg_temp;
-
 begin;
-
 do $$
 begin
   if not exists (select 1 from pg_type where typname = 'cms_factory_receipt_apply_status') then
     create type public.cms_factory_receipt_apply_status as enum ('DRAFT', 'CONFIRMED');
   end if;
 end $$;
-
 alter table if exists public.cms_factory_receipt_snapshot
   add column if not exists apply_status public.cms_factory_receipt_apply_status not null default 'DRAFT',
   add column if not exists confirmed_at timestamptz,
@@ -21,17 +18,14 @@ alter table if exists public.cms_factory_receipt_snapshot
   add column if not exists backdated_from_receipt_id uuid,
   add column if not exists backdated_detected_at timestamptz,
   add column if not exists backdated_note text;
-
 -- rollout safety: keep current behavior for existing data
 update public.cms_factory_receipt_snapshot
 set apply_status = 'CONFIRMED',
     confirmed_at = coalesce(confirmed_at, now())
 where is_current = true
   and apply_status = 'DRAFT';
-
 create index if not exists cms_factory_receipt_snapshot_vendor_apply_current_idx
   on public.cms_factory_receipt_snapshot (vendor_party_id, apply_status, is_current, issued_at desc);
-
 create or replace view public.cms_v_ap_factory_latest_receipt_by_vendor_v1
 with (security_invoker = true)
 as
@@ -51,10 +45,8 @@ order by
   coalesce(r.bill_no,'') desc,
   s.receipt_id::text desc,
   s.snapshot_version desc;
-
 grant select on public.cms_v_ap_factory_latest_receipt_by_vendor_v1 to authenticated;
 grant select on public.cms_v_ap_factory_latest_receipt_by_vendor_v1 to anon;
-
 create or replace function public.cms_fn_factory_receipt_set_apply_status_v1(
   p_receipt_id uuid,
   p_snapshot_version int default null,
@@ -219,12 +211,9 @@ begin
     'reconciled_receipt_count', v_affected_count
   );
 end $$;
-
 alter function public.cms_fn_factory_receipt_set_apply_status_v1(uuid,int,text,boolean,text)
   security definer
   set search_path = public, pg_temp;
-
 grant execute on function public.cms_fn_factory_receipt_set_apply_status_v1(uuid,int,text,boolean,text)
   to authenticated, service_role;
-
 commit;

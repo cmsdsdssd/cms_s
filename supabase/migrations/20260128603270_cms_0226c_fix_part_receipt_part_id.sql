@@ -1,10 +1,8 @@
 set search_path = public, pg_temp;
-
 -- (선택) 혹시 p_note 붙은 overload가 있으면 제거해서 모호성/오작동 원천 차단
 drop function if exists public.cms_fn_record_part_receipt_v1(
   jsonb, timestamptz, text, uuid, text, text, text, uuid, uuid, text
 );
-
 -- ✅ FIXED: PART 라인은 part_id 없으면 절대 insert 못하게 강제
 create or replace function public.cms_fn_record_part_receipt_v1(
   p_lines jsonb,

@@ -1,5 +1,4 @@
 set search_path = public, pg_temp;
-
 -- 1) resolve recipe (variant -> exact 우선, 없으면 default)
 create or replace function public.cms_fn_resolve_bom_recipe_v1(
   p_product_master_id uuid,
@@ -42,11 +41,9 @@ as $$
   select * from default_match
   limit 1;
 $$;
-
 alter function public.cms_fn_resolve_bom_recipe_v1(uuid,text)
   security definer
   set search_path = public, pg_temp;
-
 -- 2) upsert recipe header
 create or replace function public.cms_fn_upsert_bom_recipe_v1(
   p_product_master_id uuid,
@@ -133,11 +130,9 @@ begin
 
   return v_id;
 end $$;
-
 alter function public.cms_fn_upsert_bom_recipe_v1(uuid,text,boolean,text,jsonb,uuid,uuid,text,uuid)
   security definer
   set search_path = public, pg_temp;
-
 -- 3) add recipe line (line_no 자동 할당)
 -- ✅ 필수 파라미터(p_qty_per_unit)를 default 파라미터보다 앞으로 이동
 create or replace function public.cms_fn_add_bom_recipe_line_v1(
@@ -207,7 +202,6 @@ begin
 
   return v_id;
 end $$;
-
 -- ✅ 시그니처 변경에 맞춰 alter function도 수정
 alter function public.cms_fn_add_bom_recipe_line_v1(
   uuid,
@@ -224,7 +218,6 @@ alter function public.cms_fn_add_bom_recipe_line_v1(
 )
   security definer
   set search_path = public, pg_temp;
-
 -- 4) void recipe line (삭제 금지)
 create or replace function public.cms_fn_void_bom_recipe_line_v1(
   p_bom_line_id uuid,
@@ -288,7 +281,6 @@ begin
 
   return p_bom_line_id;
 end $$;
-
 alter function public.cms_fn_void_bom_recipe_line_v1(uuid,text,uuid,text,uuid)
   security definer
   set search_path = public, pg_temp;

@@ -1,5 +1,4 @@
 set search_path = public, pg_temp;
-
 -- -----------------------------------------------------------------------------
 -- cms_0266: Receipt pricing snapshot + worklist view + auto allocation/apply
 --
@@ -43,7 +42,6 @@ create table if not exists public.cms_receipt_pricing_snapshot (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
-
 -- columns might already exist if 0264/0265 were applied in another branch
 alter table public.cms_receipt_pricing_snapshot
   add column if not exists currency_code text;
@@ -73,17 +71,13 @@ alter table public.cms_receipt_pricing_snapshot
   add column if not exists created_at timestamptz;
 alter table public.cms_receipt_pricing_snapshot
   add column if not exists updated_at timestamptz;
-
 -- updated_at trigger (reuse existing cms_fn_set_updated_at)
 do $$ begin
   create trigger trg_cms_receipt_pricing_snapshot_updated_at
   before update on public.cms_receipt_pricing_snapshot
   for each row execute function public.cms_fn_set_updated_at();
 exception when duplicate_object then null; end $$;
-
 grant select, insert, update, delete on public.cms_receipt_pricing_snapshot to anon, authenticated, service_role;
-
-
 -- (B) Upsert receipt pricing snapshot (compute total_amount_krw when currency=CNY)
 create or replace function public.cms_fn_upsert_receipt_pricing_snapshot_v1(
   p_receipt_id uuid,
@@ -206,15 +200,11 @@ begin
     'fx_rate_krw_per_unit', v_fx_rate
   ));
 end $$;
-
 alter function public.cms_fn_upsert_receipt_pricing_snapshot_v1(uuid,text,numeric,numeric,numeric,numeric,uuid,text,uuid)
   security definer
   set search_path = public, pg_temp;
-
 grant execute on function public.cms_fn_upsert_receipt_pricing_snapshot_v1(uuid,text,numeric,numeric,numeric,numeric,uuid,text,uuid)
   to anon, authenticated, service_role;
-
-
 -- (C) Apply receipt total to linked shipments by proportional allocation
 create or replace function public.cms_fn_apply_receipt_pricing_snapshot_v1(
   p_receipt_id uuid,
@@ -458,21 +448,16 @@ begin
     'allocations', v_allocations
   ));
 end $$;
-
 alter function public.cms_fn_apply_receipt_pricing_snapshot_v1(uuid,uuid,text,uuid,boolean)
   security definer
   set search_path = public, pg_temp;
-
 grant execute on function public.cms_fn_apply_receipt_pricing_snapshot_v1(uuid,uuid,text,uuid,boolean)
   to anon, authenticated, service_role;
-
-
 -- (D) Receipt worklist view (one row per receipt)
 -- NOTE: Postgres cannot change view column names/order via CREATE OR REPLACE
 -- so we DROP and recreate to avoid: "cannot change name of view column ..."
 
 drop view if exists public.cms_v_receipt_inbox_open_v1 cascade;
-
 create view public.cms_v_receipt_inbox_open_v1 as
 with linked_sh as (
   select distinct
@@ -565,5 +550,4 @@ left join public.cms_party vp on vp.party_id = r.vendor_party_id
 left join public.cms_receipt_pricing_snapshot s on s.receipt_id = r.receipt_id
 left join ship_agg a on a.receipt_id = r.receipt_id
 where r.status <> 'ARCHIVED'::public.cms_e_receipt_status;
-
 grant select on public.cms_v_receipt_inbox_open_v1 to authenticated, service_role;

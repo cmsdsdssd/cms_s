@@ -1,5 +1,4 @@
 set search_path = public, pg_temp;
-
 -- 0006: views (security_invoker)
 
 create or replace view cms_v_ar_balance_by_party
@@ -14,7 +13,6 @@ select
 from cms_party p
 left join cms_ar_ledger l on l.party_id = p.party_id
 group by p.party_id, p.party_type, p.name;
-
 create or replace view cms_v_order_worklist
 with (security_invoker = true)
 as

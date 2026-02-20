@@ -116,7 +116,6 @@ BEGIN
     );
 END;
 $$;
-
 -- ============================================
 -- RPC #2: Mark PO as Sent (after fax transmission)
 -- ============================================
@@ -234,7 +233,6 @@ BEGIN
     );
 END;
 $$;
-
 -- ============================================
 -- RPC #3: Record Receipt and Update Order Line Status
 -- ============================================
@@ -303,7 +301,6 @@ BEGIN
     );
 END;
 $$;
-
 -- ============================================
 -- RPC #4: Mark Order Lines as Shipped
 -- ============================================
@@ -356,7 +353,6 @@ BEGIN
     );
 END;
 $$;
-
 -- ============================================
 -- RPC #5: Get PO Details for Preview
 -- ============================================
@@ -433,7 +429,6 @@ BEGIN
     );
 END;
 $$;
-
 -- ============================================
 -- RPC #6: Cancel Factory PO (revert order lines)
 -- ============================================
@@ -519,7 +514,6 @@ BEGIN
     );
 END;
 $$;
-
 -- ============================================
 -- Grants
 -- ============================================
@@ -529,7 +523,6 @@ GRANT EXECUTE ON FUNCTION cms_fn_receipt_attach_to_order_lines(uuid, uuid[], tim
 GRANT EXECUTE ON FUNCTION cms_fn_mark_shipped(uuid[], timestamptz, uuid) TO authenticated;
 GRANT EXECUTE ON FUNCTION cms_fn_factory_po_get_details(uuid) TO authenticated;
 GRANT EXECUTE ON FUNCTION cms_fn_factory_po_cancel(uuid, text, uuid) TO authenticated;
-
 GRANT EXECUTE ON FUNCTION cms_fn_factory_po_create_from_order_lines(uuid[], uuid) TO service_role;
 GRANT EXECUTE ON FUNCTION cms_fn_factory_po_mark_sent(uuid, jsonb, uuid) TO service_role;
 GRANT EXECUTE ON FUNCTION cms_fn_receipt_attach_to_order_lines(uuid, uuid[], timestamptz, uuid) TO service_role;

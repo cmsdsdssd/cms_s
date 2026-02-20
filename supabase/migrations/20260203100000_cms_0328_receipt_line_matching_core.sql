@@ -1,5 +1,4 @@
 set search_path = public, pg_temp;
-
 -- =========================================================
 -- Receipt Line Matching (Workbench) - Core
 --
@@ -19,21 +18,16 @@ BEGIN
   CREATE TYPE public.cms_e_receipt_line_match_status AS ENUM ('SUGGESTED','CONFIRMED','REJECTED','CLEARED');
 EXCEPTION WHEN duplicate_object THEN NULL;
 END $$;
-
 -- 1) columns
 ALTER TABLE public.cms_shipment_line
   ADD COLUMN IF NOT EXISTS purchase_receipt_line_uuid uuid;
-
 ALTER TABLE public.cms_order_line
   ADD COLUMN IF NOT EXISTS vendor_seq_no int;
-
 CREATE INDEX IF NOT EXISTS idx_cms_order_line_vendor_seq_no
   ON public.cms_order_line(vendor_seq_no);
-
 CREATE INDEX IF NOT EXISTS idx_cms_shipment_line_purchase_receipt_line_uuid
   ON public.cms_shipment_line(purchase_receipt_line_uuid)
   WHERE purchase_receipt_line_uuid IS NOT NULL;
-
 -- 2) receipt line match table
 -- NOTE: selected_factory_* fields are snapshots of factory receipt numbers (secondary). Do NOT treat as AR/AP SoT.
 CREATE TABLE IF NOT EXISTS public.cms_receipt_line_match (
@@ -70,7 +64,6 @@ CREATE TABLE IF NOT EXISTS public.cms_receipt_line_match (
 
   PRIMARY KEY (receipt_id, receipt_line_uuid, order_line_id)
 );
-
 -- idempotent re-run safety: enforce selected_weight_g scale
 DO $$
 BEGIN
@@ -83,26 +76,20 @@ BEGIN
     END;
   END IF;
 END $$;
-
 CREATE INDEX IF NOT EXISTS idx_cms_receipt_line_match_receipt
   ON public.cms_receipt_line_match(receipt_id, receipt_line_uuid);
-
 CREATE INDEX IF NOT EXISTS idx_cms_receipt_line_match_order
   ON public.cms_receipt_line_match(order_line_id);
-
 CREATE INDEX IF NOT EXISTS idx_cms_receipt_line_match_status
   ON public.cms_receipt_line_match(status);
-
 -- only 1 confirmed per receipt line
 CREATE UNIQUE INDEX IF NOT EXISTS uq_cms_receipt_line_confirmed_per_receipt_line
   ON public.cms_receipt_line_match(receipt_id, receipt_line_uuid)
   WHERE status = 'CONFIRMED';
-
 -- only 1 confirmed per order line
 CREATE UNIQUE INDEX IF NOT EXISTS uq_cms_receipt_line_confirmed_per_order_line
   ON public.cms_receipt_line_match(order_line_id)
   WHERE status = 'CONFIRMED';
-
 DO $$
 BEGIN
   CREATE TRIGGER trg_cms_receipt_line_match_updated_at
@@ -110,10 +97,8 @@ BEGIN
   FOR EACH ROW EXECUTE FUNCTION public.cms_fn_set_updated_at();
 EXCEPTION WHEN duplicate_object THEN NULL;
 END $$;
-
 -- 3) view: flatten receipt_pricing_snapshot.line_items -> rowset
 DROP VIEW IF EXISTS public.cms_v_receipt_line_items_flat_v1 CASCADE;
-
 CREATE VIEW public.cms_v_receipt_line_items_flat_v1 AS
 WITH snap AS (
   SELECT
@@ -207,7 +192,6 @@ SELECT
   t.li AS line_item_json
 FROM snap s
 LEFT JOIN LATERAL jsonb_array_elements(COALESCE(s.line_items, '[]'::jsonb)) WITH ORDINALITY AS t(li, ord) ON TRUE;
-
 -- 4) reconciliation / worklists
 -- 4-1) receipt lines with no CONFIRMED match
 DROP VIEW IF EXISTS public.cms_v_receipt_line_unlinked_v1 CASCADE;
@@ -232,7 +216,6 @@ left join public.cms_receipt_line_match m
  and m.receipt_line_uuid = l.receipt_line_uuid
  and m.status = 'CONFIRMED'::public.cms_e_receipt_line_match_status
 where m.order_line_id is null;
-
 -- 4-2) link integrity check: confirmed match but shipment_line linkage is missing/broken
 DROP VIEW IF EXISTS public.cms_v_receipt_line_link_integrity_v1 CASCADE;
 CREATE VIEW public.cms_v_receipt_line_link_integrity_v1
@@ -256,7 +239,6 @@ where m.status = 'CONFIRMED'::public.cms_e_receipt_line_match_status
     or sl.purchase_receipt_id is distinct from m.receipt_id
     or sl.purchase_receipt_line_uuid is distinct from m.receipt_line_uuid
   );
-
 -- 4-3) shipment confirmed but AR invoice missing (AR SoT is alloc/consume; this is just "missing link" detector)
 DROP VIEW IF EXISTS public.cms_v_shipment_line_missing_ar_invoice_v1 CASCADE;
 CREATE VIEW public.cms_v_shipment_line_missing_ar_invoice_v1
@@ -279,19 +261,14 @@ join public.cms_shipment_line sl on sl.shipment_id = sh.shipment_id
 left join public.cms_ar_invoice ar on ar.shipment_line_id = sl.shipment_line_id
 where sh.status = 'CONFIRMED'::public.cms_e_shipment_status
   and ar.ar_id is null;
-
 -- 5) grants
 GRANT SELECT, INSERT, UPDATE, DELETE ON public.cms_receipt_line_match TO authenticated;
 GRANT SELECT, INSERT, UPDATE, DELETE ON public.cms_receipt_line_match TO service_role;
-
 GRANT SELECT ON public.cms_v_receipt_line_items_flat_v1 TO authenticated;
 GRANT SELECT ON public.cms_v_receipt_line_items_flat_v1 TO service_role;
-
 GRANT SELECT ON public.cms_v_receipt_line_unlinked_v1 TO authenticated;
 GRANT SELECT ON public.cms_v_receipt_line_unlinked_v1 TO service_role;
-
 GRANT SELECT ON public.cms_v_receipt_line_link_integrity_v1 TO authenticated;
 GRANT SELECT ON public.cms_v_receipt_line_link_integrity_v1 TO service_role;
-
 GRANT SELECT ON public.cms_v_shipment_line_missing_ar_invoice_v1 TO authenticated;
 GRANT SELECT ON public.cms_v_shipment_line_missing_ar_invoice_v1 TO service_role;

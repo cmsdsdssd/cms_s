@@ -1,11 +1,9 @@
 -- 20260128302105_cms_0214_inventory_stocktake_functions_fix.sql
 set search_path = public, pg_temp;
-
 -- 안전: 혹시 기존 시도 흔적이 있으면 제거 (없어도 OK)
 drop function if exists public.cms_fn_upsert_inventory_count_line_v1(
   uuid,int,public.cms_e_inventory_item_ref_type,uuid,uuid,text,text,numeric,text,jsonb,uuid,uuid,text,uuid
 );
-
 -- ---------------------------------------------------------------------
 -- 0) Helper: inventory qty as-of (MASTER)
 -- ---------------------------------------------------------------------
@@ -25,7 +23,6 @@ as $$
     and h.occurred_at <= p_asof
     and l.master_id = p_master_id;
 $$;
-
 -- ---------------------------------------------------------------------
 -- 1) Helper: inventory qty as-of (LABEL)
 -- ---------------------------------------------------------------------
@@ -49,7 +46,6 @@ as $$
     and l.item_name = trim(p_item_name)
     and coalesce(nullif(trim(l.variant_hint),''),'') = coalesce(nullif(trim(p_variant_hint),''),'');
 $$;
-
 -- ---------------------------------------------------------------------
 -- 2) Create stocktake session
 -- ---------------------------------------------------------------------
@@ -125,7 +121,6 @@ begin
 
   return v_id;
 end $$;
-
 -- ---------------------------------------------------------------------
 -- 3) Add count line (auto line_no)
 -- ---------------------------------------------------------------------
@@ -188,7 +183,6 @@ begin
     p_correlation_id := p_correlation_id
   );
 end $$;
-
 -- ---------------------------------------------------------------------
 -- 4) Upsert count line (DRAFT only)  ✅ 시그니처 수정(필수값 먼저)
 -- ---------------------------------------------------------------------
@@ -401,7 +395,6 @@ begin
 
   return v_id;
 end $$;
-
 -- ---------------------------------------------------------------------
 -- 5) Void count line (delete 금지)
 -- ---------------------------------------------------------------------
@@ -453,7 +446,6 @@ begin
   insert into public.cms_decision_log(entity_type, entity_id, decision_kind, before, after, actor_person_id, occurred_at, note)
   values ('STOCKTAKE_SESSION', v_line.session_id, 'VOID_LINE', v_before, v_after, p_actor_person_id, now(), coalesce(p_note,'') || ' corr=' || p_correlation_id::text);
 end $$;
-
 -- ---------------------------------------------------------------------
 -- 6) Finalize / Void session
 -- (이 둘은 네가 받은 0214 원본과 동일 로직로 유지 가능 — 여기선 "정상 생성"만 보장)
@@ -524,7 +516,6 @@ begin
 
   return jsonb_build_object('ok', true, 'session_id', p_session_id, 'status', 'FINALIZED', 'generated_move_id', null);
 end $$;
-
 create or replace function public.cms_fn_void_inventory_count_session_v1(
   p_session_id uuid,
   p_reason text,
@@ -564,21 +555,17 @@ begin
   insert into public.cms_status_event(entity_type, entity_id, from_status, to_status, occurred_at, actor_person_id, reason, correlation_id)
   values ('STOCKTAKE_SESSION', p_session_id, 'DRAFT', 'VOID', now(), p_actor_person_id, p_reason, p_correlation_id);
 end $$;
-
 -- ---------------------------------------------------------------------
 -- 8) Grants (Write는 RPC only)
 -- ---------------------------------------------------------------------
 grant execute on function public.cms_fn_inventory_qty_asof_by_master_v1(uuid,timestamptz) to authenticated;
 grant execute on function public.cms_fn_inventory_qty_asof_by_label_v1(public.cms_e_inventory_item_ref_type,text,text,timestamptz) to authenticated;
-
 grant execute on function public.cms_fn_create_inventory_count_session_v1(timestamptz,text,text,text,jsonb,text,uuid,text,uuid) to authenticated;
 grant execute on function public.cms_fn_add_inventory_count_line_v1(uuid,public.cms_e_inventory_item_ref_type,text,numeric,uuid,uuid,text,text,jsonb,uuid,text,uuid) to authenticated;
-
 -- ✅ 수정된 시그니처(필수값 먼저)
 grant execute on function public.cms_fn_upsert_inventory_count_line_v1(
   uuid,int,public.cms_e_inventory_item_ref_type,text,numeric,uuid,uuid,text,text,jsonb,uuid,uuid,text,uuid
 ) to authenticated;
-
 grant execute on function public.cms_fn_void_inventory_count_line_v1(uuid,text,uuid,text,uuid) to authenticated;
 grant execute on function public.cms_fn_finalize_inventory_count_session_v1(uuid,boolean,uuid,text,uuid) to authenticated;
 grant execute on function public.cms_fn_void_inventory_count_session_v1(uuid,text,uuid,text,uuid) to authenticated;

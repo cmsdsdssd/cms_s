@@ -1,5 +1,4 @@
 set search_path = public, pg_temp;
-
 -- cms_0257: confirm_shipment should not read t.meta from cms_fn_latest_tick_by_role_v1()
 -- Instead, fetch meta from cms_market_tick by tick_id.
 

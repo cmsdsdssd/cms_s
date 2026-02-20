@@ -469,11 +469,9 @@ begin
     'total_cost_krw', v_total_cost
   );
 end $function$;
-
 -- 2. 권한 재부여
 ALTER FUNCTION public.cms_fn_confirm_shipment(uuid, uuid, text) SECURITY DEFINER;
 GRANT EXECUTE ON FUNCTION public.cms_fn_confirm_shipment(uuid, uuid, text) TO authenticated;
-
 -- 3. 함수 수정 확인
 SELECT 
   'cms_fn_confirm_shipment 수정 완료' as 결과,

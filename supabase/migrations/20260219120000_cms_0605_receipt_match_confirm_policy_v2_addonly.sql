@@ -1,13 +1,10 @@
 set search_path = public, pg_temp;
-
 alter table if exists public.cms_receipt_line_match
   add column if not exists pricing_policy_version smallint,
   add column if not exists pricing_policy_meta jsonb not null default '{}'::jsonb;
-
 alter table if exists public.cms_shipment_line
   add column if not exists pricing_policy_version smallint,
   add column if not exists pricing_policy_meta jsonb not null default '{}'::jsonb;
-
 create or replace function public.cms_fn_receipt_line_match_confirm_v6_policy_v2(
   p_receipt_id uuid,
   p_receipt_line_uuid uuid,
@@ -425,7 +422,6 @@ begin
     );
 end;
 $$;
-
 do $$
 declare
   r record;

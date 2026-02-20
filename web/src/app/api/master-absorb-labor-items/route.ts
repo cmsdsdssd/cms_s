@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
 type AbsorbBucket = "BASE_LABOR" | "STONE_LABOR" | "PLATING" | "ETC";
+type AbsorbLaborClass = "GENERAL" | "MATERIAL";
 
 type MasterAbsorbLaborItemRow = {
   absorb_item_id: string;
@@ -14,10 +15,14 @@ type MasterAbsorbLaborItemRow = {
   priority: number;
   is_active: boolean;
   note: string | null;
+  labor_class?: AbsorbLaborClass | null;
+  material_qty_per_unit?: number | null;
+  material_cost_krw?: number | null;
   updated_at?: string | null;
 };
 
 const BUCKETS = new Set<AbsorbBucket>(["BASE_LABOR", "STONE_LABOR", "PLATING", "ETC"]);
+const LABOR_CLASSES = new Set<AbsorbLaborClass>(["GENERAL", "MATERIAL"]);
 
 function getSupabaseAdmin() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
@@ -48,6 +53,30 @@ export async function GET(request: Request) {
   }
 
   const { searchParams } = new URL(request.url);
+  const masterIdsRaw = searchParams.get("master_ids")?.trim() ?? "";
+  if (masterIdsRaw) {
+    const masterIds = [...new Set(masterIdsRaw
+      .split(",")
+      .map((value) => value.trim())
+      .filter(Boolean))];
+
+    if (masterIds.length === 0) {
+      return NextResponse.json({ error: "master_ids 값이 올바르지 않습니다." }, { status: 400 });
+    }
+
+    const { data, error } = await supabase
+      .from("cms_master_absorb_labor_item_v1")
+      .select("*")
+      .in("master_id", masterIds)
+      .order("priority", { ascending: true });
+
+    if (error) {
+      return NextResponse.json({ error: error.message ?? "조회 실패" }, { status: 500 });
+    }
+
+    return NextResponse.json({ data: (data ?? []) as MasterAbsorbLaborItemRow[] });
+  }
+
   const masterId = searchParams.get("master_id")?.trim() ?? "";
   if (!masterId) {
     return NextResponse.json({ error: "master_id가 필요합니다." }, { status: 400 });
@@ -77,6 +106,9 @@ export async function POST(request: Request) {
   const bucket = String(body.bucket ?? "").trim() as AbsorbBucket;
   const reason = String(body.reason ?? "").trim();
   const amount = toNumber(body.amount_krw);
+  const laborClass = String(body.labor_class ?? "GENERAL").trim().toUpperCase() as AbsorbLaborClass;
+  const materialQtyPerUnit = toNumber(body.material_qty_per_unit);
+  const materialCostKrw = toNumber(body.material_cost_krw);
 
   if (!masterId) {
     return NextResponse.json({ error: "master_id 값이 필요합니다." }, { status: 400 });
@@ -89,6 +121,15 @@ export async function POST(request: Request) {
   }
   if (amount === null) {
     return NextResponse.json({ error: "amount_krw는 숫자여야 합니다." }, { status: 400 });
+  }
+  if (!LABOR_CLASSES.has(laborClass)) {
+    return NextResponse.json({ error: "labor_class 값이 올바르지 않습니다." }, { status: 400 });
+  }
+  if (laborClass === "MATERIAL" && (materialQtyPerUnit === null || materialQtyPerUnit <= 0)) {
+    return NextResponse.json({ error: "material_qty_per_unit는 0보다 커야 합니다." }, { status: 400 });
+  }
+  if (laborClass === "MATERIAL" && materialCostKrw === null) {
+    return NextResponse.json({ error: "material_cost_krw는 숫자여야 합니다." }, { status: 400 });
   }
 
   const absorbItemId = toNullableText(body.absorb_item_id) ?? crypto.randomUUID();
@@ -103,6 +144,9 @@ export async function POST(request: Request) {
     priority: 100,
     is_active: body.is_active === false ? false : true,
     note: toNullableText(body.note),
+    labor_class: laborClass,
+    material_qty_per_unit: laborClass === "MATERIAL" ? Math.max(materialQtyPerUnit ?? 1, 0) : 1,
+    material_cost_krw: laborClass === "MATERIAL" ? Math.max(materialCostKrw ?? 0, 0) : 0,
   };
 
   const { data, error } = await supabase

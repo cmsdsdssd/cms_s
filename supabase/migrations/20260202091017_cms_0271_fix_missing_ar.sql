@@ -21,7 +21,6 @@ SELECT
 FROM cms_ar_ledger
 WHERE entry_type = 'SHIPMENT'
 AND amount_krw < 0;
-
 -- 2. 누락된 미수금 생성 (실제 실행)
 INSERT INTO cms_ar_ledger (
   ar_ledger_id,
@@ -51,7 +50,6 @@ AND NOT EXISTS (
   SELECT 1 FROM cms_ar_ledger ar 
   WHERE ar.shipment_id = sh.shipment_id
 );
-
 -- 3. 결과 확인
 SELECT '생성된 미수금' as 결과, COUNT(*) as 건수 
 FROM cms_ar_ledger 

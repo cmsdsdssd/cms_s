@@ -1,5 +1,4 @@
 set search_path = public, pg_temp;
-
 -- ✅ 뷰는 "참조 대상 테이블이 없으면 생성 자체가 실패"합니다.
 -- 현재 DB에는 public.cms_part_item이 없을 수 있으므로,
 -- 존재 여부에 따라 서로 다른 SQL로 뷰를 생성합니다.
@@ -24,10 +23,8 @@ from public.cms_bom_recipe r
 join public.cms_master_item m on m.master_id = r.product_master_id
 left join public.cms_bom_recipe_line l on l.bom_id = r.bom_id
 group by r.bom_id, r.product_master_id, m.model_name, r.variant_key, r.is_active, r.note, r.meta, r.created_at, r.updated_at;
-
 -- lines enriched view는 cms_part_item 존재 여부에 따라 분기 생성
 drop view if exists public.cms_v_bom_recipe_lines_enriched_v1;
-
 do $$
 begin
   if to_regclass('public.cms_part_item') is not null then

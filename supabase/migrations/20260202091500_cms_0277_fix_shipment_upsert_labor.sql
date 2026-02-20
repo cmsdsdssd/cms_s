@@ -5,7 +5,6 @@
 
 -- 1. 기존 함수 드롭
 DROP FUNCTION IF EXISTS public.cms_fn_shipment_upsert_from_order_line(uuid, numeric, numeric, uuid, uuid);
-
 -- 2. 수정된 함수 생성
 CREATE OR REPLACE FUNCTION public.cms_fn_shipment_upsert_from_order_line(
   p_order_line_id uuid,
@@ -79,10 +78,8 @@ BEGIN
     'status', 'DRAFT'
   );
 END $$;
-
 -- 3. 권한 부여
 GRANT EXECUTE ON FUNCTION public.cms_fn_shipment_upsert_from_order_line(uuid, numeric, numeric, uuid, uuid) TO authenticated;
-
 -- 4. 수정 확인
 SELECT 
   '함수 수정 완료' as 결과,

@@ -1,6 +1,5 @@
 -- 20260128300500_cms_0212_inventory_regression.sql
 set search_path = public, pg_temp;
-
 do $$
 declare
   v_move_receipt uuid;

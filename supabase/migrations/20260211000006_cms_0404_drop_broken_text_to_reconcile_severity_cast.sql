@@ -11,5 +11,4 @@ exception
   when others then
     raise notice 'drop cast skipped: %', sqlerrm;
 end $$;
-
 drop function if exists public.cms_cast_text_to_reconcile_issue_severity(text);

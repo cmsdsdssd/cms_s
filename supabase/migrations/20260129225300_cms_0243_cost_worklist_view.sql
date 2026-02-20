@@ -1,8 +1,6 @@
 -- 20260129225300_cms_0243_cost_worklist_view.sql
 set search_path = public, pg_temp;
-
 drop view if exists public.cms_v_purchase_cost_worklist_v1;
-
 create view public.cms_v_purchase_cost_worklist_v1 as
 select
   sh.shipment_id,

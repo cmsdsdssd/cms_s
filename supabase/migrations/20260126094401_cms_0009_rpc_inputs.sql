@@ -9,20 +9,15 @@
 -- party/order/repair upsert (과거 잘못된 시그니처들 포함)
 drop function if exists public.cms_fn_upsert_party_v1(uuid, cms_e_party_type, text, text, text, text, text);
 drop function if exists public.cms_fn_upsert_party_v1(cms_e_party_type, text, text, text, text, text, uuid);
-
 drop function if exists public.cms_fn_upsert_order_line_v1(uuid, uuid, text, text, text, int, text, boolean, uuid, text);
 drop function if exists public.cms_fn_upsert_order_line_v1(uuid, text, text, text, int, text, boolean, uuid, text, uuid);
-
 drop function if exists public.cms_fn_upsert_repair_line_v1(uuid, uuid, text, text, text, cms_e_material_code, int, numeric, boolean, uuid, numeric, date, text);
 drop function if exists public.cms_fn_upsert_repair_line_v1(uuid, text, text, text, cms_e_material_code, int, numeric, boolean, uuid, numeric, date, text, uuid);
-
 -- shipment draft helpers / inputs
 drop function if exists public.cms_fn_create_shipment_header_v1(uuid, date, text);
 drop function if exists public.cms_fn__assert_shipment_draft(uuid);
-
 drop function if exists public.cms_fn_add_shipment_line_from_order_v1(uuid, uuid, int, cms_e_pricing_mode, cms_e_category_code, cms_e_material_code, boolean, uuid, numeric, numeric, text);
 drop function if exists public.cms_fn_add_shipment_line_from_repair_v1(uuid, uuid, int, cms_e_pricing_mode, cms_e_category_code, cms_e_material_code, boolean, uuid, numeric, numeric, numeric, text);
-
 -- ad_hoc: (이번에 에러났던 시그니처 포함해서) 전부 정리
 drop function if exists public.cms_fn_add_shipment_line_ad_hoc_v1(
   uuid, text, text, text,
@@ -37,10 +32,8 @@ drop function if exists public.cms_fn_add_shipment_line_ad_hoc_v1(
   cms_e_material_code, boolean, uuid,
   numeric, numeric, numeric, numeric, numeric, text
 );
-
 drop function if exists public.cms_fn_update_shipment_line_v1(uuid, int, cms_e_category_code, cms_e_material_code, numeric, numeric, boolean, uuid, cms_e_pricing_mode, numeric, numeric, numeric, text);
 drop function if exists public.cms_fn_delete_shipment_line_v1(uuid, text);
-
 -- ============================================================
 -- 1) 거래처 upsert (customer/vendor 공용)
 --    ✅ default는 뒤쪽으로만
@@ -79,7 +72,6 @@ begin
 
   return v_id;
 end $$;
-
 -- ============================================================
 -- 2) 주문 라인 upsert (헤더 없이 라인 단위)
 -- ============================================================
@@ -142,7 +134,6 @@ begin
 
   return v_id;
 end $$;
-
 -- ============================================================
 -- 3) 수리 라인 upsert (무상/유상 + 도금 가능)
 -- ============================================================
@@ -218,7 +209,6 @@ begin
 
   return v_id;
 end $$;
-
 -- ============================================================
 -- 4) 출고문서(DRAFT) 생성
 -- ============================================================
@@ -251,7 +241,6 @@ begin
 
   return v_id;
 end $$;
-
 -- ------------------------------------------------------------
 -- 내부 헬퍼: 출고문서 DRAFT 잠금 체크
 -- ------------------------------------------------------------
@@ -276,7 +265,6 @@ begin
     raise exception 'shipment not DRAFT: %, status=%', p_shipment_id, v_status;
   end if;
 end $$;
-
 -- ============================================================
 -- 5) 출고라인 추가: 주문 기반
 -- ============================================================
@@ -343,7 +331,6 @@ begin
 
   return v_id;
 end $$;
-
 -- ============================================================
 -- 6) 출고라인 추가: 수리 기반
 -- ============================================================
@@ -413,7 +400,6 @@ begin
 
   return v_id;
 end $$;
-
 -- ============================================================
 -- 7) 출고라인 추가: 단독(AD-HOC)
 --    ✅ (이번 에러) 필수 p_category_code를 default들 앞에 배치
@@ -487,7 +473,6 @@ begin
 
   return v_id;
 end $$;
-
 -- ============================================================
 -- 8) 출고라인 수정 (DRAFT에서만)
 -- ============================================================
@@ -541,7 +526,6 @@ begin
 
   return jsonb_build_object('ok', true, 'shipment_line_id', p_shipment_line_id);
 end $$;
-
 -- ============================================================
 -- 9) 출고라인 삭제 (DRAFT에서만)
 -- ============================================================
@@ -572,7 +556,6 @@ begin
 
   return jsonb_build_object('ok', true, 'deleted', true, 'shipment_line_id', p_shipment_line_id);
 end $$;
-
 -- ============================================================
 -- 10) GRANTS: cms_fn_* 전부 authenticated EXEC 허용
 -- ============================================================

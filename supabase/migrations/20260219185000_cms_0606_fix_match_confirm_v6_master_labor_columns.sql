@@ -1,5 +1,4 @@
 set search_path = public, pg_temp;
-
 do $$
 declare
   v_sig text :=

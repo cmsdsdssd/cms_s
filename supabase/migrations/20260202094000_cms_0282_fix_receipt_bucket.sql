@@ -10,7 +10,6 @@ SELECT
 FROM cms_receipt_inbox
 GROUP BY file_bucket
 ORDER BY count DESC;
-
 -- 2. 잘못된 버킷명을 가진 레코드 확인 (ocr_docs가 아닌 경우)
 SELECT 
   receipt_id,
@@ -22,7 +21,6 @@ FROM cms_receipt_inbox
 WHERE file_bucket != 'ocr_docs'
 ORDER BY received_at DESC
 LIMIT 20;
-
 -- 3. 버킷명 업데이트 (ocr_docs가 실제 버킷인 경우)
 -- ⚠️ 주의: 실제 버킷 확인 후 실행하세요
 /*
@@ -60,4 +58,4 @@ CREATE POLICY "Service role full access to ocr_docs"
 ON storage.objects 
 FOR ALL TO service_role 
 USING (bucket_id = 'ocr_docs');
-*/
+*/;

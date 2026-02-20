@@ -29,7 +29,6 @@ BEGIN
     $ddl$;
   END IF;
 END $$;
-
 -- ============================================
 -- 2) cms_vendor_fax_config.fax_provider CHECK constraint update
 -- ============================================

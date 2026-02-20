@@ -1,10 +1,8 @@
 set search_path = public, pg_temp;
-
 -- 1) Type updates: master_kind
 do $$ begin
   create type public.cms_e_master_kind as enum ('MODEL', 'PART', 'STONE');
 exception when duplicate_object then null; end $$;
-
 -- 2) Alter cms_master_item to support parts
 alter table public.cms_master_item
   add column if not exists master_kind public.cms_e_master_kind not null default 'MODEL',
@@ -16,9 +14,7 @@ alter table public.cms_master_item
   add column if not exists reorder_max_qty numeric,
   add column if not exists qr_code text unique,
   add column if not exists is_active boolean not null default true;
-
 alter table public.cms_master_item alter column category_code drop not null;
-
 -- 3) Migrate data (only if source tables exist)
 do $$ 
 begin
@@ -46,7 +42,6 @@ begin
     on conflict (model_name) do nothing;
   end if;
 end $$;
-
 -- 4) Create cms_master_alias (replacing cms_part_alias)
 create table if not exists public.cms_master_alias (
   alias_id uuid primary key default gen_random_uuid(),
@@ -55,7 +50,6 @@ create table if not exists public.cms_master_alias (
   created_at timestamptz not null default now()
 );
 create index if not exists idx_cms_master_alias_master on public.cms_master_alias(master_id);
-
 do $$
 begin
   if exists (select 1 from information_schema.tables where table_schema='public' and table_name='cms_part_alias') then
@@ -66,17 +60,14 @@ begin
     on conflict do nothing;
   end if;
 end $$;
-
 -- 5) DROP DEPENDENT VIEWS EARLY
 drop view if exists public.cms_v_inventory_move_lines_enriched_v1 cascade;
 drop view if exists public.cms_v_part_master_with_position_v1 cascade;
 drop view if exists public.cms_v_part_move_lines_v1 cascade;
 drop view if exists public.cms_v_part_unlinked_worklist_v1 cascade;
 drop view if exists public.cms_v_part_usage_daily_v1 cascade;
-
 -- 6) Update Inventory Lines
 alter table public.cms_inventory_move_line drop constraint if exists ck_cms_inventory_line_ref;
-
 do $$
 begin
   if exists (
@@ -93,18 +84,15 @@ begin
     alter table public.cms_inventory_move_line drop column part_id;
   end if;
 end $$;
-
 alter table public.cms_inventory_move_line add constraint ck_cms_inventory_line_ref 
     check (
       (item_ref_type = 'MASTER' and master_id is not null)
       or (item_ref_type = 'UNLINKED' and master_id is null)
     );
-
 -- 7) Drop old objects
 drop table if exists public.cms_part_alias cascade;
 drop table if exists public.cms_part_item cascade;
 drop type if exists public.cms_e_part_kind cascade;
-
 -- 8) Recreate Views
 
 -- ENRICHED VIEW (Updated)
@@ -153,7 +141,6 @@ from public.cms_inventory_move_header h
 join public.cms_inventory_move_line l on l.move_id = h.move_id
 left join public.cms_party p on p.party_id = h.party_id
 left join public.cms_master_item m on m.master_id = l.master_id;
-
 -- VIEW 1: Master List
 drop view if exists public.cms_v_part_master_with_position_v1;
 create view public.cms_v_part_master_with_position_v1 as
@@ -207,7 +194,6 @@ from public.cms_master_item m
 left join ledger g on g.master_id=m.master_id
 left join avg_cost a on a.master_id=m.master_id
 where m.master_kind in ('PART', 'STONE');
-
 -- VIEW 2: Move Lines
 drop view if exists public.cms_v_part_move_lines_v1;
 create view public.cms_v_part_move_lines_v1 as
@@ -247,14 +233,12 @@ where h.status='POSTED'
     (l.item_ref_type='MASTER' and m.master_kind in ('PART','STONE'))
     or (l.item_ref_type='UNLINKED' and (h.meta->>'module')='PARTS')
   );
-
 -- VIEW 3: Unlinked
 drop view if exists public.cms_v_part_unlinked_worklist_v1;
 create view public.cms_v_part_unlinked_worklist_v1 as
 select *
 from public.cms_v_part_move_lines_v1
 where item_ref_type='UNLINKED';
-
 -- VIEW 4: Daily Usage
 drop view if exists public.cms_v_part_usage_daily_v1;
 create view public.cms_v_part_usage_daily_v1 as
@@ -278,13 +262,11 @@ where h.status='POSTED'
     or (l.item_ref_type='UNLINKED' and (h.meta->>'module')='PARTS')
   )
 group by 1,2,3,4,5;
-
 -- 9) Recreate Functions
 
 -- Drop old signatures (Critical to avoid overload ambiguity)
 drop function if exists public.cms_fn_record_part_receipt_v1(jsonb, timestamptz, text, uuid, text, text, text, uuid, uuid);
 drop function if exists public.cms_fn_record_part_usage_v1(jsonb, timestamptz, text, text, text, uuid, text, text, text, uuid, uuid);
-
 -- Upsert Part
 create or replace function public.cms_fn_upsert_part_item_v1(
   p_part_id uuid,
@@ -341,7 +323,6 @@ begin
   return v_master_id;
 end;
 $$ language plpgsql security definer;
-
 -- Record Receipt
 create or replace function public.cms_fn_record_part_receipt_v1(
   p_lines jsonb,
@@ -393,7 +374,6 @@ begin
   return v_move_id;
 end;
 $$ language plpgsql security definer;
-
 -- Record Usage
 create or replace function public.cms_fn_record_part_usage_v1(
   p_lines jsonb,
@@ -448,14 +428,12 @@ begin
   return v_move_id;
 end;
 $$ language plpgsql security definer;
-
 -- Grants
 grant select on public.cms_v_part_master_with_position_v1 to anon, authenticated, service_role;
 grant select on public.cms_v_part_move_lines_v1 to anon, authenticated, service_role;
 grant select on public.cms_v_part_unlinked_worklist_v1 to anon, authenticated, service_role;
 grant select on public.cms_v_part_usage_daily_v1 to anon, authenticated, service_role;
 grant select on public.cms_v_inventory_move_lines_enriched_v1 to anon, authenticated, service_role;
-
 grant execute on function public.cms_fn_upsert_part_item_v1 to anon, authenticated, service_role;
 grant execute on function public.cms_fn_record_part_receipt_v1 to anon, authenticated, service_role;
 grant execute on function public.cms_fn_record_part_usage_v1 to anon, authenticated, service_role;

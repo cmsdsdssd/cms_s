@@ -1,7 +1,5 @@
 set search_path = public, pg_temp;
-
 drop view if exists public.v_cms_master_item_lookup;
-
 create view public.v_cms_master_item_lookup
 with (security_invoker = true)
 as

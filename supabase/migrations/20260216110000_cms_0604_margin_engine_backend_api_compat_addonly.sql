@@ -16,7 +16,6 @@
 -- =============================================================
 
 set search_path = public, pg_temp;
-
 -- =============================================================
 -- 1) BUY 마진 프로파일: profile_name alias 추가
 --    - Backend API expects: profile_name, margin_center_krw, margin_sub1_krw, margin_sub2_krw
@@ -26,18 +25,15 @@ set search_path = public, pg_temp;
 
 alter table if exists public.cms_buy_margin_profile_v1
   add column if not exists profile_name text;
-
 -- 안전: (혹시 0603이 누락된 환경에서 실행돼도) margin_* 컬럼이 없다면 추가
 alter table if exists public.cms_buy_margin_profile_v1
   add column if not exists margin_center_krw numeric,
   add column if not exists margin_sub1_krw numeric,
   add column if not exists margin_sub2_krw numeric;
-
 -- 기존 데이터 backfill
 update public.cms_buy_margin_profile_v1
 set profile_name = name
 where profile_name is null or btrim(profile_name) = '';
-
 -- 0603에서 만든 sync function을 "profile_name<->name"까지 포함하도록 보강
 -- (trigger는 기존 것을 그대로 재사용)
 create or replace function public.cms_fn_sync_buy_margin_profile_api_cols_v1()
@@ -74,7 +70,6 @@ begin
   return new;
 end;
 $$;
-
 -- trigger가 없으면 생성(있으면 no-op)
 do $$
 begin
@@ -84,7 +79,6 @@ begin
 exception when duplicate_object then
   null;
 end $$;
-
 -- =============================================================
 -- 2) 도금 마진 룰: Next.js API 호환 컬럼 추가
 --    - Backend API expects:
@@ -104,7 +98,6 @@ alter table if exists public.cms_plating_markup_rule_v1
   add column if not exists max_cost_krw numeric,
   add column if not exists markup_kind public.cms_e_pricing_rule_markup_kind not null default 'ADD_KRW',
   add column if not exists markup_value_krw numeric not null default 0;
-
 -- 기존 데이터: 새 API 컬럼을 기존 margin_fixed_krw 기반으로 채움
 update public.cms_plating_markup_rule_v1
 set
@@ -116,7 +109,6 @@ set
   end,
   min_cost_krw = greatest(coalesce(min_cost_krw, 0), 0)
 where true;
-
 -- API insert/update 시 fixed margin 동기화
 create or replace function public.cms_fn_sync_plating_markup_rule_api_cols_v1()
 returns trigger
@@ -147,7 +139,6 @@ begin
   return new;
 end;
 $$;
-
 do $$
 begin
   create trigger trg_cms_plating_markup_rule_v1_api_sync
@@ -156,7 +147,6 @@ begin
 exception when duplicate_object then
   null;
 end $$;
-
 -- 품질 방어 체크(중복이면 무시)
 do $$
 begin
@@ -170,11 +160,8 @@ begin
 exception when duplicate_object then
   null;
 end $$;
-
 create index if not exists idx_cms_plating_markup_rule_v1_vendor_party_id
   on public.cms_plating_markup_rule_v1(vendor_party_id);
-
 create index if not exists idx_cms_plating_markup_rule_v1_cost_band
   on public.cms_plating_markup_rule_v1(plating_variant_id, vendor_party_id, min_cost_krw, max_cost_krw);
-
--- 끝.
+-- 끝.;

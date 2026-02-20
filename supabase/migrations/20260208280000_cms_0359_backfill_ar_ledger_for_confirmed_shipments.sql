@@ -1,5 +1,4 @@
 set search_path = public, pg_temp;
-
 -- Insert missing AR ledger rows for confirmed shipments
 insert into public.cms_ar_ledger (
   ar_ledger_id,
@@ -30,7 +29,6 @@ having not exists (
   where ar.shipment_id = sh.shipment_id
     and ar.entry_type = 'SHIPMENT'
 );
-
 -- Fix zero amount rows when shipment totals exist
 update public.cms_ar_ledger ar
 set

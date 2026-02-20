@@ -1,5 +1,4 @@
 set search_path = public, pg_temp;
-
 -- ------------------------------------------------------------
 -- cms_0248: confirm_shipment silver factor snapshot + no-double-apply
 --

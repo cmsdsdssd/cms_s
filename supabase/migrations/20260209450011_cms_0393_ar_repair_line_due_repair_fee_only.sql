@@ -339,7 +339,6 @@ begin
     'inserted', v_inserted
   );
 end $$;
-
 -- Safe one-time backfill for existing AR invoices:
 -- apply only when invoice has no payment allocations and no return lines.
 with target as (

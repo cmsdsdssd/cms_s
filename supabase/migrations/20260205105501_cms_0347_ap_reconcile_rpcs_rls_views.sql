@@ -1,7 +1,5 @@
 set search_path = public, pg_temp;
-
 begin;
-
 -- ============================================================
 -- 1) RLS + SELECT POLICIES (최소: 읽기만 열기)
 -- ============================================================
@@ -44,8 +42,6 @@ begin
     end if;
   end loop;
 end $$;
-
-
 -- ============================================================
 -- 2) VIEW PATCH: security_invoker = true 로 재생성
 --    (지난 파일에서 만든 view가 있으면 교체)
@@ -62,10 +58,8 @@ select
   max(created_at) filter (where status in ('OPEN','ACKED')) as last_open_at
 from public.cms_ap_reconcile_issue
 group by vendor_party_id;
-
 grant select on public.cms_v_ap_reconcile_open_by_vendor_v1 to authenticated;
 grant select on public.cms_v_ap_reconcile_open_by_vendor_v1 to anon;
-
 drop view if exists public.cms_v_ap_reconcile_issue_list_v1 cascade;
 create view public.cms_v_ap_reconcile_issue_list_v1
 with (security_invoker = true)
@@ -84,11 +78,8 @@ select
   r.calc_version
 from public.cms_ap_reconcile_issue i
 join public.cms_ap_reconcile_run r on r.run_id = i.run_id;
-
 grant select on public.cms_v_ap_reconcile_issue_list_v1 to authenticated;
 grant select on public.cms_v_ap_reconcile_issue_list_v1 to anon;
-
-
 -- ============================================================
 -- 3) AP POSITION VIEWS (FIFO/대시보드용)
 -- ============================================================
@@ -126,10 +117,8 @@ select
 from public.cms_ap_invoice i
 join public.cms_ap_invoice_leg l on l.ap_id = i.ap_id
 left join alloc a on a.ap_id = i.ap_id and a.asset_code = l.asset_code;
-
 grant select on public.cms_v_ap_invoice_position_v1 to authenticated;
 grant select on public.cms_v_ap_invoice_position_v1 to anon;
-
 -- vendor별 포지션 합계
 create or replace view public.cms_v_ap_position_by_vendor_v1
 with (security_invoker = true)
@@ -141,11 +130,8 @@ select
   coalesce(sum(credit_qty),0) as credit_qty
 from public.cms_v_ap_invoice_position_v1
 group by vendor_party_id, asset_code;
-
 grant select on public.cms_v_ap_position_by_vendor_v1 to authenticated;
 grant select on public.cms_v_ap_position_by_vendor_v1 to anon;
-
-
 -- ============================================================
 -- 4) RPC: 공장 4행 스냅샷 저장(버전업) + 정합 run/issue 생성
 -- ============================================================
@@ -279,15 +265,11 @@ begin
     'reconcile', v_run
   );
 end $$;
-
 alter function public.cms_fn_upsert_factory_receipt_statement_v1(uuid,jsonb,text)
   security definer
   set search_path = public, pg_temp;
-
 grant execute on function public.cms_fn_upsert_factory_receipt_statement_v1(uuid,jsonb,text)
   to authenticated, service_role;
-
-
 -- ============================================================
 -- 5) RPC: reconcile 실행 (막지 않고 issue 생성)
 -- ============================================================
@@ -648,15 +630,11 @@ begin
     'issue_counts', jsonb_build_object('error', v_cnt_error, 'warn', v_cnt_warn, 'info', v_cnt_info)
   );
 end $$;
-
 alter function public.cms_fn_ap_run_reconcile_for_receipt_v1(uuid)
   security definer
   set search_path = public, pg_temp;
-
 grant execute on function public.cms_fn_ap_run_reconcile_for_receipt_v1(uuid)
   to authenticated, service_role;
-
-
 -- ============================================================
 -- 6) RPC: 이슈 상태 변경 (ACK/IGNORE)
 -- ============================================================
@@ -692,15 +670,11 @@ begin
 
   return jsonb_build_object('ok', true, 'issue_id', p_issue_id, 'status', p_status);
 end $$;
-
 alter function public.cms_fn_ap_set_reconcile_issue_status_v1(uuid,cms_reconcile_issue_status,text)
   security definer
   set search_path = public, pg_temp;
-
 grant execute on function public.cms_fn_ap_set_reconcile_issue_status_v1(uuid,cms_reconcile_issue_status,text)
   to authenticated, service_role;
-
-
 -- ============================================================
 -- 7) RPC: 추천 조정 생성 (PRE mismatch / PRE+SALE mismatch 전용)
 --     - 팩트(공장 4행)는 수정하지 않고,
@@ -790,12 +764,9 @@ begin
 
   return jsonb_build_object('ok', true, 'issue_id', p_issue_id, 'ap_id', v_ap_id);
 end $$;
-
 alter function public.cms_fn_ap_create_adjustment_from_issue_v1(uuid,text)
   security definer
   set search_path = public, pg_temp;
-
 grant execute on function public.cms_fn_ap_create_adjustment_from_issue_v1(uuid,text)
   to authenticated, service_role;
-
 commit;

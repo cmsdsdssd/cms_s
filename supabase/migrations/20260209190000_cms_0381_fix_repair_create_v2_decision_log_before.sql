@@ -1,8 +1,6 @@
 -- 20260206190000_cms_0380_fix_repair_create_v2_decision_log_before.sql
 set search_path = public, pg_temp;
-
 begin;
-
 create or replace function public.cms_fn_create_repair_v2(
   p_party_id uuid,
   p_notes text default null,
@@ -139,12 +137,9 @@ begin
 
   return v_first_id;
 end $$;
-
 alter function public.cms_fn_create_repair_v2(uuid,text,jsonb,uuid,uuid)
   security definer
   set search_path = public, pg_temp;
-
 grant execute on function public.cms_fn_create_repair_v2(uuid,text,jsonb,uuid,uuid)
   to authenticated, service_role;
-
 commit;

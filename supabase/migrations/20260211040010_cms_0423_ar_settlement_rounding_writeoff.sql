@@ -1,7 +1,5 @@
 set search_path = public, pg_temp;
-
 begin;
-
 -- ============================================================
 -- 0414) AR 결제(금/은) “저울 2자리 + 현금차액” 추천 + 1,000원 이하 서비스 완불(로그)
 -- - 기존 AR FIFO 결제 로직을 깨지 않고(ADD-ONLY),
@@ -37,22 +35,15 @@ create table if not exists public.cms_ar_service_writeoff_action (
   created_by uuid references public.cms_person(person_id),
   created_at timestamptz not null default now()
 );
-
 create unique index if not exists idx_cms_ar_service_writeoff_party_idempotency
   on public.cms_ar_service_writeoff_action(party_id, idempotency_key);
-
 create index if not exists idx_cms_ar_service_writeoff_party_occurred
   on public.cms_ar_service_writeoff_action(party_id, occurred_at desc);
-
 alter table public.cms_ar_service_writeoff_action enable row level security;
-
 drop policy if exists cms_select_authenticated on public.cms_ar_service_writeoff_action;
 create policy cms_select_authenticated on public.cms_ar_service_writeoff_action
   for select to authenticated using (true);
-
 grant select on public.cms_ar_service_writeoff_action to authenticated;
-
-
 create table if not exists public.cms_ar_service_writeoff_action_alloc (
   action_alloc_id uuid primary key default gen_random_uuid(),
   action_id uuid not null references public.cms_ar_service_writeoff_action(action_id) on delete cascade,
@@ -69,19 +60,13 @@ create table if not exists public.cms_ar_service_writeoff_action_alloc (
 
   created_at timestamptz not null default now()
 );
-
 create index if not exists idx_cms_ar_service_writeoff_alloc_action
   on public.cms_ar_service_writeoff_action_alloc(action_id);
-
 alter table public.cms_ar_service_writeoff_action_alloc enable row level security;
-
 drop policy if exists cms_select_authenticated on public.cms_ar_service_writeoff_action_alloc;
 create policy cms_select_authenticated on public.cms_ar_service_writeoff_action_alloc
   for select to authenticated using (true);
-
 grant select on public.cms_ar_service_writeoff_action_alloc to authenticated;
-
-
 -- (분석/조회 편의)
 create or replace view public.cms_v_ar_service_writeoff_action_v1
 with (security_invoker = true)
@@ -105,10 +90,7 @@ select
 from public.cms_ar_service_writeoff_action a
 join public.cms_party p on p.party_id = a.party_id
 left join public.cms_person per on per.person_id = a.created_by;
-
 grant select on public.cms_v_ar_service_writeoff_action_v1 to authenticated;
-
-
 -- ------------------------------------------------------------
 -- 2) AR 결제 입력(저울) 추천/정밀표시용 RPC
 -- ------------------------------------------------------------
@@ -133,7 +115,6 @@ begin
     raise exception 'cms_fn_ar_get_settlement_recommendation_v1 already exists';
   end if;
 end $$;
-
 create function public.cms_fn_ar_get_settlement_recommendation_v1(
   p_party_id uuid,
   p_scale_decimals int default 2
@@ -254,10 +235,7 @@ begin
     )
   );
 end $$;
-
 grant execute on function public.cms_fn_ar_get_settlement_recommendation_v1(uuid, int) to authenticated;
-
-
 -- ------------------------------------------------------------
 -- 3) 서비스 완불(<=limit) RPC
 -- ------------------------------------------------------------
@@ -277,7 +255,6 @@ begin
     raise exception 'cms_fn_ar_apply_service_writeoff_under_limit_v1 already exists';
   end if;
 end $$;
-
 create function public.cms_fn_ar_apply_service_writeoff_under_limit_v1(
   p_party_id uuid,
   p_idempotency_key text,
@@ -565,9 +542,7 @@ begin
     'applied_silver_g', round(v_applied_silver_g, 6)
   );
 end $$;
-
 grant execute on function public.cms_fn_ar_apply_service_writeoff_under_limit_v1(
   uuid, text, numeric, timestamptz, text, uuid
 ) to authenticated;
-
 commit;

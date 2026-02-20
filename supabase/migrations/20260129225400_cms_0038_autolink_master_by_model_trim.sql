@@ -5,7 +5,6 @@
 -- 3) 기존 데이터 백필
 
 begin;
-
 ----------------------------------------------------------------------
 -- 0) normalize helper (공백/대소문자/양끝 trim 정리)
 --    "05_벤뎅이줄   " vs "05_벤뎅이줄" 같은 케이스를 안정적으로 맞추기 위함
@@ -17,7 +16,6 @@ immutable
 as $$
   select nullif(regexp_replace(lower(trim(coalesce(p,''))), '\s+', ' ', 'g'), '');
 $$;
-
 ----------------------------------------------------------------------
 -- 1) 주문 자동 매칭 트리거:
 --    matched_master_id가 null이면,
@@ -71,15 +69,12 @@ begin
   return new;
 end;
 $$;
-
 drop trigger if exists trg_cms_order_line_autolink_master on public.cms_order_line;
-
 create trigger trg_cms_order_line_autolink_master
 before insert or update of model_name, model_name_raw, matched_master_id
 on public.cms_order_line
 for each row
 execute function public.cms_trg_order_line_autolink_master_v1();
-
 ----------------------------------------------------------------------
 -- 2) 출고라인 자동 master_id 트리거:
 --    master_id가 null인데 order_line_id가 있으면
@@ -114,15 +109,12 @@ begin
   return new;
 end;
 $$;
-
 drop trigger if exists trg_cms_shipment_line_fill_master_id on public.cms_shipment_line;
-
 create trigger trg_cms_shipment_line_fill_master_id
 before insert or update of order_line_id, master_id
 on public.cms_shipment_line
 for each row
 execute function public.cms_trg_shipment_line_fill_master_id_v1();
-
 ----------------------------------------------------------------------
 -- 3) 기존 데이터 백필 (현재 테스트/운영 데이터 모두 정리)
 -- 3-1) 주문: matched_master_id 없는 애들 자동 매칭(유니크 1개만)
@@ -152,7 +144,6 @@ set matched_master_id = u.master_id,
     end
 from uniq u
 where o.order_line_id = u.order_line_id;
-
 ----------------------------------------------------------------------
 -- 3-2) 출고라인: master_id 없는 애들 order_line.matched_master_id로 백필
 ----------------------------------------------------------------------
@@ -162,5 +153,4 @@ from public.cms_order_line o
 where sl.master_id is null
   and sl.order_line_id = o.order_line_id
   and o.matched_master_id is not null;
-
 commit;

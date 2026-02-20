@@ -80,14 +80,11 @@ begin
     'upserted', v_rows > 0
   );
 end $$;
-
 alter function public.cms_fn_ensure_ap_from_receipt_v1(uuid,text)
   security definer
   set search_path = public, pg_temp;
-
 grant execute on function public.cms_fn_ensure_ap_from_receipt_v1(uuid,text)
   to authenticated, service_role;
-
 create or replace function public.cms_fn_apply_repair_fee_to_shipment_v1(
   p_shipment_id uuid,
   p_note text default null
@@ -171,14 +168,11 @@ begin
     'total_sell_krw', v_total_sell
   );
 end $$;
-
 alter function public.cms_fn_apply_repair_fee_to_shipment_v1(uuid,text)
   security definer
   set search_path = public, pg_temp;
-
 grant execute on function public.cms_fn_apply_repair_fee_to_shipment_v1(uuid,text)
   to authenticated, service_role;
-
 create or replace function public.cms_fn_confirm_shipment_v3_cost_v1(
   p_shipment_id uuid,
   p_actor_person_id uuid default null,
@@ -246,10 +240,8 @@ begin
   return v_confirm
     || jsonb_build_object('correlation_id', v_corr);
 end $$;
-
 alter function public.cms_fn_confirm_shipment_v3_cost_v1(uuid,uuid,text,boolean,uuid,text,uuid,jsonb,boolean)
   security definer
   set search_path = public, pg_temp;
-
 grant execute on function public.cms_fn_confirm_shipment_v3_cost_v1(uuid,uuid,text,boolean,uuid,text,uuid,jsonb,boolean)
   to authenticated, service_role;

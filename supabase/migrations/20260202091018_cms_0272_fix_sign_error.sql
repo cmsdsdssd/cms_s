@@ -8,7 +8,6 @@ SELECT
 FROM cms_ar_ledger
 WHERE entry_type = 'SHIPMENT'
 AND amount_krw < 0;
-
 -- 2. 부호 수정 실행
 UPDATE cms_ar_ledger
 SET 
@@ -16,7 +15,6 @@ SET
   memo = COALESCE(memo || ' | ', '') || 'Auto-fix: sign corrected'
 WHERE entry_type = 'SHIPMENT'
 AND amount_krw < 0;
-
 -- 3. 수정 결과 확인
 SELECT 
   '수정된 건수' as 결과,

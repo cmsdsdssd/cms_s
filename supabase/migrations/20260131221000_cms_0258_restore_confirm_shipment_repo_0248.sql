@@ -1,5 +1,4 @@
 set search_path = public, pg_temp;
-
 -- ------------------------------------------------------------
 -- cms_0258: RESTORE confirm_shipment to repo version (cms_0248)
 --

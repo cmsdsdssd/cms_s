@@ -1,5 +1,4 @@
 set search_path = public, pg_temp;
-
 -- cms_0013: prevent confirming shipment without lines
 
 create or replace function public.cms_fn_confirm_shipment(

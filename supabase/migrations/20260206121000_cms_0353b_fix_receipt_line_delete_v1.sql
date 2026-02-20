@@ -162,10 +162,8 @@ begin
     'ap', v_ap
   );
 end $$;
-
 alter function public.cms_fn_receipt_line_delete_v1(uuid,uuid,text,uuid,text,uuid)
   security definer
   set search_path = public, pg_temp;
-
 grant execute on function public.cms_fn_receipt_line_delete_v1(uuid,uuid,text,uuid,text,uuid)
 to authenticated, service_role;

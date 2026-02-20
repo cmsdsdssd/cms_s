@@ -1,5 +1,4 @@
 set search_path = public, pg_temp;
-
 -- ============================================================
 -- 1) ENUM: stone supply type
 -- ============================================================
@@ -9,7 +8,6 @@ begin
 exception
   when duplicate_object then null;
 end $$;
-
 -- ============================================================
 -- 2) Columns on cms_order_line
 -- ============================================================
@@ -17,7 +15,6 @@ alter table if exists public.cms_order_line
   add column if not exists center_stone_source public.cms_e_stone_supply_source,
   add column if not exists sub1_stone_source   public.cms_e_stone_supply_source,
   add column if not exists sub2_stone_source   public.cms_e_stone_supply_source;
-
 -- ============================================================
 -- 3) RPC: upsert order line v4 (v3 + supply types)
 -- ============================================================
@@ -245,7 +242,6 @@ begin
 
   return v_id;
 end $$;
-
 do $$
 begin
   -- Explicit signature (avoid ambiguity / overload errors)
@@ -282,8 +278,6 @@ begin
     ) to service_role$g$;
   end if;
 end $$;
-
-
 -- ============================================================
 -- 4) RPC: receipt-line match confirm v2 (stone qty * (margin + self cost))
 -- ============================================================
@@ -735,6 +729,5 @@ begin
     'weight_deviation_warn', v_weight_warn
   );
 end $$;
-
 grant execute on function public.cms_fn_receipt_line_match_confirm_v2(uuid, uuid, uuid, numeric, public.cms_e_material_code, numeric, numeric, numeric, uuid, text) to authenticated;
 grant execute on function public.cms_fn_receipt_line_match_confirm_v2(uuid, uuid, uuid, numeric, public.cms_e_material_code, numeric, numeric, numeric, uuid, text) to service_role;

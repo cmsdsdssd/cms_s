@@ -1,8 +1,6 @@
 -- 20260209142000_cms_0368_ap_reconcile_status_ignore_alias.sql
 set search_path = public, pg_temp;
-
 begin;
-
 create or replace function public.cms_fn_ap_set_reconcile_issue_status_v2(
   p_issue_id uuid,
   p_status_text text,
@@ -39,12 +37,9 @@ begin
 
   return public.cms_fn_ap_set_reconcile_issue_status_v1(p_issue_id, v_status, p_note);
 end $$;
-
 alter function public.cms_fn_ap_set_reconcile_issue_status_v2(uuid,text,text)
   security definer
   set search_path = public, pg_temp;
-
 grant execute on function public.cms_fn_ap_set_reconcile_issue_status_v2(uuid,text,text)
   to authenticated, service_role;
-
 commit;

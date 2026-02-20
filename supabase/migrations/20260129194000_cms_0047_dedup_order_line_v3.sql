@@ -1,5 +1,4 @@
 set search_path = public, pg_temp;
-
 -- 1) cms_fn_upsert_order_line_v3 오버로드 전부 제거(동적 drop)
 do $$
 declare
@@ -15,7 +14,6 @@ begin
     execute format('drop function if exists public.cms_fn_upsert_order_line_v3(%s);', r.args);
   end loop;
 end $$;
-
 -- 2) 레포(0034) 기준 "정식 v3"로 재생성 (중복 제거 후엔 유일해짐)
 create or replace function public.cms_fn_upsert_order_line_v3(
   p_customer_party_id uuid,
@@ -145,7 +143,6 @@ begin
 
   return v_id;
 end $$;
-
 grant execute on function public.cms_fn_upsert_order_line_v3(
   uuid, uuid, int, text, boolean, uuid, text, date, cms_e_priority_code, text, text, uuid,
   text, int, text, int, text, int, uuid

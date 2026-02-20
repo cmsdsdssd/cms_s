@@ -62,6 +62,5 @@ BEGIN
     'status', 'DRAFT'
   );
 END $$;
-
 GRANT EXECUTE ON FUNCTION public.cms_fn_shipment_upsert_from_order_line(uuid, numeric, numeric, uuid, uuid) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.cms_fn_shipment_upsert_from_order_line(uuid, numeric, numeric, uuid, uuid) TO anon;

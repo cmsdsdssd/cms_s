@@ -1,6 +1,5 @@
 -- Grant execute permission on cms_fn_upsert_repair_line_v2 to authenticated users
 set search_path = public, pg_temp;
-
 -- NOTE: Function cms_fn_upsert_repair_line_v2 does not exist yet
 -- Commenting out grants until function is implemented
 

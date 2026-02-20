@@ -1,5 +1,4 @@
 set search_path = public, pg_temp;
-
 create or replace function public.cms_fn_update_shipment_line_v1(
   p_shipment_line_id uuid,
   p_measured_weight_g numeric default null,
@@ -23,5 +22,4 @@ begin
     p_extra_labor_items
   );
 end $$;
-
 grant execute on function public.cms_fn_update_shipment_line_v1(uuid, numeric, numeric, numeric, numeric, jsonb) to authenticated;

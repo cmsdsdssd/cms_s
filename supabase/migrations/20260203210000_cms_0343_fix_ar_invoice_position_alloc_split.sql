@@ -133,6 +133,5 @@ from cms_ar_invoice i
 left join alloc a on a.ar_id = i.ar_id
 left join returns r on r.shipment_line_id = i.shipment_line_id
 left join cms_shipment_line sl on sl.shipment_line_id = i.shipment_line_id;
-
 grant select on public.cms_v_ar_invoice_position_v1 to authenticated;
 grant select on public.cms_v_ar_invoice_position_v1 to anon;

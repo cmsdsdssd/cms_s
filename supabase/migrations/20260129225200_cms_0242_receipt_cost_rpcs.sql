@@ -1,5 +1,4 @@
 set search_path = public, pg_temp;
-
 -- A) Receipt Inbox upsert (파일 등록)
 create or replace function public.cms_fn_upsert_receipt_inbox_v1(
   p_file_bucket text,
@@ -76,15 +75,11 @@ begin
 
   return v_id;
 end $$;
-
 alter function public.cms_fn_upsert_receipt_inbox_v1(text,text,text,bigint,text,text,uuid,date,numeric,public.cms_e_receipt_status,text,jsonb)
   security definer
   set search_path = public, pg_temp;
-
 grant execute on function public.cms_fn_upsert_receipt_inbox_v1(text,text,text,bigint,text,text,uuid,date,numeric,public.cms_e_receipt_status,text,jsonb)
   to anon, authenticated, service_role;
-
-
 -- B) Shipment 원가 적용 (임시/실제) + Inventory ISSUE move line에도 반영
 create or replace function public.cms_fn_apply_purchase_cost_to_shipment_v1(
   p_shipment_id uuid,
@@ -318,15 +313,11 @@ begin
     'inventory_move_id', v_move_id
   );
 end $$;
-
 alter function public.cms_fn_apply_purchase_cost_to_shipment_v1(uuid,text,uuid,jsonb,uuid,text,uuid,boolean)
   security definer
   set search_path = public, pg_temp;
-
 grant execute on function public.cms_fn_apply_purchase_cost_to_shipment_v1(uuid,text,uuid,jsonb,uuid,text,uuid,boolean)
   to authenticated, service_role;
-
-
 -- C) confirm + cost 한번에 (UI는 이거 호출하면 됨)
 create or replace function public.cms_fn_confirm_shipment_v3_cost_v1(
   p_shipment_id uuid,
@@ -377,15 +368,11 @@ begin
   return v_confirm
     || jsonb_build_object('correlation_id', v_corr);
 end $$;
-
 alter function public.cms_fn_confirm_shipment_v3_cost_v1(uuid,uuid,text,boolean,uuid,text,uuid,jsonb,boolean)
   security definer
   set search_path = public, pg_temp;
-
 grant execute on function public.cms_fn_confirm_shipment_v3_cost_v1(uuid,uuid,text,boolean,uuid,text,uuid,jsonb,boolean)
   to authenticated, service_role;
-
-
 -- D) worklist views (원가 누락/임시원가 추적)
 create or replace view public.cms_v_purchase_cost_worklist_v1 as
 select
@@ -413,7 +400,6 @@ where sh.status = 'CONFIRMED'::public.cms_e_shipment_status
     or sl.purchase_cost_source in ('NONE'::public.cms_e_cost_source)
     or sl.purchase_unit_cost_krw is null
   );
-
 create or replace view public.cms_v_receipt_inbox_open_v1 as
 select *
 from public.cms_receipt_inbox

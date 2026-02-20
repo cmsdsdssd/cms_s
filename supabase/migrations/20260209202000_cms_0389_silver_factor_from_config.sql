@@ -72,7 +72,6 @@ begin
   return v_factor;
 end;
 $$;
-
 -- 2) valuation ensure(v2): p_silver_adjust_factor가 NULL이면 config 값 사용
 create or replace function public.cms_fn_shipment_valuation_ensure_v2(
   p_shipment_id uuid,
@@ -273,7 +272,6 @@ begin
   );
 end;
 $$;
-
 -- 3) wrapper(v2): 더 이상 1.2를 넘기지 않음 (config가 기본)
 create or replace function public.cms_fn_ar_create_from_shipment_confirm_v2(
   p_shipment_id uuid,
@@ -295,7 +293,6 @@ begin
   return jsonb_build_object('ok', true, 'shipment_id', p_shipment_id, 'valuation', v_val, 'ar', v_ar);
 end;
 $$;
-
 -- -----------------------------------------------------------------------------
 -- Patch: make AR commodity grams use silver correction factor on WEIGHT (not price)
 -- and ensure valuation exists for legacy call sites (only when missing)
@@ -628,7 +625,6 @@ select * into v_valuation
     'inserted', v_inserted
   );
 end $$;
-
 -- permissions (match existing RPC patterns)
 revoke all on function public.cms_fn_ar_create_from_shipment_confirm_v2(uuid, text) from public;
 grant execute on function public.cms_fn_ar_create_from_shipment_confirm_v2(uuid, text) to authenticated;

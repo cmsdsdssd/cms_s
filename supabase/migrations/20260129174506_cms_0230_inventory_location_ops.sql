@@ -1,5 +1,4 @@
 set search_path = public, pg_temp;
-
 -- ------------------------------------------------------------
 -- 1) Quick Move v2: location_code 지원 (기존 v1은 유지)
 -- ------------------------------------------------------------
@@ -96,12 +95,9 @@ begin
 
   return v_move_id;
 end $$;
-
 grant execute on function public.cms_fn_quick_inventory_move_v2(
   public.cms_e_inventory_move_type, text, numeric, timestamptz, uuid, text, text, text, text, text, jsonb, text, uuid, text, uuid, uuid
 ) to authenticated;
-
-
 -- ------------------------------------------------------------
 -- 2) 위치별 재고 View (MASTER 기준)
 -- ------------------------------------------------------------
@@ -122,10 +118,7 @@ where h.status = 'POSTED'
   and l.is_void = false
   and l.master_id is not null
 group by h.location_code, l.master_id, m.model_name;
-
 grant select on public.cms_v_inventory_position_by_master_item_location_v1 to authenticated;
-
-
 drop view if exists public.cms_v_inventory_location_summary_v1;
 create view public.cms_v_inventory_location_summary_v1
 with (security_invoker = true)
@@ -137,10 +130,7 @@ select
   max(last_move_at) as last_move_at
 from public.cms_v_inventory_position_by_master_item_location_v1
 group by location_code;
-
 grant select on public.cms_v_inventory_location_summary_v1 to authenticated;
-
-
 -- ------------------------------------------------------------
 -- 3) 위치 이동(Transfer) 1회 체크로 OUT+IN 생성
 -- ------------------------------------------------------------
@@ -299,7 +289,6 @@ begin
     'in_move_id', v_in
   );
 end $$;
-
 grant execute on function public.cms_fn_transfer_inventory_v1(
   uuid, numeric, text, text, timestamptz, text, jsonb, text, uuid, text, uuid
 ) to authenticated;

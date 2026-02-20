@@ -1,5 +1,4 @@
 set search_path = public, pg_temp;
-
 -- ============================================================
 -- 0379: Order stone source + Match confirm v2 (stone qty*(margin + unit_cost))
 -- - ADD ONLY: 기존 v1 / v3 유지
@@ -21,13 +20,11 @@ exception
   when duplicate_object then
     null;
 end $$;
-
 -- 2) cms_order_line: role별 stone source 컬럼 추가 (NULL 허용 = "미정")
 alter table if exists public.cms_order_line
   add column if not exists center_stone_source public.cms_e_stone_supply_source,
   add column if not exists sub1_stone_source   public.cms_e_stone_supply_source,
   add column if not exists sub2_stone_source   public.cms_e_stone_supply_source;
-
 -- 3) 주문 upsert v4 (기존 v3 유지, source 저장만 추가)
 create or replace function public.cms_fn_upsert_order_line_v4(
   p_customer_party_id uuid,
@@ -223,13 +220,11 @@ begin
 
   return v_id;
 end $$;
-
 grant execute on function public.cms_fn_upsert_order_line_v4(
   uuid, uuid, int, text, boolean, uuid, text, date, cms_e_priority_code, text, text, uuid,
   text, int, text, int, text, int, uuid, text, text, cms_e_material_code,
   public.cms_e_stone_supply_source, public.cms_e_stone_supply_source, public.cms_e_stone_supply_source
 ) to anon, authenticated, service_role;
-
 -- 4) Match confirm v2: stone qty*(stone_margin + receipt_unit_cost) 반영
 create or replace function public.cms_fn_receipt_line_match_confirm_v2(
   p_receipt_id uuid,
@@ -697,7 +692,6 @@ begin
     'missing_unit_cost_warn', v_missing_unit_cost_warn
   );
 end $$;
-
 grant execute on function public.cms_fn_receipt_line_match_confirm_v2(
   uuid, uuid, uuid, numeric, public.cms_e_material_code,
   numeric, numeric, numeric, uuid, text

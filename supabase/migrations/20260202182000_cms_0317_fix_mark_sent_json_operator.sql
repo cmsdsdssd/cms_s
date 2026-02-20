@@ -121,7 +121,6 @@ BEGIN
     );
 END;
 $$;
-
 -- Grants
 GRANT EXECUTE ON FUNCTION cms_fn_factory_po_mark_sent(uuid, jsonb, uuid) TO authenticated;
 GRANT EXECUTE ON FUNCTION cms_fn_factory_po_mark_sent(uuid, jsonb, uuid) TO service_role;

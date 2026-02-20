@@ -8,7 +8,6 @@
 
 -- Vendor Fax Config - 익명 접근 허용 (Settings 페이지용)
 GRANT SELECT ON cms_vendor_fax_config TO anon;
-
 -- 기존 authenticated 권한이 없으면 추가
 DO $$
 BEGIN
@@ -22,13 +21,11 @@ BEGIN
         GRANT SELECT, INSERT, UPDATE ON cms_vendor_fax_config TO authenticated;
     END IF;
 END $$;
-
 -- ============================================
 -- 2. Enable RLS and create policies
 -- ============================================
 
 ALTER TABLE cms_vendor_fax_config ENABLE ROW LEVEL SECURITY;
-
 -- Anon SELECT policy
 DO $$
 BEGIN
@@ -41,7 +38,6 @@ BEGIN
             FOR SELECT TO anon USING (true);
     END IF;
 END $$;
-
 -- Authenticated ALL policy (upsert)
 DO $$
 BEGIN
@@ -54,5 +50,4 @@ BEGIN
             FOR ALL TO authenticated USING (true) WITH CHECK (true);
     END IF;
 END $$;
-
 COMMIT;

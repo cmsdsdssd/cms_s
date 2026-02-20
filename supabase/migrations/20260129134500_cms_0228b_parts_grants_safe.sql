@@ -1,5 +1,4 @@
 set search_path = public, pg_temp;
-
 do $$
 begin
   -- 뷰가 있을 때만 grant

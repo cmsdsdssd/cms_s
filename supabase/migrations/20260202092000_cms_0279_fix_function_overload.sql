@@ -6,7 +6,6 @@
 -- CASCADE를 사용하여 의존하는 모든 객체(트리거, 뷰 등)도 함께 제거
 DROP FUNCTION IF EXISTS public.cms_fn_shipment_upsert_from_order_line(uuid, numeric, numeric, uuid, uuid) CASCADE;
 DROP FUNCTION IF EXISTS public.cms_fn_shipment_upsert_from_order_line(uuid, numeric, numeric, uuid, text) CASCADE;
-
 -- 추가: 매개변수가 다를 수 있는 다른 변형들도 모두 제거
 -- PostgreSQL은 함수 시그니처 전체를 비교하므로 가능한 모든 조합 제거
 DO $$
@@ -24,7 +23,6 @@ BEGIN
     RAISE NOTICE 'Dropped function: %', func_record.proname || '(' || func_record.args || ')';
   END LOOP;
 END $$;
-
 -- 2. 확실하게 UUID 타입으로만 함수 생성 (text 버전 완전 제거)
 CREATE OR REPLACE FUNCTION public.cms_fn_shipment_upsert_from_order_line(
   p_order_line_id uuid,
@@ -98,11 +96,9 @@ BEGIN
     'status', 'DRAFT'
   );
 END $$;
-
 -- 3. 권한 부여
 GRANT EXECUTE ON FUNCTION public.cms_fn_shipment_upsert_from_order_line(uuid, numeric, numeric, uuid, uuid) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.cms_fn_shipment_upsert_from_order_line(uuid, numeric, numeric, uuid, uuid) TO anon;
-
 -- 4. 함수 생성 확인 (중복 체크 - 반드시 1개만 존재해야 함)
 SELECT 
   '함수 정리 완료' as 상태,

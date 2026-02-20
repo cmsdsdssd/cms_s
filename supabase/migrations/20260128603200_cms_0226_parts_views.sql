@@ -1,5 +1,4 @@
 set search_path = public, pg_temp;
-
 -- 1) part master + on_hand + avg_cost
 drop view if exists public.cms_v_part_master_with_position_v1;
 create view public.cms_v_part_master_with_position_v1 as
@@ -46,7 +45,6 @@ select
 from public.cms_part_item p
 left join ledger g on g.part_id=p.part_id
 left join avg_cost a on a.part_id=p.part_id;
-
 -- 2) parts ledger (lines)
 drop view if exists public.cms_v_part_move_lines_v1 cascade;
 create view public.cms_v_part_move_lines_v1 as
@@ -83,14 +81,12 @@ left join public.cms_part_item p on p.part_id=l.part_id
 where h.status='POSTED'
   and l.is_void=false
   and (l.item_ref_type='PART' or (l.item_ref_type='UNLINKED' and (h.meta->>'module')='PARTS'));
-
 -- 3) unlinked worklist
 drop view if exists public.cms_v_part_unlinked_worklist_v1;
 create view public.cms_v_part_unlinked_worklist_v1 as
 select *
 from public.cms_v_part_move_lines_v1
 where item_ref_type='UNLINKED';
-
 -- 4) daily usage stats (analysis)
 drop view if exists public.cms_v_part_usage_daily_v1;
 create view public.cms_v_part_usage_daily_v1 as

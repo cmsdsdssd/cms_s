@@ -1,25 +1,21 @@
 set search_path = public, pg_temp;
-
 -- 0016: order registration support objects
 
 alter table if exists public.cms_master_item
   add column if not exists image_path text;
-
 create table if not exists public.cms_stone_catalog (
   stone_id uuid primary key default gen_random_uuid(),
   stone_name text not null,
   is_active boolean not null default true,
   created_at timestamptz not null default now()
 );
-drop view if exists public.v_cms_stone_catalog;
-create view public.v_cms_stone_catalog
+create or replace view public.v_cms_stone_catalog
 with (security_invoker = true)
 as
 select stone_id, stone_name
 from public.cms_stone_catalog
 where is_active = true;
-drop view if exists public.v_cms_plating_color;
-create view public.v_cms_plating_color
+create or replace view public.v_cms_plating_color
 with (security_invoker = true)
 as
 select distinct color_code
@@ -27,8 +23,7 @@ from public.cms_plating_variant
 where is_active = true
   and color_code is not null
 order by color_code;
-drop view if exists public.v_cms_ar_client_summary;
-create view public.v_cms_ar_client_summary
+create or replace view public.v_cms_ar_client_summary
 with (security_invoker = true)
 as
 select
@@ -44,7 +39,6 @@ left join public.cms_ar_ledger l on l.party_id = p.party_id
 where p.party_type = 'customer'
   and p.is_active = true
 group by p.party_id, p.name;
-
 drop view if exists public.v_cms_master_item_lookup;
 create view public.v_cms_master_item_lookup
 with (security_invoker = true)
@@ -82,7 +76,6 @@ select
   m.labor_sub2_sell as labor_side2
 from public.cms_master_item m
 cross join ticks t;
-
 alter table if exists public.cms_order_line
   add column if not exists center_stone_name text,
   add column if not exists center_stone_qty int,
@@ -91,11 +84,9 @@ alter table if exists public.cms_order_line
   add column if not exists sub2_stone_name text,
   add column if not exists sub2_stone_qty int,
   add column if not exists plating_color_code text;
-
 drop function if exists public.cms_fn_upsert_order_line_v2(
   uuid, text, text, text, int, text, boolean, uuid, date, cms_e_priority_code, text, text, text, uuid
 );
-
 create or replace function public.cms_fn_upsert_order_line_v2(
   p_customer_party_id uuid,
   p_model_name text,
@@ -234,7 +225,6 @@ begin
 
   return v_id;
 end $$;
-
 do $$
 declare r record;
 begin
@@ -251,7 +241,6 @@ begin
     execute format('grant execute on function public.%I(%s) to authenticated;', r.fn_name, r.args);
   end loop;
 end $$;
-
 grant select on public.v_cms_ar_client_summary to authenticated;
 grant select on public.v_cms_master_item_lookup to authenticated;
 grant select on public.v_cms_stone_catalog to authenticated;

@@ -2,7 +2,6 @@
 -- Ops-safe latest views: exclude TEST/DEMO and prefer MANUAL on tie.
 
 set search_path = public;
-
 -- 1) Ops-safe latest per symbol
 drop view if exists public.cms_v_market_tick_latest_by_symbol_ops_v1 cascade;
 create view public.cms_v_market_tick_latest_by_symbol_ops_v1 as
@@ -45,11 +44,8 @@ select
   updated_at
 from ranked
 where rn = 1;
-
 comment on view public.cms_v_market_tick_latest_by_symbol_ops_v1
 is 'Ops-safe latest tick per symbol (excludes TEST/DEMO; tie-break prefers MANUAL then N8N).';
-
-
 -- 2) Ops-safe GOLD/SILVER single row using role mapping
 drop view if exists public.cms_v_market_tick_latest_gold_silver_ops_v1;
 create view public.cms_v_market_tick_latest_gold_silver_ops_v1 as
@@ -82,6 +78,5 @@ from rg
 left join latest g on g.symbol = rg.symbol
 cross join rs
 left join latest s on s.symbol = rs.symbol;
-
 comment on view public.cms_v_market_tick_latest_gold_silver_ops_v1
 is 'Ops-safe latest GOLD/SILVER (excludes TEST/DEMO).';

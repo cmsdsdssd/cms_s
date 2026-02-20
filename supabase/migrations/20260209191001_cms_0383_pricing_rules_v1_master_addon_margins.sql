@@ -1,5 +1,4 @@
 set search_path = public, pg_temp;
-
 -- ============================================================
 -- 0381: Global pricing rules (SETTING/STONE/PACKAGE) + master addon margins (margin-only)
 -- Add-only + idempotent + safety guards
@@ -43,7 +42,6 @@ begin
     end if;
   end if;
 end $$;
-
 -- ------------------------------------------------------------
 -- 2) New enums (create only if missing)
 -- ------------------------------------------------------------
@@ -55,7 +53,6 @@ do $$ begin
     execute $sql$create type public.cms_e_factory_billing_shape as enum ('SETTING_ONLY','BUNDLED_PACKAGE','SPLIT')$sql$;
   end if;
 end $$;
-
 do $$ begin
   if not exists (
     select 1 from pg_type t join pg_namespace n on n.oid=t.typnamespace
@@ -64,7 +61,6 @@ do $$ begin
     execute $sql$create type public.cms_e_pricing_rule_component as enum ('SETTING','STONE','PACKAGE')$sql$;
   end if;
 end $$;
-
 do $$ begin
   if not exists (
     select 1 from pg_type t join pg_namespace n on n.oid=t.typnamespace
@@ -73,7 +69,6 @@ do $$ begin
     execute $sql$create type public.cms_e_pricing_rule_scope as enum ('ANY','SELF','PROVIDED','FACTORY')$sql$;
   end if;
 end $$;
-
 do $$ begin
   if not exists (
     select 1 from pg_type t join pg_namespace n on n.oid=t.typnamespace
@@ -82,7 +77,6 @@ do $$ begin
     execute $sql$create type public.cms_e_pricing_rule_markup_kind as enum ('ADD_KRW')$sql$;
   end if;
 end $$;
-
 -- ------------------------------------------------------------
 -- 3) Master addon margins (margin-only, per piece)
 --    - default 0, NOT NULL
@@ -90,7 +84,6 @@ end $$;
 alter table if exists public.cms_master_item
   add column if not exists setting_addon_margin_krw_per_piece numeric not null default 0,
   add column if not exists stone_addon_margin_krw_per_piece   numeric not null default 0;
-
 -- ------------------------------------------------------------
 -- 4) Rule table: cms_pricing_rule_v1
 -- ------------------------------------------------------------
@@ -124,10 +117,8 @@ create table if not exists public.cms_pricing_rule_v1 (
   constraint cms_pricing_rule_v1_range_check
     check (max_cost_krw is null or max_cost_krw >= min_cost_krw)
 );
-
 create index if not exists idx_cms_pricing_rule_v1_lookup
   on public.cms_pricing_rule_v1(component, scope, is_active, vendor_party_id, priority, min_cost_krw);
-
 -- ------------------------------------------------------------
 -- 5) Pick rule function (SECURITY DEFINER)
 --    - vendor-specific wins over global
@@ -181,7 +172,6 @@ begin
     return next;
   end if;
 end $$;
-
 -- ------------------------------------------------------------
 -- 6) Safe grants (only if roles exist)
 -- ------------------------------------------------------------
@@ -205,5 +195,4 @@ begin
     ) to service_role$g$;
   end if;
 end $$;
-
--- Done.
+-- Done.;
