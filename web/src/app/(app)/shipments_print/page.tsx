@@ -365,6 +365,13 @@ const toBreakdownAmounts = (bucket?: { krw?: number; labor_krw?: number; gold_g?
   total: Number(bucket?.krw ?? 0),
 });
 
+const toFallbackBreakdownAmounts = (totalKrw: number): Amounts => ({
+  gold: 0,
+  silver: 0,
+  labor: 0,
+  total: Number.isFinite(totalKrw) ? totalKrw : 0,
+});
+
 const normalizeLegacyRow = (row: LegacyLedgerStatementRow): LedgerStatementRow => {
   const prev = toObject(row.prev_position);
   const day = toObject(row.day_ledger_totals);
@@ -1009,12 +1016,31 @@ function ShipmentsPrintContent() {
         .sort((a, b) => new Date(b.occurred_at ?? 0).getTime() - new Date(a.occurred_at ?? 0).getTime());
 
       const breakdown = group.statement.day_breakdown;
-      const shipmentBreakdown = toBreakdownAmounts(breakdown?.shipment);
-      const returnBreakdown = toBreakdownAmounts(breakdown?.return);
-      const paymentBreakdown = toBreakdownAmounts(breakdown?.payment);
-      const adjustBreakdown = toBreakdownAmounts(breakdown?.adjust);
-      const offsetBreakdown = toBreakdownAmounts(breakdown?.offset);
-      const otherBreakdown = toBreakdownAmounts(breakdown?.other);
+      const shipmentBreakdown = breakdown
+        ? toBreakdownAmounts(breakdown.shipment)
+        : toFallbackBreakdownAmounts(Number(day.delta_shipment_krw ?? 0));
+      const returnBreakdown = breakdown
+        ? toBreakdownAmounts(breakdown.return)
+        : toFallbackBreakdownAmounts(Number(day.delta_return_krw ?? 0));
+      const paymentBreakdown = breakdown
+        ? toBreakdownAmounts(breakdown.payment)
+        : toFallbackBreakdownAmounts(Number(day.delta_payment_krw ?? 0));
+      const adjustBreakdown = breakdown
+        ? toBreakdownAmounts(breakdown.adjust)
+        : toFallbackBreakdownAmounts(Number(day.delta_adjust_krw ?? 0));
+      const offsetBreakdown = breakdown
+        ? toBreakdownAmounts(breakdown.offset)
+        : toFallbackBreakdownAmounts(Number(day.delta_offset_krw ?? 0));
+      const fallbackOtherTotal =
+        Number(day.delta_total_krw ?? 0) -
+        Number(day.delta_shipment_krw ?? 0) -
+        Number(day.delta_return_krw ?? 0) -
+        Number(day.delta_payment_krw ?? 0) -
+        Number(day.delta_adjust_krw ?? 0) -
+        Number(day.delta_offset_krw ?? 0);
+      const otherBreakdown = breakdown
+        ? toBreakdownAmounts(breakdown.other)
+        : toFallbackBreakdownAmounts(fallbackOtherTotal);
 
       const printWriteoffs = {
         totalKrw: writeoffs.reduce((sum, adjust) => sum + -Number(adjust.amount_krw ?? 0), 0),
@@ -1138,16 +1164,14 @@ function ShipmentsPrintContent() {
           labor: Number(end.labor_cash_outstanding_krw ?? 0) - Number(prev.labor_cash_outstanding_krw ?? 0),
           total: Number(day.delta_total_krw ?? 0),
         },
-        printCategoryBreakdown: breakdown
-          ? {
-              shipment: shipmentBreakdown,
-              return: returnBreakdown,
-              payment: paymentBreakdown,
-              adjust: adjustBreakdown,
-              offset: offsetBreakdown,
-              other: otherBreakdown,
-            }
-          : undefined,
+        printCategoryBreakdown: {
+          shipment: shipmentBreakdown,
+          return: returnBreakdown,
+          payment: paymentBreakdown,
+          adjust: adjustBreakdown,
+          offset: offsetBreakdown,
+          other: otherBreakdown,
+        },
         hasNonZeroOther:
           Math.abs(otherBreakdown.total) > 0 ||
           Math.abs(otherBreakdown.gold) > 0 ||
@@ -1204,6 +1228,13 @@ function ShipmentsPrintContent() {
   );
 
   const isPagePass = useMemo(() => pageChecks.every((row) => row.pass), [pageChecks]);
+
+  const hasFallbackBreakdownMissing = useMemo(
+    () => partyGroups.some((group) => !group.statement.day_breakdown),
+    [partyGroups]
+  );
+
+  const isStrictPrintBlocked = !isPagePass && !hasFallbackBreakdownMissing;
 
   const visiblePages = useMemo(() => {
     if (!activePartyId) return receiptPages;
@@ -1318,7 +1349,6 @@ function ShipmentsPrintContent() {
   const errorMessage = statementQuery.error ? toMessage(statementQuery.error) : "";
 
   const canPrint =
-    isPagePass &&
     !isLoading &&
     visiblePages.length > 0 &&
     visiblePages[0]?.partyId !== "empty" &&
@@ -1398,14 +1428,20 @@ function ShipmentsPrintContent() {
               <span
                 className={cn(
                   "inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold",
-                  isPagePass ? "bg-emerald-100 text-emerald-700" : "bg-rose-100 text-rose-700"
+                  isStrictPrintBlocked ? "bg-rose-100 text-rose-700" : "bg-emerald-100 text-emerald-700"
                 )}
               >
-                {isPagePass ? "PASS" : "FAIL"}
+                {isStrictPrintBlocked ? "FAIL" : "PASS"}
               </span>
             </div>
 
-            {!isPagePass && pageChecks.length > 0 && (
+            {hasFallbackBreakdownMissing && (
+              <div className="rounded border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-700">
+                v3 day_breakdown 데이터가 없어(v2/v1 fallback) 출력 차단은 해제되고, 카테고리별 분해표만 숨깁니다.
+              </div>
+            )}
+
+            {isStrictPrintBlocked && pageChecks.length > 0 && (
               <div className="overflow-x-auto">
                 <table className="w-full border-collapse text-xs">
                   <thead>
@@ -1647,17 +1683,18 @@ function ShipmentsPrintContent() {
                           <div className="text-xs text-[var(--muted)] tabular-nums">합계 {formatKrw(-Number(selectedPartyGroup.statement.day_ledger_totals.delta_payment_krw ?? 0))} · {payments.length}건</div>
                         </CardHeader>
                         <CardBody className="p-4">
-                          {selectedPartyGroup.day_breakdown ? (
+                          {selectedPartyGroup.statement.day_breakdown ? (
                             <div className="mb-4 rounded border border-[var(--panel-border)] p-3">
                               <div className="text-xs font-semibold">당일 변동 내역</div>
                               <div className="mt-1 text-[11px] text-[var(--muted)]">(+는 미수 증가, -는 미수 감소)</div>
                               {(() => {
-                                const shipment = toBreakdownAmounts(selectedPartyGroup.day_breakdown.shipment);
-                                const returns = toBreakdownAmounts(selectedPartyGroup.day_breakdown.return);
-                                const adjust = toBreakdownAmounts(selectedPartyGroup.day_breakdown.adjust);
-                                const offset = toBreakdownAmounts(selectedPartyGroup.day_breakdown.offset);
-                                const other = toBreakdownAmounts(selectedPartyGroup.day_breakdown.other);
-                                const payment = toBreakdownAmounts(selectedPartyGroup.day_breakdown.payment);
+                                const dayBreakdown = selectedPartyGroup.statement.day_breakdown;
+                                const shipment = toBreakdownAmounts(dayBreakdown?.shipment);
+                                const returns = toBreakdownAmounts(dayBreakdown?.return);
+                                const adjust = toBreakdownAmounts(dayBreakdown?.adjust);
+                                const offset = toBreakdownAmounts(dayBreakdown?.offset);
+                                const other = toBreakdownAmounts(dayBreakdown?.other);
+                                const payment = toBreakdownAmounts(dayBreakdown?.payment);
                                 const hasReturns =
                                   Math.abs(returns.gold) > 0 ||
                                   Math.abs(returns.silver) > 0 ||
@@ -1727,7 +1764,7 @@ function ShipmentsPrintContent() {
                             </div>
                           ) : (
                             <div className="mb-4 rounded border border-amber-300 bg-amber-50 p-3 text-xs text-amber-700">
-                              v3 day_breakdown이 없어 카테고리별 분해표를 표시하지 않습니다(v2/v1 fallback).
+                              day_breakdown 데이터가 없어 카테고리별 분해표를 표시하지 않습니다(요약 출력은 계속 가능합니다).
                             </div>
                           )}
 
@@ -1795,7 +1832,7 @@ function ShipmentsPrintContent() {
               </div>
             </div>
 
-            <div className="receipt-print-root shipments-print-root print-only space-y-6">
+            <div className="receipt-print-root shipments-print-root space-y-6">
               {canPrint ? (
                 visiblePages.map((page, index) => (
                   <div
