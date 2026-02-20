@@ -556,7 +556,6 @@ function computeMasterLaborTotalsWithAbsorb(
 
   const activeAbsorbItems = absorbItems.filter((item) => {
     if (item.is_active === false) return false;
-    if (String(item.vendor_party_id ?? "").trim() !== "") return false;
     if (shouldExcludeEtcAbsorbItem(item)) return false;
     return true;
   });
@@ -1545,10 +1544,9 @@ export default function CatalogPage() {
     queryFn: () => fetchBomLines(selectedRecipeId ?? ""),
   });
 
-  const decorComponentMasterIds = useMemo(() => {
+  const componentMasterIds = useMemo(() => {
     const ids = new Set<string>();
     ((linesQuery.data ?? []) as BomLineRow[]).forEach((line) => {
-      if (parseBomLineKind(line.note) !== "DECOR") return;
       const masterId = String(line.component_master_id ?? "").trim();
       if (!masterId) return;
       ids.add(masterId);
@@ -1556,20 +1554,20 @@ export default function CatalogPage() {
     return [...ids];
   }, [linesQuery.data]);
 
-  const decorComponentAbsorbQuery = useQuery({
-    queryKey: ["master-absorb-labor-items", "batch", [...decorComponentMasterIds].sort().join("|")],
-    enabled: decorComponentMasterIds.length > 0,
+  const componentAbsorbQuery = useQuery({
+    queryKey: ["master-absorb-labor-items", "batch", [...componentMasterIds].sort().join("|")],
+    enabled: componentMasterIds.length > 0,
     retry: false,
     refetchOnWindowFocus: false,
     staleTime: 60_000,
     queryFn: async () => {
-      if (decorComponentMasterIds.length === 0) return [] as MasterAbsorbLaborItem[];
+      if (componentMasterIds.length === 0) return [] as MasterAbsorbLaborItem[];
       const response = await fetch(
-        `/api/master-absorb-labor-items?master_ids=${encodeURIComponent(decorComponentMasterIds.join(","))}`,
+        `/api/master-absorb-labor-items?master_ids=${encodeURIComponent(componentMasterIds.join(","))}`,
         { cache: "no-store" }
       );
       const json = (await response.json()) as { data?: MasterAbsorbLaborItem[]; error?: string };
-      if (!response.ok) throw new Error(json.error ?? "장식 마스터 흡수공임 조회 실패");
+      if (!response.ok) throw new Error(json.error ?? "구성품 마스터 흡수공임 조회 실패");
       return (json.data ?? []) as MasterAbsorbLaborItem[];
     },
   });
@@ -2369,16 +2367,29 @@ export default function CatalogPage() {
       }
 
       absorbLaborCacheRef.current.delete(masterIdToSync);
+      await queryClient.invalidateQueries({ queryKey: ["master-absorb-labor-items"] });
       if (selectedItemId === masterIdToSync) {
         await loadAbsorbLaborItems(masterIdToSync, { forceRefresh: true });
       }
     },
-    [calculateMaterialPrice, loadAbsorbLaborItems, masterRowsById, selectedItemId]
+    [calculateMaterialPrice, loadAbsorbLaborItems, masterRowsById, queryClient, selectedItemId]
   );
 
   const createRecipeDisabled = !selectedMasterId || upsertRecipeMutation.isPending || !canWrite;
   const addLineDisabled = !selectedComponentId || addLineMutation.isPending || upsertRecipeMutation.isPending || !canWrite;
   const voidActionDisabled = voidLineMutation.isPending || !canWrite;
+
+  const componentAbsorbByMasterId = useMemo(() => {
+    const map = new Map<string, MasterAbsorbLaborItem[]>();
+    (componentAbsorbQuery.data ?? []).forEach((row) => {
+      const masterId = String(row.master_id ?? "").trim();
+      if (!masterId) return;
+      const existing = map.get(masterId) ?? [];
+      existing.push(row);
+      map.set(masterId, existing);
+    });
+    return map;
+  }, [componentAbsorbQuery.data]);
 
   const bomLineMetrics = useMemo(() => {
     const rows = linesQuery.data ?? [];
@@ -2393,15 +2404,12 @@ export default function CatalogPage() {
       const deductionWeight = Number.isFinite(deductionPerUnit) && Number.isFinite(qty) ? deductionPerUnit * qty : 0;
       const netWeight = Math.max(grossWeight - deductionWeight, 0);
 
-      const centerQty = Number(masterRow?.center_qty_default ?? 0);
-      const sub1Qty = Number(masterRow?.sub1_qty_default ?? 0);
-      const sub2Qty = Number(masterRow?.sub2_qty_default ?? 0);
-      const laborPerUnit =
-        Number(masterRow?.labor_base_sell ?? 0) +
-        Number(masterRow?.labor_center_sell ?? 0) * centerQty +
-        Number(masterRow?.labor_sub1_sell ?? 0) * sub1Qty +
-        Number(masterRow?.labor_sub2_sell ?? 0) * sub2Qty;
-      const laborTotal = Number.isFinite(laborPerUnit) && Number.isFinite(qty) ? laborPerUnit * qty : 0;
+      const componentMasterId = String(line.component_master_id ?? "").trim();
+      const perUnitTotals = computeMasterLaborTotalsWithAbsorb(
+        masterRow,
+        componentMasterId ? (componentAbsorbByMasterId.get(componentMasterId) ?? []) : []
+      );
+      const laborTotal = Number.isFinite(perUnitTotals.sellPerUnit) && Number.isFinite(qty) ? perUnitTotals.sellPerUnit * qty : 0;
 
       const materialCode = String(masterRow?.material_code_default ?? "00");
       const materialPerUnit = calculateMaterialPrice(materialCode, grossPerUnit, deductionPerUnit);
@@ -2418,7 +2426,7 @@ export default function CatalogPage() {
         estimatedTotal,
       };
     });
-  }, [calculateMaterialPrice, linesQuery.data, masterRowsById]);
+  }, [calculateMaterialPrice, componentAbsorbByMasterId, linesQuery.data, masterRowsById]);
 
   const bomTotals = useMemo(() => {
     return bomLineMetrics.reduce(
@@ -2485,18 +2493,6 @@ export default function CatalogPage() {
     return rows;
   }, [bomLineMetrics]);
 
-  const decorComponentAbsorbByMasterId = useMemo(() => {
-    const map = new Map<string, MasterAbsorbLaborItem[]>();
-    (decorComponentAbsorbQuery.data ?? []).forEach((row) => {
-      const masterId = String(row.master_id ?? "").trim();
-      if (!masterId) return;
-      const existing = map.get(masterId) ?? [];
-      existing.push(row);
-      map.set(masterId, existing);
-    });
-    return map;
-  }, [decorComponentAbsorbQuery.data]);
-
   const decorLaborRows = useMemo(() => {
     const rows = displayedBomLineMetrics
       .filter(({ line }) => parseBomLineKind(line.note) === "DECOR")
@@ -2509,7 +2505,7 @@ export default function CatalogPage() {
         if (!Number.isFinite(qty) || qty <= 0) return null;
         const perUnitTotals = computeMasterLaborTotalsWithAbsorb(
           componentMaster,
-          decorComponentAbsorbByMasterId.get(componentMasterId) ?? []
+          componentAbsorbByMasterId.get(componentMasterId) ?? []
         );
         const sellTotal = perUnitTotals.sellPerUnit * qty;
         const costTotal = perUnitTotals.costPerUnit * qty;
@@ -2530,12 +2526,13 @@ export default function CatalogPage() {
       sellTotal: rows.reduce((sum, row) => sum + row.sellTotal, 0),
       costTotal: rows.reduce((sum, row) => sum + row.costTotal, 0),
     };
-  }, [decorComponentAbsorbByMasterId, displayedBomLineMetrics, masterRowsById]);
+  }, [componentAbsorbByMasterId, displayedBomLineMetrics, masterRowsById]);
 
   const flattenComponentMetrics = useMemo(() => {
     const rows = (flattenQuery.data ?? []) as BomFlattenLeafRow[];
     const mapped = rows.map((leaf, idx) => {
       const qty = Math.max(0, Number(leaf.qty_per_product_unit ?? 0));
+      const componentMasterId = String(leaf.component_master_id ?? "").trim();
       const masterRow = leaf.component_master_id
         ? (masterRowsById[leaf.component_master_id] as Record<string, unknown> | undefined)
         : undefined;
@@ -2543,21 +2540,12 @@ export default function CatalogPage() {
       const deductionPerUnit = Number(masterRow?.deduction_weight_default_g ?? 0);
       const grossWeight = grossPerUnit * qty;
 
-      const centerQty = Number(masterRow?.center_qty_default ?? 0);
-      const sub1Qty = Number(masterRow?.sub1_qty_default ?? 0);
-      const sub2Qty = Number(masterRow?.sub2_qty_default ?? 0);
-      const laborPerUnit =
-        Number(masterRow?.labor_base_sell ?? 0) +
-        Number(masterRow?.labor_center_sell ?? 0) * centerQty +
-        Number(masterRow?.labor_sub1_sell ?? 0) * sub1Qty +
-        Number(masterRow?.labor_sub2_sell ?? 0) * sub2Qty;
-      const laborSellTotal = laborPerUnit * qty;
-      const laborCostPerUnit =
-        Number(masterRow?.labor_base_cost ?? 0) +
-        Number(masterRow?.labor_center_cost ?? 0) * centerQty +
-        Number(masterRow?.labor_sub1_cost ?? 0) * sub1Qty +
-        Number(masterRow?.labor_sub2_cost ?? 0) * sub2Qty;
-      const laborCostTotal = laborCostPerUnit * qty;
+      const perUnitTotals = computeMasterLaborTotalsWithAbsorb(
+        masterRow,
+        componentMasterId ? (componentAbsorbByMasterId.get(componentMasterId) ?? []) : []
+      );
+      const laborSellTotal = perUnitTotals.sellPerUnit * qty;
+      const laborCostTotal = perUnitTotals.costPerUnit * qty;
 
       return {
         key: `${leaf.component_master_id ?? leaf.component_part_id ?? "leaf"}-${idx}`,
@@ -2587,7 +2575,7 @@ export default function CatalogPage() {
     );
 
     return { rows: mapped, totals };
-  }, [flattenQuery.data, masterRowsById]);
+  }, [componentAbsorbByMasterId, flattenQuery.data, masterRowsById]);
 
   const decorLaborSellTotal = decorLaborRows.sellTotal;
   const decorLaborCostTotal = decorLaborRows.costTotal;

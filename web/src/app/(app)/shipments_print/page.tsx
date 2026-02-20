@@ -638,8 +638,13 @@ function ShipmentsPrintContent() {
     return map;
   }, [unitPricingModelQuery.data]);
 
+  const shipmentOnlyStatements = useMemo(
+    () => (statementQuery.data ?? []).filter((statement) => (statement.details?.shipments ?? []).length > 0),
+    [statementQuery.data]
+  );
+
   const partyGroups = useMemo<PartyGroup[]>(() => {
-    return (statementQuery.data ?? []).map((statement) => {
+    return shipmentOnlyStatements.map((statement) => {
       const shipmentLines: ReceiptLine[] = (statement.details?.shipments ?? []).flatMap((shipment, shipmentIndex) => {
         return (shipment.lines ?? []).map((line, lineIndex) => ({
           shipment_line_id:
@@ -701,7 +706,7 @@ function ShipmentsPrintContent() {
         lines: [...shipmentLines, ...returnLines],
       };
     });
-  }, [statementQuery.data, unitPricingByModel]);
+  }, [shipmentOnlyStatements, unitPricingByModel]);
 
   const paymentFallbackQuery = useQuery({
     queryKey: ["shipments-print-payment-fallback", today, filterPartyId],
