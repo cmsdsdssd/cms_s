@@ -1,0 +1,21 @@
+node_modules/
+.env
+.env.local
+.DS_Store
+dist/
+build/
+.next/
+
+supabase/.temp/
+
+
+supabase/.temp/
+
+
+_*.sql
+nul
+
+
+# Supabase db pull remote schema dumps
+/supabase/migrations/*_remote_schema.sql
+
