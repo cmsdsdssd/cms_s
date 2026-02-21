@@ -1,4 +1,7 @@
 {
+  "scripts": {
+    "guard:anon": "node scripts/check-anon-access.mjs"
+  },
   "devDependencies": {
     "supabase": "^2.72.8"
   }

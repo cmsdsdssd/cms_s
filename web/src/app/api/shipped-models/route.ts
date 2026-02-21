@@ -6,6 +6,7 @@ type ShippedModelRow = {
     suffix: string;
     color: string;
     material_code?: string;
+    last_shipped_at?: string | null;
 };
 
 export async function GET(request: Request) {
@@ -22,18 +23,12 @@ export async function GET(request: Request) {
         return NextResponse.json({ error: "customer_party_id is required" }, { status: 400 });
     }
 
-    // Query shipment lines for this customer with distinct model names
     let query = schema
-        .from("cms_shipment_line")
-        .select(`
-      model_name,
-      suffix,
-      color,
-      material_code,
-      cms_shipment_header!inner(customer_party_id)
-    `)
-        .eq("cms_shipment_header.customer_party_id", customerId)
-        .order("model_name", { ascending: true });
+        .from("cms_v_shipped_model_latest_v1")
+        .select("model_name, suffix, color, material_code, last_shipped_at")
+        .eq("customer_party_id", customerId)
+        .order("last_shipped_at", { ascending: false })
+        .limit(50);
 
     if (keyword) {
         query = query.ilike("model_name", `%${keyword}%`);
@@ -46,20 +41,5 @@ export async function GET(request: Request) {
         return NextResponse.json({ error: error.message }, { status: 500 });
     }
 
-    // Deduplicate by model_name (keep first occurrence)
-    const seen = new Set<string>();
-    const unique: ShippedModelRow[] = [];
-    for (const row of (data ?? []) as unknown as ShippedModelRow[]) {
-        if (!seen.has(row.model_name)) {
-            seen.add(row.model_name);
-            unique.push({
-                model_name: row.model_name,
-                suffix: row.suffix,
-                color: row.color,
-                material_code: row.material_code,
-            });
-        }
-    }
-
-    return NextResponse.json(unique.slice(0, 50));
+    return NextResponse.json((data ?? []) as unknown as ShippedModelRow[]);
 }

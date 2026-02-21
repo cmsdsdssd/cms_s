@@ -10,7 +10,7 @@ import { Input, Select, Textarea } from "@/components/ui/field";
 import { Badge } from "@/components/ui/badge";
 import { NumberText } from "@/components/ui/number-text";
 import { Modal } from "@/components/ui/modal";
-import { Grid2x2, List, X } from "lucide-react";
+import { Grid2x2, List, WandSparkles, X } from "lucide-react";
 import { Sheet } from "@/components/ui/sheet";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
@@ -20,6 +20,7 @@ import { getSchemaClient } from "@/lib/supabase/client";
 import { compressImage } from "@/lib/image-utils";
 import { deriveCategoryCodeFromModelName } from "@/lib/model-name";
 import { roundUpToUnit } from "@/lib/number";
+import { buildPromptText } from "@/lib/nanobanana/prompt-template";
 import {
   buildMaterialFactorMap,
   calcMaterialAmountSellKrw,
@@ -78,6 +79,35 @@ type CatalogDetail = {
   note: string;
   releaseDate: string;
   modifiedDate: string;
+};
+
+type NanobananaSetting = {
+  productPose: 0 | 1 | 2;
+  backgroundStyle: 0 | 1 | 2 | 3 | 4 | 5;
+  customPrompt: string;
+  showModelNameOverlay: boolean;
+  textColor: "black" | "white";
+  displayName: string;
+};
+
+type BatchGenerateResultRow = {
+  master_id: string;
+  success: boolean;
+  image_url?: string;
+  image_path?: string;
+  error?: string;
+  code?: string;
+};
+
+type GeneratedPreviewPayload = {
+  masterId: string;
+  sourcePath: string;
+  sourceMimeType: string;
+  generatedBase64: string;
+  generatedMimeType: string;
+  promptHash: string;
+  previousImageUrl: string | null;
+  imageUrl: string;
 };
 
 type AbsorbLaborBucket = "BASE_LABOR" | "STONE_LABOR" | "PLATING" | "ETC";
@@ -673,6 +703,20 @@ function supportsChinaCostPanel(materialCode: string) {
   return true;
 }
 
+function createDefaultNanobananaSetting(displayName: string): NanobananaSetting {
+  return {
+    productPose: 0,
+    backgroundStyle: 0,
+    customPrompt: "",
+    showModelNameOverlay: true,
+    textColor: "black",
+    displayName,
+  };
+}
+
+const PRODUCT_POSE_LABELS = ["눕혀서", "세워서", "걸어서"] as const;
+const BACKGROUND_STYLE_LABELS = ["순백", "아이보리", "라이트그레이", "스카이블루", "소프트핑크", "검정"] as const;
+
 export default function CatalogPage() {
   const [catalogItemsState, setCatalogItemsState] = useState<CatalogItem[]>([]);
   const [isCatalogLoading, setIsCatalogLoading] = useState(false);
@@ -683,6 +727,19 @@ export default function CatalogPage() {
   const [registerOpen, setRegisterOpen] = useState(false);
   const [isEditMode, setIsEditMode] = useState(false);
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectedMasterIds, setSelectedMasterIds] = useState<Set<string>>(new Set());
+  const [batchGenerateOpen, setBatchGenerateOpen] = useState(false);
+  const [batchSlideIndex, setBatchSlideIndex] = useState(0);
+  const [batchSettingsById, setBatchSettingsById] = useState<Record<string, NanobananaSetting>>({});
+  const [isBatchGenerating, setIsBatchGenerating] = useState(false);
+  const [isSingleGenerating, setIsSingleGenerating] = useState(false);
+  const [singleGenerateDrawerOpen, setSingleGenerateDrawerOpen] = useState(false);
+  const [singleGenerateDebugPrompt, setSingleGenerateDebugPrompt] = useState("");
+  const [singleGenerateDebugHash, setSingleGenerateDebugHash] = useState("");
+  const [isApplyingGeneratedPreview, setIsApplyingGeneratedPreview] = useState(false);
+  const [batchResultById, setBatchResultById] = useState<Record<string, BatchGenerateResultRow>>({});
+  const [generatedPreview, setGeneratedPreview] = useState<GeneratedPreviewPayload | null>(null);
   const [isDetailDrawerOpen, setIsDetailDrawerOpen] = useState(false);
   const [masterId, setMasterId] = useState("");
   const [modelName, setModelName] = useState("");
@@ -1130,6 +1187,47 @@ export default function CatalogPage() {
     return sortedCatalogItems.slice(start, start + activePageSize);
   }, [sortedCatalogItems, page, activePageSize]);
 
+  const selectedBatchItems = useMemo(
+    () => sortedCatalogItems.filter((item) => selectedMasterIds.has(item.id)),
+    [selectedMasterIds, sortedCatalogItems]
+  );
+
+  const selectedBatchItem = selectedBatchItems[batchSlideIndex] ?? null;
+
+  const upsertBatchSetting = useCallback((masterId: string, updater: (prev: NanobananaSetting) => NanobananaSetting) => {
+    setBatchSettingsById((prev) => {
+      const currentItem = sortedCatalogItems.find((item) => item.id === masterId);
+      const fallback = createDefaultNanobananaSetting(currentItem?.model ?? "product");
+      const next = updater(prev[masterId] ?? fallback);
+      return { ...prev, [masterId]: next };
+    });
+  }, [sortedCatalogItems]);
+
+  const toggleMasterSelection = useCallback((masterId: string) => {
+    setSelectedMasterIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(masterId)) {
+        next.delete(masterId);
+      } else {
+        next.add(masterId);
+      }
+      return next;
+    });
+  }, []);
+
+  const handleToggleSelectionMode = useCallback(() => {
+    setSelectionMode((prev) => {
+      const next = !prev;
+      if (next) {
+        setIsDetailDrawerOpen(false);
+      } else {
+        setSelectedMasterIds(new Set());
+        setBatchResultById({});
+      }
+      return next;
+    });
+  }, []);
+
   useEffect(() => {
     if (pageItems.length === 0) return;
     const ids = pageItems.slice(0, 8).map((item) => item.id).filter(Boolean);
@@ -1147,10 +1245,57 @@ export default function CatalogPage() {
     if (page > totalPages) setPage(totalPages);
   }, [page, totalPages]);
 
+  useEffect(() => {
+    if (batchSlideIndex < selectedBatchItems.length) return;
+    setBatchSlideIndex(Math.max(selectedBatchItems.length - 1, 0));
+  }, [batchSlideIndex, selectedBatchItems.length]);
+
   const selectedItem = useMemo(
     () => catalogItemsState.find((item) => item.id === selectedItemId) ?? null,
     [catalogItemsState, selectedItemId]
   );
+
+  const currentEditNanobananaSetting = useMemo(() => {
+    const targetMasterId = masterId.trim();
+    if (!targetMasterId) return createDefaultNanobananaSetting(modelName || "product");
+    const fallbackName = modelName || selectedItem?.model || "product";
+    return batchSettingsById[targetMasterId] ?? createDefaultNanobananaSetting(fallbackName);
+  }, [batchSettingsById, masterId, modelName, selectedItem?.model]);
+
+  const updateCurrentEditNanobananaSetting = useCallback(
+    (updater: (prev: NanobananaSetting) => NanobananaSetting) => {
+      const targetMasterId = masterId.trim();
+      if (!targetMasterId) return;
+      upsertBatchSetting(targetMasterId, updater);
+    },
+    [masterId, upsertBatchSetting]
+  );
+
+  const singleGeneratePromptPreview = useMemo(
+    () => buildPromptText({
+      productPose: currentEditNanobananaSetting.productPose,
+      backgroundStyle: currentEditNanobananaSetting.backgroundStyle,
+      customPrompt: currentEditNanobananaSetting.customPrompt,
+    }).prompt,
+    [
+      currentEditNanobananaSetting.backgroundStyle,
+      currentEditNanobananaSetting.customPrompt,
+      currentEditNanobananaSetting.productPose,
+    ]
+  );
+
+  useEffect(() => {
+    setSelectedMasterIds((prev) => {
+      if (prev.size === 0) return prev;
+      const validIds = new Set(catalogItemsState.map((item) => item.id));
+      const next = new Set<string>();
+      prev.forEach((id) => {
+        if (validIds.has(id)) next.add(id);
+      });
+      return next;
+    });
+  }, [catalogItemsState]);
+
   const vendorLabelById = useMemo(() => {
     const map = new Map<string, string>();
     vendorOptions.forEach((option) => {
@@ -2853,6 +2998,276 @@ export default function CatalogPage() {
     }
   };
 
+  const applyGeneratedImageState = useCallback((masterIdToUpdate: string, nextImageUrl: string, nextImagePath: string) => {
+    setCatalogItemsState((prev) =>
+      prev.map((item) => (item.id === masterIdToUpdate ? { ...item, imageUrl: nextImageUrl } : item))
+    );
+    setMasterRowsById((prev) => {
+      const row = prev[masterIdToUpdate];
+      if (!row) return prev;
+      return {
+        ...prev,
+        [masterIdToUpdate]: {
+          ...row,
+          image_url: nextImageUrl,
+          image_path: nextImagePath,
+        },
+      };
+    });
+    if (masterIdToUpdate === masterId || masterIdToUpdate === selectedItemId) {
+      setImageUrl(nextImageUrl);
+      setImagePath(nextImagePath);
+    }
+  }, [masterId, selectedItemId]);
+
+  const handleOpenSingleGenerateDrawer = () => {
+    const targetMasterId = (masterId || selectedItemId || "").trim();
+    if (!targetMasterId) {
+      toast.error("처리 실패", { description: "마스터 수정 화면에서 사용해 주세요." });
+      return;
+    }
+
+    const targetItem = sortedCatalogItems.find((item) => item.id === targetMasterId);
+    setBatchSettingsById((prev) => ({
+      ...prev,
+      [targetMasterId]: prev[targetMasterId] ?? createDefaultNanobananaSetting(targetItem?.model ?? modelName ?? "product"),
+    }));
+    setSingleGenerateDebugPrompt("");
+    setSingleGenerateDebugHash("");
+    setSingleGenerateDrawerOpen(true);
+  };
+
+  const handleGenerateSingleImage = async () => {
+    const targetMasterId = (masterId || selectedItemId || "").trim();
+    if (!targetMasterId) {
+      toast.error("처리 실패", { description: "저장된 마스터를 먼저 선택해 주세요." });
+      return;
+    }
+
+    const targetItem = sortedCatalogItems.find((item) => item.id === targetMasterId);
+    const setting = batchSettingsById[targetMasterId]
+      ?? createDefaultNanobananaSetting(targetItem?.model ?? modelName ?? "product");
+
+    setIsSingleGenerating(true);
+    try {
+      const response = await fetch("/api/master-image/auto-generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          master_id: targetMasterId,
+          preview_only: true,
+          product_pose: setting.productPose,
+          background_style: setting.backgroundStyle,
+          custom_prompt: setting.customPrompt,
+          show_model_name_overlay: setting.showModelNameOverlay,
+          text_color: setting.textColor,
+          display_name: setting.displayName || targetItem?.model || modelName || "product",
+        }),
+      });
+
+      const rawText = await response.text();
+      let result: {
+        success?: boolean;
+        source_path?: string;
+        source_mime_type?: string;
+        generated_image_base64?: string;
+        generated_mime_type?: string;
+        prompt_hash?: string;
+        debug_prompt?: string;
+        debug_prompt_hash?: string;
+        error?: string;
+      } = {};
+      if (rawText) {
+        try {
+          result = JSON.parse(rawText) as {
+            success?: boolean;
+            source_path?: string;
+            source_mime_type?: string;
+            generated_image_base64?: string;
+            generated_mime_type?: string;
+            prompt_hash?: string;
+            debug_prompt?: string;
+            debug_prompt_hash?: string;
+            error?: string;
+          };
+        } catch {
+          const message = response.status >= 500
+            ? `서버 오류 (${response.status}) - NanoBanana/Gateway 응답을 확인해 주세요.`
+            : `서버 응답 파싱 실패 (${response.status})`;
+          throw new Error(message);
+        }
+      }
+
+      if (
+        !response.ok
+        || !result.success
+        || !result.generated_image_base64
+        || !result.generated_mime_type
+        || !result.source_path
+      ) {
+        throw new Error(result.error ?? "대표 이미지 생성에 실패했습니다.");
+      }
+
+      setGeneratedPreview({
+        masterId: targetMasterId,
+        sourcePath: result.source_path,
+        sourceMimeType: result.source_mime_type ?? "image/png",
+        generatedBase64: result.generated_image_base64,
+        generatedMimeType: result.generated_mime_type,
+        promptHash: result.prompt_hash ?? "",
+        previousImageUrl: targetItem?.imageUrl ?? imageUrl ?? null,
+        imageUrl: `data:${result.generated_mime_type};base64,${result.generated_image_base64}`,
+      });
+      setSingleGenerateDebugPrompt(result.debug_prompt ?? singleGeneratePromptPreview);
+      setSingleGenerateDebugHash(result.debug_prompt_hash ?? result.prompt_hash ?? "");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "대표 이미지 생성에 실패했습니다.";
+      toast.error("처리 실패", { description: message });
+    } finally {
+      setIsSingleGenerating(false);
+    }
+  };
+
+  const handleApplyGeneratedPreview = async () => {
+    if (!generatedPreview) return;
+
+    setIsApplyingGeneratedPreview(true);
+    try {
+      const response = await fetch("/api/master-image/apply-generated", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          master_id: generatedPreview.masterId,
+          source_path: generatedPreview.sourcePath,
+          source_mime_type: generatedPreview.sourceMimeType,
+          generated_image_base64: generatedPreview.generatedBase64,
+          generated_mime_type: generatedPreview.generatedMimeType,
+          prompt_hash: generatedPreview.promptHash,
+        }),
+      });
+
+      const rawText = await response.text();
+      let result: { success?: boolean; image_url?: string; image_path?: string; error?: string } = {};
+      if (rawText) {
+        try {
+          result = JSON.parse(rawText) as { success?: boolean; image_url?: string; image_path?: string; error?: string };
+        } catch {
+          throw new Error(`서버 응답 파싱 실패 (${response.status})`);
+        }
+      }
+      if (!response.ok || !result.success || !result.image_url || !result.image_path) {
+        throw new Error(result.error ?? "대표 이미지 적용에 실패했습니다.");
+      }
+
+      applyGeneratedImageState(generatedPreview.masterId, result.image_url, result.image_path);
+      setGeneratedPreview(null);
+      toast.success("대표 이미지 적용 완료");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "대표 이미지 적용에 실패했습니다.";
+      toast.error("처리 실패", { description: message });
+    } finally {
+      setIsApplyingGeneratedPreview(false);
+    }
+  };
+
+  const handleOpenBatchGenerate = () => {
+    if (selectedMasterIds.size === 0) {
+      toast.error("처리 실패", { description: "먼저 항목을 선택해 주세요." });
+      return;
+    }
+    setBatchSettingsById((prev) => {
+      const next = { ...prev };
+      selectedBatchItems.forEach((item) => {
+        if (!next[item.id]) next[item.id] = createDefaultNanobananaSetting(item.model);
+      });
+      return next;
+    });
+    setBatchSlideIndex(0);
+    setBatchResultById({});
+    setBatchGenerateOpen(true);
+  };
+
+  const handleBatchGenerate = async () => {
+    if (selectedBatchItems.length === 0) {
+      toast.error("처리 실패", { description: "생성 대상이 없습니다." });
+      return;
+    }
+
+    setIsBatchGenerating(true);
+    try {
+      const payload = {
+        concurrency: 3,
+        items: selectedBatchItems.map((item) => {
+          const setting = batchSettingsById[item.id] ?? createDefaultNanobananaSetting(item.model);
+          return {
+            master_id: item.id,
+            product_pose: setting.productPose,
+            background_style: setting.backgroundStyle,
+            custom_prompt: setting.customPrompt,
+            show_model_name_overlay: setting.showModelNameOverlay,
+            text_color: setting.textColor,
+            display_name: setting.displayName || item.model,
+          };
+        }),
+      };
+
+      const response = await fetch("/api/master-image/auto-generate/batch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      const rawText = await response.text();
+      let result: {
+        success_count?: number;
+        fail_count?: number;
+        results?: BatchGenerateResultRow[];
+        error?: string;
+      } = {};
+      if (rawText) {
+        try {
+          result = JSON.parse(rawText) as {
+            success_count?: number;
+            fail_count?: number;
+            results?: BatchGenerateResultRow[];
+            error?: string;
+          };
+        } catch {
+          const message = response.status >= 500
+            ? `서버 오류 (${response.status}) - NanoBanana/Gateway 응답을 확인해 주세요.`
+            : `서버 응답 파싱 실패 (${response.status})`;
+          throw new Error(message);
+        }
+      }
+
+      if (!response.ok || !Array.isArray(result.results)) {
+        throw new Error(result.error ?? "일괄 생성에 실패했습니다.");
+      }
+
+      const resultMap: Record<string, BatchGenerateResultRow> = {};
+      result.results.forEach((row) => {
+        resultMap[row.master_id] = row;
+        if (row.success && row.image_url && row.image_path) {
+          applyGeneratedImageState(row.master_id, row.image_url, row.image_path);
+        }
+      });
+      setBatchResultById(resultMap);
+
+      const successCount = Number(result.success_count ?? 0);
+      const failCount = Number(result.fail_count ?? 0);
+      if (failCount > 0) {
+        toast.warning(`일괄 생성 완료 (성공 ${successCount} / 실패 ${failCount})`);
+      } else {
+        toast.success(`일괄 생성 완료 (${successCount}개)`);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "일괄 생성에 실패했습니다.";
+      toast.error("처리 실패", { description: message });
+    } finally {
+      setIsBatchGenerating(false);
+    }
+  };
+
   const resetForm = () => {
     setShowAdvancedPricing(false);
     setMasterId(crypto.randomUUID());
@@ -2927,6 +3342,10 @@ export default function CatalogPage() {
     setIsEditMode(true);
     setMasterId(selectedItem.id);
     setModelName(selectedItem.model);
+    setBatchSettingsById((prev) => ({
+      ...prev,
+      [selectedItem.id]: prev[selectedItem.id] ?? createDefaultNanobananaSetting(selectedItem.model),
+    }));
     const vendorCandidate = String(row?.vendor_party_id ?? selectedItem.vendor ?? "");
     setVendorId(
       isUuid(vendorCandidate)
@@ -3577,6 +3996,7 @@ export default function CatalogPage() {
       open={registerOpen}
       onClose={() => {
         setRegisterOpen(false);
+        setSingleGenerateDrawerOpen(false);
         setIsSaving(false);
         setUploadError(null);
         setUploadingImage(false);
@@ -3597,12 +4017,21 @@ export default function CatalogPage() {
           <div className="space-y-4">
             <div className="rounded-[18px] border border-dashed border-[var(--panel-border)] bg-[var(--panel)] p-4">
               <div className="mb-3 flex items-center justify-between text-sm font-semibold text-[var(--foreground)]">
-                <span>대표 이미지</span>
-                {uploadingImage ? (
-                  <span className="text-xs text-[var(--muted)]">
-                    업로드 중...
-                  </span>
-                ) : null}
+                <div className="flex items-center gap-2">
+                  <span>대표 이미지</span>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    type="button"
+                    onClick={handleOpenSingleGenerateDrawer}
+                    disabled={!isEditMode || !masterId.trim() || isSingleGenerating}
+                  >
+                    대표이미지 생성
+                  </Button>
+                </div>
+                <div className="text-xs text-[var(--muted)]">
+                  {uploadingImage ? "업로드 중..." : ""}
+                </div>
               </div>
               <label className="group relative flex h-56 w-56 mx-auto cursor-pointer flex-col items-center justify-center overflow-hidden rounded-[16px] border border-[var(--panel-border)] bg-[var(--panel)] text-center">
                 <input
@@ -5500,6 +5929,324 @@ export default function CatalogPage() {
     </Sheet>
   );
 
+  const renderSingleGenerateDrawer = () => {
+    const targetMasterId = masterId.trim();
+    const targetItem = sortedCatalogItems.find((item) => item.id === targetMasterId) ?? selectedItem;
+    const setting = currentEditNanobananaSetting;
+
+    return (
+      <Sheet
+        open={singleGenerateDrawerOpen}
+        onClose={() => {
+          if (isSingleGenerating) return;
+          setSingleGenerateDrawerOpen(false);
+        }}
+        side="left"
+        title="대표이미지 생성 설정"
+        className="w-full sm:w-[480px] lg:w-[520px]"
+      >
+        <div className="h-full overflow-y-auto p-5 scrollbar-hide">
+          <div className="space-y-4">
+            <div className="rounded-[12px] border border-[var(--panel-border)] bg-[var(--panel)] p-3">
+              <div className="text-xs text-[var(--muted)]">대상 마스터</div>
+              <div className="mt-1 text-sm font-semibold text-[var(--foreground)]">
+                {targetItem?.model ?? modelName ?? "-"}
+              </div>
+            </div>
+
+            <div className="space-y-3 rounded-[12px] border border-[var(--panel-border)] bg-[var(--subtle-bg)] p-3">
+              <div className="space-y-1">
+                <div className="flex items-center justify-between text-xs text-[var(--muted)]">
+                  <span>포즈</span>
+                  <span className="font-semibold text-[var(--foreground)]">{PRODUCT_POSE_LABELS[setting.productPose]}</span>
+                </div>
+                <input
+                  type="range"
+                  min={0}
+                  max={2}
+                  step={1}
+                  value={setting.productPose}
+                  onChange={(event) =>
+                    updateCurrentEditNanobananaSetting((prev) => ({
+                      ...prev,
+                      productPose: Number(event.target.value) as 0 | 1 | 2,
+                    }))
+                  }
+                  className="w-full"
+                />
+              </div>
+
+              <div className="space-y-1">
+                <div className="flex items-center justify-between text-xs text-[var(--muted)]">
+                  <span>배경</span>
+                  <span className="font-semibold text-[var(--foreground)]">{BACKGROUND_STYLE_LABELS[setting.backgroundStyle]}</span>
+                </div>
+                <input
+                  type="range"
+                  min={0}
+                  max={5}
+                  step={1}
+                  value={setting.backgroundStyle}
+                  onChange={(event) =>
+                    updateCurrentEditNanobananaSetting((prev) => ({
+                      ...prev,
+                      backgroundStyle: Number(event.target.value) as 0 | 1 | 2 | 3 | 4 | 5,
+                    }))
+                  }
+                  className="w-full"
+                />
+              </div>
+
+              <Field label="표시 모델명">
+                <Input
+                  value={setting.displayName}
+                  onChange={(event) =>
+                    updateCurrentEditNanobananaSetting((prev) => ({
+                      ...prev,
+                      displayName: event.target.value,
+                    }))
+                  }
+                  placeholder="모델명"
+                />
+              </Field>
+
+              <div className="grid grid-cols-2 gap-2">
+                <label className="inline-flex items-center gap-2 text-xs text-[var(--foreground)]">
+                  <input
+                    type="checkbox"
+                    checked={setting.showModelNameOverlay}
+                    onChange={(event) =>
+                      updateCurrentEditNanobananaSetting((prev) => ({
+                        ...prev,
+                        showModelNameOverlay: event.target.checked,
+                      }))
+                    }
+                    className="h-4 w-4"
+                  />
+                  좌측 상단 모델명
+                </label>
+                <Select
+                  value={setting.textColor}
+                  onChange={(event) =>
+                    updateCurrentEditNanobananaSetting((prev) => ({
+                      ...prev,
+                      textColor: event.target.value === "white" ? "white" : "black",
+                    }))
+                  }
+                >
+                  <option value="black">텍스트 black</option>
+                  <option value="white">텍스트 white</option>
+                </Select>
+              </div>
+
+              <Field label="추가 프롬프트">
+                <Textarea
+                  value={setting.customPrompt}
+                  onChange={(event) =>
+                    updateCurrentEditNanobananaSetting((prev) => ({
+                      ...prev,
+                      customPrompt: event.target.value,
+                    }))
+                  }
+                  placeholder="Additional 프롬프트"
+                />
+              </Field>
+
+              <Field label="적용 프롬프트 미리보기">
+                <Textarea value={singleGeneratePromptPreview} readOnly className="min-h-[180px]" />
+              </Field>
+
+              {singleGenerateDebugPrompt ? (
+                <Field label="서버 사용 프롬프트 (최근 생성)">
+                  <Textarea value={singleGenerateDebugPrompt} readOnly className="min-h-[180px]" />
+                </Field>
+              ) : null}
+
+              <div className="text-[11px] text-[var(--muted)]">
+                prompt_hash: {singleGenerateDebugHash || "(생성 후 표시)"}
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2">
+              <Button variant="secondary" onClick={() => setSingleGenerateDrawerOpen(false)} disabled={isSingleGenerating}>
+                닫기
+              </Button>
+              <Button onClick={handleGenerateSingleImage} disabled={isSingleGenerating || !targetMasterId}>
+                {isSingleGenerating ? "생성 중..." : "생성하기"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      </Sheet>
+    );
+  };
+
+  const renderBatchGenerateDrawer = () => (
+    <Sheet
+      open={batchGenerateOpen}
+      onClose={() => {
+        if (isBatchGenerating) return;
+        setBatchGenerateOpen(false);
+      }}
+      title="대표 이미지 일괄 생성"
+      className="lg:w-[860px]"
+    >
+      <div className="h-full overflow-y-auto p-6 scrollbar-hide">
+        <div className="space-y-4">
+          <ActionBar
+            title="나노바나나 배치"
+            subtitle={`선택 ${selectedBatchItems.length}개`}
+            actions={
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => setBatchSlideIndex((prev) => Math.max(prev - 1, 0))}
+                  disabled={batchSlideIndex <= 0}
+                >
+                  이전
+                </Button>
+                <div className="text-xs text-[var(--muted)]">
+                  {selectedBatchItems.length === 0 ? "0 / 0" : `${batchSlideIndex + 1} / ${selectedBatchItems.length}`}
+                </div>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => setBatchSlideIndex((prev) => Math.min(prev + 1, Math.max(selectedBatchItems.length - 1, 0)))}
+                  disabled={batchSlideIndex >= selectedBatchItems.length - 1}
+                >
+                  다음
+                </Button>
+                <Button
+                  size="sm"
+                  onClick={handleBatchGenerate}
+                  disabled={isBatchGenerating || selectedBatchItems.length === 0}
+                >
+                  {isBatchGenerating ? "일괄 생성 중..." : "전체 실행"}
+                </Button>
+              </div>
+            }
+          />
+
+          {!selectedBatchItem ? (
+            <div className="rounded-[12px] border border-[var(--panel-border)] bg-[var(--panel)] p-4 text-sm text-[var(--muted)]">
+              선택된 항목이 없습니다.
+            </div>
+          ) : (
+            (() => {
+              const setting = batchSettingsById[selectedBatchItem.id] ?? createDefaultNanobananaSetting(selectedBatchItem.model);
+              const result = batchResultById[selectedBatchItem.id];
+              return (
+                <div className="grid gap-4 lg:grid-cols-[280px,minmax(0,1fr)]">
+                  <div className="rounded-[12px] border border-[var(--panel-border)] bg-[var(--panel)] p-3">
+                    <div className="mb-2 text-sm font-semibold">{selectedBatchItem.model}</div>
+                    <div className="aspect-square overflow-hidden rounded-[10px] border border-[var(--panel-border)] bg-[var(--subtle-bg)]">
+                      {selectedBatchItem.imageUrl ? (
+                        <img src={selectedBatchItem.imageUrl} alt={selectedBatchItem.model} className="h-full w-full object-cover" />
+                      ) : (
+                        <div className="flex h-full items-center justify-center text-xs text-[var(--muted)]">No Image</div>
+                      )}
+                    </div>
+                    {result ? (
+                      <p className={cn("mt-2 text-xs", result.success ? "text-emerald-600" : "text-red-500")}>
+                        {result.success ? "생성 완료" : result.error ?? "실패"}
+                      </p>
+                    ) : null}
+                  </div>
+
+                  <div className="rounded-[12px] border border-[var(--panel-border)] bg-[var(--panel)] p-4">
+                    <div className="grid gap-3 md:grid-cols-2">
+                      <Field label="포즈">
+                        <Select
+                          value={String(setting.productPose)}
+                          onChange={(event) =>
+                            upsertBatchSetting(selectedBatchItem.id, (prev) => ({
+                              ...prev,
+                              productPose: Number(event.target.value) as 0 | 1 | 2,
+                            }))
+                          }
+                        >
+                          <option value="0">눕혀서</option>
+                          <option value="1">세워서</option>
+                          <option value="2">걸어서</option>
+                        </Select>
+                      </Field>
+                      <Field label="배경">
+                        <Select
+                          value={String(setting.backgroundStyle)}
+                          onChange={(event) =>
+                            upsertBatchSetting(selectedBatchItem.id, (prev) => ({
+                              ...prev,
+                              backgroundStyle: Number(event.target.value) as 0 | 1 | 2 | 3 | 4 | 5,
+                            }))
+                          }
+                        >
+                          <option value="0">순백</option>
+                          <option value="1">아이보리</option>
+                          <option value="2">라이트그레이</option>
+                          <option value="3">스카이블루</option>
+                          <option value="4">소프트핑크</option>
+                          <option value="5">검정</option>
+                        </Select>
+                      </Field>
+                      <Field label="표시명">
+                        <Input
+                          value={setting.displayName}
+                          onChange={(event) =>
+                            upsertBatchSetting(selectedBatchItem.id, (prev) => ({ ...prev, displayName: event.target.value }))
+                          }
+                        />
+                      </Field>
+                      <Field label="텍스트 색상">
+                        <Select
+                          value={setting.textColor}
+                          onChange={(event) =>
+                            upsertBatchSetting(selectedBatchItem.id, (prev) => ({
+                              ...prev,
+                              textColor: event.target.value === "white" ? "white" : "black",
+                            }))
+                          }
+                        >
+                          <option value="black">black</option>
+                          <option value="white">white</option>
+                        </Select>
+                      </Field>
+                    </div>
+                    <div className="mt-3">
+                      <Field label="추가 프롬프트">
+                        <Textarea
+                          value={setting.customPrompt}
+                          onChange={(event) =>
+                            upsertBatchSetting(selectedBatchItem.id, (prev) => ({ ...prev, customPrompt: event.target.value }))
+                          }
+                          placeholder="추가 프롬프트"
+                        />
+                      </Field>
+                    </div>
+                    <label className="mt-2 inline-flex items-center gap-2 text-xs text-[var(--foreground)]">
+                      <input
+                        type="checkbox"
+                        checked={setting.showModelNameOverlay}
+                        onChange={(event) =>
+                          upsertBatchSetting(selectedBatchItem.id, (prev) => ({
+                            ...prev,
+                            showModelNameOverlay: event.target.checked,
+                          }))
+                        }
+                        className="h-4 w-4"
+                      />
+                      좌측 상단 모델명 오버레이 적용
+                    </label>
+                  </div>
+                </div>
+              );
+            })()
+          )}
+        </div>
+      </div>
+    </Sheet>
+  );
+
   const renderListLeftPanel = () => (
     <div className="flex flex-col gap-3 h-full" id="catalog.listPanel">
       <div className="sticky top-3 z-10 flex min-h-[42px] items-center justify-between rounded-full border border-[var(--panel-border)] bg-[var(--panel)]/95 px-4 py-2 shadow-sm backdrop-blur-md transition-all">
@@ -5537,10 +6284,10 @@ export default function CatalogPage() {
         ) : (
           <div className="space-y-3">
             {pageItems.map((item) => (
-                <Card
+              <Card
                 key={item.id}
                 className={cn(
-                  "cursor-pointer p-3 transition",
+                  "relative cursor-pointer p-3 transition",
                   getMaterialBgColor(
                     String(
                       masterRowsById[item.id]?.material_code_default ?? "00"
@@ -5551,13 +6298,33 @@ export default function CatalogPage() {
                     : "hover:opacity-90"
                   )}
                   onClick={() => {
+                    if (selectionMode) {
+                      toggleMasterSelection(item.id);
+                      return;
+                    }
                     prefetchMasterDetailFastPath(item.id);
                     setSelectedItemId(item.id);
                   }}
                   onMouseEnter={() => prefetchMasterDetailFastPath(item.id)}
                   onFocus={() => prefetchMasterDetailFastPath(item.id)}
-                  onDoubleClick={handleOpenEdit}
+                  onDoubleClick={() => {
+                    if (selectionMode) return;
+                    handleOpenEdit();
+                  }}
                 >
+                {selectionMode ? (
+                  <label
+                    className="absolute left-2 top-2 z-20 inline-flex items-center rounded bg-[var(--panel)]/90 px-1.5 py-1 text-[10px]"
+                    onClick={(event) => event.stopPropagation()}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={selectedMasterIds.has(item.id)}
+                      onChange={() => toggleMasterSelection(item.id)}
+                      className="h-3 w-3"
+                    />
+                  </label>
+                ) : null}
                 <div className="flex gap-4">
                   <div
                     className="relative h-28 w-28 shrink-0 overflow-hidden rounded-[14px] bg-gradient-to-br from-[var(--panel)] to-[var(--background)]"
@@ -5664,7 +6431,7 @@ export default function CatalogPage() {
           }
           subtitle="마스터카드 관리"
           actions={
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 whitespace-nowrap">
               <Select value={`${sortBy}-${sortOrder}`} onChange={(e) => {
                 const [newSortBy, newSortOrder] = e.target.value.split('-') as ["model" | "modified", "asc" | "desc"];
                 setSortBy(newSortBy);
@@ -5675,6 +6442,19 @@ export default function CatalogPage() {
                 <option value="modified-asc">수정순 (오래된순)</option>
                 <option value="modified-desc">수정순 (최신순)</option>
               </Select>
+              <Button variant="secondary" size="sm" onClick={handleToggleSelectionMode}>
+                {selectionMode ? "선택 종료" : "선택"}
+              </Button>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={handleOpenBatchGenerate}
+                disabled={selectedMasterIds.size === 0}
+                title={selectedMasterIds.size === 0 ? "선택된 항목이 없습니다." : undefined}
+              >
+                <WandSparkles size={14} className="mr-1" />
+                대표이미지 변경 ({selectedMasterIds.size})
+              </Button>
               <Button variant="secondary" size="sm" onClick={handleOpenNew}>
                 새 상품 등록
               </Button>
@@ -5718,7 +6498,15 @@ export default function CatalogPage() {
             right={
               <>
                 {renderFilterBar()}
-                {renderDetailPanel()}
+                {selectionMode ? (
+                  <Card>
+                    <CardBody className="py-10 text-center text-sm text-[var(--muted)]">
+                      선택 모드에서는 마스터 상세가 비활성화됩니다.
+                    </CardBody>
+                  </Card>
+                ) : (
+                  renderDetailPanel()
+                )}
               </>
             }
           />
@@ -5775,10 +6563,29 @@ export default function CatalogPage() {
                         ),
                         selectedItemId === item.id && "ring-2 ring-[var(--primary)]"
                       )}
-                      onClick={() => openDetailDrawer(item.id)}
+                      onClick={() => {
+                        if (selectionMode) {
+                          toggleMasterSelection(item.id);
+                          return;
+                        }
+                        openDetailDrawer(item.id);
+                      }}
                       onMouseEnter={() => prefetchMasterDetailFastPath(item.id)}
                       onFocus={() => prefetchMasterDetailFastPath(item.id)}
                     >
+                      {selectionMode ? (
+                        <label
+                          className="absolute left-2 top-2 z-20 inline-flex items-center rounded bg-[var(--panel)]/90 px-1.5 py-1 text-[10px]"
+                          onClick={(event) => event.stopPropagation()}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={selectedMasterIds.has(item.id)}
+                            onChange={() => toggleMasterSelection(item.id)}
+                            className="h-3 w-3"
+                          />
+                        </label>
+                      ) : null}
                       {/* Image */}
                       <div className="absolute inset-x-0 top-0 bottom-28 bg-[var(--white)] dark:bg-[var(--black)]">
                         {item.imageUrl ? (
@@ -5871,7 +6678,9 @@ export default function CatalogPage() {
 
       {renderBomDrawer()}
       {renderRegisterDrawer()}
+      {renderSingleGenerateDrawer()}
       {renderAbsorbDrawer()}
+      {renderBatchGenerateDrawer()}
       {renderImageOverlay()}
 
       <Modal open={deleteConfirmOpen} onClose={() => setDeleteConfirmOpen(false)} title="마스터 삭제">
@@ -5884,6 +6693,67 @@ export default function CatalogPage() {
             <Button variant="secondary" onClick={() => setDeleteConfirmOpen(false)} disabled={isDeleting}>취소</Button>
             <Button variant="danger" onClick={handleDeleteMaster} disabled={isDeleting}>
               {isDeleting ? "삭제 중..." : "삭제"}
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
+      <Modal
+        open={Boolean(generatedPreview)}
+        onClose={() => {
+          if (isApplyingGeneratedPreview) return;
+          setGeneratedPreview(null);
+        }}
+        title="생성된 대표이미지 미리보기"
+        description="이미지를 확인한 뒤 적용 여부를 선택하세요."
+        className="max-w-5xl"
+      >
+        <div className="space-y-4">
+          <div className="grid gap-3 md:grid-cols-2">
+            <div className="overflow-hidden rounded-[14px] border border-[var(--panel-border)] bg-[var(--subtle-bg)]">
+              <div className="border-b border-[var(--panel-border)] px-3 py-2 text-xs font-semibold text-[var(--muted)]">
+                이전 이미지
+              </div>
+              <div className="aspect-square w-full bg-[var(--subtle-bg)]">
+                {generatedPreview?.previousImageUrl ? (
+                  <img
+                    src={generatedPreview.previousImageUrl}
+                    alt="이전 대표이미지"
+                    className="h-full w-full object-contain"
+                  />
+                ) : (
+                  <div className="flex h-full items-center justify-center text-xs text-[var(--muted)]">
+                    이전 이미지 없음
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="overflow-hidden rounded-[14px] border border-[var(--panel-border)] bg-[var(--subtle-bg)]">
+              <div className="border-b border-[var(--panel-border)] px-3 py-2 text-xs font-semibold text-[var(--muted)]">
+                생성 이미지 (1:1)
+              </div>
+              <div className="aspect-square w-full bg-[var(--subtle-bg)]">
+                {generatedPreview ? (
+                  <img
+                    src={generatedPreview.imageUrl}
+                    alt="생성된 대표이미지 미리보기"
+                    className="h-full w-full object-contain"
+                  />
+                ) : null}
+              </div>
+            </div>
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button
+              variant="secondary"
+              onClick={() => setGeneratedPreview(null)}
+              disabled={isApplyingGeneratedPreview}
+            >
+              적용 안 함
+            </Button>
+            <Button onClick={handleApplyGeneratedPreview} disabled={isApplyingGeneratedPreview || !generatedPreview}>
+              {isApplyingGeneratedPreview ? "적용 중..." : "이 이미지로 적용"}
             </Button>
           </div>
         </div>

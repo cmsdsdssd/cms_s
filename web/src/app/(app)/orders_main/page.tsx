@@ -319,6 +319,14 @@ const STATUS_OPTIONS = [
   { value: "CANCELLED", label: "주문취소" },
 ];
 
+const STATUS_TONE_CLASS: Record<string, { row: string; rail: string }> = {
+  CANCELLED: { row: "", rail: "bg-rose-500/80" },
+  ORDER_PENDING: { row: "bg-amber-500/10", rail: "bg-amber-500/80" },
+  SENT_TO_VENDOR: { row: "", rail: "bg-sky-500/80" },
+  READY_TO_SHIP: { row: "", rail: "bg-violet-500/80" },
+  SHIPPED: { row: "", rail: "bg-emerald-500/80" },
+};
+
 function getCategoryLabel(value?: string | null) {
   if (!value) return "-";
   return CATEGORY_LABELS[value] ?? value;
@@ -1436,6 +1444,8 @@ export default function OrdersMainPage() {
                       : "-";
                     const rowKey = order?.order_line_id ?? `empty-${startIndex + idx}`;
 
+                    const statusTone = STATUS_TONE_CLASS[order?.status ?? ""];
+
                     return (
                       <div
                         key={rowKey}
@@ -1444,7 +1454,7 @@ export default function OrdersMainPage() {
                           "transition-colors duration-150 hover:border-[var(--primary)]/25 hover:bg-[var(--panel)]",
                           isEmpty ? "opacity-40 min-h-[56px]" : "cursor-default",
                           order?.status === "CANCELLED" ? "line-through decoration-[2px] decoration-[var(--muted)] text-[var(--muted)]" : "",
-                          order?.status === "ORDER_PENDING" ? "bg-[var(--warning)]/10" : ""
+                          statusTone?.row ?? ""
                         )}
                       >
                         <div className="grid grid-cols-1 gap-2 text-xs lg:grid-cols-[0.35fr_64px_1.3fr_2.03fr_0.6fr_0.6fr_0.6fr_0.6fr_0.6fr_0.6fr_0.8fr_1fr] items-stretch">
@@ -1596,12 +1606,7 @@ export default function OrdersMainPage() {
                           <div
                             className={cn(
                               "absolute right-0 top-0 h-full w-2 rounded-r-[14px] pointer-events-none",
-                              order.status === "ORDER_PENDING" ? "bg-[var(--warning)]/70" :
-                                order.status === "SENT_TO_VENDOR" ? "bg-sky-500/70" :
-                                  order.status === "READY_TO_SHIP" ? "bg-emerald-500/70" :
-                                    order.status === "SHIPPED" ? "bg-indigo-500/70" :
-                                      order.status === "CANCELLED" ? "bg-[var(--muted)]/70" :
-                                        "bg-[var(--muted)]/40"
+                              statusTone?.rail ?? "bg-[var(--muted)]/40"
                             )}
                           />
                         )}

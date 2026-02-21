@@ -1,103 +1,127 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
+import { createServerClient } from "@supabase/ssr";
+import { cookies } from "next/headers";
 
-// Force dynamic to avoid caching
 export const dynamic = "force-dynamic";
 
+const LEGACY_BUCKET_ALLOWLIST = new Set(["ocr_docs", "receipts", "factory-orders"]);
+const LEGACY_PATH_PREFIX = /^(?:\d{8}\/|receipts\/|factory-orders\/)/;
+
 function getSupabaseAdmin() {
-    const url = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
-    const key = process.env.SUPABASE_SERVICE_ROLE_KEY ?? "";
-    if (!url || !key) return null;
-    return createClient(url, key);
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY ?? "";
+  if (!url || !key) return null;
+  return createClient(url, key);
 }
 
-function safeFilename(name: string) {
-    // minimal header-safe filename
-    return name.replace(/["\r\n]/g, "").slice(0, 180) || "receipt";
-}
+async function getSupabaseSession() {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
+  const key =
+    process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ??
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ??
+    "";
+  if (!url || !key) return null;
 
-function guessContentType(mimeHint: string, filename: string, blobType: string) {
-    const hint = (mimeHint || "").trim().toLowerCase();
-    if (hint) return hint;
-
-    const bt = (blobType || "").trim().toLowerCase();
-    if (bt) return bt;
-
-    const lower = (filename || "").toLowerCase();
-    if (lower.endsWith(".pdf")) return "application/pdf";
-    if (lower.endsWith(".png")) return "image/png";
-    if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) return "image/jpeg";
-    if (lower.endsWith(".webp")) return "image/webp";
-
-    return "application/octet-stream";
+  const cookieStore = await cookies();
+  return createServerClient(url, key, {
+    cookies: {
+      getAll() {
+        return cookieStore.getAll();
+      },
+      setAll(cookiesToSet) {
+        try {
+          cookiesToSet.forEach(({ name, value, options }) => cookieStore.set(name, value, options));
+        } catch {
+          // noop in route handlers where cookies are readonly
+        }
+      },
+    },
+  });
 }
 
 export async function GET(request: Request) {
-    const { searchParams } = new URL(request.url);
+  const { searchParams } = new URL(request.url);
+  const receiptId = searchParams.get("receipt_id");
+  const bucket = searchParams.get("bucket");
+  const path = searchParams.get("path");
+  const mode = (searchParams.get("mode") ?? "redirect").toLowerCase();
 
-    const receiptId = searchParams.get("receipt_id");
-    let bucket = searchParams.get("bucket");
-    let path = searchParams.get("path");
-    let mime = searchParams.get("mime") ?? "";
+  const supabase = getSupabaseAdmin();
+  const session = await getSupabaseSession();
+  if (!supabase || !session) {
+    return NextResponse.json({ error: "Supabase config missing" }, { status: 500 });
+  }
 
-    const supabase = getSupabaseAdmin();
-    if (!supabase) {
-        return NextResponse.json({ error: "Supabase config missing" }, { status: 500 });
+  const { data: authData, error: authError } = await session.auth.getUser();
+  if (authError || !authData.user) {
+    return NextResponse.json({ error: "UNAUTHORIZED" }, { status: 401 });
+  }
+
+  let resolvedBucket: string | null = null;
+  let resolvedPath: string | null = null;
+
+  if (receiptId) {
+    const { data: receiptMeta, error: receiptMetaError } = await supabase
+      .from("cms_receipt_inbox")
+      .select("file_bucket, file_path")
+      .eq("receipt_id", receiptId)
+      .maybeSingle();
+
+    if (receiptMetaError) {
+      return NextResponse.json({ error: "failed to resolve receipt" }, { status: 500 });
+    }
+    if (!receiptMeta) {
+      return NextResponse.json({ error: "receipt not found" }, { status: 404 });
     }
 
-    // ✅ Preferred: receipt_id (resolve bucket/path from cms_receipt_inbox)
-    if (receiptId && (!bucket || !path)) {
-        const { data, error } = await supabase
-            .from("cms_receipt_inbox")
-            .select("file_bucket, file_path, mime_type")
-            .eq("receipt_id", receiptId)
-            .maybeSingle();
-
-        if (error) {
-            return NextResponse.json({ error: error.message ?? "receipt lookup failed" }, { status: 500 });
-        }
-        if (!data) {
-            return NextResponse.json({ error: "receipt not found" }, { status: 404 });
-        }
-
-        bucket = data.file_bucket;
-        path = data.file_path;
-        mime = mime || (data.mime_type ?? "");
-    }
-
+    resolvedBucket = receiptMeta.file_bucket;
+    resolvedPath = receiptMeta.file_path;
+  } else {
     if (!bucket || !path) {
-        return NextResponse.json({ error: "receipt_id or (bucket and path) required" }, { status: 400 });
+      return NextResponse.json({ error: "receipt_id or (bucket and path) required" }, { status: 400 });
     }
 
-    try {
-        console.log(`[Receipt Preview] Downloading from bucket: ${bucket}, path: ${path}`);
-        const { data, error } = await supabase.storage.from(bucket).download(path);
-
-        if (error || !data) {
-            const msg = error?.message ?? "download failed";
-            console.error(`[Receipt Preview] Download failed: ${msg}, bucket: ${bucket}, path: ${path}`);
-            const status = msg.toLowerCase().includes("not found") ? 404 : 500;
-            return NextResponse.json({ error: msg, bucket, path }, { status });
-        }
-
-        const filename = safeFilename(path.split("/").pop() ?? "receipt");
-        const blob = data as Blob;
-        const contentType = guessContentType(mime, filename, blob.type);
-
-        // NextResponse + Blob 직접 반환 시, 브라우저에서 이미지/PDF가 깨지는 케이스가 있어
-        // Uint8Array로 변환해서 반환합니다.
-        const ab = await blob.arrayBuffer();
-        const body = new Uint8Array(ab);
-
-        const headers = new Headers();
-        headers.set("Content-Type", contentType);
-        headers.set("Content-Disposition", `inline; filename="${filename}"`);
-        headers.set("Cache-Control", "no-store");
-        headers.set("X-Content-Type-Options", "nosniff");
-
-        return new NextResponse(body, { headers, status: 200 });
-    } catch (error) {
-        const err = error as { message?: string } | null;
-        return NextResponse.json({ error: err?.message ?? "unknown error" }, { status: 500 });
+    if (!LEGACY_BUCKET_ALLOWLIST.has(bucket) || !LEGACY_PATH_PREFIX.test(path)) {
+      return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
     }
+
+    const { data: legacyMatch, error: legacyError } = await supabase
+      .from("cms_receipt_inbox")
+      .select("receipt_id, file_bucket, file_path")
+      .eq("file_bucket", bucket)
+      .eq("file_path", path)
+      .maybeSingle();
+
+    if (legacyError || !legacyMatch) {
+      return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
+    }
+
+    resolvedBucket = legacyMatch.file_bucket;
+    resolvedPath = legacyMatch.file_path;
+  }
+
+  if (!resolvedBucket || !resolvedPath) {
+    return NextResponse.json({ error: "invalid resolved file" }, { status: 500 });
+  }
+
+  const { data, error } = await supabase.storage
+    .from(resolvedBucket)
+    .createSignedUrl(resolvedPath, 300);
+
+  if (error || !data?.signedUrl) {
+    return NextResponse.json({ error: "failed to create preview url" }, { status: 500 });
+  }
+
+  if (mode === "url") {
+    return NextResponse.json({ signedUrl: data.signedUrl });
+  }
+
+  return NextResponse.redirect(data.signedUrl, {
+    status: 307,
+    headers: {
+      "Cache-Control": "no-store",
+      "X-Content-Type-Options": "nosniff",
+    },
+  });
 }

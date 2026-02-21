@@ -65,7 +65,7 @@ function PartyPageContent() {
     const timer = setTimeout(() => {
       setDebouncedSearch(searchQuery);
       setPage(1);
-    }, 400);
+    }, 280);
     return () => clearTimeout(timer);
   }, [searchQuery]);
 
@@ -73,14 +73,16 @@ function PartyPageContent() {
   const { data: listData, isLoading: isListLoading, error: listError } = useQuery({
     queryKey: ["cms", "parties", typeFilter, activeOnly, debouncedSearch, regionFilter, page],
     queryFn: () =>
-      fetchParties({
-        type: typeFilter,
-        activeOnly,
-        search: debouncedSearch,
-        region: regionFilter || undefined,
-        page,
-        pageSize: 100, // Load more for scrolling list
-      }),
+        fetchParties({
+          type: typeFilter,
+          activeOnly,
+          search: debouncedSearch,
+          region: regionFilter || undefined,
+          page,
+          pageSize: 50,
+          includeCount: true,
+        }),
+    staleTime: 30_000,
   });
 
   const effectiveSelectedPartyId = selectedPartyId ?? listData?.data?.[0]?.party_id ?? null;
@@ -135,15 +137,15 @@ function PartyPageContent() {
   const mutation = useRpcMutation<string>({
     fn: CONTRACTS.functions.partyUpsert,
     successMessage: "저장 완료",
-    onSuccess: async (partyId, variables) => {
+    onSuccess: async (partyId) => {
       if (form.getValues("party_type") === "vendor") {
         const prefix = form.getValues("prefix")?.trim();
-        if (prefix) {
-          const { error } = await supabase.rpc(CONTRACTS.functions.upsertVendorPrefix, {
+        if (prefix && supabase) {
+          const { error } = await supabase.rpc(CONTRACTS.functions.upsertVendorPrefix as never, {
             p_vendor_party_id: partyId,
             p_prefix: prefix,
             p_note: "Created via Basic Info"
-          });
+          } as never);
 
           if (error) {
             toast.error(`Prefix 저장 실패: ${error.message}`);
@@ -193,7 +195,7 @@ function PartyPageContent() {
         <div className="p-4 border-b border-[var(--panel-border)] shrink-0 space-y-3">
           <div className="flex items-center justify-between">
             <h2 className="text-lg font-bold">거래처 관리</h2>
-            <ToolbarButton onClick={handleCreate} size="sm" variant="primary" className="h-8 text-xs">+ 추가</ToolbarButton>
+            <ToolbarButton onClick={handleCreate} variant="primary">+ 추가</ToolbarButton>
           </div>
 
           <div className="space-y-2">
@@ -261,7 +263,7 @@ function PartyPageContent() {
             totalCount={listData?.count}
             onSelect={setSelectedPartyId}
             onPageChange={setPage}
-            pageSize={100} // pass pageSize prop
+            pageSize={50}
           />
         </div>
       </div>

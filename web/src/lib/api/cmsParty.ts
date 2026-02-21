@@ -75,13 +75,20 @@ export async function fetchParties(params: {
   region?: string;
   page?: number;
   pageSize?: number;
+  includeCount?: boolean;
 }) {
   const client = getSchemaClient();
   if (!client) throw new Error("Supabase client not available");
 
+  const includeCount = Boolean(params.includeCount);
+  const page = params.page ?? 1;
+  const pageSize = params.pageSize ?? 50;
+  const from = (page - 1) * pageSize;
+  const to = from + pageSize - 1;
+
   let query = client
     .from("cms_party")
-    .select("*", { count: "exact" });
+    .select("*", { count: includeCount ? "exact" : undefined });
 
   if (params.type) {
     query = query.eq("party_type", params.type);
@@ -99,21 +106,14 @@ export async function fetchParties(params: {
     query = query.ilike("region", `%${params.region}%`);
   }
 
-  const page = params.page ?? 1;
-  const pageSize = params.pageSize ?? 50;
-  const from = (page - 1) * pageSize;
-  const to = from + pageSize;
-
-  if (params.type !== "customer") {
-    query = query.order("name", { ascending: true }).range(from, to - 1);
-  }
+  query = query.order("name", { ascending: true }).range(from, to);
 
   const { data, error, count } = await query;
   if (error) throw error;
 
   let enrichedData = (data ?? []) as PartyRow[];
 
-  // For customers, fetch AR info and apply required ordering (balance desc nulls last, name asc)
+  // For customers, enrich current page rows only (no full-list fetch)
   if (params.type === "customer" && enrichedData.length > 0) {
     const partyIds = enrichedData.map((p) => p.party_id);
     const { data: arData, error: arError } = await client
@@ -128,18 +128,9 @@ export async function fetchParties(params: {
       ...p,
       ...arMap.get(p.party_id),
     }));
-
-    enrichedData.sort((a, b) => {
-      const balanceA = a.balance_krw ?? Number.NEGATIVE_INFINITY;
-      const balanceB = b.balance_krw ?? Number.NEGATIVE_INFINITY;
-      if (balanceA !== balanceB) return balanceB - balanceA;
-      return a.name.localeCompare(b.name, "ko-KR");
-    });
-
-    enrichedData = enrichedData.slice(from, to);
   }
 
-  return { data: enrichedData, count: count ?? enrichedData.length };
+  return { data: enrichedData, count: includeCount ? count ?? enrichedData.length : undefined };
 }
 
 export async function fetchPartyDetail(partyId: string) {

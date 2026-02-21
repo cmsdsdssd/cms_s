@@ -61,7 +61,23 @@ type FaxSendGroupResult = {
   success: boolean;
   pendingManualConfirm?: boolean;
   providerMessageId?: string | null;
+  pdfPath?: string | null;
+  pdfSignedUrl?: string | null;
   warning?: string;
+};
+
+type FaxPdfApiResponse = {
+  success?: boolean;
+  po_id?: string;
+  pdf?: {
+    path?: string;
+    signed_url?: string;
+    sha256?: string;
+    expires_in?: number;
+  };
+  error?: string;
+  error_code?: string;
+  action?: "fallback_print_html" | string;
 };
 
 interface FactoryGroup {
@@ -461,6 +477,21 @@ export function FactoryOrderWizard({ orderLines, onClose, onSuccess }: FactoryOr
     }
   }, [generateFaxHtmlForGroup, sendResult?.results]);
 
+  const openHtmlFallbackPrint = useCallback((group: FactoryGroup, poId: string) => {
+    const printWindow = window.open("", "_blank");
+    if (!printWindow) {
+      toast.error("팝업 차단을 해제해주세요.");
+      return false;
+    }
+
+    const html = generateFaxHtmlForGroup(group, poId);
+    printWindow.document.write(html);
+    printWindow.document.close();
+    printWindow.focus();
+    printWindow.print();
+    return true;
+  }, [generateFaxHtmlForGroup]);
+
   // Handle send fax - SEPARATE PO for each factory
   const handleSendFax = useCallback(async () => {
     if (selectedGroups.length === 0) return;
@@ -496,15 +527,73 @@ export function FactoryOrderWizard({ orderLines, onClose, onSuccess }: FactoryOr
         const html = generateFaxHtmlForGroup(group, poId);
 
         if (group.faxProvider === "uplus_print") {
-          results.push({
-            group,
-            poId,
-            success: false,
-            pendingManualConfirm: true,
-            providerMessageId: null,
-          });
-          toast.info(`${group.vendorName} 발주 생성 완료. U+ 인쇄전송 후 전송완료처리를 진행하세요.`);
-          continue;
+          try {
+            const pdfResponse = await fetch("/api/fax-pdf", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                po_id: poId,
+                vendor_prefix: group.prefix,
+                vendor_name: group.vendorName,
+                line_count: group.lines.length,
+                html_content: html,
+                mode: "uplus_print",
+              }),
+            });
+
+            const isJson = (pdfResponse.headers.get("content-type") || "").includes("application/json");
+            const payload: FaxPdfApiResponse = isJson ? await pdfResponse.json() : {};
+
+            if (pdfResponse.ok && payload.pdf?.signed_url) {
+              results.push({
+                group,
+                poId,
+                success: false,
+                pendingManualConfirm: true,
+                providerMessageId: null,
+                pdfPath: payload.pdf.path ?? null,
+                pdfSignedUrl: payload.pdf.signed_url,
+              });
+              window.open(payload.pdf.signed_url, "_blank", "noopener,noreferrer");
+              toast.info(`${group.vendorName} PDF 생성 완료. Ctrl+P 후 프린터를 'LGUplusBizWebFax'로 선택하세요.`);
+              continue;
+            }
+
+            const opened = openHtmlFallbackPrint(group, poId);
+            results.push({
+              group,
+              poId,
+              success: false,
+              pendingManualConfirm: true,
+              providerMessageId: null,
+              warning: payload.error_code || payload.error || "PDF generation failed",
+            });
+
+            if (opened) {
+              toast.warning(`${group.vendorName} PDF 생성 실패 -> HTML 인쇄 폴백으로 진행합니다.`);
+            } else {
+              toast.error(`${group.vendorName} PDF 생성 실패 및 폴백 창 열기 실패`);
+            }
+            continue;
+          } catch (error) {
+            console.error("uplus pdf generation failed:", error);
+            const opened = openHtmlFallbackPrint(group, poId);
+            results.push({
+              group,
+              poId,
+              success: false,
+              pendingManualConfirm: true,
+              providerMessageId: null,
+              warning: error instanceof Error ? error.message : "PDF generation failed",
+            });
+            if (opened) {
+              toast.warning(`${group.vendorName} PDF 생성 실패 -> HTML 인쇄 폴백으로 진행합니다.`);
+            } else {
+              toast.error(`${group.vendorName} PDF 생성 실패 및 폴백 창 열기 실패`);
+            }
+            continue;
+          }
+
         }
 
         const isMock = group.faxProvider === "mock";
@@ -598,7 +687,7 @@ export function FactoryOrderWizard({ orderLines, onClose, onSuccess }: FactoryOr
     } finally {
       setIsSending(false);
     }
-  }, [selectedGroups, generateFaxHtmlForGroup, queryClient]);
+  }, [selectedGroups, generateFaxHtmlForGroup, openHtmlFallbackPrint, queryClient]);
 
   const findResultForGroup = useCallback((group: FactoryGroup) => {
     return sendResult?.results?.find(
@@ -614,20 +703,17 @@ export function FactoryOrderWizard({ orderLines, onClose, onSuccess }: FactoryOr
       return;
     }
 
-    const printWindow = window.open("", "_blank");
-    if (!printWindow) {
-      toast.error("팝업 차단을 해제해주세요.");
+    if (result.pdfSignedUrl) {
+      window.open(result.pdfSignedUrl, "_blank", "noopener,noreferrer");
+      toast.info("PDF를 열었습니다. Ctrl+P 후 프린터를 'LGUplusBizWebFax'로 선택하세요.");
       return;
     }
 
-    const html = generateFaxHtmlForGroup(group, result.poId);
-    printWindow.document.write(html);
-    printWindow.document.close();
-    printWindow.focus();
-    printWindow.print();
-
-    toast.info("프린터에서 'U+Webfax'를 선택하고 U+ 팩스창에서 수신번호/제목 확인 후 전송하세요.");
-  }, [findResultForGroup, generateFaxHtmlForGroup]);
+    const opened = openHtmlFallbackPrint(group, result.poId);
+    if (opened) {
+      toast.info("PDF 생성 실패로 HTML 인쇄 폴백을 실행했습니다. 프린터를 'LGUplusBizWebFax'로 선택하세요.");
+    }
+  }, [findResultForGroup, openHtmlFallbackPrint]);
 
   const handleManualConfirm = useCallback(async (result: FaxSendGroupResult) => {
     const confirmed = window.confirm(
@@ -636,6 +722,7 @@ export function FactoryOrderWizard({ orderLines, onClose, onSuccess }: FactoryOr
     if (!confirmed) return;
 
     const sendFaxId = sendFaxIds[result.poId]?.trim() || null;
+    const payloadUrl = result.pdfPath || result.pdfSignedUrl || null;
     setConfirmingPoIds((prev) => new Set(prev).add(result.poId));
 
     try {
@@ -645,7 +732,7 @@ export function FactoryOrderWizard({ orderLines, onClose, onSuccess }: FactoryOr
           provider: "uplus_print",
           success: true,
           provider_message_id: sendFaxId,
-          payload_url: null,
+          payload_url: payloadUrl,
           request: {
             vendor_prefix: result.group.prefix,
             vendor_name: result.group.vendorName,
@@ -657,6 +744,8 @@ export function FactoryOrderWizard({ orderLines, onClose, onSuccess }: FactoryOr
             confirmed_at: new Date().toISOString(),
             uplus_sent_url: UPLUS_SENT_URL,
             sendFaxId,
+            pdf_path: result.pdfPath ?? null,
+            pdf_signed_url: result.pdfSignedUrl ?? null,
           },
         },
         p_actor_person_id: process.env.NEXT_PUBLIC_CMS_ACTOR_ID ?? null,
@@ -1004,6 +1093,16 @@ export function FactoryOrderWizard({ orderLines, onClose, onSuccess }: FactoryOr
                     제목에서 &#39;발주서 - {result.group.prefix} - {poId8}&#39;로 검색하면 빠릅니다.
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
+                    {result.pdfSignedUrl && (
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        onClick={() => window.open(result.pdfSignedUrl || "", "_blank", "noopener,noreferrer")}
+                      >
+                        <ExternalLink className="w-3.5 h-3.5 mr-1" />
+                        PDF 다시 열기
+                      </Button>
+                    )}
                     <Button
                       size="sm"
                       variant="secondary"

@@ -9,12 +9,13 @@ type SheetProps = {
   title?: string;
   children: React.ReactNode;
   className?: string;
+  side?: "right" | "left";
 };
 
 const FOCUSABLE_SELECTOR =
   "button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])";
 
-export function Sheet({ open, onClose, title, children, className }: SheetProps) {
+export function Sheet({ open, onClose, title, children, className, side = "right" }: SheetProps) {
   const panelRef = useRef<HTMLDivElement | null>(null);
   const prevFocusedRef = useRef<HTMLElement | null>(null);
   const onCloseRef = useRef(onClose);
@@ -69,7 +70,9 @@ export function Sheet({ open, onClose, title, children, className }: SheetProps)
         aria-modal="true"
         aria-label={title ?? "Sheet"}
         className={cn(
-          "absolute right-0 top-0 h-full w-[95vw] border-l border-[var(--panel-border)] bg-[var(--panel)] shadow-[var(--shadow)]",
+          side === "left"
+            ? "absolute left-0 top-0 h-full w-[95vw] border-r border-[var(--panel-border)] bg-[var(--panel)] shadow-[var(--shadow)]"
+            : "absolute right-0 top-0 h-full w-[95vw] border-l border-[var(--panel-border)] bg-[var(--panel)] shadow-[var(--shadow)]",
           "transition-transform duration-[var(--duration-normal)] ease-[var(--ease-out)] translate-x-0",
           "flex flex-col lg:w-[1100px]",
           className

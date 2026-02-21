@@ -51,7 +51,7 @@ export async function POST(request: Request) {
 
         if (provider === 'uplus_print') {
             return NextResponse.json(
-                { error: "uplus_print는 인쇄 전송 방식이므로 /api/fax-send 사용 금지" },
+                { error: "uplus_print는 /api/fax-pdf를 사용하세요. /api/fax-send 사용 금지" },
                 { status: 400 }
             );
         }

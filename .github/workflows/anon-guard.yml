@@ -1,0 +1,27 @@
+name: Anon Access Guard
+
+on:
+  pull_request:
+    paths:
+      - "supabase/migrations/**"
+      - "scripts/check-anon-access.mjs"
+      - "package.json"
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      - "supabase/migrations/**"
+      - "scripts/check-anon-access.mjs"
+      - "package.json"
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Run anon guard
+        run: npm run guard:anon

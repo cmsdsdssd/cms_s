@@ -5,6 +5,10 @@ import { getMaterialFactor } from "@/lib/material-factors";
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
+const CACHE_TTL_MS = 10_000;
+
+let marketTicksCache: { expiresAt: number; payload: unknown } | null = null;
+
 type MarketTickConfigRow = {
     fx_markup: number;
     cs_correction_factor: number;
@@ -27,24 +31,39 @@ const readMetaNumber = (meta: Record<string, unknown> | null, key: string): numb
 
 export async function GET() {
     try {
+        const now = Date.now();
+        if (marketTicksCache && marketTicksCache.expiresAt > now) {
+            return NextResponse.json(marketTicksCache.payload, {
+                headers: {
+                    "Cache-Control": "private, max-age=10, stale-while-revalidate=10",
+                },
+            });
+        }
+
         const sb = getSchemaClient();
         if (!sb) {
             return NextResponse.json({ error: "Supabase 환경 변수가 설정되지 않았습니다." }, { status: 500 });
         }
 
-        // 1) Settings에서 바꾸는 config 읽기
-        const { data: cfg, error: cfgErr } = await sb
-            .from("cms_market_tick_config")
-            .select("fx_markup, cs_correction_factor, silver_kr_correction_factor")
-            .eq("config_key", "DEFAULT")
-            .maybeSingle();
+        const [cfgResult, roleResult] = await Promise.all([
+            sb
+                .from("cms_market_tick_config")
+                .select("fx_markup, cs_correction_factor, silver_kr_correction_factor")
+                .eq("config_key", "DEFAULT")
+                .maybeSingle(),
+            sb
+                .from("cms_market_symbol_role")
+                .select("role_code, symbol")
+                .in("role_code", ["GOLD", "SILVER"])
+                .eq("is_active", true),
+        ]);
 
-        if (cfgErr) {
-            console.error("Market tick config fetch error:", cfgErr);
+        if (cfgResult.error) {
+            console.error("Market tick config fetch error:", cfgResult.error);
             return NextResponse.json({ error: "Failed to fetch market tick config" }, { status: 500 });
         }
 
-        const cfgRow = (cfg ?? {
+        const cfgRow = (cfgResult.data ?? {
             fx_markup: 1.03,
             cs_correction_factor: 1.2,
             silver_kr_correction_factor: 1.2,
@@ -54,49 +73,52 @@ export async function GET() {
         const csFactor = Number(cfgRow.cs_correction_factor ?? 1.2);
         const silverKrFactor = Number(cfgRow.silver_kr_correction_factor ?? 1.2);
 
-        // 2) GOLD/SILVER가 어떤 symbol에 매핑되어 있는지 확인
-        const { data: roles, error: roleErr } = await sb
-            .from("cms_market_symbol_role")
-            .select("role_code, symbol")
-            .in("role_code", ["GOLD", "SILVER"])
-            .eq("is_active", true);
-
-        if (roleErr) {
-            console.error("Market symbol role fetch error:", roleErr);
+        if (roleResult.error) {
+            console.error("Market symbol role fetch error:", roleResult.error);
             return NextResponse.json({ error: "Failed to fetch market symbol roles" }, { status: 500 });
         }
 
-        const roleRows = (roles ?? []) as RoleRow[];
+        const roleRows = (roleResult.data ?? []) as RoleRow[];
         const goldSymbol = roleRows.find((r) => r.role_code === "GOLD")?.symbol ?? null;
         const silverSymbol = roleRows.find((r) => r.role_code === "SILVER")?.symbol ?? null;
 
-        // 3) 최신 tick (ops view 사용: TEST/DEMO 제외 + MANUAL 우선 tie-break)
-        const { data: goldRow, error: goldErr } = await sb
-            .from("cms_v_market_tick_latest_by_symbol_ops_v1")
-            .select("symbol, price_krw_per_g, meta")
-            .eq("symbol", goldSymbol ?? "__MISSING__")
-            .maybeSingle();
+        const [goldResult, silverResult, csResult, cnyResult] = await Promise.all([
+            sb
+                .from("cms_v_market_tick_latest_by_symbol_ops_v1")
+                .select("symbol, price_krw_per_g, meta")
+                .eq("symbol", goldSymbol ?? "__MISSING__")
+                .maybeSingle(),
+            sb
+                .from("cms_v_market_tick_latest_by_symbol_ops_v1")
+                .select("symbol, price_krw_per_g, meta")
+                .eq("symbol", silverSymbol ?? "__MISSING__")
+                .maybeSingle(),
+            sb
+                .from("cms_v_market_tick_latest_by_symbol_ops_v1")
+                .select("price_krw_per_g, meta")
+                .eq("symbol", "SILVER_CN_KRW_PER_G")
+                .maybeSingle(),
+            sb
+                .from("cms_v_market_tick_latest_by_symbol_ops_v1")
+                .select("price_krw_per_g")
+                .eq("symbol", "CNY_KRW_PER_1_ADJ")
+                .maybeSingle(),
+        ]);
 
-        if (goldErr) {
-            console.error("Gold tick fetch error:", goldErr);
+        if (goldResult.error) {
+            console.error("Gold tick fetch error:", goldResult.error);
             return NextResponse.json({ error: "Failed to fetch gold tick" }, { status: 500 });
         }
 
-        const { data: silverRow, error: silverErr } = await sb
-            .from("cms_v_market_tick_latest_by_symbol_ops_v1")
-            .select("symbol, price_krw_per_g, meta")
-            .eq("symbol", silverSymbol ?? "__MISSING__")
-            .maybeSingle();
-
-        if (silverErr) {
-            console.error("Silver tick fetch error:", silverErr);
+        if (silverResult.error) {
+            console.error("Silver tick fetch error:", silverResult.error);
             return NextResponse.json({ error: "Failed to fetch silver tick" }, { status: 500 });
         }
 
-        const goldPrice = toNum((goldRow as LatestBySymbolRow | null)?.price_krw_per_g) ?? 0;
+        const goldPrice = toNum((goldResult.data as LatestBySymbolRow | null)?.price_krw_per_g) ?? 0;
 
         // SILVER는 “원래 은시세(보정 전)”를 복원할 수 있으면 복원(메타에 factor가 있으면 나눠서 복원)
-        const silverRowData = silverRow as LatestBySymbolRow | null;
+        const silverRowData = silverResult.data as LatestBySymbolRow | null;
         const silverPriceMaybe = toNum(silverRowData?.price_krw_per_g);
         const silverMeta = silverRowData?.meta ?? null;
         const silverFactorInMeta =
@@ -115,14 +137,7 @@ export async function GET() {
         const silver925Purity = getMaterialFactor({ materialCode: "925" }).purityRate;
         const ks925 = ks === null ? null : ks * silver925Purity; // ✅ 표시용만
 
-        // 4) CN Silver (CS)
-        const { data: csRow } = await sb
-            .from("cms_v_market_tick_latest_by_symbol_ops_v1")
-            .select("price_krw_per_g, meta")
-            .eq("symbol", "SILVER_CN_KRW_PER_G")
-            .maybeSingle();
-
-        const csRowData = csRow as LatestBySymbolRow | null;
+        const csRowData = csResult.data as LatestBySymbolRow | null;
         const csPriceRaw = toNum(csRowData?.price_krw_per_g);
         const csMeta = csRowData?.meta ?? null;
 
@@ -140,16 +155,9 @@ export async function GET() {
         // ✅ CS도 Settings 값(cs_correction_factor)에 “연동”(원시세가 있으면 config로 재계산)
         const cs = csNoCorr === null ? csPriceRaw : csNoCorr * csFactor;
 
-        // 5) CNY/KRW (amount-based quote)
-        const { data: cnyRow } = await sb
-            .from("cms_v_market_tick_latest_by_symbol_ops_v1")
-            .select("price_krw_per_g")
-            .eq("symbol", "CNY_KRW_PER_1_ADJ")
-            .maybeSingle();
+        const cnyAd = toNum((cnyResult.data as { price_krw_per_g?: number | null } | null)?.price_krw_per_g);
 
-        const cnyAd = toNum((cnyRow as { price_krw_per_g?: number | null } | null)?.price_krw_per_g);
-
-        return NextResponse.json({
+        const payload = {
             data: {
                 fxAsOf: new Date().toISOString(),
                 // legacy (catalog/page.tsx 등에서 사용)
@@ -168,6 +176,14 @@ export async function GET() {
                 cnyAd,
                 // 디버깅/가시성용(원하면 유지, 싫으면 삭제 가능)
                 _config: { fxMarkup, csFactor, silverKrFactor },
+            },
+        };
+
+        marketTicksCache = { expiresAt: Date.now() + CACHE_TTL_MS, payload };
+
+        return NextResponse.json(payload, {
+            headers: {
+                "Cache-Control": "private, max-age=10, stale-while-revalidate=10",
             },
         });
     } catch (error) {

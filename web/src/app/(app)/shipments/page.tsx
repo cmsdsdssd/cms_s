@@ -7028,7 +7028,7 @@ const extractEtcLaborAmount = (value: unknown): number => {
                 확정된 출고 내역은 전체 히스토리 페이지에서 조회 및 관리할 수 있습니다.
               </p>
             </div>
-            <Link href="/shipments_main">
+            <Link href="/shipments_history">
               <Button variant="secondary" className="gap-2">
                 전체 내역 보러가기
                 <ArrowRight className="w-4 h-4" />

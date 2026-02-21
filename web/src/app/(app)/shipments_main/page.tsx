@@ -106,6 +106,17 @@ const getKstYmd = () => {
 
 const isValidYmd = (value: string) => /^\d{4}-\d{2}-\d{2}$/.test(value);
 
+function hashIds(ids: string[]) {
+  let hash = 2166136261;
+  for (const id of ids) {
+    for (let i = 0; i < id.length; i += 1) {
+      hash ^= id.charCodeAt(i);
+      hash = Math.imul(hash, 16777619);
+    }
+  }
+  return (hash >>> 0).toString(16);
+}
+
 // Color chip helper
 function ColorChip({ color }: { color: string }) {
   const colors: Record<string, string> = {
@@ -245,8 +256,13 @@ export default function ShipmentsMainPage() {
     [unshippedQuery.data]
   );
 
+  const orderLineIdsKey = useMemo(() => {
+    if (orderLineIds.length === 0) return "none";
+    return `${orderLineIds.length}:${hashIds(orderLineIds)}`;
+  }, [orderLineIds]);
+
   const storePickupOrderLinesQuery = useQuery({
-    queryKey: ["cms", "store_pickup_order_lines", orderLineIds],
+    queryKey: ["cms", "store_pickup_order_lines", orderLineIdsKey],
     enabled: Boolean(schemaClient) && orderLineIds.length > 0,
     queryFn: async () => {
       if (!schemaClient) throw new Error("Supabase 클라이언트가 초기화되지 않았습니다");
@@ -274,18 +290,9 @@ export default function ShipmentsMainPage() {
     if (!unshippedQuery.data) return [];
 
     let result = unshippedQuery.data;
-    console.log("[shipments_main DEBUG] unshippedQuery.data:", result.length, "rows");
-    console.log("[shipments_main DEBUG] order_line_ids:", result.map(r => r.order_line_id));
-    console.log("[shipments_main DEBUG] includeStorePickup:", includeStorePickup);
-    console.log("[shipments_main DEBUG] storePickupOrderLinesQuery.isLoading:", storePickupOrderLinesQuery.isLoading);
-    console.log("[shipments_main DEBUG] storePickupOrderLineIds:", Array.from(storePickupOrderLineIds));
     
     if (!includeStorePickup) {
-      const beforeCount = result.length;
-      const removedIds = result.filter((row) => storePickupOrderLineIds.has(row.order_line_id)).map(r => r.order_line_id);
-      console.log("[shipments_main DEBUG] Removed order_line_ids (store pickup):", removedIds);
       result = result.filter((row) => !storePickupOrderLineIds.has(row.order_line_id));
-      console.log("[shipments_main DEBUG] After store pickup filter:", result.length, "/", beforeCount);
     }
     
     const activeFilters = filters.filter((filter) => filter.value);

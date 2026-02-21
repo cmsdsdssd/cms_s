@@ -95,6 +95,77 @@ type ShipmentCostCandidate = {
   model_names?: string | null;
 };
 
+const SHIPMENT_CANDIDATES_SOURCE =
+  process.env.NEXT_PUBLIC_SHIPMENT_CANDIDATES_SOURCE?.toLowerCase() === "direct"
+    ? "direct"
+    : "api";
+
+const SHIPMENT_CANDIDATES_SHADOW_CHECK =
+  process.env.NEXT_PUBLIC_SHIPMENT_CANDIDATES_SHADOW_CHECK === "1";
+
+function candidateSignature(row: ShipmentCostCandidate) {
+  return [
+    row.shipment_id,
+    row.ship_date ?? "",
+    row.customer_party_id ?? "",
+    row.customer_name ?? "",
+    String(row.total_qty ?? ""),
+    String(row.total_cost_krw ?? ""),
+    String(row.total_sell_krw ?? ""),
+    String(row.cost_confirmed ?? ""),
+    row.model_names ?? "",
+  ].join("|");
+}
+
+function diffCandidates(baseRows: ShipmentCostCandidate[], shadowRows: ShipmentCostCandidate[]) {
+  const baseMap = new Map(baseRows.map((row) => [row.shipment_id, candidateSignature(row)]));
+  const shadowMap = new Map(shadowRows.map((row) => [row.shipment_id, candidateSignature(row)]));
+
+  const missingInShadow: string[] = [];
+  const missingInBase: string[] = [];
+  const changed: string[] = [];
+
+  for (const [shipmentId, sig] of baseMap.entries()) {
+    if (!shadowMap.has(shipmentId)) {
+      missingInShadow.push(shipmentId);
+      continue;
+    }
+    if (shadowMap.get(shipmentId) !== sig) {
+      changed.push(shipmentId);
+    }
+  }
+
+  for (const shipmentId of shadowMap.keys()) {
+    if (!baseMap.has(shipmentId)) {
+      missingInBase.push(shipmentId);
+    }
+  }
+
+  return { missingInShadow, missingInBase, changed };
+}
+
+async function fetchShipmentCandidatesFromApi() {
+  const res = await fetch("/api/shipment-cost-candidates", { cache: "no-store" });
+  const json = (await res.json()) as { data?: ShipmentCostCandidate[]; error?: string };
+  if (!res.ok) {
+    throw new Error(json?.error ?? "출고 배분 후보 조회 실패");
+  }
+  const rows = Array.isArray(json?.data) ? json.data : [];
+  return rows;
+}
+
+async function fetchShipmentCandidatesDirect(
+  schemaClient: NonNullable<ReturnType<typeof getSchemaClient>>
+) {
+  const { data, error } = await schemaClient
+    .from(CONTRACTS.views.shipmentCostApplyCandidates)
+    .select("*")
+    .order("ship_date", { ascending: false });
+
+  if (error) throw error;
+  return (data ?? []) as ShipmentCostCandidate[];
+}
+
 type PartyOption = { label: string; value: string };
 
 type VendorRow = {
@@ -318,15 +389,37 @@ function PurchaseCostWorklistContent() {
   });
 
   const shipmentCandidatesQuery = useQuery({
-    queryKey: ["shipment-cost-candidates"],
+    queryKey: ["shipment-cost-candidates-v2", SHIPMENT_CANDIDATES_SOURCE],
     queryFn: async () => {
       if (!schemaClient) return [] as ShipmentCostCandidate[];
-      const { data, error } = await schemaClient
-        .from(CONTRACTS.views.shipmentCostApplyCandidates)
-        .select("*")
-        .order("ship_date", { ascending: false });
-      if (error) throw error;
-      return (data ?? []) as ShipmentCostCandidate[];
+
+      const primaryRows =
+        SHIPMENT_CANDIDATES_SOURCE === "direct"
+          ? await fetchShipmentCandidatesDirect(schemaClient)
+          : await fetchShipmentCandidatesFromApi();
+
+      if (SHIPMENT_CANDIDATES_SHADOW_CHECK) {
+        try {
+          const shadowRows =
+            SHIPMENT_CANDIDATES_SOURCE === "direct"
+              ? await fetchShipmentCandidatesFromApi()
+              : await fetchShipmentCandidatesDirect(schemaClient);
+
+          const diff = diffCandidates(primaryRows, shadowRows);
+          if (diff.missingInShadow.length > 0 || diff.missingInBase.length > 0 || diff.changed.length > 0) {
+            console.warn("[shipment-candidates shadow-check mismatch]", {
+              primarySource: SHIPMENT_CANDIDATES_SOURCE,
+              missingInShadow: diff.missingInShadow.slice(0, 20),
+              missingInBase: diff.missingInBase.slice(0, 20),
+              changed: diff.changed.slice(0, 20),
+            });
+          }
+        } catch (error) {
+          console.warn("[shipment-candidates shadow-check failed]", error);
+        }
+      }
+
+      return primaryRows;
     },
     enabled: Boolean(schemaClient),
   });
