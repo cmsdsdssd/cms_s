@@ -112,7 +112,7 @@ export async function GET() {
 
         // ✅ KS 계산: Settings 값(silver_kr_correction_factor)에 연동
         const ks = silverBasePrice === null ? null : Number(silverBasePrice) * silverKrFactor;
-        const silver925Purity = getMaterialFactor({ materialCode: "925", silverAdjustApplied: 1 }).purityRate;
+        const silver925Purity = getMaterialFactor({ materialCode: "925" }).purityRate;
         const ks925 = ks === null ? null : ks * silver925Purity; // ✅ 표시용만
 
         // 4) CN Silver (CS)

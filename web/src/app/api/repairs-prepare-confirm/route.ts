@@ -11,7 +11,7 @@ type Body = {
   added_weight_g?: number | null;
 };
 
-const REPAIR_MATERIAL_CODES = new Set(["14", "18", "24", "925", "999", "00"]);
+const REPAIR_MATERIAL_CODE_PATTERN = /^(00|\d{1,4})$/;
 
 function getSupabaseAdmin() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
@@ -27,8 +27,13 @@ function asUuid(value: unknown) {
 }
 
 function resolveMaterialCode(value: unknown) {
-  const code = String(value ?? "").trim();
-  return REPAIR_MATERIAL_CODES.has(code) ? code : "00";
+  const code = String(value ?? "").trim().toUpperCase();
+  if (code === "14K") return "14";
+  if (code === "18K") return "18";
+  if (code === "24K" || code === "PURE") return "24";
+  if (code === "S925") return "925";
+  if (code === "S999") return "999";
+  return REPAIR_MATERIAL_CODE_PATTERN.test(code) ? code : "00";
 }
 
 export async function POST(request: Request) {
@@ -42,6 +47,23 @@ export async function POST(request: Request) {
   const repairLineId = asUuid(body?.repair_line_id);
   if (!shipmentId || !repairLineId) {
     return NextResponse.json({ error: "shipment_id and repair_line_id are required" }, { status: 400 });
+  }
+
+  const { data: shipmentHeader, error: shipmentHeaderError } = await supabase
+    .from("cms_shipment_header")
+    .select("confirmed_at, status")
+    .eq("shipment_id", shipmentId)
+    .maybeSingle<{ confirmed_at: string | null; status: string | null }>();
+
+  if (shipmentHeaderError) {
+    return NextResponse.json({ error: shipmentHeaderError.message ?? "shipment header query failed" }, { status: 500 });
+  }
+
+  if (shipmentHeader?.confirmed_at || shipmentHeader?.status === "CONFIRMED") {
+    return NextResponse.json(
+      { error: "shipment is confirmed; repairs pre-confirm adjustment is locked" },
+      { status: 409 }
+    );
   }
 
   const materialCode = resolveMaterialCode(body?.material_code ?? null);
@@ -85,26 +107,23 @@ export async function POST(request: Request) {
 
     const { data: valuation, error: valuationError } = await supabase
       .from("cms_shipment_valuation")
-      .select("gold_krw_per_g_snapshot, silver_krw_per_g_snapshot, silver_adjust_factor_snapshot")
+      .select("gold_krw_per_g_snapshot, silver_krw_per_g_snapshot")
       .eq("shipment_id", shipmentId)
       .maybeSingle<{
         gold_krw_per_g_snapshot: number | null;
         silver_krw_per_g_snapshot: number | null;
-        silver_adjust_factor_snapshot: number | null;
       }>();
 
     if (valuationError) {
       return NextResponse.json({ error: valuationError.message ?? "shipment valuation query failed" }, { status: 500 });
     }
 
-    const silverAdjustRaw = Number(valuation?.silver_adjust_factor_snapshot ?? 1);
-    const silverAdjust = Number.isFinite(silverAdjustRaw) && silverAdjustRaw > 0 ? silverAdjustRaw : 1;
     const goldPrice = Number(valuation?.gold_krw_per_g_snapshot ?? 0);
     const silverPrice = Number(valuation?.silver_krw_per_g_snapshot ?? 0);
 
     const { data: factorRows } = await supabase
       .from("cms_material_factor_config")
-      .select("material_code, purity_rate, gold_adjust_factor");
+      .select("material_code, purity_rate, material_adjust_factor, gold_adjust_factor, price_basis");
     const factors = buildMaterialFactorMap((factorRows ?? []) as never[]);
 
     let materialAmount = 0;
@@ -140,7 +159,6 @@ export async function POST(request: Request) {
         tickPriceKrwPerG: silverPrice,
         materialCode: nextMaterial,
         factors,
-        silverAdjustApplied: silverAdjust,
       });
       silverTick = silverPrice;
     } else if (nextMaterial === "999") {
@@ -149,7 +167,6 @@ export async function POST(request: Request) {
         tickPriceKrwPerG: silverPrice,
         materialCode: nextMaterial,
         factors,
-        silverAdjustApplied: silverAdjust,
       });
       silverTick = silverPrice;
     }
@@ -182,7 +199,7 @@ export async function POST(request: Request) {
       total_amount_sell_krw: totalAmount,
       gold_tick_krw_per_g: goldTick,
       silver_tick_krw_per_g: silverTick,
-      silver_adjust_factor: silverAdjust,
+      silver_adjust_factor: 1,
       price_calc_trace: {
         repair_prepare_confirm_repriced: true,
         repair_fee_included: true,

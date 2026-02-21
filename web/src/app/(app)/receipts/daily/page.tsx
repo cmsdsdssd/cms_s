@@ -6,6 +6,7 @@ import { ActionBar } from "@/components/layout/action-bar";
 import { ReceiptPrintHalf, type ReceiptAmounts } from "@/components/receipt/receipt-print";
 import { Button } from "@/components/ui/button";
 import { ListCard } from "@/components/ui/list-card";
+import { CONTRACTS } from "@/lib/contracts";
 import { getSchemaClient } from "@/lib/supabase/client";
 import { getMaterialFactor } from "@/lib/material-factors";
 import { cn } from "@/lib/utils";
@@ -23,6 +24,18 @@ type ShipmentLineRow = {
   total_amount_sell_krw?: number | null;
   gold_tick_krw_per_g?: number | null;
   silver_tick_krw_per_g?: number | null;
+  purity_rate_snapshot?: number | null;
+  material_adjust_factor_snapshot?: number | null;
+  market_adjust_factor_snapshot?: number | null;
+  effective_factor_snapshot?: number | null;
+  gold_adjust_factor_snapshot?: number | null;
+  price_basis_snapshot?: string | null;
+  silver_adjust_factor?: number | null;
+  commodity_due_g?: number | null;
+  commodity_price_snapshot_krw_per_g?: number | null;
+  material_cash_due_krw?: number | null;
+  labor_cash_due_krw?: number | null;
+  total_cash_due_krw?: number | null;
   shipment_header?: {
     ship_date?: string | null;
     status?: string | null;
@@ -68,17 +81,23 @@ const subtractAmounts = (base: Amounts, sub: Amounts) => ({
   total: base.total - sub.total,
 });
 
-const getMaterialBucket = (code?: string | null) => {
-  const material = (code ?? "").trim();
+const getMaterialBucket = (line: ShipmentLineRow) => {
+  const material = (line.material_code ?? "").trim();
   if (!material || material === "00") return { kind: "none" as const, factor: 0 };
+  const snapshotEffective = Number(line.effective_factor_snapshot ?? Number.NaN);
+  if (Number.isFinite(snapshotEffective) && snapshotEffective > 0) {
+    if (material === "925" || material === "999") {
+      return { kind: "silver" as const, factor: snapshotEffective };
+    }
+    if (material === "14" || material === "18" || material === "24") {
+      return { kind: "gold" as const, factor: snapshotEffective };
+    }
+  }
   if (material === "14" || material === "18" || material === "24") {
     return { kind: "gold" as const, factor: getMaterialFactor({ materialCode: material }).effectiveFactor };
   }
   if (material === "925" || material === "999") {
-    return {
-      kind: "silver" as const,
-      factor: getMaterialFactor({ materialCode: material, silverAdjustApplied: 1 }).effectiveFactor,
-    };
+    return { kind: "silver" as const, factor: getMaterialFactor({ materialCode: material }).effectiveFactor };
   }
   return { kind: "none" as const, factor: 0 };
 };
@@ -87,7 +106,7 @@ const toLineAmounts = (line: ShipmentLineRow): Amounts => {
   const netWeight = Number(line.net_weight_g ?? 0);
   const labor = Number(line.labor_total_sell_krw ?? 0);
   const total = Number(line.total_amount_sell_krw ?? 0);
-  const bucket = getMaterialBucket(line.material_code ?? null);
+  const bucket = getMaterialBucket(line);
   if (bucket.kind === "none") {
     return { gold: 0, silver: 0, labor: 0, total: 0 };
   }
@@ -127,7 +146,7 @@ export default function DailyReceiptsPage() {
       const { data, error } = await schemaClient
         .from("cms_shipment_line")
         .select(
-          "shipment_line_id, shipment_id, model_name, qty, material_code, color, size, net_weight_g, labor_total_sell_krw, total_amount_sell_krw, gold_tick_krw_per_g, silver_tick_krw_per_g, shipment_header:cms_shipment_header(ship_date, confirmed_at, status, customer_party_id, is_store_pickup, customer:cms_party(name))"
+          "shipment_line_id, shipment_id, model_name, qty, material_code, color, size, net_weight_g, labor_total_sell_krw, total_amount_sell_krw, gold_tick_krw_per_g, silver_tick_krw_per_g, purity_rate_snapshot, material_adjust_factor_snapshot, market_adjust_factor_snapshot, effective_factor_snapshot, gold_adjust_factor_snapshot, price_basis_snapshot, silver_adjust_factor, shipment_header:cms_shipment_header(ship_date, confirmed_at, status, customer_party_id, is_store_pickup, customer:cms_party(name))"
         )
         .not("shipment_header", "is", null)
         .order("created_at", { ascending: true });
@@ -148,9 +167,82 @@ export default function DailyReceiptsPage() {
 
   const todayLines = useMemo(() => todayLinesQuery.data ?? [], [todayLinesQuery.data]);
 
+  const todayLineIds = useMemo(
+    () => Array.from(new Set(todayLines.map((line) => String(line.shipment_line_id ?? "").trim()).filter(Boolean))),
+    [todayLines]
+  );
+
+  const invoiceSnapshotQuery = useQuery({
+    queryKey: ["daily-receipts-invoice-snapshot", todayLineIds.join(",")],
+    queryFn: async () => {
+      if (!schemaClient || todayLineIds.length === 0) return [] as Array<{
+        shipment_line_id?: string | null;
+        commodity_due_g?: number | null;
+        commodity_price_snapshot_krw_per_g?: number | null;
+        material_cash_due_krw?: number | null;
+        labor_cash_due_krw?: number | null;
+        total_cash_due_krw?: number | null;
+      }>;
+      const { data, error } = await schemaClient
+        .from(CONTRACTS.views.arInvoicePosition)
+        .select("shipment_line_id, commodity_due_g, commodity_price_snapshot_krw_per_g, material_cash_due_krw, labor_cash_due_krw, total_cash_due_krw")
+        .in("shipment_line_id", todayLineIds);
+      if (error) throw error;
+      return (data ?? []) as Array<{
+        shipment_line_id?: string | null;
+        commodity_due_g?: number | null;
+        commodity_price_snapshot_krw_per_g?: number | null;
+        material_cash_due_krw?: number | null;
+        labor_cash_due_krw?: number | null;
+        total_cash_due_krw?: number | null;
+      }>;
+    },
+    enabled: Boolean(schemaClient) && todayLineIds.length > 0,
+  });
+
+  const invoiceSnapshotByLineId = useMemo(() => {
+    const map = new Map<string, {
+      commodity_due_g?: number | null;
+      commodity_price_snapshot_krw_per_g?: number | null;
+      material_cash_due_krw?: number | null;
+      labor_cash_due_krw?: number | null;
+      total_cash_due_krw?: number | null;
+    }>();
+    (invoiceSnapshotQuery.data ?? []).forEach((row) => {
+      const key = String(row.shipment_line_id ?? "").trim();
+      if (!key) return;
+      map.set(key, {
+        commodity_due_g: row.commodity_due_g ?? null,
+        commodity_price_snapshot_krw_per_g: row.commodity_price_snapshot_krw_per_g ?? null,
+        material_cash_due_krw: row.material_cash_due_krw ?? null,
+        labor_cash_due_krw: row.labor_cash_due_krw ?? null,
+        total_cash_due_krw: row.total_cash_due_krw ?? null,
+      });
+    });
+    return map;
+  }, [invoiceSnapshotQuery.data]);
+
+  const todayLinesForReceipt = useMemo(
+    () =>
+      todayLines.map((line) => {
+        const key = String(line.shipment_line_id ?? "").trim();
+        const snapshot = key ? invoiceSnapshotByLineId.get(key) : undefined;
+        if (!snapshot) return line;
+        return {
+          ...line,
+          commodity_due_g: snapshot.commodity_due_g ?? null,
+          commodity_price_snapshot_krw_per_g: snapshot.commodity_price_snapshot_krw_per_g ?? null,
+          material_cash_due_krw: snapshot.material_cash_due_krw ?? null,
+          labor_cash_due_krw: snapshot.labor_cash_due_krw ?? null,
+          total_cash_due_krw: snapshot.total_cash_due_krw ?? null,
+        };
+      }),
+    [invoiceSnapshotByLineId, todayLines]
+  );
+
   const partyGroups = useMemo(() => {
     const map = new Map<string, { partyId: string; partyName: string; lines: ShipmentLineRow[] }>();
-    todayLines.forEach((line) => {
+    todayLinesForReceipt.forEach((line) => {
       const partyId = line.shipment_header?.customer_party_id ?? "";
       if (!partyId) return;
       const partyName = line.shipment_header?.customer?.name ?? "-";
@@ -159,7 +251,7 @@ export default function DailyReceiptsPage() {
       map.set(partyId, entry);
     });
     return Array.from(map.values()).sort((a, b) => a.partyName.localeCompare(b.partyName, "ko-KR"));
-  }, [todayLines]);
+  }, [todayLinesForReceipt]);
 
   const partyIds = useMemo(() => partyGroups.map((group) => group.partyId), [partyGroups]);
   const activePartyId = selectedPartyId ?? partyGroups[0]?.partyId ?? null;

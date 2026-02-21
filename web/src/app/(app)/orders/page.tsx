@@ -266,6 +266,7 @@ const MATERIAL_OPTIONS = [
   { label: "18K", value: "18" },
   { label: "24K", value: "24" },
   { label: "925", value: "925" },
+  { label: "999", value: "999" },
   { label: "00(기타)", value: "00" },
 ];
 

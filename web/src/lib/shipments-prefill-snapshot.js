@@ -153,9 +153,8 @@ export const materializeSnapshotPolicyItems = ({ items, policyMeta }) => {
 
   if (!next.some((item) => isPlatingLikeItem(item))) {
     const policyPlatingSell = Math.max(roundKrw(parseNumberish(normalizedPolicyMeta?.plating_sell_krw)), 0);
-    const policyAbsorbPlating = Math.max(roundKrw(parseNumberish(normalizedPolicyMeta?.absorb_plating_krw)), 0);
     const policyPlatingCost = Math.max(roundKrw(parseNumberish(normalizedPolicyMeta?.plating_cost_krw)), 0);
-    const platingSell = Math.max(roundKrw(policyPlatingSell + policyAbsorbPlating), 0);
+    const platingSell = Math.max(roundKrw(policyPlatingSell), 0);
     const platingAmount = platingSell > 0 ? platingSell : policyPlatingCost;
     const platingItem = buildAutoItem({
       type: "PLATING_MASTER",

@@ -10,7 +10,7 @@ import {
 test("etc-visible classification excludes auto/evidence and stone-like items", () => {
   assert.equal(isCoreVisibleEtcItem({ type: "STONE_LABOR", label: "알공임" }), false);
   assert.equal(isCoreVisibleEtcItem({ type: "BOM_DEFAULT", label: "BOM" }), false);
-  assert.equal(isCoreVisibleEtcItem({ type: "MATERIAL_MASTER:abc", label: "기타-소재" }), true);
+  assert.equal(isCoreVisibleEtcItem({ type: "MATERIAL_MASTER:abc", label: "기타-소재" }), false);
   assert.equal(isCoreVisibleEtcItem({ type: "WARN", label: "warn" }), false);
   assert.equal(isCoreVisibleEtcItem({ type: "DECOR:abc", label: "[장식] 장식:A" }), true);
   assert.equal(isCoreVisibleEtcItem({ type: "PLATING_MASTER", label: "도금-마스터" }), true);

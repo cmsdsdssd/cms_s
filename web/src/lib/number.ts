@@ -12,6 +12,10 @@ export function roundUpToUnit(value: number, unit: number) {
 export function formatNumberInput(value: string) {
   const cleaned = value.replaceAll(",", "").trim();
   if (!cleaned) return "";
+  if (cleaned === "-" || cleaned === "+") return cleaned;
+  if (cleaned === ".") return ".";
+  if (cleaned === "-.") return "-.";
+  if (cleaned === "+.") return "+.";
   const sign = cleaned.startsWith("-") ? "-" : "";
   const unsigned = cleaned.replace(/[^0-9.]/g, "");
   const parts = unsigned.split(".");

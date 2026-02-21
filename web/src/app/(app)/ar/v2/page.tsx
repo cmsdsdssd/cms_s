@@ -14,7 +14,6 @@ import { useRpcMutation } from "@/hooks/use-rpc-mutation";
 import { CONTRACTS, isFnConfigured } from "@/lib/contracts";
 import { callRpc } from "@/lib/supabase/rpc";
 import { getSchemaClient } from "@/lib/supabase/client";
-import { getMaterialFactor, normalizeMaterialCode } from "@/lib/material-factors";
 import { cn } from "@/lib/utils";
 import { Modal } from "@/components/ui/modal";
 
@@ -61,6 +60,11 @@ type ShipmentLineRow = {
   total_amount_sell_krw?: number | null;
   material_amount_sell_krw?: number | null;
   labor_total_sell_krw?: number | null;
+  purity_rate_snapshot?: number | null;
+  material_adjust_factor_snapshot?: number | null;
+  gold_adjust_factor_snapshot?: number | null;
+  market_adjust_factor_snapshot?: number | null;
+  effective_factor_snapshot?: number | null;
   model_name?: string | null;
   suffix?: string | null;
   color?: string | null;
@@ -2872,12 +2876,6 @@ function DetailsModal({
                   </span>
                 </div>
                 <div>
-                  <span className="block text-[var(--muted)] text-xs mb-1">은 보정계수 (Factor)</span>
-                  <span className="font-bold tabular-nums text-[var(--foreground)]">
-                    {valuation.silver_adjust_factor_snapshot ?? "1.0"}x
-                  </span>
-                </div>
-                <div>
                   <span className="block text-[var(--muted)] text-xs mb-1">자료 출처</span>
                   <span className="font-medium text-[var(--foreground)]">
                     {valuation.pricing_source ?? "-"}
@@ -2937,11 +2935,17 @@ function LineCalculation({
     queryFn: async () => {
       const { data, error } = await schemaClient
         .from(CONTRACTS.views.arInvoicePosition)
-        .select("commodity_due_g, commodity_price_snapshot_krw_per_g")
+        .select("commodity_due_g, commodity_price_snapshot_krw_per_g, material_cash_due_krw, labor_cash_due_krw, total_cash_due_krw")
         .eq("shipment_line_id", shipmentLineId)
         .maybeSingle();
       if (error) throw error;
-      return (data ?? null) as { commodity_due_g?: number | null; commodity_price_snapshot_krw_per_g?: number | null } | null;
+      return (data ?? null) as {
+        commodity_due_g?: number | null;
+        commodity_price_snapshot_krw_per_g?: number | null;
+        material_cash_due_krw?: number | null;
+        labor_cash_due_krw?: number | null;
+        total_cash_due_krw?: number | null;
+      } | null;
     },
     enabled: Boolean(shipmentLineId),
   });
@@ -2955,37 +2959,25 @@ function LineCalculation({
   const mat = (line.material_code ?? "").toUpperCase();
   const isSilver = mat.startsWith("925") || mat.startsWith("999");
 
-  // Logic: Use authoritative weight from Invoice if available, else calc
-  let purity = 1.0;
-  let loss = 1.0;
-  const normalizedMat = normalizeMaterialCode(mat);
+  const convertedWeight = Number(invoice?.commodity_due_g ?? Number.NaN);
+  const pricePerG = Number(invoice?.commodity_price_snapshot_krw_per_g ?? Number.NaN);
+  const materialAmt = Number(invoice?.material_cash_due_krw ?? Number.NaN);
+  const labor = Number(invoice?.labor_cash_due_krw ?? Number.NaN);
+  const total = Number(invoice?.total_cash_due_krw ?? Number.NaN);
+  const hasSnapshot =
+    Number.isFinite(convertedWeight) &&
+    Number.isFinite(pricePerG) &&
+    Number.isFinite(materialAmt) &&
+    Number.isFinite(labor) &&
+    Number.isFinite(total);
 
-  if (isSilver) {
-    purity = getMaterialFactor({ materialCode: normalizedMat, silverAdjustApplied: 1 }).purityRate;
-    loss = valuation?.silver_adjust_factor_snapshot ?? line.silver_adjust_factor ?? 1.0;
-  } else {
-    if (normalizedMat === "14" || normalizedMat === "18" || normalizedMat === "24") {
-      const factor = getMaterialFactor({ materialCode: normalizedMat, silverAdjustApplied: 1 });
-      purity = factor.purityRate;
-      loss = factor.adjustApplied;
-    } else {
-      purity = 1.0;
-      loss = 1.0;
-    }
+  if (!hasSnapshot) {
+    return (
+      <div className="rounded-md border border-[var(--warn)]/40 bg-[var(--warn)]/10 p-3 text-xs text-[var(--warn)]">
+        원장 스냅샷이 없어 계산 상세를 표시할 수 없습니다. (잠금건은 AR 원장 SOT만 표시)
+      </div>
+    );
   }
-
-  const rawWeight = line.net_weight_g ?? 0;
-
-  // Authoritative data from Invoice
-  const invoiceWeight = invoice?.commodity_due_g ? Number(invoice.commodity_due_g) : null;
-  const invoicePrice = invoice?.commodity_price_snapshot_krw_per_g ? Number(invoice.commodity_price_snapshot_krw_per_g) : null;
-
-  // Use invoice weight if available, else fallback to manual calc
-  const convertedWeight = invoiceWeight ?? (rawWeight * purity * loss);
-  const pricePerG = invoicePrice ?? (isSilver ? (line.silver_tick_krw_per_g ?? 0) : (line.gold_tick_krw_per_g ?? 0));
-
-  const materialAmt = line.material_amount_sell_krw ?? 0;
-  const labor = line.labor_total_sell_krw ?? 0;
 
   return (
     <div className="bg-[var(--surface)] p-3 rounded-md border border-[var(--panel-border)] text-sm space-y-1">
@@ -2995,20 +2987,6 @@ function LineCalculation({
           {mat} {isSilver ? "(은)" : "(금)"}
         </span>
       </div>
-
-      {/* Formula: 원중량 * 함량 * 해리 = 순금 환산 중량 */}
-      <div className="flex justify-between items-center text-[var(--muted)] text-xs">
-        <div className="flex flex-col">
-          <span>
-            {rawWeight}g(원중량) × {purity}(함량) × {loss}(해리)
-          </span>
-        </div>
-        <span className="font-medium text-[var(--foreground)]">
-          = {formatGram(convertedWeight)} (환산)
-        </span>
-      </div>
-
-      <div className="my-1 border-t border-[var(--panel-border)] border-dashed" />
 
       {/* Price calculation */}
       <div className="flex justify-between items-center text-[var(--muted)]">
@@ -3022,14 +3000,10 @@ function LineCalculation({
 
       <div className="border-t border-[var(--panel-border)] mt-2 pt-2 flex justify-between items-center font-bold text-[var(--foreground)]">
         <span>= 합계</span>
-        <span>{formatKrw(rowAmount)}</span>
+        <span>{formatKrw(total)}</span>
       </div>
-
-      {/* Warning if calc mismatch (only if invoice exists) */}
-      {invoiceWeight && Math.abs(invoiceWeight - (rawWeight * purity * loss)) > 0.05 && (
-        <div className="text-[10px] text-[var(--warn)] mt-1">
-          * 시스템 환산 중량({formatGram(invoiceWeight)})과 계산상 중량({formatGram(rawWeight * purity * loss)})에 차이가 있습니다. (시스템 값 적용)
-        </div>
+      {Math.abs(Number(rowAmount ?? 0) - total) > 0.5 && (
+        <div className="text-[10px] text-[var(--warn)]">* 리스트 합계와 원장 스냅샷 합계가 다릅니다. 원장값을 기준으로 표시합니다.</div>
       )}
     </div>
   );

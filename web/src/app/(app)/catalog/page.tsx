@@ -20,7 +20,11 @@ import { getSchemaClient } from "@/lib/supabase/client";
 import { compressImage } from "@/lib/image-utils";
 import { deriveCategoryCodeFromModelName } from "@/lib/model-name";
 import { roundUpToUnit } from "@/lib/number";
-import { calcMaterialAmountSellKrw } from "@/lib/material-factors";
+import {
+  buildMaterialFactorMap,
+  calcMaterialAmountSellKrw,
+  type MaterialFactorConfigRow,
+} from "@/lib/material-factors";
 import { CatalogGalleryGrid } from "@/components/catalog/CatalogGalleryGrid";
 import { ChinaCostPanel, type ChinaExtraLaborItem } from "../../../components/catalog/ChinaCostPanel";
 /* eslint-disable @next/next/no-img-element */
@@ -336,6 +340,7 @@ const materialOptions = [
   { label: "18K", value: "18" },
   { label: "24K", value: "24" },
   { label: "925", value: "925" },
+  { label: "999", value: "999" },
   { label: "00", value: "00" },
 ];
 
@@ -964,6 +969,24 @@ export default function CatalogPage() {
     void refreshMarketTicks();
   }, [refreshMarketTicks]);
 
+  const materialFactorQuery = useQuery({
+    queryKey: ["cms", "material-factor-config", "catalog"],
+    queryFn: async () => {
+      if (!schema) throw new Error("Supabase env is missing");
+      const { data, error } = await schema
+        .from("cms_material_factor_config")
+        .select("material_code, purity_rate, material_adjust_factor, gold_adjust_factor, price_basis");
+      if (error) throw error;
+      return (data ?? []) as MaterialFactorConfigRow[];
+    },
+    staleTime: 60_000,
+  });
+
+  const materialFactorMap = useMemo(
+    () => buildMaterialFactorMap(materialFactorQuery.data ?? null),
+    [materialFactorQuery.data]
+  );
+
   // Reset saving state when modal opens/closes to prevent stuck state
   useEffect(() => {
     if (!registerOpen) {
@@ -1152,9 +1175,9 @@ export default function CatalogPage() {
       netWeightG: netWeight,
       tickPriceKrwPerG: isSilver ? silverModifiedPrice : goldPrice,
       materialCode: material,
-      silverAdjustApplied: isSilver ? 1 : null,
+      factors: materialFactorMap,
     });
-  }, [goldPrice, silverModifiedPrice]);
+  }, [goldPrice, materialFactorMap, silverModifiedPrice]);
 
   function roundUpToThousand(value: number) {
     return Math.ceil(value / 1000) * 1000;
@@ -3944,11 +3967,8 @@ export default function CatalogPage() {
                           type="number"
                           min={0}
                           value={laborBaseSellWithAccessoryForEdit}
-                          onChange={(e) => {
-                            const nextDisplay = toNumber(e.target.value);
-                            const nextRaw = Math.max(0, nextDisplay - absorbImpactSummary.baseLaborUnit);
-                            setLaborBaseSell(nextRaw);
-                          }}
+                          readOnly
+                          disabled
                           className="bg-lime-50"
                         />
                       </div>
@@ -4009,6 +4029,7 @@ export default function CatalogPage() {
                           min={0}
                           value={laborCenterSellWithAbsorb}
                           readOnly
+                          disabled
                           className="bg-green-50"
                         />
                       </div>
@@ -4076,6 +4097,7 @@ export default function CatalogPage() {
                           min={0}
                           value={laborSub1SellWithAbsorb}
                           readOnly
+                          disabled
                           className="bg-green-50"
                         />
                       </div>
@@ -4143,6 +4165,7 @@ export default function CatalogPage() {
                           min={0}
                           value={laborSub2SellWithAbsorb}
                           readOnly
+                          disabled
                           className="bg-green-50"
                         />
                       </div>
@@ -4181,11 +4204,8 @@ export default function CatalogPage() {
                           min={0}
                           value={platingSellWithAbsorb}
                           className="bg-[var(--subtle-bg)]"
-                          onChange={(e) => {
-                            const nextDisplay = toNumber(e.target.value);
-                            const nextRaw = Math.max(0, nextDisplay - absorbImpactSummary.platingUnit);
-                            setPlatingSell(nextRaw);
-                          }}
+                          readOnly
+                          disabled
                         />
                       </div>
                       <div className="text-center text-[var(--muted)]">-</div>

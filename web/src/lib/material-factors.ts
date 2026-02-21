@@ -1,12 +1,14 @@
-export type MaterialCode = "14" | "18" | "24" | "925" | "999" | "00";
+export type MaterialCode = string;
 
 export type MaterialFactorConfigRow = {
   material_code: MaterialCode;
   purity_rate: number;
-  gold_adjust_factor: number;
+  material_adjust_factor: number;
+  gold_adjust_factor?: number;
+  price_basis?: "GOLD" | "SILVER" | "NONE";
 };
 
-export type MaterialFactorMap = Record<MaterialCode, MaterialFactorConfigRow>;
+export type MaterialFactorMap = Record<string, MaterialFactorConfigRow>;
 
 export type MaterialFactorResult = {
   materialCode: MaterialCode;
@@ -16,12 +18,12 @@ export type MaterialFactorResult = {
 };
 
 const DEFAULT_ROWS: MaterialFactorConfigRow[] = [
-  { material_code: "14", purity_rate: 0.585, gold_adjust_factor: 1.1 },
-  { material_code: "18", purity_rate: 0.75, gold_adjust_factor: 1.1 },
-  { material_code: "24", purity_rate: 1, gold_adjust_factor: 1 },
-  { material_code: "925", purity_rate: 0.925, gold_adjust_factor: 1 },
-  { material_code: "999", purity_rate: 1, gold_adjust_factor: 1 },
-  { material_code: "00", purity_rate: 0, gold_adjust_factor: 1 },
+  { material_code: "14", purity_rate: 0.585, material_adjust_factor: 1.1, price_basis: "GOLD" },
+  { material_code: "18", purity_rate: 0.75, material_adjust_factor: 1.1, price_basis: "GOLD" },
+  { material_code: "24", purity_rate: 1, material_adjust_factor: 1, price_basis: "GOLD" },
+  { material_code: "925", purity_rate: 0.925, material_adjust_factor: 1, price_basis: "SILVER" },
+  { material_code: "999", purity_rate: 1, material_adjust_factor: 1, price_basis: "SILVER" },
+  { material_code: "00", purity_rate: 0, material_adjust_factor: 1, price_basis: "NONE" },
 ];
 
 export function normalizeMaterialCode(raw: string | null | undefined): MaterialCode {
@@ -31,7 +33,8 @@ export function normalizeMaterialCode(raw: string | null | undefined): MaterialC
   if (value === "24" || value === "24K" || value === "PURE") return "24";
   if (value === "925" || value === "S925") return "925";
   if (value === "999" || value === "S999") return "999";
-  return "00";
+  if (value === "") return "00";
+  return value;
 }
 
 export function buildMaterialFactorMap(
@@ -43,7 +46,9 @@ export function buildMaterialFactorMap(
     map[row.material_code] = {
       material_code: row.material_code,
       purity_rate: Number(row.purity_rate ?? 0),
-      gold_adjust_factor: Number(row.gold_adjust_factor ?? 1),
+      material_adjust_factor: Number(row.material_adjust_factor ?? row.gold_adjust_factor ?? 1),
+      gold_adjust_factor: Number(row.gold_adjust_factor ?? row.material_adjust_factor ?? 1),
+      price_basis: row.price_basis ?? map[row.material_code].price_basis,
     };
   }
   return map;
@@ -52,20 +57,24 @@ export function buildMaterialFactorMap(
 export function getMaterialFactor(args: {
   materialCode: string | null | undefined;
   factors?: MaterialFactorMap | null;
+  marketAdjustApplied?: number | null;
   silverAdjustApplied?: number | null;
+  materialAdjustOverride?: number | null;
   goldAdjustOverride?: number | null;
 }): MaterialFactorResult {
   const materialCode = normalizeMaterialCode(args.materialCode);
   const factors = args.factors ?? buildMaterialFactorMap(null);
-  const row = factors[materialCode];
+  const row =
+    factors[materialCode] ??
+    ({ material_code: materialCode, purity_rate: 0, material_adjust_factor: 1, price_basis: "NONE" } as MaterialFactorConfigRow);
   const purityRate = Number(row?.purity_rate ?? 0);
 
-  let adjustApplied = 1;
-  if (materialCode === "14" || materialCode === "18" || materialCode === "24") {
-    adjustApplied = Number(args.goldAdjustOverride ?? row?.gold_adjust_factor ?? 1);
-  } else if (materialCode === "925" || materialCode === "999") {
-    adjustApplied = Number(args.silverAdjustApplied ?? 1);
-  }
+  const baseAdjust = Number(
+    args.materialAdjustOverride ?? args.goldAdjustOverride ?? row?.material_adjust_factor ?? row?.gold_adjust_factor ?? 1
+  );
+  const basis = row?.price_basis ?? (materialCode === "00" ? "NONE" : "GOLD");
+  let adjustApplied = baseAdjust;
+  if (basis === "NONE") adjustApplied = 1;
 
   if (!Number.isFinite(adjustApplied) || adjustApplied <= 0) adjustApplied = 1;
   const effectiveFactor = purityRate * adjustApplied;

@@ -8,7 +8,7 @@ export const isBomReferenceTypeValue = (type) => {
   return normalized === "BOM_DEFAULT" || normalized.startsWith("BOM_COMPONENT:");
 };
 
-export const isMaterialMasterTypeValue = (type) => toType(type).startsWith("MATERIAL_MASTER:");
+export const isMaterialMasterTypeValue = (type) => toType(type).startsWith("MATERIAL_MASTER");
 
 export const isPlatingMasterTypeValue = (type) => toType(type) === "PLATING_MASTER";
 
@@ -29,6 +29,7 @@ export const isCoreVisibleEtcItem = (item) => {
   const type = toType(item?.type);
   const label = String(item?.label ?? "");
   if (isBomReferenceTypeValue(type)) return false;
+  if (isMaterialMasterTypeValue(type)) return false;
   if (type === "STONE_LABOR") return false;
   if (type === "VENDOR_DELTA") return false;
   if (type === "CUSTOM_VARIATION") return false;

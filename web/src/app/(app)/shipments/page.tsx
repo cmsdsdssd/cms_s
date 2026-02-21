@@ -65,6 +65,10 @@ type OrderLookupRow = {
   is_plated?: boolean | null;
   plating_color_code?: string | null;
   display_status?: string;
+  confirmed_at?: string | null;
+  receipt_id?: string | null;
+  receipt_line_uuid?: string | null;
+  has_inbound_receipt?: boolean | null;
 };
 
 type OrderLineModelRow = {
@@ -260,13 +264,6 @@ type StorePickupLookupRow = {
   } | null;
 };
 
-type ArResyncResult = {
-  ok?: boolean;
-  shipment_id?: string;
-  updated?: number;
-  inserted?: number;
-};
-
 type ShipmentArConsistencyResult = {
   shipment_id?: string;
   shipment_total_sell_krw?: number;
@@ -332,6 +329,8 @@ type ShipmentUpsertResult = {
 
 const debounceMs = 250;
 const EXTRA_LABOR_ITEM_TYPE_OPTIONS = [
+  { label: "기본공임", value: "BASE" },
+  { label: "장식공임", value: "DECOR" },
   { label: "도금", value: "PLATING" },
   { label: "중심공임", value: "CENTER" },
   { label: "보조1공임", value: "SUB1" },
@@ -382,6 +381,15 @@ const parseNumberInput = (value: string) => {
   if (!normalized) return 0;
   const parsed = Number(normalized);
   return Number.isFinite(parsed) ? parsed : 0;
+};
+
+const parseSignedNumberInputMaybe = (value: string): number | null => {
+  const normalized = value.replaceAll(",", "").trim();
+  if (!normalized || normalized === "-" || normalized === "+" || normalized === "." || normalized === "-." || normalized === "+.") {
+    return null;
+  }
+  const parsed = Number(normalized);
+  return Number.isFinite(parsed) ? parsed : null;
 };
 
 const parseNumberish = (value: unknown): number => {
@@ -473,6 +481,10 @@ const extractDecorReasonKey = (reason: unknown): string | null => {
   const normalized = text.startsWith("[장식] ") ? text.slice(5).trim() : text;
   if (normalized.startsWith(BOM_DECOR_REASON_PREFIX)) {
     const key = normalized.slice(BOM_DECOR_REASON_PREFIX.length).trim();
+    return key || null;
+  }
+  if (normalized.startsWith(BOM_DECOR_ALIAS_REASON_PREFIX)) {
+    const key = normalized.slice(BOM_DECOR_ALIAS_REASON_PREFIX.length).trim();
     return key || null;
   }
   if (normalized.startsWith(BOM_MATERIAL_REASON_PREFIX)) {
@@ -591,6 +603,20 @@ type ExtraLaborItem = {
   meta?: Record<string, unknown> | null;
 };
 type StoneAdjustmentReason = "FACTORY_MISTAKE" | "PRICE_UP" | "VARIANT" | "OTHER";
+type ManualOverrideReasonCode =
+  | "FACTORY_MISTAKE"
+  | "RECEIPT_DIFF"
+  | "POLICY_EXCEPTION"
+  | "CUSTOMER_REQUEST"
+  | "OTHER";
+
+const MANUAL_OVERRIDE_REASON_OPTIONS: Array<{ value: ManualOverrideReasonCode; label: string }> = [
+  { value: "FACTORY_MISTAKE", label: "공장 오차/실수" },
+  { value: "RECEIPT_DIFF", label: "영수증 실측 차이" },
+  { value: "POLICY_EXCEPTION", label: "정책 예외" },
+  { value: "CUSTOMER_REQUEST", label: "고객 요청" },
+  { value: "OTHER", label: "기타" },
+];
 
 const EXTRA_TYPE_VENDOR_DELTA = "VENDOR_DELTA";
 const EXTRA_TYPE_CUSTOM_VARIATION = "CUSTOM_VARIATION";
@@ -612,6 +638,7 @@ const BOM_DECOR_NOTE_PREFIX = "BOM_DECOR_LINE:";
 const BOM_MATERIAL_NOTE_PREFIX = "BOM_MATERIAL_LINE:";
 const BOM_DECOR_REASON_PREFIX = "장식:";
 const BOM_MATERIAL_REASON_PREFIX = "기타-소재:";
+const BOM_DECOR_ALIAS_REASON_PREFIX = "기타-장식:";
 const ACCESSORY_ETC_REASON_KEYWORD = "부속공임";
 const AUTO_EVIDENCE_TYPES = new Set(["COST_BASIS", "MARGINS", "WARN"]);
 
@@ -664,11 +691,15 @@ const isAutoManagedExtraLaborItem = (item: ExtraLaborItem) => {
 
 const isDecorEditableAbsorbItem = (item: ExtraLaborItem) => {
   const type = String(item.type ?? "").trim().toUpperCase();
+  const label = String(item.label ?? "");
   const meta = (item.meta as Record<string, unknown> | null) ?? null;
   const source = String(meta?.source ?? "").trim().toUpperCase();
   if (type.startsWith("OTHER_ABSORB:")) return false;
   if (type.startsWith(EXTRA_TYPE_ABSORB_PREFIX) || type.startsWith("DECOR:")) return true;
-  return source === "MASTER_ABSORB_LABOR" && String(item.label ?? "").includes("장식");
+  if (type.startsWith(EXTRA_TYPE_MATERIAL_MASTER_PREFIX)) {
+    return label.includes("장식");
+  }
+  return source === "MASTER_ABSORB_LABOR" && label.includes("장식");
 };
 
 const mergeDecorEditableRows = (items: ExtraLaborItem[]): ExtraLaborItem[] => {
@@ -747,7 +778,21 @@ const isBomReferenceType = (type: string) => {
 
 const isMaterialMasterType = (type: string) => {
   const normalized = String(type ?? "").trim().toUpperCase();
-  return normalized.startsWith(EXTRA_TYPE_MATERIAL_MASTER_PREFIX);
+  return normalized.startsWith("MATERIAL_MASTER");
+};
+
+const isMaterialMasterLikeExtraLaborItem = (item: {
+  type?: unknown;
+  meta?: Record<string, unknown> | null;
+}) => {
+  const type = String(item?.type ?? "").trim().toUpperCase();
+  if (isMaterialMasterType(type)) return true;
+  const meta = item?.meta && typeof item.meta === "object" && !Array.isArray(item.meta)
+    ? item.meta
+    : null;
+  const className = String(meta?.class ?? "").trim().toUpperCase();
+  const source = String(meta?.source ?? "").trim().toUpperCase();
+  return className === "MATERIAL_MASTER" || source === "MASTER_MATERIAL_LABOR";
 };
 
 const isLegacyPolicyAbsorbType = (type: string) => {
@@ -777,10 +822,12 @@ const upsertAutoRemainderAdjustmentItem = ({
   items,
   amount,
   indexSeed = 0,
+  contextLabel = "",
 }: {
   items: ExtraLaborItem[];
   amount: number;
   indexSeed?: number;
+  contextLabel?: string;
 }) => {
   const rounded = roundKrw(Math.max(Number.isFinite(amount) ? amount : 0, 0));
   const findIndex = items.findIndex((item) => {
@@ -800,7 +847,7 @@ const upsertAutoRemainderAdjustmentItem = ({
   const nextMeta: Record<string, unknown> = {
     source: AUTO_REMAINDER_ADJUSTMENT_SOURCE,
     item_type: "OTHER",
-    item_label: "",
+    item_label: contextLabel.trim(),
     cost_krw: rounded,
     margin_krw: 0,
     sell_krw: rounded,
@@ -813,14 +860,14 @@ const upsertAutoRemainderAdjustmentItem = ({
         : toStableExtraLaborItemId(
             {
               type: EXTRA_TYPE_ADJUSTMENT,
-              label: "기타(직접작성)",
+              label: "기타(자동보정)",
               amount: String(rounded),
               meta: nextMeta,
             },
             Math.max(indexSeed, items.length)
           ),
     type: EXTRA_TYPE_ADJUSTMENT,
-    label: "기타(직접작성)",
+    label: "기타(자동보정)",
     amount: String(rounded),
     meta: nextMeta,
   };
@@ -947,6 +994,9 @@ export default function ShipmentsPage() {
   const [stoneAdjustmentReason, setStoneAdjustmentReason] =
     useState<StoneAdjustmentReason>("FACTORY_MISTAKE");
   const [stoneAdjustmentNote, setStoneAdjustmentNote] = useState("");
+  const [manualOverrideReasonCode, setManualOverrideReasonCode] =
+    useState<ManualOverrideReasonCode>("FACTORY_MISTAKE");
+  const [manualOverrideReasonDetail, setManualOverrideReasonDetail] = useState("");
 
   const resetLaborDirtyState = useCallback(() => {
     laborDirtyRef.current = { base: false, other: false, extra: false };
@@ -1039,6 +1089,13 @@ export default function ShipmentsPage() {
         const normalizedLabelForItem = isLegacyRemainderType ? "기타(직접작성)" : baseLabel;
         const isPlatingMaster = normalizedType === EXTRA_TYPE_PLATING_MASTER;
         const isMaterialMaster = normalizedType.startsWith(EXTRA_TYPE_MATERIAL_MASTER_PREFIX);
+        const metaSource = String((rawMeta as Record<string, unknown> | null)?.source ?? "").trim().toUpperCase();
+        const normalizedLabel = (() => {
+          if (isMaterialMaster && metaSource === "MASTER_MATERIAL_LABOR") {
+            return baseLabel.replace("기타-소재:", "기타-장식:");
+          }
+          return baseLabel;
+        })();
         const sellFromMeta =
           rawMeta && rawMeta.sell_krw !== null && rawMeta.sell_krw !== undefined
             ? parseNumberish(rawMeta.sell_krw)
@@ -1046,7 +1103,6 @@ export default function ShipmentsPage() {
         const normalizedAmount = isMaterialMaster && sellFromMeta !== null ? String(sellFromMeta) : amount;
         const parsedAmount = parseNumberInput(normalizedAmount);
         const roundedAmount = String(roundKrw(parsedAmount));
-        const metaSource = String((rawMeta as Record<string, unknown> | null)?.source ?? "").trim().toUpperCase();
         const metaBucket = String((rawMeta as Record<string, unknown> | null)?.bucket ?? "").trim().toUpperCase();
         const isAbsorbLike =
           normalizedType.includes("ABSORB") ||
@@ -1055,6 +1111,7 @@ export default function ShipmentsPage() {
           baseLabel.includes("흡수") ||
           baseLabel.includes("공임-마스터") ||
           metaSource === "MASTER_ABSORB_LABOR" ||
+          metaSource === "MASTER_MATERIAL_LABOR" ||
           metaBucket === "ETC" ||
           metaBucket === "BASE_LABOR" ||
           metaBucket === "STONE_LABOR" ||
@@ -1063,7 +1120,8 @@ export default function ShipmentsPage() {
           normalizedType.startsWith(EXTRA_TYPE_ABSORB_PREFIX) ||
           normalizedType.startsWith("DECOR:") ||
           normalizedType.startsWith("OTHER_ABSORB:") ||
-          baseLabel.includes("장식");
+          normalizedLabel.includes("장식") ||
+          metaSource === "MASTER_MATERIAL_LABOR";
         const metaMargin =
           rawMeta && (rawMeta.margin_krw !== null && rawMeta.margin_krw !== undefined)
             ? parseNumberish(rawMeta.margin_krw)
@@ -1131,12 +1189,15 @@ export default function ShipmentsPage() {
         return {
           id: toStableExtraLaborItemId(record, index),
           type: normalizedTypeForItem,
-          label: normalizedLabelForItem,
+          label: normalizedLabelForItem === baseLabel ? normalizedLabel : normalizedLabelForItem,
           amount: roundedAmount,
           meta: normalizedMeta,
         };
       })
       .filter((item) => {
+        if (isMaterialMasterLikeExtraLaborItem(item)) {
+          return false;
+        }
         if (!item.label) return false;
         if (isLegacyPolicyAbsorbType(item.type)) return false;
         const amount = parseNumberInput(item.amount);
@@ -1190,6 +1251,9 @@ const extractEtcLaborAmount = (value: unknown): number => {
           ? {
             item_type: itemType,
             item_label: itemType === "OTHER" ? "" : null,
+            reason_note: "",
+            raw_cost_input: "",
+            raw_margin_input: "",
             cost_krw: 0,
             margin_krw: 0,
           }
@@ -1275,7 +1339,9 @@ const extractEtcLaborAmount = (value: unknown): number => {
 
   const handleRemoveExtraLabor = (id: string) => {
     const target = extraLaborItems.find((item) => item.id === id);
-    if (target && isLockedExtraLaborItem(target)) return;
+    const isPlatingMasterTarget =
+      String(target?.type ?? "").trim().toUpperCase() === EXTRA_TYPE_PLATING_MASTER;
+    if (target && isLockedExtraLaborItem(target) && !isPlatingMasterTarget) return;
     markLaborExtraDirty();
     setExtraLaborItems((prev) => prev.filter((item) => item.id !== id));
   };
@@ -1294,7 +1360,8 @@ const extractEtcLaborAmount = (value: unknown): number => {
 
   const isLockedExtraLaborItem = (item: ExtraLaborItem) => {
     const type = String(item.type ?? "").trim().toUpperCase();
-    if (type === EXTRA_TYPE_PLATING_MASTER || type.startsWith(EXTRA_TYPE_MATERIAL_MASTER_PREFIX)) return true;
+    if (type === EXTRA_TYPE_PLATING_MASTER) return true;
+    if (type.startsWith(EXTRA_TYPE_MATERIAL_MASTER_PREFIX)) return !isDecorEditableAbsorbItem(item);
     return isAutoAbsorbItem(item) && !isDecorEditableAbsorbItem(item);
   };
 
@@ -1308,6 +1375,9 @@ const extractEtcLaborAmount = (value: unknown): number => {
     }
     const meta = (item.meta as Record<string, unknown> | null) ?? null;
     if (meta && (meta.cost_krw !== null && meta.cost_krw !== undefined)) {
+      if (item.type === EXTRA_TYPE_ADJUSTMENT && !isAutoRemainderAdjustmentItem(item)) {
+        return parseNumberish(meta.cost_krw);
+      }
       return roundNumberishKrw(meta.cost_krw);
     }
     const type = String(item.type ?? "").toUpperCase();
@@ -1318,6 +1388,9 @@ const extractEtcLaborAmount = (value: unknown): number => {
       type.startsWith("OTHER_ABSORB:") ||
       label.includes("장식");
     if (isDecorLike) return 0;
+    if (item.type === EXTRA_TYPE_ADJUSTMENT && !isAutoRemainderAdjustmentItem(item)) {
+      return parseNumberInput(item.amount);
+    }
     return roundKrw(parseNumberInput(item.amount));
   };
 
@@ -1333,6 +1406,9 @@ const extractEtcLaborAmount = (value: unknown): number => {
     }
     const meta = (item.meta as Record<string, unknown> | null) ?? null;
     if (meta && (meta.margin_krw !== null && meta.margin_krw !== undefined)) {
+      if (item.type === EXTRA_TYPE_ADJUSTMENT && !isAutoRemainderAdjustmentItem(item)) {
+        return parseNumberish(meta.margin_krw);
+      }
       return roundNumberishKrw(meta.margin_krw);
     }
     const type = String(item.type ?? "").toUpperCase();
@@ -1343,6 +1419,9 @@ const extractEtcLaborAmount = (value: unknown): number => {
       type.startsWith("OTHER_ABSORB:") ||
       label.includes("장식");
     if (isDecorLike) return roundKrw(parseNumberInput(item.amount));
+    if (item.type === EXTRA_TYPE_ADJUSTMENT && !isAutoRemainderAdjustmentItem(item)) {
+      return parseNumberInput(item.amount);
+    }
     return 0;
   };
 
@@ -1383,17 +1462,97 @@ const extractEtcLaborAmount = (value: unknown): number => {
   };
 
   const handleExtraLaborCostChange = (id: string, value: string) => {
-    const nextCost = parseNumberInput(value);
     const target = extraLaborItems.find((item) => item.id === id);
     if (target && isLockedExtraLaborItem(target)) return;
+    const isManualAdjustment = Boolean(target) && target.type === EXTRA_TYPE_ADJUSTMENT && !isAutoRemainderAdjustmentItem(target);
+    if (isManualAdjustment) {
+      const parsedCost = parseSignedNumberInputMaybe(value);
+      if (parsedCost === null) {
+        markLaborExtraDirty();
+        setExtraLaborItems((prev) =>
+          prev.map((item) =>
+            item.id === id
+              ? {
+                ...item,
+                meta: {
+                  ...(item.meta ?? {}),
+                  raw_cost_input: value,
+                },
+              }
+              : item
+          )
+        );
+        return;
+      }
+      const currentMargin = target ? getExtraLaborMargin(target) : 0;
+      markLaborExtraDirty();
+      setExtraLaborItems((prev) =>
+        prev.map((item) => {
+          if (item.id !== id) return item;
+          const meta = (item.meta as Record<string, unknown> | null) ?? null;
+          return {
+            ...item,
+            amount: String(parsedCost + currentMargin),
+            meta: {
+              ...(meta ?? {}),
+              cost_krw: parsedCost,
+              margin_krw: currentMargin,
+              raw_cost_input: value,
+            },
+          };
+        })
+      );
+      return;
+    }
+    const nextCost = parseNumberInput(value);
     const currentMargin = target ? getExtraLaborMargin(target) : 0;
     setExtraLaborCostMargin(id, nextCost, currentMargin);
   };
 
   const handleExtraLaborMarginChange = (id: string, value: string) => {
-    const nextMargin = parseNumberInput(value);
     const target = extraLaborItems.find((item) => item.id === id);
     if (target && isLockedExtraLaborItem(target)) return;
+    const isManualAdjustment = Boolean(target) && target.type === EXTRA_TYPE_ADJUSTMENT && !isAutoRemainderAdjustmentItem(target);
+    if (isManualAdjustment) {
+      const parsedMargin = parseSignedNumberInputMaybe(value);
+      if (parsedMargin === null) {
+        markLaborExtraDirty();
+        setExtraLaborItems((prev) =>
+          prev.map((item) =>
+            item.id === id
+              ? {
+                ...item,
+                meta: {
+                  ...(item.meta ?? {}),
+                  raw_margin_input: value,
+                },
+              }
+              : item
+          )
+        );
+        return;
+      }
+      const currentCost = target ? getExtraLaborCost(target) : 0;
+      markLaborExtraDirty();
+      setExtraLaborItems((prev) =>
+        prev.map((item) => {
+          if (item.id !== id) return item;
+          const meta = (item.meta as Record<string, unknown> | null) ?? null;
+          return {
+            ...item,
+            amount: String(currentCost + parsedMargin),
+            meta: {
+              ...(meta ?? {}),
+              cost_krw: currentCost,
+              margin_krw: parsedMargin,
+              raw_margin_input: value,
+            },
+          };
+        })
+      );
+      return;
+    }
+    const nextMargin = parseNumberInput(value);
     const currentCost = target ? getExtraLaborCost(target) : 0;
     setExtraLaborCostMargin(id, currentCost, nextMargin);
   };
@@ -1865,6 +2024,7 @@ const extractEtcLaborAmount = (value: unknown): number => {
             items: snapshotItems,
             amount: remainder,
             indexSeed: snapshotItems.length,
+            contextLabel: "스냅샷 총액-상세합 차액 보정",
           });
         }
 
@@ -1877,6 +2037,7 @@ const extractEtcLaborAmount = (value: unknown): number => {
           items: snapshotItems,
           amount: Number(receiptLaborSnapshot.extra_labor_cost_krw ?? 0),
           indexSeed: snapshotItems.length,
+          contextLabel: "스냅샷 상세없음: 기타공임 총액 이관",
         });
       }
 
@@ -2103,10 +2264,36 @@ const extractEtcLaborAmount = (value: unknown): number => {
     if (!selectedOrderLineId) return;
     if (prefillHydratedOrderLineId !== selectedOrderLineId) return;
     if (laborDirtyRef.current.extra) return;
-    // Freeze to receipt-match snapshot SOT when snapshot exists.
-    if (receiptLaborSnapshot) return;
-
     const persistedItems = normalizeExtraLaborItems(receiptMatchPrefillQuery.data?.shipment_extra_labor_items);
+    const hasPersistedMaterialDecorRows = persistedItems.some((item) => {
+      const type = String(item.type ?? "").trim().toUpperCase();
+      const label = String(item.label ?? "");
+      const meta = (item.meta as Record<string, unknown> | null) ?? null;
+      const source = String(meta?.source ?? "").trim().toUpperCase();
+      return (
+        type.startsWith(EXTRA_TYPE_MATERIAL_MASTER_PREFIX) &&
+        (label.includes("장식") || source === "MASTER_MATERIAL_LABOR")
+      );
+    });
+    const snapshotDecorItems = normalizeExtraLaborItems(receiptLaborSnapshot?.extra_labor_items).filter((item) => {
+      const type = String(item.type ?? "").trim().toUpperCase();
+      const label = String(item.label ?? "");
+      if (type.startsWith("OTHER_ABSORB:")) return false;
+      if (type.startsWith(EXTRA_TYPE_ABSORB_PREFIX) || type.startsWith("DECOR:")) return true;
+      return label.includes("[장식]") || label.startsWith("장식");
+    });
+    const snapshotAbsorbDecor = Math.max(
+      roundLaborMarginToHundred(parseNumberish(receiptLaborSnapshot?.policy_absorb_decor_total_krw)),
+      0
+    );
+    // Freeze to receipt-match snapshot SOT when snapshot exists.
+    if (
+      receiptLaborSnapshot &&
+      (snapshotDecorItems.length > 0 || snapshotAbsorbDecor <= 0) &&
+      !hasPersistedMaterialDecorRows
+    ) {
+      return;
+    }
     const decorReferenceByReasonKey = (() => {
       const map = new Map<string, { qtyPerUnit: number; sellPerUnit: number; costPerUnit: number }>();
       const breakdown = Array.isArray(effectivePriceData?.breakdown)
@@ -2163,8 +2350,6 @@ const extractEtcLaborAmount = (value: unknown): number => {
         if (!absorbId) return acc;
         const reason = String(row.reason ?? "장식공임").trim() || "장식공임";
         const laborClass = String(row.labor_class ?? "GENERAL").trim().toUpperCase();
-        const isMaterialLike = laborClass === "MATERIAL" || reason.startsWith(BOM_MATERIAL_REASON_PREFIX);
-        if (isMaterialLike) return acc;
         const unitAmountRaw = Number(row.amount_krw ?? 0);
         if (!Number.isFinite(unitAmountRaw) || unitAmountRaw === 0) return acc;
         const perPiece = row.is_per_piece !== false;
@@ -2312,7 +2497,7 @@ const extractEtcLaborAmount = (value: unknown): number => {
           return acc;
         }, []);
 
-        return [...merged, ...missingRows];
+        return [...merged, ...missingRows].filter((item) => !isMaterialMasterLikeExtraLaborItem(item));
       }
 
       const built = rows.reduce<ExtraLaborItem[]>((acc, row) => {
@@ -2370,7 +2555,7 @@ const extractEtcLaborAmount = (value: unknown): number => {
           return acc;
         }, []);
 
-      return mergeDecorEditableRows([...keep, ...built]);
+      return mergeDecorEditableRows([...keep, ...built]).filter((item) => !isMaterialMasterLikeExtraLaborItem(item));
     });
   }, [
     effectivePriceData,
@@ -2511,6 +2696,8 @@ const extractEtcLaborAmount = (value: unknown): number => {
     setIsManualTotalOverride(false);
     setManualLabor("");
     setUseManualLabor(false);
+    setManualOverrideReasonCode("FACTORY_MISTAKE");
+    setManualOverrideReasonDetail("");
     setExtraLaborItems([]);
   };
 
@@ -2587,10 +2774,16 @@ const extractEtcLaborAmount = (value: unknown): number => {
       currentLine.extra_labor_items !== null &&
       currentLine.extra_labor_items !== undefined
     ) {
-      setExtraLaborItems(normalizeExtraLaborItems(currentLine.extra_labor_items));
+      const normalizedLineExtraLaborItems = normalizeExtraLaborItems(currentLine.extra_labor_items);
+      setExtraLaborItems(normalizedLineExtraLaborItems);
+      if (!laborDirtyRef.current.other) {
+        setOtherLaborCost("0");
+      }
     } else if (
       !hasReceiptPrefillForSelected &&
       !laborDirtyRef.current.other &&
+      !receiptMatchPrefillQuery.isFetching &&
+      !receiptMatchPrefillQuery.data &&
       currentLine.extra_labor_krw !== null &&
       currentLine.extra_labor_krw !== undefined
     ) {
@@ -2781,20 +2974,105 @@ const extractEtcLaborAmount = (value: unknown): number => {
     fn: CONTRACTS.functions.shipmentSetSourceLocation,
   });
 
-  const arInvoiceResyncMutation = useRpcMutation<ArResyncResult>({
-    fn: CONTRACTS.functions.arInvoiceResyncFromShipment,
-    onSuccess: (result) => {
-      const updated = result?.updated ?? 0;
-      const inserted = result?.inserted ?? 0;
-      toast.success(`AR 재계산 완료 (updated=${updated}, inserted=${inserted})`);
-    },
-  });
+  const requireManualOverrideReason = useCallback(() => {
+    const isManualOverrideActive =
+      useManualLabor ||
+      isManualTotalOverride ||
+      laborDirtyRef.current.base ||
+      laborDirtyRef.current.extra ||
+      laborDirtyRef.current.other;
+    if (!isManualOverrideActive) return true;
+
+    if (manualOverrideReasonCode === "OTHER" && manualOverrideReasonDetail.trim() === "") {
+      toast.error("수동조정 사유를 입력해주세요.", {
+        description: "사유가 '기타'일 때는 상세 메모가 필요합니다.",
+      });
+      return false;
+    }
+
+    return true;
+  }, [isManualTotalOverride, manualOverrideReasonCode, manualOverrideReasonDetail, useManualLabor]);
 
   // ✅ 영수증 “연결” upsert
   const receiptUsageUpsertMutation = useRpcMutation<unknown>({
     fn: FN_RECEIPT_USAGE_UPSERT,
     successMessage: "영수증 연결 완료",
   });
+
+  const logShipmentOverrideBestEffort = useCallback(
+    async (args: {
+      eventType: "SAVE" | "FINAL_CONFIRM";
+      shipmentId: string | null;
+      shipmentLineId: string | null;
+      orderLineId: string | null;
+    }) => {
+      const isManualOverrideActive =
+        useManualLabor ||
+        isManualTotalOverride ||
+        laborDirtyRef.current.base ||
+        laborDirtyRef.current.extra ||
+        laborDirtyRef.current.other;
+      if (!isManualOverrideActive) return;
+
+      const requestBody = {
+        shipment_id: args.shipmentId,
+        shipment_line_id: args.shipmentLineId,
+        order_line_id: args.orderLineId,
+        event_type: args.eventType,
+        override_scope: "MANUAL_LABOR",
+        reason_code: manualOverrideReasonCode,
+        reason_detail: manualOverrideReasonDetail.trim() || null,
+        actor_person_id: actorId,
+        pricing_mode: isManualTotalOverride ? "AMOUNT_ONLY" : "RULE",
+        is_manual_total_override: isManualTotalOverride,
+        is_manual_labor: useManualLabor,
+        payload: {
+          weight_g: parseNumberInput(weightG),
+          deduction_weight_g: resolveDeductionValue(
+            deductionWeightG ?? "",
+            Number(masterLookupQuery.data?.deduction_weight_default_g ?? 0),
+            !hasReceiptDeduction && applyMasterDeductionWhenEmpty
+          ),
+          base_labor_input_krw: parseNumberInput(baseLabor),
+          manual_labor_input_krw: parseNumberInput(manualLabor),
+          manual_total_input_krw: isManualTotalOverride ? parseNumberInput(manualTotalAmountKrw) : null,
+          extra_labor_item_count: extraLaborItems.length,
+          extra_labor_items: extraLaborItems,
+        },
+      };
+
+      try {
+        const response = await fetch("/api/shipment-override-log", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(requestBody),
+        });
+        if (!response.ok) {
+          const message = await response.text();
+          console.warn("[override-log] insert failed", response.status, message);
+        }
+      } catch (error) {
+        console.warn("[override-log] request failed", error);
+      }
+    },
+    [
+      actorId,
+      applyMasterDeductionWhenEmpty,
+      baseLabor,
+      deductionWeightG,
+      extraLaborItems.length,
+      extraLaborItems,
+      hasReceiptDeduction,
+      isManualTotalOverride,
+      manualLabor,
+      manualOverrideReasonCode,
+      manualOverrideReasonDetail,
+      manualTotalAmountKrw,
+      masterLookupQuery.data?.deduction_weight_default_g,
+      useManualLabor,
+      weightG,
+    ]
+  );
 
 
   const handleSaveShipment = async () => {
@@ -2871,6 +3149,10 @@ const extractEtcLaborAmount = (value: unknown): number => {
       toast.error("기타공임 정합성 오류", {
         description: extraLaborPayloadMismatchDetail,
       });
+      return;
+    }
+
+    if (!requireManualOverrideReason()) {
       return;
     }
 
@@ -2977,6 +3259,13 @@ const extractEtcLaborAmount = (value: unknown): number => {
     }
 
     await shipmentLineUpdateMutation.mutateAsync(updatePayload);
+
+    void logShipmentOverrideBestEffort({
+      eventType: "SAVE",
+      shipmentId,
+      shipmentLineId,
+      orderLineId: selectedOrderLineId,
+    });
 
     if (shouldStorePickup) {
       await shipmentSetSourceLocationMutation.mutateAsync({
@@ -3282,6 +3571,8 @@ const extractEtcLaborAmount = (value: unknown): number => {
     setStoneAdjustmentReason("FACTORY_MISTAKE");
     setStoneAdjustmentNote("");
     setManualTotalAmountKrw("");
+    setManualOverrideReasonCode("FACTORY_MISTAKE");
+    setManualOverrideReasonDetail("");
     setCostMode("PROVISIONAL");
     setCostInputs({});
 
@@ -3331,6 +3622,9 @@ const extractEtcLaborAmount = (value: unknown): number => {
       toast.error("기타공임 정합성 오류", {
         description: extraLaborPayloadMismatchDetail,
       });
+      return;
+    }
+    if (!requireManualOverrideReason()) {
       return;
     }
     const currentLines = currentLinesQuery.data ?? [];
@@ -3413,6 +3707,13 @@ const extractEtcLaborAmount = (value: unknown): number => {
         updatePayload.p_measured_weight_g = weightValue;
       }
       await shipmentLineUpdateMutation.mutateAsync(updatePayload);
+
+      void logShipmentOverrideBestEffort({
+        eventType: "FINAL_CONFIRM",
+        shipmentId,
+        shipmentLineId: String(currentShipmentLineId),
+        orderLineId: selectedOrderLineId,
+      });
 
     }
 
@@ -3550,10 +3851,6 @@ const extractEtcLaborAmount = (value: unknown): number => {
       p_force: false,
     });
 
-    await arInvoiceResyncMutation.mutateAsync({
-      p_shipment_id: shipmentId,
-    });
-
     try {
       const verifyResponse = await fetch(
         `/api/check-shipment-ar-consistency?shipment_id=${encodeURIComponent(shipmentId)}`,
@@ -3604,6 +3901,23 @@ const extractEtcLaborAmount = (value: unknown): number => {
   const resolvedBaseLabor = useMemo(() => roundKrw(parseNumberInput(baseLabor)), [baseLabor]);
 
   const resolvedManualLabor = useMemo(() => roundKrw(parseNumberInput(manualLabor)), [manualLabor]);
+  const isManualOverrideActive = useMemo(
+    () =>
+      useManualLabor ||
+      isManualTotalOverride ||
+      laborDirtyRef.current.base ||
+      laborDirtyRef.current.extra ||
+      laborDirtyRef.current.other,
+    [
+      isManualTotalOverride,
+      useManualLabor,
+      baseLabor,
+      extraLaborItems,
+      otherLaborCost,
+      manualLabor,
+      manualTotalAmountKrw,
+    ]
+  );
 
   const stoneLaborAmount = useMemo(() => {
     const found = extraLaborItems.find((item) => item.type === "STONE_LABOR");
@@ -3618,9 +3932,12 @@ const extractEtcLaborAmount = (value: unknown): number => {
   const userEditableExtraLaborItems = useMemo(
     () =>
       extraLaborItems.filter(
-        (item) =>
-          isEtcSummaryEligibleItem(item) &&
-          (!isAutoAbsorbItem(item) || isDecorEditableAbsorbItem(item))
+        (item) => {
+          if (isAdjustmentTypeValue(item.type)) {
+            return !isAutoRemainderAdjustmentItem(item);
+          }
+          return isEtcSummaryEligibleItem(item) && (!isAutoAbsorbItem(item) || isDecorEditableAbsorbItem(item));
+        }
       ),
     [extraLaborItems]
   );
@@ -3641,11 +3958,18 @@ const extractEtcLaborAmount = (value: unknown): number => {
   );
 
   const displayedExtraLaborItems = useMemo(
-    () => extraLaborItems.filter((item) => isCoreVisibleEtcItem(item) && !isAdjustmentTypeValue(item.type)),
+    () => extraLaborItems.filter((item) => isCoreVisibleEtcItem(item) && !isAutoRemainderAdjustmentItem(item)),
     [extraLaborItems]
   );
 
   const hasDetailedExtraLaborItems = displayedExtraLaborItems.length > 0;
+
+  useEffect(() => {
+    setExtraLaborItems((prev) => {
+      const filtered = prev.filter((item) => !isMaterialMasterLikeExtraLaborItem(item));
+      return filtered.length === prev.length ? prev : filtered;
+    });
+  }, [selectedOrderLineId]);
 
   useEffect(() => {
     if (!hasDetailedExtraLaborItems) return;
@@ -3656,6 +3980,7 @@ const extractEtcLaborAmount = (value: unknown): number => {
         items: prev,
         amount: legacyRemainder,
         indexSeed: prev.length,
+        contextLabel: "기존 기타공임 잔액 이관",
       })
     );
     setOtherLaborCost("0");
@@ -4556,11 +4881,6 @@ const extractEtcLaborAmount = (value: unknown): number => {
         const amount = roundLaborMarginToHundred(amountRaw);
         const bucket = String(row.bucket ?? "ETC").trim().toUpperCase();
         if (bucket === "ETC" && shouldExcludeCatalogEtcAbsorbItem(row)) return acc;
-        if (bucket === "BASE_LABOR") {
-          const noteUpper = String(row.note ?? "").trim().toUpperCase();
-          const isBaseAbsorbLike = reasonUpper.includes("흡수") || noteUpper.includes("ABSORB");
-          if (!isBaseAbsorbLike) return acc;
-        }
 
         let applied = amount;
         const role = parseAbsorbStoneRole(row.note);
@@ -4649,26 +4969,89 @@ const extractEtcLaborAmount = (value: unknown): number => {
     [masterAbsorbLaborQuery.data]
   );
 
+  const masterDecorSummaryForCore = useMemo(() => {
+    if (decorReasonKeys.length === 0) return masterCatalogDecorSummary;
+
+    const summary = decorReasonKeys.reduce(
+      (acc, reasonKey) => {
+        const fromRefSell = decorReferenceSellByName.get(reasonKey) ?? 0;
+        const fromAbsorb = decorResolvedFromAbsorbByReasonKey.get(reasonKey);
+        const sell =
+          fromRefSell > 0
+            ? roundLaborMarginToHundred(fromRefSell)
+            : Math.max(fromAbsorb?.sell ?? 0, 0);
+
+        const qtyApplied = Math.max(
+          decorQtyAppliedByReasonKey.get(reasonKey) ?? fromAbsorb?.qtyApplied ?? 1,
+          1
+        );
+        const fromMasterUnitSell =
+          (decorMasterUnitSellByName[reasonKey] ?? 0) > 0
+            ? roundLaborMarginToHundred((decorMasterUnitSellByName[reasonKey] ?? 0) * qtyApplied)
+            : 0;
+        const unitCost =
+          decorReferenceUnitCostByName.get(reasonKey) ??
+          decorMasterUnitCostByName[reasonKey] ??
+          0;
+        const cost = unitCost > 0 ? roundLaborMarginToHundred(unitCost * qtyApplied) : 0;
+
+        const resolvedSell = Math.max(sell, fromMasterUnitSell, 0);
+
+        acc.sell += resolvedSell;
+        acc.cost += Math.max(cost, 0);
+        return acc;
+      },
+      { sell: 0, cost: 0 }
+    );
+
+    if (summary.sell <= 0 && summary.cost <= 0) return masterCatalogDecorSummary;
+    return summary;
+  }, [
+    decorReasonKeys,
+    decorReferenceSellByName,
+    decorResolvedFromAbsorbByReasonKey,
+    decorQtyAppliedByReasonKey,
+    decorMasterUnitSellByName,
+    decorReferenceUnitCostByName,
+    decorMasterUnitCostByName,
+    masterCatalogDecorSummary,
+  ]);
+
   const masterPlatingSellWithAbsorb = useMemo(
     () => roundLaborMarginToHundred(Math.max(masterPlatingSell, 0) + Math.max(masterCatalogAbsorbSummary.plating, 0)),
     [masterCatalogAbsorbSummary.plating, masterPlatingSell]
   );
 
+  const masterDetailBaseSellDisplay = useMemo(
+    () => Number(masterBaseSell ?? 0) + Math.max(masterCatalogAbsorbSummary.baseLaborUnit, 0),
+    [masterBaseSell, masterCatalogAbsorbSummary.baseLaborUnit]
+  );
+
+  const masterDetailCenterSellDisplay = useMemo(
+    () => Number(masterCenterSell ?? 0) + Math.max(masterCatalogAbsorbSummary.stoneCenterUnit, 0),
+    [masterCenterSell, masterCatalogAbsorbSummary.stoneCenterUnit]
+  );
+
+  const masterDetailSub1SellDisplay = useMemo(
+    () => Number(masterSub1Sell ?? 0) + Math.max(masterCatalogAbsorbSummary.stoneSub1Unit, 0),
+    [masterSub1Sell, masterCatalogAbsorbSummary.stoneSub1Unit]
+  );
+
+  const masterDetailSub2SellDisplay = useMemo(
+    () => Number(masterSub2Sell ?? 0) + Math.max(masterCatalogAbsorbSummary.stoneSub2Unit, 0),
+    [masterSub2Sell, masterCatalogAbsorbSummary.stoneSub2Unit]
+  );
+
+  const masterDetailPlatingSellDisplay = useMemo(
+    () => Number(masterPlatingSell ?? 0) + Math.max(masterCatalogAbsorbSummary.platingUnit, 0),
+    [masterPlatingSell, masterCatalogAbsorbSummary.platingUnit]
+  );
+
   const masterBaseSellWithAbsorb = useMemo(() => {
-    const absorbBase = Math.max(masterCatalogAbsorbSummary.baseLaborUnit, 0);
-    if (masterBaseCost !== null && masterBaseSell !== null) {
-      const baseMargin = Math.max(roundLaborMarginToHundred(masterBaseSell - masterBaseCost), 0);
-      return roundLaborMarginToHundred(Math.max(masterBaseCost, 0) + baseMargin + absorbBase);
-    }
-    if (masterBaseSell !== null) {
-      return roundLaborMarginToHundred(Math.max(masterBaseSell, 0) + absorbBase);
-    }
-    if (masterBaseCost !== null) {
-      return roundLaborMarginToHundred(Math.max(masterBaseCost, 0) + absorbBase);
-    }
-    if (absorbBase <= 0) return null;
-    return roundLaborMarginToHundred(absorbBase);
-  }, [masterBaseCost, masterBaseSell, masterCatalogAbsorbSummary.baseLaborUnit]);
+    const hasAny = masterBaseSell !== null || masterCatalogAbsorbSummary.baseLaborUnit > 0;
+    if (!hasAny) return null;
+    return roundLaborMarginToHundred(masterDetailBaseSellDisplay);
+  }, [masterBaseSell, masterCatalogAbsorbSummary.baseLaborUnit, masterDetailBaseSellDisplay]);
 
   const masterStoneLaborSellWithAbsorb = useMemo(() => {
     const hasAnyStoneSell =
@@ -4693,50 +5076,78 @@ const extractEtcLaborAmount = (value: unknown): number => {
   const masterEtcLaborSellWithAbsorb = useMemo(() => {
     const value =
       masterPlatingSellWithAbsorb +
-      masterCatalogDecorSummary.sell;
+      masterDecorSummaryForCore.sell;
     return value > 0 ? roundLaborMarginToHundred(value) : null;
   }, [
-    masterCatalogDecorSummary.sell,
+    masterDecorSummaryForCore.sell,
     masterPlatingSellWithAbsorb,
   ]);
 
   const masterTotalLaborSellWithAbsorb = useMemo(() => {
+    const centerQty = Math.max(Number(masterCenterQtyDefault ?? 0), 0);
+    const sub1Qty = Math.max(Number(masterSub1QtyDefault ?? 0), 0);
+    const sub2Qty = Math.max(Number(masterSub2QtyDefault ?? 0), 0);
     const hasAny =
-      masterBaseSellWithAbsorb !== null ||
-      masterStoneLaborSellWithAbsorb !== null ||
-      masterEtcLaborSellWithAbsorb !== null;
+      masterBaseSell !== null ||
+      masterCenterSell !== null ||
+      masterSub1Sell !== null ||
+      masterSub2Sell !== null ||
+      masterPlatingSell > 0 ||
+      masterCatalogAbsorbSummary.total > 0 ||
+      masterDecorSummaryForCore.sell > 0;
     if (!hasAny) return null;
-    return roundLaborMarginToHundred(
-      (masterBaseSellWithAbsorb ?? 0) + (masterStoneLaborSellWithAbsorb ?? 0) + (masterEtcLaborSellWithAbsorb ?? 0)
-    );
+
+    const totalSell =
+      masterDetailBaseSellDisplay +
+      masterDetailCenterSellDisplay * centerQty +
+      masterDetailSub1SellDisplay * sub1Qty +
+      masterDetailSub2SellDisplay * sub2Qty +
+      masterDetailPlatingSellDisplay +
+      Math.max(masterCatalogAbsorbSummary.etc, 0) +
+      Math.max(masterDecorSummaryForCore.sell, 0);
+
+    return roundLaborMarginToHundred(totalSell);
   }, [
-    masterBaseSellWithAbsorb,
-    masterEtcLaborSellWithAbsorb,
-    masterStoneLaborSellWithAbsorb,
+    masterBaseSell,
+    masterCenterQtyDefault,
+    masterCenterSell,
+    masterSub1QtyDefault,
+    masterSub1Sell,
+    masterSub2QtyDefault,
+    masterSub2Sell,
+    masterPlatingSell,
+    masterCatalogAbsorbSummary.total,
+    masterCatalogAbsorbSummary.etc,
+    masterDecorSummaryForCore.sell,
+    masterDetailBaseSellDisplay,
+    masterDetailCenterSellDisplay,
+    masterDetailSub1SellDisplay,
+    masterDetailSub2SellDisplay,
+    masterDetailPlatingSellDisplay,
   ]);
 
   const masterCenterSellWithAbsorb = useMemo(
     () =>
       roundLaborMarginToHundred(
-        (masterCenterSell ?? 0) * Math.max(masterCenterQtyDefault ?? 0, 0)
+        masterDetailCenterSellDisplay * Math.max(masterCenterQtyDefault ?? 0, 0)
       ),
-    [masterCenterQtyDefault, masterCenterSell]
+    [masterCenterQtyDefault, masterDetailCenterSellDisplay]
   );
 
   const masterSub1SellWithAbsorb = useMemo(
     () =>
       roundLaborMarginToHundred(
-        (masterSub1Sell ?? 0) * Math.max(masterSub1QtyDefault ?? 0, 0)
+        masterDetailSub1SellDisplay * Math.max(masterSub1QtyDefault ?? 0, 0)
       ),
-    [masterSub1QtyDefault, masterSub1Sell]
+    [masterDetailSub1SellDisplay, masterSub1QtyDefault]
   );
 
   const masterSub2SellWithAbsorb = useMemo(
     () =>
       roundLaborMarginToHundred(
-        (masterSub2Sell ?? 0) * Math.max(masterSub2QtyDefault ?? 0, 0)
+        masterDetailSub2SellDisplay * Math.max(masterSub2QtyDefault ?? 0, 0)
       ),
-    [masterSub2QtyDefault, masterSub2Sell]
+    [masterDetailSub2SellDisplay, masterSub2QtyDefault]
   );
 
   const masterCenterCostForCore = useMemo(
@@ -4763,29 +5174,51 @@ const extractEtcLaborAmount = (value: unknown): number => {
   }, [masterCatalogDecorSummary.cost, masterPlatingCost]);
 
   const masterTotalLaborCost = useMemo(() => {
-    const base = masterBaseCost ?? 0;
-    const center = masterCenterCostForCore;
-    const sub1 = masterSub1CostForCore;
-    const sub2 = masterSub2CostForCore;
-    const etc = masterEtcLaborCostWithAbsorb ?? 0;
+    const centerQty = Math.max(Number(masterCenterQtyDefault ?? 0), 0);
+    const sub1Qty = Math.max(Number(masterSub1QtyDefault ?? 0), 0);
+    const sub2Qty = Math.max(Number(masterSub2QtyDefault ?? 0), 0);
     const hasAny =
       masterBaseCost !== null ||
       masterCenterCost !== null ||
       masterSub1Cost !== null ||
       masterSub2Cost !== null ||
-      masterEtcLaborCostWithAbsorb !== null;
+      masterPlatingCost > 0 ||
+      masterDecorSummaryForCore.cost > 0;
     if (!hasAny) return null;
-    return roundLaborMarginToHundred(base + center + sub1 + sub2 + etc);
+
+    const totalCost =
+      Number(masterBaseCost ?? 0) +
+      Number(masterCenterCost ?? 0) * centerQty +
+      Number(masterSub1Cost ?? 0) * sub1Qty +
+      Number(masterSub2Cost ?? 0) * sub2Qty +
+      Number(masterPlatingCost ?? 0) +
+      Math.max(masterDecorSummaryForCore.cost, 0);
+
+    return roundLaborMarginToHundred(totalCost);
   }, [
     masterBaseCost,
     masterCenterCost,
-    masterCenterCostForCore,
-    masterEtcLaborCostWithAbsorb,
+    masterCenterQtyDefault,
     masterSub1Cost,
-    masterSub1CostForCore,
+    masterSub1QtyDefault,
     masterSub2Cost,
-    masterSub2CostForCore,
+    masterSub2QtyDefault,
+    masterPlatingCost,
+    masterDecorSummaryForCore.cost,
   ]);
+
+  const masterEtcSummaryTotal = useMemo(
+    () => ({
+      sell: roundLaborMarginToHundred(Math.max(masterPlatingSellWithAbsorb, 0) + Math.max(masterDecorSummaryForCore.sell, 0)),
+      cost: roundLaborMarginToHundred(Math.max(masterPlatingCost, 0) + Math.max(masterDecorSummaryForCore.cost, 0)),
+    }),
+    [
+      masterDecorSummaryForCore.cost,
+      masterDecorSummaryForCore.sell,
+      masterPlatingCost,
+      masterPlatingSellWithAbsorb,
+    ]
+  );
 
   const masterLaborAnalysisRows = useMemo(
     () => [
@@ -4840,14 +5273,24 @@ const extractEtcLaborAmount = (value: unknown): number => {
   );
 
   const masterWeightDefaultG = useMemo(() => {
-    const value = masterLookupQuery.data?.weight_default_g;
+    const value =
+      matchedMasterPricingQuery.data?.weight_default_g ??
+      masterLookupQuery.data?.weight_default_g;
     return value === null || value === undefined ? null : Number(value);
-  }, [masterLookupQuery.data?.weight_default_g]);
+  }, [
+    matchedMasterPricingQuery.data?.weight_default_g,
+    masterLookupQuery.data?.weight_default_g,
+  ]);
 
   const masterDeductionDefaultG = useMemo(() => {
-    const value = masterLookupQuery.data?.deduction_weight_default_g;
+    const value =
+      matchedMasterPricingQuery.data?.deduction_weight_default_g ??
+      masterLookupQuery.data?.deduction_weight_default_g;
     return value === null || value === undefined ? null : Number(value);
-  }, [masterLookupQuery.data?.deduction_weight_default_g]);
+  }, [
+    matchedMasterPricingQuery.data?.deduction_weight_default_g,
+    masterLookupQuery.data?.deduction_weight_default_g,
+  ]);
 
   const masterTotalWeightDefaultG = useMemo(() => {
     if (masterWeightDefaultG === null) return null;
@@ -4892,7 +5335,7 @@ const extractEtcLaborAmount = (value: unknown): number => {
       .filter(
         (item) =>
           !isBomReferenceType(item.type) &&
-          !isMaterialMasterType(item.type) &&
+          !isMaterialMasterLikeExtraLaborItem(item) &&
           !isLegacyPolicyAbsorbType(item.type)
       )
       .map((item) => {
@@ -5235,7 +5678,7 @@ const extractEtcLaborAmount = (value: unknown): number => {
   const shipmentIdForResync = normalizeId(currentShipmentId);
   const isShipmentConfirmed =
     Boolean(shipmentHeaderQuery.data?.confirmed_at) || shipmentHeaderQuery.data?.status === "CONFIRMED";
-  const canResyncAr = Boolean(shipmentIdForResync) && isShipmentConfirmed && !arInvoiceResyncMutation.isPending;
+  const canResyncAr = false;
   const bundlePricingBlockMessage = isEffectiveBundle
     ? effectivePriceState?.isLoading
       ? "BUNDLE 유효가격 계산 중(확정 대기)"
@@ -5266,9 +5709,7 @@ const extractEtcLaborAmount = (value: unknown): number => {
 
   const handleArResync = async () => {
     if (!shipmentIdForResync) return;
-    await arInvoiceResyncMutation.mutateAsync({
-      p_shipment_id: shipmentIdForResync,
-    });
+    toast.error("정책상 출고 확정 후 AR 재계산은 비활성화되었습니다.");
   };
 
   // --- UI Helpers ---
@@ -5303,7 +5744,7 @@ const extractEtcLaborAmount = (value: unknown): number => {
                   onClick={handleArResync}
                   disabled={!canResyncAr}
                 >
-                  {arInvoiceResyncMutation.isPending ? "재계산 중..." : "AR 재계산(999 포함)"}
+                  AR 재계산(비활성)
                 </Button>
                 <Link href="/ar/v2">
                   <Button variant="secondary" size="sm">
@@ -5490,6 +5931,17 @@ const extractEtcLaborAmount = (value: unknown): number => {
                             const id = row.order_line_id ?? "";
                             const isSelected = selectedOrderLineId === id;
                             const isDemoted = longPendingDemoteIds.has(String(id));
+                            const normalizedStatus = String(row.status ?? "").trim().toUpperCase();
+                            const normalizedDisplayStatus = String(row.display_status ?? "").trim();
+                            const isReceiptConfirmed =
+                              Boolean(row.has_inbound_receipt) ||
+                              Boolean(row.inbound_at) ||
+                              Boolean(row.receipt_id) ||
+                              Boolean(row.receipt_line_uuid) ||
+                              Boolean(row.confirmed_at) ||
+                              normalizedStatus === "CONFIRMED" ||
+                              normalizedStatus === "RECEIPT_CONFIRMED" ||
+                              (normalizedDisplayStatus.includes("영수증") && normalizedDisplayStatus.includes("확정"));
                             const orderDate = row.sent_to_vendor_at ?? row.order_date ?? null;
                             const inboundDate = row.inbound_at ?? null;
                             const customerLabel = row.customer_name ?? row.client_name ?? "-";
@@ -5511,13 +5963,19 @@ const extractEtcLaborAmount = (value: unknown): number => {
                                 onClick={() => handleSelectOrder(row)}
                                 className={cn(
                                   "w-full px-4 py-2 text-left transition-all hover:bg-[var(--panel-hover)]",
+                                  isReceiptConfirmed && "bg-sky-50",
+                                  isSelected ? "border-l-4 border-l-[var(--primary)]" : "border-l-4 border-l-transparent",
                                   isSelected
-                                    ? "bg-[var(--primary)]/5 border-l-4 border-l-[var(--primary)]"
-                                    : "border-l-4 border-l-transparent"
+                                    ? isReceiptConfirmed
+                                      ? "bg-sky-100"
+                                      : "bg-[var(--primary)]/5"
+                                    : isReceiptConfirmed
+                                      ? "border-l-sky-200"
+                                      : ""
                                 )}
                               >
                                 <div className="grid min-w-[500px] grid-cols-[76px_120px_minmax(140px,1.2fr)_60px_50px_50px] gap-2 items-center text-xs">
-                                  <span className="text-black dark:text-white tabular-nums font-bold">
+                                  <span className="text-black tabular-nums font-bold">
                                     {formatDateCompact(orderDate)}
                                     <span className="ml-1 inline-flex items-center align-middle">
                                       <input
@@ -5750,9 +6208,15 @@ const extractEtcLaborAmount = (value: unknown): number => {
                                 </div>
                                 <div className="grid grid-cols-12 items-center gap-x-2 border-t border-amber-200 pt-1">
                                   <div className="col-span-3 font-semibold text-[var(--muted)]">장식 합계</div>
-                                  <div className="col-span-3 text-right tabular-nums text-[var(--foreground)]">{renderNumber(masterCatalogDecorSummary.sell, "원")}</div>
+                                  <div className="col-span-3 text-right tabular-nums text-[var(--foreground)]">{renderNumber(masterDecorSummaryForCore.sell, "원")}</div>
                                   <div className="col-span-2 text-right text-[var(--muted)]">-</div>
-                                  <div className="col-span-4 text-right tabular-nums text-[var(--foreground)]">{renderNumber(masterCatalogDecorSummary.cost, "원")}</div>
+                                  <div className="col-span-4 text-right tabular-nums text-[var(--foreground)]">{renderNumber(masterDecorSummaryForCore.cost, "원")}</div>
+                                </div>
+                                <div className="grid grid-cols-12 items-center gap-x-2 border-t border-amber-200 pt-1">
+                                  <div className="col-span-3 font-semibold text-[var(--muted)]">기타합계</div>
+                                  <div className="col-span-3 text-right tabular-nums font-semibold text-amber-900">{renderNumber(masterEtcSummaryTotal.sell, "원")}</div>
+                                  <div className="col-span-2 text-right text-[var(--muted)]">-</div>
+                                  <div className="col-span-4 text-right tabular-nums font-semibold text-amber-900">{renderNumber(masterEtcSummaryTotal.cost, "원")}</div>
                                 </div>
                               </div>
                             </div>
@@ -6052,15 +6516,18 @@ const extractEtcLaborAmount = (value: unknown): number => {
 
                         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 rounded-lg border border-[var(--panel-border)] bg-[var(--surface)]/30 p-3">
                           <div className="space-y-1">
-                            <span className="text-xs text-[var(--muted)]">총중량 (중량-차감중량)</span>
+                            <span className="text-xs font-bold text-[var(--muted)]">총중량 (중량-차감중량)</span>
                             <div className="text-xl font-extrabold tracking-tight">
                               {resolvedNetWeightG === null ? "-" : renderNumber(Number(resolvedNetWeightG.toFixed(3)), "g")}
                             </div>
                           </div>
                           <div className="space-y-1">
-                            <span className="text-xs text-[var(--muted)]">
+                            <span className="text-xs font-bold text-[var(--muted)]">
                               총공임 ({useManualLabor ? "직접입력" : "기본+기타"})
                             </span>
+                            {isManualOverrideActive ? (
+                              <Badge tone="warning" className="w-fit text-[10px] font-bold">수동조정</Badge>
+                            ) : null}
                             <div className="text-xl font-extrabold tracking-tight">
                               {renderNumber(resolvedTotalLabor, "원")}
                             </div>
@@ -6093,29 +6560,74 @@ const extractEtcLaborAmount = (value: unknown): number => {
                           </div>
                         </div>
 
+                        <div className="rounded-lg border border-[var(--panel-border)] bg-[var(--surface)]/30 p-3 space-y-2">
+                          <div className="flex items-center justify-between">
+                            <span className="text-xs font-semibold text-[var(--foreground)]">수동조정 사유</span>
+                            {isManualOverrideActive ? <Badge tone="warning" className="text-[10px]">필수</Badge> : null}
+                          </div>
+                          <div className="grid grid-cols-1 md:grid-cols-[220px_1fr] gap-2">
+                            <select
+                              className="h-9 rounded-md border border-[var(--panel-border)] bg-[var(--input-bg)] px-2 text-xs"
+                              value={manualOverrideReasonCode}
+                              onChange={(e) => {
+                                const nextValue = e.target.value;
+                                if (
+                                  nextValue === "FACTORY_MISTAKE" ||
+                                  nextValue === "RECEIPT_DIFF" ||
+                                  nextValue === "POLICY_EXCEPTION" ||
+                                  nextValue === "CUSTOMER_REQUEST" ||
+                                  nextValue === "OTHER"
+                                ) {
+                                  setManualOverrideReasonCode(nextValue);
+                                }
+                              }}
+                            >
+                              {MANUAL_OVERRIDE_REASON_OPTIONS.map((option) => (
+                                <option key={option.value} value={option.value}>{option.label}</option>
+                              ))}
+                            </select>
+                            <Input
+                              placeholder="수동조정 상세 메모"
+                              value={manualOverrideReasonDetail}
+                              onChange={(e) => setManualOverrideReasonDetail(e.target.value)}
+                              className="h-9 text-xs"
+                              disabled={manualOverrideReasonCode !== "OTHER"}
+                            />
+                          </div>
+                          {isManualOverrideActive ? (
+                            <div className="text-[11px] text-[var(--muted)]">
+                              총공임 직접입력 또는 총액 덮어쓰기 사용 시 사유를 남겨주세요.
+                            </div>
+                          ) : (
+                            <div className="text-[11px] text-[var(--muted)]">수동조정 사용 시 사유 입력이 활성화됩니다.</div>
+                          )}
+                        </div>
+
                         <div className="grid grid-cols-1 md:grid-cols-5 gap-6">
                           <div className="space-y-2">
-                            <label className="text-sm font-medium text-[var(--foreground)]">중량 (g)</label>
+                            <label className="text-sm font-bold text-[var(--foreground)]">중량 (g)</label>
                             <Input
                               placeholder="0.00"
                               value={weightG}
                               onChange={(e) => setWeightG(e.target.value)}
                               inputMode="decimal"
-                              className="tabular-nums text-lg h-12"
+                              className="tabular-nums text-base font-extrabold h-12"
+                              displayClassName="text-base font-extrabold"
                               autoFocus
                             />
                           </div>
                           <div className="space-y-2">
-                            <label className="text-sm font-medium text-[var(--foreground)]">
+                            <label className="text-sm font-bold text-[var(--foreground)]">
                               차감중량 (g)
-                              <span className="text-[var(--muted)] font-normal ml-1 text-xs">(선택)</span>
+                              <span className="text-[var(--muted)] font-bold ml-1 text-xs">(선택)</span>
                             </label>
                             <Input
                               placeholder={master?.deduction_weight_default_g ? `${master.deduction_weight_default_g} (기본값)` : "0.00"}
                               value={deductionWeightG}
                               onChange={(e) => setDeductionWeightG(e.target.value)}
                               inputMode="decimal"
-                              className="tabular-nums text-lg h-12"
+                              className="tabular-nums text-base font-extrabold h-12"
+                              displayClassName="text-base font-extrabold"
                             />
                             {hasReceiptDeduction ? (
                               <div className="text-[11px] text-[var(--muted)]">
@@ -6141,51 +6653,47 @@ const extractEtcLaborAmount = (value: unknown): number => {
                             )}
                           </div>
                           <div className="space-y-2">
-                            <div className="flex items-center justify-between text-sm font-medium text-[var(--foreground)]">
-                              <span>기본공임 (원)+마진</span>
-                              <span className="text-xs text-[var(--muted)]">마진 {renderNumber(resolvedBaseLaborMargin)}</span>
+                            <div className="flex items-center justify-between text-sm font-bold text-[var(--foreground)]">
+                              <span className="font-bold">기본공임 (판매)</span>
+                              <span className="text-xs font-bold text-[var(--muted)]">마진 {renderNumber(resolvedBaseLaborMargin)}</span>
                             </div>
                             <Input
                               placeholder="0"
                               value={baseLabor}
-                              onChange={(e) => {
-                                markLaborBaseDirty();
-                                setBaseLabor(e.target.value);
-                              }}
+                              readOnly
+                              disabled
                               inputMode="numeric"
-                              className="tabular-nums text-lg h-12"
+                              className="tabular-nums text-base font-extrabold h-12"
+                              displayClassName="text-base font-extrabold"
                             />
                           </div>
                           <div className="space-y-2">
-                            <div className="flex items-center justify-between text-sm font-medium text-[var(--foreground)]">
-                              <span>기타공임 (판매)</span>
-                                  <span className="text-xs text-[var(--muted)]">마진 {renderNumber(resolvedEtcLaborMarginTotal)}</span>
+                            <div className="flex items-center justify-between text-sm font-bold text-[var(--foreground)]">
+                              <span className="font-bold">기타공임 (판매)</span>
+                                  <span className="text-xs font-bold text-[var(--muted)]">마진 {renderNumber(resolvedEtcLaborMarginTotal)}</span>
                             </div>
                             <Input
                               placeholder="0"
                               value={resolvedEtcLaborTotal.toLocaleString()}
                               readOnly
                               inputMode="numeric"
-                              className="tabular-nums text-lg h-12"
+                              className="tabular-nums text-base font-extrabold h-12"
+                              displayClassName="text-base font-extrabold"
                             />
                           </div>
                           <div className="space-y-2">
-                            <div className="flex items-center justify-between text-sm font-medium text-[var(--foreground)]">
-                              <span>알공임</span>
-                              <span className="text-xs text-[var(--muted)]">마진 {renderNumber(stoneMarginDisplay)}</span>
+                            <div className="flex items-center justify-between text-sm font-bold text-[var(--foreground)]">
+                              <span className="font-bold">알공임 (판매)</span>
+                              <span className="text-xs font-bold text-[var(--muted)]">마진 {renderNumber(stoneMarginDisplay)}</span>
                             </div>
                             <Input
                               placeholder="0"
                               value={String(finalStoneSell)}
-                              onChange={(e) => {
-                                markLaborExtraDirty();
-                                const nextFinal = parseNumberInput(e.target.value);
-                                const nextAdjustment = nextFinal - stoneRecommendation.recommended;
-                                setStoneAdjustmentAmount(String(nextAdjustment));
-                                applyRecommendedStoneLabor(true);
-                              }}
+                              readOnly
+                              disabled
                               inputMode="numeric"
-                              className="tabular-nums text-lg h-12"
+                              className="tabular-nums text-base font-extrabold h-12"
+                              displayClassName="text-base font-extrabold"
                             />
                           </div>
                         </div>
@@ -6224,7 +6732,7 @@ const extractEtcLaborAmount = (value: unknown): number => {
                             </div>
                             <div className="flex items-center gap-2 rounded-full border border-[var(--panel-border)] bg-[var(--panel)] px-2 py-1">
                               <span className="text-xs text-[var(--muted)]">기타원가(합계)</span>
-                              <div className="tabular-nums h-7 w-24 flex items-center justify-end">
+                              <div className="tabular-nums h-7 w-28 flex items-center justify-end text-base font-extrabold text-[var(--foreground)]">
                                 {renderNumber(resolvedEtcLaborCostTotal)}
                               </div>
                             </div>
@@ -6235,7 +6743,7 @@ const extractEtcLaborAmount = (value: unknown): number => {
                                 <div className="text-xs font-semibold text-[var(--foreground)]">부품 구성품 참고(자동합산 안함)</div>
                                 <div className="mt-1 grid grid-cols-12 gap-2 text-[11px] text-[var(--muted)]">
                                   <div className="col-span-6">품목</div>
-                                  <div className="col-span-2 text-right">수량</div>
+                                  <div className="col-span-2 text-center">수량</div>
                                   <div className="col-span-4 text-right">총공임원가</div>
                                 </div>
                                 {componentReferenceRows.map((row) => (
@@ -6263,12 +6771,24 @@ const extractEtcLaborAmount = (value: unknown): number => {
                                   const itemType = getExtraLaborItemType(item);
                                   const isAdjustment = item.type === EXTRA_TYPE_ADJUSTMENT;
                                   const isLockedMaster = isLockedExtraLaborItem(item);
+                                  const canDeleteItem =
+                                    !isLockedMaster || String(item.type ?? "").trim().toUpperCase() === EXTRA_TYPE_PLATING_MASTER;
                                   const isQtyEditableDecor = isDecorEditableAbsorbItem(item);
+                                  const shouldShowFixedBadge = isLockedMaster || isQtyEditableDecor;
                                   const qtyApplied = getExtraLaborQtyApplied(item);
                                   const customItemLabel = String((item.meta as Record<string, unknown> | null)?.item_label ?? "");
+                                  const adjustmentReasonNote = String((item.meta as Record<string, unknown> | null)?.reason_note ?? "");
                                   const costValue = getExtraLaborCost(item);
                                   const marginValue = getExtraLaborMargin(item);
                                   const finalValue = getExtraLaborFinal(item);
+                                  const rawCostInput = String((item.meta as Record<string, unknown> | null)?.raw_cost_input ?? "");
+                                  const rawMarginInput = String((item.meta as Record<string, unknown> | null)?.raw_margin_input ?? "");
+                                  const isNegativeCostInput = isAdjustment
+                                    ? ((parseSignedNumberInputMaybe(rawCostInput) ?? costValue) < 0)
+                                    : costValue < 0;
+                                  const isNegativeMarginInput = isAdjustment
+                                    ? ((parseSignedNumberInputMaybe(rawMarginInput) ?? marginValue) < 0)
+                                    : marginValue < 0;
                                   return (
                                     <div key={item.id} className="grid grid-cols-12 items-center gap-2">
                                       <div className="col-span-3">
@@ -6291,6 +6811,9 @@ const extractEtcLaborAmount = (value: unknown): number => {
                                                           ...(current.meta ?? {}),
                                                           item_type: nextType,
                                                           item_label: nextType === "OTHER" ? String((current.meta as Record<string, unknown> | null)?.item_label ?? "") : null,
+                                                          reason_note: String((current.meta as Record<string, unknown> | null)?.reason_note ?? ""),
+                                                          raw_cost_input: String((current.meta as Record<string, unknown> | null)?.raw_cost_input ?? ""),
+                                                          raw_margin_input: String((current.meta as Record<string, unknown> | null)?.raw_margin_input ?? ""),
                                                         },
                                                       }
                                                       : current
@@ -6310,17 +6833,23 @@ const extractEtcLaborAmount = (value: unknown): number => {
                                                 onChange={(e) => handleExtraLaborMetaChange(item.id, "item_label", e.target.value)}
                                               />
                                             ) : null}
+                                            <Input
+                                              className="h-8 text-xs"
+                                              placeholder="추가 사유"
+                                              value={adjustmentReasonNote}
+                                              onChange={(e) => handleExtraLaborMetaChange(item.id, "reason_note", e.target.value)}
+                                            />
                                           </div>
                                         ) : (
                                           <div className="flex items-center gap-2 text-xs font-medium text-[var(--foreground)]">
                                             <span>{item.label}</span>
-                                            {isLockedMaster ? <Badge tone="warning" className="text-[9px]">고정</Badge> : null}
+                                            {shouldShowFixedBadge ? <Badge tone="warning" className="text-[9px]">고정</Badge> : null}
                                           </div>
                                         )}
                                       </div>
                                       <div className="col-span-2">
                                         {isQtyEditableDecor ? (
-                                          <div className="flex items-center justify-end gap-1 text-[10px] text-[var(--muted)]">
+                                          <div className="flex items-center justify-center gap-1 text-xs font-bold text-[var(--muted)]">
                                             <Button
                                               type="button"
                                               variant="ghost"
@@ -6330,13 +6859,9 @@ const extractEtcLaborAmount = (value: unknown): number => {
                                             >
                                               -
                                             </Button>
-                                            <Input
-                                              placeholder="0"
-                                              value={String(qtyApplied ?? 0)}
-                                              onChange={(e) => handleExtraLaborQtyChange(item.id, e.target.value)}
-                                              inputMode="numeric"
-                                              className="h-7 w-14 tabular-nums text-right"
-                                            />
+                                            <div className="h-7 w-14 rounded-md border border-[var(--panel-border)] bg-[var(--panel)] px-2 tabular-nums text-center leading-7 text-sm font-bold">
+                                              {String(qtyApplied ?? 0)}
+                                            </div>
                                             <Button
                                               type="button"
                                               variant="ghost"
@@ -6348,7 +6873,7 @@ const extractEtcLaborAmount = (value: unknown): number => {
                                             </Button>
                                           </div>
                                         ) : (
-                                          <div className="text-right tabular-nums text-xs text-[var(--muted)]">
+                                          <div className="text-center tabular-nums text-sm font-bold text-[var(--muted)]">
                                             {getExtraLaborQtyDisplay(item) !== null ? renderNumber(getExtraLaborQtyDisplay(item)) : "-"}
                                           </div>
                                         )}
@@ -6356,10 +6881,13 @@ const extractEtcLaborAmount = (value: unknown): number => {
                                       <div className="col-span-2">
                                         <Input
                                           placeholder="0"
-                                          value={String(costValue)}
+                                          value={isAdjustment ? rawCostInput : String(costValue)}
                                           onChange={(e) => handleExtraLaborCostChange(item.id, e.target.value)}
-                                          inputMode="numeric"
-                                          className="tabular-nums h-9 text-right"
+                                          inputMode="decimal"
+                                          className={cn(
+                                            "tabular-nums h-9 text-right",
+                                            isNegativeCostInput && "bg-red-50 border-red-200"
+                                          )}
                                           disabled={isLockedMaster}
                                           readOnly={isLockedMaster}
                                         />
@@ -6367,15 +6895,18 @@ const extractEtcLaborAmount = (value: unknown): number => {
                                       <div className="col-span-2">
                                         <Input
                                           placeholder="0"
-                                          value={String(marginValue)}
+                                          value={isAdjustment ? rawMarginInput : String(marginValue)}
                                           onChange={(e) => handleExtraLaborMarginChange(item.id, e.target.value)}
-                                          inputMode="numeric"
-                                          className="tabular-nums h-9 text-right"
+                                          inputMode="decimal"
+                                          className={cn(
+                                            "tabular-nums h-9 text-right",
+                                            isNegativeMarginInput && "bg-red-50 border-red-200"
+                                          )}
                                           disabled={isLockedMaster}
                                           readOnly={isLockedMaster}
                                         />
                                       </div>
-                                      <div className="col-span-2 text-right tabular-nums text-sm font-semibold">
+                                      <div className="col-span-2 text-right tabular-nums text-base font-extrabold">
                                         {renderNumber(finalValue)}
                                       </div>
                                       <div className="col-span-1 flex justify-end">
@@ -6383,7 +6914,7 @@ const extractEtcLaborAmount = (value: unknown): number => {
                                           variant="ghost"
                                           size="sm"
                                           onClick={() => handleRemoveExtraLabor(item.id)}
-                                          disabled={isLockedMaster}
+                                          disabled={!canDeleteItem}
                                           className="text-[var(--muted)]"
                                         >
                                           삭제
@@ -6559,7 +7090,10 @@ const extractEtcLaborAmount = (value: unknown): number => {
                   </div>
                 </div>
               </div>
-              <Badge tone="active">작성 중</Badge>
+              <div className="flex items-center gap-2">
+                <Badge tone="active">작성 중</Badge>
+                {isManualOverrideActive ? <Badge tone="warning">수동조정</Badge> : null}
+              </div>
             </div>
 
             <div className="space-y-3 pt-3 border-t border-[var(--primary)]/20">
@@ -6580,22 +7114,24 @@ const extractEtcLaborAmount = (value: unknown): number => {
                 <div>
                   <span className="text-xs text-[var(--primary)] block mb-1">중량</span>
                   <Input
-                    className="h-7 text-xs w-16 bg-[var(--input-bg)] tabular-nums"
+                    className="h-7 text-sm font-bold w-16 bg-[var(--input-bg)] tabular-nums"
                     placeholder="0.00"
                     value={weightG}
                     onChange={(e) => setWeightG(e.target.value)}
                     inputMode="decimal"
+                    displayClassName="text-sm font-bold"
                   />
                 </div>
                 <div>
                   <span className="text-xs text-[var(--primary)] block mb-1">차감</span>
                   <div className="flex items-center gap-2">
                     <Input
-                      className="h-7 text-xs w-16 bg-[var(--input-bg)] tabular-nums"
+                      className="h-7 text-sm font-bold w-16 bg-[var(--input-bg)] tabular-nums"
                       placeholder="0.00"
                       value={deductionWeightG}
                       onChange={(e) => setDeductionWeightG(e.target.value)}
                       inputMode="decimal"
+                      displayClassName="text-sm font-bold"
                     />
                     {hasReceiptDeduction ? (
                       <span className="text-[10px] text-[var(--muted)]">영수증 차감 적용</span>
@@ -6616,45 +7152,41 @@ const extractEtcLaborAmount = (value: unknown): number => {
                   ) : null}
                 </div>
                 <div>
-                  <span className="text-xs text-[var(--primary)] block mb-1">기본공임 (원)+마진</span>
+                  <span className="text-xs text-[var(--primary)] block mb-1">기본공임 (판매)</span>
                   <span className="text-[10px] text-[var(--muted)] block">마진 {renderNumber(resolvedBaseLaborMargin)}</span>
                   <Input
-                    className="h-7 text-xs w-24 bg-[var(--input-bg)] tabular-nums"
+                    className="h-7 text-sm font-bold w-24 bg-[var(--input-bg)] tabular-nums"
                     placeholder="0"
                     value={baseLabor}
-                    onChange={(e) => {
-                      markLaborBaseDirty();
-                      setBaseLabor(e.target.value);
-                    }}
+                    readOnly
+                    disabled
                     inputMode="numeric"
+                    displayClassName="text-sm font-bold"
                   />
                 </div>
                 <div>
                   <span className="text-xs text-[var(--primary)] block mb-1">기타공임 (판매)</span>
                                 <span className="text-[10px] text-[var(--muted)] block">마진 {renderNumber(resolvedEtcLaborMarginTotal)}</span>
                   <Input
-                    className="h-7 text-xs w-24 bg-[var(--input-bg)] tabular-nums"
+                    className="h-7 text-sm font-bold w-24 bg-[var(--input-bg)] tabular-nums"
                     placeholder="0"
                     value={String(resolvedEtcLaborTotal)}
                     readOnly
                     inputMode="numeric"
+                    displayClassName="text-sm font-bold"
                   />
                 </div>
                 <div>
-                  <span className="text-xs text-[var(--primary)] block mb-1">알공임</span>
+                  <span className="text-xs text-[var(--primary)] block mb-1">알공임 (판매)</span>
                   <span className="text-[10px] text-[var(--muted)] block">별도입력</span>
                   <Input
-                    className="h-7 text-xs w-24 bg-[var(--input-bg)] tabular-nums"
+                    className="h-7 text-sm font-bold w-24 bg-[var(--input-bg)] tabular-nums"
                     placeholder="0"
                     value={String(finalStoneSell)}
-                    onChange={(e) => {
-                      markLaborExtraDirty();
-                      const nextFinal = parseNumberInput(e.target.value);
-                      const nextAdjustment = nextFinal - stoneRecommendation.recommended;
-                      setStoneAdjustmentAmount(String(nextAdjustment));
-                      applyRecommendedStoneLabor(true);
-                    }}
+                    readOnly
+                    disabled
                     inputMode="numeric"
+                    displayClassName="text-sm font-bold"
                   />
                 </div>
                 <div>
@@ -6682,6 +7214,42 @@ const extractEtcLaborAmount = (value: unknown): number => {
                       disabled={!isManualTotalOverride}
                     />
                   </div>
+                </div>
+              </div>
+
+              <div className="rounded-md border border-[var(--primary)]/20 bg-[var(--surface)]/60 p-3 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-semibold text-[var(--primary)]">수동조정 사유</span>
+                  {isManualOverrideActive ? <Badge tone="warning" className="text-[10px]">필수</Badge> : null}
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-[220px_1fr] gap-2">
+                  <select
+                    className="h-8 rounded-md border border-[var(--panel-border)] bg-[var(--input-bg)] px-2 text-xs"
+                    value={manualOverrideReasonCode}
+                    onChange={(e) => {
+                      const nextValue = e.target.value;
+                      if (
+                        nextValue === "FACTORY_MISTAKE" ||
+                        nextValue === "RECEIPT_DIFF" ||
+                        nextValue === "POLICY_EXCEPTION" ||
+                        nextValue === "CUSTOMER_REQUEST" ||
+                        nextValue === "OTHER"
+                      ) {
+                        setManualOverrideReasonCode(nextValue);
+                      }
+                    }}
+                  >
+                    {MANUAL_OVERRIDE_REASON_OPTIONS.map((option) => (
+                      <option key={`modal-${option.value}`} value={option.value}>{option.label}</option>
+                    ))}
+                  </select>
+                  <Input
+                    className="h-8 text-xs bg-[var(--input-bg)]"
+                    placeholder="수동조정 상세 메모"
+                    value={manualOverrideReasonDetail}
+                    onChange={(e) => setManualOverrideReasonDetail(e.target.value)}
+                    disabled={manualOverrideReasonCode !== "OTHER"}
+                  />
                 </div>
               </div>
 
@@ -6725,7 +7293,7 @@ const extractEtcLaborAmount = (value: unknown): number => {
                   </div>
                   <div className="flex items-center gap-2 rounded-full border border-[var(--panel-border)] bg-[var(--panel)] px-2 py-1">
                     <span className="text-[10px] text-[var(--primary)]">기타원가(합계)</span>
-                    <div className="h-7 text-xs w-20 bg-[var(--input-bg)] tabular-nums flex items-center justify-end">
+                    <div className="h-7 w-24 bg-[var(--input-bg)] tabular-nums flex items-center justify-end text-sm font-bold text-[var(--foreground)]">
                       {renderNumber(resolvedEtcLaborCostTotal)}
                     </div>
                   </div>
@@ -6736,7 +7304,7 @@ const extractEtcLaborAmount = (value: unknown): number => {
                       <div className="text-[10px] font-semibold text-[var(--foreground)]">부품 구성품 참고(자동합산 안함)</div>
                       <div className="mt-1 grid grid-cols-12 gap-2 text-[10px] text-[var(--muted)]">
                         <div className="col-span-6">품목</div>
-                        <div className="col-span-2 text-right">수량</div>
+                        <div className="col-span-2 text-center">수량</div>
                         <div className="col-span-4 text-right">총공임원가</div>
                       </div>
                       {componentReferenceRows.map((row) => (
@@ -6764,12 +7332,24 @@ const extractEtcLaborAmount = (value: unknown): number => {
                         const itemType = getExtraLaborItemType(item);
                         const isAdjustment = item.type === EXTRA_TYPE_ADJUSTMENT;
                         const isLockedMaster = isLockedExtraLaborItem(item);
+                        const canDeleteItem =
+                          !isLockedMaster || String(item.type ?? "").trim().toUpperCase() === EXTRA_TYPE_PLATING_MASTER;
                         const isQtyEditableDecor = isDecorEditableAbsorbItem(item);
+                        const shouldShowFixedBadge = isLockedMaster || isQtyEditableDecor;
                         const qtyApplied = getExtraLaborQtyApplied(item);
                         const customItemLabel = String((item.meta as Record<string, unknown> | null)?.item_label ?? "");
+                        const adjustmentReasonNote = String((item.meta as Record<string, unknown> | null)?.reason_note ?? "");
                         const costValue = getExtraLaborCost(item);
                         const marginValue = getExtraLaborMargin(item);
                         const finalValue = getExtraLaborFinal(item);
+                        const rawCostInput = String((item.meta as Record<string, unknown> | null)?.raw_cost_input ?? "");
+                        const rawMarginInput = String((item.meta as Record<string, unknown> | null)?.raw_margin_input ?? "");
+                        const isNegativeCostInput = isAdjustment
+                          ? ((parseSignedNumberInputMaybe(rawCostInput) ?? costValue) < 0)
+                          : costValue < 0;
+                        const isNegativeMarginInput = isAdjustment
+                          ? ((parseSignedNumberInputMaybe(rawMarginInput) ?? marginValue) < 0)
+                          : marginValue < 0;
                         return (
                           <div key={item.id} className="grid grid-cols-12 items-center gap-2">
                             <div className="col-span-3">
@@ -6792,6 +7372,9 @@ const extractEtcLaborAmount = (value: unknown): number => {
                                               ...(current.meta ?? {}),
                                               item_type: nextType,
                                               item_label: nextType === "OTHER" ? String((current.meta as Record<string, unknown> | null)?.item_label ?? "") : null,
+                                              reason_note: String((current.meta as Record<string, unknown> | null)?.reason_note ?? ""),
+                                              raw_cost_input: String((current.meta as Record<string, unknown> | null)?.raw_cost_input ?? ""),
+                                              raw_margin_input: String((current.meta as Record<string, unknown> | null)?.raw_margin_input ?? ""),
                                             },
                                           }
                                           : current
@@ -6811,17 +7394,23 @@ const extractEtcLaborAmount = (value: unknown): number => {
                                       onChange={(e) => handleExtraLaborMetaChange(item.id, "item_label", e.target.value)}
                                     />
                                   ) : null}
+                                  <Input
+                                    className="h-7 text-[10px]"
+                                    placeholder="추가 사유"
+                                    value={adjustmentReasonNote}
+                                    onChange={(e) => handleExtraLaborMetaChange(item.id, "reason_note", e.target.value)}
+                                  />
                                 </div>
                               ) : (
                                 <div className="flex items-center gap-1 text-[10px] text-[var(--primary)]">
                                   <span>{item.label}</span>
-                                  {isLockedMaster ? <Badge tone="warning" className="text-[8px]">고정</Badge> : null}
+                                  {shouldShowFixedBadge ? <Badge tone="warning" className="text-[8px]">고정</Badge> : null}
                                 </div>
                               )}
                             </div>
                             <div className="col-span-2">
                               {isQtyEditableDecor ? (
-                                <div className="flex items-center justify-end gap-1 text-[9px] text-[var(--muted)]">
+                                <div className="flex items-center justify-center gap-1 text-[10px] font-bold text-[var(--muted)]">
                                   <Button
                                     type="button"
                                     variant="ghost"
@@ -6831,13 +7420,9 @@ const extractEtcLaborAmount = (value: unknown): number => {
                                   >
                                     -
                                   </Button>
-                                  <Input
-                                    className="h-6 w-12 text-[10px] tabular-nums"
-                                    placeholder="0"
-                                    value={String(qtyApplied ?? 0)}
-                                    onChange={(e) => handleExtraLaborQtyChange(item.id, e.target.value)}
-                                    inputMode="numeric"
-                                  />
+                                  <div className="h-6 w-12 rounded-md border border-[var(--panel-border)] bg-[var(--panel)] px-1 tabular-nums text-center leading-6 text-xs font-bold">
+                                    {String(qtyApplied ?? 0)}
+                                  </div>
                                   <Button
                                     type="button"
                                     variant="ghost"
@@ -6849,34 +7434,40 @@ const extractEtcLaborAmount = (value: unknown): number => {
                                   </Button>
                                 </div>
                               ) : (
-                                <div className="text-right tabular-nums text-[10px] text-[var(--muted)]">
+                                <div className="text-center tabular-nums text-xs font-bold text-[var(--muted)]">
                                   {getExtraLaborQtyDisplay(item) !== null ? renderNumber(getExtraLaborQtyDisplay(item)) : "-"}
                                 </div>
                               )}
                             </div>
                             <div className="col-span-2">
                               <Input
-                                className="h-7 text-xs bg-[var(--input-bg)] tabular-nums"
                                 placeholder="0"
-                                value={String(costValue)}
+                                value={isAdjustment ? rawCostInput : String(costValue)}
                                 onChange={(e) => handleExtraLaborCostChange(item.id, e.target.value)}
-                                inputMode="numeric"
+                                inputMode="decimal"
+                                className={cn(
+                                  "h-7 text-xs bg-[var(--input-bg)] tabular-nums",
+                                  isNegativeCostInput && "bg-red-50 border-red-200"
+                                )}
                                 disabled={isLockedMaster}
                                 readOnly={isLockedMaster}
                               />
                             </div>
                             <div className="col-span-2">
                               <Input
-                                className="h-7 text-xs bg-[var(--input-bg)] tabular-nums"
                                 placeholder="0"
-                                value={String(marginValue)}
+                                value={isAdjustment ? rawMarginInput : String(marginValue)}
                                 onChange={(e) => handleExtraLaborMarginChange(item.id, e.target.value)}
-                                inputMode="numeric"
+                                inputMode="decimal"
+                                className={cn(
+                                  "h-7 text-xs bg-[var(--input-bg)] tabular-nums",
+                                  isNegativeMarginInput && "bg-red-50 border-red-200"
+                                )}
                                 disabled={isLockedMaster}
                                 readOnly={isLockedMaster}
                               />
                             </div>
-                            <div className="col-span-2 text-right tabular-nums text-xs font-semibold text-[var(--primary)]">
+                            <div className="col-span-2 text-right tabular-nums text-sm font-bold text-[var(--primary)]">
                               {renderNumber(finalValue)}
                             </div>
                             <div className="col-span-1 flex justify-end">
@@ -6884,7 +7475,7 @@ const extractEtcLaborAmount = (value: unknown): number => {
                                 variant="ghost"
                                 size="sm"
                                 onClick={() => handleRemoveExtraLabor(item.id)}
-                                disabled={isLockedMaster}
+                                disabled={!canDeleteItem}
                                 className="text-[var(--muted)]"
                               >
                                 삭제

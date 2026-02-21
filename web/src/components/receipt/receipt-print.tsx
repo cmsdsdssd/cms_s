@@ -1,6 +1,5 @@
 import { Fragment, useMemo } from "react";
 import { cn } from "@/lib/utils";
-import { calcCommodityDueG } from "@/lib/material-factors";
 
 export type ReceiptAmounts = {
   gold: number;
@@ -23,6 +22,16 @@ export type ReceiptLineItem = {
   gold_tick_krw_per_g?: number | null;
   silver_tick_krw_per_g?: number | null;
   silver_adjust_factor?: number | null;
+  purity_rate_snapshot?: number | null;
+  material_adjust_factor_snapshot?: number | null;
+  market_adjust_factor_snapshot?: number | null;
+  effective_factor_snapshot?: number | null;
+  gold_adjust_factor_snapshot?: number | null;
+  commodity_due_g?: number | null;
+  commodity_price_snapshot_krw_per_g?: number | null;
+  material_cash_due_krw?: number | null;
+  labor_cash_due_krw?: number | null;
+  total_cash_due_krw?: number | null;
   is_unit_pricing?: boolean | null;
   is_return?: boolean | null;
   is_repair?: boolean | null;
@@ -147,7 +156,7 @@ const buildAppliedPriceText = (lines: ReceiptLineItem[], kind: "gold" | "silver"
     const isGoldMaterial = code === "14" || code === "18" || code === "24";
     if (kind === "gold" && !isGoldMaterial) return;
     if (kind === "silver" && !isSilverMaterial) return;
-    const price = kind === "gold" ? line.gold_tick_krw_per_g : line.silver_tick_krw_per_g;
+    const price = line.commodity_price_snapshot_krw_per_g;
     if (price === null || price === undefined) return;
     const normalizedPrice = Number(price);
     const lineNumbers = priceToLineNumbers.get(normalizedPrice) ?? [];
@@ -265,47 +274,29 @@ export const ReceiptPrintHalf = ({
               const unitPricingLabor = total;
               const buildPriceFormula = () => {
                 if (!hasContent) return { materialExpr: "", labor, total, isUnitPricing };
-                const code = (line.material_code ?? "").trim();
-                const weight = Number(line.net_weight_g ?? 0);
-                const goldPrice = Number(line.gold_tick_krw_per_g ?? 0);
-                const silverPrice = Number(line.silver_tick_krw_per_g ?? 0);
-                const silverFactor = Number(line.silver_adjust_factor ?? 1);
-                const materialSell = Number(line.material_amount_sell_krw ?? 0);
+                const snapshotWeight = Number(line.commodity_due_g ?? Number.NaN);
+                const snapshotPrice = Number(line.commodity_price_snapshot_krw_per_g ?? Number.NaN);
+                const snapshotMaterialSell = Number(line.material_cash_due_krw ?? Number.NaN);
+                const snapshotLaborSell = Number(line.labor_cash_due_krw ?? Number.NaN);
+                const snapshotTotalSell = Number(line.total_cash_due_krw ?? Number.NaN);
+                const materialSell = Number.isFinite(snapshotMaterialSell)
+                  ? snapshotMaterialSell
+                  : Number(line.material_amount_sell_krw ?? 0);
+                const laborSell = Number.isFinite(snapshotLaborSell) ? snapshotLaborSell : labor;
+                const totalSell = Number.isFinite(snapshotTotalSell) ? snapshotTotalSell : total;
                 if (isUnitPricing) {
                   return { materialExpr: "", labor: unitPricingLabor, total, isUnitPricing: true };
                 }
 
-                let pureWeight = 0;
-                if (code === "14" || code === "18" || code === "24") {
-                  pureWeight = calcCommodityDueG({ netWeightG: weight, materialCode: code });
-                } else if (code === "925" || code === "999") {
-                  pureWeight = calcCommodityDueG({
-                    netWeightG: weight,
-                    materialCode: code,
-                    silverAdjustApplied: silverFactor,
-                  });
-                }
+                const hasSnapshot =
+                  Number.isFinite(snapshotWeight) && snapshotWeight >= 0 &&
+                  Number.isFinite(snapshotPrice) && snapshotPrice >= 0;
 
-                const explicitRate =
-                  code === "925" || code === "999"
-                    ? silverPrice > 0
-                      ? silverPrice
-                      : 0
-                    : goldPrice > 0
-                      ? goldPrice
-                      : 0;
+                const materialExpr = hasSnapshot
+                  ? `소재가격(환산중량 ${formatNumber3(snapshotWeight)}g x 적용시세 ${formatKrw(snapshotPrice)}/g)=${formatKrw(materialSell)}`
+                  : "소재가격(원장 스냅샷 없음: 계산식 비표시)";
 
-                const inferredRate = pureWeight > 0 && Math.abs(materialSell) > 0 ? materialSell / pureWeight : 0;
-                const appliedRate = explicitRate > 0 ? explicitRate : inferredRate;
-
-                let materialExpr = `소재가격(환산중량 ${formatNumber3(pureWeight)}g x 적용시세 ${formatKrw(appliedRate)}/g)=${formatKrw(materialSell)}`;
-                if (!(isRepair && !isRepairWithMaterial)) {
-                  if (pureWeight <= 0) {
-                    materialExpr = `소재가격(환산중량 0.000g x 적용시세 0/g)=${formatKrw(materialSell)}`;
-                  }
-                }
-
-                return { materialExpr, labor, total, isUnitPricing: false };
+                return { materialExpr, labor: laborSell, total: totalSell, isUnitPricing: false };
               };
               const priceFormula = buildPriceFormula();
               return (

@@ -2,8 +2,11 @@ import * as React from "react";
 import { cn } from "@/lib/utils";
 import { formatNumberInput, splitFormattedNumberParts } from "@/lib/number";
 
-export const Input = React.forwardRef<HTMLInputElement, React.InputHTMLAttributes<HTMLInputElement> & { autoFormat?: boolean }>(
-  ({ className, type, inputMode, onChange, value, defaultValue, autoFormat = true, ...props }, ref) => {
+export const Input = React.forwardRef<
+  HTMLInputElement,
+  React.InputHTMLAttributes<HTMLInputElement> & { autoFormat?: boolean; displayClassName?: string }
+>(
+  ({ className, displayClassName, type, inputMode, onChange, value, defaultValue, autoFormat = true, ...props }, ref) => {
     const isNumeric = type === "number" || inputMode === "numeric" || inputMode === "decimal";
     const resolvedType = isNumeric ? "text" : type;
     const resolvedInputMode = isNumeric ? inputMode ?? "numeric" : inputMode;
@@ -90,7 +93,8 @@ export const Input = React.forwardRef<HTMLInputElement, React.InputHTMLAttribute
           <div
             className={cn(
               "pointer-events-none absolute inset-0 flex items-center px-3 py-2 text-sm tabular-nums text-[var(--foreground)]",
-              alignClassName
+              alignClassName,
+              displayClassName
             )}
           >
             {hasComma ? <span className="text-[color:var(--primary)]">{displayParts.prefix}</span> : displayParts.prefix}

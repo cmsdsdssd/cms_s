@@ -28,6 +28,18 @@ const parseNumericOrNull = (value: unknown) => {
   return parsed === null ? null : Number(parsed);
 };
 
+const pickPlatingPolicyValue = (policyValue: number | null, fallbackValue: number | null) => {
+  if (policyValue !== null && policyValue > 0) return policyValue;
+  if (fallbackValue !== null && fallbackValue > 0) return fallbackValue;
+  return policyValue;
+};
+
+const roundKrw = (value: number) => {
+  if (!Number.isFinite(value)) return 0;
+  if (value <= 0) return Math.round(value);
+  return Math.ceil(value / 100) * 100;
+};
+
 export async function GET(request: Request) {
   const supabase = getSupabaseAdmin();
   if (!supabase) {
@@ -74,6 +86,24 @@ export async function GET(request: Request) {
   let stoneLaborKrw: number | null = null;
   let receiptLaborBasicCostKrw: number | null = null;
   let receiptLaborOtherCostKrw: number | null = null;
+  let masterPlatingSellFallbackKrw: number | null = null;
+  let masterPlatingCostFallbackKrw: number | null = null;
+
+  const loadMasterPlatingFallback = async (masterId: string | null) => {
+    if (!masterId) return;
+    const { data: masterRow } = await supabase
+      .from("cms_master_item")
+      .select("plating_price_sell_default, plating_price_cost_default")
+      .eq("master_id", masterId)
+      .maybeSingle();
+
+    if (masterRow?.plating_price_sell_default !== null && masterRow?.plating_price_sell_default !== undefined) {
+      masterPlatingSellFallbackKrw = Number(masterRow.plating_price_sell_default);
+    }
+    if (masterRow?.plating_price_cost_default !== null && masterRow?.plating_price_cost_default !== undefined) {
+      masterPlatingCostFallbackKrw = Number(masterRow.plating_price_cost_default);
+    }
+  };
 
   if (data.receipt_id && data.receipt_line_uuid) {
     const { data: lineRow } = await supabase
@@ -127,20 +157,65 @@ export async function GET(request: Request) {
       shipmentExtraLaborKrw = Number(shipmentLineRow.extra_labor_krw);
     }
     shipmentExtraLaborItems = shipmentLineRow?.extra_labor_items ?? null;
+
+    await loadMasterPlatingFallback(shipmentMasterId);
+  }
+
+  if (masterPlatingSellFallbackKrw === null && masterPlatingCostFallbackKrw === null && data.order_line_id) {
+    const { data: orderLineRow } = await supabase
+      .from("cms_order_line")
+      .select("matched_master_id")
+      .eq("order_line_id", data.order_line_id)
+      .maybeSingle();
+    const matchedMasterId = orderLineRow?.matched_master_id ? String(orderLineRow.matched_master_id) : null;
+    await loadMasterPlatingFallback(matchedMasterId);
   }
 
   const normalizedShipmentExtraLaborItems = normalizeExtraLaborItemsWithStableIds(shipmentExtraLaborItems);
+  const sanitizedShipmentExtraLaborItems = normalizedShipmentExtraLaborItems.filter((item: Record<string, unknown>) => {
+    const type = String(item?.type ?? "").trim().toUpperCase();
+    const meta = item?.meta && typeof item.meta === "object" && !Array.isArray(item.meta)
+      ? (item.meta as Record<string, unknown>)
+      : null;
+    const className = String(meta?.class ?? "").trim().toUpperCase();
+    const source = String(meta?.source ?? "").trim().toUpperCase();
+    if (type.startsWith("MATERIAL_MASTER")) return false;
+    if (className === "MATERIAL_MASTER") return false;
+    if (source === "MASTER_MATERIAL_LABOR") return false;
+    return true;
+  });
+  const sanitizedShipmentExtraLaborSellKrw = roundKrw(
+    sanitizedShipmentExtraLaborItems.reduce((sum: number, item: Record<string, unknown>) => {
+      const parsed = parseNumeric(item?.amount);
+      return sum + (parsed ?? 0);
+    }, 0)
+  );
+  const sanitizedShipmentExtraLaborCostKrw = roundKrw(
+    sanitizedShipmentExtraLaborItems.reduce((sum: number, item: Record<string, unknown>) => {
+      const meta = item?.meta && typeof item.meta === "object" && !Array.isArray(item.meta)
+        ? (item.meta as Record<string, unknown>)
+        : null;
+      const parsed = parseNumeric(meta?.cost_krw ?? null);
+      return sum + (parsed ?? 0);
+    }, 0)
+  );
 
   const policyMeta =
     data.pricing_policy_meta && typeof data.pricing_policy_meta === "object" && !Array.isArray(data.pricing_policy_meta)
       ? (data.pricing_policy_meta as Record<string, unknown>)
       : null;
-  const shipmentExtraItemsArray = normalizedShipmentExtraLaborItems as Array<Record<string, unknown>>;
+  const shipmentExtraItemsArray = sanitizedShipmentExtraLaborItems as Array<Record<string, unknown>>;
   const shipmentPlatingItems = shipmentExtraItemsArray.filter((item) => {
     const type = String(item.type ?? "").toUpperCase();
     const label = String(item.label ?? "");
     return type.includes("PLATING") || label.includes("도금");
   });
+  const rawPolicyPlatingSellKrw = parseNumericOrNull(policyMeta?.plating_sell_krw ?? null);
+  const rawPolicyPlatingCostKrw = parseNumericOrNull(policyMeta?.plating_cost_krw ?? null);
+  const policyPlatingSellKrw =
+    pickPlatingPolicyValue(rawPolicyPlatingSellKrw, parseNumericOrNull(masterPlatingSellFallbackKrw));
+  const policyPlatingCostKrw =
+    pickPlatingPolicyValue(rawPolicyPlatingCostKrw, parseNumericOrNull(masterPlatingCostFallbackKrw));
 
   const laborPrefillSnapshotBase = {
     snapshot_version: Number(data.pricing_policy_version ?? 1),
@@ -149,17 +224,18 @@ export async function GET(request: Request) {
     base_labor_cost_krw:
       parseNumericOrNull(data.selected_factory_labor_basic_cost_krw) ??
       parseNumericOrNull(receiptLaborBasicCostKrw),
-    extra_labor_sell_krw: shipmentExtraLaborKrw,
+    extra_labor_sell_krw: data.shipment_line_id ? sanitizedShipmentExtraLaborSellKrw : shipmentExtraLaborKrw,
     extra_labor_cost_krw:
+      (data.shipment_line_id ? sanitizedShipmentExtraLaborCostKrw : null) ??
       parseNumericOrNull(data.selected_factory_labor_other_cost_krw) ??
       parseNumericOrNull(receiptLaborOtherCostKrw),
-    policy_plating_sell_krw: parseNumericOrNull(policyMeta?.plating_sell_krw ?? null),
-    policy_plating_cost_krw: parseNumericOrNull(policyMeta?.plating_cost_krw ?? null),
+    policy_plating_sell_krw: policyPlatingSellKrw,
+    policy_plating_cost_krw: policyPlatingCostKrw,
     policy_absorb_plating_krw: parseNumericOrNull(policyMeta?.absorb_plating_krw ?? null),
     policy_absorb_etc_total_krw: parseNumericOrNull(policyMeta?.absorb_etc_total_krw ?? null),
     policy_absorb_decor_total_krw: parseNumericOrNull(policyMeta?.absorb_decor_total_krw ?? null),
     policy_absorb_other_total_krw: parseNumericOrNull(policyMeta?.absorb_other_total_krw ?? null),
-    extra_labor_items: normalizedShipmentExtraLaborItems,
+    extra_labor_items: sanitizedShipmentExtraLaborItems,
   };
   const laborPrefillSnapshot = {
     ...laborPrefillSnapshotBase,
@@ -172,8 +248,10 @@ export async function GET(request: Request) {
     selectedFactoryLaborOtherCostKrw: data.selected_factory_labor_other_cost_krw,
     shipmentExtraLaborKrw,
     pricingPolicyVersion: data.pricing_policy_version,
-    policyPlatingSellKrw: parseNumeric(policyMeta?.plating_sell_krw ?? null),
-    policyPlatingCostKrw: parseNumeric(policyMeta?.plating_cost_krw ?? null),
+    policyPlatingSellKrw,
+    policyPlatingCostKrw,
+    masterPlatingSellFallbackKrw,
+    masterPlatingCostFallbackKrw,
     policyAbsorbPlatingKrw: parseNumeric(policyMeta?.absorb_plating_krw ?? null),
     policyAbsorbEtcTotalKrw: parseNumeric(policyMeta?.absorb_etc_total_krw ?? null),
     shipmentPlatingItems,
@@ -185,8 +263,8 @@ export async function GET(request: Request) {
       receipt_weight_g: receiptWeightG,
       receipt_deduction_weight_g: receiptDeductionWeightG,
       shipment_base_labor_krw: shipmentBaseLaborKrw,
-      shipment_extra_labor_krw: shipmentExtraLaborKrw,
-      shipment_extra_labor_items: normalizedShipmentExtraLaborItems,
+      shipment_extra_labor_krw: data.shipment_line_id ? sanitizedShipmentExtraLaborSellKrw : shipmentExtraLaborKrw,
+      shipment_extra_labor_items: sanitizedShipmentExtraLaborItems,
       shipment_master_id: shipmentMasterId,
       receipt_match_overridden_fields: data.overridden_fields ?? null,
       stone_center_qty: stoneCenterQty,

@@ -85,6 +85,11 @@ type LedgerStatementRow = {
         size?: string | null;
         labor_total_sell_krw?: number | null;
         material_amount_sell_krw?: number | null;
+        commodity_due_g?: number | null;
+        commodity_price_snapshot_krw_per_g?: number | null;
+        labor_cash_due_krw?: number | null;
+        material_cash_due_krw?: number | null;
+        total_cash_due_krw?: number | null;
         repair_fee_krw?: number | null;
         is_unit_pricing?: boolean | null;
         amount_krw: number;
@@ -658,6 +663,11 @@ function ShipmentsPrintContent() {
           size: line.size ?? null,
           labor_total_sell_krw: line.labor_total_sell_krw ?? null,
           material_amount_sell_krw: line.material_amount_sell_krw ?? null,
+          commodity_due_g: line.commodity_due_g ?? null,
+          commodity_price_snapshot_krw_per_g: line.commodity_price_snapshot_krw_per_g ?? null,
+          labor_cash_due_krw: line.labor_cash_due_krw ?? null,
+          material_cash_due_krw: line.material_cash_due_krw ?? null,
+          total_cash_due_krw: line.total_cash_due_krw ?? null,
           repair_fee_krw: line.repair_fee_krw ?? null,
           is_unit_pricing:
             line.is_unit_pricing ??
@@ -707,6 +717,98 @@ function ShipmentsPrintContent() {
       };
     });
   }, [shipmentOnlyStatements, unitPricingByModel]);
+
+  const shipmentLineIdsForSnapshot = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          partyGroups
+            .flatMap((group) => group.lines)
+            .filter((line) => !line.is_return)
+            .map((line) => String(line.shipment_line_id ?? "").trim())
+            .filter(Boolean)
+        )
+      ),
+    [partyGroups]
+  );
+
+  const invoiceSnapshotQuery = useQuery({
+    queryKey: ["shipments-print-invoice-snapshot", today, shipmentLineIdsForSnapshot.join(",")],
+    queryFn: async () => {
+      const supabase = getSupabaseClient();
+      if (!supabase || shipmentLineIdsForSnapshot.length === 0) {
+        return [] as Array<{
+          shipment_line_id?: string | null;
+          commodity_due_g?: number | null;
+          commodity_price_snapshot_krw_per_g?: number | null;
+          material_cash_due_krw?: number | null;
+          labor_cash_due_krw?: number | null;
+          total_cash_due_krw?: number | null;
+        }>;
+      }
+      const { data, error } = await supabase
+        .from(CONTRACTS.views.arInvoicePosition)
+        .select("shipment_line_id, commodity_due_g, commodity_price_snapshot_krw_per_g, material_cash_due_krw, labor_cash_due_krw, total_cash_due_krw")
+        .in("shipment_line_id", shipmentLineIdsForSnapshot);
+      if (error) return [];
+      return (data ?? []) as Array<{
+        shipment_line_id?: string | null;
+        commodity_due_g?: number | null;
+        commodity_price_snapshot_krw_per_g?: number | null;
+        material_cash_due_krw?: number | null;
+        labor_cash_due_krw?: number | null;
+        total_cash_due_krw?: number | null;
+      }>;
+    },
+    enabled: shipmentLineIdsForSnapshot.length > 0,
+    staleTime: 30_000,
+    refetchOnWindowFocus: false,
+  });
+
+  const invoiceSnapshotByLineId = useMemo(() => {
+    const map = new Map<string, {
+      commodity_due_g?: number | null;
+      commodity_price_snapshot_krw_per_g?: number | null;
+      material_cash_due_krw?: number | null;
+      labor_cash_due_krw?: number | null;
+      total_cash_due_krw?: number | null;
+    }>();
+    (invoiceSnapshotQuery.data ?? []).forEach((row) => {
+      const key = String(row.shipment_line_id ?? "").trim();
+      if (!key) return;
+      map.set(key, {
+        commodity_due_g: row.commodity_due_g ?? null,
+        commodity_price_snapshot_krw_per_g: row.commodity_price_snapshot_krw_per_g ?? null,
+        material_cash_due_krw: row.material_cash_due_krw ?? null,
+        labor_cash_due_krw: row.labor_cash_due_krw ?? null,
+        total_cash_due_krw: row.total_cash_due_krw ?? null,
+      });
+    });
+    return map;
+  }, [invoiceSnapshotQuery.data]);
+
+  const receiptPartyGroups = useMemo(
+    () =>
+      partyGroups.map((group) => ({
+        ...group,
+        lines: group.lines.map((line) => {
+          if (line.is_return) return line;
+          const key = String(line.shipment_line_id ?? "").trim();
+          const snapshot = key ? invoiceSnapshotByLineId.get(key) : undefined;
+          if (!snapshot) return line;
+          return {
+            ...line,
+            commodity_due_g: snapshot.commodity_due_g ?? line.commodity_due_g ?? null,
+            commodity_price_snapshot_krw_per_g:
+              snapshot.commodity_price_snapshot_krw_per_g ?? line.commodity_price_snapshot_krw_per_g ?? null,
+            material_cash_due_krw: snapshot.material_cash_due_krw ?? line.material_cash_due_krw ?? null,
+            labor_cash_due_krw: snapshot.labor_cash_due_krw ?? line.labor_cash_due_krw ?? null,
+            total_cash_due_krw: snapshot.total_cash_due_krw ?? line.total_cash_due_krw ?? null,
+          };
+        }),
+      })),
+    [invoiceSnapshotByLineId, partyGroups]
+  );
 
   const paymentFallbackQuery = useQuery({
     queryKey: ["shipments-print-payment-fallback", today, filterPartyId],
@@ -1011,7 +1113,7 @@ function ShipmentsPrintContent() {
 
   const receiptPages = useMemo<PartyReceiptPage[]>(() => {
     const pages: PartyReceiptPage[] = [];
-    partyGroups.forEach((group) => {
+    receiptPartyGroups.forEach((group) => {
       const prev = group.statement.prev_position;
       const end = group.statement.end_position;
       const day = group.statement.day_ledger_totals;
@@ -1218,7 +1320,7 @@ function ShipmentsPrintContent() {
     }
 
     return pages;
-  }, [evidencePaymentsByParty, evidenceWriteoffsByParty, partyGroups, printMode]);
+  }, [evidencePaymentsByParty, evidenceWriteoffsByParty, printMode, receiptPartyGroups]);
 
   const pageChecks = useMemo(
     () =>
@@ -1328,27 +1430,11 @@ function ShipmentsPrintContent() {
     [dayPaymentByParty]
   );
 
-  const unconfirmShipmentMutation = useRpcMutation<unknown>({
-    fn: CONTRACTS.functions.shipmentUnconfirm,
-    successMessage: "출고 초기화 완료",
-    onSuccess: () => {
-      setReasonModalOpen(false);
-      setReasonText("");
-      setSelectedResetShipmentId(null);
-      statementQuery.refetch();
-    },
-  });
-
   const handleConfirmClear = useCallback(async () => {
-    if (!selectedResetShipment) return;
-    const reason = reasonText.trim();
-    if (!reason) return;
-    await unconfirmShipmentMutation.mutateAsync({
-      p_shipment_id: selectedResetShipment.shipmentId,
-      p_reason: reason,
-      p_note: "unconfirm from shipments_print",
-    });
-  }, [reasonText, selectedResetShipment, unconfirmShipmentMutation]);
+    void selectedResetShipment;
+    void reasonText;
+    toast.error("정책상 출고 확정 후 초기화(언컨펌)는 비활성화되었습니다.");
+  }, [reasonText, selectedResetShipment]);
 
   const isLoading = statementQuery.isLoading;
   const errorMessage = statementQuery.error ? toMessage(statementQuery.error) : "";
@@ -1930,9 +2016,9 @@ function ShipmentsPrintContent() {
                 onClick={() => {
                   void handleConfirmClear();
                 }}
-                disabled={!reasonText.trim() || !selectedResetShipment || unconfirmShipmentMutation.isPending}
+                disabled
               >
-                {unconfirmShipmentMutation.isPending ? "처리 중..." : "초기화"}
+                초기화(비활성)
               </Button>
             </div>
           </div>

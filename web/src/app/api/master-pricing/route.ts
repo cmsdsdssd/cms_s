@@ -9,7 +9,7 @@ function getSupabaseAdmin() {
 }
 
 const SELECT_COLUMNS =
-  "master_id, model_name, labor_base_sell, labor_base_cost, labor_center_sell, labor_center_cost, labor_sub1_sell, labor_sub1_cost, labor_sub2_sell, labor_sub2_cost, center_qty_default, sub1_qty_default, sub2_qty_default, plating_price_cost_default, plating_price_sell_default";
+  "master_id, model_name, weight_default_g, deduction_weight_default_g, labor_base_sell, labor_base_cost, labor_center_sell, labor_center_cost, labor_sub1_sell, labor_sub1_cost, labor_sub2_sell, labor_sub2_cost, center_qty_default, sub1_qty_default, sub2_qty_default, plating_price_cost_default, plating_price_sell_default";
 
 export async function GET(request: Request) {
   const supabase = getSupabaseAdmin();
@@ -66,29 +66,5 @@ export async function GET(request: Request) {
     return NextResponse.json({ data: byModelExact.data });
   }
 
-  const byModelInsensitive = await supabase
-    .from("cms_master_item")
-    .select(SELECT_COLUMNS)
-    .ilike("model_name", modelName)
-    .order("updated_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  if (byModelInsensitive.error) return NextResponse.json({ error: byModelInsensitive.error.message ?? "조회 실패" }, { status: 500 });
-  if (byModelInsensitive.data) {
-    logMasterPricing("model_insensitive", byModelInsensitive.data as Record<string, unknown>);
-    return NextResponse.json({ data: byModelInsensitive.data });
-  }
-
-  const byModelContains = await supabase
-    .from("cms_master_item")
-    .select(SELECT_COLUMNS)
-    .ilike("model_name", `%${modelName}%`)
-    .order("updated_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  if (byModelContains.error) return NextResponse.json({ error: byModelContains.error.message ?? "조회 실패" }, { status: 500 });
-
-  logMasterPricing("model_contains", (byModelContains.data ?? null) as Record<string, unknown> | null);
-
-  return NextResponse.json({ data: byModelContains.data ?? null });
+  return NextResponse.json({ data: null });
 }

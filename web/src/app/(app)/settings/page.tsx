@@ -48,12 +48,14 @@ type VendorFaxConfig = {
 type MaterialFactorConfigRow = {
   material_code: MaterialCode;
   purity_rate: number;
-  gold_adjust_factor: number;
+  material_adjust_factor: number;
+  price_basis: "GOLD" | "SILVER" | "NONE";
   updated_at?: string | null;
   note?: string | null;
 };
 
-const MATERIAL_FACTOR_CODES: MaterialCode[] = ["14", "18", "24", "925", "999"];
+const MATERIAL_FACTOR_CODES: MaterialCode[] = ["14", "18", "24", "925", "999", "00"];
+const PRICE_BASIS_OPTIONS: Array<"GOLD" | "SILVER" | "NONE"> = ["GOLD", "SILVER", "NONE"];
 
 const FAX_PROVIDERS = ['mock', 'twilio', 'sendpulse', 'custom', 'apiplex', 'uplus_print'] as const;
 type FaxProvider = typeof FAX_PROVIDERS[number];
@@ -196,7 +198,7 @@ export default function SettingsPage() {
   const [silverKrFactor, setSilverKrFactor] = useState<string | null>(null);
   const [ruleRoundingUnit, setRuleRoundingUnit] = useState<string | null>(null);
   const [materialFactorEdits, setMaterialFactorEdits] = useState<
-    Partial<Record<MaterialCode, { purity_rate: string; gold_adjust_factor: string }>>
+    Partial<Record<MaterialCode, { purity_rate: string; material_adjust_factor: string; price_basis: "GOLD" | "SILVER" | "NONE" }>>
   >({});
   const [isMarketAdvancedOpen, setIsMarketAdvancedOpen] = useState(false);
 
@@ -233,16 +235,18 @@ export default function SettingsPage() {
     queryKey: ["cms_material_factor_config"],
     queryFn: async (): Promise<MaterialFactorConfigRow[]> => {
       if (!sb) throw new Error("Supabase env is missing");
-      const { data, error } = await sb
-        .from("cms_material_factor_config")
-        .select("material_code, purity_rate, gold_adjust_factor, updated_at, note")
-        .order("material_code", { ascending: true });
+      const { data, error } = await sb.rpc(CONTRACTS.functions.materialFactorConfigList as never, {} as never);
       if (error) throw error;
-      const map = buildMaterialFactorMap((data ?? []) as MaterialFactorConfigRow[]);
+      const dataRows = (data ?? []) as MaterialFactorConfigRow[];
+      const map = buildMaterialFactorMap(dataRows);
       return MATERIAL_FACTOR_CODES.map((code) => ({
-        ...map[code],
-        updated_at: (data ?? []).find((row) => row.material_code === code)?.updated_at ?? null,
-        note: (data ?? []).find((row) => row.material_code === code)?.note ?? null,
+        material_code: code,
+        purity_rate: Number(map[code]?.purity_rate ?? 0),
+        material_adjust_factor: Number(map[code]?.material_adjust_factor ?? 1),
+        price_basis: (map[code]?.price_basis ??
+          (code === "00" ? "NONE" : code === "925" || code === "999" ? "SILVER" : "GOLD")) as "GOLD" | "SILVER" | "NONE",
+        updated_at: dataRows.find((row) => row.material_code === code)?.updated_at ?? null,
+        note: dataRows.find((row) => row.material_code === code)?.note ?? null,
       }));
     },
   });
@@ -257,33 +261,66 @@ export default function SettingsPage() {
   });
 
   const defaultFactorMap = buildMaterialFactorMap(null);
-  const factorRows = materialFactorsQuery.data ?? MATERIAL_FACTOR_CODES.map((code) => ({
+  const factorRows: MaterialFactorConfigRow[] = materialFactorsQuery.data ?? MATERIAL_FACTOR_CODES.map((code) => ({
     ...defaultFactorMap[code],
+    price_basis: (defaultFactorMap[code]?.price_basis ??
+      (code === "00" ? "NONE" : code === "925" || code === "999" ? "SILVER" : "GOLD")) as "GOLD" | "SILVER" | "NONE",
     updated_at: null,
     note: null,
   }));
+  const materialOrder = new Map(MATERIAL_FACTOR_CODES.map((code, index) => [code, index]));
+  const orderedFactorRows = [...factorRows].sort((a, b) => {
+    const aOrder = materialOrder.get(a.material_code) ?? Number.MAX_SAFE_INTEGER;
+    const bOrder = materialOrder.get(b.material_code) ?? Number.MAX_SAFE_INTEGER;
+    if (aOrder !== bOrder) return aOrder - bOrder;
+    return String(a.material_code).localeCompare(String(b.material_code));
+  });
+  const goldRows = orderedFactorRows.filter((row) => row.price_basis === "GOLD");
+  const silverRows = orderedFactorRows.filter((row) => row.price_basis === "SILVER");
+  const otherRows = orderedFactorRows.filter((row) => row.price_basis === "NONE");
   const getFactorInputValue = (
     code: MaterialCode,
-    field: "purity_rate" | "gold_adjust_factor",
+    field: "purity_rate" | "material_adjust_factor",
     fallback: number
   ) => {
     const edited = materialFactorEdits[code]?.[field];
     return edited ?? String(fallback);
   };
 
+  const getFactorBasisValue = (
+    code: MaterialCode,
+    fallback: "GOLD" | "SILVER" | "NONE"
+  ) => {
+    return materialFactorEdits[code]?.price_basis ?? fallback;
+  };
+
   const setFactorInputValue = (
     code: MaterialCode,
-    field: "purity_rate" | "gold_adjust_factor",
+    field: "purity_rate" | "material_adjust_factor",
     value: string
   ) => {
     setMaterialFactorEdits((prev) => ({
       ...prev,
       [code]: {
         purity_rate: prev[code]?.purity_rate ?? String(factorRows.find((row) => row.material_code === code)?.purity_rate ?? 0),
-        gold_adjust_factor:
-          prev[code]?.gold_adjust_factor ??
-          String(factorRows.find((row) => row.material_code === code)?.gold_adjust_factor ?? 1),
+        material_adjust_factor:
+          prev[code]?.material_adjust_factor ??
+          String(factorRows.find((row) => row.material_code === code)?.material_adjust_factor ?? 1),
+        price_basis: prev[code]?.price_basis ?? (factorRows.find((row) => row.material_code === code)?.price_basis ?? "NONE"),
         [field]: value,
+      },
+    }));
+  };
+
+  const setFactorBasisValue = (code: MaterialCode, value: "GOLD" | "SILVER" | "NONE") => {
+    setMaterialFactorEdits((prev) => ({
+      ...prev,
+      [code]: {
+        purity_rate: prev[code]?.purity_rate ?? String(factorRows.find((row) => row.material_code === code)?.purity_rate ?? 0),
+        material_adjust_factor:
+          prev[code]?.material_adjust_factor ??
+          String(factorRows.find((row) => row.material_code === code)?.material_adjust_factor ?? 1),
+        price_basis: value,
       },
     }));
   };
@@ -327,13 +364,15 @@ export default function SettingsPage() {
   const onSaveMaterialFactors = async () => {
     const rows = factorRows.map((row) => {
       const purity = Number(getFactorInputValue(row.material_code, "purity_rate", row.purity_rate));
-      const goldAdjust = Number(
-        getFactorInputValue(row.material_code, "gold_adjust_factor", row.gold_adjust_factor)
+      const adjust = Number(
+        getFactorInputValue(row.material_code, "material_adjust_factor", row.material_adjust_factor)
       );
+      const priceBasis = getFactorBasisValue(row.material_code, row.price_basis);
       return {
         material_code: row.material_code,
         purity_rate: purity,
-        gold_adjust_factor: goldAdjust,
+        material_adjust_factor: adjust,
+        price_basis: priceBasis,
       };
     });
 
@@ -342,8 +381,12 @@ export default function SettingsPage() {
         toast.error(`${row.material_code}: 함량은 0~1 범위여야 합니다.`);
         return;
       }
-      if (!Number.isFinite(row.gold_adjust_factor) || row.gold_adjust_factor < 0.5 || row.gold_adjust_factor > 2) {
-        toast.error(`${row.material_code}: 금 보정계수는 0.5~2.0 범위여야 합니다.`);
+      if (!Number.isFinite(row.material_adjust_factor) || row.material_adjust_factor < 0.5 || row.material_adjust_factor > 2) {
+        toast.error(`${row.material_code}: 소재 보정계수는 0.5~2.0 범위여야 합니다.`);
+        return;
+      }
+      if (!PRICE_BASIS_OPTIONS.includes(row.price_basis)) {
+        toast.error(`${row.material_code}: 가격 기준이 올바르지 않습니다.`);
         return;
       }
     }
@@ -1931,68 +1974,177 @@ export default function SettingsPage() {
                 <div>
                   <div className="text-sm font-semibold">소재 함량/보정계수</div>
                   <div className="text-xs text-[var(--muted)]">
-                    소재 SoT: purity x adjust. 은 보정계수는 Market Tick Config(한국 실버 해리)를 따릅니다.
+                    소재 SoT: purity x material-adjust. 각 소재별로 독립 설정됩니다.
                   </div>
                 </div>
 
-                <div className="overflow-x-auto">
-                  <table className="min-w-[760px] w-full text-xs">
-                    <thead className="text-[var(--muted)]">
-                      <tr>
-                        <th className="text-left py-1">Material</th>
-                        <th className="text-left py-1">Purity</th>
-                        <th className="text-left py-1">Gold Adjust</th>
-                        <th className="text-left py-1">Silver Adjust</th>
-                        <th className="text-left py-1">Effective Preview</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {factorRows.map((row) => {
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                  <div className="rounded-md border border-[var(--panel-border)] bg-[var(--surface)] p-3 space-y-2">
+                    <div className="text-xs font-semibold">금 소재</div>
+                    <div className="grid grid-cols-5 gap-2 text-[11px] text-[var(--muted)]">
+                      <div>소재</div>
+                      <div>함량</div>
+                      <div>소재 보정계수</div>
+                      <div>가격 기준</div>
+                      <div>적용계수 미리보기</div>
+                    </div>
+                    {goldRows.map((row) => {
+                      const purityValue = getFactorInputValue(row.material_code, "purity_rate", row.purity_rate);
+                      const adjustValue = getFactorInputValue(
+                        row.material_code,
+                        "material_adjust_factor",
+                        row.material_adjust_factor
+                      );
+                      const priceBasisValue = getFactorBasisValue(row.material_code, row.price_basis);
+                      const purity = Number(purityValue);
+                      const adjust = Number(adjustValue || "1");
+                      const effective = purity * adjust;
+                      return (
+                        <div key={row.material_code} className="grid grid-cols-5 gap-2 items-center">
+                          <div className="text-xs font-medium">{row.material_code}</div>
+                          <Input
+                            value={purityValue}
+                            onChange={(event) => setFactorInputValue(row.material_code, "purity_rate", event.target.value)}
+                            className="h-8"
+                          />
+                          <Input
+                            value={adjustValue}
+                            onChange={(event) =>
+                              setFactorInputValue(row.material_code, "material_adjust_factor", event.target.value)
+                            }
+                            className="h-8"
+                          />
+                          <Select
+                            value={priceBasisValue}
+                            onChange={(event) =>
+                              setFactorBasisValue(
+                                row.material_code,
+                                event.target.value as "GOLD" | "SILVER" | "NONE"
+                              )
+                            }
+                            className="h-8"
+                          >
+                            <option value="GOLD">GOLD</option>
+                            <option value="SILVER">SILVER</option>
+                            <option value="NONE">NONE</option>
+                          </Select>
+                          <div className="text-xs tabular-nums">{Number.isFinite(effective) ? effective.toFixed(6) : "0.000000"}</div>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  <div className="rounded-md border border-[var(--panel-border)] bg-[var(--surface)] p-3 space-y-2">
+                    <div className="text-xs font-semibold">은 소재</div>
+                    <div className="grid grid-cols-5 gap-2 text-[11px] text-[var(--muted)]">
+                      <div>소재</div>
+                      <div>함량</div>
+                      <div>소재 보정계수</div>
+                      <div>가격 기준</div>
+                      <div>적용계수 미리보기</div>
+                    </div>
+                    {silverRows.map((row) => {
+                      const purityValue = getFactorInputValue(row.material_code, "purity_rate", row.purity_rate);
+                      const adjustValue = getFactorInputValue(
+                        row.material_code,
+                        "material_adjust_factor",
+                        row.material_adjust_factor
+                      );
+                      const priceBasisValue = getFactorBasisValue(row.material_code, row.price_basis);
+                      const purity = Number(purityValue);
+                      const adjust = Number(adjustValue || "1");
+                      const effective = purity * adjust;
+                      return (
+                        <div key={row.material_code} className="grid grid-cols-5 gap-2 items-center">
+                          <div className="text-xs font-medium">{row.material_code}</div>
+                          <Input
+                            value={purityValue}
+                            onChange={(event) => setFactorInputValue(row.material_code, "purity_rate", event.target.value)}
+                            className="h-8"
+                          />
+                          <Input
+                            value={adjustValue}
+                            onChange={(event) =>
+                              setFactorInputValue(row.material_code, "material_adjust_factor", event.target.value)
+                            }
+                            className="h-8"
+                          />
+                          <Select
+                            value={priceBasisValue}
+                            onChange={(event) =>
+                              setFactorBasisValue(
+                                row.material_code,
+                                event.target.value as "GOLD" | "SILVER" | "NONE"
+                              )
+                            }
+                            className="h-8"
+                          >
+                            <option value="GOLD">GOLD</option>
+                            <option value="SILVER">SILVER</option>
+                            <option value="NONE">NONE</option>
+                          </Select>
+                          <div className="text-xs tabular-nums">{Number.isFinite(effective) ? effective.toFixed(6) : "0.000000"}</div>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {otherRows.length > 0 ? (
+                    <div className="rounded-md border border-[var(--panel-border)] bg-[var(--surface)] p-3 space-y-2">
+                      <div className="text-xs font-semibold">기타/비정산 소재</div>
+                      <div className="grid grid-cols-5 gap-2 text-[11px] text-[var(--muted)]">
+                        <div>소재</div>
+                        <div>함량</div>
+                        <div>소재 보정계수</div>
+                        <div>가격 기준</div>
+                        <div>적용계수 미리보기</div>
+                      </div>
+                      {otherRows.map((row) => {
                         const purityValue = getFactorInputValue(row.material_code, "purity_rate", row.purity_rate);
-                        const goldAdjustValue = getFactorInputValue(
+                        const adjustValue = getFactorInputValue(
                           row.material_code,
-                          "gold_adjust_factor",
-                          row.gold_adjust_factor
+                          "material_adjust_factor",
+                          row.material_adjust_factor
                         );
+                        const priceBasisValue = getFactorBasisValue(row.material_code, row.price_basis);
                         const purity = Number(purityValue);
-                        const goldAdjust = Number(goldAdjustValue);
-                        const isSilver = row.material_code === "925" || row.material_code === "999";
-                        const effective = isSilver
-                          ? purity * Number(displaySilverKrFactor || "1")
-                          : purity * goldAdjust;
+                        const adjust = Number(adjustValue || "1");
+                        const effective = purity * adjust;
                         return (
-                          <tr key={row.material_code} className="border-t border-[var(--panel-border)]">
-                            <td className="py-1">{row.material_code}</td>
-                            <td className="py-1">
-                              <Input
-                                value={purityValue}
-                                onChange={(event) =>
-                                  setFactorInputValue(row.material_code, "purity_rate", event.target.value)
-                                }
-                                className="h-7"
-                              />
-                            </td>
-                            <td className="py-1">
-                              <Input
-                                value={goldAdjustValue}
-                                disabled={isSilver}
-                                onChange={(event) =>
-                                  setFactorInputValue(
-                                    row.material_code,
-                                    "gold_adjust_factor",
-                                    event.target.value
-                                  )
-                                }
-                                className="h-7"
-                              />
-                            </td>
-                            <td className="py-1 tabular-nums">{isSilver ? displaySilverKrFactor : "1.0"}</td>
-                            <td className="py-1 tabular-nums">{Number.isFinite(effective) ? effective.toFixed(6) : "0.000000"}</td>
-                          </tr>
+                          <div key={row.material_code} className="grid grid-cols-5 gap-2 items-center">
+                            <div className="text-xs font-medium">{row.material_code}</div>
+                            <Input
+                              value={purityValue}
+                              onChange={(event) => setFactorInputValue(row.material_code, "purity_rate", event.target.value)}
+                              className="h-8"
+                            />
+                            <Input
+                              value={adjustValue}
+                              onChange={(event) =>
+                                setFactorInputValue(row.material_code, "material_adjust_factor", event.target.value)
+                              }
+                              className="h-8"
+                            />
+                            <Select
+                              value={priceBasisValue}
+                              onChange={(event) =>
+                                setFactorBasisValue(
+                                  row.material_code,
+                                  event.target.value as "GOLD" | "SILVER" | "NONE"
+                                )
+                              }
+                              className="h-8"
+                            >
+                              <option value="GOLD">GOLD</option>
+                              <option value="SILVER">SILVER</option>
+                              <option value="NONE">NONE</option>
+                            </Select>
+                            <div className="text-xs tabular-nums">{Number.isFinite(effective) ? effective.toFixed(6) : "0.000000"}</div>
+                          </div>
                         );
                       })}
-                    </tbody>
-                  </table>
+                    </div>
+                  ) : null}
                 </div>
 
                 <div className="flex items-center gap-2">

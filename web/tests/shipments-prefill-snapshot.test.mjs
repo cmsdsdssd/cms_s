@@ -143,6 +143,8 @@ test("materializeSnapshotPolicyItems injects only plating policy row", () => {
   });
 
   assert.equal(seeded.some((item) => String(item.type).toUpperCase() === "PLATING_MASTER"), true);
+  const plating = seeded.find((item) => String(item.type).toUpperCase() === "PLATING_MASTER");
+  assert.equal(String(plating?.amount ?? ""), "1200");
   assert.equal(seeded.some((item) => String(item.type).toUpperCase() === "OTHER_ABSORB:POLICY_ETC"), false);
   assert.equal(seeded.some((item) => String(item.type).toUpperCase() === "OTHER_ABSORB:POLICY_DECOR"), false);
   assert.equal(seeded.some((item) => String(item.type).toUpperCase() === "OTHER_ABSORB:POLICY_OTHER"), false);
