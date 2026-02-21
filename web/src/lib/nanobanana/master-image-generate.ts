@@ -1,4 +1,6 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import { createHash } from "node:crypto";
+import sharp from "sharp";
 import { buildNanobananaPrompt } from "@/lib/nanobanana/prompt-builder";
 import { generateNanobananaImage } from "@/lib/nanobanana/gemini-client";
 import { addModelNameOverlay } from "@/lib/nanobanana/overlay";
@@ -30,6 +32,9 @@ export type MasterImagePreviewResult = {
   generatedMimeType: string;
   promptHash: string;
   promptText: string;
+  modelUsed: string;
+  inputImageSha256: string;
+  outputImageSha256: string;
 };
 
 export type ApplyGeneratedMasterImageInput = {
@@ -54,7 +59,18 @@ type MasterSourceImage = {
   defaultDisplayName: string;
 };
 
-function getSupabaseAdmin(): SupabaseClient<unknown> {
+function toOverlayModelName(value: string) {
+  const raw = value.trim();
+  if (!raw) return raw;
+  const firstDash = raw.indexOf("-");
+  if (firstDash < 0) return raw;
+  const head = raw.slice(0, firstDash).trim();
+  if (!/^[A-Za-z]{1,6}$/.test(head)) return raw;
+  const stripped = raw.slice(firstDash + 1).trim();
+  return stripped || raw;
+}
+
+function getSupabaseAdmin(): SupabaseClient {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY ?? "";
   if (!url || !key) {
@@ -72,8 +88,40 @@ function getLegacyBucketName() {
 }
 
 function normalizePath(path: string, bucket: string) {
+  if (/^https?:\/\//i.test(path)) {
+    try {
+      const url = new URL(path);
+      const marker = `/storage/v1/object/public/${bucket}/`;
+      const idx = url.pathname.indexOf(marker);
+      if (idx >= 0) {
+        return decodeURIComponent(url.pathname.slice(idx + marker.length));
+      }
+    } catch {
+      // ignore URL parse errors and fall through
+    }
+  }
   if (path.startsWith(`${bucket}/`)) return path.slice(bucket.length + 1);
   return path;
+}
+
+async function prepareModelInputImage(bytes: Uint8Array, mimeType: string) {
+  try {
+    const normalized = await sharp(Buffer.from(bytes))
+      .rotate()
+      .png({ compressionLevel: 9 })
+      .toBuffer();
+    return {
+      imageBytes: new Uint8Array(normalized),
+      imageMimeType: "image/png",
+      originalMimeType: mimeType,
+    };
+  } catch {
+    return {
+      imageBytes: bytes,
+      imageMimeType: mimeType,
+      originalMimeType: mimeType,
+    };
+  }
 }
 
 function extensionFromMimeType(mimeType: string) {
@@ -109,8 +157,12 @@ function encodeBytesToBase64(bytes: Uint8Array) {
   return Buffer.from(bytes).toString("base64");
 }
 
+function sha256OfBytes(bytes: Uint8Array) {
+  return createHash("sha256").update(Buffer.from(bytes)).digest("hex");
+}
+
 async function archiveOriginalImage(
-  supabase: SupabaseClient<unknown>,
+  supabase: SupabaseClient,
   bucket: string,
   legacyBucket: string,
   masterId: string,
@@ -144,7 +196,7 @@ async function archiveOriginalImage(
 }
 
 async function readMasterSourceImage(
-  supabase: SupabaseClient<unknown>,
+  supabase: SupabaseClient,
   bucket: string,
   masterId: string
 ) {
@@ -164,7 +216,7 @@ async function readMasterSourceImage(
 
   const { data: sourceBlob, error: downloadError } = await supabase.storage.from(bucket).download(sourcePath);
   if (downloadError || !sourceBlob) throw new Error(downloadError?.message ?? "원본 이미지 다운로드 실패");
-  const defaultDisplayName = String(row.model_name ?? "").trim() || "product";
+  const defaultDisplayName = toOverlayModelName(String(row.model_name ?? "").trim() || "product");
   return {
     sourcePath,
     sourceBlob,
@@ -181,6 +233,7 @@ export async function generateMasterImagePreviewWithNanobanana(
   const source = await readMasterSourceImage(supabase, bucket, input.masterId);
 
   const imageBytes = new Uint8Array(await source.sourceBlob.arrayBuffer());
+  const prepared = await prepareModelInputImage(imageBytes, source.sourceMimeType);
   const promptResult = buildNanobananaPrompt({
     productPose: input.productPose,
     backgroundStyle: input.backgroundStyle,
@@ -190,8 +243,8 @@ export async function generateMasterImagePreviewWithNanobanana(
   let generated;
   try {
     generated = await generateNanobananaImage({
-      imageBytes,
-      imageMimeType: source.sourceMimeType,
+      imageBytes: prepared.imageBytes,
+      imageMimeType: prepared.imageMimeType,
       prompt: promptResult.prompt,
       timeoutMs: 120_000,
     });
@@ -201,7 +254,7 @@ export async function generateMasterImagePreviewWithNanobanana(
   }
 
   const overlayEnabled = input.showModelNameOverlay ?? true;
-  const displayName = String(input.displayName ?? "").trim() || source.defaultDisplayName || "product";
+  const displayName = toOverlayModelName(String(input.displayName ?? "").trim() || source.defaultDisplayName || "product");
   const textColor = String(input.textColor ?? "black").trim() || "black";
   const overlayedBytes = overlayEnabled
     ? await addModelNameOverlay({
@@ -219,6 +272,9 @@ export async function generateMasterImagePreviewWithNanobanana(
     generatedMimeType: "image/png",
     promptHash: promptResult.promptHash,
     promptText: promptResult.prompt,
+    modelUsed: generated.modelUsed,
+    inputImageSha256: sha256OfBytes(prepared.imageBytes),
+    outputImageSha256: sha256OfBytes(overlayedBytes),
   };
 }
 

@@ -3,6 +3,7 @@
 import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
+import { toast } from "sonner";
 import { ActionBar } from "@/components/layout/action-bar";
 import {
   ReceiptPrintHalf,
@@ -839,14 +840,14 @@ function ShipmentsPrintContent() {
     queryFn: async () => {
       if (printMode !== "evidence" || !activePartyId) {
         return {
-          payments: [] as Array<{ occurred_at: string; amount_krw: number; payment_id?: string | null; memo?: string | null; cash_krw?: number | null; alloc_gold_g?: number | null; alloc_silver_g?: number | null; paid_gold_krw?: number | null; paid_silver_krw?: number | null }>,
+          payments: [] as Array<{ occurred_at: string; amount_krw: number; payment_id?: string | null; memo?: string | null; cash_krw?: number | null; paid_gold_g?: number | null; paid_silver_g?: number | null; alloc_gold_g?: number | null; alloc_silver_g?: number | null; alloc_labor_krw?: number | null; alloc_material_krw?: number | null; alloc_material_gold_krw?: number | null; alloc_material_silver_krw?: number | null; paid_gold_krw?: number | null; paid_silver_krw?: number | null }>,
           writeoffs: [] as Array<{ occurred_at: string; amount_krw: number; memo?: string | null }>,
         };
       }
       const supabase = getSupabaseClient();
       if (!supabase) {
         return {
-          payments: [] as Array<{ occurred_at: string; amount_krw: number; payment_id?: string | null; memo?: string | null; cash_krw?: number | null; alloc_gold_g?: number | null; alloc_silver_g?: number | null; paid_gold_krw?: number | null; paid_silver_krw?: number | null }>,
+          payments: [] as Array<{ occurred_at: string; amount_krw: number; payment_id?: string | null; memo?: string | null; cash_krw?: number | null; paid_gold_g?: number | null; paid_silver_g?: number | null; alloc_gold_g?: number | null; alloc_silver_g?: number | null; alloc_labor_krw?: number | null; alloc_material_krw?: number | null; alloc_material_gold_krw?: number | null; alloc_material_silver_krw?: number | null; paid_gold_krw?: number | null; paid_silver_krw?: number | null }>,
           writeoffs: [] as Array<{ occurred_at: string; amount_krw: number; memo?: string | null }>,
         };
       }
@@ -859,7 +860,7 @@ function ShipmentsPrintContent() {
         .limit(500);
       if (error) {
         return {
-          payments: [] as Array<{ occurred_at: string; amount_krw: number; payment_id?: string | null; memo?: string | null; cash_krw?: number | null; alloc_gold_g?: number | null; alloc_silver_g?: number | null; paid_gold_krw?: number | null; paid_silver_krw?: number | null }>,
+          payments: [] as Array<{ occurred_at: string; amount_krw: number; payment_id?: string | null; memo?: string | null; cash_krw?: number | null; paid_gold_g?: number | null; paid_silver_g?: number | null; alloc_gold_g?: number | null; alloc_silver_g?: number | null; alloc_labor_krw?: number | null; alloc_material_krw?: number | null; alloc_material_gold_krw?: number | null; alloc_material_silver_krw?: number | null; paid_gold_krw?: number | null; paid_silver_krw?: number | null }>,
           writeoffs: [] as Array<{ occurred_at: string; amount_krw: number; memo?: string | null }>,
         };
       }

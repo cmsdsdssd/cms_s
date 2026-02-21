@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { Suspense, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { toast } from "sonner";
 
@@ -9,7 +9,7 @@ import { Card, CardBody, CardHeader } from "@/components/ui/card";
 import { Input } from "@/components/ui/field";
 import { createSupabaseBrowserClient } from "@/lib/supabase/ssr";
 
-export default function LoginPage() {
+function LoginPageContent() {
     const sp = useSearchParams();
     const next = sp.get("next") || "/dashboard";
 
@@ -70,4 +70,12 @@ export default function LoginPage() {
             </Card>
         </div>
     );
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense fallback={<div className="min-h-[100vh] grid place-items-center p-6 text-sm text-[var(--muted)]">로딩 중...</div>}>
+      <LoginPageContent />
+    </Suspense>
+  );
 }

@@ -1,12 +1,14 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { cn } from "@/lib/utils";
 
 type SheetProps = {
   open: boolean;
-  onClose: () => void;
+  onClose?: () => void;
+  onOpenChange?: (open: boolean) => void;
   title?: string;
+  description?: string;
   children: React.ReactNode;
   className?: string;
   side?: "right" | "left";
@@ -15,14 +17,31 @@ type SheetProps = {
 const FOCUSABLE_SELECTOR =
   "button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])";
 
-export function Sheet({ open, onClose, title, children, className, side = "right" }: SheetProps) {
+export function Sheet({
+  open,
+  onClose,
+  onOpenChange,
+  title,
+  description,
+  children,
+  className,
+  side = "right",
+}: SheetProps) {
   const panelRef = useRef<HTMLDivElement | null>(null);
   const prevFocusedRef = useRef<HTMLElement | null>(null);
-  const onCloseRef = useRef(onClose);
+  const onCloseRef = useRef<() => void>(() => {});
+
+  const handleClose = useCallback(() => {
+    if (onOpenChange) {
+      onOpenChange(false);
+      return;
+    }
+    onClose?.();
+  }, [onClose, onOpenChange]);
 
   useEffect(() => {
-    onCloseRef.current = onClose;
-  }, [onClose]);
+    onCloseRef.current = handleClose;
+  }, [handleClose]);
 
   useEffect(() => {
     if (!open) return;
@@ -62,13 +81,14 @@ export function Sheet({ open, onClose, title, children, className, side = "right
           "absolute inset-0 bg-[var(--overlay)] transition-opacity",
           "duration-[var(--duration-normal)] ease-[var(--ease-out)] opacity-100"
         )}
-        onClick={onClose}
+        onClick={handleClose}
       />
       <div
         ref={panelRef}
         role="dialog"
         aria-modal="true"
         aria-label={title ?? "Sheet"}
+        aria-description={description}
         className={cn(
           side === "left"
             ? "absolute left-0 top-0 h-full w-[95vw] border-r border-[var(--panel-border)] bg-[var(--panel)] shadow-[var(--shadow)]"

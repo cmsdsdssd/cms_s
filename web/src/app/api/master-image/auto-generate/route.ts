@@ -64,6 +64,9 @@ export async function POST(request: Request) {
         prompt_hash: preview.promptHash,
         debug_prompt: preview.promptText,
         debug_prompt_hash: preview.promptHash,
+        debug_model: preview.modelUsed,
+        debug_input_sha256: preview.inputImageSha256,
+        debug_output_sha256: preview.outputImageSha256,
       });
     }
 

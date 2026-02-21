@@ -68,8 +68,10 @@ export function buildPromptText(input: PromptInput) {
     "You are NANOBANANA PRO for jewelry image-to-image retouch.",
     "CRITICAL: Zero deformation. Keep exact jewelry identity and topology from input image.",
     "Allowed: camera angle/layout reposition only. Forbidden: redesign, added/removed stones, geometry changes.",
+    "MANDATORY EDIT: Apply requested composition and requested background in this generation. Do not keep original background if it conflicts.",
     posePrompt,
     backgroundPrompt.sentence,
+    `MANDATORY BACKGROUND TARGET: final background must be visually close to ${backgroundPrompt.hex} in uniform studio tone.`,
     "LIGHTING: Soft warm studio light, clean specular control, premium e-commerce look.",
     "OUTPUT: 1:1 square composition, product fully in frame, centered around 75% frame occupancy.",
     "QUALITY CHECK: no hallucination, no missing parts, no melted metal, no text/watermark/hands/props.",
@@ -79,7 +81,7 @@ export function buildPromptText(input: PromptInput) {
     promptLines.push(`STRICT REQUIREMENT: ${customPrompt}`);
   }
 
-  promptLines.push("If any instruction conflicts, prioritize: ZERO DEFORMATION > PRODUCT IDENTITY > requested style.");
+  promptLines.push("If any instruction conflicts, prioritize: ZERO DEFORMATION > PRODUCT IDENTITY > MANDATORY BACKGROUND TARGET > requested style.");
 
   return {
     prompt: promptLines.join("\n"),

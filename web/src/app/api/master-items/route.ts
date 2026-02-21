@@ -22,14 +22,21 @@ function normalizeImagePath(path: string, bucket: string) {
 
 function buildImageUrl(supabase: SupabaseClient<unknown>, path: string | null) {
   if (!path) return null;
-  if (path.startsWith("http://") || path.startsWith("https://")) return path;
+  const versionSuffix = `v=${Date.now()}`;
+  const appendVersion = (urlValue: string) => {
+    if (!urlValue) return urlValue;
+    return `${urlValue}${urlValue.includes("?") ? "&" : "?"}${versionSuffix}`;
+  };
+
+  if (path.startsWith("http://") || path.startsWith("https://")) return appendVersion(path);
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
   const bucket = process.env.SUPABASE_BUCKET ?? "master_images";
   if (!url) return null;
   const normalized = normalizeImagePath(path, bucket);
 
   const { data } = supabase.storage.from(bucket).getPublicUrl(normalized);
-  return data?.publicUrl ?? `${url}/storage/v1/object/public/${bucket}/${normalized}`;
+  const base = data?.publicUrl ?? `${url}/storage/v1/object/public/${bucket}/${normalized}`;
+  return appendVersion(base);
 }
 
 

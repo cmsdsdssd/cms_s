@@ -1464,7 +1464,10 @@ const extractEtcLaborAmount = (value: unknown): number => {
   const handleExtraLaborCostChange = (id: string, value: string) => {
     const target = extraLaborItems.find((item) => item.id === id);
     if (target && isLockedExtraLaborItem(target)) return;
-    const isManualAdjustment = Boolean(target) && target.type === EXTRA_TYPE_ADJUSTMENT && !isAutoRemainderAdjustmentItem(target);
+    const isManualAdjustment =
+      target !== undefined &&
+      target.type === EXTRA_TYPE_ADJUSTMENT &&
+      !isAutoRemainderAdjustmentItem(target);
     if (isManualAdjustment) {
       const parsedCost = parseSignedNumberInputMaybe(value);
       if (parsedCost === null) {
@@ -1512,7 +1515,10 @@ const extractEtcLaborAmount = (value: unknown): number => {
   const handleExtraLaborMarginChange = (id: string, value: string) => {
     const target = extraLaborItems.find((item) => item.id === id);
     if (target && isLockedExtraLaborItem(target)) return;
-    const isManualAdjustment = Boolean(target) && target.type === EXTRA_TYPE_ADJUSTMENT && !isAutoRemainderAdjustmentItem(target);
+    const isManualAdjustment =
+      target !== undefined &&
+      target.type === EXTRA_TYPE_ADJUSTMENT &&
+      !isAutoRemainderAdjustmentItem(target);
     if (isManualAdjustment) {
       const parsedMargin = parseSignedNumberInputMaybe(value);
       if (parsedMargin === null) {

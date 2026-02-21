@@ -9,11 +9,23 @@ type GeminiGenerateResult = {
   imageBytes: Uint8Array;
   mimeType: string;
   statusCode: number;
+  modelUsed: string;
 };
 
 const DEFAULT_TIMEOUT_MS = 120_000;
 const DEFAULT_BASE_URL = "https://generativelanguage.googleapis.com";
 const DEFAULT_MODEL = "gemini-2.5-flash-image";
+
+function getModelCandidates() {
+  const configured = (process.env.NANOBANANA_MODEL ?? "").trim();
+  if (configured) {
+    return configured
+      .split(",")
+      .map((v) => v.trim())
+      .filter(Boolean);
+  }
+  return ["nano-banana-pro-preview", "nanobanana-pro", "nano-banana-pro", "gemini-3-pro-image-preview", DEFAULT_MODEL];
+}
 
 function toBase64(bytes: Uint8Array) {
   return Buffer.from(bytes).toString("base64");
@@ -54,62 +66,76 @@ export async function generateNanobananaImage(input: GeminiGenerateInput): Promi
   }
 
   const baseUrl = getBaseUrl();
-  const model = (process.env.NANOBANANA_MODEL ?? DEFAULT_MODEL).trim() || DEFAULT_MODEL;
   const timeoutMs = input.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  const endpoint = `${baseUrl}/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`;
+  const modelCandidates = getModelCandidates();
 
   const payload = {
     contents: [
       {
         parts: [
-          { text: input.prompt },
           {
             inline_data: {
               mime_type: input.imageMimeType,
               data: toBase64(input.imageBytes),
             },
           },
+          { text: input.prompt },
         ],
       },
     ],
+    generationConfig: {
+      responseModalities: ["IMAGE"],
+    },
   };
 
   let lastStatus = 500;
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-    try {
-      const response = await fetch(endpoint, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-        signal: controller.signal,
-      });
-      lastStatus = response.status;
-      const json = (await response.json().catch(() => ({}))) as unknown;
-      if (!response.ok) {
-        if (response.status >= 500 && attempt < 2) continue;
-        const errorText = JSON.stringify(json).slice(0, 400);
-        throw new Error(`NANOBANANA_UPSTREAM_ERROR:${response.status}:${errorText}`);
-      }
-      const parsed = parseImagePart(json);
-      if (!parsed) throw new Error("NANOBANANA_UPSTREAM_ERROR:invalid_image_payload");
-      return {
-        imageBytes: parsed.bytes,
-        mimeType: parsed.mimeType,
-        statusCode: response.status,
-      };
-    } catch (error) {
-      if (error instanceof DOMException && error.name === "AbortError") {
+  let lastErrorText = "";
+
+  for (const model of modelCandidates) {
+    const endpoint = `${baseUrl}/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        const response = await fetch(endpoint, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+          signal: controller.signal,
+        });
+        lastStatus = response.status;
+        const json = (await response.json().catch(() => ({}))) as unknown;
+        if (!response.ok) {
+          const errorText = JSON.stringify(json).slice(0, 400);
+          lastErrorText = errorText;
+          const lower = errorText.toLowerCase();
+          const modelMissing = response.status === 404 || lower.includes("model") && (lower.includes("not found") || lower.includes("unsupported"));
+          if (modelMissing) {
+            break;
+          }
+          if (response.status >= 500 && attempt < 2) continue;
+          throw new Error(`NANOBANANA_UPSTREAM_ERROR:${response.status}:${errorText}`);
+        }
+        const parsed = parseImagePart(json);
+        if (!parsed) throw new Error("NANOBANANA_UPSTREAM_ERROR:invalid_image_payload");
+        return {
+          imageBytes: parsed.bytes,
+          mimeType: parsed.mimeType,
+          statusCode: response.status,
+          modelUsed: model,
+        };
+      } catch (error) {
+        if (error instanceof DOMException && error.name === "AbortError") {
+          if (attempt < 2) continue;
+          throw new Error("NANOBANANA_TIMEOUT");
+        }
         if (attempt < 2) continue;
-        throw new Error("NANOBANANA_TIMEOUT");
+        throw error;
+      } finally {
+        clearTimeout(timer);
       }
-      if (attempt < 2) continue;
-      throw error;
-    } finally {
-      clearTimeout(timer);
     }
   }
 
-  throw new Error(`NANOBANANA_UPSTREAM_ERROR:${lastStatus}`);
+  throw new Error(`NANOBANANA_UPSTREAM_ERROR:${lastStatus}:${lastErrorText}`);
 }

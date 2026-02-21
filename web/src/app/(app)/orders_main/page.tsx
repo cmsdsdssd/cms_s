@@ -125,6 +125,7 @@ type FactoryOrderLine = Omit<OrderRow, "customer_mask_code"> & {
   customer_mask_code?: string;
   vendor_guess_id: string;
   vendor_guess: string;
+  matched_master_id?: string | null;
 };
 
 type PartyRow = {
@@ -240,6 +241,14 @@ const upsertOrderMemoViaApi = async (
     sub1_stone_qty?: number;
     sub2_stone_name?: string;
     sub2_stone_qty?: number;
+    selected_base_weight_g?: number;
+    selected_deduction_weight_g?: number;
+    selected_net_weight_g?: number;
+    selected_labor_base_sell_krw?: number;
+    selected_labor_other_sell_krw?: number;
+    selected_inventory_move_line_id?: string;
+    selected_inventory_location_code?: string;
+    selected_inventory_bin_code?: string;
   }
 ) => {
   const response = await fetch("/api/order-line-memo", {

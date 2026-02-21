@@ -703,6 +703,17 @@ function supportsChinaCostPanel(materialCode: string) {
   return true;
 }
 
+function toOverlayModelName(value: string) {
+  const raw = value.trim();
+  if (!raw) return raw;
+  const firstDash = raw.indexOf("-");
+  if (firstDash < 0) return raw;
+  const head = raw.slice(0, firstDash).trim();
+  if (!/^[A-Za-z]{1,6}$/.test(head)) return raw;
+  const stripped = raw.slice(firstDash + 1).trim();
+  return stripped || raw;
+}
+
 function createDefaultNanobananaSetting(displayName: string): NanobananaSetting {
   return {
     productPose: 0,
@@ -710,7 +721,7 @@ function createDefaultNanobananaSetting(displayName: string): NanobananaSetting 
     customPrompt: "",
     showModelNameOverlay: true,
     textColor: "black",
-    displayName,
+    displayName: toOverlayModelName(displayName),
   };
 }
 
@@ -730,13 +741,19 @@ export default function CatalogPage() {
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectedMasterIds, setSelectedMasterIds] = useState<Set<string>>(new Set());
   const [batchGenerateOpen, setBatchGenerateOpen] = useState(false);
-  const [batchSlideIndex, setBatchSlideIndex] = useState(0);
+  const [batchGenerateSelectedIds, setBatchGenerateSelectedIds] = useState<Set<string>>(new Set());
+  const [batchApplySelectedIds, setBatchApplySelectedIds] = useState<Set<string>>(new Set());
+  const [batchPreviewById, setBatchPreviewById] = useState<Record<string, GeneratedPreviewPayload>>({});
   const [batchSettingsById, setBatchSettingsById] = useState<Record<string, NanobananaSetting>>({});
   const [isBatchGenerating, setIsBatchGenerating] = useState(false);
+  const [isBatchApplying, setIsBatchApplying] = useState(false);
   const [isSingleGenerating, setIsSingleGenerating] = useState(false);
   const [singleGenerateDrawerOpen, setSingleGenerateDrawerOpen] = useState(false);
   const [singleGenerateDebugPrompt, setSingleGenerateDebugPrompt] = useState("");
   const [singleGenerateDebugHash, setSingleGenerateDebugHash] = useState("");
+  const [singleGenerateDebugModel, setSingleGenerateDebugModel] = useState("");
+  const [singleGenerateInputSha, setSingleGenerateInputSha] = useState("");
+  const [singleGenerateOutputSha, setSingleGenerateOutputSha] = useState("");
   const [isApplyingGeneratedPreview, setIsApplyingGeneratedPreview] = useState(false);
   const [batchResultById, setBatchResultById] = useState<Record<string, BatchGenerateResultRow>>({});
   const [generatedPreview, setGeneratedPreview] = useState<GeneratedPreviewPayload | null>(null);
@@ -1192,7 +1209,6 @@ export default function CatalogPage() {
     [selectedMasterIds, sortedCatalogItems]
   );
 
-  const selectedBatchItem = selectedBatchItems[batchSlideIndex] ?? null;
 
   const upsertBatchSetting = useCallback((masterId: string, updater: (prev: NanobananaSetting) => NanobananaSetting) => {
     setBatchSettingsById((prev) => {
@@ -1244,11 +1260,6 @@ export default function CatalogPage() {
   useEffect(() => {
     if (page > totalPages) setPage(totalPages);
   }, [page, totalPages]);
-
-  useEffect(() => {
-    if (batchSlideIndex < selectedBatchItems.length) return;
-    setBatchSlideIndex(Math.max(selectedBatchItems.length - 1, 0));
-  }, [batchSlideIndex, selectedBatchItems.length]);
 
   const selectedItem = useMemo(
     () => catalogItemsState.find((item) => item.id === selectedItemId) ?? null,
@@ -3034,6 +3045,9 @@ export default function CatalogPage() {
     }));
     setSingleGenerateDebugPrompt("");
     setSingleGenerateDebugHash("");
+    setSingleGenerateDebugModel("");
+    setSingleGenerateInputSha("");
+    setSingleGenerateOutputSha("");
     setSingleGenerateDrawerOpen(true);
   };
 
@@ -3061,7 +3075,7 @@ export default function CatalogPage() {
           custom_prompt: setting.customPrompt,
           show_model_name_overlay: setting.showModelNameOverlay,
           text_color: setting.textColor,
-          display_name: setting.displayName || targetItem?.model || modelName || "product",
+          display_name: toOverlayModelName(setting.displayName || targetItem?.model || modelName || "product"),
         }),
       });
 
@@ -3075,6 +3089,9 @@ export default function CatalogPage() {
         prompt_hash?: string;
         debug_prompt?: string;
         debug_prompt_hash?: string;
+        debug_model?: string;
+        debug_input_sha256?: string;
+        debug_output_sha256?: string;
         error?: string;
       } = {};
       if (rawText) {
@@ -3088,6 +3105,9 @@ export default function CatalogPage() {
             prompt_hash?: string;
             debug_prompt?: string;
             debug_prompt_hash?: string;
+            debug_model?: string;
+            debug_input_sha256?: string;
+            debug_output_sha256?: string;
             error?: string;
           };
         } catch {
@@ -3120,6 +3140,9 @@ export default function CatalogPage() {
       });
       setSingleGenerateDebugPrompt(result.debug_prompt ?? singleGeneratePromptPreview);
       setSingleGenerateDebugHash(result.debug_prompt_hash ?? result.prompt_hash ?? "");
+      setSingleGenerateDebugModel(result.debug_model ?? "");
+      setSingleGenerateInputSha(result.debug_input_sha256 ?? "");
+      setSingleGenerateOutputSha(result.debug_output_sha256 ?? "");
     } catch (error) {
       const message = error instanceof Error ? error.message : "대표 이미지 생성에 실패했습니다.";
       toast.error("처리 실패", { description: message });
@@ -3182,89 +3205,186 @@ export default function CatalogPage() {
       });
       return next;
     });
-    setBatchSlideIndex(0);
     setBatchResultById({});
+    setBatchPreviewById({});
+    setBatchGenerateSelectedIds(new Set(selectedBatchItems.map((item) => item.id)));
+    setBatchApplySelectedIds(new Set());
     setBatchGenerateOpen(true);
   };
 
   const handleBatchGenerate = async () => {
-    if (selectedBatchItems.length === 0) {
+    const targetItems = selectedBatchItems.filter((item) => batchGenerateSelectedIds.has(item.id));
+    if (targetItems.length === 0) {
       toast.error("처리 실패", { description: "생성 대상이 없습니다." });
       return;
     }
 
     setIsBatchGenerating(true);
     try {
-      const payload = {
-        concurrency: 3,
-        items: selectedBatchItems.map((item) => {
-          const setting = batchSettingsById[item.id] ?? createDefaultNanobananaSetting(item.model);
-          return {
+      const resultMap: Record<string, BatchGenerateResultRow> = {};
+      const previewMap: Record<string, GeneratedPreviewPayload> = {};
+
+      for (const item of targetItems) {
+        const setting = batchSettingsById[item.id] ?? createDefaultNanobananaSetting(item.model);
+        const response = await fetch("/api/master-image/auto-generate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
             master_id: item.id,
+            preview_only: true,
             product_pose: setting.productPose,
             background_style: setting.backgroundStyle,
             custom_prompt: setting.customPrompt,
             show_model_name_overlay: setting.showModelNameOverlay,
             text_color: setting.textColor,
-            display_name: setting.displayName || item.model,
-          };
-        }),
-      };
+            display_name: toOverlayModelName(setting.displayName || item.model),
+          }),
+        });
 
-      const response = await fetch("/api/master-image/auto-generate/batch", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
+        const rawText = await response.text();
+        let parsed: {
+          success?: boolean;
+          source_path?: string;
+          source_mime_type?: string;
+          generated_image_base64?: string;
+          generated_mime_type?: string;
+          prompt_hash?: string;
+          error?: string;
+          code?: string;
+        } = {};
+        if (rawText) {
+          try {
+            parsed = JSON.parse(rawText) as typeof parsed;
+          } catch {
+            parsed = { success: false, error: `서버 응답 파싱 실패 (${response.status})`, code: "INVALID_JSON" };
+          }
+        }
 
-      const rawText = await response.text();
-      let result: {
-        success_count?: number;
-        fail_count?: number;
-        results?: BatchGenerateResultRow[];
-        error?: string;
-      } = {};
-      if (rawText) {
-        try {
-          result = JSON.parse(rawText) as {
-            success_count?: number;
-            fail_count?: number;
-            results?: BatchGenerateResultRow[];
-            error?: string;
+        if (
+          response.ok
+          && parsed.success
+          && parsed.generated_image_base64
+          && parsed.generated_mime_type
+          && parsed.source_path
+        ) {
+          previewMap[item.id] = {
+            masterId: item.id,
+            sourcePath: parsed.source_path,
+            sourceMimeType: parsed.source_mime_type ?? "image/png",
+            generatedBase64: parsed.generated_image_base64,
+            generatedMimeType: parsed.generated_mime_type,
+            promptHash: parsed.prompt_hash ?? "",
+            previousImageUrl: item.imageUrl ?? null,
+            imageUrl: `data:${parsed.generated_mime_type};base64,${parsed.generated_image_base64}`,
           };
-        } catch {
-          const message = response.status >= 500
-            ? `서버 오류 (${response.status}) - NanoBanana/Gateway 응답을 확인해 주세요.`
-            : `서버 응답 파싱 실패 (${response.status})`;
-          throw new Error(message);
+          resultMap[item.id] = { master_id: item.id, success: true };
+        } else {
+          resultMap[item.id] = {
+            master_id: item.id,
+            success: false,
+            code: parsed.code ?? `HTTP_${response.status}`,
+            error: parsed.error ?? "미리보기 생성 실패",
+          };
         }
       }
 
-      if (!response.ok || !Array.isArray(result.results)) {
-        throw new Error(result.error ?? "일괄 생성에 실패했습니다.");
-      }
+      setBatchResultById((prev) => ({ ...prev, ...resultMap }));
+      setBatchPreviewById((prev) => ({ ...prev, ...previewMap }));
 
-      const resultMap: Record<string, BatchGenerateResultRow> = {};
-      result.results.forEach((row) => {
-        resultMap[row.master_id] = row;
-        if (row.success && row.image_url && row.image_path) {
-          applyGeneratedImageState(row.master_id, row.image_url, row.image_path);
-        }
-      });
-      setBatchResultById(resultMap);
+      const previewIds = Object.keys(previewMap);
+      setBatchApplySelectedIds(new Set(previewIds));
 
-      const successCount = Number(result.success_count ?? 0);
-      const failCount = Number(result.fail_count ?? 0);
+      const successCount = previewIds.length;
+      const failCount = targetItems.length - successCount;
       if (failCount > 0) {
-        toast.warning(`일괄 생성 완료 (성공 ${successCount} / 실패 ${failCount})`);
+        toast.warning(`미리보기 생성 완료 (성공 ${successCount} / 실패 ${failCount})`);
       } else {
-        toast.success(`일괄 생성 완료 (${successCount}개)`);
+        toast.success(`미리보기 생성 완료 (${successCount}개)`);
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : "일괄 생성에 실패했습니다.";
       toast.error("처리 실패", { description: message });
     } finally {
       setIsBatchGenerating(false);
+    }
+  };
+
+  const handleBatchApplySelected = async () => {
+    const targetIds = Array.from(batchApplySelectedIds).filter((id) => batchPreviewById[id]);
+    if (targetIds.length === 0) {
+      toast.error("처리 실패", { description: "적용할 미리보기를 먼저 선택해 주세요." });
+      return;
+    }
+
+    setIsBatchApplying(true);
+    try {
+      let successCount = 0;
+      let failCount = 0;
+      for (const id of targetIds) {
+        const preview = batchPreviewById[id];
+        if (!preview) continue;
+
+        const response = await fetch("/api/master-image/apply-generated", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            master_id: preview.masterId,
+            source_path: preview.sourcePath,
+            source_mime_type: preview.sourceMimeType,
+            generated_image_base64: preview.generatedBase64,
+            generated_mime_type: preview.generatedMimeType,
+            prompt_hash: preview.promptHash,
+          }),
+        });
+
+        const rawText = await response.text();
+        let parsed: { success?: boolean; image_url?: string; image_path?: string; error?: string } = {};
+        if (rawText) {
+          try {
+            parsed = JSON.parse(rawText) as typeof parsed;
+          } catch {
+            parsed = { success: false, error: `서버 응답 파싱 실패 (${response.status})` };
+          }
+        }
+
+        if (response.ok && parsed.success && parsed.image_url && parsed.image_path) {
+          applyGeneratedImageState(id, parsed.image_url, parsed.image_path);
+          successCount += 1;
+          setBatchResultById((prev) => ({ ...prev, [id]: { master_id: id, success: true } }));
+          setBatchPreviewById((prev) => {
+            const next = { ...prev };
+            delete next[id];
+            return next;
+          });
+          setBatchApplySelectedIds((prev) => {
+            const next = new Set(prev);
+            next.delete(id);
+            return next;
+          });
+        } else {
+          failCount += 1;
+          setBatchResultById((prev) => ({
+            ...prev,
+            [id]: {
+              master_id: id,
+              success: false,
+              error: parsed.error ?? "적용 실패",
+              code: `HTTP_${response.status}`,
+            },
+          }));
+        }
+      }
+
+      if (failCount > 0) {
+        toast.warning(`선택 적용 완료 (성공 ${successCount} / 실패 ${failCount})`);
+      } else {
+        toast.success(`선택 적용 완료 (${successCount}개)`);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "일괄 적용에 실패했습니다.";
+      toast.error("처리 실패", { description: message });
+    } finally {
+      setIsBatchApplying(false);
     }
   };
 
@@ -6065,6 +6185,15 @@ export default function CatalogPage() {
               <div className="text-[11px] text-[var(--muted)]">
                 prompt_hash: {singleGenerateDebugHash || "(생성 후 표시)"}
               </div>
+              <div className="text-[11px] text-[var(--muted)]">
+                model: {singleGenerateDebugModel || "(생성 후 표시)"}
+              </div>
+              <div className="text-[11px] text-[var(--muted)] break-all">
+                input_sha256: {singleGenerateInputSha || "(생성 후 표시)"}
+              </div>
+              <div className="text-[11px] text-[var(--muted)] break-all">
+                output_sha256: {singleGenerateOutputSha || "(생성 후 표시)"}
+              </div>
             </div>
 
             <div className="flex items-center justify-end gap-2">
@@ -6095,105 +6224,188 @@ export default function CatalogPage() {
         <div className="space-y-4">
           <ActionBar
             title="나노바나나 배치"
-            subtitle={`선택 ${selectedBatchItems.length}개`}
+            subtitle={`선택 ${selectedBatchItems.length}개 · 실행 ${batchGenerateSelectedIds.size}개`}
             actions={
               <div className="flex items-center gap-2">
                 <Button
+                  type="button"
                   variant="secondary"
                   size="sm"
-                  onClick={() => setBatchSlideIndex((prev) => Math.max(prev - 1, 0))}
-                  disabled={batchSlideIndex <= 0}
+                  onClick={() => setBatchGenerateSelectedIds(new Set(selectedBatchItems.map((item) => item.id)))}
+                  disabled={selectedBatchItems.length === 0}
                 >
-                  이전
+                  전체 선택
                 </Button>
-                <div className="text-xs text-[var(--muted)]">
-                  {selectedBatchItems.length === 0 ? "0 / 0" : `${batchSlideIndex + 1} / ${selectedBatchItems.length}`}
-                </div>
                 <Button
+                  type="button"
                   variant="secondary"
                   size="sm"
-                  onClick={() => setBatchSlideIndex((prev) => Math.min(prev + 1, Math.max(selectedBatchItems.length - 1, 0)))}
-                  disabled={batchSlideIndex >= selectedBatchItems.length - 1}
+                  onClick={() => setBatchGenerateSelectedIds(new Set())}
+                  disabled={batchGenerateSelectedIds.size === 0}
                 >
-                  다음
+                  선택 해제
                 </Button>
                 <Button
                   size="sm"
                   onClick={handleBatchGenerate}
-                  disabled={isBatchGenerating || selectedBatchItems.length === 0}
+                  disabled={isBatchGenerating || isBatchApplying || batchGenerateSelectedIds.size === 0}
                 >
-                  {isBatchGenerating ? "일괄 생성 중..." : "전체 실행"}
+                  {isBatchGenerating ? "미리보기 생성 중..." : `선택 미리보기 (${batchGenerateSelectedIds.size})`}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={handleBatchApplySelected}
+                  disabled={isBatchGenerating || isBatchApplying || batchApplySelectedIds.size === 0}
+                >
+                  {isBatchApplying ? "선택 적용 중..." : `선택 적용 (${batchApplySelectedIds.size})`}
                 </Button>
               </div>
             }
           />
 
-          {!selectedBatchItem ? (
+          {selectedBatchItems.length === 0 ? (
             <div className="rounded-[12px] border border-[var(--panel-border)] bg-[var(--panel)] p-4 text-sm text-[var(--muted)]">
               선택된 항목이 없습니다.
             </div>
           ) : (
-            (() => {
-              const setting = batchSettingsById[selectedBatchItem.id] ?? createDefaultNanobananaSetting(selectedBatchItem.model);
-              const result = batchResultById[selectedBatchItem.id];
-              return (
-                <div className="grid gap-4 lg:grid-cols-[280px,minmax(0,1fr)]">
-                  <div className="rounded-[12px] border border-[var(--panel-border)] bg-[var(--panel)] p-3">
-                    <div className="mb-2 text-sm font-semibold">{selectedBatchItem.model}</div>
-                    <div className="aspect-square overflow-hidden rounded-[10px] border border-[var(--panel-border)] bg-[var(--subtle-bg)]">
-                      {selectedBatchItem.imageUrl ? (
-                        <img src={selectedBatchItem.imageUrl} alt={selectedBatchItem.model} className="h-full w-full object-cover" />
-                      ) : (
-                        <div className="flex h-full items-center justify-center text-xs text-[var(--muted)]">No Image</div>
-                      )}
-                    </div>
-                    {result ? (
-                      <p className={cn("mt-2 text-xs", result.success ? "text-emerald-600" : "text-red-500")}>
-                        {result.success ? "생성 완료" : result.error ?? "실패"}
-                      </p>
-                    ) : null}
-                  </div>
+            <div className="grid gap-4 lg:grid-cols-2">
+              {selectedBatchItems.map((item) => {
+                const setting = batchSettingsById[item.id] ?? createDefaultNanobananaSetting(item.model);
+                const result = batchResultById[item.id];
 
-                  <div className="rounded-[12px] border border-[var(--panel-border)] bg-[var(--panel)] p-4">
-                    <div className="grid gap-3 md:grid-cols-2">
-                      <Field label="포즈">
-                        <Select
-                          value={String(setting.productPose)}
+                return (
+                  <div key={item.id} className="rounded-[12px] border border-[var(--panel-border)] bg-[var(--panel)] p-4">
+                    <div className="mb-3 flex items-center gap-3">
+                      <label className="inline-flex items-center gap-1 text-xs text-[var(--muted)]">
+                        <input
+                          type="checkbox"
+                          className="h-4 w-4"
+                          checked={batchGenerateSelectedIds.has(item.id)}
+                          onChange={(event) => {
+                            const checked = event.target.checked;
+                            setBatchGenerateSelectedIds((prev) => {
+                              const next = new Set(prev);
+                              if (checked) next.add(item.id);
+                              else next.delete(item.id);
+                              return next;
+                            });
+                          }}
+                        />
+                        실행
+                      </label>
+                      <label className="inline-flex items-center gap-1 text-xs text-[var(--muted)]">
+                        <input
+                          type="checkbox"
+                          className="h-4 w-4"
+                          checked={batchApplySelectedIds.has(item.id)}
+                          disabled={!batchPreviewById[item.id]}
+                          onChange={(event) => {
+                            const checked = event.target.checked;
+                            setBatchApplySelectedIds((prev) => {
+                              const next = new Set(prev);
+                              if (checked) next.add(item.id);
+                              else next.delete(item.id);
+                              return next;
+                            });
+                          }}
+                        />
+                        적용
+                      </label>
+                      <div className="h-20 w-20 overflow-hidden rounded-[10px] border border-[var(--panel-border)] bg-[var(--subtle-bg)]">
+                        {item.imageUrl ? (
+                          <img src={item.imageUrl} alt={item.model} className="h-full w-full object-cover" />
+                        ) : (
+                          <div className="flex h-full items-center justify-center text-[10px] text-[var(--muted)]">No Image</div>
+                        )}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-semibold">{item.model}</p>
+                        {result ? (
+                          <p className={cn("mt-1 text-xs", result.success ? "text-emerald-600" : "text-red-500")}>
+                            {result.success ? "생성 완료" : result.error ?? "실패"}
+                          </p>
+                        ) : (
+                          <p className="mt-1 text-xs text-[var(--muted)]">대기 중</p>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="mb-3 grid grid-cols-2 gap-2">
+                      <div className="overflow-hidden rounded-[10px] border border-[var(--panel-border)] bg-[var(--subtle-bg)]">
+                        <div className="px-2 py-1 text-[10px] text-[var(--muted)]">이전</div>
+                        <div className="aspect-square w-full">
+                          {item.imageUrl ? (
+                            <img src={item.imageUrl} alt={`${item.model} 이전`} className="h-full w-full object-contain" />
+                          ) : null}
+                        </div>
+                      </div>
+                      <div className="overflow-hidden rounded-[10px] border border-[var(--panel-border)] bg-[var(--subtle-bg)]">
+                        <div className="px-2 py-1 text-[10px] text-[var(--muted)]">미리보기</div>
+                        <div className="aspect-square w-full">
+                          {batchPreviewById[item.id]?.imageUrl ? (
+                            <img
+                              src={batchPreviewById[item.id].imageUrl}
+                              alt={`${item.model} 미리보기`}
+                              className="h-full w-full object-contain"
+                            />
+                          ) : (
+                            <div className="flex h-full items-center justify-center text-[10px] text-[var(--muted)]">미리보기 없음</div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="space-y-2">
+                      <div className="space-y-1">
+                        <div className="flex items-center justify-between text-xs text-[var(--muted)]">
+                          <span>포즈</span>
+                          <span className="font-semibold text-[var(--foreground)]">{PRODUCT_POSE_LABELS[setting.productPose]}</span>
+                        </div>
+                        <input
+                          type="range"
+                          min={0}
+                          max={2}
+                          step={1}
+                          value={setting.productPose}
                           onChange={(event) =>
-                            upsertBatchSetting(selectedBatchItem.id, (prev) => ({
+                            upsertBatchSetting(item.id, (prev) => ({
                               ...prev,
                               productPose: Number(event.target.value) as 0 | 1 | 2,
                             }))
                           }
-                        >
-                          <option value="0">눕혀서</option>
-                          <option value="1">세워서</option>
-                          <option value="2">걸어서</option>
-                        </Select>
-                      </Field>
-                      <Field label="배경">
-                        <Select
-                          value={String(setting.backgroundStyle)}
+                          className="w-full"
+                        />
+                      </div>
+
+                      <div className="space-y-1">
+                        <div className="flex items-center justify-between text-xs text-[var(--muted)]">
+                          <span>배경</span>
+                          <span className="font-semibold text-[var(--foreground)]">{BACKGROUND_STYLE_LABELS[setting.backgroundStyle]}</span>
+                        </div>
+                        <input
+                          type="range"
+                          min={0}
+                          max={5}
+                          step={1}
+                          value={setting.backgroundStyle}
                           onChange={(event) =>
-                            upsertBatchSetting(selectedBatchItem.id, (prev) => ({
+                            upsertBatchSetting(item.id, (prev) => ({
                               ...prev,
                               backgroundStyle: Number(event.target.value) as 0 | 1 | 2 | 3 | 4 | 5,
                             }))
                           }
-                        >
-                          <option value="0">순백</option>
-                          <option value="1">아이보리</option>
-                          <option value="2">라이트그레이</option>
-                          <option value="3">스카이블루</option>
-                          <option value="4">소프트핑크</option>
-                          <option value="5">검정</option>
-                        </Select>
-                      </Field>
+                          className="w-full"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="mt-3 grid gap-2 md:grid-cols-2">
                       <Field label="표시명">
                         <Input
                           value={setting.displayName}
                           onChange={(event) =>
-                            upsertBatchSetting(selectedBatchItem.id, (prev) => ({ ...prev, displayName: event.target.value }))
+                            upsertBatchSetting(item.id, (prev) => ({ ...prev, displayName: event.target.value }))
                           }
                         />
                       </Field>
@@ -6201,7 +6413,7 @@ export default function CatalogPage() {
                         <Select
                           value={setting.textColor}
                           onChange={(event) =>
-                            upsertBatchSetting(selectedBatchItem.id, (prev) => ({
+                            upsertBatchSetting(item.id, (prev) => ({
                               ...prev,
                               textColor: event.target.value === "white" ? "white" : "black",
                             }))
@@ -6212,23 +6424,25 @@ export default function CatalogPage() {
                         </Select>
                       </Field>
                     </div>
-                    <div className="mt-3">
+
+                    <div className="mt-2">
                       <Field label="추가 프롬프트">
                         <Textarea
                           value={setting.customPrompt}
                           onChange={(event) =>
-                            upsertBatchSetting(selectedBatchItem.id, (prev) => ({ ...prev, customPrompt: event.target.value }))
+                            upsertBatchSetting(item.id, (prev) => ({ ...prev, customPrompt: event.target.value }))
                           }
                           placeholder="추가 프롬프트"
                         />
                       </Field>
                     </div>
+
                     <label className="mt-2 inline-flex items-center gap-2 text-xs text-[var(--foreground)]">
                       <input
                         type="checkbox"
                         checked={setting.showModelNameOverlay}
                         onChange={(event) =>
-                          upsertBatchSetting(selectedBatchItem.id, (prev) => ({
+                          upsertBatchSetting(item.id, (prev) => ({
                             ...prev,
                             showModelNameOverlay: event.target.checked,
                           }))
@@ -6237,10 +6451,37 @@ export default function CatalogPage() {
                       />
                       좌측 상단 모델명 오버레이 적용
                     </label>
+
+                    <div className="mt-2 flex justify-end">
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        size="sm"
+                        onClick={() => {
+                          const sourceSetting = { ...setting };
+                          setBatchSettingsById((prev) => {
+                            const next = { ...prev };
+                            selectedBatchItems
+                              .filter((selected) => batchGenerateSelectedIds.has(selected.id))
+                              .forEach((selected) => {
+                              next[selected.id] = {
+                                ...sourceSetting,
+                                displayName: prev[selected.id]?.displayName || createDefaultNanobananaSetting(selected.model).displayName,
+                              };
+                              });
+                            next[item.id] = sourceSetting;
+                            return next;
+                          });
+                          toast.success("현재 카드 설정을 선택된 실행 대상에 적용했습니다.");
+                        }}
+                      >
+                        현재 설정 선택 대상 적용
+                      </Button>
+                    </div>
                   </div>
-                </div>
-              );
-            })()
+                );
+              })}
+            </div>
           )}
         </div>
       </div>

@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { Suspense, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -238,7 +238,7 @@ const buildPaymentHistory = (rows: Record<string, unknown>[]) => {
   });
 };
 
-export default function ApPage() {
+function ApPageContent() {
   const schemaClient = getSchemaClient();
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -974,5 +974,13 @@ export default function ApPage() {
         )}
       </div>
     </div>
+  );
+}
+
+export default function ApPage() {
+  return (
+    <Suspense fallback={<div className="min-h-[100vh] grid place-items-center p-6 text-sm text-[var(--muted)]">로딩 중...</div>}>
+      <ApPageContent />
+    </Suspense>
   );
 }
