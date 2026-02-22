@@ -800,7 +800,8 @@ export default function InventoryPage() {
           return;
         }
         const exact = (masterRows ?? []).filter(
-          (row) => String((row as { model_name?: string | null }).model_name ?? "").trim().toLowerCase() === normalizedModel.toLowerCase()
+          (row: { model_name?: string | null }) =>
+            String(row.model_name ?? "").trim().toLowerCase() === normalizedModel.toLowerCase()
         );
         if (exact.length === 1) {
           resolvedMasterId = String((exact[0] as { master_id?: string | null }).master_id ?? "") || null;

@@ -218,7 +218,7 @@ export default function Dashboard2Page() {
       const arMap = new Map((arData ?? []).map((a: any) => [a.party_id, a]));
       return parties.map((p) => ({
         ...p,
-        ...arMap.get(p.party_id),
+        ...(arMap.get(p.party_id) ?? {}),
       })) as PartyRow[];
     },
   });

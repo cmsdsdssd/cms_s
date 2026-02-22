@@ -2448,7 +2448,7 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                 .select("*")
                 .in("master_item_id", componentMasterIds);
 
-              (componentMasters ?? []).forEach((componentMaster) => {
+              (componentMasters ?? []).forEach((componentMaster: unknown) => {
                 const componentRecord = componentMaster as Record<string, unknown>;
                 const componentMasterId = readStringField(componentRecord, ["master_item_id", "master_id"]);
                 if (!componentMasterId) return;
