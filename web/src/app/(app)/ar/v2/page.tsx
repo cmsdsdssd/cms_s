@@ -555,6 +555,7 @@ export default function ArPage() {
   // Service Writeoff State
   const [writeoffReason, setWriteoffReason] = useState("");
   const [writeoffIdempotencyKey, setWriteoffIdempotencyKey] = useState(() => crypto.randomUUID());
+  const actorPersonId = (process.env.NEXT_PUBLIC_CMS_ACTOR_ID || "").trim() || null;
 
 
   // 1. Fetch Parties
@@ -701,6 +702,20 @@ export default function ArPage() {
       { labor: 0, material: 0, gold: 0, silver: 0 }
     );
   }, [invoicePositionsQuery.data, selectedParty]);
+
+  const ledgerCashOutstanding = useMemo(() => {
+    return Math.max(Number(selectedParty?.receivable_krw ?? 0), 0);
+  }, [selectedParty?.receivable_krw]);
+
+  const settlementRecoCashOutstanding = useMemo(() => {
+    if (!settlementRecoQuery.data?.ok) return null;
+    return Math.max(Number(settlementRecoQuery.data.totals.total_cash_outstanding_krw ?? 0), 0);
+  }, [settlementRecoQuery.data]);
+
+  const writeoffAmountMismatch = useMemo(() => {
+    if (settlementRecoCashOutstanding == null) return false;
+    return Math.abs(ledgerCashOutstanding - settlementRecoCashOutstanding) > 0.5;
+  }, [ledgerCashOutstanding, settlementRecoCashOutstanding]);
 
   // Real-time calculation: remaining g and cash difference
   const realTimeCalculation = useMemo(() => {
@@ -2443,20 +2458,29 @@ export default function ArPage() {
                           <div className="rounded border border-[var(--panel-border)] bg-[var(--panel)] p-4 space-y-2">
                             <div className="text-xs font-semibold text-[var(--muted)]">현재 총 미수금</div>
                             <div className="text-2xl font-bold text-[var(--primary)]">
-                              {settlementRecoQuery.data?.ok
-                                ? formatKrw(settlementRecoQuery.data.totals.total_cash_outstanding_krw)
-                                : formatKrw(
-                                  displayOutstanding.labor +
-                                  displayOutstanding.material
-                                )
-                              }
+                              {formatKrw(ledgerCashOutstanding)}
                             </div>
-                            {settlementRecoQuery.data?.ok && settlementRecoQuery.data.totals.total_cash_outstanding_krw <= 1000 && settlementRecoQuery.data.totals.total_cash_outstanding_krw > 0 && (
+                            {settlementRecoCashOutstanding != null && (
+                              <div className="text-xs text-[var(--muted)]">
+                                인보이스 기준: {formatKrw(settlementRecoCashOutstanding)}
+                              </div>
+                            )}
+                            {writeoffAmountMismatch && (
+                              <div className="text-xs text-[var(--danger)]">
+                                ⚠️ 원장/인보이스 미수금이 불일치합니다. 완불처리를 중단하고 정합성 점검이 필요합니다.
+                              </div>
+                            )}
+                            {!actorPersonId && (
+                              <div className="text-xs text-[var(--danger)]">
+                                ⚠️ NEXT_PUBLIC_CMS_ACTOR_ID 미설정으로 완불처리를 실행할 수 없습니다.
+                              </div>
+                            )}
+                            {settlementRecoQuery.data?.ok && ledgerCashOutstanding <= 1000 && ledgerCashOutstanding > 0 && !writeoffAmountMismatch && (
                               <div className="text-xs text-[var(--success)] font-semibold">
                                 ✅ 서비스 완불처리 가능 (≤₩1,000)
                               </div>
                             )}
-                            {settlementRecoQuery.data?.ok && settlementRecoQuery.data.totals.total_cash_outstanding_krw > 1000 && (
+                            {settlementRecoQuery.data?.ok && ledgerCashOutstanding > 1000 && (
                               <div className="text-xs text-[var(--danger)]">
                                 ⚠️ 잔액이 ₩1,000를 초과하여 서비스 완불처리를 할 수 없습니다.
                               </div>
@@ -2479,16 +2503,25 @@ export default function ArPage() {
                             className="w-full"
                             disabled={
                               !settlementRecoQuery.data?.ok ||
-                              settlementRecoQuery.data.totals.total_cash_outstanding_krw <= 0 ||
-                              settlementRecoQuery.data.totals.total_cash_outstanding_krw > 1000
+                              ledgerCashOutstanding <= 0 ||
+                              ledgerCashOutstanding > 1000 ||
+                              writeoffAmountMismatch ||
+                              !actorPersonId
                             }
                             onClick={async () => {
                               if (!effectiveSelectedPartyId) return;
+                              if (!actorPersonId) {
+                                toast.error("서비스 완불처리 실패", {
+                                  description: "NEXT_PUBLIC_CMS_ACTOR_ID가 필요합니다.",
+                                });
+                                return;
+                              }
                               try {
                                 await callRpc(CONTRACTS.functions.arApplyServiceWriteoffUnderLimit, {
                                   p_party_id: effectiveSelectedPartyId,
                                   p_reason_detail: writeoffReason.trim() || null,
                                   p_idempotency_key: writeoffIdempotencyKey,
+                                  p_actor_person_id: actorPersonId,
                                 });
                                 toast.success("서비스 완불처리 완료", {
                                   description: "미수금이 서비스로 정리되었습니다.",
