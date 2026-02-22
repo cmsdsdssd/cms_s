@@ -142,6 +142,7 @@ const BOM_MATERIAL_REASON_PREFIX = "기타-소재:";
 const CN_BASIC_BASIS_META_LABEL = "__CN_BASIC_BASIS__";
 
 type CnRawLaborBasis = "PER_G" | "PER_PIECE";
+type CnRawMarketMode = "CN" | "KR";
 
 type CnRawEntryState = {
   id: string;
@@ -167,6 +168,7 @@ type CnRawEntryComputed = {
 
 type CnRawSnapshotRow = {
   snapshot_id?: string;
+  request_id?: string;
   analysis_date?: string | null;
   labor_basis?: string | null;
   total_price_cny?: number | null;
@@ -176,6 +178,7 @@ type CnRawSnapshotRow = {
   cny_krw_rate_snapshot?: number | null;
   silver_price_krw_per_g_snapshot?: number | null;
   labor_krw_snapshot?: number | null;
+  raw_input?: unknown;
   created_at?: string | null;
 };
 
@@ -189,6 +192,7 @@ type CnRawHistoryRow = {
   totalCostKrw: number;
   silverPriceKrwPerG: number;
   laborKrw: number;
+  marketMode: CnRawMarketMode;
   createdAt: string;
 };
 
@@ -229,6 +233,11 @@ function normalizeCnRawHistoryRows(rows: CnRawSnapshotRow[]): CnRawHistoryRow[] 
         Math.max(Number(row.silver_price_krw_per_g_snapshot ?? Number.NaN), 0) || silverPriceCny * cnyRate;
       const laborKrw = Number(row.labor_krw_snapshot ?? Number.NaN);
       const resolvedLaborKrw = Number.isFinite(laborKrw) ? laborKrw : laborCny * cnyRate;
+      const rawInput = row.raw_input;
+      const marketMode =
+        rawInput && typeof rawInput === "object"
+          ? normalizeCnRawMarketMode((rawInput as { market_mode?: unknown }).market_mode)
+          : "CN";
       const createdAt = String(row.created_at ?? "").trim();
       return {
         id: String(row.snapshot_id ?? crypto.randomUUID()),
@@ -240,6 +249,7 @@ function normalizeCnRawHistoryRows(rows: CnRawSnapshotRow[]): CnRawHistoryRow[] 
         totalCostKrw,
         silverPriceKrwPerG,
         laborKrw: resolvedLaborKrw,
+        marketMode,
         createdAt,
       };
     })
@@ -686,6 +696,24 @@ function getMaterialBgColor(materialCode: string): string {
   return "bg-[var(--panel)]";
 }
 
+function getMaterialChipColorClass(materialCode: string): string {
+  const code = String(materialCode ?? "").trim();
+  const numeric = Number(code);
+
+  if (code === "999") return "border border-slate-500 bg-slate-400 text-slate-900";
+  if (code === "925") return "border border-slate-300 bg-slate-200 text-slate-800";
+
+  if (Number.isFinite(numeric) && numeric >= 14 && numeric <= 24) {
+    if (numeric >= 24) return "border border-amber-600 bg-amber-500 text-amber-950";
+    if (numeric >= 22) return "border border-amber-500 bg-amber-400 text-amber-950";
+    if (numeric >= 18) return "border border-amber-400 bg-amber-300 text-amber-950";
+    if (numeric >= 16) return "border border-amber-300 bg-amber-200 text-amber-900";
+    return "border border-amber-200 bg-amber-100 text-amber-900";
+  }
+
+  return "bg-[var(--chip)] text-[var(--muted)]";
+}
+
 function toNumber(value: string) {
   const parsed = Number(value.replaceAll(",", "").trim());
   return Number.isNaN(parsed) ? 0 : parsed;
@@ -694,6 +722,43 @@ function toNumber(value: string) {
 function formatWeightNumber(value: number) {
   if (!Number.isFinite(value)) return "";
   return value.toFixed(2);
+}
+
+function formatRawInputNumber(value: number) {
+  if (!Number.isFinite(value) || value <= 0) return "";
+  const rounded = Math.round(value * 100) / 100;
+  if (!Number.isFinite(rounded) || rounded <= 0) return "";
+  const text = rounded.toFixed(2);
+  return text.replace(/\.00$/, "").replace(/(\.\d)0$/, "$1");
+}
+
+function sanitizeTwoDecimalInput(value: string) {
+  const source = String(value ?? "").replaceAll(",", "");
+  const normalized = source.replace(/[^\d.]/g, "");
+  if (!normalized) return "";
+  const [intPartRaw, ...decimalParts] = normalized.split(".");
+  const intPart = intPartRaw.replace(/^0+(?=\d)/, "");
+  if (decimalParts.length === 0) return intPart || "0";
+  const decimal = decimalParts.join("").slice(0, 2);
+  return `${intPart || "0"}.${decimal}`;
+}
+
+function normalizeCnRawMarketMode(value: unknown): CnRawMarketMode {
+  return String(value ?? "CN").trim().toUpperCase() === "KR" ? "KR" : "CN";
+}
+
+function renderWeightNumberWithRedDecimal(value: number) {
+  const text = formatWeightNumber(value);
+  if (!text) return "-";
+  const [intPart, decimalPart] = text.split(".");
+  if (!decimalPart) return intPart;
+  return (
+    <>
+      {intPart}
+      <span className="text-red-500">.</span>
+      {decimalPart}
+    </>
+  );
 }
 
 function isUuid(value: string) {
@@ -819,6 +884,7 @@ export default function CatalogPage() {
   const [sub1SelfMargin, setSub1SelfMargin] = useState(0);
   const [sub2SelfMargin, setSub2SelfMargin] = useState(0);
   const [showAdvancedPricing, setShowAdvancedPricing] = useState(false);
+  const [force18KViewFor14, setForce18KViewFor14] = useState(false);
   const [previewImage, setPreviewImage] = useState<string | null>(null);
   const [absorbLaborItems, setAbsorbLaborItems] = useState<MasterAbsorbLaborItem[]>([]);
   const [absorbBucket, setAbsorbBucket] = useState<AbsorbLaborBucket>("BASE_LABOR");
@@ -834,6 +900,7 @@ export default function CatalogPage() {
   const [editingAbsorbItemId, setEditingAbsorbItemId] = useState<string | null>(null);
   const [goldPrice, setGoldPrice] = useState(0);
   const [silverModifiedPrice, setSilverModifiedPrice] = useState(0);
+  const [silverOriginalPrice, setSilverOriginalPrice] = useState(0);
   const [cnyAdRate, setCnyAdRate] = useState(0);
   const [cnyFxAsOf, setCnyFxAsOf] = useState("");
   const [csOriginalKrwPerG, setCsOriginalKrwPerG] = useState(0);
@@ -841,6 +908,7 @@ export default function CatalogPage() {
   const [cnLaborBasicBasis, setCnLaborBasicBasis] = useState<"PER_G" | "PER_PIECE">("PER_G");
   const [cnLaborExtraItems, setCnLaborExtraItems] = useState<ChinaExtraLaborItem[]>([]);
   const [cnRawEntries, setCnRawEntries] = useState<CnRawEntryState[]>([createEmptyCnRawEntry()]);
+  const [cnRawMarketMode, setCnRawMarketMode] = useState<CnRawMarketMode>("CN");
   const [cnRawHistoryByMasterId, setCnRawHistoryByMasterId] = useState<Record<string, CnRawHistoryRow[]>>({});
   const [isUnitPricing, setIsUnitPricing] = useState(false);
 
@@ -865,9 +933,12 @@ export default function CatalogPage() {
   const [unit, setUnit] = useState<"EA" | "G" | "M">("EA");
   const [lineNote, setLineNote] = useState("");
   const [voidConfirmId, setVoidConfirmId] = useState<string | null>(null);
+  const [bomLineQtyDrafts, setBomLineQtyDrafts] = useState<Record<string, string>>({});
   const bomToastRef = useRef(false);
   const bomAutoSyncRef = useRef<string>("");
   const cnRawAutoSaveBusyRef = useRef(false);
+  const cnRawMarketModeRef = useRef<CnRawMarketMode>("CN");
+  const cnRawHistoryReqSeqByMasterRef = useRef<Record<string, number>>({});
   const absorbLaborCacheRef = useRef<Map<string, MasterAbsorbLaborItem[]>>(new Map());
   const selectedItemIdRef = useRef<string | null>(null);
   const absorbLaborAbortRef = useRef<AbortController | null>(null);
@@ -1001,8 +1072,11 @@ export default function CatalogPage() {
     }
   }, [fetchBomLines, fetchBomRecipes, fetchFlattenRows, queryClient]);
 
-  const loadCnRawHistory = useCallback(async (targetMasterId: string, options?: { syncEditor?: boolean }) => {
+  const loadCnRawHistory = useCallback(async (targetMasterId: string, options?: { syncEditor?: boolean; marketMode?: CnRawMarketMode }) => {
     if (!targetMasterId || !isUuid(targetMasterId)) return;
+    const requestSeq = (cnRawHistoryReqSeqByMasterRef.current[targetMasterId] ?? 0) + 1;
+    cnRawHistoryReqSeqByMasterRef.current[targetMasterId] = requestSeq;
+
     const response = await fetch(`/api/master-item-cn-cost?master_id=${encodeURIComponent(targetMasterId)}`, {
       cache: "no-store",
     });
@@ -1012,27 +1086,57 @@ export default function CatalogPage() {
     }
 
     const normalizedRows = normalizeCnRawHistoryRows(Array.isArray(json.data) ? json.data : []);
+    if (cnRawHistoryReqSeqByMasterRef.current[targetMasterId] !== requestSeq) return;
+
     setCnRawHistoryByMasterId((prev) => ({
       ...prev,
       [targetMasterId]: normalizedRows,
     }));
 
-    if (options?.syncEditor && normalizedRows.length > 0) {
+    if (options?.syncEditor) {
+      const activeMarketMode = options.marketMode ?? cnRawMarketModeRef.current;
+      const filteredRows = normalizedRows.filter((row) => row.marketMode === activeMarketMode);
       setCnRawEntries(
         sortCnRawEntriesAsc(
-          normalizedRows.map((row) =>
-            createEmptyCnRawEntry({
-              id: row.id,
-              analysisDate: toIsoDateInputValue(row.analysisDate),
-              totalPriceCny: row.totalPriceCny > 0 ? String(row.totalPriceCny) : "",
-              silverPriceCny: row.silverPriceCny > 0 ? String(row.silverPriceCny) : "",
-              laborBasis: row.laborBasis,
-            })
-          )
+          filteredRows.length > 0
+            ? filteredRows.map((row) =>
+              createEmptyCnRawEntry({
+                id: row.id,
+                analysisDate: toIsoDateInputValue(row.analysisDate),
+                totalPriceCny:
+                  activeMarketMode === "KR"
+                    ? row.totalCostKrw > 0
+                      ? String(Math.round(row.totalCostKrw))
+                      : ""
+                    : row.totalPriceCny > 0
+                      ? formatRawInputNumber(row.totalPriceCny)
+                      : "",
+                silverPriceCny:
+                  activeMarketMode === "KR"
+                    ? row.silverPriceKrwPerG > 0
+                      ? String(Math.round(row.silverPriceKrwPerG))
+                      : silverOriginalPrice > 0
+                        ? String(Math.ceil(silverOriginalPrice))
+                        : ""
+                    : row.silverPriceCny > 0
+                      ? formatRawInputNumber(row.silverPriceCny)
+                      : "",
+                laborBasis: activeMarketMode === "KR" ? "PER_PIECE" : row.laborBasis,
+              })
+            )
+            : [
+              createEmptyCnRawEntry({
+                laborBasis: activeMarketMode === "KR" ? "PER_PIECE" : "PER_G",
+                silverPriceCny:
+                  activeMarketMode === "KR" && silverOriginalPrice > 0
+                    ? String(Math.ceil(silverOriginalPrice))
+                    : "",
+              }),
+            ]
         )
       );
     }
-  }, []);
+  }, [silverOriginalPrice]);
 
   // Fetch market prices
   const refreshMarketTicks = useCallback(async () => {
@@ -1042,6 +1146,7 @@ export default function CatalogPage() {
       if (result.data) {
         setGoldPrice(result.data.gold);
         setSilverModifiedPrice(result.data.silver);
+        setSilverOriginalPrice(Number(result.data.silverOriginal ?? result.data.silver ?? 0));
         setCnyAdRate(Number(result.data.cnyAd ?? 0));
         setCnyFxAsOf(String(result.data.fxAsOf ?? result.data.asof ?? new Date().toISOString()));
         setCsOriginalKrwPerG(Number(result.data.csTick ?? result.data.cs ?? 0));
@@ -1734,6 +1839,8 @@ export default function CatalogPage() {
     setComponentType("MASTER");
     setShowAdvancedComponents(false);
     setBomPreviewQtyInput("1");
+    setForce18KViewFor14(false);
+    setBomLineQtyDrafts({});
   }, [selectedMasterId]);
 
   useEffect(() => {
@@ -1749,6 +1856,14 @@ export default function CatalogPage() {
       toast.error("처리 실패", { description: message });
     });
   }, [loadAbsorbLaborItems, selectedItemId]);
+
+  useEffect(() => {
+    if (!selectedMasterId || !isUuid(selectedMasterId)) return;
+    if (cnRawHistoryByMasterId[selectedMasterId] !== undefined) return;
+    void loadCnRawHistory(selectedMasterId).catch((error) => {
+      console.error("Failed to load RAW history for detail:", error);
+    });
+  }, [cnRawHistoryByMasterId, loadCnRawHistory, selectedMasterId]);
 
   const bomPreviewQty = useMemo(() => {
     const parsed = Number(bomPreviewQtyInput);
@@ -1943,7 +2058,7 @@ export default function CatalogPage() {
 
   const upsertRecipeMutation = useRpcMutation<string>({
     fn: CONTRACTS.functions.bomRecipeUpsert,
-      successMessage: "구성 저장 완료",
+    successMessage: "구성 저장 완료",
     onSuccess: (result) => {
       if (typeof result === "string") setSelectedRecipeId(result);
       recipesQuery.refetch();
@@ -2006,9 +2121,52 @@ export default function CatalogPage() {
   }, [weightDefault, deductionWeight]);
   const cnRawEntriesSorted = useMemo(() => sortCnRawEntriesAsc(cnRawEntries), [cnRawEntries]);
   const cnRawEntriesComputed = useMemo<CnRawEntryComputed[]>(() => {
+    const fxRate = Number.isFinite(cnyAdRate) && cnyAdRate > 0 ? cnyAdRate : 0;
+    const materialCodeForRaw = String(materialCode || "").trim();
     return cnRawEntriesSorted.map((entry) => {
-      const totalPriceCny = Math.max(toNumber(entry.totalPriceCny), 0);
-      const silverPriceCny = Math.max(toNumber(entry.silverPriceCny), 0);
+      const totalInput = Math.max(toNumber(entry.totalPriceCny), 0);
+      const silverInput = Math.max(toNumber(entry.silverPriceCny), 0);
+
+      if (cnRawMarketMode === "KR") {
+        const totalCostKrw = totalInput;
+        const isSilverMaterial = materialCodeForRaw === "925" || materialCodeForRaw === "999";
+        const materialTickKrwPerG = isSilverMaterial ? silverInput : goldPrice;
+        const materialAmountKrw = calcMaterialAmountSellKrw({
+          netWeightG,
+          tickPriceKrwPerG: materialTickKrwPerG,
+          materialCode: materialCodeForRaw,
+          factors: materialFactorMap,
+        });
+        const silverPriceKrwPerG = materialTickKrwPerG;
+        const laborBaseKrw = totalCostKrw - materialAmountKrw;
+        const laborKrw =
+          entry.laborBasis === "PER_PIECE"
+            ? laborBaseKrw
+            : netWeightG > 0
+              ? laborBaseKrw / netWeightG
+              : 0;
+        const totalPriceCny = fxRate > 0 ? totalCostKrw / fxRate : 0;
+        const silverPriceCny = fxRate > 0 ? silverPriceKrwPerG / fxRate : 0;
+        const silverAmountCny = fxRate > 0 ? materialAmountKrw / fxRate : 0;
+        const laborBaseCny = fxRate > 0 ? laborBaseKrw / fxRate : 0;
+        const laborCny = fxRate > 0 ? laborKrw / fxRate : 0;
+        return {
+          id: entry.id,
+          analysisDate: entry.analysisDate,
+          laborBasis: entry.laborBasis,
+          totalPriceCny,
+          silverPriceCny,
+          silverAmountCny,
+          laborBaseCny,
+          laborCny,
+          totalCostKrw,
+          silverPriceKrwPerG,
+          laborKrw,
+        };
+      }
+
+      const totalPriceCny = totalInput;
+      const silverPriceCny = silverInput;
       const silverAmountCny = netWeightG * silverPriceCny;
       const laborBaseCny = totalPriceCny - silverAmountCny;
       const laborCny =
@@ -2017,9 +2175,9 @@ export default function CatalogPage() {
           : netWeightG > 0
             ? laborBaseCny / netWeightG
             : 0;
-      const totalCostKrw = totalPriceCny * (Number.isFinite(cnyAdRate) ? cnyAdRate : 0);
-      const silverPriceKrwPerG = silverPriceCny * (Number.isFinite(cnyAdRate) ? cnyAdRate : 0);
-      const laborKrw = laborCny * (Number.isFinite(cnyAdRate) ? cnyAdRate : 0);
+      const totalCostKrw = totalPriceCny * fxRate;
+      const silverPriceKrwPerG = silverPriceCny * fxRate;
+      const laborKrw = laborCny * fxRate;
       return {
         id: entry.id,
         analysisDate: entry.analysisDate,
@@ -2034,7 +2192,7 @@ export default function CatalogPage() {
         laborKrw,
       };
     });
-  }, [cnRawEntriesSorted, cnyAdRate, netWeightG]);
+  }, [cnRawEntriesSorted, cnyAdRate, cnRawMarketMode, goldPrice, materialCode, materialFactorMap, netWeightG]);
   const showChinaCostPanel = useMemo(() => supportsChinaCostPanel(materialCode), [materialCode]);
 
   const addCnExtraItem = useCallback(() => {
@@ -2050,8 +2208,19 @@ export default function CatalogPage() {
   }, []);
 
   const addCnRawEntry = useCallback(() => {
-    setCnRawEntries((prev) => sortCnRawEntriesAsc([...prev, createEmptyCnRawEntry()]));
-  }, []);
+    setCnRawEntries((prev) =>
+      sortCnRawEntriesAsc([
+        ...prev,
+        createEmptyCnRawEntry({
+          laborBasis: cnRawMarketMode === "KR" ? "PER_PIECE" : "PER_G",
+          silverPriceCny:
+            cnRawMarketMode === "KR" && silverOriginalPrice > 0
+              ? String(Math.ceil(silverOriginalPrice))
+              : "",
+        }),
+      ])
+    );
+  }, [cnRawMarketMode, silverOriginalPrice]);
 
   const changeCnRawEntry = useCallback((id: string, patch: Partial<Omit<CnRawEntryState, "id">>) => {
     setCnRawEntries((prev) => sortCnRawEntriesAsc(prev.map((entry) => (entry.id === id ? { ...entry, ...patch } : entry))));
@@ -2060,9 +2229,37 @@ export default function CatalogPage() {
   const removeCnRawEntry = useCallback((id: string) => {
     setCnRawEntries((prev) => {
       const next = prev.filter((entry) => entry.id !== id);
-      return sortCnRawEntriesAsc(next.length > 0 ? next : [createEmptyCnRawEntry()]);
+      return sortCnRawEntriesAsc(next);
     });
   }, []);
+
+  const handleChangeCnRawMarketMode = useCallback((nextMode: CnRawMarketMode) => {
+    cnRawMarketModeRef.current = nextMode;
+    setCnRawMarketMode(nextMode);
+
+    if (!isEditMode) return;
+    const targetMasterId = selectedItemId || masterId;
+    if (!targetMasterId || !isUuid(targetMasterId)) {
+      setCnRawEntries([
+        createEmptyCnRawEntry({
+          laborBasis: nextMode === "KR" ? "PER_PIECE" : "PER_G",
+          silverPriceCny:
+            nextMode === "KR" && silverOriginalPrice > 0
+              ? String(Math.ceil(silverOriginalPrice))
+              : "",
+        }),
+      ]);
+      return;
+    }
+
+    void loadCnRawHistory(targetMasterId, { syncEditor: true, marketMode: nextMode }).catch((error) => {
+      console.error("Failed to switch RAW market mode:", error);
+    });
+  }, [isEditMode, loadCnRawHistory, masterId, selectedItemId, silverOriginalPrice]);
+
+  useEffect(() => {
+    cnRawMarketModeRef.current = cnRawMarketMode;
+  }, [cnRawMarketMode]);
 
   const buildCnExtraPayload = useCallback(() => {
     const extraPayload = cnLaborExtraItems
@@ -2174,6 +2371,7 @@ export default function CatalogPage() {
             silver_price_cny_per_g: latestCnRawPayload?.silver_price_cny_per_g ?? 0,
             labor_basis: latestCnRawPayload?.labor_basis ?? "PER_G",
             net_weight_g: netWeightG,
+            market_mode: cnRawMarketMode,
           },
           cn_raw_computed: {
             formula_version: 1,
@@ -2233,6 +2431,7 @@ export default function CatalogPage() {
   }, [
     buildCnExtraPayload,
     buildCnRawEntriesPayload,
+    cnRawMarketMode,
     cnLaborBasicCnyPerG,
     cnyAdRate,
     cnyFxAsOf,
@@ -2425,6 +2624,73 @@ export default function CatalogPage() {
       await syncBomAutoAbsorbLabor(selectedMasterId, (refreshedLines.data ?? []) as BomLineRow[]);
     }
     setVoidConfirmId(null);
+  };
+
+  const handleSaveBomLineQty = async (line: BomLineRow) => {
+    if (!canWrite) {
+      notifyWriteDisabled();
+      return;
+    }
+
+    const bomLineId = String(line.bom_line_id ?? "").trim();
+    const componentMasterId = String(line.component_master_id ?? "").trim();
+    const componentPartId = String(line.component_part_id ?? "").trim();
+    const componentRefType = String(line.component_ref_type ?? "MASTER").trim().toUpperCase() === "PART" ? "PART" : "MASTER";
+    const bomId = String(line.bom_id ?? selectedRecipeId ?? "").trim();
+    const hasValidComponent = componentRefType === "PART" ? Boolean(componentPartId) : Boolean(componentMasterId);
+    if (!bomLineId || !bomId || !hasValidComponent) {
+      toast.error("처리 실패", { description: "수정 가능한 구성품 정보를 찾지 못했습니다." });
+      return;
+    }
+
+    const draftRaw = bomLineQtyDrafts[bomLineId];
+    const nextQty = Number(draftRaw ?? line.qty_per_unit ?? 0);
+    const currentQty = Number(line.qty_per_unit ?? 0);
+    if (!Number.isFinite(nextQty) || nextQty <= 0) {
+      toast.error("처리 실패", { description: "수량은 0보다 커야 합니다." });
+      return;
+    }
+    if (Math.abs(nextQty - currentQty) < 1e-9) {
+      return;
+    }
+
+    try {
+      await addLineMutation.mutateAsync({
+        p_bom_id: bomId,
+        p_component_ref_type: componentRefType,
+        p_component_master_id: componentRefType === "MASTER" ? componentMasterId : null,
+        p_component_part_id: componentRefType === "PART" ? componentPartId : null,
+        p_qty_per_unit: nextQty,
+        p_unit: String(line.unit ?? "EA") || "EA",
+        p_note: String(line.note ?? "").trim() || buildBomLineKindNote(parseBomLineKind(line.note)),
+        p_meta: {},
+        p_actor_person_id: actorId,
+        p_note2: "replace qty from web",
+      });
+
+      await voidLineMutation.mutateAsync({
+        p_bom_line_id: bomLineId,
+        p_void_reason: "replace qty from web",
+        p_actor_person_id: actorId,
+        p_note: "replace qty from web",
+      });
+
+      if (selectedMasterId) {
+        await queryClient.invalidateQueries({ queryKey: ["bom", "flatten", selectedMasterId] });
+        const refreshedLines = await linesQuery.refetch();
+        await syncBomAutoAbsorbLabor(selectedMasterId, (refreshedLines.data ?? []) as BomLineRow[]);
+      }
+
+      setBomLineQtyDrafts((prev) => {
+        const next = { ...prev };
+        delete next[bomLineId];
+        return next;
+      });
+      toast.success("구성품 수량 수정 완료");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "구성품 수량 수정 중 오류가 발생했습니다.";
+      toast.error("처리 실패", { description: message });
+    }
   };
 
   const syncBomAutoAbsorbLabor = useCallback(
@@ -2687,6 +2953,8 @@ export default function CatalogPage() {
         componentMasterId ? (componentAbsorbByMasterId.get(componentMasterId) ?? []) : []
       );
       const laborTotal = Number.isFinite(perUnitTotals.sellPerUnit) && Number.isFinite(qty) ? perUnitTotals.sellPerUnit * qty : 0;
+      const laborCostTotal =
+        Number.isFinite(perUnitTotals.costPerUnit) && Number.isFinite(qty) ? perUnitTotals.costPerUnit * qty : 0;
 
       const materialCode = String(masterRow?.material_code_default ?? "00");
       const materialPerUnit = calculateMaterialPrice(materialCode, grossPerUnit, deductionPerUnit);
@@ -2699,6 +2967,7 @@ export default function CatalogPage() {
         deductionWeight,
         netWeight,
         laborTotal,
+        laborCostTotal,
         materialTotal,
         estimatedTotal,
       };
@@ -2778,6 +3047,11 @@ export default function CatalogPage() {
   const bomDecorRows = useMemo(
     () => displayedBomLineMetrics.filter(({ line }) => parseBomLineKind(line.note) === "DECOR"),
     [displayedBomLineMetrics]
+  );
+
+  const bomAccessoryLaborCostTotal = useMemo(
+    () => bomAccessoryRows.reduce((sum, row) => sum + Number(row.laborCostTotal ?? 0), 0),
+    [bomAccessoryRows]
   );
 
   const bomAccessoryLaborSellTotal = useMemo(
@@ -2942,7 +3216,6 @@ export default function CatalogPage() {
   const detailLaborCostWithAccessory = detailLaborCost;
   const detailLaborMarginWithAccessory = detailLaborSellWithAccessory - detailLaborCostWithAccessory;
   const totalEstimatedCost = roundUpToThousand(materialPrice + detailLaborCostWithAccessory);
-  const totalEstimatedSell = roundUpToThousand(materialPrice + detailLaborSellWithAccessory);
 
   const showDetailBaseRow = detailLaborBaseSellDisplay !== 0 || detailLaborBaseCostDisplay !== 0;
   const showDetailCenterRow =
@@ -3058,14 +3331,38 @@ export default function CatalogPage() {
     return "";
   }, [selectedDetail?.materialCode]);
   const isKaratMaterialDetail = detailKaratCode === "14" || detailKaratCode === "18";
-  const detailKaratLabel = detailKaratCode ? `${detailKaratCode}K` : "";
+  const canPromote14To18 = detailKaratCode === "14";
+  const is18KConvertedView = detailKaratCode === "18" || (canPromote14To18 && force18KViewFor14);
+  const detailKaratLabel = is18KConvertedView ? "18K" : detailKaratCode ? `${detailKaratCode}K` : "";
   const detailKaratGrossWeight = detailRawGrossWeight * 1.2;
   const detailKaratNetWeight = Math.max(detailKaratGrossWeight - detailRawDeductionWeight, 0);
   const detailKaratMaterialPrice = useMemo(() => {
     if (!isKaratMaterialDetail) return 0;
     return calculateMaterialPrice(detailKaratCode, detailKaratGrossWeight, detailRawDeductionWeight);
   }, [calculateMaterialPrice, detailKaratCode, detailKaratGrossWeight, detailRawDeductionWeight, isKaratMaterialDetail]);
-  const detailKaratTotalSell = roundUpToThousand(detailKaratMaterialPrice + detailLaborSellWithAccessory);
+  const detailDisplayGrossWeight = is18KConvertedView ? detailKaratGrossWeight : detailRawGrossWeight;
+  const detailDisplayNetWeight = is18KConvertedView ? detailKaratNetWeight : detailRawNetWeight;
+  const detailDisplayMaterialPrice = roundUpDisplayHundred(
+    is18KConvertedView ? detailKaratMaterialPrice : materialPrice
+  );
+  const detailDisplayTotalSell = roundUpDisplayHundred(
+    (is18KConvertedView ? detailKaratMaterialPrice : materialPrice) + detailLaborSellWithAccessory
+  );
+  const isSilverMaterialDetail = String(selectedDetail?.materialCode ?? "").trim() === "925" || String(selectedDetail?.materialCode ?? "").trim() === "999";
+  const isEtcMaterialDetail = String(selectedDetail?.materialCode ?? "").trim() === "00";
+  const detailMaterialPriceLabel = isEtcMaterialDetail
+    ? "기타"
+    : isSilverMaterialDetail
+      ? "은가격"
+      : "금가격";
+  const detailMarketTickLabel = isSilverMaterialDetail ? "은시세" : "금시세";
+  const detailMarketTickBaseValue = isSilverMaterialDetail ? silverOriginalPrice : goldPrice;
+  const detailMarketTickValue = Number.isFinite(detailMarketTickBaseValue) ? Math.ceil(detailMarketTickBaseValue) : 0;
+  const detailMaterialChipLabel = canPromote14To18
+    ? force18KViewFor14
+      ? "18K"
+      : selectedMaterialLabel
+    : selectedMaterialLabel;
 
   const detailRawHistoryRows = useMemo<CnRawHistoryRow[]>(() => {
     if (!selectedMasterId) return [];
@@ -3098,63 +3395,38 @@ export default function CatalogPage() {
         totalCostKrw: totalPriceCny * appliedRate,
         silverPriceKrwPerG: silverPriceCny * appliedRate,
         laborKrw: laborCny * appliedRate,
+        marketMode: "CN",
         createdAt: "",
       },
     ];
   }, [cnRawHistoryByMasterId, cnyAdRate, detailRawNetWeight, masterRowsById, selectedMasterId]);
 
-  const topMaterialFactor = useMemo(
-    () =>
-      getMaterialFactor({
-        materialCode: selectedDetail?.materialCode ?? "00",
-        factors: materialFactorMap,
-      }).effectiveFactor,
-    [materialFactorMap, selectedDetail?.materialCode]
-  );
-
-  const topKoreaSilverValue = useMemo(
-    () => detailRawNetWeight * silverModifiedPrice * topMaterialFactor,
-    [detailRawNetWeight, silverModifiedPrice, topMaterialFactor]
-  );
-
-  const topChinaSilverValue = useMemo(
-    () => detailRawNetWeight * csOriginalKrwPerG,
-    [csOriginalKrwPerG, detailRawNetWeight]
-  );
-
-  const overallKoreaLaborTotal = useMemo(
-    () => bomAccessoryLaborSellTotal + bomDecorLaborSellTotal,
-    [bomAccessoryLaborSellTotal, bomDecorLaborSellTotal]
-  );
-
-  const overallSharedLaborTotal = overallKoreaLaborTotal;
-
-  const componentSummaryRows = useMemo(
-    () => [
-      {
-        label: "[공임참고]총가격(전체-은값)",
-        korea: overallSharedLaborTotal - topKoreaSilverValue,
-        china: overallSharedLaborTotal - topChinaSilverValue,
+  const componentCategorySummary = useMemo(() => {
+    const accessory = bomAccessoryRows.reduce(
+      (acc, row) => {
+        acc.grossWeight += Number(row.grossWeight ?? 0);
+        acc.laborSell += Number(row.laborTotal ?? 0);
+        acc.laborCost += Number(row.laborCostTotal ?? 0);
+        return acc;
       },
-      {
-        label: "[공임참고]총가격(전체-부품)",
-        korea: overallSharedLaborTotal - bomAccessoryLaborSellTotal,
-        china: overallSharedLaborTotal - bomAccessoryLaborSellTotal,
+      { grossWeight: 0, laborSell: 0, laborCost: 0 }
+    );
+    const decor = bomDecorRows.reduce(
+      (acc, row) => {
+        acc.grossWeight += Number(row.grossWeight ?? 0);
+        acc.laborSell += Number(row.laborTotal ?? 0);
+        acc.laborCost += Number(row.laborCostTotal ?? 0);
+        return acc;
       },
-      {
-        label: "[공임참고]총가격(전체-장식)",
-        korea: overallSharedLaborTotal - bomDecorLaborSellTotal,
-        china: overallSharedLaborTotal - bomDecorLaborSellTotal,
-      },
-    ],
-    [
-      bomAccessoryLaborSellTotal,
-      bomDecorLaborSellTotal,
-      overallSharedLaborTotal,
-      topChinaSilverValue,
-      topKoreaSilverValue,
-    ]
-  );
+      { grossWeight: 0, laborSell: 0, laborCost: 0 }
+    );
+    const total = {
+      grossWeight: accessory.grossWeight + decor.grossWeight,
+      laborSell: accessory.laborSell + decor.laborSell,
+      laborCost: accessory.laborCost + decor.laborCost,
+    };
+    return { accessory, decor, total };
+  }, [bomAccessoryRows, bomDecorRows]);
 
 
   const handleImageUpload = async (file: File) => {
@@ -3792,18 +4064,20 @@ export default function CatalogPage() {
     setCnRawEntries([
       createEmptyCnRawEntry({
         analysisDate: toIsoDateInputValue(cnRawCostDateValue),
-        totalPriceCny: Number.isFinite(cnRawTotalPriceValue) && cnRawTotalPriceValue > 0 ? String(cnRawTotalPriceValue) : "",
-        silverPriceCny: Number.isFinite(cnRawSilverPriceValue) && cnRawSilverPriceValue > 0 ? String(cnRawSilverPriceValue) : "",
+        totalPriceCny: formatRawInputNumber(cnRawTotalPriceValue),
+        silverPriceCny: formatRawInputNumber(cnRawSilverPriceValue),
         laborBasis: cnRawLaborBasisValue,
       }),
     ]);
+    setCnRawMarketMode("CN");
+    cnRawMarketModeRef.current = "CN";
 
     if (selectedItem.id) {
       void loadAbsorbLaborItems(selectedItem.id).catch((error) => {
         const message = error instanceof Error ? error.message : "흡수공임 조회 실패";
         toast.error("처리 실패", { description: message });
       });
-      void loadCnRawHistory(selectedItem.id, { syncEditor: true }).catch((error) => {
+      void loadCnRawHistory(selectedItem.id, { syncEditor: true, marketMode: "CN" }).catch((error) => {
         console.error("Failed to load RAW history for editor:", error);
       });
     }
@@ -4209,9 +4483,9 @@ export default function CatalogPage() {
           amount_krw: amount,
           material_qty_per_unit: absorbLaborClass === "MATERIAL" ? materialQtyPerUnit : 1,
           material_cost_krw: absorbLaborClass === "MATERIAL" ? materialCostKrw : 0,
-          is_per_piece: absorbIsPerPiece,
-          vendor_party_id: absorbVendorId || null,
-          is_active: absorbIsActive,
+          is_per_piece: true,
+          vendor_party_id: null,
+          is_active: true,
         }),
       });
       const json = (await response.json()) as { error?: string };
@@ -4292,10 +4566,12 @@ export default function CatalogPage() {
   const openDetailDrawer = (id: string) => {
     prefetchMasterDetailFastPath(id);
     setSelectedItemId(id);
+    setForce18KViewFor14(false);
     setIsDetailDrawerOpen(true);
   };
 
   const closeDetailDrawer = () => {
+    setForce18KViewFor14(false);
     setIsDetailDrawerOpen(false);
   };
 
@@ -4335,7 +4611,7 @@ export default function CatalogPage() {
         setUploadingImage(false);
       }}
       title={isEditMode ? "마스터 수정" : "새 상품 등록"}
-      className="w-full sm:w-[96vw] lg:w-[92vw] 2xl:w-[1500px] sm:max-w-none"
+      className="w-full sm:w-[98vw] lg:w-[95vw] 2xl:w-[1900px] sm:max-w-none"
     >
       <div className="h-full overflow-y-auto p-6 scrollbar-hide">
         <div
@@ -4369,7 +4645,7 @@ export default function CatalogPage() {
               <label className="group relative flex h-56 w-56 mx-auto cursor-pointer flex-col items-center justify-center overflow-hidden rounded-[16px] border border-[var(--panel-border)] bg-[var(--panel)] text-center">
                 <input
                   type="file"
-                    accept="image/*,.heic,.heif"
+                  accept="image/*,.heic,.heif"
                   className="sr-only"
                   ref={fileInputRef}
                   onChange={(event) => {
@@ -4435,7 +4711,7 @@ export default function CatalogPage() {
             }}
           >
             <div className="pr-2">
-              <div className="grid h-full grid-cols-1 gap-6 xl:grid-cols-2 2xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(320px,360px)]">
+              <div className="grid h-full grid-cols-1 gap-6 xl:grid-cols-2 2xl:[grid-template-columns:minmax(0,40%)_minmax(0,30%)_minmax(0,30%)]">
                 {/* 2-1. 좌측 열: 기본 정보 및 비고 */}
                 <div className="flex min-w-0 flex-col gap-4 h-full">
                   <div className="rounded-[18px] border border-[var(--panel-border)] bg-[var(--panel)] p-4">
@@ -4455,10 +4731,22 @@ export default function CatalogPage() {
                           />
                           <span>단가제</span>
                         </label>
+                        <button
+                          type="button"
+                          onClick={() => handleChangeCnRawMarketMode(cnRawMarketMode === "KR" ? "CN" : "KR")}
+                          className={cn(
+                            "rounded-[6px] px-2.5 py-1 text-[11px] font-semibold",
+                            cnRawMarketMode === "KR"
+                              ? "bg-blue-600 text-white hover:bg-blue-700"
+                              : "bg-red-600 text-white hover:bg-red-700"
+                          )}
+                        >
+                          {cnRawMarketMode === "KR" ? "한국" : "중국"}
+                        </button>
                       </div>
                       <span className="text-xs text-[var(--muted)]">자동올림</span>
                     </div>
-                    <div className="grid gap-4 md:grid-cols-2">
+                    <div className="space-y-4">
                       <Field label="모델명">
                         <Input
                           placeholder="모델명*"
@@ -4467,82 +4755,79 @@ export default function CatalogPage() {
                           onBlur={() => {
                             const derived =
                               deriveCategoryCodeFromModelName(modelName);
-                            if (derived) {
-                              setCategoryCode(derived);
-                            }
+                            setCategoryCode(derived || "");
                             applyVendorFromModelName(modelName);
                           }}
                         />
                       </Field>
-                      <Field label="공급처">
-                        <Select
-                          value={vendorId}
-                          onChange={(event) => setVendorId(event.target.value)}
-                        >
-                          <option value="">공급처 선택</option>
-                          {vendorOptions.map((vendor) => (
-                            <option key={vendor.value} value={vendor.value}>
-                              {vendor.label}
-                            </option>
-                          ))}
-                        </Select>
-                      </Field>
-                      <Field label="기본 재질">
-                        <Select
-                          value={materialCode}
-                          onChange={(event) =>
-                            setMaterialCode(event.target.value)
-                          }
-                        >
-                          <option value="">기본 재질 선택</option>
-                          {materialOptions.map((material) => (
-                            <option key={material.value} value={material.value}>
-                              {material.label}
-                            </option>
-                          ))}
-                        </Select>
-                      </Field>
-                      <Field label="카테고리">
-                        <Select
-                          value={categoryCode}
-                          onChange={(event) => {
-                            setCategoryCode(event.target.value);
-                          }}
-                        >
-                          <option value="">카테고리 선택*</option>
-                          {categoryOptions.map((category) => (
-                            <option key={category.value} value={category.value}>
-                              {category.label}
-                            </option>
-                          ))}
-                        </Select>
-                      </Field>
-                      <Field label="기본 중량 (g)">
-                        <Input
-                          type="number"
-                          step="0.01"
-                          min={0}
-                          placeholder="중량"
-                          value={weightDefault}
-                          onChange={(event) =>
-                            setWeightDefault(event.target.value)
-                          }
-                          disabled={masterKind === "BUNDLE"}
-                        />
-                      </Field>
-                      <Field label="차감 중량 (g)">
-                        <Input
-                          type="number"
-                          step="0.01"
-                          min={0}
-                          placeholder="차감 중량"
-                          value={deductionWeight}
-                          onChange={(event) =>
-                            setDeductionWeight(event.target.value)
-                          }
-                          disabled={masterKind === "BUNDLE"}
-                        />
-                      </Field>
+                      <div className="grid gap-4 md:grid-cols-3">
+                        <Field label="소재">
+                          <Select
+                            value={materialCode}
+                            onChange={(event) =>
+                              setMaterialCode(event.target.value)
+                            }
+                          >
+                            <option value="">기본 재질 선택</option>
+                            {materialOptions.map((material) => (
+                              <option key={material.value} value={material.value}>
+                                {material.label}
+                              </option>
+                            ))}
+                          </Select>
+                        </Field>
+                        <Field label="공장명">
+                          <Input
+                            readOnly
+                            value={vendorOptions.find((vendor) => vendor.value === vendorId)?.label ?? vendorId}
+                            placeholder="공장명"
+                            className="bg-[var(--subtle-bg)]"
+                          />
+                        </Field>
+                        <Field label="카테고리">
+                          <Input
+                            readOnly
+                            value={categoryOptions.find((category) => category.value === categoryCode)?.label ?? categoryCode}
+                            placeholder="카테고리"
+                            className="bg-[var(--subtle-bg)]"
+                          />
+                        </Field>
+                      </div>
+                      <div className="grid gap-4 md:grid-cols-3">
+                        <Field label="기본중량">
+                          <Input
+                            type="number"
+                            step="0.01"
+                            min={0}
+                            placeholder="중량"
+                            value={weightDefault}
+                            onChange={(event) =>
+                              setWeightDefault(event.target.value)
+                            }
+                            disabled={masterKind === "BUNDLE"}
+                          />
+                        </Field>
+                        <Field label="차감중량">
+                          <Input
+                            type="number"
+                            step="0.01"
+                            min={0}
+                            placeholder="차감 중량"
+                            value={deductionWeight}
+                            onChange={(event) =>
+                              setDeductionWeight(event.target.value)
+                            }
+                            disabled={masterKind === "BUNDLE"}
+                          />
+                        </Field>
+                        <Field label="총중량">
+                          <Input
+                            readOnly
+                            value={formatWeightNumber(Math.max(0, toNumber(weightDefault) - toNumber(deductionWeight)))}
+                            className="bg-[var(--subtle-bg)]"
+                          />
+                        </Field>
+                      </div>
                     </div>
                   </div>
 
@@ -4559,7 +4844,21 @@ export default function CatalogPage() {
 
                     <div className="rounded-[12px] border border-[var(--panel-border)] bg-[var(--subtle-bg)] p-3 space-y-2">
                       <div className="flex items-center justify-between gap-2">
-                        <div className="text-sm font-semibold text-[var(--foreground)]">RAW원가 분석</div>
+                        <div className="flex items-center gap-2 text-sm font-semibold text-[var(--foreground)]">
+                          <span>RAW원가 분석</span>
+                          <button
+                            type="button"
+                            onClick={() => handleChangeCnRawMarketMode(cnRawMarketMode === "KR" ? "CN" : "KR")}
+                            className={cn(
+                              "rounded-[6px] px-2 py-0.5 text-[10px] font-semibold",
+                              cnRawMarketMode === "KR"
+                                ? "bg-blue-600 text-white hover:bg-blue-700"
+                                : "bg-red-600 text-white hover:bg-red-700"
+                            )}
+                          >
+                            {cnRawMarketMode === "KR" ? "한국" : "중국"}
+                          </button>
+                        </div>
                         <div className="flex items-center gap-2">
                           <Button
                             type="button"
@@ -4574,12 +4873,12 @@ export default function CatalogPage() {
                         </div>
                       </div>
                       <div className="space-y-1">
-                        <div className="grid grid-cols-[116px_68px_68px_76px_72px_auto] items-center gap-1 text-[10px] text-[var(--muted)] px-1">
+                        <div className="grid grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,0.9fr)_minmax(0,1fr)_minmax(96px,0.9fr)] items-center gap-1 text-[10px] text-[var(--muted)] px-1">
                           <div>날짜</div>
-                          <div className="text-right">총(CNY)</div>
-                          <div className="text-right">은(CNY/g)</div>
+                          <div className="text-right">총({cnRawMarketMode === "KR" ? "KRW" : "CNY"})</div>
+                          <div className="text-right">은({cnRawMarketMode === "KR" ? "KRW/g" : "CNY/g"})</div>
                           <div>공임기준</div>
-                          <div className="text-right">공임</div>
+                          <div className="text-right">공임({cnRawMarketMode === "KR" ? "KRW" : "CNY"})</div>
                           <div className="text-right">추가/삭제</div>
                         </div>
                         {cnRawEntriesSorted.map((rawEntry, idx) => {
@@ -4598,19 +4897,21 @@ export default function CatalogPage() {
                                 void saveCnCostPayload(targetMasterId, { silent: true });
                               }}
                             >
-                              <div className="grid grid-cols-[116px_68px_68px_76px_72px_auto] items-center gap-1">
-                                <Input
-                                  type="date"
-                                  value={rawEntry.analysisDate}
-                                  onChange={(event) => changeCnRawEntry(entry.id, { analysisDate: event.target.value })}
-                                  className="h-8 px-2 text-[11px]"
-                                />
+                              <div className="grid grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,0.9fr)_minmax(0,1fr)_minmax(96px,0.9fr)] items-center gap-1">
+                                <div className="relative">
+                                  <Input
+                                    type="date"
+                                    value={rawEntry.analysisDate}
+                                    onChange={(event) => changeCnRawEntry(entry.id, { analysisDate: event.target.value })}
+                                    className="h-8 px-2 text-[11px]"
+                                  />
+                                </div>
                                 <Input
                                   type="number"
                                   min={0}
                                   step="0.01"
                                   value={rawEntry.totalPriceCny}
-                                  onChange={(event) => changeCnRawEntry(entry.id, { totalPriceCny: event.target.value })}
+                                  onChange={(event) => changeCnRawEntry(entry.id, { totalPriceCny: sanitizeTwoDecimalInput(event.target.value) })}
                                   className="h-8 px-2 text-[11px] text-right"
                                 />
                                 <Input
@@ -4618,7 +4919,7 @@ export default function CatalogPage() {
                                   min={0}
                                   step="0.01"
                                   value={rawEntry.silverPriceCny}
-                                  onChange={(event) => changeCnRawEntry(entry.id, { silverPriceCny: event.target.value })}
+                                  onChange={(event) => changeCnRawEntry(entry.id, { silverPriceCny: sanitizeTwoDecimalInput(event.target.value) })}
                                   className="h-8 px-2 text-[11px] text-right"
                                 />
                                 <Select
@@ -4631,46 +4932,42 @@ export default function CatalogPage() {
                                 </Select>
                                 <Input
                                   readOnly
-                                  value={formatDisplayCny(entry.laborCny)}
-                                  className="h-8 px-2 text-[11px] text-right"
+                                  value={cnRawMarketMode === "KR" ? formatDisplayKrw(entry.laborKrw) : formatDisplayCny(entry.laborCny)}
+                                  className={cn(
+                                    "h-8 px-2 text-[11px] font-medium tabular-nums text-right",
+                                    idx === 0 ? "text-blue-600" : undefined
+                                  )}
                                 />
-                                <div className="flex items-center justify-end gap-1">
-                                  {idx === cnRawEntriesSorted.length - 1 ? (
-                                    <Button
-                                      type="button"
-                                      size="sm"
-                                      variant="secondary"
-                                      className="h-7 px-2 text-[11px]"
-                                      onClick={addCnRawEntry}
-                                    >
-                                      +
-                                    </Button>
-                                  ) : null}
-                                  {cnRawEntriesSorted.length > 1 ? (
+                                <div className="flex items-center justify-end gap-1 whitespace-nowrap">
+                                  <Button
+                                    type="button"
+                                    size="sm"
+                                    variant="secondary"
+                                    className="h-7 px-2 text-[11px]"
+                                    onClick={addCnRawEntry}
+                                  >
+                                    +
+                                  </Button>
                                   <Button
                                     type="button"
                                     size="sm"
                                     variant="ghost"
                                     className="h-7 px-2 text-[11px] text-[var(--danger)]"
+                                    disabled={cnRawEntriesSorted.length <= 1}
                                     onClick={() => {
                                       removeCnRawEntry(entry.id);
-                                      if (!isEditMode) return;
-                                      const targetMasterId = selectedItemId || masterId;
-                                      if (!targetMasterId) return;
-                                      window.setTimeout(() => {
-                                        void saveCnCostPayload(targetMasterId, { silent: true });
-                                      }, 0);
                                     }}
                                   >
                                     삭제
                                   </Button>
-                                ) : null}
                                 </div>
                               </div>
-                              <div className="pl-1 text-[10px] text-[var(--muted)] tabular-nums overflow-x-auto whitespace-nowrap">
-                                {`<${toCompactYyMmDd(entry.analysisDate) || "-"}>총${formatDisplayCny(entry.totalPriceCny)} /은:${formatDisplayCny(entry.silverPriceCny)} /공임 ${formatDisplayCny(entry.laborCny)}${entry.laborBasis === "PER_G" ? "/g" : "/ea"}(`}
-                                <span className="font-semibold text-blue-600">{`원가${formatDisplayKrw(entry.totalCostKrw)}원`}</span>
-                                {`) | KRW 총: ₩${formatDisplayKrw(entry.totalPriceCny * cnyAdRate)} | 은: ₩${formatDisplayKrw(entry.silverPriceKrwPerG)}/g | 공임: ₩${formatDisplayKrw(entry.laborKrw)}${entry.laborBasis === "PER_G" ? "/g" : "/ea"}`}
+                              <div className="pl-1 text-[10px] leading-4 text-[var(--muted)] tabular-nums whitespace-normal break-all">
+                                <span>{`<${toCompactYyMmDd(entry.analysisDate) || "-"}> `}</span>
+                                <span>{`총 ${cnRawMarketMode === "KR" ? formatDisplayKrw(entry.totalCostKrw) : formatDisplayCny(entry.totalPriceCny)} / `}</span>
+                                <span>{`은 ${cnRawMarketMode === "KR" ? formatDisplayKrw(entry.silverPriceKrwPerG) : formatDisplayCny(entry.silverPriceCny)} / `}</span>
+                                <span>{`공임 ${cnRawMarketMode === "KR" ? formatDisplayKrw(entry.laborKrw) : formatDisplayCny(entry.laborCny)}${entry.laborBasis === "PER_G" ? "/g" : "/ea"} `}</span>
+                                <span className="font-semibold text-blue-600">{`| 원가 ${formatDisplayKrw(entry.totalCostKrw)}원`}</span>
                               </div>
                             </div>
                           );
@@ -4687,16 +4984,15 @@ export default function CatalogPage() {
                       <p className="text-sm font-semibold text-[var(--foreground)]">
                         공임 및 구성
                       </p>
-                      <div className="flex items-center gap-2">
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="secondary"
-                          className="h-7 px-2 text-[11px]"
-                          onClick={() => setShowAdvancedPricing((prev) => !prev)}
-                        >
-                          {showAdvancedPricing ? "고급 닫기" : "고급"}
-                        </Button>
+                      <div className="flex items-center gap-3 text-[11px] tabular-nums whitespace-nowrap">
+                        <span className="text-[var(--muted)]">부품 판매</span>
+                        <span className="font-semibold text-[var(--foreground)]">
+                          {linesQuery.isLoading || linesQuery.isError ? "-" : `₩${formatLaborDisplayKrw(bomAccessoryLaborSellTotal)}`}
+                        </span>
+                        <span className="text-[var(--muted)]">부품 원가</span>
+                        <span className="font-semibold text-[var(--foreground)]">
+                          {linesQuery.isLoading || linesQuery.isError ? "-" : `₩${formatLaborDisplayKrw(bomAccessoryLaborCostTotal)}`}
+                        </span>
                         <span className="text-[10px] bg-[var(--primary)]/10 text-[var(--primary)] px-2 py-0.5 rounded">
                           좌:판매
                         </span>
@@ -5251,7 +5547,7 @@ export default function CatalogPage() {
     <div
       className={cn(
         "grid grid-cols-1 gap-4 items-start",
-        "2xl:[grid-template-columns:minmax(600px,1fr)_minmax(380px,480px)]"
+        "2xl:[grid-template-columns:minmax(0,3fr)_minmax(0,2fr)]"
       )}
     >
       {/* [왼쪽 기둥] 상세 정보 패널 */}
@@ -5275,64 +5571,51 @@ export default function CatalogPage() {
           )}
 
           <div className="flex-1 min-w-0 rounded-[12px] border border-[var(--panel-border)] bg-[var(--panel)] px-4 py-3 flex flex-col gap-3">
-            <div className="grid grid-cols-3 gap-2 text-xs">
-              <div className="rounded-[8px] border border-[var(--panel-border)] bg-[var(--subtle-bg)] px-2 py-2 text-center">{selectedVendorName || "-"}</div>
-              <div className="rounded-[8px] border border-[var(--panel-border)] bg-[var(--subtle-bg)] px-2 py-2 text-center">{selectedMaterialLabel}</div>
-              <div className="rounded-[8px] border border-[var(--panel-border)] bg-[var(--subtle-bg)] px-2 py-2 text-center">{selectedCategoryLabel}</div>
-            </div>
-            <div className="rounded-[8px] border border-[var(--panel-border)] bg-blue-50 px-3 py-2 text-sm font-semibold text-[var(--foreground)] text-center">
-              {(() => {
-                const weight = parseFloat(String(selectedDetail?.weight ?? ""));
-                const deduction = parseFloat(String(selectedDetail?.deductionWeight ?? ""));
-                if (!Number.isFinite(weight)) return "총중량 -";
-                const safeDeduction = Number.isFinite(deduction) ? deduction : 0;
-                const netWeightText = formatWeightNumber(weight - safeDeduction);
-                const [intPart, decimalPart] = netWeightText.split(".");
-                return (
-                  <>
-                    총중량 {intPart}
-                    {decimalPart ? <><span className="decimal-point-emphasis">.</span>{decimalPart}</> : null} g
-                  </>
-                );
-              })()}
-            </div>
-            <div className="grid grid-cols-2 gap-2 text-xs">
-              <div className="rounded-[8px] border border-[var(--panel-border)] bg-[var(--subtle-bg)] px-3 py-2 text-center">
-                {(() => {
-                  const weight = parseFloat(String(selectedDetail?.weight ?? ""));
-                  if (!Number.isFinite(weight)) return <>중량 -</>;
-                  const weightText = formatWeightNumber(weight);
-                  const [intPart, decimalPart] = weightText.split(".");
-                  return (
-                    <>
-                      중량 {intPart}
-                      {decimalPart ? <><span className="decimal-point-emphasis">.</span>{decimalPart}</> : null} g
-                    </>
-                  );
-                })()}
-              </div>
-              <div className="rounded-[8px] border border-[var(--panel-border)] bg-[var(--subtle-bg)] px-3 py-2 text-center">
-                차감중량 {selectedDetail?.deductionWeight ? `${selectedDetail.deductionWeight} g` : "-"}
-              </div>
-            </div>
-            {isKaratMaterialDetail ? (
-              <div className="grid grid-cols-2 gap-2 text-xs">
-                <div className="rounded-[8px] border border-[var(--panel-border)] bg-amber-50 px-3 py-2 text-center font-semibold text-[var(--foreground)]">
-                  {detailKaratLabel} 중량 {formatWeightNumber(detailKaratGrossWeight)} g
-                </div>
-                <div className="rounded-[8px] border border-[var(--panel-border)] bg-amber-50 px-3 py-2 text-center font-semibold text-[var(--foreground)]">
-                  {detailKaratLabel} 차감중량 {formatWeightNumber(detailRawDeductionWeight)} g
-                </div>
-                <div className="rounded-[8px] border border-[var(--panel-border)] bg-amber-100 px-3 py-2 text-center font-semibold text-[var(--foreground)] col-span-2">
-                  {detailKaratLabel} 총중량 {formatWeightNumber(detailKaratNetWeight)} g
-                </div>
-                <div className="rounded-[8px] border border-[var(--panel-border)] bg-amber-100 px-3 py-2 text-center font-semibold text-[var(--foreground)] col-span-2">
-                  {detailKaratLabel} 총 가격 <NumberText value={detailKaratTotalSell} /> 원
-                </div>
-              </div>
-            ) : null}
-            <div className="mt-auto rounded-[8px] border border-[var(--panel-border)] bg-blue-50 px-3 py-2 text-sm font-semibold leading-snug whitespace-normal break-words text-[var(--foreground)]">
+            <div className="rounded-[8px] border border-[var(--panel-border)] bg-white px-3 py-3 text-xl font-bold leading-snug whitespace-nowrap overflow-hidden text-ellipsis text-[var(--foreground)] text-left min-h-[72px] flex items-center">
               {selectedItem?.model ?? "-"}
+            </div>
+            <div className={cn(
+              "rounded-[10px] border-2 border-green-500 bg-blue-100 px-2.5 py-2"
+            )}>
+              <div className="flex items-center justify-start gap-2">
+                <div className="shrink-0 text-[12px] font-bold text-[var(--foreground)]">총가격(판매)</div>
+                <div className="text-2xl font-bold text-[var(--foreground)] tabular-nums leading-tight text-left inline-flex items-center gap-2">
+                  <span><NumberText value={detailDisplayTotalSell} /> 원</span>
+                  {is18KConvertedView ? <span className="text-[11px] font-medium text-amber-900">18K 보기</span> : null}
+                </div>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <div className={cn(
+                "rounded-[8px] border-2 border-white px-2 py-1 text-left min-h-[52px] flex flex-col justify-center",
+                "bg-amber-50"
+              )}>
+                <div className="flex items-center justify-start gap-2">
+                  <div className="shrink-0 text-[12px] font-bold text-[var(--foreground)]">총공임(판매)</div>
+                  <div className="text-lg font-semibold text-[var(--foreground)] tabular-nums text-left">
+                    <NumberText value={detailLaborSellWithAccessory} /> 원
+                  </div>
+                </div>
+              </div>
+              <div className={cn(
+                "rounded-[8px] border-2 border-white px-2 py-1 text-left min-h-[52px] flex flex-col justify-center",
+                "bg-amber-50"
+              )}>
+                <div className="flex items-center justify-start gap-2">
+                  <div className="shrink-0 text-[12px] font-bold text-[var(--foreground)]">{is18KConvertedView ? "18K 총중량" : "총중량"}</div>
+                  <div className="flex-1 min-w-0 text-lg font-semibold text-[var(--foreground)] tabular-nums text-left">
+                    {Number.isFinite(detailDisplayNetWeight)
+                      ? <div className="flex items-baseline justify-between gap-2">
+                        <span className="whitespace-nowrap">{renderWeightNumberWithRedDecimal(detailDisplayNetWeight)} g</span>
+                        <span className="whitespace-nowrap text-right text-base">({renderWeightNumberWithRedDecimal(detailDisplayGrossWeight)} - {renderWeightNumberWithRedDecimal(detailRawDeductionWeight)})</span>
+                      </div>
+                      : "-"}
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div className="rounded-[8px] border border-[var(--panel-border)] bg-[var(--subtle-bg)] px-2 py-1 text-left text-base font-semibold tabular-nums text-[var(--foreground)]">
+              총가격(<NumberText value={detailDisplayTotalSell} />) = 소재가격(<NumberText value={detailDisplayMaterialPrice} />) + 총공임(<NumberText value={detailLaborSellWithAccessory} />)
             </div>
           </div>
         </div>
@@ -5340,7 +5623,7 @@ export default function CatalogPage() {
         {/* B. 상세 정보 카드 */}
         <Card id="catalog.detail.merged">
           <CardHeader>
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between gap-3">
               <div className="flex items-center gap-3">
                 <span className="shrink-0 whitespace-nowrap text-lg font-bold text-[var(--foreground)]">
                   상세
@@ -5350,7 +5633,7 @@ export default function CatalogPage() {
                   size="sm"
                   onClick={handleOpenEdit}
                   disabled={!selectedItem}
-                  className="border-amber-600 bg-amber-500 text-white hover:bg-amber-600"
+                  className="border-gray-700 bg-gray-700 text-white hover:bg-gray-800"
                 >
                   마스터 수정
                 </Button>
@@ -5360,37 +5643,39 @@ export default function CatalogPage() {
                   onClick={openBomDrawer}
                   disabled={!selectedItem}
                   className={cn(
-                    "border-amber-300 bg-amber-100 text-amber-900 hover:bg-amber-200",
-                    showBomPanel && "border-amber-500 bg-amber-200 text-amber-950"
+                    "border-gray-300 bg-gray-100 text-gray-800 hover:bg-gray-200",
+                    showBomPanel && "border-gray-400 bg-gray-200 text-gray-900"
                   )}
                 >
                   부속
                 </Button>
-                <div className="grid grid-cols-[auto_auto] items-center gap-2 rounded-[8px] border-2 border-red-400 bg-white px-3 py-1.5">
-                  <div className="text-xs text-[var(--muted)]">총중량</div>
-                  <div className="text-sm font-semibold text-[var(--foreground)]">
-                    {(() => {
-                      const weight = parseFloat(String(selectedDetail?.weight ?? ""));
-                      const deduction = parseFloat(String(selectedDetail?.deductionWeight ?? ""));
-                      if (!Number.isFinite(weight)) return "-";
-                      const safeDeduction = Number.isFinite(deduction) ? deduction : 0;
-                      const netWeightText = formatWeightNumber(weight - safeDeduction);
-                      const [intPart, decimalPart] = netWeightText.split(".");
-                      return (
-                        <>
-                          {intPart}
-                          {decimalPart ? <><span className="decimal-point-emphasis">.</span>{decimalPart}</> : null} g
-                        </>
-                      );
-                    })()}
-                  </div>
+              </div>
+              <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
+                <div className="rounded-[8px] border-2 border-white bg-[var(--subtle-bg)] px-3 py-2 text-center text-sm font-extrabold tabular-nums text-[var(--foreground)]">
+                  {detailMaterialPriceLabel} <NumberText value={detailDisplayMaterialPrice} />원
                 </div>
-                <div className="grid grid-cols-[auto_auto] items-center gap-2 rounded-[8px] border-2 border-[var(--primary)] bg-[var(--panel)] px-3 py-1.5">
-                  <div className="text-xs text-[var(--muted)]">총금액(판매)</div>
-                  <div className="text-sm font-semibold text-[var(--foreground)]">
-                    <NumberText value={totalEstimatedSell} /> 원
-                  </div>
+                <div className="rounded-[8px] border-2 border-white bg-[var(--subtle-bg)] px-3 py-2 text-center text-sm font-extrabold tabular-nums text-[var(--foreground)]">
+                  {detailMarketTickLabel} <NumberText value={detailMarketTickValue} />원/g
                 </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!canPromote14To18) return;
+                    setForce18KViewFor14((prev) => !prev);
+                  }}
+                  className={cn(
+                    "rounded-[8px] border-2 px-3 py-2 text-center text-sm font-extrabold",
+                    canPromote14To18
+                      ? "cursor-pointer border-amber-500 bg-amber-100 text-amber-900"
+                      : "border-[var(--panel-border)] bg-[var(--subtle-bg)] text-[var(--foreground)]",
+                    force18KViewFor14 && "border-amber-600 bg-amber-200 text-amber-950"
+                  )}
+                  title={canPromote14To18 ? "클릭하여 18K 보기 전환" : undefined}
+                >
+                  {detailMaterialChipLabel}
+                </button>
+                <div className="rounded-[8px] border border-[var(--panel-border)] bg-[var(--subtle-bg)] px-2 py-2 text-center text-xs">{selectedVendorName || "-"}</div>
+                <div className="rounded-[8px] border border-[var(--panel-border)] bg-[var(--subtle-bg)] px-2 py-2 text-center text-xs">{selectedCategoryLabel}</div>
               </div>
             </div>
           </CardHeader>
@@ -5410,14 +5695,14 @@ export default function CatalogPage() {
                       총공임
                     </span>
                   </div>
-                  <ReadonlyNumberCell value={detailLaborSellWithAccessory} valueClassName="text-base font-bold" className="bg-blue-50 border-2 border-green-500" />
+                  <ReadonlyNumberCell value={detailLaborSellWithAccessory} valueClassName="text-base font-bold" className="bg-white" />
                   <div className="col-span-2" />
-                    <ReadonlyNumberCell
-                      value={detailLaborMarginWithAccessory}
-                      extraText={totalLaborMarginShare ? `(${totalLaborMarginShare})` : ""}
-                      valueClassName="text-sm font-semibold"
-                      className="bg-blue-50"
-                    />
+                  <ReadonlyNumberCell
+                    value={detailLaborMarginWithAccessory}
+                    extraText={totalLaborMarginShare ? `(${totalLaborMarginShare})` : ""}
+                    valueClassName="text-sm font-semibold"
+                    className="bg-white"
+                  />
                 </div>
                 <div className="border-t border-[var(--panel-border)]/60" />
                 {/* 기본공임 */}
@@ -5574,18 +5859,18 @@ export default function CatalogPage() {
             />
             <div className="rounded-[10px] border border-[var(--panel-border)] bg-[var(--subtle-bg)] p-3 space-y-2">
               <div className="flex items-center justify-between gap-2">
-                <div className="text-sm font-semibold">RAW원가 분석</div>
-                <div className="text-[11px] text-[var(--muted)]">
+                <div className="text-base font-semibold">RAW원가 분석</div>
+                <div className="text-[12px] text-[var(--muted)]">
                   총중량 {formatWeightNumber(detailRawNetWeight)} g
                 </div>
               </div>
               {detailRawHistoryRows.length === 0 ? (
-                <div className="rounded border border-[var(--panel-border)] bg-[var(--panel)] px-3 py-2 text-[11px] text-[var(--muted)]">기록 없음</div>
+                <div className="rounded border border-[var(--panel-border)] bg-[var(--panel)] px-3 py-2 text-[12px] text-[var(--muted)]">기록 없음</div>
               ) : (
                 <div className="space-y-1">
                   {detailRawHistoryRows.map((entry) => (
                     <div key={entry.id} className="rounded border border-[var(--panel-border)] bg-[var(--panel)] px-2.5 py-1.5">
-                      <div className="text-[10px] text-[var(--muted)] tabular-nums">
+                      <div className="text-[12px] leading-5 whitespace-normal break-all text-[var(--muted)] tabular-nums">
                         {`<${toCompactYyMmDd(entry.analysisDate) || "-"}>총${formatDisplayCny(entry.totalPriceCny)} /은:${formatDisplayCny(entry.silverPriceCny)} /공임 ${formatDisplayCny(entry.laborCny)}${entry.laborBasis === "PER_PIECE" ? "/ea" : "/g"}(`}
                         <span className="font-semibold text-blue-600">{`원가${formatDisplayKrw(entry.totalCostKrw)}원`}</span>
                         {`) | KRW 총: ₩${formatDisplayKrw(entry.totalCostKrw)} | 은: ₩${formatDisplayKrw(entry.silverPriceKrwPerG)}/g | 공임: ₩${formatDisplayKrw(entry.laborKrw)}${entry.laborBasis === "PER_G" ? "/g" : "/ea"}`}
@@ -5683,9 +5968,9 @@ export default function CatalogPage() {
                                   <td className={cn("px-2 py-2 text-right", laborRowBgClass)}>₩{formatLaborDisplayKrw(row.ours)}</td>
                                   <td className={cn("px-2 py-2 text-right", laborRowBgClass)}>{chinaCostComparison ? `₩${formatLaborDisplayKrw(row.china)}` : "-"}</td>
                                   <td className={cn("px-2 py-2 text-right", laborRowBgClass)}>
-                                  {chinaCostComparison
-                                    ? `₩${formatLaborDisplayKrw(row.ours - row.china)}`
-                                    : "-"}
+                                    {chinaCostComparison
+                                      ? `₩${formatLaborDisplayKrw(row.ours - row.china)}`
+                                      : "-"}
                                   </td>
                                 </tr>
                               );
@@ -5733,26 +6018,7 @@ export default function CatalogPage() {
               <div className="rounded-[10px] border border-[var(--panel-border)] bg-[var(--panel)] p-3 space-y-3">
                 <div className="flex items-center justify-between gap-3">
                   <div className="text-sm font-semibold">구성품 목록</div>
-                  <div className="grid grid-cols-[auto_auto] items-center gap-x-2 gap-y-1 text-xs tabular-nums">
-                    <span className="text-[var(--muted)]">총중량</span>
-                    <span className="font-semibold text-[var(--foreground)]">
-                      {flattenQuery.isLoading || flattenQuery.isError || flattenComponentMetrics.rows.length === 0
-                        ? "-"
-                        : `${formatWeightNumber(flattenComponentMetrics.totals.grossWeight)} g`}
-                    </span>
-                    <span className="text-[var(--muted)]">판매공임 합계</span>
-                    <span className="font-semibold text-[var(--foreground)]">
-                      {flattenQuery.isLoading || flattenQuery.isError || flattenComponentMetrics.rows.length === 0
-                        ? "-"
-                        : `₩${formatLaborDisplayKrw(flattenComponentMetrics.totals.laborSellTotal)}`}
-                    </span>
-                    <span className="text-[var(--muted)]">판매공임 원가</span>
-                    <span className="font-semibold text-[var(--foreground)]">
-                      {flattenQuery.isLoading || flattenQuery.isError || flattenComponentMetrics.rows.length === 0
-                        ? "-"
-                        : `₩${formatLaborDisplayKrw(flattenComponentMetrics.totals.laborCostTotal)}`}
-                    </span>
-                  </div>
+                  <div className="text-[11px] text-[var(--muted)]">부품 / 장식 / 합계</div>
                 </div>
 
                 <div className="rounded-[8px] border border-[var(--panel-border)] bg-[var(--subtle-bg)] overflow-hidden">
@@ -5760,18 +6026,48 @@ export default function CatalogPage() {
                     <thead className="bg-[var(--panel)] text-[var(--muted)]">
                       <tr>
                         <th className="px-3 py-2 text-left">항목</th>
-                        <th className="px-3 py-2 text-right text-blue-600">한국</th>
-                        <th className="px-3 py-2 text-right text-red-600">중국</th>
+                        <th className="px-3 py-2 text-right text-blue-600">부품</th>
+                        <th className="px-3 py-2 text-right text-violet-600">장식</th>
+                        <th className="px-3 py-2 text-right text-[var(--foreground)]">합계</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {componentSummaryRows.map((row) => (
-                        <tr key={row.label} className="border-t border-[var(--panel-border)]">
-                          <td className="px-3 py-2 whitespace-nowrap">{row.label}</td>
-                          <td className="px-3 py-2 text-right tabular-nums font-semibold text-blue-600">₩{formatDisplayKrw(row.korea)}</td>
-                          <td className="px-3 py-2 text-right tabular-nums font-semibold text-red-600">₩{formatDisplayKrw(row.china)}</td>
-                        </tr>
-                      ))}
+                      <tr className="border-t border-[var(--panel-border)]">
+                        <td className="px-3 py-2 whitespace-nowrap">총중량</td>
+                        <td className="px-3 py-2 text-right tabular-nums font-semibold text-blue-600">
+                          {flattenQuery.isLoading || flattenQuery.isError || flattenComponentMetrics.rows.length === 0
+                            ? "-"
+                            : `${formatWeightNumber(componentCategorySummary.accessory.grossWeight)} g`}
+                        </td>
+                        <td className="px-3 py-2 text-right tabular-nums font-semibold text-violet-600">
+                          {flattenQuery.isLoading || flattenQuery.isError || flattenComponentMetrics.rows.length === 0
+                            ? "-"
+                            : `${formatWeightNumber(componentCategorySummary.decor.grossWeight)} g`}
+                        </td>
+                        <td className="px-3 py-2 text-right tabular-nums font-semibold text-[var(--foreground)]">
+                          {flattenQuery.isLoading || flattenQuery.isError || flattenComponentMetrics.rows.length === 0
+                            ? "-"
+                            : `${formatWeightNumber(componentCategorySummary.total.grossWeight)} g`}
+                        </td>
+                      </tr>
+                      <tr className="border-t border-[var(--panel-border)]">
+                        <td className="px-3 py-2 whitespace-nowrap">총공임(판매) | 총공임(원가)</td>
+                        <td className="px-3 py-2 text-right tabular-nums font-semibold text-blue-600">
+                          {flattenQuery.isLoading || flattenQuery.isError || flattenComponentMetrics.rows.length === 0
+                            ? "-"
+                            : `₩${formatLaborDisplayKrw(componentCategorySummary.accessory.laborSell)} | ₩${formatLaborDisplayKrw(componentCategorySummary.accessory.laborCost)}`}
+                        </td>
+                        <td className="px-3 py-2 text-right tabular-nums font-semibold text-violet-600">
+                          {flattenQuery.isLoading || flattenQuery.isError || flattenComponentMetrics.rows.length === 0
+                            ? "-"
+                            : `₩${formatLaborDisplayKrw(componentCategorySummary.decor.laborSell)} | ₩${formatLaborDisplayKrw(componentCategorySummary.decor.laborCost)}`}
+                        </td>
+                        <td className="px-3 py-2 text-right tabular-nums font-semibold text-[var(--foreground)]">
+                          {flattenQuery.isLoading || flattenQuery.isError || flattenComponentMetrics.rows.length === 0
+                            ? "-"
+                            : `₩${formatLaborDisplayKrw(componentCategorySummary.total.laborSell)} | ₩${formatLaborDisplayKrw(componentCategorySummary.total.laborCost)}`}
+                        </td>
+                      </tr>
                     </tbody>
                   </table>
                 </div>
@@ -5784,94 +6080,94 @@ export default function CatalogPage() {
                   </div>
                 ) : flattenComponentMetrics.rows.length === 0 ? (
                   <div className="text-xs text-[var(--muted)]">등록된 부속 구성품이 없습니다.</div>
-                  ) : (
-                    <>
-                      {(() => {
-                        if (displayedBomLineMetrics.length === 0) {
-                          return (
-                            <div className="rounded-[10px] border border-[var(--panel-border)] bg-[var(--panel)] p-2">
-                              <div className="mb-2 text-xs font-semibold text-[var(--foreground)]">구성품(빠른 로딩)</div>
-                              <div className="overflow-x-auto rounded-[8px] border border-[var(--panel-border)]">
-                                <table className="min-w-full text-left text-xs">
-                                  <thead className="bg-[var(--subtle-bg)] text-[var(--muted)]">
-                                    <tr>
-                                      <th className="px-3 py-2">품목명</th>
-                                      <th className="px-3 py-2">수량</th>
-                                      <th className="px-3 py-2">총공임(판매)</th>
-                                      <th className="px-3 py-2">총공임(원가)</th>
-                                    </tr>
-                                  </thead>
-                                  <tbody>
-                                    {flattenComponentMetrics.rows.map((row) => (
-                                      <tr key={row.key} className="border-t border-[var(--panel-border)]">
-                                        <td className="px-3 py-2">{row.name}</td>
-                                        <td className="px-3 py-2 tabular-nums">{row.qty.toLocaleString("ko-KR")}</td>
-                                        <td className="px-3 py-2 tabular-nums">₩{formatLaborDisplayKrw(row.laborSellTotal)}</td>
-                                        <td className="px-3 py-2 tabular-nums">₩{formatLaborDisplayKrw(row.laborCostTotal)}</td>
-                                      </tr>
-                                    ))}
-                                  </tbody>
-                                </table>
-                              </div>
-                            </div>
-                          );
-                        }
-
-                        const renderGroupTable = (groupTitle: string, rows: typeof displayedBomLineMetrics) => (
-                          <div className="rounded-[10px] border border-[var(--panel-border)] bg-[var(--panel)] p-2">
-                            <div className="mb-2 text-xs font-semibold text-[var(--foreground)]">{groupTitle}</div>
-                            {rows.length === 0 ? (
-                              <div className="px-2 py-3 text-xs text-[var(--muted)]">등록된 항목이 없습니다.</div>
-                            ) : (
-                              <div className="overflow-x-auto rounded-[8px] border border-[var(--panel-border)]">
-                                <table className="min-w-full text-left text-xs">
-                                  <thead className="bg-[var(--subtle-bg)] text-[var(--muted)]">
-                                    <tr>
-                                      <th className="px-3 py-2">사진</th>
-                                      <th className="px-3 py-2">품목명</th>
-                                      <th className="px-3 py-2">수량</th>
-                                      <th className="px-3 py-2">총공임(판매)</th>
-                                    </tr>
-                                  </thead>
-                                  <tbody>
-                                    {rows.map(({ line, laborTotal }) => {
-                                      const name = line.component_master_model_name ?? line.component_part_name ?? "(unknown item)";
-                                      const imageUrl = line.component_master_id
-                                        ? String(masterRowsById[line.component_master_id]?.image_url ?? "")
-                                        : "";
-                                      const qty = Number(line.qty_per_unit ?? 0);
-                                      return (
-                                        <tr key={`${groupTitle}-${line.bom_line_id}`} className="border-t border-[var(--panel-border)]">
-                                          <td className="px-3 py-2">
-                                            {imageUrl ? (
-                                              <img src={imageUrl} alt={name} className="h-10 w-10 rounded-md border border-[var(--panel-border)] object-cover bg-[var(--subtle-bg)]" loading="lazy" />
-                                            ) : (
-                                              <div className="flex h-10 w-10 items-center justify-center rounded-md border border-[var(--panel-border)] bg-[var(--subtle-bg)] text-[10px] text-[var(--muted)]">-</div>
-                                            )}
-                                          </td>
-                                          <td className="px-3 py-2">{name}</td>
-                                          <td className="px-3 py-2 tabular-nums">{qty.toLocaleString("ko-KR")}</td>
-                                          <td className="px-3 py-2 tabular-nums">₩{formatLaborDisplayKrw(laborTotal)}</td>
-                                        </tr>
-                                      );
-                                    })}
-                                  </tbody>
-                                </table>
-                              </div>
-                            )}
-                          </div>
-                        );
-
+                ) : (
+                  <>
+                    {(() => {
+                      if (displayedBomLineMetrics.length === 0) {
                         return (
-                          <div className="grid grid-cols-1 gap-3">
-                            {renderGroupTable("부품", bomAccessoryRows)}
-                            {renderGroupTable("장식", bomDecorRows)}
+                          <div className="rounded-[10px] border border-[var(--panel-border)] bg-[var(--panel)] p-2">
+                            <div className="mb-2 text-xs font-semibold text-[var(--foreground)]">구성품(빠른 로딩)</div>
+                            <div className="overflow-x-auto rounded-[8px] border border-[var(--panel-border)]">
+                              <table className="min-w-full text-left text-xs">
+                                <thead className="bg-[var(--subtle-bg)] text-[var(--muted)]">
+                                  <tr>
+                                    <th className="px-3 py-2">품목명</th>
+                                    <th className="px-3 py-2">수량</th>
+                                    <th className="px-3 py-2">총공임(판매)</th>
+                                    <th className="px-3 py-2">총공임(원가)</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {flattenComponentMetrics.rows.map((row) => (
+                                    <tr key={row.key} className="border-t border-[var(--panel-border)]">
+                                      <td className="px-3 py-2">{row.name}</td>
+                                      <td className="px-3 py-2 tabular-nums">{row.qty.toLocaleString("ko-KR")}</td>
+                                      <td className="px-3 py-2 tabular-nums">₩{formatLaborDisplayKrw(row.laborSellTotal)}</td>
+                                      <td className="px-3 py-2 tabular-nums">₩{formatLaborDisplayKrw(row.laborCostTotal)}</td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
                           </div>
                         );
-                      })()}
-                    </>
-                  )}
-                </div>
+                      }
+
+                      const renderGroupTable = (groupTitle: string, rows: typeof displayedBomLineMetrics) => (
+                        <div className="rounded-[10px] border border-[var(--panel-border)] bg-[var(--panel)] p-2">
+                          <div className="mb-2 text-xs font-semibold text-[var(--foreground)]">{groupTitle}</div>
+                          {rows.length === 0 ? (
+                            <div className="px-2 py-3 text-xs text-[var(--muted)]">등록된 항목이 없습니다.</div>
+                          ) : (
+                            <div className="overflow-x-auto rounded-[8px] border border-[var(--panel-border)]">
+                              <table className="min-w-full text-left text-xs">
+                                <thead className="bg-[var(--subtle-bg)] text-[var(--muted)]">
+                                  <tr>
+                                    <th className="px-3 py-2">사진</th>
+                                    <th className="px-3 py-2">품목명</th>
+                                    <th className="px-3 py-2">수량</th>
+                                    <th className="px-3 py-2">총공임(판매)</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {rows.map(({ line, laborTotal }) => {
+                                    const name = line.component_master_model_name ?? line.component_part_name ?? "(unknown item)";
+                                    const imageUrl = line.component_master_id
+                                      ? String(masterRowsById[line.component_master_id]?.image_url ?? "")
+                                      : "";
+                                    const qty = Number(line.qty_per_unit ?? 0);
+                                    return (
+                                      <tr key={`${groupTitle}-${line.bom_line_id}`} className="border-t border-[var(--panel-border)]">
+                                        <td className="px-3 py-2">
+                                          {imageUrl ? (
+                                            <img src={imageUrl} alt={name} className="h-10 w-10 rounded-md border border-[var(--panel-border)] object-cover bg-[var(--subtle-bg)]" loading="lazy" />
+                                          ) : (
+                                            <div className="flex h-10 w-10 items-center justify-center rounded-md border border-[var(--panel-border)] bg-[var(--subtle-bg)] text-[10px] text-[var(--muted)]">-</div>
+                                          )}
+                                        </td>
+                                        <td className="px-3 py-2">{name}</td>
+                                        <td className="px-3 py-2 tabular-nums">{qty.toLocaleString("ko-KR")}</td>
+                                        <td className="px-3 py-2 tabular-nums">₩{formatLaborDisplayKrw(laborTotal)}</td>
+                                      </tr>
+                                    );
+                                  })}
+                                </tbody>
+                              </table>
+                            </div>
+                          )}
+                        </div>
+                      );
+
+                      return (
+                        <div className="grid grid-cols-1 gap-3">
+                          {renderGroupTable("부품", bomAccessoryRows)}
+                          {renderGroupTable("장식", bomDecorRows)}
+                        </div>
+                      );
+                    })()}
+                  </>
+                )}
+              </div>
             </CardBody>
           </Card>
         ) : null}
@@ -5886,7 +6182,7 @@ export default function CatalogPage() {
       open={showBomPanel}
       onClose={closeBomDrawer}
       title="자재명세서(BOM)"
-      className="left-0 right-auto w-full sm:w-[96vw] lg:w-[1200px] 2xl:w-[1440px] sm:max-w-none border-r border-[var(--panel-border)] border-l-0"
+      className="left-0 right-auto w-full sm:w-[84vw] lg:w-[700px] 2xl:w-[1040px] sm:max-w-none border-r border-[var(--panel-border)] border-l-0"
     >
       <div className="h-full overflow-y-auto p-6 scrollbar-hide">
         <div className="space-y-4" id="catalog.detail.bom">
@@ -5957,159 +6253,212 @@ export default function CatalogPage() {
                   <div className="text-sm font-semibold">구성품 추가</div>
                 </CardHeader>
                 <CardBody className="space-y-3">
-                      <div className="relative space-y-2">
-                        <div className="grid grid-cols-1 gap-2 md:grid-cols-[140px_minmax(0,1fr)_120px_auto]">
-                          <Select
-                            aria-label="구분"
-                            value={componentLineKind}
-                            onChange={(e) => setComponentLineKind(e.target.value as BomLineKind)}
-                          >
-                            <option value="ACCESSORY">부속</option>
-                            <option value="DECOR">장식(기타공임)</option>
-                          </Select>
-                          <Input
-                            aria-label="품목명 검색"
-                            placeholder="품목명 검색"
-                            value={componentQuery}
-                            onFocus={() => setShowComponentResults(true)}
-                            onBlur={() => window.setTimeout(() => setShowComponentResults(false), 220)}
-                            onChange={(e) => {
-                              setComponentQuery(e.target.value);
-                              setShowComponentResults(true);
-                            }}
-                          />
-                          <Input
-                            aria-label="수량"
-                            placeholder="수량"
-                            value={qtyPerUnit}
-                            onChange={(e) => setQtyPerUnit(e.target.value)}
-                          />
-                          <span className="inline-flex" title={!canWrite ? writeDisabledReason : undefined}>
-                            <Button onClick={handleAddLine} disabled={addLineDisabled}>
-                              추가
-                            </Button>
-                          </span>
-                        </div>
+                  <div className="relative space-y-2">
+                    <div className="grid grid-cols-1 gap-2 md:grid-cols-[140px_minmax(0,1fr)_120px_auto]">
+                      <Select
+                        aria-label="구분"
+                        value={componentLineKind}
+                        onChange={(e) => setComponentLineKind(e.target.value as BomLineKind)}
+                      >
+                        <option value="ACCESSORY">부속</option>
+                        <option value="DECOR">장식(기타공임)</option>
+                      </Select>
+                      <Input
+                        aria-label="품목명 검색"
+                        placeholder="품목명 검색"
+                        value={componentQuery}
+                        onFocus={() => setShowComponentResults(true)}
+                        onBlur={() => window.setTimeout(() => setShowComponentResults(false), 220)}
+                        onChange={(e) => {
+                          setComponentQuery(e.target.value);
+                          setShowComponentResults(true);
+                        }}
+                      />
+                      <Input
+                        aria-label="수량"
+                        placeholder="수량"
+                        value={qtyPerUnit}
+                        onChange={(e) => setQtyPerUnit(e.target.value)}
+                      />
+                      <span className="inline-flex" title={!canWrite ? writeDisabledReason : undefined}>
+                        <Button onClick={handleAddLine} disabled={addLineDisabled}>
+                          추가
+                        </Button>
+                      </span>
+                    </div>
 
-                        {showComponentResults || componentQuery.trim().length > 0 ? (
-                          <div className="max-h-56 overflow-y-auto rounded-[10px] border border-[var(--panel-border)] bg-[var(--panel)]">
-                            {componentSearchQuery.isLoading ? (
-                              <div className="px-3 py-2 text-xs text-[var(--muted)]">검색 중...</div>
-                            ) : componentSearchResults.length === 0 ? (
-                              <div className="px-3 py-2 text-xs text-[var(--muted)]">검색 결과가 없습니다.</div>
+                    {showComponentResults || componentQuery.trim().length > 0 ? (
+                      <div className="max-h-56 overflow-y-auto rounded-[10px] border border-[var(--panel-border)] bg-[var(--panel)]">
+                        {componentSearchQuery.isLoading ? (
+                          <div className="px-3 py-2 text-xs text-[var(--muted)]">검색 중...</div>
+                        ) : componentSearchResults.length === 0 ? (
+                          <div className="px-3 py-2 text-xs text-[var(--muted)]">검색 결과가 없습니다.</div>
+                        ) : (
+                          componentSearchResults.map((item) => {
+                            const materialCode = String(masterRowsById[item.master_id]?.material_code_default ?? item.material_code_default ?? "-");
+                            const isSelected = selectedComponentId === item.master_id;
+                            return (
+                              <button
+                                key={item.master_id}
+                                type="button"
+                                onMouseDown={(e) => e.preventDefault()}
+                                onClick={() => {
+                                  setSelectedComponentId(item.master_id);
+                                  setComponentQuery(item.model_name);
+                                  setShowComponentResults(false);
+                                }}
+                                className={cn(
+                                  "w-full border-b border-[var(--panel-border)] px-3 py-2 text-left text-sm last:border-b-0 hover:bg-[var(--subtle-bg)]",
+                                  isSelected && "bg-[var(--subtle-bg)]"
+                                )}
+                              >
+                                <div className="font-medium text-[var(--foreground)]">{item.model_name}</div>
+                                <div className="text-xs text-[var(--muted)]">소재: {materialCode}</div>
+                              </button>
+                            );
+                          })
+                        )}
+                      </div>
+                    ) : null}
+                  </div>
+
+                  <div className="text-xs text-[var(--muted)]">선택한 품목의 소재는 마스터에 저장된 소재가 기본으로 적용됩니다.</div>
+                </CardBody>
+              </Card>
+
+              <Card>
+                <CardHeader>
+                  <div className="text-sm font-semibold">현재 구성품 목록</div>
+                </CardHeader>
+                <CardBody className="space-y-2">
+                  {linesQuery.isLoading ? (
+                    <p className="text-sm text-[var(--muted)]">불러오는 중...</p>
+                  ) : (linesQuery.data ?? []).length === 0 ? (
+                    <p className="text-sm text-[var(--muted)]">등록된 구성품이 없습니다.</p>
+                  ) : (
+                    (() => {
+                      const accessoryRows = displayedBomLineMetrics.filter(({ line }) => parseBomLineKind(line.note) === "ACCESSORY");
+                      const decorRows = displayedBomLineMetrics.filter(({ line }) => parseBomLineKind(line.note) === "DECOR");
+
+                      const renderTable = (title: string, rows: typeof displayedBomLineMetrics) => {
+                        const qtySum = rows.reduce((sum, { line }) => sum + Number(line.qty_per_unit ?? 0), 0);
+                        const laborSum = rows.reduce((sum, { laborTotal }) => sum + Number(laborTotal ?? 0), 0);
+
+                        return (
+                          <div className="rounded-[10px] border border-[var(--panel-border)] bg-[var(--panel)] p-2">
+                            <div className="mb-2 text-xs font-semibold text-[var(--foreground)]">{title}</div>
+                            {rows.length === 0 ? (
+                              <div className="px-2 py-3 text-xs text-[var(--muted)]">등록된 항목이 없습니다.</div>
                             ) : (
-                              componentSearchResults.map((item) => {
-                                const materialCode = String(masterRowsById[item.master_id]?.material_code_default ?? item.material_code_default ?? "-");
-                                const isSelected = selectedComponentId === item.master_id;
-                                return (
-                                  <button
-                                    key={item.master_id}
-                                    type="button"
-                                    onMouseDown={(e) => e.preventDefault()}
-                                    onClick={() => {
-                                      setSelectedComponentId(item.master_id);
-                                      setComponentQuery(item.model_name);
-                                      setShowComponentResults(false);
-                                    }}
-                                    className={cn(
-                                      "w-full border-b border-[var(--panel-border)] px-3 py-2 text-left text-sm last:border-b-0 hover:bg-[var(--subtle-bg)]",
-                                      isSelected && "bg-[var(--subtle-bg)]"
-                                    )}
-                                  >
-                                    <div className="font-medium text-[var(--foreground)]">{item.model_name}</div>
-                                    <div className="text-xs text-[var(--muted)]">소재: {materialCode}</div>
-                                  </button>
-                                );
-                              })
+                              <div className="overflow-x-auto rounded-[8px] border border-[var(--panel-border)]">
+                                <table className="min-w-full text-left text-xs">
+                                  <thead className="bg-[var(--subtle-bg)] text-[var(--muted)]">
+                                    <tr>
+                                      <th className="px-3 py-2">사진</th>
+                                      <th className="px-3 py-2">품목명</th>
+                                      <th className="px-3 py-2">수량</th>
+                                      <th className="px-3 py-2">총공임</th>
+                                      <th className="px-3 py-2">액션</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {rows.map(({ line, laborTotal }) => {
+                                      const name = line.component_master_model_name ?? line.component_part_name ?? "(unknown item)";
+                                      const imageUrl = line.component_master_id
+                                        ? String(masterRowsById[line.component_master_id]?.image_url ?? "")
+                                        : "";
+                                      const bomLineId = String(line.bom_line_id ?? "").trim();
+                                      const draftQty = bomLineQtyDrafts[bomLineId] ?? String(Number(line.qty_per_unit ?? 0));
+                                      const parsedDraftQty = Number(draftQty);
+                                      const isQtyChanged = Number.isFinite(parsedDraftQty) && Math.abs(parsedDraftQty - Number(line.qty_per_unit ?? 0)) > 1e-9;
+                                      const isMasterRow = String(line.component_ref_type ?? "MASTER").trim().toUpperCase() !== "PART";
+                                      const hasEditableComponentId = isMasterRow
+                                        ? Boolean(String(line.component_master_id ?? "").trim())
+                                        : Boolean(String(line.component_part_id ?? "").trim());
+                                      const canEditRow = canWrite && hasEditableComponentId;
+                                      return (
+                                        <tr key={`${title}-${line.bom_line_id}`} className="border-t border-[var(--panel-border)]">
+                                          <td className="px-3 py-2">
+                                            {imageUrl ? (
+                                              <img src={imageUrl} alt={name} className="h-10 w-10 rounded-md border border-[var(--panel-border)] object-cover bg-[var(--subtle-bg)]" loading="lazy" />
+                                            ) : (
+                                              <div className="flex h-10 w-10 items-center justify-center rounded-md border border-[var(--panel-border)] bg-[var(--subtle-bg)] text-[10px] text-[var(--muted)]">-</div>
+                                            )}
+                                          </td>
+                                          <td className="px-3 py-2">{name}</td>
+                                          <td className="px-3 py-2 tabular-nums">
+                                            <Input
+                                              type="number"
+                                              min={0.0001}
+                                              step="any"
+                                              value={draftQty}
+                                              onChange={(event) => {
+                                                const value = event.target.value;
+                                                setBomLineQtyDrafts((prev) => ({
+                                                  ...prev,
+                                                  [bomLineId]: value,
+                                                }));
+                                              }}
+                                              disabled={!canEditRow || addLineMutation.isPending || voidLineMutation.isPending}
+                                              className="h-8 w-20 text-right"
+                                            />
+                                          </td>
+                                          <td className="px-3 py-2 tabular-nums">₩{formatLaborDisplayKrw(laborTotal)}</td>
+                                          <td className="px-3 py-2">
+                                            <div className="flex items-center gap-1">
+                                              <Button
+                                                type="button"
+                                                size="sm"
+                                                variant="secondary"
+                                                className="h-7 px-2 text-[11px]"
+                                                disabled={!canEditRow || !isQtyChanged || addLineMutation.isPending || voidLineMutation.isPending}
+                                                onClick={() => {
+                                                  void handleSaveBomLineQty(line);
+                                                }}
+                                              >
+                                                수정
+                                              </Button>
+                                              <Button
+                                                type="button"
+                                                size="sm"
+                                                variant="danger"
+                                                className="h-7 px-2 text-[11px]"
+                                                disabled={!canWrite || voidLineMutation.isPending}
+                                                onClick={() => setVoidConfirmId(String(line.bom_line_id ?? ""))}
+                                              >
+                                                삭제
+                                              </Button>
+                                            </div>
+                                          </td>
+                                        </tr>
+                                      );
+                                    })}
+                                    <tr className="border-t border-[var(--panel-border)] bg-[var(--subtle-bg)] font-semibold">
+                                      <td className="px-3 py-2" />
+                                      <td className="px-3 py-2">합계</td>
+                                      <td className="px-3 py-2 tabular-nums">{qtySum.toLocaleString("ko-KR")}</td>
+                                      <td className="px-3 py-2 tabular-nums">₩{formatLaborDisplayKrw(laborSum)}</td>
+                                      <td className="px-3 py-2" />
+                                    </tr>
+                                  </tbody>
+                                </table>
+                              </div>
                             )}
                           </div>
-                        ) : null}
-                      </div>
+                        );
+                      };
 
-                      <div className="text-xs text-[var(--muted)]">선택한 품목의 소재는 마스터에 저장된 소재가 기본으로 적용됩니다.</div>
-                    </CardBody>
-                  </Card>
-
-                  <Card>
-                    <CardHeader>
-                      <div className="text-sm font-semibold">현재 구성품 목록</div>
-                    </CardHeader>
-                    <CardBody className="space-y-2">
-                      {linesQuery.isLoading ? (
-                        <p className="text-sm text-[var(--muted)]">불러오는 중...</p>
-                      ) : (linesQuery.data ?? []).length === 0 ? (
-                        <p className="text-sm text-[var(--muted)]">등록된 구성품이 없습니다.</p>
-                      ) : (
-                        (() => {
-                          const accessoryRows = displayedBomLineMetrics.filter(({ line }) => parseBomLineKind(line.note) === "ACCESSORY");
-                          const decorRows = displayedBomLineMetrics.filter(({ line }) => parseBomLineKind(line.note) === "DECOR");
-
-                          const renderTable = (title: string, rows: typeof displayedBomLineMetrics) => {
-                            const qtySum = rows.reduce((sum, { line }) => sum + Number(line.qty_per_unit ?? 0), 0);
-                            const laborSum = rows.reduce((sum, { laborTotal }) => sum + Number(laborTotal ?? 0), 0);
-
-                            return (
-                              <div className="rounded-[10px] border border-[var(--panel-border)] bg-[var(--panel)] p-2">
-                                <div className="mb-2 text-xs font-semibold text-[var(--foreground)]">{title}</div>
-                                {rows.length === 0 ? (
-                                  <div className="px-2 py-3 text-xs text-[var(--muted)]">등록된 항목이 없습니다.</div>
-                                ) : (
-                                  <div className="overflow-x-auto rounded-[8px] border border-[var(--panel-border)]">
-                                    <table className="min-w-full text-left text-xs">
-                                      <thead className="bg-[var(--subtle-bg)] text-[var(--muted)]">
-                                        <tr>
-                                          <th className="px-3 py-2">사진</th>
-                                          <th className="px-3 py-2">품목명</th>
-                                          <th className="px-3 py-2">수량</th>
-                                          <th className="px-3 py-2">총공임</th>
-                                        </tr>
-                                      </thead>
-                                      <tbody>
-                                        {rows.map(({ line, laborTotal }) => {
-                                          const name = line.component_master_model_name ?? line.component_part_name ?? "(unknown item)";
-                                          const imageUrl = line.component_master_id
-                                            ? String(masterRowsById[line.component_master_id]?.image_url ?? "")
-                                            : "";
-                                          return (
-                                            <tr key={`${title}-${line.bom_line_id}`} className="border-t border-[var(--panel-border)]">
-                                              <td className="px-3 py-2">
-                                                {imageUrl ? (
-                                                  <img src={imageUrl} alt={name} className="h-10 w-10 rounded-md border border-[var(--panel-border)] object-cover bg-[var(--subtle-bg)]" loading="lazy" />
-                                                ) : (
-                                                  <div className="flex h-10 w-10 items-center justify-center rounded-md border border-[var(--panel-border)] bg-[var(--subtle-bg)] text-[10px] text-[var(--muted)]">-</div>
-                                                )}
-                                              </td>
-                                              <td className="px-3 py-2">{name}</td>
-                                              <td className="px-3 py-2 tabular-nums">{Number(line.qty_per_unit ?? 0).toLocaleString("ko-KR")}</td>
-                                              <td className="px-3 py-2 tabular-nums">₩{formatLaborDisplayKrw(laborTotal)}</td>
-                                            </tr>
-                                          );
-                                        })}
-                                        <tr className="border-t border-[var(--panel-border)] bg-[var(--subtle-bg)] font-semibold">
-                                          <td className="px-3 py-2" />
-                                          <td className="px-3 py-2">합계</td>
-                                          <td className="px-3 py-2 tabular-nums">{qtySum.toLocaleString("ko-KR")}</td>
-                                          <td className="px-3 py-2 tabular-nums">₩{formatLaborDisplayKrw(laborSum)}</td>
-                                        </tr>
-                                      </tbody>
-                                    </table>
-                                  </div>
-                                )}
-                              </div>
-                            );
-                          };
-
-                          return (
-                            <div className="grid grid-cols-1 gap-3">
-                              {renderTable("부품", accessoryRows)}
-                              {renderTable("장식", decorRows)}
-                            </div>
-                          );
-                        })()
-                      )}
-                    </CardBody>
-                  </Card>
-                </div>
+                      return (
+                        <div className="grid grid-cols-1 gap-3">
+                          {renderTable("부품", accessoryRows)}
+                          {renderTable("장식", decorRows)}
+                        </div>
+                      );
+                    })()
+                  )}
+                </CardBody>
+              </Card>
+            </div>
           )}
 
           <Modal open={!!voidConfirmId} onClose={() => setVoidConfirmId(null)} title="구성품 VOID">
@@ -6145,7 +6494,7 @@ export default function CatalogPage() {
         <div className="space-y-4">
           <ActionBar
             title="흡수공임"
-            subtitle="버킷/사유/금액/공장 스코프 기준으로 추가 공임을 관리합니다."
+            subtitle="버킷/사유/흡수공임 기준으로 추가 공임을 관리합니다."
             actions={
               <div className="flex items-center gap-2">
                 <Button variant="secondary" onClick={closeAbsorbDrawer}>
@@ -6166,15 +6515,6 @@ export default function CatalogPage() {
                     <option key={option.value} value={option.value}>{option.label}</option>
                   ))}
                 </Select>
-                {absorbBucket === "ETC" ? (
-                  <Select value={absorbLaborClass} onChange={(e) => setAbsorbLaborClass(e.target.value as AbsorbLaborClass)}>
-                    {absorbLaborClassOptions.map((option) => (
-                      <option key={option.value} value={option.value}>{option.label}</option>
-                    ))}
-                  </Select>
-                ) : (
-                  <Input value="일반" readOnly className="text-[var(--muted)] bg-[var(--input-bg)]" />
-                )}
                 {absorbBucket === "STONE_LABOR" ? (
                   <Select value={absorbStoneRole} onChange={(e) => setAbsorbStoneRole(e.target.value as AbsorbStoneRole)}>
                     {absorbStoneRoleOptions.map((option) => (
@@ -6188,7 +6528,7 @@ export default function CatalogPage() {
                 <Input
                   value={absorbAmount}
                   onChange={(e) => setAbsorbAmount(e.target.value)}
-                  placeholder="예: -3000 또는 5000"
+                  placeholder="흡수공임 (예: -3000 또는 5000)"
                 />
                 {absorbBucket === "ETC" && absorbLaborClass === "MATERIAL" ? (
                   <>
@@ -6204,20 +6544,6 @@ export default function CatalogPage() {
                     />
                   </>
                 ) : null}
-                <Select value={absorbVendorId} onChange={(e) => setAbsorbVendorId(e.target.value)}>
-                  <option value="">전체 공장</option>
-                  {vendorOptions.map((vendor) => (
-                    <option key={vendor.value} value={vendor.value}>{vendor.label}</option>
-                  ))}
-                </Select>
-                <label className="inline-flex items-center gap-2 text-xs">
-                  <input type="checkbox" checked={absorbIsPerPiece} onChange={(e) => setAbsorbIsPerPiece(e.target.checked)} className="h-4 w-4" />
-                  수량 곱(is_per_piece)
-                </label>
-                <label className="inline-flex items-center gap-2 text-xs">
-                  <input type="checkbox" checked={absorbIsActive} onChange={(e) => setAbsorbIsActive(e.target.checked)} className="h-4 w-4" />
-                  활성화
-                </label>
               </div>
 
               <div className="flex items-center gap-2">
@@ -6250,28 +6576,24 @@ export default function CatalogPage() {
                 <table className="w-full min-w-[760px] text-xs">
                   <thead className="text-[var(--muted)]">
                     <tr>
-                      <th className="text-left py-1">활성</th>
                       <th className="text-left py-1">버킷</th>
                       <th className="text-left py-1">분류</th>
                       <th className="text-left py-1">알공임 위치</th>
                       <th className="text-left py-1">사유</th>
-                      <th className="text-left py-1">금액</th>
+                      <th className="text-left py-1">흡수공임</th>
                       <th className="text-left py-1">소재개수</th>
                       <th className="text-left py-1">소재원가</th>
-                      <th className="text-left py-1">수량 곱</th>
-                      <th className="text-left py-1">공장 범위</th>
                       <th className="text-left py-1">작업</th>
                     </tr>
                   </thead>
                   <tbody>
                     {visibleAbsorbLaborItems.length === 0 ? (
                       <tr className="border-t border-[var(--panel-border)]">
-                        <td className="py-2 text-[var(--muted)]" colSpan={11}>등록된 흡수공임이 없습니다.</td>
+                        <td className="py-2 text-[var(--muted)]" colSpan={8}>등록된 흡수공임이 없습니다.</td>
                       </tr>
                     ) : (
                       visibleAbsorbLaborItems.map((item) => (
                         <tr key={item.absorb_item_id} className="border-t border-[var(--panel-border)]">
-                          <td className="py-1">{item.is_active ? "Y" : "N"}</td>
                           <td className={cn("py-1", getAbsorbBucketToneClass(item.bucket))}>{getAbsorbBucketDisplayLabel(item)}</td>
                           <td className="py-1">{normalizeAbsorbLaborClass(item.labor_class) === "MATERIAL" ? "소재" : "일반"}</td>
                           <td className="py-1">{getAbsorbStoneRoleLabel(item.note)}</td>
@@ -6279,8 +6601,6 @@ export default function CatalogPage() {
                           <td className="py-1">{Number(item.amount_krw).toLocaleString()}</td>
                           <td className="py-1">{Math.max(Number(item.material_qty_per_unit ?? 1), 0).toLocaleString()}</td>
                           <td className="py-1">{Math.max(Number(item.material_cost_krw ?? 0), 0).toLocaleString()}</td>
-                          <td className="py-1">{item.is_per_piece ? "Y" : "N"}</td>
-                          <td className="py-1">{vendorOptions.find((vendor) => vendor.value === item.vendor_party_id)?.label ?? "전체"}</td>
                           <td className="py-1">
                             <div className="flex items-center gap-1">
                               <Button type="button" size="sm" variant="secondary" onClick={() => handleEditAbsorbLaborItem(item)}>수정</Button>
@@ -6715,10 +7035,10 @@ export default function CatalogPage() {
                             selectedBatchItems
                               .filter((selected) => batchGenerateSelectedIds.has(selected.id))
                               .forEach((selected) => {
-                              next[selected.id] = {
-                                ...sourceSetting,
-                                displayName: prev[selected.id]?.displayName || createDefaultNanobananaSetting(selected.model).displayName,
-                              };
+                                next[selected.id] = {
+                                  ...sourceSetting,
+                                  displayName: prev[selected.id]?.displayName || createDefaultNanobananaSetting(selected.model).displayName,
+                                };
                               });
                             next[item.id] = sourceSetting;
                             return next;
@@ -6788,22 +7108,22 @@ export default function CatalogPage() {
                   item.id === selectedItemId
                     ? "ring-2 ring-[var(--primary)]"
                     : "hover:opacity-90"
-                  )}
-                  onClick={() => {
-                    if (selectionMode) {
-                      toggleMasterSelection(item.id);
-                      return;
-                    }
-                    prefetchMasterDetailFastPath(item.id);
-                    setSelectedItemId(item.id);
-                  }}
-                  onMouseEnter={() => prefetchMasterDetailFastPath(item.id)}
-                  onFocus={() => prefetchMasterDetailFastPath(item.id)}
-                  onDoubleClick={() => {
-                    if (selectionMode) return;
-                    handleOpenEdit();
-                  }}
-                >
+                )}
+                onClick={() => {
+                  if (selectionMode) {
+                    toggleMasterSelection(item.id);
+                    return;
+                  }
+                  prefetchMasterDetailFastPath(item.id);
+                  setSelectedItemId(item.id);
+                }}
+                onMouseEnter={() => prefetchMasterDetailFastPath(item.id)}
+                onFocus={() => prefetchMasterDetailFastPath(item.id)}
+                onDoubleClick={() => {
+                  if (selectionMode) return;
+                  handleOpenEdit();
+                }}
+              >
                 {selectionMode ? (
                   <label
                     className="absolute left-2 top-2 z-20 inline-flex items-center rounded bg-[var(--panel)]/90 px-1.5 py-1 text-[10px]"
@@ -7058,7 +7378,7 @@ export default function CatalogPage() {
                     categoryOptions.find((category) => category.value === categoryCode)?.label ??
                     (categoryCode || "-");
                   const totalPrice = hasWeight
-                    ? roundUpToThousand(baseMaterialSell + laborSellTotal)
+                    ? roundUpDisplayHundred(baseMaterialSell + laborSellTotal)
                     : null;
 
                   return (
@@ -7114,7 +7434,7 @@ export default function CatalogPage() {
                         <div className="flex items-center justify-between gap-2">
                           <div className="font-semibold text-[var(--foreground)] truncate">{item.model}</div>
                           <div className="flex items-center gap-1 text-[10px] text-[var(--muted)] shrink-0">
-                            <span className="rounded bg-[var(--chip)] px-1.5 py-0.5">{materialLabel}</span>
+                            <span className={cn("rounded px-1.5 py-0.5", getMaterialChipColorClass(materialCode))}>{materialLabel}</span>
                             <span className="rounded bg-[var(--chip)] px-1.5 py-0.5">{categoryLabel}</span>
                           </div>
                         </div>
@@ -7122,27 +7442,29 @@ export default function CatalogPage() {
                           className="mt-1 space-y-1 text-[11px] text-[var(--foreground)]"
                           style={{ fontFamily: "'Malgun Gothic', '맑은 고딕', sans-serif" }}
                         >
-                          <div className="grid grid-cols-[auto_1fr] items-baseline gap-2">
-                            <span className="text-[var(--muted)]">총중량</span>
-                            <span className="truncate text-right font-normal">
-                              {netWeight === null ? "-" : <><NumberText value={netWeight} /> g</>}
-                            </span>
+                          <div className="rounded border border-green-400 bg-[var(--primary-soft)] px-2 py-1.5">
+                            <div className="text-[10px] text-[var(--muted)]">총가격(판매)</div>
+                            <div className="text-right text-sm font-extrabold tabular-nums">
+                              {!isGalleryPricingReady || totalPrice === null ? "계산중" : <><NumberText value={totalPrice} /> 원</>}
+                            </div>
                           </div>
-                          <div className="grid grid-cols-[auto_1fr] items-baseline gap-2">
-                            <span className="text-[var(--muted)]">총공임</span>
-                            <span className="truncate text-right font-normal">
-                              {!isGalleryPricingReady
-                                ? "-"
-                                : laborSellDisplay > 0
-                                  ? <><NumberText value={laborSellDisplay} /> 원</>
-                                  : "-"}
-                            </span>
-                          </div>
-                          <div className="grid grid-cols-[auto_1fr] items-baseline gap-2">
-                            <span className="text-[var(--muted)]">총가격</span>
-                            <span className="truncate text-right font-bold">
-                              {!isGalleryPricingReady || totalPrice === null ? "-" : <><NumberText value={totalPrice} /> 원</>}
-                            </span>
+                          <div className="grid grid-cols-2 gap-2">
+                            <div className="rounded border border-[var(--panel-border)] bg-[var(--subtle-bg)] px-2 py-1">
+                              <div className="text-[10px] font-semibold text-[var(--muted)]">총공임(판매)</div>
+                              <div className="text-right font-bold tabular-nums">
+                                {!isGalleryPricingReady
+                                  ? "계산중"
+                                  : laborSellDisplay > 0
+                                    ? <><NumberText value={laborSellDisplay} /> 원</>
+                                    : "-"}
+                              </div>
+                            </div>
+                            <div className="rounded border border-[var(--panel-border)] bg-[var(--subtle-bg)] px-2 py-1">
+                              <div className="text-[10px] font-semibold text-[var(--muted)]">총중량</div>
+                              <div className="text-right font-bold tabular-nums">
+                                {netWeight === null ? "-" : <><NumberText value={netWeight} /> g</>}
+                              </div>
+                            </div>
                           </div>
                         </div>
                       </div>
@@ -7178,7 +7500,7 @@ export default function CatalogPage() {
               open={isDetailDrawerOpen}
               onClose={closeDetailDrawer}
               title={selectedItem?.model ?? "상세 정보"}
-              className="lg:w-[1100px]"
+              className="lg:w-[1600px] 2xl:w-[1900px]"
             >
               <div className="h-full overflow-y-auto p-6 scrollbar-hide">
                 {renderDetailPanel()}

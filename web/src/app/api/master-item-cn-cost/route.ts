@@ -179,45 +179,53 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: "master_id(UUID) 값이 필요합니다." }, { status: 400 });
   }
 
-  const { data: snapshotData, error: snapshotError } = await supabase
-    .from(SNAPSHOT_TABLE)
-    .select(
-      "snapshot_id,analysis_date,labor_basis,total_price_cny,silver_price_cny_per_g,labor_cny_snapshot,total_cost_krw_snapshot,cny_krw_rate_snapshot,silver_price_krw_per_g_snapshot,labor_krw_snapshot,created_at"
-    )
-    .eq("master_id", masterId)
-    .order("analysis_date", { ascending: true, nullsFirst: false })
-    .order("created_at", { ascending: true });
-
-  if (!snapshotError) {
-    return NextResponse.json({ data: snapshotData ?? [] });
-  }
-
-  if (!isSnapshotSkippableError(snapshotError as SupabaseLikeError)) {
-    return NextResponse.json({ error: snapshotError.message ?? "RAW 분석 이력 조회에 실패했습니다." }, { status: 400 });
-  }
-
   const { data: currentRowsData, error: currentRowsError } = await supabase
     .from(CURRENT_ROWS_TABLE)
     .select(
-      "entry_id,analysis_date,labor_basis,total_price_cny,silver_price_cny_per_g,labor_cny_snapshot,total_cost_krw_snapshot,cny_krw_rate_snapshot,silver_price_krw_per_g_snapshot,labor_krw_snapshot,created_at"
+      "entry_id,analysis_date,labor_basis,total_price_cny,silver_price_cny_per_g,labor_cny_snapshot,total_cost_krw_snapshot,cny_krw_rate_snapshot,silver_price_krw_per_g_snapshot,labor_krw_snapshot,raw_input,created_at"
     )
     .eq("master_id", masterId)
     .is("deleted_at", null)
     .order("analysis_date", { ascending: true, nullsFirst: false })
     .order("created_at", { ascending: true });
 
-  if (currentRowsError) {
-    if (isCurrentRowsSkippableError(currentRowsError as SupabaseLikeError)) {
-      return NextResponse.json({ data: [] });
-    }
+  if (!currentRowsError) {
+    const rows = (currentRowsData ?? []).map((row) => ({
+      ...row,
+      snapshot_id: row.entry_id,
+    }));
+    return NextResponse.json({ data: rows });
+  }
+
+  if (!isCurrentRowsSkippableError(currentRowsError as SupabaseLikeError)) {
     return NextResponse.json({ error: currentRowsError.message ?? "RAW 분석 이력 조회에 실패했습니다." }, { status: 400 });
   }
 
-  const rows = (currentRowsData ?? []).map((row) => ({
-    ...row,
-    snapshot_id: row.entry_id,
-  }));
-  return NextResponse.json({ data: rows });
+  const { data: snapshotData, error: snapshotError } = await supabase
+    .from(SNAPSHOT_TABLE)
+    .select(
+      "snapshot_id,request_id,analysis_date,labor_basis,total_price_cny,silver_price_cny_per_g,labor_cny_snapshot,total_cost_krw_snapshot,cny_krw_rate_snapshot,silver_price_krw_per_g_snapshot,labor_krw_snapshot,raw_input,created_at"
+    )
+    .eq("master_id", masterId)
+    .order("analysis_date", { ascending: true, nullsFirst: false })
+    .order("created_at", { ascending: true });
+
+  if (snapshotError) {
+    if (isSnapshotSkippableError(snapshotError as SupabaseLikeError)) {
+      return NextResponse.json({ data: [] });
+    }
+    return NextResponse.json({ error: snapshotError.message ?? "RAW 분석 이력 조회에 실패했습니다." }, { status: 400 });
+  }
+
+  const snapshotRows = (snapshotData ?? []).map((row) => {
+    const reqId = String((row as { request_id?: unknown }).request_id ?? "").trim();
+    const snapId = String((row as { snapshot_id?: unknown }).snapshot_id ?? "").trim();
+    return {
+      ...row,
+      snapshot_id: reqId || snapId,
+    };
+  });
+  return NextResponse.json({ data: snapshotRows });
 }
 
 export async function POST(request: Request) {
