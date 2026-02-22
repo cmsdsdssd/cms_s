@@ -49,10 +49,10 @@ export function GlobalTopBar({ onMobileMenuOpen, onWorkbenchOpen }: GlobalTopBar
 
   return (
     <header className="sticky top-0 z-40 flex h-14 w-full items-center gap-4 border-b border-[var(--hairline)] bg-[var(--background)]/80 px-4 backdrop-blur-md lg:px-6">
-      {/* Mobile Menu Button */}
+      {/* Mobile Menu Button — hidden; bottom nav replaces mobile navigation */}
       <button
         onClick={onMobileMenuOpen}
-        className="lg:hidden -ml-2 p-2 text-[var(--muted-strong)] hover:text-[var(--foreground)]"
+        className="hidden -ml-2 p-2 text-[var(--muted-strong)] hover:text-[var(--foreground)]"
       >
         <Menu className="h-5 w-5" />
       </button>

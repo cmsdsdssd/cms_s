@@ -14,6 +14,7 @@ import { useRpcMutation } from "@/hooks/use-rpc-mutation";
 import { CONTRACTS, isFnConfigured } from "@/lib/contracts";
 import { getSchemaClient } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
+import { ReceivablesMobileTabs } from "@/components/layout/receivables-mobile-tabs";
 
 import { ApVendorList, type VendorItem } from "./_components/ApVendorList";
 
@@ -980,6 +981,7 @@ function ApPageContent() {
 export default function ApPage() {
   return (
     <Suspense fallback={<div className="min-h-[100vh] grid place-items-center p-6 text-sm text-[var(--muted)]">로딩 중...</div>}>
+      <ReceivablesMobileTabs />
       <ApPageContent />
     </Suspense>
   );

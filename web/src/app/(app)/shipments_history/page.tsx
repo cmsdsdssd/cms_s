@@ -21,6 +21,7 @@ import {
   isCoreVisibleEtcItem,
 } from "@/lib/shipments-labor-rules";
 import { cn } from "@/lib/utils";
+import { ShipmentsMobileTabs } from "@/components/layout/shipments-mobile-tabs";
 import {
   combineShipmentRows,
   filterShipmentRows,
@@ -436,8 +437,8 @@ export default function ShipmentsHistoryPage() {
   const laborBreakdownRows = useMemo(() => {
     const prefillSnapshot =
       selectedLinePrefill?.labor_prefill_snapshot &&
-      typeof selectedLinePrefill.labor_prefill_snapshot === "object" &&
-      !Array.isArray(selectedLinePrefill.labor_prefill_snapshot)
+        typeof selectedLinePrefill.labor_prefill_snapshot === "object" &&
+        !Array.isArray(selectedLinePrefill.labor_prefill_snapshot)
         ? (selectedLinePrefill.labor_prefill_snapshot as Record<string, unknown>)
         : null;
     const extraItemsSource = prefillSnapshot?.extra_labor_items ?? selectedLineDetail?.extra_labor_items;
@@ -474,8 +475,8 @@ export default function ShipmentsHistoryPage() {
     const policyMeta =
       prefillSnapshot ??
       (selectedLineMatch?.pricing_policy_meta &&
-      typeof selectedLineMatch.pricing_policy_meta === "object" &&
-      !Array.isArray(selectedLineMatch.pricing_policy_meta)
+        typeof selectedLineMatch.pricing_policy_meta === "object" &&
+        !Array.isArray(selectedLineMatch.pricing_policy_meta)
         ? (selectedLineMatch.pricing_policy_meta as Record<string, unknown>)
         : selectedLinePrefill?.pricing_policy_meta &&
           typeof selectedLinePrefill.pricing_policy_meta === "object" &&
@@ -631,6 +632,8 @@ export default function ShipmentsHistoryPage() {
 
   return (
     <div className="min-h-screen bg-[var(--background)]">
+      {/* 모바일 세그먼트: 출고대기 | 출고완료 — lg:hidden */}
+      <ShipmentsMobileTabs />
       <div className="border-b border-[var(--panel-border)] bg-[var(--background)]/80 px-6 py-4 backdrop-blur">
         <ActionBar
           title="출고 확인"
@@ -813,16 +816,16 @@ export default function ShipmentsHistoryPage() {
                       <thead className="border-b border-[var(--panel-border)] bg-[var(--chip)] text-[var(--muted)]">
                         <tr>
                           <th className="px-4 py-3 whitespace-nowrap">출고일</th>
-                            <th className="px-4 py-3 whitespace-nowrap">공임일치</th>
-                            <th className="px-4 py-3 whitespace-nowrap">고객</th>
+                          <th className="px-4 py-3 whitespace-nowrap">공임일치</th>
+                          <th className="px-4 py-3 whitespace-nowrap">고객</th>
                           <th className="px-4 py-3 whitespace-nowrap">모델</th>
-                            <th className="px-4 py-3 text-right whitespace-nowrap">수량</th>
-                            <th className="px-4 py-3 text-right whitespace-nowrap">중량</th>
-                            <th className="px-4 py-3 text-right whitespace-nowrap">환산중량</th>
-                            <th className="px-4 py-3 text-right whitespace-nowrap">적용시세</th>
-                            <th className="px-4 py-3 text-right whitespace-nowrap">공임</th>
-                            <th className="px-4 py-3 text-right whitespace-nowrap">소재</th>
-                            <th className="px-4 py-3 text-right whitespace-nowrap">합계</th>
+                          <th className="px-4 py-3 text-right whitespace-nowrap">수량</th>
+                          <th className="px-4 py-3 text-right whitespace-nowrap">중량</th>
+                          <th className="px-4 py-3 text-right whitespace-nowrap">환산중량</th>
+                          <th className="px-4 py-3 text-right whitespace-nowrap">적용시세</th>
+                          <th className="px-4 py-3 text-right whitespace-nowrap">공임</th>
+                          <th className="px-4 py-3 text-right whitespace-nowrap">소재</th>
+                          <th className="px-4 py-3 text-right whitespace-nowrap">합계</th>
                           <th className="px-4 py-3 text-center whitespace-nowrap">구분</th>
                         </tr>
                       </thead>
@@ -957,63 +960,63 @@ export default function ShipmentsHistoryPage() {
 
                   <div className="max-h-[52vh] overflow-auto rounded border border-[var(--panel-border)]">
                     <table className="w-full text-left text-xs">
-                    <thead className="sticky top-0 border-b border-[var(--panel-border)] bg-[var(--chip)] text-[var(--muted)]">
-                      <tr>
-                        <th className="px-4 py-3 whitespace-nowrap">항목</th>
-                        <th className="px-4 py-3 text-right whitespace-nowrap">수량기준</th>
-                        <th className="px-4 py-3 text-right whitespace-nowrap">원가</th>
-                        <th className="px-4 py-3 text-right whitespace-nowrap">마진</th>
-                        <th className="px-4 py-3 text-right whitespace-nowrap">판매금액</th>
-                        <th className="px-4 py-3 whitespace-nowrap">근거/메모</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-[var(--panel-border)]">
-                      <tr className="bg-[var(--chip)]/40">
-                        <td className="px-4 py-3 font-semibold">기본공임</td>
-                        <td className="px-4 py-3 text-right tabular-nums">{laborBreakdownTotals.lineQty}</td>
-                        <td className="px-4 py-3 text-right tabular-nums">-</td>
-                        <td className="px-4 py-3 text-right tabular-nums">-</td>
-                        <td className="px-4 py-3 text-right tabular-nums font-semibold">{formatKrw(laborBreakdownTotals.baseSell)}</td>
-                        <td className="px-4 py-3 text-[var(--muted)]">라인 기본공임 스냅샷(base_labor_krw)</td>
-                      </tr>
-
-                      {displayedLaborBreakdownRows.map((item) => (
-                        <tr key={item.id} className="hover:bg-[var(--panel-hover)]">
-                          <td className="px-4 py-3">
-                            <div className="font-medium">{item.label}</div>
-                            <div className="text-[10px] text-[var(--muted)]">{item.type}</div>
-                          </td>
-                          <td className="px-4 py-3 text-right tabular-nums">{item.qtyApplied ?? "-"}</td>
-                          <td className="px-4 py-3 text-right tabular-nums">{item.costKrw === null ? "-" : formatKrw(item.costKrw)}</td>
-                          <td className="px-4 py-3 text-right tabular-nums">{item.marginKrw === null ? "-" : formatKrw(item.marginKrw)}</td>
-                          <td className="px-4 py-3 text-right tabular-nums font-semibold">{formatKrw(item.sellKrw)}</td>
-                          <td className="px-4 py-3 text-[var(--muted)]">{[item.source, item.reason].filter(Boolean).join(" | ") || "-"}</td>
+                      <thead className="sticky top-0 border-b border-[var(--panel-border)] bg-[var(--chip)] text-[var(--muted)]">
+                        <tr>
+                          <th className="px-4 py-3 whitespace-nowrap">항목</th>
+                          <th className="px-4 py-3 text-right whitespace-nowrap">수량기준</th>
+                          <th className="px-4 py-3 text-right whitespace-nowrap">원가</th>
+                          <th className="px-4 py-3 text-right whitespace-nowrap">마진</th>
+                          <th className="px-4 py-3 text-right whitespace-nowrap">판매금액</th>
+                          <th className="px-4 py-3 whitespace-nowrap">근거/메모</th>
                         </tr>
-                      ))}
+                      </thead>
+                      <tbody className="divide-y divide-[var(--panel-border)]">
+                        <tr className="bg-[var(--chip)]/40">
+                          <td className="px-4 py-3 font-semibold">기본공임</td>
+                          <td className="px-4 py-3 text-right tabular-nums">{laborBreakdownTotals.lineQty}</td>
+                          <td className="px-4 py-3 text-right tabular-nums">-</td>
+                          <td className="px-4 py-3 text-right tabular-nums">-</td>
+                          <td className="px-4 py-3 text-right tabular-nums font-semibold">{formatKrw(laborBreakdownTotals.baseSell)}</td>
+                          <td className="px-4 py-3 text-[var(--muted)]">라인 기본공임 스냅샷(base_labor_krw)</td>
+                        </tr>
 
-                      <tr className="border-t-2 border-[var(--panel-border)] bg-[var(--chip)]/60 font-semibold">
-                        <td className="px-4 py-3">추가공임 합계</td>
-                        <td className="px-4 py-3 text-right tabular-nums">-</td>
-                        <td className="px-4 py-3 text-right tabular-nums">{formatKrw(laborBreakdownTotals.extraCost)}</td>
-                        <td className="px-4 py-3 text-right tabular-nums">{formatKrw(laborBreakdownTotals.extraMargin)}</td>
-                        <td className="px-4 py-3 text-right tabular-nums">{formatKrw(laborBreakdownTotals.extraSell)}</td>
-                        <td className="px-4 py-3 text-[var(--muted)]">extra_labor_items 합산 / 원가스냅샷 {laborBreakdownTotals.extraCostSnapshot === null ? "-" : formatKrw(laborBreakdownTotals.extraCostSnapshot)}{laborBreakdownTotals.extraCostDelta === null ? "" : ` (차이 ${formatKrw(laborBreakdownTotals.extraCostDelta)})`}</td>
-                      </tr>
+                        {displayedLaborBreakdownRows.map((item) => (
+                          <tr key={item.id} className="hover:bg-[var(--panel-hover)]">
+                            <td className="px-4 py-3">
+                              <div className="font-medium">{item.label}</div>
+                              <div className="text-[10px] text-[var(--muted)]">{item.type}</div>
+                            </td>
+                            <td className="px-4 py-3 text-right tabular-nums">{item.qtyApplied ?? "-"}</td>
+                            <td className="px-4 py-3 text-right tabular-nums">{item.costKrw === null ? "-" : formatKrw(item.costKrw)}</td>
+                            <td className="px-4 py-3 text-right tabular-nums">{item.marginKrw === null ? "-" : formatKrw(item.marginKrw)}</td>
+                            <td className="px-4 py-3 text-right tabular-nums font-semibold">{formatKrw(item.sellKrw)}</td>
+                            <td className="px-4 py-3 text-[var(--muted)]">{[item.source, item.reason].filter(Boolean).join(" | ") || "-"}</td>
+                          </tr>
+                        ))}
 
-                      <tr className="bg-[var(--primary)]/8 font-semibold">
-                        <td className="px-4 py-3">{isSelectedLineUnitPricing ? "총금액 비교 (단가제)" : "공임 총계 비교"}</td>
-                        <td className="px-4 py-3 text-right tabular-nums">-</td>
-                        <td className="px-4 py-3 text-right tabular-nums">-</td>
-                        <td className="px-4 py-3 text-right tabular-nums">-</td>
-                        <td className="px-4 py-3 text-right tabular-nums">{formatKrw(compareTargetValue)}</td>
-                        <td className="px-4 py-3 text-[var(--muted)]">
-                          {isSelectedLineUnitPricing ? "총금액 기준 / SOT 총액" : "분해합 / SOT"}: {formatKrw(compareSotValue)}
-                          {Math.abs(compareDiff) > 0.5 ? ` (차이 ${formatKrw(compareDiff)})` : " (일치)"}
-                        </td>
-                      </tr>
-                    </tbody>
-                  </table>
-                </div>
+                        <tr className="border-t-2 border-[var(--panel-border)] bg-[var(--chip)]/60 font-semibold">
+                          <td className="px-4 py-3">추가공임 합계</td>
+                          <td className="px-4 py-3 text-right tabular-nums">-</td>
+                          <td className="px-4 py-3 text-right tabular-nums">{formatKrw(laborBreakdownTotals.extraCost)}</td>
+                          <td className="px-4 py-3 text-right tabular-nums">{formatKrw(laborBreakdownTotals.extraMargin)}</td>
+                          <td className="px-4 py-3 text-right tabular-nums">{formatKrw(laborBreakdownTotals.extraSell)}</td>
+                          <td className="px-4 py-3 text-[var(--muted)]">extra_labor_items 합산 / 원가스냅샷 {laborBreakdownTotals.extraCostSnapshot === null ? "-" : formatKrw(laborBreakdownTotals.extraCostSnapshot)}{laborBreakdownTotals.extraCostDelta === null ? "" : ` (차이 ${formatKrw(laborBreakdownTotals.extraCostDelta)})`}</td>
+                        </tr>
+
+                        <tr className="bg-[var(--primary)]/8 font-semibold">
+                          <td className="px-4 py-3">{isSelectedLineUnitPricing ? "총금액 비교 (단가제)" : "공임 총계 비교"}</td>
+                          <td className="px-4 py-3 text-right tabular-nums">-</td>
+                          <td className="px-4 py-3 text-right tabular-nums">-</td>
+                          <td className="px-4 py-3 text-right tabular-nums">-</td>
+                          <td className="px-4 py-3 text-right tabular-nums">{formatKrw(compareTargetValue)}</td>
+                          <td className="px-4 py-3 text-[var(--muted)]">
+                            {isSelectedLineUnitPricing ? "총금액 기준 / SOT 총액" : "분해합 / SOT"}: {formatKrw(compareSotValue)}
+                            {Math.abs(compareDiff) > 0.5 ? ` (차이 ${formatKrw(compareDiff)})` : " (일치)"}
+                          </td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
 
                   {displayedLaborBreakdownRows.length === 0 ? (
                     <div className="rounded border border-[var(--panel-border)] bg-[var(--chip)]/40 p-3 text-xs text-[var(--muted)]">

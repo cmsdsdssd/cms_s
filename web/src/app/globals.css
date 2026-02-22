@@ -208,6 +208,21 @@ body {
   background-attachment: fixed;
 }
 
+/* ─── Mobile Bottom Nav: height compensation ─── */
+:root {
+  --mobile-nav-h: 56px;
+}
+
+@media (max-width: 1023px) {
+  /* Pages that use h-[calc(100vh-4rem)] need extra clearance for the fixed bottom nav */
+  [id="ap.root"],
+  [id="ap-reconcile.root"],
+  [id="inventory.root"],
+  [id="party.root"] {
+    height: calc(100vh - 4rem - var(--mobile-nav-h)) !important;
+  }
+}
+
 .decimal-point-emphasis {
   font-size: 1.16em;
   font-weight: 800;

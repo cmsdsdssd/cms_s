@@ -18,6 +18,7 @@ import { cn } from "@/lib/utils";
 import { hasVariationTag, removeVariationTag } from "@/lib/variation-tag";
 import { Truck, Package, CheckCircle2, Clock, ArrowRight } from "lucide-react";
 import { toast } from "sonner";
+import { ShipmentsMobileTabs } from "@/components/layout/shipments-mobile-tabs";
 
 type UnshippedRow = {
   order_line_id: string;
@@ -195,7 +196,7 @@ export default function ShipmentsMainPage() {
     queryKey: ["cms", "unshipped_order_lines"],
     queryFn: async () => {
       if (!schemaClient) throw new Error("Supabase 클라이언트가 초기화되지 않았습니다");
-      
+
       try {
         const startTime = performance.now();
         const { data, error } = await schemaClient
@@ -204,9 +205,9 @@ export default function ShipmentsMainPage() {
           .order("status_sort_order", { ascending: true })  // 공장발주완료(1) → 입고대기(2) → 출고대기(3)
           .order("queue_sort_date", { ascending: true })    // 같은 status 내에서는 오래된 순
           .limit(500);
-        
+
         const endTime = performance.now();
-        
+
         if (error) {
           console.error('Supabase error:', error);
           // 친화적인 에러 메시지
@@ -218,7 +219,7 @@ export default function ShipmentsMainPage() {
             throw new Error(`데이터베이스 오류: ${error.message}`);
           }
         }
-        
+
         return (data ?? []) as UnshippedRow[];
       } catch (err) {
         console.error('Fetch exception:', err);
@@ -290,11 +291,11 @@ export default function ShipmentsMainPage() {
     if (!unshippedQuery.data) return [];
 
     let result = unshippedQuery.data;
-    
+
     if (!includeStorePickup) {
       result = result.filter((row) => !storePickupOrderLineIds.has(row.order_line_id));
     }
-    
+
     const activeFilters = filters.filter((filter) => filter.value);
 
     const matchesFilter = (row: UnshippedRow, filter: FilterRow) => {
@@ -329,19 +330,19 @@ export default function ShipmentsMainPage() {
     result.sort((a, b) => {
       const rowA = a as UnshippedRow & { status_sort_order?: number };
       const rowB = b as UnshippedRow & { status_sort_order?: number };
-      
+
       // 1st priority: status_sort_order (DB에서 가져온 값)
       const sortOrderA = STATUS_PRIORITY[rowA.status ?? ""] ?? rowA.status_sort_order ?? 99;
       const sortOrderB = STATUS_PRIORITY[rowB.status ?? ""] ?? rowB.status_sort_order ?? 99;
-      
+
       if (sortOrderA !== sortOrderB) {
         return sortOrderA - sortOrderB;
       }
-      
+
       // 같은 status 내에서: 선택한 sortField로 정렬
       let valA: string | null | undefined;
       let valB: string | null | undefined;
-      
+
       switch (sortField) {
         case "order_date":
           valA = a.created_at ?? null;
@@ -365,12 +366,12 @@ export default function ShipmentsMainPage() {
           valB = b.queue_sort_date;
           break;
       }
-      
+
       // Handle null values
       if (!valA && !valB) return 0;
       if (!valA) return sortOrder === "asc" ? -1 : 1;
       if (!valB) return sortOrder === "asc" ? 1 : -1;
-      
+
       if (sortField === "order_date") {
         const now = Date.now();
         const timeA = new Date(valA).getTime();
@@ -384,7 +385,7 @@ export default function ShipmentsMainPage() {
       const comparison = valA.localeCompare(valB);
       return sortOrder === "asc" ? comparison : -comparison;
     });
-    
+
     return result;
   }, [unshippedQuery.data, storePickupOrderLineIds, includeStorePickup, filters, filterOperator, sortField, sortOrder]);
 
@@ -486,7 +487,7 @@ export default function ShipmentsMainPage() {
   if (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
     const isMigrationError = errorMessage.includes('마이그레이션') || errorMessage.includes('존재하지 않습니다');
-    
+
     return (
       <div className="flex flex-col items-center justify-center h-96 gap-4 px-4">
         <div className="text-red-500 font-semibold text-lg">⚠️ 데이터 로딩 실패</div>
@@ -495,8 +496,8 @@ export default function ShipmentsMainPage() {
         </div>
         {isMigrationError && (
           <div className="text-xs text-amber-600 bg-amber-50 p-3 rounded-lg max-w-md">
-            <strong>해결 방법:</strong><br/>
-            1. 터미널에서 <code className="bg-gray-200 px-1">npx supabase db reset</code> 실행<br/>
+            <strong>해결 방법:</strong><br />
+            1. 터미널에서 <code className="bg-gray-200 px-1">npx supabase db reset</code> 실행<br />
             2. 페이지 새로고침 (F5)
           </div>
         )}
@@ -510,6 +511,8 @@ export default function ShipmentsMainPage() {
 
   return (
     <div className="space-y-3" id="shipments_main.root">
+      {/* 모바일 세그먼트: 출고대기 | 출고완료 — lg:hidden */}
+      <ShipmentsMobileTabs />
       {/* Unified Toolbar */}
       <UnifiedToolbar
         title="출고관리"
@@ -520,8 +523,8 @@ export default function ShipmentsMainPage() {
                 <Badge tone="neutral" className="text-xs">
                   {selectedLines.size}개 선택
                 </Badge>
-                  <Button
-                    variant="primary"
+                <Button
+                  variant="primary"
                   size="sm"
                   onClick={handleCreateShipment}
                   className="text-xs"
@@ -744,7 +747,7 @@ export default function ShipmentsMainPage() {
                     onClick={() => removeFilter(filter.id)}
                     className="text-[var(--muted)] hover:text-red-500 transition-colors"
                   >
-                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 6 6 18" /><path d="m6 6 12 12" /></svg>
                   </button>
                 </div>
 
@@ -809,7 +812,7 @@ export default function ShipmentsMainPage() {
                 </>
               )}
             </div>
-            
+
             {/* Sort Controls */}
             <div className="flex items-center gap-2">
               <select
@@ -834,9 +837,9 @@ export default function ShipmentsMainPage() {
             {/* Pagination */}
             {totalPages > 1 && (
               <div className="flex items-center gap-1">
-                <Button 
-                  variant="ghost" 
-                  size="sm" 
+                <Button
+                  variant="ghost"
+                  size="sm"
                   className="h-7 px-2"
                   onClick={() => setPage(p => Math.max(1, p - 1))}
                   disabled={page === 1}
@@ -846,9 +849,9 @@ export default function ShipmentsMainPage() {
                 <span className="text-xs text-[var(--muted)]">
                   {page} / {totalPages}
                 </span>
-                <Button 
-                  variant="ghost" 
-                  size="sm" 
+                <Button
+                  variant="ghost"
+                  size="sm"
                   className="h-7 px-2"
                   onClick={() => setPage(p => Math.min(totalPages, p + 1))}
                   disabled={page === totalPages}
@@ -858,7 +861,7 @@ export default function ShipmentsMainPage() {
               </div>
             )}
           </CardHeader>
-          
+
           <CardBody className="space-y-1 p-3 flex-1">
             {isLoading ? (
               <div className="flex flex-col items-center justify-center h-64 gap-3 text-[var(--muted)]">
