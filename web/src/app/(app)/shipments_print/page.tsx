@@ -198,6 +198,7 @@ type PartyReceiptPage = {
 };
 
 const zeroAmounts: Amounts = { gold: 0, silver: 0, labor: 0, total: 0 };
+const CASH_EPS_KRW = 0.5;
 
 const formatKrw = (value?: number | null) => {
   if (value === null || value === undefined) return "-";
@@ -213,7 +214,7 @@ const formatBreakdownKrw = (amounts: Amounts) => {
   return formatKrw(amounts.total);
 };
 
-const isFullyPaidAmounts = (amounts: Amounts) => Number(amounts.total ?? 0) === 0;
+const isFullyPaidAmounts = (amounts: Amounts) => Math.abs(Number(amounts.total ?? 0)) <= CASH_EPS_KRW;
 
 const formatCheckValue = (name: string, value: number) => {
   if (name.includes("_krw")) return formatKrw(value);

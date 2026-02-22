@@ -284,6 +284,18 @@ const round6 = (n: number) => {
   return Math.round(n * 1e6) / 1e6;
 };
 
+const CASH_EPS_KRW = 0.5;
+
+const normalizeCashKrw = (value?: number | null) => {
+  const numeric = Number(value ?? 0);
+  if (!Number.isFinite(numeric)) return 0;
+  return Math.abs(numeric) <= CASH_EPS_KRW ? 0 : numeric;
+};
+
+const hasPositiveCashKrw = (value?: number | null) => {
+  return normalizeCashKrw(value) > 0;
+};
+
 const fifoValueForCommodity = (
   rows: ArInvoicePositionRow[],
   type: "gold" | "silver",
@@ -359,7 +371,7 @@ const buildPaymentAllocationPreview = (args: {
   const { rows, cashValue, allowCashForMaterial, mode, targetArIds } = args;
   const targetSet = new Set(targetArIds);
   const sortable = rows
-    .filter((row) => Number(row.total_cash_outstanding_krw ?? 0) > 0)
+    .filter((row) => hasPositiveCashKrw(row.total_cash_outstanding_krw))
     .slice()
     .sort((a, b) => {
       const aTarget = mode === "TARGET_FIRST" && targetSet.has(a.ar_id ?? "") ? 0 : 1;
@@ -589,9 +601,9 @@ export default function ArPage() {
       const nameMatch = (row.name ?? "").toLowerCase().includes(searchQuery.toLowerCase());
       const balance = Number(row.balance_krw ?? 0);
       const balanceMatch = (() => {
-        if (balanceFilter === "receivable") return balance > 0;
-        if (balanceFilter === "credit") return balance < 0;
-        if (balanceFilter === "nonzero") return balance !== 0;
+        if (balanceFilter === "receivable") return balance > CASH_EPS_KRW;
+        if (balanceFilter === "credit") return balance < -CASH_EPS_KRW;
+        if (balanceFilter === "nonzero") return Math.abs(balance) > CASH_EPS_KRW;
         return true;
       })();
       return nameMatch && balanceMatch;
@@ -704,12 +716,15 @@ export default function ArPage() {
   }, [invoicePositionsQuery.data, selectedParty]);
 
   const ledgerCashOutstanding = useMemo(() => {
-    return Math.max(Number(selectedParty?.receivable_krw ?? 0), 0);
+    return Math.max(normalizeCashKrw(selectedParty?.receivable_krw), 0);
   }, [selectedParty?.receivable_krw]);
 
   const settlementRecoCashOutstanding = useMemo(() => {
     if (!settlementRecoQuery.data?.ok) return null;
-    return Math.max(Number(settlementRecoQuery.data.totals.total_cash_outstanding_krw ?? 0), 0);
+    return Math.max(
+      normalizeCashKrw(settlementRecoQuery.data.totals.total_cash_outstanding_krw ?? 0),
+      0
+    );
   }, [settlementRecoQuery.data]);
 
   const writeoffAmountMismatch = useMemo(() => {
@@ -759,7 +774,7 @@ export default function ArPage() {
 
   const targetableInvoiceRows = useMemo(() => {
     return (invoicePositionsQuery.data ?? []).filter(
-      (row) => Number(row.total_cash_outstanding_krw ?? 0) > 0
+      (row) => hasPositiveCashKrw(row.total_cash_outstanding_krw)
     );
   }, [invoicePositionsQuery.data]);
 
@@ -1247,7 +1262,7 @@ export default function ArPage() {
       >
         <div className="flex justify-between items-start mb-1">
           <span className={cn("font-bold text-sm truncate pr-2", isSelected ? "text-[var(--primary)]" : "text-[var(--foreground)]")}>{party.name}</span>
-          <span className={cn("text-xs font-medium tabular-nums", Number(party.balance_krw) > 0 ? "text-[var(--danger)]" : "text-[var(--muted)]")}>
+          <span className={cn("text-xs font-medium tabular-nums", normalizeCashKrw(party.balance_krw) > 0 ? "text-[var(--danger)]" : "text-[var(--muted)]")}>
             {formatKrw(party.balance_krw)}
           </span>
         </div>
@@ -1358,7 +1373,16 @@ export default function ArPage() {
               <div className="grid grid-cols-5 gap-4 p-4 rounded-xl bg-[var(--chip)] border border-[var(--panel-border)]">
                 <div>
                   <p className="text-xs font-medium text-[var(--muted)] mb-1">총 미수금</p>
-                  <p className="text-lg font-bold tabular-nums text-[var(--danger)]">{formatKrw(selectedParty.receivable_krw)}</p>
+                  <p
+                    className={cn(
+                      "text-lg font-bold tabular-nums",
+                      normalizeCashKrw(selectedParty.receivable_krw) > 0
+                        ? "text-[var(--danger)]"
+                        : "text-[var(--muted)]"
+                    )}
+                  >
+                    {formatKrw(selectedParty.receivable_krw)}
+                  </p>
                 </div>
                 <div>
                   <p className="text-xs font-medium text-[var(--muted)] mb-1">금 잔액</p>
@@ -1627,7 +1651,11 @@ export default function ArPage() {
                       </thead>
                       <tbody className="divide-y divide-[var(--panel-border)]">
                         {invoicePositionsQuery.data && invoicePositionsQuery.data
-                          .filter(row => row.total_cash_outstanding_krw! > 0 || row.commodity_outstanding_g! > 0)
+                          .filter(
+                            (row) =>
+                              hasPositiveCashKrw(row.total_cash_outstanding_krw) ||
+                              Number(row.commodity_outstanding_g ?? 0) > 0
+                          )
                           .map(row => {
                             const unitOnly = isUnitPricingCashOnlyAr(row);
                             return (
@@ -2475,7 +2503,7 @@ export default function ArPage() {
                                 ⚠️ NEXT_PUBLIC_CMS_ACTOR_ID 미설정으로 완불처리를 실행할 수 없습니다.
                               </div>
                             )}
-                            {settlementRecoQuery.data?.ok && ledgerCashOutstanding <= 1000 && ledgerCashOutstanding > 0 && !writeoffAmountMismatch && (
+                            {settlementRecoQuery.data?.ok && ledgerCashOutstanding <= 1000 && ledgerCashOutstanding > CASH_EPS_KRW && !writeoffAmountMismatch && (
                               <div className="text-xs text-[var(--success)] font-semibold">
                                 ✅ 서비스 완불처리 가능 (≤₩1,000)
                               </div>
@@ -2503,7 +2531,7 @@ export default function ArPage() {
                             className="w-full"
                             disabled={
                               !settlementRecoQuery.data?.ok ||
-                              ledgerCashOutstanding <= 0 ||
+                              ledgerCashOutstanding <= CASH_EPS_KRW ||
                               ledgerCashOutstanding > 1000 ||
                               writeoffAmountMismatch ||
                               !actorPersonId

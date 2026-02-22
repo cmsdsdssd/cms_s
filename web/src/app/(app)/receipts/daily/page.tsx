@@ -66,6 +66,9 @@ const getKstYmd = () => {
 };
 
 const zeroAmounts: Amounts = { gold: 0, silver: 0, labor: 0, total: 0 };
+const CASH_EPS_KRW = 0.5;
+
+const isFullyPaidAmounts = (amounts: Amounts) => Math.abs(Number(amounts.total ?? 0)) <= CASH_EPS_KRW;
 
 const addAmounts = (base: Amounts, add: Amounts) => ({
   gold: base.gold + add.gold,
@@ -446,6 +449,7 @@ export default function DailyReceiptsPage() {
                       ]}
                       goldPrice={page.goldPrice}
                       silverPrice={page.silverPrice}
+                      isFullyPaid={isFullyPaidAmounts(page.totals)}
                     />
                   </div>
                   <div className="h-full pl-4">
@@ -460,6 +464,7 @@ export default function DailyReceiptsPage() {
                       ]}
                       goldPrice={page.goldPrice}
                       silverPrice={page.silverPrice}
+                      isFullyPaid={isFullyPaidAmounts(page.totals)}
                     />
                   </div>
                 </div>
