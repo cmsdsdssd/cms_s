@@ -21,6 +21,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Validate required Actions vars/secrets
+        run: |
+          if [ -z "${{ vars.NEXT_PUBLIC_SUPABASE_URL }}" ]; then echo "Missing variable: NEXT_PUBLIC_SUPABASE_URL"; exit 1; fi
+          if [ -z "${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}" ]; then echo "Missing secret: NEXT_PUBLIC_SUPABASE_ANON_KEY"; exit 1; fi
+          if [ -z "${{ vars.NEXT_PUBLIC_CMS_ACTOR_ID }}" ]; then echo "Missing variable: NEXT_PUBLIC_CMS_ACTOR_ID"; exit 1; fi
+          if [ -z "${{ vars.NEXT_PUBLIC_CMS_ACTOR_TYPE }}" ]; then echo "Missing variable: NEXT_PUBLIC_CMS_ACTOR_TYPE"; exit 1; fi
+          if [ -z "${{ vars.NEXT_PUBLIC_CMS_CORRELATION_ID }}" ]; then echo "Missing variable: NEXT_PUBLIC_CMS_CORRELATION_ID"; exit 1; fi
+          if [ -z "${{ vars.CLOUDFLARE_ACCOUNT_ID }}" ]; then echo "Missing variable: CLOUDFLARE_ACCOUNT_ID"; exit 1; fi
+
       - uses: google-github-actions/auth@v2
         with:
           workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
@@ -30,7 +40,13 @@ jobs:
       - run: |
           IMAGE="${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/${{ env.SERVICE }}:${{ github.sha }}"
           echo "IMAGE=$IMAGE" >> $GITHUB_ENV
-          docker build -t "$IMAGE" ./web
+          docker build \
+            --build-arg NEXT_PUBLIC_SUPABASE_URL='${{ vars.NEXT_PUBLIC_SUPABASE_URL }}' \
+            --build-arg NEXT_PUBLIC_SUPABASE_ANON_KEY='${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}' \
+            --build-arg NEXT_PUBLIC_CMS_ACTOR_ID='${{ vars.NEXT_PUBLIC_CMS_ACTOR_ID }}' \
+            --build-arg NEXT_PUBLIC_CMS_ACTOR_TYPE='${{ vars.NEXT_PUBLIC_CMS_ACTOR_TYPE }}' \
+            --build-arg NEXT_PUBLIC_CMS_CORRELATION_ID='${{ vars.NEXT_PUBLIC_CMS_CORRELATION_ID }}' \
+            -t "$IMAGE" ./web
           docker push "$IMAGE"
           gcloud run deploy "${{ env.SERVICE }}" \
             --image "$IMAGE" \
@@ -43,7 +59,9 @@ jobs:
             --timeout 600 \
             --cpu 1 \
             --memory 1Gi \
-            --concurrency 40
+            --concurrency 40 \
+            --set-env-vars "TZ=Asia/Seoul,CLOUDFLARE_ACCOUNT_ID=${{ vars.CLOUDFLARE_ACCOUNT_ID }},NANOBANANA_MODEL=gemini-2.5-flash-image,NEXT_PUBLIC_SUPABASE_URL=${{ vars.NEXT_PUBLIC_SUPABASE_URL }},NEXT_PUBLIC_CMS_ACTOR_ID=${{ vars.NEXT_PUBLIC_CMS_ACTOR_ID }},NEXT_PUBLIC_CMS_ACTOR_TYPE=${{ vars.NEXT_PUBLIC_CMS_ACTOR_TYPE }},NEXT_PUBLIC_CMS_CORRELATION_ID=${{ vars.NEXT_PUBLIC_CMS_CORRELATION_ID }},NEXT_PUBLIC_SUPABASE_ANON_KEY=${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}" \
+            --set-secrets "SUPABASE_SERVICE_ROLE_KEY=SUPABASE_SERVICE_ROLE_KEY:latest,CLOUDFLARE_API_TOKEN=CLOUDFLARE_API_TOKEN:latest,GEMINI_API_KEY=GEMINI_API_KEY:latest"
 # trigger 1771727622
 # trigger-2 1771727758
 # trigger-3 1771727873
