@@ -3039,10 +3039,17 @@ export default function CatalogPage() {
     }
 
     const targetItem = sortedCatalogItems.find((item) => item.id === targetMasterId);
-    setBatchSettingsById((prev) => ({
-      ...prev,
-      [targetMasterId]: prev[targetMasterId] ?? createDefaultNanobananaSetting(targetItem?.model ?? modelName ?? "product"),
-    }));
+    setBatchSettingsById((prev) => {
+      const base = prev[targetMasterId] ?? createDefaultNanobananaSetting(targetItem?.model ?? modelName ?? "product");
+      return {
+        ...prev,
+        [targetMasterId]: {
+          ...base,
+          showModelNameOverlay: true,
+          displayName: base.displayName || toOverlayModelName(targetItem?.model ?? modelName ?? "product"),
+        },
+      };
+    });
     setSingleGenerateDebugPrompt("");
     setSingleGenerateDebugHash("");
     setSingleGenerateDebugModel("");
@@ -3201,7 +3208,12 @@ export default function CatalogPage() {
     setBatchSettingsById((prev) => {
       const next = { ...prev };
       selectedBatchItems.forEach((item) => {
-        if (!next[item.id]) next[item.id] = createDefaultNanobananaSetting(item.model);
+        const base = next[item.id] ?? createDefaultNanobananaSetting(item.model);
+        next[item.id] = {
+          ...base,
+          showModelNameOverlay: true,
+          displayName: base.displayName || toOverlayModelName(item.model),
+        };
       });
       return next;
     });

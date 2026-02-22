@@ -11,9 +11,9 @@ const BACKGROUND_STYLE_DEFAULT: BackgroundStyle = 0;
 const PRODUCT_POSE_DEFAULT: ProductPose = 0;
 
 const POSE_PROMPT_MAP: Record<ProductPose, string> = {
-  0: "CAMERA & COMPOSITION: Top-down flat-lay orientation preferred. Keep product centered and occupying roughly 75% of frame with natural spacing.",
-  1: "CAMERA & COMPOSITION: Upright eye-level orientation preferred. Keep product centered and occupying roughly 75% of frame with natural spacing.",
-  2: "CAMERA & COMPOSITION: Hanging/slight-angle orientation preferred. Keep product centered and occupying roughly 75% of frame with natural spacing.",
+  0: "CAMERA & COMPOSITION: Top-down flat-lay orientation preferred. HARD CONSTRAINT: product must be centered and occupy about 72-78% of the frame area.",
+  1: "CAMERA & COMPOSITION: Upright eye-level orientation preferred. HARD CONSTRAINT: product must be centered and occupy about 72-78% of the frame area.",
+  2: "CAMERA & COMPOSITION: Hanging/slight-angle orientation preferred. HARD CONSTRAINT: product must be centered and occupy about 72-78% of the frame area.",
 };
 
 const BACKGROUND_PROFILE_MAP: Record<BackgroundStyle, { hex: string; sentence: string }> = {
@@ -70,10 +70,12 @@ export function buildPromptText(input: PromptInput) {
     "Allowed: camera angle/layout reposition only. Forbidden: redesign, added/removed stones, geometry changes.",
     "MANDATORY EDIT: Apply requested composition and requested background in this generation. Do not keep original background if it conflicts.",
     posePrompt,
+    "FRAMING RULE: Use close framing. Avoid wide shot or distant subject.",
+    "CROP RULE: Keep minimal empty margin (about 8-12%) around the product while keeping entire product visible.",
     backgroundPrompt.sentence,
     `MANDATORY BACKGROUND TARGET: final background must be visually close to ${backgroundPrompt.hex} in uniform studio tone.`,
     "LIGHTING: Soft warm studio light, clean specular control, premium e-commerce look.",
-    "OUTPUT: 1:1 square composition, product fully in frame, centered around 75% frame occupancy.",
+    "OUTPUT: 1:1 square composition, product fully in frame, centered around 75% frame occupancy (acceptable range 72-78%).",
     "QUALITY CHECK: no hallucination, no missing parts, no melted metal, no text/watermark/hands/props.",
   ];
 

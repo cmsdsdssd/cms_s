@@ -59,6 +59,49 @@ type MasterSourceImage = {
   defaultDisplayName: string;
 };
 
+function normalizeLegacyName(value: string) {
+  const trimmed = value.trim();
+  const safe = trimmed
+    .replace(/[\\/:*?"<>|]/g, "_")
+    .replace(/\s+/g, "_")
+    .replace(/_+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  return safe || "model";
+}
+
+function escapeRegex(text: string) {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+async function nextLegacyRelativePath(params: {
+  supabase: SupabaseClient;
+  bucket: string;
+  folder: string;
+  baseName: string;
+  ext: string;
+}) {
+  const { data, error } = await params.supabase.storage.from(params.bucket).list(params.folder, {
+    limit: 1000,
+    sortBy: { column: "name", order: "asc" },
+  });
+  if (error) {
+    throw new Error(`legacy 목록 조회 실패: ${error.message}`);
+  }
+
+  const matcher = new RegExp(`^${escapeRegex(params.baseName)}_(\\d+)\\.${escapeRegex(params.ext)}$`, "i");
+  let maxIndex = -1;
+  for (const item of data ?? []) {
+    const name = String(item.name ?? "").trim();
+    if (!name) continue;
+    const m = name.match(matcher);
+    if (!m) continue;
+    const n = Number(m[1]);
+    if (Number.isFinite(n)) maxIndex = Math.max(maxIndex, n);
+  }
+  const next = String(maxIndex + 1).padStart(2, "0");
+  return `${params.folder}/${params.baseName}_${next}.${params.ext}`;
+}
+
 function toOverlayModelName(value: string) {
   const raw = value.trim();
   if (!raw) return raw;
@@ -166,12 +209,21 @@ async function archiveOriginalImage(
   bucket: string,
   legacyBucket: string,
   masterId: string,
+  modelName: string,
   sourcePath: string,
   sourceBlob: Blob,
-  sourceMimeType: string,
-  requestId: string
+  sourceMimeType: string
 ) {
-  const legacyRelativePath = `master/${masterId}/${nowStamp()}_${requestId}.${sourcePath.split(".").pop() || "png"}`;
+  const ext = sourcePath.split(".").pop() || extensionFromMimeType(sourceMimeType);
+  const baseName = normalizeLegacyName(modelName);
+  const folder = baseName;
+  const legacyRelativePath = await nextLegacyRelativePath({
+    supabase,
+    bucket: legacyBucket,
+    folder,
+    baseName,
+    ext,
+  });
   const { error: legacyUploadError } = await supabase.storage
     .from(legacyBucket)
     .upload(legacyRelativePath, sourceBlob, { upsert: true, contentType: sourceMimeType });
@@ -290,6 +342,16 @@ export async function applyGeneratedMasterImage(
   if (sourceError || !sourceBlob) throw new Error(sourceError?.message ?? "원본 이미지 다운로드 실패");
   const sourceMimeType = input.sourceMimeType || sourceBlob.type || "image/png";
 
+  const { data: masterRow, error: masterError } = await supabase
+    .from("cms_master_item")
+    .select("model_name")
+    .eq("master_id", input.masterId)
+    .maybeSingle();
+  if (masterError) {
+    throw new Error(`마스터 조회 실패: ${masterError.message}`);
+  }
+  const modelName = toOverlayModelName(String((masterRow as { model_name?: string | null } | null)?.model_name ?? "").trim() || input.masterId);
+
   const generatedBytes = decodeBase64ToBytes(input.generatedBase64);
   const ext = extensionFromMimeType(input.generatedMimeType);
   const activePath = sourcePath || `master/${input.masterId}/main.${ext}`;
@@ -299,10 +361,10 @@ export async function applyGeneratedMasterImage(
     bucket,
     legacyBucket,
     input.masterId,
+    modelName,
     sourcePath,
     sourceBlob,
-    sourceMimeType,
-    input.requestId
+    sourceMimeType
   );
 
   const { error: activeUploadError } = await supabase.storage

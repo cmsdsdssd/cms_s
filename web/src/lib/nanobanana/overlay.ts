@@ -25,6 +25,10 @@ function estimateTextWidth(text: string) {
   return Math.max(120, Math.min(width, 1200));
 }
 
+function luminance(r: number, g: number, b: number) {
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+
 async function sampleAverageColor(image: sharp.Sharp) {
   const metadata = await image.metadata();
   const width = Number(metadata.width ?? 0);
@@ -63,7 +67,7 @@ async function sampleAverageColor(image: sharp.Sharp) {
 
 export async function addModelNameOverlay(input: OverlayInput) {
   const displayName = (input.displayName || "product").trim() || "product";
-  const textColor = (input.textColor || "black").trim() || "black";
+  const requestedTextColor = (input.textColor || "black").trim().toLowerCase() || "black";
 
   const image = sharp(Buffer.from(input.imageBytes));
   const metadata = await image.metadata();
@@ -74,6 +78,12 @@ export async function addModelNameOverlay(input: OverlayInput) {
   }
 
   const { r, g, b } = await sampleAverageColor(image);
+  const bgLuma = luminance(r, g, b);
+  const textColor =
+    requestedTextColor === "white"
+      ? (bgLuma > 185 ? "black" : "white")
+      : (bgLuma < 120 ? "white" : "black");
+  const strokeColor = textColor === "black" ? "rgba(255,255,255,0.88)" : "rgba(0,0,0,0.78)";
 
   const fontSize = Math.max(16, Math.min(40, Math.floor(imageWidth * 0.08)));
   const textX = clamp(70, 8, Math.max(8, imageWidth - 8));
@@ -95,7 +105,17 @@ export async function addModelNameOverlay(input: OverlayInput) {
   const svg = `
 <svg xmlns="http://www.w3.org/2000/svg" width="${imageWidth}" height="${imageHeight}">
   <rect x="${boxX}" y="${boxY}" width="${boxWidth}" height="${boxHeight}" fill="rgba(${r}, ${g}, ${b}, 1)" />
-  <text x="${textX}" y="${textY}" font-family="Arial, sans-serif" font-size="${fontSize}" font-weight="300" fill="${escapeXml(textColor)}">${escapeXml(displayName)}</text>
+  <text
+    x="${textX}"
+    y="${textY}"
+    font-family="Arial, sans-serif"
+    font-size="${fontSize}"
+    font-weight="500"
+    fill="${escapeXml(textColor)}"
+    stroke="${escapeXml(strokeColor)}"
+    stroke-width="1.25"
+    paint-order="stroke"
+  >${escapeXml(displayName)}</text>
 </svg>`;
 
   const overlaid = await image
