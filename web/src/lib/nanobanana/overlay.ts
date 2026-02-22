@@ -99,9 +99,9 @@ export async function addModelNameOverlay(input: OverlayInput) {
   <text
     x="${textX}"
     y="${textY}"
-    font-family="Arial, sans-serif"
+    font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif"
     font-size="${fontSize}"
-    font-weight="300"
+    font-weight="500"
     fill="${escapeXml(textColor)}"
   >${escapeXml(displayName)}</text>
 </svg>`;

@@ -26,6 +26,7 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV PORT=8080
 ENV HOSTNAME=0.0.0.0
+RUN apk add --no-cache fontconfig ttf-dejavu font-noto-cjk
 COPY --from=builder /app .
 EXPOSE 8080
 CMD ["npm", "run", "start", "--", "-p", "8080", "-H", "0.0.0.0"]
