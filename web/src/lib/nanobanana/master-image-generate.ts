@@ -149,10 +149,23 @@ function normalizePath(path: string, bucket: string) {
 
 async function prepareModelInputImage(bytes: Uint8Array, mimeType: string) {
   try {
-    const normalized = await sharp(Buffer.from(bytes))
-      .rotate()
-      .png({ compressionLevel: 9 })
-      .toBuffer();
+    const image = sharp(Buffer.from(bytes)).rotate();
+    const metadata = await image.metadata();
+    const width = Number(metadata.width ?? 0);
+    const height = Number(metadata.height ?? 0);
+    const side = Math.max(width, height);
+
+    const normalized = await (side > 0
+      ? image
+          .clone()
+          .resize(side, side, {
+            fit: "contain",
+            background: { r: 255, g: 255, b: 255, alpha: 1 },
+          })
+          .png({ compressionLevel: 9 })
+          .toBuffer()
+      : image.clone().png({ compressionLevel: 9 }).toBuffer());
+
     return {
       imageBytes: new Uint8Array(normalized),
       imageMimeType: "image/png",
@@ -164,6 +177,30 @@ async function prepareModelInputImage(bytes: Uint8Array, mimeType: string) {
       imageMimeType: mimeType,
       originalMimeType: mimeType,
     };
+  }
+}
+
+async function ensureSquareOutputImage(bytes: Uint8Array) {
+  try {
+    const image = sharp(Buffer.from(bytes)).rotate();
+    const metadata = await image.metadata();
+    const width = Number(metadata.width ?? 0);
+    const height = Number(metadata.height ?? 0);
+    if (width <= 0 || height <= 0) {
+      return bytes;
+    }
+    const side = Math.max(width, height);
+    const squared = await image
+      .clone()
+      .resize(side, side, {
+        fit: "contain",
+        background: { r: 255, g: 255, b: 255, alpha: 1 },
+      })
+      .png({ compressionLevel: 9 })
+      .toBuffer();
+    return new Uint8Array(squared);
+  } catch {
+    return bytes;
   }
 }
 
@@ -309,25 +346,27 @@ export async function generateMasterImagePreviewWithNanobanana(
   const requestedDisplayName = String(input.displayName ?? "").trim();
   const displayName = requestedDisplayName || source.defaultDisplayName || "product";
   const textColor = String(input.textColor ?? "black").trim() || "black";
+  const squareGeneratedBytes = await ensureSquareOutputImage(generated.imageBytes);
   const overlayedBytes = overlayEnabled
     ? await addModelNameOverlay({
-      imageBytes: generated.imageBytes,
+      imageBytes: squareGeneratedBytes,
       displayName,
       textColor,
     })
-    : generated.imageBytes;
+    : squareGeneratedBytes;
+  const finalSquareBytes = await ensureSquareOutputImage(overlayedBytes);
 
   return {
     masterId: input.masterId,
     sourcePath: source.sourcePath,
     sourceMimeType: source.sourceMimeType,
-    generatedBase64: encodeBytesToBase64(overlayedBytes),
+    generatedBase64: encodeBytesToBase64(finalSquareBytes),
     generatedMimeType: "image/png",
     promptHash: promptResult.promptHash,
     promptText: promptResult.prompt,
     modelUsed: generated.modelUsed,
     inputImageSha256: sha256OfBytes(prepared.imageBytes),
-    outputImageSha256: sha256OfBytes(overlayedBytes),
+    outputImageSha256: sha256OfBytes(finalSquareBytes),
   };
 }
 

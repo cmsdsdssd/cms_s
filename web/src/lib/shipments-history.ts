@@ -19,6 +19,8 @@ export type ShipmentHistoryLineRow = {
   measured_weight_g?: number | null;
   deduction_weight_g?: number | null;
   net_weight_g?: number | null;
+  base_labor_krw?: number | null;
+  extra_labor_krw?: number | null;
   labor_total_sell_krw?: number | null;
   material_amount_sell_krw?: number | null;
   total_amount_sell_krw?: number | null;
@@ -49,6 +51,8 @@ export type ShipmentHistoryRow = {
   qty: number;
   net_weight_g: number;
   labor_total_sell_krw: number;
+  labor_breakdown_sum_krw: number | null;
+  labor_consistent: boolean;
   material_amount_sell_krw: number;
   total_amount_sell_krw: number;
   created_at: string;
@@ -184,6 +188,8 @@ export const combineShipmentRows = (
               : 0;
 
       const lineLabor = toFiniteNumber(line.labor_total_sell_krw, Number.NaN);
+      const lineBaseLabor = toFiniteNumber(line.base_labor_krw, Number.NaN);
+      const lineExtraLabor = toFiniteNumber(line.extra_labor_krw, Number.NaN);
       const lineMaterial = toFiniteNumber(line.material_amount_sell_krw, Number.NaN);
       const lineTotal = toFiniteNumber(line.total_amount_sell_krw, Number.NaN);
 
@@ -192,6 +198,12 @@ export const combineShipmentRows = (
       const invoiceTotal = toFiniteNumber(invoice?.total_cash_due_krw, Number.NaN);
 
       const effectiveLabor = Number.isFinite(invoiceLabor) ? invoiceLabor : Number.isFinite(lineLabor) ? lineLabor : 0;
+      const laborBreakdownSum =
+        Number.isFinite(lineBaseLabor) && Number.isFinite(lineExtraLabor)
+          ? lineBaseLabor + lineExtraLabor
+          : null;
+      const laborConsistent =
+        laborBreakdownSum === null ? true : Math.abs(laborBreakdownSum - effectiveLabor) <= 0.5;
       const effectiveMaterial = Number.isFinite(invoiceMaterial)
         ? invoiceMaterial
         : Number.isFinite(lineMaterial)
@@ -219,6 +231,8 @@ export const combineShipmentRows = (
         qty: Math.max(toFiniteNumber(line.qty, 0), 0),
         net_weight_g: effectiveWeight,
         labor_total_sell_krw: effectiveLabor,
+        labor_breakdown_sum_krw: laborBreakdownSum,
+        labor_consistent: laborConsistent,
         material_amount_sell_krw: effectiveMaterial,
         total_amount_sell_krw: effectiveTotal,
         created_at: createdAt,

@@ -38,6 +38,7 @@ import {
 } from "@/lib/shipments-history";
 
 type ShipmentLineDetailRow = ShipmentHistoryLineRow & {
+  master_id?: string | null;
   material_code?: string | null;
   base_labor_krw?: number | null;
   extra_labor_krw?: number | null;
@@ -252,7 +253,7 @@ export default function ShipmentsHistoryPage() {
         const { data: lineData, error: lineError } = await schemaClient
           .from("cms_shipment_line")
           .select(
-            "shipment_line_id, shipment_id, order_line_id, model_name, suffix, color, size, qty, measured_weight_g, deduction_weight_g, net_weight_g, labor_total_sell_krw, material_amount_sell_krw, total_amount_sell_krw, created_at"
+            "shipment_line_id, shipment_id, order_line_id, model_name, suffix, color, size, qty, measured_weight_g, deduction_weight_g, net_weight_g, base_labor_krw, extra_labor_krw, labor_total_sell_krw, material_amount_sell_krw, total_amount_sell_krw, created_at"
           )
           .in("shipment_id", ids)
           .order("created_at", { ascending: false });
@@ -357,7 +358,7 @@ export default function ShipmentsHistoryPage() {
       const { data: lineData, error: lineError } = await schemaClient
         .from("cms_shipment_line")
         .select(
-          "shipment_line_id, shipment_id, order_line_id, model_name, suffix, color, size, qty, material_code, measured_weight_g, deduction_weight_g, net_weight_g, base_labor_krw, extra_labor_krw, extra_labor_items, labor_total_sell_krw, material_amount_sell_krw, total_amount_sell_krw, created_at"
+          "shipment_line_id, shipment_id, order_line_id, master_id, model_name, suffix, color, size, qty, material_code, measured_weight_g, deduction_weight_g, net_weight_g, base_labor_krw, extra_labor_krw, extra_labor_items, labor_total_sell_krw, material_amount_sell_krw, total_amount_sell_krw, created_at"
         )
         .eq("shipment_line_id", lineId)
         .maybeSingle();
@@ -416,6 +417,21 @@ export default function ShipmentsHistoryPage() {
     () => (selectedLineDetailQuery.data?.prefill ?? null) as ShipmentPrefillSnapshotData | null,
     [selectedLineDetailQuery.data]
   );
+
+  const selectedLineUnitPricingQuery = useQuery({
+    queryKey: ["shipments-history-selected-line-unit-pricing", selectedLineDetail?.master_id ?? ""],
+    enabled: Boolean(schemaClient && selectedLineDetail?.master_id),
+    queryFn: async () => {
+      if (!schemaClient || !selectedLineDetail?.master_id) return null;
+      const { data, error } = await schemaClient
+        .from("cms_master_item")
+        .select("is_unit_pricing")
+        .eq("master_id", String(selectedLineDetail.master_id))
+        .maybeSingle();
+      if (error) return null;
+      return (data ?? null) as { is_unit_pricing?: boolean | null } | null;
+    },
+  });
 
   const laborBreakdownRows = useMemo(() => {
     const prefillSnapshot =
@@ -526,7 +542,8 @@ export default function ShipmentsHistoryPage() {
         const isAutoRemainderAdjustment =
           isAdjustmentTypeValue(item.type) &&
           String(item.source ?? "").trim().toUpperCase() === AUTO_REMAINDER_ADJUSTMENT_SOURCE;
-        return isCoreVisibleEtcItem({ type: item.type, label: item.label }) && !isAutoRemainderAdjustment;
+        const isStoneLabor = String(item.type ?? "").trim().toUpperCase() === "STONE_LABOR";
+        return (isCoreVisibleEtcItem({ type: item.type, label: item.label }) || isStoneLabor) && !isAutoRemainderAdjustment;
       });
 
       const snapshotExtraSellRaw =
@@ -582,6 +599,7 @@ export default function ShipmentsHistoryPage() {
       toNumber(selectedLineDetail?.extra_labor_krw, Number.NaN);
     const extraSellSnapshot = Number.isFinite(extraSellSnapshotRaw) ? extraSellSnapshotRaw : 0;
     const laborSellSot = toNumber(selectedLineInvoice?.labor_cash_due_krw, toNumber(selectedDetailRow?.labor_total_sell_krw, 0));
+    const lineTotalSell = toNumber(selectedLineDetail?.total_amount_sell_krw, toNumber(selectedDetailRow?.total_amount_sell_krw, 0));
 
     return {
       baseSell,
@@ -593,6 +611,7 @@ export default function ShipmentsHistoryPage() {
         Number.isFinite(extraCostSnapshot) ? extraCostSnapshot - extraCost : null,
       extraMargin,
       laborSellSot,
+      lineTotalSell,
       extraDelta: extraSellSnapshot - extraSell,
       lineQty: toNumber(selectedLineDetail?.qty, toNumber(selectedDetailRow?.qty, 0)),
       lineWeightG: toNumber(selectedLineInvoice?.commodity_due_g, toNumber(selectedDetailRow?.net_weight_g, 0)),
@@ -600,6 +619,15 @@ export default function ShipmentsHistoryPage() {
       totalSot: toNumber(selectedLineInvoice?.total_cash_due_krw, toNumber(selectedDetailRow?.total_amount_sell_krw, 0)),
     };
   }, [displayedLaborBreakdownRows, selectedDetailRow, selectedLineDetail, selectedLineInvoice, selectedLinePrefill, selectedLineMatch]);
+
+  const isSelectedLineUnitPricing = Boolean(selectedLineUnitPricingQuery.data?.is_unit_pricing);
+  const compareTargetValue = isSelectedLineUnitPricing
+    ? laborBreakdownTotals.lineTotalSell
+    : laborBreakdownTotals.baseSell + laborBreakdownTotals.extraSell;
+  const compareSotValue = isSelectedLineUnitPricing
+    ? laborBreakdownTotals.totalSot
+    : laborBreakdownTotals.laborSellSot;
+  const compareDiff = compareTargetValue - compareSotValue;
 
   return (
     <div className="min-h-screen bg-[var(--background)]">
@@ -785,7 +813,8 @@ export default function ShipmentsHistoryPage() {
                       <thead className="border-b border-[var(--panel-border)] bg-[var(--chip)] text-[var(--muted)]">
                         <tr>
                           <th className="px-4 py-3 whitespace-nowrap">출고일</th>
-                          <th className="px-4 py-3 whitespace-nowrap">고객</th>
+                            <th className="px-4 py-3 whitespace-nowrap">공임일치</th>
+                            <th className="px-4 py-3 whitespace-nowrap">고객</th>
                           <th className="px-4 py-3 whitespace-nowrap">모델</th>
                           <th className="px-4 py-3 text-right whitespace-nowrap">수량</th>
                           <th className="px-4 py-3 text-right whitespace-nowrap">중량</th>
@@ -803,6 +832,9 @@ export default function ShipmentsHistoryPage() {
                             onClick={() => setSelectedDetailRow(row)}
                           >
                             <td className="px-4 py-3 tabular-nums">{row.ship_date}</td>
+                            <td className="px-4 py-3 text-center">
+                              {row.labor_consistent ? <Badge tone="active">일치</Badge> : <Badge tone="danger">불일치</Badge>}
+                            </td>
                             <td className="px-4 py-3">{row.customer_name}</td>
                             <td className="px-4 py-3">{row.model_display}</td>
                             <td className="px-4 py-3 text-right tabular-nums">{row.qty}</td>
@@ -835,7 +867,7 @@ export default function ShipmentsHistoryPage() {
           {selectedDetailRow ? (
             <Card className="bg-white">
               <CardBody className="px-4 py-3">
-                <div className="grid grid-cols-1 gap-3 text-xs text-[var(--muted)] sm:grid-cols-2 lg:grid-cols-4">
+                <div className="grid grid-cols-1 gap-3 text-xs text-[var(--muted)] sm:grid-cols-2 lg:grid-cols-5">
                   <div>
                     <div>선택 라인</div>
                     <div className="mt-1 font-mono text-[var(--foreground)]">{selectedDetailRow.shipment_line_id}</div>
@@ -845,12 +877,18 @@ export default function ShipmentsHistoryPage() {
                     <div className="mt-1 font-semibold text-[var(--foreground)]">{selectedDetailRow.model_display}</div>
                   </div>
                   <div>
-                    <div>현재 고객</div>
-                    <div className="mt-1 text-[var(--foreground)]">{selectedDetailRow.customer_name}</div>
-                  </div>
-                  <div>
                     <div>현재 출고일</div>
                     <div className="mt-1 text-[var(--foreground)]">{selectedDetailRow.ship_date}</div>
+                  </div>
+                  <div>
+                    <div>공임 일치</div>
+                    <div className="mt-1">
+                      {selectedDetailRow.labor_consistent ? <Badge tone="active">일치</Badge> : <Badge tone="danger">불일치</Badge>}
+                    </div>
+                  </div>
+                  <div>
+                    <div>현재 고객</div>
+                    <div className="mt-1 text-[var(--foreground)]">{selectedDetailRow.customer_name}</div>
                   </div>
                 </div>
               </CardBody>
@@ -959,12 +997,15 @@ export default function ShipmentsHistoryPage() {
                       </tr>
 
                       <tr className="bg-[var(--primary)]/8 font-semibold">
-                        <td className="px-4 py-3">공임 총계 비교</td>
+                        <td className="px-4 py-3">{isSelectedLineUnitPricing ? "총금액 비교 (단가제)" : "공임 총계 비교"}</td>
                         <td className="px-4 py-3 text-right tabular-nums">-</td>
                         <td className="px-4 py-3 text-right tabular-nums">-</td>
                         <td className="px-4 py-3 text-right tabular-nums">-</td>
-                        <td className="px-4 py-3 text-right tabular-nums">{formatKrw(laborBreakdownTotals.baseSell + laborBreakdownTotals.extraSell)}</td>
-                        <td className="px-4 py-3 text-[var(--muted)]">분해합 / SOT: {formatKrw(laborBreakdownTotals.laborSellSot)}{Math.abs((laborBreakdownTotals.baseSell + laborBreakdownTotals.extraSell) - laborBreakdownTotals.laborSellSot) > 0.5 ? ` (차이 ${formatKrw((laborBreakdownTotals.baseSell + laborBreakdownTotals.extraSell) - laborBreakdownTotals.laborSellSot)})` : " (일치)"}</td>
+                        <td className="px-4 py-3 text-right tabular-nums">{formatKrw(compareTargetValue)}</td>
+                        <td className="px-4 py-3 text-[var(--muted)]">
+                          {isSelectedLineUnitPricing ? "총금액 기준 / SOT 총액" : "분해합 / SOT"}: {formatKrw(compareSotValue)}
+                          {Math.abs(compareDiff) > 0.5 ? ` (차이 ${formatKrw(compareDiff)})` : " (일치)"}
+                        </td>
                       </tr>
                     </tbody>
                   </table>

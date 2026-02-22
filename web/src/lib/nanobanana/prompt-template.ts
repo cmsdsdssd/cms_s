@@ -75,15 +75,18 @@ export function buildPromptText(input: PromptInput) {
     backgroundPrompt.sentence,
     `MANDATORY BACKGROUND TARGET: final background must be visually close to ${backgroundPrompt.hex} in uniform studio tone.`,
     "LIGHTING: Soft warm studio light, clean specular control, premium e-commerce look.",
-    "OUTPUT: 1:1 square composition, product fully in frame, centered around 75% frame occupancy (acceptable range 72-78%).",
+    "OUTPUT FORMAT (HARD): 1:1 square image only. Never output landscape or portrait aspect ratio.",
+    "OUTPUT: product fully in frame, centered around 75% frame occupancy (acceptable range 72-78%).",
     "QUALITY CHECK: no hallucination, no missing parts, no melted metal, no text/watermark/hands/props.",
   ];
 
   if (customPrompt) {
-    promptLines.push(`STRICT REQUIREMENT: ${customPrompt}`);
+    promptLines.push(`STRICT REQUIREMENT (must not violate 1:1 square output): ${customPrompt}`);
   }
 
-  promptLines.push("If any instruction conflicts, prioritize: ZERO DEFORMATION > PRODUCT IDENTITY > MANDATORY BACKGROUND TARGET > requested style.");
+  promptLines.push(
+    "If any instruction conflicts, prioritize: ZERO DEFORMATION > PRODUCT IDENTITY > 1:1 SQUARE OUTPUT FORMAT > MANDATORY BACKGROUND TARGET > requested style."
+  );
 
   return {
     prompt: promptLines.join("\n"),
