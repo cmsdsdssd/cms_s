@@ -234,7 +234,7 @@ export default function ShipmentsAnalysisPage() {
             .select("master_id, weight_default_g, deduction_weight_default_g")
             .in("master_id", ids);
           if (error) throw error;
-          (data ?? []).forEach((row) => {
+          (data ?? []).forEach((row: unknown) => {
             const id = String((row as MasterRow).master_id ?? "").trim();
             if (!id) return;
             masterMap.set(id, row as MasterRow);
@@ -254,7 +254,7 @@ export default function ShipmentsAnalysisPage() {
             .eq("status", "CONFIRMED")
             .order("confirmed_at", { ascending: false });
           if (error) throw error;
-          (data ?? []).forEach((row) => {
+          (data ?? []).forEach((row: unknown) => {
             const parsed = row as ReceiptMatchRow;
             const id = String(parsed.shipment_line_id ?? "").trim();
             if (!id) return;
