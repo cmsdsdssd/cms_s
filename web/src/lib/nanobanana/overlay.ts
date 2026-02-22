@@ -25,10 +25,6 @@ function estimateTextWidth(text: string) {
   return Math.max(120, Math.min(width, 1200));
 }
 
-function luminance(r: number, g: number, b: number) {
-  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
-}
-
 async function sampleAverageColor(image: sharp.Sharp) {
   const metadata = await image.metadata();
   const width = Number(metadata.width ?? 0);
@@ -78,17 +74,12 @@ export async function addModelNameOverlay(input: OverlayInput) {
   }
 
   const { r, g, b } = await sampleAverageColor(image);
-  const bgLuma = luminance(r, g, b);
-  const textColor =
-    requestedTextColor === "white"
-      ? (bgLuma > 185 ? "black" : "white")
-      : (bgLuma < 120 ? "white" : "black");
-  const strokeColor = textColor === "black" ? "rgba(255,255,255,0.88)" : "rgba(0,0,0,0.78)";
+  const textColor = requestedTextColor === "white" ? "white" : "black";
 
-  const fontSize = Math.max(16, Math.min(40, Math.floor(imageWidth * 0.08)));
+  const fontSize = 40;
   const textX = clamp(70, 8, Math.max(8, imageWidth - 8));
   const textY = clamp(70, fontSize + 8, Math.max(fontSize + 8, imageHeight - 8));
-  const textHeight = fontSize;
+  const textHeight = 40;
   const padding = 12;
   const textWidth = Math.min(estimateTextWidth(displayName), Math.max(40, imageWidth - 16));
 
@@ -110,11 +101,8 @@ export async function addModelNameOverlay(input: OverlayInput) {
     y="${textY}"
     font-family="Arial, sans-serif"
     font-size="${fontSize}"
-    font-weight="500"
+    font-weight="300"
     fill="${escapeXml(textColor)}"
-    stroke="${escapeXml(strokeColor)}"
-    stroke-width="1.25"
-    paint-order="stroke"
   >${escapeXml(displayName)}</text>
 </svg>`;
 

@@ -347,6 +347,17 @@ type BomLineRow = {
   created_at: string;
 };
 
+type DecorLineLite = {
+  product_master_id: string;
+  bom_id: string;
+  bom_line_id: string;
+  component_master_id: string;
+  component_master_model_name: string | null;
+  qty_per_unit: number;
+  note: string | null;
+  line_no: number;
+};
+
 
 // pageSize is dynamic based on view
 
@@ -1194,7 +1205,7 @@ export default function CatalogPage() {
 
     return filtered;
   }, [catalogItemsState, sortBy, sortOrder, masterRowsById, filterMaterial, filterCategory, filterQuery, includeAccessory]);
-  const activePageSize = view === "gallery" ? 24 : 20;
+  const activePageSize = view === "gallery" ? 12 : 20;
   const totalPages = Math.max(1, Math.ceil(sortedCatalogItems.length / activePageSize));
   const totalCount = sortedCatalogItems.length;
   const rangeStart = totalCount === 0 ? 0 : (page - 1) * activePageSize + 1;
@@ -1203,6 +1214,95 @@ export default function CatalogPage() {
     const start = (page - 1) * activePageSize;
     return sortedCatalogItems.slice(start, start + activePageSize);
   }, [sortedCatalogItems, page, activePageSize]);
+
+  const pageProductIds = useMemo(() => {
+    const ids = new Set<string>();
+    pageItems.forEach((item) => {
+      const id = String(item.id ?? "").trim();
+      if (id) ids.add(id);
+    });
+    return [...ids];
+  }, [pageItems]);
+
+  const pageProductIdsSortedKey = useMemo(() => [...pageProductIds].sort().join("|"), [pageProductIds]);
+
+  const decorLinesQuery = useQuery({
+    queryKey: ["catalog", "gallery", "decorLines", pageProductIdsSortedKey],
+    enabled: view === "gallery" && pageProductIds.length > 0,
+    retry: false,
+    refetchOnWindowFocus: false,
+    staleTime: 60_000,
+    queryFn: async () => {
+      if (pageProductIds.length === 0) return [] as DecorLineLite[];
+      const response = await fetch(
+        `/api/bom-decor-lines?product_master_ids=${encodeURIComponent(pageProductIds.join(","))}`,
+        { cache: "no-store" }
+      );
+      const json = (await response.json()) as { data?: DecorLineLite[]; error?: string };
+      if (!response.ok) throw new Error(json.error ?? "DECOR 라인 조회 실패");
+      return (json.data ?? []) as DecorLineLite[];
+    },
+  });
+
+  const decorLinesByProductId = useMemo(() => {
+    const map = new Map<string, DecorLineLite[]>();
+    (decorLinesQuery.data ?? []).forEach((line) => {
+      const productId = String(line.product_master_id ?? "").trim();
+      if (!productId) return;
+      const existing = map.get(productId) ?? [];
+      existing.push(line);
+      map.set(productId, existing);
+    });
+    return map;
+  }, [decorLinesQuery.data]);
+
+  const decorComponentMasterIds = useMemo(() => {
+    const ids = new Set<string>();
+    (decorLinesQuery.data ?? []).forEach((line) => {
+      const componentId = String(line.component_master_id ?? "").trim();
+      if (componentId) ids.add(componentId);
+    });
+    return [...ids];
+  }, [decorLinesQuery.data]);
+
+  const pricingMasterIds = useMemo(() => {
+    const ids = new Set<string>();
+    pageProductIds.forEach((id) => ids.add(id));
+    decorComponentMasterIds.forEach((id) => ids.add(id));
+    return [...ids];
+  }, [decorComponentMasterIds, pageProductIds]);
+
+  const pricingMasterIdsSortedKey = useMemo(() => [...pricingMasterIds].sort().join("|"), [pricingMasterIds]);
+
+  const galleryAbsorbBatchQuery = useQuery({
+    queryKey: ["catalog", "gallery", "absorbBatch", pricingMasterIdsSortedKey],
+    enabled: view === "gallery" && decorLinesQuery.isSuccess && pricingMasterIds.length > 0,
+    retry: false,
+    refetchOnWindowFocus: false,
+    staleTime: 60_000,
+    queryFn: async () => {
+      if (pricingMasterIds.length === 0) return [] as MasterAbsorbLaborItem[];
+      const response = await fetch(
+        `/api/master-absorb-labor-items?master_ids=${encodeURIComponent(pricingMasterIds.join(","))}`,
+        { cache: "no-store" }
+      );
+      const json = (await response.json()) as { data?: MasterAbsorbLaborItem[]; error?: string };
+      if (!response.ok) throw new Error(json.error ?? "흡수공임 조회 실패");
+      return (json.data ?? []) as MasterAbsorbLaborItem[];
+    },
+  });
+
+  const absorbByMasterId = useMemo(() => {
+    const map = new Map<string, MasterAbsorbLaborItem[]>();
+    (galleryAbsorbBatchQuery.data ?? []).forEach((item) => {
+      const targetMasterId = String(item.master_id ?? "").trim();
+      if (!targetMasterId) return;
+      const existing = map.get(targetMasterId) ?? [];
+      existing.push(item);
+      map.set(targetMasterId, existing);
+    });
+    return map;
+  }, [galleryAbsorbBatchQuery.data]);
 
   const selectedBatchItems = useMemo(
     () => sortedCatalogItems.filter((item) => selectedMasterIds.has(item.id)),
@@ -1246,7 +1346,8 @@ export default function CatalogPage() {
 
   useEffect(() => {
     if (pageItems.length === 0) return;
-    const ids = pageItems.slice(0, 8).map((item) => item.id).filter(Boolean);
+    const prefetchCount = view === "gallery" ? 4 : 8;
+    const ids = pageItems.slice(0, prefetchCount).map((item) => item.id).filter(Boolean);
     if (ids.length === 0) return;
 
     const timer = window.setTimeout(() => {
@@ -1254,7 +1355,7 @@ export default function CatalogPage() {
     }, 60);
 
     return () => window.clearTimeout(timer);
-  }, [pageItems, prefetchMasterDetailFastPath]);
+  }, [pageItems, prefetchMasterDetailFastPath, view]);
 
 
   useEffect(() => {
@@ -3082,7 +3183,7 @@ export default function CatalogPage() {
           custom_prompt: setting.customPrompt,
           show_model_name_overlay: setting.showModelNameOverlay,
           text_color: setting.textColor,
-          display_name: toOverlayModelName(setting.displayName || targetItem?.model || modelName || "product"),
+          display_name: (setting.displayName || targetItem?.model || modelName || "product").trim(),
         }),
       });
 
@@ -3249,7 +3350,7 @@ export default function CatalogPage() {
             custom_prompt: setting.customPrompt,
             show_model_name_overlay: setting.showModelNameOverlay,
             text_color: setting.textColor,
-            display_name: toOverlayModelName(setting.displayName || item.model),
+            display_name: (setting.displayName || item.model).trim(),
           }),
         });
 
@@ -5226,7 +5327,7 @@ export default function CatalogPage() {
                   <div className="grid grid-cols-10 gap-2">
                     <div className="col-span-2 flex items-center justify-center rounded-[8px] border border-[var(--panel-border)] bg-green-50 px-2 py-2">
                       <span className="text-xs font-semibold text-[var(--foreground)]">
-                        중심공임
+                        중심공임(개)
                       </span>
                     </div>
                     <ReadonlyNumberCell value={detailLaborCenterSellDisplay} className="bg-green-50" />
@@ -5249,7 +5350,7 @@ export default function CatalogPage() {
                   <div className="grid grid-cols-10 gap-2">
                     <div className="col-span-2 flex items-center justify-center rounded-[8px] border border-[var(--panel-border)] bg-green-50 px-2 py-2">
                       <span className="text-xs font-semibold text-[var(--foreground)]">
-                        보조1공임
+                        보조1공임(개)
                       </span>
                     </div>
                     <ReadonlyNumberCell value={detailLaborSub1SellDisplay} className="bg-green-50" />
@@ -5272,7 +5373,7 @@ export default function CatalogPage() {
                   <div className="grid grid-cols-10 gap-2">
                     <div className="col-span-2 flex items-center justify-center rounded-[8px] border border-[var(--panel-border)] bg-green-50 px-2 py-2">
                       <span className="text-xs font-semibold text-[var(--foreground)]">
-                        보조2공임
+                        보조2공임(개)
                       </span>
                     </div>
                     <ReadonlyNumberCell value={detailLaborSub2SellDisplay} className="bg-green-50" />
@@ -5456,9 +5557,13 @@ export default function CatalogPage() {
                             ) : null}
                             {rows.map((row) => {
                               const laborRowBgClass = laborRowBgClassMap[row.label] ?? "";
+                              const rowLabel =
+                                row.label === "중심공임" || row.label === "보조1공임" || row.label === "보조2공임"
+                                  ? `${row.label}(개)`
+                                  : row.label;
                               return (
                                 <tr key={row.label} className="border-t border-[var(--panel-border)]">
-                                  <td className={cn("px-1.5 py-2 whitespace-nowrap", laborRowBgClass)}>{row.label}</td>
+                                  <td className={cn("px-1.5 py-2 whitespace-nowrap", laborRowBgClass)}>{rowLabel}</td>
                                   <td className={cn("px-2 py-2 text-right", laborRowBgClass)}>₩{formatLaborDisplayKrw(row.ours)}</td>
                                   <td className={cn("px-2 py-2 text-right", laborRowBgClass)}>{chinaCostComparison ? `₩${formatLaborDisplayKrw(row.china)}` : "-"}</td>
                                   <td className={cn("px-2 py-2 text-right", laborRowBgClass)}>
@@ -6772,7 +6877,7 @@ export default function CatalogPage() {
                 Array.from({ length: 12 }).map((_, i) => (
                   <div
                     key={i}
-                    className="aspect-[3/4] animate-pulse rounded-[16px] bg-[var(--shimmer)]"
+                    className="aspect-square animate-pulse rounded-[16px] bg-[var(--shimmer)]"
                   />
                 ))
               ) : pageItems.length === 0 ? (
@@ -6782,20 +6887,36 @@ export default function CatalogPage() {
               ) : (
                 pageItems.map((item) => {
                   const row = masterRowsById[item.id];
-                  const weight = parseFloat(item.weight);
-                  const hasWeight = Number.isFinite(weight);
-                  const deduction = parseFloat(String(row?.deduction_weight_default_g ?? 0)) || 0;
-                  const netWeight = hasWeight ? weight - deduction : null;
-                  const centerQty = Number(row?.center_qty_default ?? 0);
-                  const sub1Qty = Number(row?.sub1_qty_default ?? 0);
-                  const sub2Qty = Number(row?.sub2_qty_default ?? 0);
-                  const laborSell =
-                    (row?.labor_total_sell as number | undefined) ??
-                    (Number(row?.labor_base_sell ?? 0) +
-                      Number(row?.labor_center_sell ?? 0) * centerQty +
-                      Number(row?.labor_sub1_sell ?? 0) * sub1Qty +
-                      Number(row?.labor_sub2_sell ?? 0) * sub2Qty);
+                  const grossWeight = Number(row?.weight_default_g);
+                  const hasWeight = Number.isFinite(grossWeight);
+                  const deduction = Number(row?.deduction_weight_default_g ?? 0) || 0;
+                  const netWeight = hasWeight ? Math.max(grossWeight - deduction, 0) : null;
                   const materialCode = String(row?.material_code_default ?? "00");
+                  const baseMaterialSell = hasWeight
+                    ? calculateMaterialPrice(materialCode, grossWeight, deduction)
+                    : 0;
+                  const baseTotals = computeMasterLaborTotalsWithAbsorb(
+                    row,
+                    absorbByMasterId.get(item.id) ?? []
+                  );
+                  const baseLaborSell = baseTotals.sellPerUnit;
+                  const decorLines = decorLinesByProductId.get(item.id) ?? [];
+                  const decorLaborSell = decorLines.reduce((sum, line) => {
+                    const componentId = String(line.component_master_id ?? "").trim();
+                    if (!componentId) return sum;
+                    const qty = Math.max(Number(line.qty_per_unit ?? 0), 0);
+                    if (!Number.isFinite(qty) || qty <= 0) return sum;
+                    const componentRow = masterRowsById[componentId] as Record<string, unknown> | undefined;
+                    if (!componentRow) return sum;
+                    const componentTotals = computeMasterLaborTotalsWithAbsorb(
+                      componentRow,
+                      absorbByMasterId.get(componentId) ?? []
+                    );
+                    return sum + componentTotals.sellPerUnit * qty;
+                  }, 0);
+                  const laborSellTotal = baseLaborSell + decorLaborSell;
+                  const laborSellDisplay = roundUpDisplayHundred(laborSellTotal);
+                  const isGalleryPricingReady = decorLinesQuery.isSuccess && galleryAbsorbBatchQuery.isSuccess;
                   const materialLabel =
                     materialOptions.find((material) => material.value === materialCode)?.label ?? materialCode;
                   const categoryCode = String(row?.category_code ?? "");
@@ -6803,14 +6924,14 @@ export default function CatalogPage() {
                     categoryOptions.find((category) => category.value === categoryCode)?.label ??
                     (categoryCode || "-");
                   const totalPrice = hasWeight
-                    ? roundUpToThousand(calculateMaterialPrice(materialCode, weight, deduction) + laborSell)
+                    ? roundUpToThousand(baseMaterialSell + laborSellTotal)
                     : null;
 
                   return (
                     <div
                       key={item.id}
                       className={cn(
-                        "group relative aspect-[3/4] cursor-pointer overflow-hidden rounded-[16px] border border-[var(--panel-border)] bg-[var(--panel)] transition-all hover:ring-2 hover:ring-[var(--primary)]",
+                        "group relative cursor-pointer overflow-hidden rounded-[16px] border border-[var(--panel-border)] bg-[var(--panel)] transition-all hover:ring-2 hover:ring-[var(--primary)]",
                         getMaterialBgColor(
                           String(masterRowsById[item.id]?.material_code_default ?? "00")
                         ),
@@ -6840,12 +6961,12 @@ export default function CatalogPage() {
                         </label>
                       ) : null}
                       {/* Image */}
-                      <div className="absolute inset-x-0 top-0 bottom-28 bg-[var(--white)] dark:bg-[var(--black)]">
+                      <div className="relative aspect-square w-full bg-[var(--white)] dark:bg-[var(--black)]">
                         {item.imageUrl ? (
                           <img
                             src={item.imageUrl}
                             alt={item.model}
-                            className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-105"
+                            className="h-full w-full object-contain transition-transform duration-500 group-hover:scale-105"
                             loading="lazy"
                           />
                         ) : (
@@ -6855,7 +6976,7 @@ export default function CatalogPage() {
                         )}
                       </div>
                       {/* Content */}
-                      <div className="absolute bottom-0 left-0 right-0 h-28 border-t border-[var(--panel-border)] bg-[var(--panel)] p-2.5">
+                      <div className="border-t border-[var(--panel-border)] bg-[var(--panel)] p-2.5">
                         <div className="flex items-center justify-between gap-2">
                           <div className="font-semibold text-[var(--foreground)] truncate">{item.model}</div>
                           <div className="flex items-center gap-1 text-[10px] text-[var(--muted)] shrink-0">
@@ -6876,13 +6997,17 @@ export default function CatalogPage() {
                           <div className="grid grid-cols-[auto_1fr] items-baseline gap-2">
                             <span className="text-[var(--muted)]">총공임</span>
                             <span className="truncate text-right font-normal">
-                              {laborSell > 0 ? <><NumberText value={laborSell} /> 원</> : "-"}
+                              {!isGalleryPricingReady
+                                ? "-"
+                                : laborSellDisplay > 0
+                                  ? <><NumberText value={laborSellDisplay} /> 원</>
+                                  : "-"}
                             </span>
                           </div>
                           <div className="grid grid-cols-[auto_1fr] items-baseline gap-2">
                             <span className="text-[var(--muted)]">총가격</span>
                             <span className="truncate text-right font-bold">
-                              {totalPrice === null ? "-" : <><NumberText value={totalPrice} /> 원</>}
+                              {!isGalleryPricingReady || totalPrice === null ? "-" : <><NumberText value={totalPrice} /> 원</>}
                             </span>
                           </div>
                         </div>

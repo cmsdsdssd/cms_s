@@ -88,7 +88,7 @@ async function nextLegacyRelativePath(params: {
     throw new Error(`legacy 목록 조회 실패: ${error.message}`);
   }
 
-  const matcher = new RegExp(`^${escapeRegex(params.baseName)}_(\\d+)\\.${escapeRegex(params.ext)}$`, "i");
+  const matcher = new RegExp(`^${escapeRegex(params.baseName)}_(\\d+)\\.[^.]+$`, "i");
   let maxIndex = -1;
   for (const item of data ?? []) {
     const name = String(item.name ?? "").trim();
@@ -98,7 +98,7 @@ async function nextLegacyRelativePath(params: {
     const n = Number(m[1]);
     if (Number.isFinite(n)) maxIndex = Math.max(maxIndex, n);
   }
-  const next = String(maxIndex + 1).padStart(2, "0");
+  const next = String(Math.max(1, maxIndex + 1)).padStart(2, "0");
   return `${params.folder}/${params.baseName}_${next}.${params.ext}`;
 }
 
@@ -306,7 +306,8 @@ export async function generateMasterImagePreviewWithNanobanana(
   }
 
   const overlayEnabled = input.showModelNameOverlay ?? true;
-  const displayName = toOverlayModelName(String(input.displayName ?? "").trim() || source.defaultDisplayName || "product");
+  const requestedDisplayName = String(input.displayName ?? "").trim();
+  const displayName = requestedDisplayName || source.defaultDisplayName || "product";
   const textColor = String(input.textColor ?? "black").trim() || "black";
   const overlayedBytes = overlayEnabled
     ? await addModelNameOverlay({
@@ -356,16 +357,27 @@ export async function applyGeneratedMasterImage(
   const ext = extensionFromMimeType(input.generatedMimeType);
   const activePath = sourcePath || `master/${input.masterId}/main.${ext}`;
 
-  const legacyPath = await archiveOriginalImage(
-    supabase,
-    bucket,
-    legacyBucket,
-    input.masterId,
-    modelName,
-    sourcePath,
-    sourceBlob,
-    sourceMimeType
-  );
+  let legacyPath: string | null = null;
+  try {
+    legacyPath = await archiveOriginalImage(
+      supabase,
+      bucket,
+      legacyBucket,
+      input.masterId,
+      modelName,
+      sourcePath,
+      sourceBlob,
+      sourceMimeType
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn("[nanobanana] legacy archive skipped", {
+      requestId: input.requestId,
+      masterId: input.masterId,
+      sourcePath,
+      message,
+    });
+  }
 
   const { error: activeUploadError } = await supabase.storage
     .from(bucket)

@@ -117,12 +117,9 @@ export const CONTRACTS = {
 
     recordPayment:
       process.env.NEXT_PUBLIC_CMS_FN_RECORD_PAYMENT || "cms_fn_record_payment_v2",
-    arApplyPaymentFifo:
-      process.env.NEXT_PUBLIC_CMS_FN_AR_APPLY_PAYMENT_FIFO || "cms_fn_ar_apply_payment_fifo_v2",
-    arApplyPaymentFifoAdvanced:
-      process.env.NEXT_PUBLIC_CMS_FN_AR_APPLY_PAYMENT_FIFO_ADVANCED || "cms_fn_ar_apply_payment_fifo_v3",
-    arInvoiceResyncFromShipment:
-      process.env.NEXT_PUBLIC_RPC_AR_INVOICE_RESYNC || "cms_fn_ar_create_from_shipment_confirm_v1",
+    arApplyPaymentFifo: "cms_fn_ar_apply_payment_fifo_v3",
+    arApplyPaymentFifoAdvanced: "cms_fn_ar_apply_payment_fifo_v3",
+    arInvoiceResyncFromShipment: "cms_fn_verify_shipment_ar_consistency_v1",
     recordReturn:
       process.env.NEXT_PUBLIC_CMS_FN_RECORD_RETURN_V2 ??
       process.env.NEXT_PUBLIC_CMS_FN_RECORD_RETURN ??

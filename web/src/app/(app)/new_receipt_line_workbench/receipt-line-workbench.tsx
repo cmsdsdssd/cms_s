@@ -914,6 +914,8 @@ const AUTO_FIELD_CLASS = "bg-[var(--panel)]/70";
 const DEFAULT_RANGE_MONTHS = -3;
 const DON_TO_G = 3.75;
 const SUGGESTION_LIMIT = 10;
+const SUGGESTION_PAGE_SIZE = 5;
+const MATERIAL_MISMATCH_PENALTY = 20;
 const MAX_LINE_COPY_TOTAL = 50;
 
 const FACTORY_ROWS: Array<Pick<FactoryRowInput, "rowCode" | "label">> = [
@@ -1005,6 +1007,54 @@ function getDefaultRangeDateByMonths(offsetMonths: number) {
   return d.toISOString().slice(0, 10);
 }
 
+function normalizeMatchToken(value: unknown) {
+  return String(value ?? "").trim().toUpperCase();
+}
+
+function isMeaningfulToken(value: string) {
+  return value !== "" && value !== "-";
+}
+
+function hasMaterialMismatch(candidateMaterialCode: unknown, baseMaterialCode: unknown) {
+  const candidate = normalizeMatchToken(candidateMaterialCode);
+  const base = normalizeMatchToken(baseMaterialCode);
+  if (!isMeaningfulToken(candidate) || !isMeaningfulToken(base)) return false;
+  return candidate !== base;
+}
+
+function applyMaterialMismatchPenalty(candidate: MatchCandidate, baseMaterialCode: unknown): MatchCandidate {
+  const mismatch = hasMaterialMismatch(candidate.material_code, baseMaterialCode);
+  const hasNumericScore = candidate.match_score !== null && candidate.match_score !== undefined && Number.isFinite(Number(candidate.match_score));
+  const numericScore = hasNumericScore ? Number(candidate.match_score) : 0;
+  const adjustedScore = hasNumericScore
+    ? (mismatch ? numericScore - MATERIAL_MISMATCH_PENALTY : numericScore)
+    : candidate.match_score;
+  const detail =
+    candidate.score_detail_json && typeof candidate.score_detail_json === "object" && !Array.isArray(candidate.score_detail_json)
+      ? candidate.score_detail_json
+      : null;
+  return {
+    ...candidate,
+    match_score: adjustedScore,
+    score_detail_json: {
+      ...(detail ?? {}),
+      material_mismatch_penalty: mismatch ? -MATERIAL_MISMATCH_PENALTY : 0,
+      adjusted_total_score: hasNumericScore ? adjustedScore : null,
+    },
+  };
+}
+
+function sortMatchCandidatesByScore(candidates: MatchCandidate[]) {
+  return [...candidates].sort((a, b) => {
+    const scoreA = Number(a.match_score ?? 0);
+    const scoreB = Number(b.match_score ?? 0);
+    if (scoreB !== scoreA) return scoreB - scoreA;
+    const timeA = a.order_date ? new Date(a.order_date).getTime() : 0;
+    const timeB = b.order_date ? new Date(b.order_date).getTime() : 0;
+    return timeB - timeA;
+  });
+}
+
 export default function ReceiptLineWorkbench({ initialReceiptId }: { initialReceiptId?: string | null }) {
   const queryClient = useQueryClient();
   const schemaClient = useMemo(() => getSchemaClient(), []);
@@ -1087,6 +1137,7 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
   const [isAdvancedConfirmOpen, setIsAdvancedConfirmOpen] = useState(false);
   const [selectedUnlinked, setSelectedUnlinked] = useState<UnlinkedLineRow | null>(null);
   const [suggestions, setSuggestions] = useState<MatchCandidate[]>([]);
+  const [suggestionPage, setSuggestionPage] = useState(1);
   const [suggestionLineUuid, setSuggestionLineUuid] = useState<string | null>(null);
   const [selectedCandidate, setSelectedCandidate] = useState<MatchCandidate | null>(null);
   const [scoreOpenMap, setScoreOpenMap] = useState<Record<string, boolean>>({});
@@ -1104,6 +1155,28 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
   const [isSuggesting, setIsSuggesting] = useState(false);
   const [isPreviewExpanded, setIsPreviewExpanded] = useState(false);
   const [suggestDebugState, setSuggestDebugState] = useState<{ query: string; count: number } | null>(null);
+
+  const suggestionTotalPages = useMemo(
+    () => Math.max(1, Math.ceil(suggestions.length / SUGGESTION_PAGE_SIZE)),
+    [suggestions.length]
+  );
+
+  const pagedSuggestions = useMemo(() => {
+    const start = (suggestionPage - 1) * SUGGESTION_PAGE_SIZE;
+    return suggestions.slice(start, start + SUGGESTION_PAGE_SIZE);
+  }, [suggestionPage, suggestions]);
+
+  useEffect(() => {
+    setSuggestionPage((prev) => {
+      if (prev < 1) return 1;
+      if (prev > suggestionTotalPages) return suggestionTotalPages;
+      return prev;
+    });
+  }, [suggestionTotalPages]);
+
+  useEffect(() => {
+    setSuggestionPage(1);
+  }, [suggestionLineUuid]);
 
   const [matchClearOpen, setMatchClearOpen] = useState(false);
   const [matchClearTarget, setMatchClearTarget] = useState<ConfirmedMatchRow | null>(null);
@@ -3286,10 +3359,13 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
           : Array.isArray(json?.candidates)
             ? json.candidates
             : []) as Array<MatchCandidate & { match_reason?: Record<string, unknown> | null }>;
-      const candidates: MatchCandidate[] = rawCandidates.map((candidate) => ({
-        ...candidate,
-        score_detail_json: candidate.score_detail_json ?? candidate.match_reason ?? null,
-      }));
+      const baseMaterialCode = targetLine.material_code ?? null;
+      const candidates: MatchCandidate[] = sortMatchCandidatesByScore(
+        rawCandidates.map((candidate) => ({
+          ...candidate,
+          score_detail_json: candidate.score_detail_json ?? candidate.match_reason ?? null,
+        }))
+      );
       if (payload?.already_confirmed) {
         toast.error("이미 매칭 확정된 라인입니다.");
         setSuggestions([]);
@@ -3300,7 +3376,7 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
         return;
       }
 
-      let nextCandidates = [...candidates].sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0));
+      let nextCandidates = [...candidates];
       if (nextCandidates.length === 0) {
         const modelName = targetLine.model_name ?? "";
         const customerCode = targetLine.customer_factory_code ?? "";
@@ -3369,6 +3445,9 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
       if (nextCandidates.length === 0) {
         toast.error("매칭 후보가 없습니다.");
       }
+      nextCandidates = sortMatchCandidatesByScore(
+        nextCandidates.map((candidate) => applyMaterialMismatchPenalty(candidate, baseMaterialCode))
+      );
       const limited = nextCandidates.slice(0, SUGGESTION_LIMIT);
       setSuggestions(limited);
       setSuggestionLineUuid(receiptLineUuid);
@@ -3422,7 +3501,8 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
         sub1_stone_source?: string | null;
         sub2_stone_source?: string | null;
       }>;
-      const candidates: MatchCandidate[] = rows.map((row) => ({
+      const baseMaterialCode = selectedUnlinked?.material_code ?? null;
+      const candidates: MatchCandidate[] = sortMatchCandidatesByScore(rows.map((row) => ({
         order_no: row.order_no ?? null,
         order_line_id: row.order_line_id ?? null,
         customer_party_id: row.client_id ?? null,
@@ -3444,7 +3524,7 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
         memo: null,
         match_score: null,
         score_detail_json: null,
-      }));
+      })).map((candidate) => applyMaterialMismatchPenalty(candidate, baseMaterialCode)));
       setSuggestions(candidates.slice(0, SUGGESTION_LIMIT));
       setSelectedCandidate(null);
       setConfirmResult(null);
@@ -5547,7 +5627,7 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
 
                           const diffClass = (value: string, base?: string | null) =>
                             baseLine && base !== undefined && base !== null && value !== base
-                              ? "bg-amber-500/10 text-[var(--foreground)]"
+                              ? "bg-yellow-200/70"
                               : "";
 
                           return (
@@ -5606,7 +5686,7 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                                       </tr>
                                     </>
                                   ) : null}
-                                  {suggestions.map((candidate, idx) => {
+                                  {pagedSuggestions.map((candidate, idx) => {
                                     const key = candidate.order_line_id ?? `candidate-${idx}`;
                                     const expanded = scoreOpenMap[key] ?? false;
                                     const platedLabel =
@@ -5713,7 +5793,7 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                                             ) : null}
                                           </td>
                                           <td className="px-2 py-2 text-right">
-                                            <Badge tone="warning" className="h-6 px-2 text-[10px] font-bold">
+                                            <Badge tone="neutral" className="h-6 border-emerald-200 bg-emerald-50 px-2 text-[10px] font-bold text-emerald-700">
                                               점수 {formatNumber(candidate.match_score)}
                                             </Badge>
                                           </td>
@@ -5830,8 +5910,9 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                                                           ? 5
                                                           : 0
                                                         : 0;
+                                                  const scorePenalty = readScore(detail.material_mismatch_penalty);
                                                   const scoreTotal =
-                                                    scoreModel + scoreMaterial + scoreColor + scoreSize + scoreMemo + scoreCustomer;
+                                                    scoreModel + scoreMaterial + scoreColor + scoreSize + scoreMemo + scoreCustomer + scorePenalty;
 
                                                   return (
                                                     <div className="flex flex-wrap items-center gap-x-5 gap-y-1">
@@ -5855,7 +5936,10 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                                                       <span className="text-[var(--foreground)]">거래처코드</span>
                                                       <span>{scoreCustomer}점</span>
                                                       <span>|</span>
-                                                      <span className="font-semibold text-blue-600">합산 {scoreTotal}점</span>
+                                                      <span className="text-[var(--foreground)]">소재불일치</span>
+                                                      <span>{scorePenalty}점</span>
+                                                      <span>|</span>
+                                                      <span className="font-semibold text-emerald-700">합산 {scoreTotal}점</span>
                                                     </div>
                                                   );
                                                 })()}
@@ -5868,6 +5952,27 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                                   })}
                                 </tbody>
                               </table>
+                            </div>
+                            <div className="mt-2 flex items-center justify-end gap-2 px-2 pb-2">
+                              <Button
+                                size="sm"
+                                variant="secondary"
+                                onClick={() => setSuggestionPage((prev) => Math.max(1, prev - 1))}
+                                disabled={suggestionPage <= 1}
+                              >
+                                이전
+                              </Button>
+                              <span className="text-[10px] text-[var(--muted)]">
+                                {suggestionPage} / {suggestionTotalPages}
+                              </span>
+                              <Button
+                                size="sm"
+                                variant="secondary"
+                                onClick={() => setSuggestionPage((prev) => Math.min(suggestionTotalPages, prev + 1))}
+                                disabled={suggestionPage >= suggestionTotalPages}
+                              >
+                                다음
+                              </Button>
                             </div>
                           );
                         })()}
@@ -6409,7 +6514,7 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                     const baseStone = `${formatStoneQty(selectedUnlinked?.stone_center_qty)}/${formatStoneQty(selectedUnlinked?.stone_sub1_qty)}/${formatStoneQty(selectedUnlinked?.stone_sub2_qty)}`;
                     const baseMemo = selectedUnlinked?.remark ?? "-";
                     const diffClass = (value: string, base: string) =>
-                      value !== base ? "text-amber-700 font-semibold" : "text-[var(--foreground)]";
+                      value !== base ? "bg-yellow-200/70" : "";
                     return (
                       <div className="max-h-[58vh] overflow-y-scroll overflow-x-hidden rounded-lg border border-[var(--panel-border)] bg-[var(--panel)]">
                         <table className="w-full table-fixed text-xs font-semibold">
@@ -6453,7 +6558,7 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                                 비고: {baseMemo}
                               </td>
                             </tr>
-                            {suggestions.map((candidate, idx) => {
+                            {pagedSuggestions.map((candidate, idx) => {
                               const key = candidate.order_line_id ?? `candidate-${idx}`;
                               const isSelected = selectedCandidate?.order_line_id === candidate.order_line_id;
                               const candidateModel = candidate.model_name ?? "-";
@@ -6493,7 +6598,7 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                                     <td className={cn("px-1.5 py-2 truncate", diffClass(candidateCode, baseCode))} title={candidateCode}>{candidateCode}</td>
                                     <td className={cn("px-1.5 py-2 truncate", diffClass(candidateStone, baseStone))} title={candidateStone}>{candidateStone}</td>
                                     <td className="px-1.5 py-2 text-right">
-                                      <Badge tone="warning" className="h-5 px-1.5 text-[10px]">{formatNumber(candidate.match_score)}</Badge>
+                                      <Badge tone="neutral" className="h-5 border-emerald-200 bg-emerald-50 px-1.5 text-[10px] text-emerald-700">{formatNumber(candidate.match_score)}</Badge>
                                     </td>
                                     <td className="px-1.5 py-2 text-right">
                                       <Button
@@ -6600,7 +6705,8 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                                                 ? 5
                                                 : 0
                                               : 0;
-                                        const scoreTotal = scoreModel + scoreMaterial + scoreColor + scoreSize + scoreMemo + scoreCustomer;
+                                        const scorePenalty = readScore(detail.material_mismatch_penalty);
+                                        const scoreTotal = scoreModel + scoreMaterial + scoreColor + scoreSize + scoreMemo + scoreCustomer + scorePenalty;
 
                                         return (
                                           <>
@@ -6615,7 +6721,7 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                                             <td className="px-1.5 py-1.5 text-[10px] text-left">-</td>
                                             <td className="px-1.5 py-1.5 text-[10px] text-left">{scoreCustomer}점</td>
                                             <td className="px-1.5 py-1.5 text-[10px] text-left">-</td>
-                                            <td className="px-1.5 py-1.5 text-[10px] text-left font-bold text-blue-600">{scoreTotal}점</td>
+                                            <td className="px-1.5 py-1.5 text-[10px] text-left font-bold text-emerald-700">{scoreTotal}점</td>
                                             <td className="px-1.5 py-1.5" />
                                           </>
                                         );
@@ -6627,6 +6733,27 @@ export default function ReceiptLineWorkbench({ initialReceiptId }: { initialRece
                             })}
                           </tbody>
                         </table>
+                      <div className="mt-2 flex items-center justify-end gap-2 px-2 pb-2">
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          onClick={() => setSuggestionPage((prev) => Math.max(1, prev - 1))}
+                          disabled={suggestionPage <= 1}
+                        >
+                          이전
+                        </Button>
+                        <span className="text-[10px] text-[var(--muted)]">
+                          {suggestionPage} / {suggestionTotalPages}
+                        </span>
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          onClick={() => setSuggestionPage((prev) => Math.min(suggestionTotalPages, prev + 1))}
+                          disabled={suggestionPage >= suggestionTotalPages}
+                        >
+                          다음
+                        </Button>
+                      </div>
                       </div>
                     );
                   })()
