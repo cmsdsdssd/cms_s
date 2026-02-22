@@ -1,19 +1,16 @@
-import { createClient } from "@supabase/supabase-js";
+import { createBrowserClient } from "@supabase/ssr";
 import { CMS_SCHEMA } from "@/lib/contracts";
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? "";
 if (typeof window !== "undefined") console.log("SUPABASE anonKey len:", (supabaseAnonKey ?? "").length);
 
-let client: ReturnType<typeof createClient> | null = null;
+let client: ReturnType<typeof createBrowserClient> | null = null;
 
 export function getSupabaseClient() {
   if (!supabaseUrl || !supabaseAnonKey) return null;
   if (!client) {
-    // ✅ supabase-js 기본 동작에 맡김:
-    // - 로그인 전: anon으로 호출 (기존과 동일)
-    // - 로그인 후: session access_token으로 호출 (의도한 동작)
-    client = createClient(supabaseUrl, supabaseAnonKey);
+    client = createBrowserClient(supabaseUrl, supabaseAnonKey);
   }
   return client;
 }
