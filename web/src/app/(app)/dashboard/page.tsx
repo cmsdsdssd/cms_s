@@ -261,6 +261,14 @@ export default function DashboardPage() {
   const sb = useMemo(() => getSchemaClient(), []);
   const qc = useQueryClient();
   const today = todayDateStr();
+  const hasClient = Boolean(sb);
+
+  const baseQueryOptions = {
+    enabled: hasClient,
+    staleTime: 60_000,
+    refetchOnWindowFocus: false as const,
+    refetchOnReconnect: false as const,
+  };
 
   // ── 1. Shipments (today) ─────────────────────────────────────
   const shipmentsQ = useQuery({
@@ -316,6 +324,7 @@ export default function DashboardPage() {
         })),
       };
     },
+    ...baseQueryOptions,
     refetchInterval: 60_000,
   });
 
@@ -352,6 +361,7 @@ export default function DashboardPage() {
         })),
       };
     },
+    ...baseQueryOptions,
     refetchInterval: 120_000,
   });
 
@@ -364,7 +374,7 @@ export default function DashboardPage() {
         .from(CONTRACTS.views.repairLineEnriched)
         .select("repair_line_id, status, customer_name, repair_fee_krw")
         .in("status", ["RECEIVED", "IN_PROGRESS", "READY"])
-        .limit(500);
+        .limit(200);
       if (error) throw error;
       const rows = (data ?? []) as Array<{
         repair_line_id: string;
@@ -377,6 +387,7 @@ export default function DashboardPage() {
       const ready = rows.filter((r) => r.status === "READY").length;
       return { total: rows.length, received, inProgress, ready };
     },
+    ...baseQueryOptions,
     refetchInterval: 120_000,
   });
 
@@ -388,7 +399,7 @@ export default function DashboardPage() {
       const { data, error } = await sb
         .from(CONTRACTS.views.ordersWorklist)
         .select("order_line_id, display_status, order_date, client_name")
-        .limit(500);
+        .limit(200);
       if (error) throw error;
       const rows = (data ?? []) as Array<{
         order_line_id: string;
@@ -406,6 +417,7 @@ export default function DashboardPage() {
         todayNew: todayOrders.length,
       };
     },
+    ...baseQueryOptions,
     refetchInterval: 120_000,
   });
 
@@ -439,11 +451,22 @@ export default function DashboardPage() {
         goldRecordedAt: gold?.recorded_at ?? null,
       };
     },
+    ...baseQueryOptions,
     refetchInterval: 300_000,
   });
 
-  const isLoading =
-    shipmentsQ.isLoading || arQ.isLoading || repairsQ.isLoading || ordersQ.isLoading || marketQ.isLoading;
+  const ship = shipmentsQ.data;
+  const ar = arQ.data;
+  const rep = repairsQ.data;
+  const ord = ordersQ.data;
+  const mkt = marketQ.data;
+
+  const hasAnyData = Boolean(ship || ar || rep || ord || mkt);
+  const hasAnyPending =
+    shipmentsQ.isPending || arQ.isPending || repairsQ.isPending || ordersQ.isPending || marketQ.isPending;
+  const isInitialLoading = hasClient && !hasAnyData && hasAnyPending;
+  const isRefreshing =
+    shipmentsQ.isFetching || arQ.isFetching || repairsQ.isFetching || ordersQ.isFetching || marketQ.isFetching;
 
   const handleRefresh = () => {
     qc.invalidateQueries({ queryKey: ["dashboard_shipments"] });
@@ -452,13 +475,6 @@ export default function DashboardPage() {
     qc.invalidateQueries({ queryKey: ["dashboard_orders"] });
     qc.invalidateQueries({ queryKey: ["dashboard_market"] });
   };
-
-  // ── Derived values ───────────────────────────────────────────
-  const ship = shipmentsQ.data;
-  const ar = arQ.data;
-  const rep = repairsQ.data;
-  const ord = ordersQ.data;
-  const mkt = marketQ.data;
 
   const goldTrend: "up" | "down" | "flat" =
     mkt?.goldChangePct != null ? (mkt.goldChangePct > 0 ? "up" : mkt.goldChangePct < 0 ? "down" : "flat") : "flat";
@@ -482,17 +498,17 @@ export default function DashboardPage() {
           variant="secondary"
           size="sm"
           onClick={handleRefresh}
-          disabled={isLoading}
+          disabled={isRefreshing}
           className="flex items-center gap-1.5"
         >
-          <RefreshCw className={cn("h-3.5 w-3.5", isLoading && "animate-spin")} />
+          <RefreshCw className={cn("h-3.5 w-3.5", isRefreshing && "animate-spin")} />
           새로고침
         </Button>
       </div>
 
       {/* ── Hero KPI Row ────────────────────────────────────── */}
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        {isLoading ? (
+        {isInitialLoading ? (
           <>
             <KpiSkeleton />
             <KpiSkeleton />
@@ -540,7 +556,7 @@ export default function DashboardPage() {
 
       {/* ── Process Sections ────────────────────────────────── */}
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2 xl:grid-cols-3">
-        {isLoading ? (
+        {isInitialLoading ? (
           <>
             <SectionSkeleton />
             <SectionSkeleton />

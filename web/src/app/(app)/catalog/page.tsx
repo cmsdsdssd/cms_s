@@ -24,6 +24,7 @@ import { buildPromptText } from "@/lib/nanobanana/prompt-template";
 import {
   buildMaterialFactorMap,
   calcMaterialAmountSellKrw,
+  getMaterialFactor,
   type MaterialFactorConfigRow,
 } from "@/lib/material-factors";
 import { CatalogGalleryGrid } from "@/components/catalog/CatalogGalleryGrid";
@@ -2769,6 +2770,26 @@ export default function CatalogPage() {
     return rows;
   }, [bomLineMetrics]);
 
+  const bomAccessoryRows = useMemo(
+    () => displayedBomLineMetrics.filter(({ line }) => parseBomLineKind(line.note) === "ACCESSORY"),
+    [displayedBomLineMetrics]
+  );
+
+  const bomDecorRows = useMemo(
+    () => displayedBomLineMetrics.filter(({ line }) => parseBomLineKind(line.note) === "DECOR"),
+    [displayedBomLineMetrics]
+  );
+
+  const bomAccessoryLaborSellTotal = useMemo(
+    () => bomAccessoryRows.reduce((sum, row) => sum + Number(row.laborTotal ?? 0), 0),
+    [bomAccessoryRows]
+  );
+
+  const bomDecorLaborSellTotal = useMemo(
+    () => bomDecorRows.reduce((sum, row) => sum + Number(row.laborTotal ?? 0), 0),
+    [bomDecorRows]
+  );
+
   const decorLaborRows = useMemo(() => {
     const rows = displayedBomLineMetrics
       .filter(({ line }) => parseBomLineKind(line.note) === "DECOR")
@@ -3020,6 +3041,32 @@ export default function CatalogPage() {
     return Math.max(safeWeight - safeDeduction, 0);
   }, [selectedDetail?.deductionWeight, selectedDetail?.weight]);
 
+  const detailRawGrossWeight = useMemo(() => {
+    const weight = parseFloat(String(selectedDetail?.weight ?? ""));
+    return Number.isFinite(weight) ? weight : 0;
+  }, [selectedDetail?.weight]);
+
+  const detailRawDeductionWeight = useMemo(() => {
+    const deduction = parseFloat(String(selectedDetail?.deductionWeight ?? ""));
+    return Number.isFinite(deduction) ? deduction : 0;
+  }, [selectedDetail?.deductionWeight]);
+
+  const detailKaratCode = useMemo(() => {
+    const raw = String(selectedDetail?.materialCode ?? "").trim().toUpperCase();
+    if (raw === "14" || raw === "14K") return "14";
+    if (raw === "18" || raw === "18K") return "18";
+    return "";
+  }, [selectedDetail?.materialCode]);
+  const isKaratMaterialDetail = detailKaratCode === "14" || detailKaratCode === "18";
+  const detailKaratLabel = detailKaratCode ? `${detailKaratCode}K` : "";
+  const detailKaratGrossWeight = detailRawGrossWeight * 1.2;
+  const detailKaratNetWeight = Math.max(detailKaratGrossWeight - detailRawDeductionWeight, 0);
+  const detailKaratMaterialPrice = useMemo(() => {
+    if (!isKaratMaterialDetail) return 0;
+    return calculateMaterialPrice(detailKaratCode, detailKaratGrossWeight, detailRawDeductionWeight);
+  }, [calculateMaterialPrice, detailKaratCode, detailKaratGrossWeight, detailRawDeductionWeight, isKaratMaterialDetail]);
+  const detailKaratTotalSell = roundUpToThousand(detailKaratMaterialPrice + detailLaborSellWithAccessory);
+
   const detailRawHistoryRows = useMemo<CnRawHistoryRow[]>(() => {
     if (!selectedMasterId) return [];
     const historyRows = cnRawHistoryByMasterId[selectedMasterId] ?? [];
@@ -3055,6 +3102,59 @@ export default function CatalogPage() {
       },
     ];
   }, [cnRawHistoryByMasterId, cnyAdRate, detailRawNetWeight, masterRowsById, selectedMasterId]);
+
+  const topMaterialFactor = useMemo(
+    () =>
+      getMaterialFactor({
+        materialCode: selectedDetail?.materialCode ?? "00",
+        factors: materialFactorMap,
+      }).effectiveFactor,
+    [materialFactorMap, selectedDetail?.materialCode]
+  );
+
+  const topKoreaSilverValue = useMemo(
+    () => detailRawNetWeight * silverModifiedPrice * topMaterialFactor,
+    [detailRawNetWeight, silverModifiedPrice, topMaterialFactor]
+  );
+
+  const topChinaSilverValue = useMemo(
+    () => detailRawNetWeight * csOriginalKrwPerG,
+    [csOriginalKrwPerG, detailRawNetWeight]
+  );
+
+  const overallKoreaLaborTotal = useMemo(
+    () => bomAccessoryLaborSellTotal + bomDecorLaborSellTotal,
+    [bomAccessoryLaborSellTotal, bomDecorLaborSellTotal]
+  );
+
+  const overallSharedLaborTotal = overallKoreaLaborTotal;
+
+  const componentSummaryRows = useMemo(
+    () => [
+      {
+        label: "[공임참고]총가격(전체-은값)",
+        korea: overallSharedLaborTotal - topKoreaSilverValue,
+        china: overallSharedLaborTotal - topChinaSilverValue,
+      },
+      {
+        label: "[공임참고]총가격(전체-부품)",
+        korea: overallSharedLaborTotal - bomAccessoryLaborSellTotal,
+        china: overallSharedLaborTotal - bomAccessoryLaborSellTotal,
+      },
+      {
+        label: "[공임참고]총가격(전체-장식)",
+        korea: overallSharedLaborTotal - bomDecorLaborSellTotal,
+        china: overallSharedLaborTotal - bomDecorLaborSellTotal,
+      },
+    ],
+    [
+      bomAccessoryLaborSellTotal,
+      bomDecorLaborSellTotal,
+      overallSharedLaborTotal,
+      topChinaSilverValue,
+      topKoreaSilverValue,
+    ]
+  );
 
 
   const handleImageUpload = async (file: File) => {
@@ -5215,6 +5315,22 @@ export default function CatalogPage() {
                 차감중량 {selectedDetail?.deductionWeight ? `${selectedDetail.deductionWeight} g` : "-"}
               </div>
             </div>
+            {isKaratMaterialDetail ? (
+              <div className="grid grid-cols-2 gap-2 text-xs">
+                <div className="rounded-[8px] border border-[var(--panel-border)] bg-amber-50 px-3 py-2 text-center font-semibold text-[var(--foreground)]">
+                  {detailKaratLabel} 중량 {formatWeightNumber(detailKaratGrossWeight)} g
+                </div>
+                <div className="rounded-[8px] border border-[var(--panel-border)] bg-amber-50 px-3 py-2 text-center font-semibold text-[var(--foreground)]">
+                  {detailKaratLabel} 차감중량 {formatWeightNumber(detailRawDeductionWeight)} g
+                </div>
+                <div className="rounded-[8px] border border-[var(--panel-border)] bg-amber-100 px-3 py-2 text-center font-semibold text-[var(--foreground)] col-span-2">
+                  {detailKaratLabel} 총중량 {formatWeightNumber(detailKaratNetWeight)} g
+                </div>
+                <div className="rounded-[8px] border border-[var(--panel-border)] bg-amber-100 px-3 py-2 text-center font-semibold text-[var(--foreground)] col-span-2">
+                  {detailKaratLabel} 총 가격 <NumberText value={detailKaratTotalSell} /> 원
+                </div>
+              </div>
+            ) : null}
             <div className="mt-auto rounded-[8px] border border-[var(--panel-border)] bg-blue-50 px-3 py-2 text-sm font-semibold leading-snug whitespace-normal break-words text-[var(--foreground)]">
               {selectedItem?.model ?? "-"}
             </div>
@@ -5639,6 +5755,27 @@ export default function CatalogPage() {
                   </div>
                 </div>
 
+                <div className="rounded-[8px] border border-[var(--panel-border)] bg-[var(--subtle-bg)] overflow-hidden">
+                  <table className="w-full text-xs">
+                    <thead className="bg-[var(--panel)] text-[var(--muted)]">
+                      <tr>
+                        <th className="px-3 py-2 text-left">항목</th>
+                        <th className="px-3 py-2 text-right text-blue-600">한국</th>
+                        <th className="px-3 py-2 text-right text-red-600">중국</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {componentSummaryRows.map((row) => (
+                        <tr key={row.label} className="border-t border-[var(--panel-border)]">
+                          <td className="px-3 py-2 whitespace-nowrap">{row.label}</td>
+                          <td className="px-3 py-2 text-right tabular-nums font-semibold text-blue-600">₩{formatDisplayKrw(row.korea)}</td>
+                          <td className="px-3 py-2 text-right tabular-nums font-semibold text-red-600">₩{formatDisplayKrw(row.china)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
                 {flattenQuery.isLoading ? (
                   <div className="text-xs text-[var(--muted)]">구성품 계산 중...</div>
                 ) : flattenQuery.isError ? (
@@ -5679,9 +5816,6 @@ export default function CatalogPage() {
                             </div>
                           );
                         }
-
-                        const accessoryRows = displayedBomLineMetrics.filter(({ line }) => parseBomLineKind(line.note) === "ACCESSORY");
-                        const decorRows = displayedBomLineMetrics.filter(({ line }) => parseBomLineKind(line.note) === "DECOR");
 
                         const renderGroupTable = (groupTitle: string, rows: typeof displayedBomLineMetrics) => (
                           <div className="rounded-[10px] border border-[var(--panel-border)] bg-[var(--panel)] p-2">
@@ -5730,8 +5864,8 @@ export default function CatalogPage() {
 
                         return (
                           <div className="grid grid-cols-1 gap-3">
-                            {renderGroupTable("부품", accessoryRows)}
-                            {renderGroupTable("장식", decorRows)}
+                            {renderGroupTable("부품", bomAccessoryRows)}
+                            {renderGroupTable("장식", bomDecorRows)}
                           </div>
                         );
                       })()}

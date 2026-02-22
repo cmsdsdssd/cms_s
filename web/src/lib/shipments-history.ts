@@ -30,6 +30,7 @@ export type ShipmentHistoryLineRow = {
 export type ShipmentHistoryInvoiceRow = {
   shipment_line_id?: string | null;
   commodity_due_g?: number | null;
+  commodity_price_snapshot_krw_per_g?: number | null;
   labor_cash_due_krw?: number | null;
   material_cash_due_krw?: number | null;
   total_cash_due_krw?: number | null;
@@ -50,6 +51,8 @@ export type ShipmentHistoryRow = {
   model_display: string;
   qty: number;
   net_weight_g: number;
+  commodity_due_g: number | null;
+  commodity_price_snapshot_krw_per_g: number | null;
   labor_total_sell_krw: number;
   labor_breakdown_sum_krw: number | null;
   labor_consistent: boolean;
@@ -196,14 +199,14 @@ export const combineShipmentRows = (
       const invoiceLabor = toFiniteNumber(invoice?.labor_cash_due_krw, Number.NaN);
       const invoiceMaterial = toFiniteNumber(invoice?.material_cash_due_krw, Number.NaN);
       const invoiceTotal = toFiniteNumber(invoice?.total_cash_due_krw, Number.NaN);
+      const invoicePricePerG = toFiniteNumber(invoice?.commodity_price_snapshot_krw_per_g, Number.NaN);
 
       const effectiveLabor = Number.isFinite(invoiceLabor) ? invoiceLabor : Number.isFinite(lineLabor) ? lineLabor : 0;
       const laborBreakdownSum =
         Number.isFinite(lineBaseLabor) && Number.isFinite(lineExtraLabor)
           ? lineBaseLabor + lineExtraLabor
           : null;
-      const laborConsistent =
-        laborBreakdownSum === null ? true : Math.abs(laborBreakdownSum - effectiveLabor) <= 0.5;
+
       const effectiveMaterial = Number.isFinite(invoiceMaterial)
         ? invoiceMaterial
         : Number.isFinite(lineMaterial)
@@ -214,6 +217,16 @@ export const combineShipmentRows = (
         : Number.isFinite(lineTotal)
           ? lineTotal
           : effectiveLabor + effectiveMaterial;
+
+      const sourceLineTotal = Number.isFinite(lineTotal)
+        ? lineTotal
+        : Number.isFinite(lineLabor) && Number.isFinite(lineMaterial)
+          ? lineLabor + lineMaterial
+          : effectiveTotal;
+      const laborSplitConsistent =
+        laborBreakdownSum === null ? false : Math.abs(laborBreakdownSum - effectiveLabor) <= 0.5;
+      const totalConsistent = Math.abs(effectiveTotal - sourceLineTotal) <= 1;
+      const laborConsistent = laborSplitConsistent || totalConsistent;
 
       return {
         shipment_id: shipmentId,
@@ -230,6 +243,8 @@ export const combineShipmentRows = (
         model_display: buildModelDisplay(line),
         qty: Math.max(toFiniteNumber(line.qty, 0), 0),
         net_weight_g: effectiveWeight,
+        commodity_due_g: Number.isFinite(invoiceCommodityG) ? invoiceCommodityG : null,
+        commodity_price_snapshot_krw_per_g: Number.isFinite(invoicePricePerG) ? invoicePricePerG : null,
         labor_total_sell_krw: effectiveLabor,
         labor_breakdown_sum_krw: laborBreakdownSum,
         labor_consistent: laborConsistent,

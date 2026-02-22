@@ -269,7 +269,7 @@ export default function ShipmentsHistoryPage() {
       for (const lineIds of chunk(shipmentLineIds, 500)) {
         const { data: invoiceData, error: invoiceError } = await schemaClient
           .from(CONTRACTS.views.arInvoicePosition)
-          .select("shipment_line_id, commodity_due_g, labor_cash_due_krw, material_cash_due_krw, total_cash_due_krw")
+          .select("shipment_line_id, commodity_due_g, commodity_price_snapshot_krw_per_g, labor_cash_due_krw, material_cash_due_krw, total_cash_due_krw")
           .in("shipment_line_id", lineIds);
         if (invoiceError) throw invoiceError;
         invoices.push(...((invoiceData ?? []) as ShipmentHistoryInvoiceRow[]));
@@ -816,11 +816,13 @@ export default function ShipmentsHistoryPage() {
                             <th className="px-4 py-3 whitespace-nowrap">공임일치</th>
                             <th className="px-4 py-3 whitespace-nowrap">고객</th>
                           <th className="px-4 py-3 whitespace-nowrap">모델</th>
-                          <th className="px-4 py-3 text-right whitespace-nowrap">수량</th>
-                          <th className="px-4 py-3 text-right whitespace-nowrap">중량</th>
-                          <th className="px-4 py-3 text-right whitespace-nowrap">공임</th>
-                          <th className="px-4 py-3 text-right whitespace-nowrap">소재</th>
-                          <th className="px-4 py-3 text-right whitespace-nowrap">합계</th>
+                            <th className="px-4 py-3 text-right whitespace-nowrap">수량</th>
+                            <th className="px-4 py-3 text-right whitespace-nowrap">중량</th>
+                            <th className="px-4 py-3 text-right whitespace-nowrap">환산중량</th>
+                            <th className="px-4 py-3 text-right whitespace-nowrap">적용시세</th>
+                            <th className="px-4 py-3 text-right whitespace-nowrap">공임</th>
+                            <th className="px-4 py-3 text-right whitespace-nowrap">소재</th>
+                            <th className="px-4 py-3 text-right whitespace-nowrap">합계</th>
                           <th className="px-4 py-3 text-center whitespace-nowrap">구분</th>
                         </tr>
                       </thead>
@@ -839,6 +841,8 @@ export default function ShipmentsHistoryPage() {
                             <td className="px-4 py-3">{row.model_display}</td>
                             <td className="px-4 py-3 text-right tabular-nums">{row.qty}</td>
                             <td className="px-4 py-3 text-right tabular-nums">{formatGram(row.net_weight_g)}</td>
+                            <td className="px-4 py-3 text-right tabular-nums">{row.commodity_due_g === null ? "-" : formatGram(row.commodity_due_g)}</td>
+                            <td className="px-4 py-3 text-right tabular-nums">{row.commodity_price_snapshot_krw_per_g === null ? "-" : `${formatKrw(row.commodity_price_snapshot_krw_per_g)}/g`}</td>
                             <td className="px-4 py-3 text-right tabular-nums">{formatKrw(row.labor_total_sell_krw)}</td>
                             <td className="px-4 py-3 text-right tabular-nums">{formatKrw(row.material_amount_sell_krw)}</td>
                             <td className="px-4 py-3 text-right tabular-nums font-semibold">{formatKrw(row.total_amount_sell_krw)}</td>
