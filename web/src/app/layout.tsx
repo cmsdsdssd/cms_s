@@ -52,8 +52,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             __html: `(function(){try{
               var key='cms_theme';
               var stored=localStorage.getItem(key);
-              var prefersDark=window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches;
-              var theme=(stored==='light'||stored==='dark')?stored:(prefersDark?'dark':'light');
+              var theme=(stored==='light'||stored==='dark')?stored:'light';
               document.documentElement.dataset.theme=theme;
               document.documentElement.style.colorScheme=theme;
             }catch(e){}})();`,

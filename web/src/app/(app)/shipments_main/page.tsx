@@ -63,6 +63,7 @@ type SortField = "order_date" | "factory_po" | "sent_date" | "inbound_date" | "q
 type SortOrder = "asc" | "desc";
 
 type FilterOperator = "and" | "or";
+type ShipmentStage = "ORDER_PENDING" | "SENT_TO_VENDOR" | "READY_TO_SHIP" | "CONFIRMED" | "ALL";
 
 const createFilter = (type: FilterType): FilterRow => ({
   id: `${type}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
@@ -189,6 +190,8 @@ export default function ShipmentsMainPage() {
   const [sortField, setSortField] = useState<SortField>("order_date");
   const [sortOrder, setSortOrder] = useState<SortOrder>("desc");
   const [receiptDate, setReceiptDate] = useState(() => getKstYmd());
+  const [searchText, setSearchText] = useState("");
+  const [selectedStage, setSelectedStage] = useState<ShipmentStage>("READY_TO_SHIP");
   const pageSize = 50; // 페이지당 50개씩
 
   // Fetch unshipped order lines - OPTIMIZED with caching
@@ -317,6 +320,29 @@ export default function ShipmentsMainPage() {
     };
 
     result = result.filter((row) => {
+      if (selectedStage !== "ALL" && selectedStage !== "CONFIRMED") {
+        if (selectedStage === "READY_TO_SHIP") {
+          if (!(row.status === "READY_TO_SHIP" || row.status === "WAITING_INBOUND")) return false;
+        } else if (row.status !== selectedStage) {
+          return false;
+        }
+      }
+
+      const q = searchText.trim().toLowerCase();
+      if (q) {
+        const haystack = [
+          row.customer_name,
+          row.customer_party_id,
+          row.model_name,
+          row.memo,
+          row.color,
+          row.size,
+        ]
+          .map((value) => String(value ?? "").toLowerCase())
+          .join("\n");
+        if (!haystack.includes(q)) return false;
+      }
+
       if (activeFilters.length === 0) return true;
       if (filterOperator === "or") {
         return activeFilters.some((filter) => matchesFilter(row, filter));
@@ -387,7 +413,7 @@ export default function ShipmentsMainPage() {
     });
 
     return result;
-  }, [unshippedQuery.data, storePickupOrderLineIds, includeStorePickup, filters, filterOperator, sortField, sortOrder]);
+  }, [unshippedQuery.data, storePickupOrderLineIds, includeStorePickup, filters, filterOperator, sortField, sortOrder, selectedStage, searchText]);
 
   // Pagination
   const paginatedData = useMemo(() => {
@@ -511,12 +537,14 @@ export default function ShipmentsMainPage() {
 
   return (
     <div className="space-y-3" id="shipments_main.root">
-      {/* 모바일 세그먼트: 출고대기 | 출고완료 — lg:hidden */}
-      <ShipmentsMobileTabs />
-      {/* Unified Toolbar */}
-      <UnifiedToolbar
-        title="출고관리"
-        actions={
+      <div className="sticky top-14 z-30 space-y-2 border-b border-[var(--panel-border)] bg-[var(--background)]/95 pb-2 backdrop-blur">
+        {/* 모바일 세그먼트: 출고대기 | 출고완료 — lg:hidden */}
+        <ShipmentsMobileTabs />
+        {/* Unified Toolbar */}
+        <UnifiedToolbar
+          className="border-b-0"
+          title="출고관리"
+          actions={
           <div className="flex items-center gap-2">
             {selectedLines.size > 0 && (
               <div className="flex items-center gap-2 mr-2">
@@ -579,8 +607,48 @@ export default function ShipmentsMainPage() {
               오늘 전체출고 영수증
             </ToolbarButton>
           </div>
-        }
-      >
+          }
+        >
+          <div className="flex items-center gap-1 rounded-[10px] border border-[var(--panel-border)] bg-[var(--chip)] p-1">
+            {[
+              { key: "ORDER_PENDING", label: "주문" },
+              { key: "SENT_TO_VENDOR", label: "공장발주" },
+              { key: "READY_TO_SHIP", label: "출고대기" },
+            ].map((stage) => {
+              const active = selectedStage === stage.key;
+              return (
+                <button
+                  key={stage.key}
+                  type="button"
+                  onClick={() => setSelectedStage(stage.key as ShipmentStage)}
+                  className={cn(
+                    "rounded-md px-2 py-1 text-xs font-medium transition-colors",
+                    active ? "bg-[var(--panel)] text-[var(--foreground)] shadow-sm" : "text-[var(--muted)]"
+                  )}
+                >
+                  {stage.label}
+                </button>
+              );
+            })}
+            <Link
+              href="/shipments_history"
+              className="rounded-md px-2 py-1 text-xs font-medium text-[var(--muted)] transition-colors hover:bg-[var(--panel)] hover:text-[var(--foreground)]"
+            >
+              출고확정
+            </Link>
+          </div>
+
+          <Input
+            value={searchText}
+            onChange={(event) => {
+              setSearchText(event.target.value);
+              setPage(1);
+            }}
+            placeholder="거래처/모델/비고 검색"
+            className="h-8 w-44"
+            autoFormat={false}
+          />
+
         <ToolbarSelect
           value={filters.find(f => f.type === "customer")?.value || ""}
           onChange={(value) => {
@@ -635,7 +703,8 @@ export default function ShipmentsMainPage() {
             {filters.length}
           </Badge>
         )}
-      </UnifiedToolbar>
+        </UnifiedToolbar>
+      </div>
 
       {/* Summary Cards */}
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4 px-4">

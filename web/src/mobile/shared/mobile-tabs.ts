@@ -1,5 +1,5 @@
 import type { ElementType } from "react";
-import { PackageCheck, Boxes, CreditCard, User } from "lucide-react";
+import { PackageCheck, Boxes, LayoutDashboard, CreditCard, User } from "lucide-react";
 
 export type MobileOnlyTabItem = {
   key: string;
@@ -23,6 +23,13 @@ export const mobileOnlyTabs: MobileOnlyTabItem[] = [
     href: "/m/catalog",
     icon: Boxes,
     activePrefixes: ["/m/catalog"],
+  },
+  {
+    key: "home",
+    label: "홈",
+    href: "/dashboard",
+    icon: LayoutDashboard,
+    activePrefixes: ["/dashboard", "/", "/analysis"],
   },
   {
     key: "receivables",
