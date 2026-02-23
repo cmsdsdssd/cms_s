@@ -48,7 +48,7 @@ export const mobileTabs: MobileTabItem[] = [
         label: "홈",
         href: "/dashboard",
         icon: LayoutDashboard,
-        activePrefixes: ["/dashboard", "/"],
+        activePrefixes: ["/dashboard", "/", "/analysis"],
     },
     {
         key: "ar",

@@ -1,10 +1,14 @@
 "use client";
 
 import * as React from "react";
-import { useRouter } from "next/navigation";
-import { Search, X, ArrowRight } from "lucide-react";
+import { usePathname, useRouter } from "next/navigation";
+import { Search, ArrowRight } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { navItems, bottomNavItems, NavItem } from "./nav-items";
+import {
+  getBottomNavItemsByMode,
+  getNavItemsByMode,
+  resolveMode,
+} from "./nav-items";
 
 interface CommandPaletteProps {
   open: boolean;
@@ -21,6 +25,7 @@ type SearchResult = {
 
 export function CommandPalette({ open, onClose, onOpenWorkbench }: CommandPaletteProps) {
   const router = useRouter();
+  const pathname = usePathname();
   const [query, setQuery] = React.useState("");
   const [selectedIndex, setSelectedIndex] = React.useState(0);
   const inputRef = React.useRef<HTMLInputElement>(null);
@@ -29,7 +34,11 @@ export function CommandPalette({ open, onClose, onOpenWorkbench }: CommandPalett
   // Flatten items for search
   const allItems = React.useMemo(() => {
     const items: SearchResult[] = [];
-    
+
+    const mode = resolveMode(pathname);
+    const navItems = getNavItemsByMode(mode);
+    const bottomNavItems = getBottomNavItemsByMode(mode);
+
     navItems.forEach((group) => {
       group.items?.forEach((item) => {
         if (item.href) {
@@ -55,7 +64,7 @@ export function CommandPalette({ open, onClose, onOpenWorkbench }: CommandPalett
     });
 
     return items;
-  }, []);
+  }, [pathname]);
 
   // Filter items
   const filteredItems = React.useMemo(() => {
@@ -90,6 +99,16 @@ export function CommandPalette({ open, onClose, onOpenWorkbench }: CommandPalett
   }, [open]);
 
   // Handle keyboard navigation
+  const handleSelect = React.useCallback((item: SearchResult) => {
+    if (item.href === "/workbench") {
+      onClose();
+      onOpenWorkbench?.();
+      return;
+    }
+    router.push(item.href);
+    onClose();
+  }, [onClose, onOpenWorkbench, router]);
+
   React.useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (!open) return;
@@ -115,17 +134,7 @@ export function CommandPalette({ open, onClose, onOpenWorkbench }: CommandPalett
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [open, filteredItems, selectedIndex, onClose]);
-
-  const handleSelect = (item: SearchResult) => {
-    if (item.href === "/workbench") {
-      onClose();
-      onOpenWorkbench?.();
-      return;
-    }
-    router.push(item.href);
-    onClose();
-  };
+  }, [open, filteredItems, selectedIndex, onClose, handleSelect]);
 
   if (!open) return null;
 

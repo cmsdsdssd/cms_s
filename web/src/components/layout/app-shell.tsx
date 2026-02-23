@@ -1,14 +1,21 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { usePathname } from "next/navigation";
 import { SidebarNav } from "@/components/layout/sidebar-nav";
 import { GlobalTopBar } from "@/components/layout/global-top-bar";
 import { MobileBottomNav } from "@/components/layout/mobile-bottom-nav";
 import { WorkbenchPartySearchModal } from "@/components/party/workbench-party-search-modal";
+import { saveLastPathByMode } from "@/lib/analysis-mode";
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [workbenchSearchOpen, setWorkbenchSearchOpen] = useState(false);
+  const pathname = usePathname();
+
+  useEffect(() => {
+    saveLastPathByMode(pathname);
+  }, [pathname]);
 
   return (
     <div className="flex min-h-screen bg-[var(--background)]" data-app-shell="v5">

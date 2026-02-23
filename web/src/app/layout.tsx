@@ -1,6 +1,5 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { JetBrains_Mono, Manrope } from "next/font/google";
-import { Toaster } from "sonner";
 import Providers from "./providers";
 import "./globals.css";
 
@@ -17,6 +16,30 @@ const jetbrainsMono = JetBrains_Mono({
 export const metadata: Metadata = {
   title: "MS",
   description: "1차 운영 UI",
+  applicationName: "MS",
+  manifest: "/manifest.webmanifest",
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: "black-translucent",
+    title: "MS",
+  },
+  formatDetection: {
+    telephone: false,
+  },
+  other: {
+    "mobile-web-app-capable": "yes",
+  },
+};
+
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  viewportFit: "cover",
+  themeColor: [
+    { media: "(prefers-color-scheme: light)", color: "#f6f7fb" },
+    { media: "(prefers-color-scheme: dark)", color: "#0b1220" },
+  ],
+  interactiveWidget: "resizes-content",
 };
 
 // web/src/app/layout.tsx

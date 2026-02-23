@@ -4,7 +4,7 @@ export function FilterBar({ className, children }: React.HTMLAttributes<HTMLDivE
   return (
     <div
       className={cn(
-        "flex flex-wrap items-center gap-3 rounded-[var(--radius)] border border-[var(--panel-border)] bg-[var(--panel)] px-4 py-3 shadow-[var(--shadow-sm)]",
+        "sticky top-14 z-30 flex flex-wrap items-center gap-3 rounded-[var(--radius)] border border-[var(--panel-border)] bg-[var(--panel)]/95 px-4 py-3 shadow-[var(--shadow-sm)] backdrop-blur supports-[backdrop-filter]:bg-[var(--panel)]/80",
         className
       )}
     >

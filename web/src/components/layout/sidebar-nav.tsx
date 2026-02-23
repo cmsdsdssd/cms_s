@@ -1,16 +1,24 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useState, useEffect } from "react";
-import { 
-  ChevronLeft, 
-  ChevronRight, 
-  X
+import {
+  ChevronLeft,
+  ChevronRight,
+  X,
+  ArrowLeftRight,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { navItems, bottomNavItems, type NavItem, isNavItemActive } from "./nav-items";
+import {
+  type NavItem,
+  isNavItemActive,
+  resolveMode,
+  getBottomNavItemsByMode,
+  getNavItemsByMode,
+} from "./nav-items";
 import { Button } from "@/components/ui/button";
+import { getToggleTargetPath } from "@/lib/analysis-mode";
 
 interface SidebarNavProps {
   mobileOpen: boolean;
@@ -20,7 +28,11 @@ interface SidebarNavProps {
 
 export function SidebarNav({ mobileOpen, onMobileClose, onWorkbenchOpen }: SidebarNavProps) {
   const pathname = usePathname();
+  const router = useRouter();
   const [isCollapsed, setIsCollapsed] = useState(false);
+  const mode = resolveMode(pathname);
+  const navItems = getNavItemsByMode(mode);
+  const bottomNavItems = getBottomNavItemsByMode(mode);
 
   // Close mobile menu on route change
   useEffect(() => {
@@ -29,6 +41,10 @@ export function SidebarNav({ mobileOpen, onMobileClose, onWorkbenchOpen }: Sideb
 
   const toggleCollapse = () => {
     setIsCollapsed(!isCollapsed);
+  };
+
+  const handleModeToggle = () => {
+    router.push(getToggleTargetPath(pathname));
   };
 
   const NavGroup = ({ group, collapsed }: { group: NavItem; collapsed: boolean }) => {
@@ -112,17 +128,27 @@ export function SidebarNav({ mobileOpen, onMobileClose, onWorkbenchOpen }: Sideb
       {/* Header / Logo */}
       <div className={cn("flex h-14 items-center border-b border-[var(--hairline)] px-4", isCollapsed ? "justify-center" : "justify-between")}>
         {!isCollapsed && (
-          <div className="flex items-center gap-2 font-bold text-[var(--foreground)]">
+          <button
+            type="button"
+            className="flex items-center gap-2 font-bold text-[var(--foreground)]"
+            onClick={handleModeToggle}
+            title={mode === "analysis" ? "업무 모드로 전환" : "분석 모드로 전환"}
+          >
             <div className="flex h-8 w-8 items-center justify-center rounded-[var(--radius-md)] bg-gradient-to-br from-[var(--primary)] to-[var(--primary-strong)] text-white shadow-sm">
               J
             </div>
-            <span>MS</span>
-          </div>
+            <span>{mode === "analysis" ? "AN" : "MS"}</span>
+          </button>
         )}
         {isCollapsed && (
-           <div className="flex h-8 w-8 items-center justify-center rounded-[var(--radius-md)] bg-gradient-to-br from-[var(--primary)] to-[var(--primary-strong)] text-white shadow-sm">
+           <button
+             type="button"
+             onClick={handleModeToggle}
+             className="flex h-8 w-8 items-center justify-center rounded-[var(--radius-md)] bg-gradient-to-br from-[var(--primary)] to-[var(--primary-strong)] text-white shadow-sm"
+             title={mode === "analysis" ? "업무 모드로 전환" : "분석 모드로 전환"}
+           >
              J
-           </div>
+           </button>
         )}
         
         {/* Desktop Collapse Toggle */}
@@ -141,11 +167,11 @@ export function SidebarNav({ mobileOpen, onMobileClose, onWorkbenchOpen }: Sideb
       </div>
 
       {/* Scrollable Nav Items */}
-      <div className="flex-1 overflow-y-auto py-4 px-2 scrollbar-thin">
-        {navItems.map((group) => (
-          <NavGroup key={group.label} group={group} collapsed={isCollapsed} />
-        ))}
-      </div>
+        <div className="flex-1 overflow-y-auto py-4 px-2 scrollbar-thin">
+          {navItems.map((group) => (
+            <NavGroup key={group.label} group={group} collapsed={isCollapsed} />
+          ))}
+        </div>
 
       {/* Bottom Actions / Settings */}
       <div className="border-t border-[var(--hairline)] p-2">
@@ -194,11 +220,22 @@ export function SidebarNav({ mobileOpen, onMobileClose, onWorkbenchOpen }: Sideb
         <div className="flex h-full flex-col">
             <div className="flex items-center justify-between border-b border-[var(--hairline)] px-4 h-14">
                <span className="font-bold">메뉴</span>
-               <button onClick={onMobileClose} className="p-1" title="닫기">
+               <button onClick={onMobileClose} className="p-1" title="닫기" type="button">
                  <X className="h-5 w-5" />
                </button>
-            </div>
-           <div className="flex-1 overflow-y-auto p-4">
+             </div>
+            <div className="flex-1 overflow-y-auto p-4">
+              <button
+                type="button"
+                onClick={() => {
+                  onMobileClose();
+                  handleModeToggle();
+                }}
+                className="mb-4 flex w-full items-center justify-center gap-2 rounded-[var(--radius-md)] border border-[var(--hairline)] px-3 py-2 text-sm font-medium text-[var(--muted-strong)]"
+              >
+                <ArrowLeftRight className="h-4 w-4" />
+                {mode === "analysis" ? "업무 모드로" : "분석 모드로"}
+              </button>
               {navItems.map((group) => (
                 <div key={group.label} className="mb-6">
                   <h3 className="mb-2 px-2 text-xs font-semibold uppercase tracking-wider text-[var(--muted-strong)]">
