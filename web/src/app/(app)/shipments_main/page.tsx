@@ -537,7 +537,7 @@ export default function ShipmentsMainPage() {
 
   return (
     <div className="space-y-3" id="shipments_main.root">
-      <div className="sticky top-14 z-30 space-y-2 border-b border-[var(--panel-border)] bg-[var(--background)]/95 pb-2 backdrop-blur">
+      <div className="sticky top-[var(--topbar-sticky-offset)] z-30 space-y-2 border-b border-[var(--panel-border)] bg-[var(--background)]/95 pb-2 backdrop-blur">
         {/* 모바일 세그먼트: 출고대기 | 출고완료 — lg:hidden */}
         <ShipmentsMobileTabs />
         {/* Unified Toolbar */}

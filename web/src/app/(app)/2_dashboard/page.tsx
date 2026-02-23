@@ -391,7 +391,7 @@ export default function Dashboard2Page() {
   return (
     <div className="min-h-screen bg-[var(--background)] pb-20" id="dashboard2.root">
       {/* Header */}
-      <div className="sticky top-0 z-30 bg-[var(--background)]/95 backdrop-blur border-b border-[var(--panel-border)]">
+            <div className="sticky top-[var(--topbar-sticky-offset)] z-30 bg-[var(--background)]/95 backdrop-blur border-b border-[var(--panel-border)]">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
           <ActionBar
             title="통합 업무 대시보드"

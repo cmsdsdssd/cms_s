@@ -5737,7 +5737,7 @@ const extractEtcLaborAmount = (value: unknown): number => {
   return (
     <div className="min-h-screen bg-[var(--background)] pb-20">
       {/* Sticky Header */}
-      <div className="sticky top-0 z-20 bg-[var(--background)]/80 backdrop-blur-md border-b border-[var(--panel-border)] shadow-sm transition-all">
+      <div className="sticky top-[var(--topbar-sticky-offset)] z-20 bg-[var(--background)]/80 backdrop-blur-md border-b border-[var(--panel-border)] shadow-sm transition-all">
         <div className="px-4 sm:px-6 lg:px-8 py-4">
           <ActionBar
             title="출고 관리"

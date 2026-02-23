@@ -160,9 +160,8 @@ export async function GET() {
         const payload = {
             data: {
                 fxAsOf: new Date().toISOString(),
-                // legacy (catalog/page.tsx 등에서 사용)
+                // legacy
                 gold: goldPrice,
-                silver: ks,
                 silverOriginal: silverBasePrice,
                 // new (MarketTicker에서 사용)
                 kg: goldPrice,

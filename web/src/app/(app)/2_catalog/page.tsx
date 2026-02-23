@@ -1271,7 +1271,7 @@ export default function Catalog2Page() {
       .then(data => {
         if (data.data) {
           setGoldPrice(data.data.gold);
-          setSilverPrice(data.data.silver);
+          setSilverPrice(Number(data.data.silverOriginal ?? 0));
         }
       });
   }, []);

@@ -68,6 +68,11 @@
   /* Background glow (subtle) */
   --bg-glow-a: rgba(43, 92, 255, 0.08);
   --bg-glow-b: rgba(245, 158, 11, 0.06);
+
+  /* Sticky offsets */
+  --safe-top: env(safe-area-inset-top, 0px);
+  --topbar-h: 56px;
+  --topbar-sticky-offset: calc(var(--safe-top) + var(--topbar-h));
 }
 
 /* web/src/app/globals.css */

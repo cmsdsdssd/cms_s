@@ -1213,7 +1213,7 @@ export default function ArPage() {
             </div>
 
             {/* Tab Navigation */}
-            <div className="flex border-b border-[var(--panel-border)] px-6 bg-[var(--panel)] sticky top-0">
+            <div className="flex border-b border-[var(--panel-border)] px-6 bg-[var(--panel)] sticky top-[var(--topbar-sticky-offset)]">
               <button
                 onClick={() => setActiveTab('ledger')}
                 className={cn(

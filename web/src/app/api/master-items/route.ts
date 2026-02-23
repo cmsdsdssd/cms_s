@@ -54,7 +54,40 @@ export async function GET(request: Request) {
 
   const { searchParams } = new URL(request.url);
   const model = String(searchParams.get("model") ?? "").trim();
+  const masterIdsRaw = String(searchParams.get("master_ids") ?? "").trim();
   const isUuidQuery = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(model);
+
+  if (masterIdsRaw) {
+    const masterIds = Array.from(
+      new Set(
+        masterIdsRaw
+          .split(",")
+          .map((id) => id.trim())
+          .filter(Boolean)
+      )
+    ).slice(0, 300);
+
+    if (masterIds.length === 0) {
+      return NextResponse.json({ data: [] }, { headers: { "Cache-Control": "no-store" } });
+    }
+
+    const { data, error } = await supabase
+      .from("cms_master_item")
+      .select("*")
+      .in("master_id", masterIds)
+      .limit(masterIds.length);
+
+    if (error) {
+      return NextResponse.json({ error: error.message ?? "데이터 조회 실패" }, { status: 500 });
+    }
+
+    const mapped = (data ?? []).map((row: Record<string, unknown>) => ({
+      ...row,
+      image_url: buildImageUrl(supabase, row.image_path ? String(row.image_path) : null),
+    }));
+
+    return NextResponse.json({ data: mapped }, { headers: { "Cache-Control": "no-store" } });
+  }
 
   if (model) {
     const baseQuery = supabase

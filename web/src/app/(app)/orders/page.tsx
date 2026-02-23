@@ -2055,7 +2055,7 @@ function OrdersPageContent() {
       <div className="min-h-screen bg-[var(--background)] pb-20">
 
         {/* High-grade Sticky Header */}
-        <div className="sticky top-0 z-40 w-full bg-[var(--background)]/80 backdrop-blur-md border-b border-[var(--border)] transition-all duration-200">
+        <div className="sticky top-[var(--topbar-sticky-offset)] z-40 w-full bg-[var(--background)]/80 backdrop-blur-md border-b border-[var(--border)] transition-all duration-200">
           <div className="max-w-[1920px] mx-auto px-4 h-14 flex items-center justify-between">
             <div className="flex items-center gap-4">
               <div className="flex flex-col">

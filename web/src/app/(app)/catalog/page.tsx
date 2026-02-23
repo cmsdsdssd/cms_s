@@ -899,7 +899,6 @@ export default function CatalogPage() {
   const [absorbIsActive, setAbsorbIsActive] = useState(true);
   const [editingAbsorbItemId, setEditingAbsorbItemId] = useState<string | null>(null);
   const [goldPrice, setGoldPrice] = useState(0);
-  const [silverModifiedPrice, setSilverModifiedPrice] = useState(0);
   const [silverOriginalPrice, setSilverOriginalPrice] = useState(0);
   const [cnyAdRate, setCnyAdRate] = useState(0);
   const [cnyFxAsOf, setCnyFxAsOf] = useState("");
@@ -1143,13 +1142,12 @@ export default function CatalogPage() {
     try {
       const response = await fetch("/api/market-ticks");
       const result = await response.json();
-      if (result.data) {
-        setGoldPrice(result.data.gold);
-        setSilverModifiedPrice(result.data.silver);
-        setSilverOriginalPrice(Number(result.data.silverOriginal ?? result.data.silver ?? 0));
-        setCnyAdRate(Number(result.data.cnyAd ?? 0));
-        setCnyFxAsOf(String(result.data.fxAsOf ?? result.data.asof ?? new Date().toISOString()));
-        setCsOriginalKrwPerG(Number(result.data.csTick ?? result.data.cs ?? 0));
+        if (result.data) {
+          setGoldPrice(result.data.gold);
+          setSilverOriginalPrice(Number(result.data.silverOriginal ?? 0));
+          setCnyAdRate(Number(result.data.cnyAd ?? 0));
+          setCnyFxAsOf(String(result.data.fxAsOf ?? result.data.asof ?? new Date().toISOString()));
+          setCsOriginalKrwPerG(Number(result.data.csTick ?? result.data.cs ?? 0));
       }
     } catch (error) {
       console.error("Failed to fetch market ticks:", error);
@@ -1533,14 +1531,15 @@ export default function CatalogPage() {
   // Calculate material price based on material code
   const calculateMaterialPrice = useCallback((material: string, weight: number, deduction: number) => {
     const netWeight = Math.max(0, weight - deduction);
-    const isSilver = material === "925" || material === "999";
+    const normalizedMaterial = String(material ?? "").trim();
+    const isSilver = normalizedMaterial === "925" || normalizedMaterial === "999";
     return calcMaterialAmountSellKrw({
       netWeightG: netWeight,
-      tickPriceKrwPerG: isSilver ? silverModifiedPrice : goldPrice,
+      tickPriceKrwPerG: isSilver ? silverOriginalPrice : goldPrice,
       materialCode: material,
       factors: materialFactorMap,
     });
-  }, [goldPrice, materialFactorMap, silverModifiedPrice]);
+  }, [goldPrice, materialFactorMap, silverOriginalPrice]);
 
   function roundUpToThousand(value: number) {
     return Math.ceil(value / 1000) * 1000;

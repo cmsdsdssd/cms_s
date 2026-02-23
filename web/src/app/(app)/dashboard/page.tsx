@@ -373,7 +373,7 @@ export default function DashboardPage() {
       const { data, error } = await sb
         .from(CONTRACTS.views.repairLineEnriched)
         .select("repair_line_id, status, customer_name, repair_fee_krw")
-        .in("status", ["RECEIVED", "IN_PROGRESS", "READY"])
+        .in("status", ["RECEIVED", "IN_PROGRESS", "READY_TO_SHIP"])
         .limit(200);
       if (error) throw error;
       const rows = (data ?? []) as Array<{
@@ -384,7 +384,7 @@ export default function DashboardPage() {
       }>;
       const received = rows.filter((r) => r.status === "RECEIVED").length;
       const inProgress = rows.filter((r) => r.status === "IN_PROGRESS").length;
-      const ready = rows.filter((r) => r.status === "READY").length;
+      const ready = rows.filter((r) => r.status === "READY_TO_SHIP").length;
       return { total: rows.length, received, inProgress, ready };
     },
     ...baseQueryOptions,
@@ -398,17 +398,17 @@ export default function DashboardPage() {
       if (!sb) throw new Error("Supabase env missing");
       const { data, error } = await sb
         .from(CONTRACTS.views.ordersWorklist)
-        .select("order_line_id, display_status, order_date, client_name")
+        .select("order_line_id, status, order_date, customer_name")
         .limit(200);
       if (error) throw error;
       const rows = (data ?? []) as Array<{
         order_line_id: string;
-        display_status: string | null;
+        status: string | null;
         order_date: string | null;
-        client_name: string | null;
+        customer_name: string | null;
       }>;
       const unshipped = rows.filter(
-        (r) => r.display_status && !["SHIPPED", "CANCELLED", "COMPLETED"].includes(r.display_status)
+        (r) => r.status && !["SHIPPED", "CANCELLED", "COMPLETED"].includes(r.status)
       );
       const todayOrders = rows.filter((r) => r.order_date === today);
       return {

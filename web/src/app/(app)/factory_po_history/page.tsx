@@ -323,7 +323,7 @@ function FactoryPoHistoryPageContent() {
   return (
     <div className="min-h-screen bg-[var(--background)] flex flex-col">
       {/* Sticky ActionBar */}
-      <div className="sticky top-0 z-30 border-b border-[var(--panel-border)] bg-[var(--background)]/95 backdrop-blur supports-[backdrop-filter]:bg-[var(--background)]/80">
+        <div className="sticky top-[var(--topbar-sticky-offset)] z-30 border-b border-[var(--panel-border)] bg-[var(--background)]/95 backdrop-blur supports-[backdrop-filter]:bg-[var(--background)]/80">
         <div className="px-6 py-4">
           <ActionBar
             title="공장발주 전송내역"

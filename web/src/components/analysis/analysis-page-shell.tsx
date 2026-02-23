@@ -46,7 +46,7 @@ export function AnalysisFilterBar({
   children,
 }: AnalysisFilterBarProps) {
   return (
-    <div className="sticky top-14 z-30">
+    <div className="sticky top-[var(--topbar-sticky-offset)] z-30">
       <Card className="bg-[var(--background)]/95 backdrop-blur supports-[backdrop-filter]:bg-[var(--background)]/80">
         <CardHeader title="공통 필터" description="기본 조회 기간은 최근 30일입니다." />
         <CardBody className="space-y-3">

@@ -704,7 +704,7 @@ function ApPageContent() {
               </div>
             </div>
 
-            <div className="sticky top-0 flex border-b border-[var(--panel-border)] bg-[var(--panel)] px-6">
+            <div className="sticky top-[var(--topbar-sticky-offset)] flex border-b border-[var(--panel-border)] bg-[var(--panel)] px-6">
               <button
                 onClick={() => setActiveTab("post")}
                 className={cn(

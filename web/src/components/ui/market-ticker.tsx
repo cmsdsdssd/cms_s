@@ -41,7 +41,6 @@ export function MarketTicker({ variant = "full" }: MarketTickerProps) {
                     data?: {
                         // legacy
                         gold?: number;
-                        silver?: number;
                         silverOriginal?: number;
                         // new
                         kg?: number;
@@ -58,7 +57,7 @@ export function MarketTicker({ variant = "full" }: MarketTickerProps) {
                 if (result.data) {
                     if (!disposed) {
                         setKg(result.data.kg ?? result.data.gold ?? null);
-                        setKs(result.data.ks ?? result.data.silver ?? null);
+                        setKs(result.data.ks ?? null);
                         setKsOriginal(result.data.ksOriginal ?? result.data.silverOriginal ?? null);
                         setCs(result.data.cs ?? null);
                         setCsTick(result.data.csTick ?? null);

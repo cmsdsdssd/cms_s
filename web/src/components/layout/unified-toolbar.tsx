@@ -20,7 +20,7 @@ export function UnifiedToolbar({
     <div
       className={cn(
         "flex flex-wrap items-center gap-2 px-4 py-2 border-b border-[var(--hairline)] bg-[var(--background)]",
-        sticky && "sticky top-14 z-30 backdrop-blur supports-[backdrop-filter]:bg-[var(--background)]/90",
+        sticky && "sticky top-[var(--topbar-sticky-offset)] z-30 backdrop-blur supports-[backdrop-filter]:bg-[var(--background)]/90",
         className
       )}
     >

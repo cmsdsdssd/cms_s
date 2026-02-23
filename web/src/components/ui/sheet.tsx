@@ -11,7 +11,7 @@ type SheetProps = {
   description?: string;
   children: React.ReactNode;
   className?: string;
-  side?: "right" | "left";
+  side?: "right" | "left" | "auto";
 };
 
 const FOCUSABLE_SELECTOR =
@@ -25,7 +25,7 @@ export function Sheet({
   description,
   children,
   className,
-  side = "right",
+  side = "auto",
 }: SheetProps) {
   const panelRef = useRef<HTMLDivElement | null>(null);
   const prevFocusedRef = useRef<HTMLElement | null>(null);
@@ -74,6 +74,10 @@ export function Sheet({
 
   if (!open) return null;
 
+  const resolvedSide = side === "auto"
+    ? (typeof window !== "undefined" && window.matchMedia("(max-width: 1023px)").matches ? "left" : "right")
+    : side;
+
   return (
     <div className="fixed inset-0 z-50" aria-hidden={!open}>
       <div
@@ -90,7 +94,7 @@ export function Sheet({
         aria-label={title ?? "Sheet"}
         aria-description={description}
         className={cn(
-          side === "left"
+          resolvedSide === "left"
             ? "absolute left-0 top-0 h-full w-[95vw] border-r border-[var(--panel-border)] bg-[var(--panel)] shadow-[var(--shadow)]"
             : "absolute right-0 top-0 h-full w-[95vw] border-l border-[var(--panel-border)] bg-[var(--panel)] shadow-[var(--shadow)]",
           "transition-transform duration-[var(--duration-normal)] ease-[var(--ease-out)] translate-x-0",

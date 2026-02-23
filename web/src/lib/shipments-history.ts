@@ -11,10 +11,12 @@ export type ShipmentHistoryLineRow = {
   shipment_line_id?: string | null;
   shipment_id?: string | null;
   order_line_id?: string | null;
+  master_id?: string | null;
   model_name?: string | null;
   suffix?: string | null;
   color?: string | null;
   size?: string | null;
+  material_code?: string | null;
   qty?: number | null;
   measured_weight_g?: number | null;
   deduction_weight_g?: number | null;
@@ -40,6 +42,7 @@ export type ShipmentHistoryRow = {
   shipment_id: string;
   shipment_line_id: string;
   order_line_id: string;
+  master_id: string;
   ship_date: string;
   status: string;
   customer_party_id: string;
@@ -49,6 +52,8 @@ export type ShipmentHistoryRow = {
   color: string;
   size: string;
   model_display: string;
+  material_code: string;
+  is_unit_pricing: boolean;
   qty: number;
   net_weight_g: number;
   commodity_due_g: number | null;
@@ -140,7 +145,9 @@ const buildModelDisplay = (line: ShipmentHistoryLineRow) => {
 export const combineShipmentRows = (
   headers: ShipmentHistoryHeaderRow[],
   lines: ShipmentHistoryLineRow[],
-  invoices: ShipmentHistoryInvoiceRow[] = []
+  invoices: ShipmentHistoryInvoiceRow[] = [],
+  unitPricingMasterIds: Set<string> = new Set<string>(),
+  unitPricingModelNames: Set<string> = new Set<string>()
 ): ShipmentHistoryRow[] => {
   const headerByShipmentId = new Map<string, ShipmentHistoryHeaderRow>();
   const invoiceByShipmentLineId = new Map<string, ShipmentHistoryInvoiceRow>();
@@ -165,6 +172,8 @@ export const combineShipmentRows = (
 
       const header = headerByShipmentId.get(shipmentId);
       if (!header) return null;
+      const masterId = String(line.master_id ?? "").trim();
+      const modelNameKey = String(line.model_name ?? "").trim();
 
       const shipDate = String(header.ship_date ?? "").trim();
       const status = toSafeText(header.status, "-");
@@ -181,14 +190,13 @@ export const combineShipmentRows = (
           ? measuredWeight - deductionWeight
           : Number.NaN;
       const invoiceCommodityG = toFiniteNumber(invoice?.commodity_due_g, Number.NaN);
-      const effectiveWeight =
-        Number.isFinite(invoiceCommodityG)
-          ? invoiceCommodityG
-          : Number.isFinite(directNetWeight)
-            ? directNetWeight
-            : Number.isFinite(derivedNetWeight)
-              ? derivedNetWeight
-              : 0;
+      const effectiveProductWeight = Number.isFinite(directNetWeight)
+        ? directNetWeight
+        : Number.isFinite(derivedNetWeight)
+          ? derivedNetWeight
+          : Number.isFinite(measuredWeight)
+            ? measuredWeight
+            : 0;
 
       const lineLabor = toFiniteNumber(line.labor_total_sell_krw, Number.NaN);
       const lineBaseLabor = toFiniteNumber(line.base_labor_krw, Number.NaN);
@@ -201,6 +209,9 @@ export const combineShipmentRows = (
       const invoiceTotal = toFiniteNumber(invoice?.total_cash_due_krw, Number.NaN);
       const invoicePricePerG = toFiniteNumber(invoice?.commodity_price_snapshot_krw_per_g, Number.NaN);
 
+      const isUnitPricing =
+        (masterId ? unitPricingMasterIds.has(masterId) : false) ||
+        (modelNameKey ? unitPricingModelNames.has(modelNameKey) : false);
       const effectiveLabor = Number.isFinite(invoiceLabor) ? invoiceLabor : Number.isFinite(lineLabor) ? lineLabor : 0;
       const laborBreakdownSum =
         Number.isFinite(lineBaseLabor) && Number.isFinite(lineExtraLabor)
@@ -228,10 +239,22 @@ export const combineShipmentRows = (
       const totalConsistent = Math.abs(effectiveTotal - sourceLineTotal) <= 1;
       const laborConsistent = laborSplitConsistent || totalConsistent;
 
+      const effectiveCommodityDueG = Number.isFinite(invoiceCommodityG)
+        ? invoiceCommodityG
+        : isUnitPricing && effectiveProductWeight > 0
+          ? effectiveProductWeight
+          : null;
+      const effectivePricePerG = Number.isFinite(invoicePricePerG)
+        ? invoicePricePerG
+        : isUnitPricing && effectiveCommodityDueG !== null && effectiveCommodityDueG > 0
+          ? effectiveMaterial / effectiveCommodityDueG
+          : null;
+
       return {
         shipment_id: shipmentId,
         shipment_line_id: shipmentLineId,
         order_line_id: String(line.order_line_id ?? "").trim(),
+        master_id: masterId,
         ship_date: shipDate,
         status,
         customer_party_id: customerPartyId,
@@ -241,10 +264,12 @@ export const combineShipmentRows = (
         color: toSafeText(line.color, ""),
         size: toSafeText(line.size, ""),
         model_display: buildModelDisplay(line),
+        material_code: toSafeText(line.material_code, "-"),
+        is_unit_pricing: isUnitPricing,
         qty: Math.max(toFiniteNumber(line.qty, 0), 0),
-        net_weight_g: effectiveWeight,
-        commodity_due_g: Number.isFinite(invoiceCommodityG) ? invoiceCommodityG : null,
-        commodity_price_snapshot_krw_per_g: Number.isFinite(invoicePricePerG) ? invoicePricePerG : null,
+        net_weight_g: effectiveProductWeight,
+        commodity_due_g: effectiveCommodityDueG,
+        commodity_price_snapshot_krw_per_g: effectivePricePerG,
         labor_total_sell_krw: effectiveLabor,
         labor_breakdown_sum_krw: laborBreakdownSum,
         labor_consistent: laborConsistent,

@@ -1906,7 +1906,7 @@ export default function SettingsPage() {
 
             <div className="flex-1 overflow-y-auto p-6 space-y-6">
               {/* 시세 파이프라인 */}
-              <div className="rounded-lg border border-[var(--panel-border)] bg-[var(--panel)] p-4 space-y-4">
+              <div className="hidden rounded-lg border border-[var(--panel-border)] bg-[var(--panel)] p-4 space-y-4">
                 <div className="flex items-center justify-between gap-2">
                   <div>
                     <div className="text-sm font-semibold">시세 파이프라인 설정</div>
