@@ -542,6 +542,7 @@ export default function ShipmentsMainPage() {
         <ShipmentsMobileTabs />
         {/* Unified Toolbar */}
         <UnifiedToolbar
+          sticky={false}
           className="border-b-0"
           title="출고관리"
           actions={

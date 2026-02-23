@@ -8,12 +8,14 @@ import { Input } from "@/components/ui/field";
 import { NumberText } from "@/components/ui/number-text";
 import { Sheet } from "@/components/ui/sheet";
 import { MobilePage } from "@/mobile/shared/MobilePage";
+import { cn } from "@/lib/utils";
 
 type CatalogRow = {
   master_id?: string;
   model_name?: string;
   image_url?: string | null;
   material_code_default?: string | null;
+  category_code?: string | null;
   material_price?: number | null;
   weight_default_g?: number | null;
   center_qty_default?: number | null;
@@ -44,6 +46,39 @@ type MarketTicksPayload = {
 };
 
 const PAGE_SIZE = 20;
+
+const CATEGORY_LABEL_MAP: Record<string, string> = {
+  RING: "반지",
+  NECKLACE: "목걸이",
+  BRACELET: "팔찌",
+  EARRING: "귀걸이",
+  PENDANT: "펜던트",
+  BROOCH: "브로치",
+};
+
+function getPurityRate(materialCode: string) {
+  if (materialCode === "14") return 0.585;
+  if (materialCode === "18") return 0.75;
+  if (materialCode === "24") return 0.999;
+  if (materialCode === "925") return 0.925;
+  if (materialCode === "999") return 0.999;
+  return 1;
+}
+
+function getMaterialBgColor(materialCode: string) {
+  if (materialCode === "925") return "bg-gradient-to-br from-[var(--panel)] to-[var(--panel-hover)]";
+  if (materialCode === "14" || materialCode === "18") return "bg-gradient-to-br from-[var(--danger-soft)] to-[var(--panel)]";
+  if (materialCode === "24") return "bg-gradient-to-br from-[var(--warning-soft)] to-[var(--panel)]";
+  return "bg-[var(--panel)]";
+}
+
+function getMaterialChipColorClass(materialCode: string) {
+  if (materialCode === "925") return "bg-slate-200 text-slate-800";
+  if (materialCode === "14") return "bg-amber-100 text-amber-900";
+  if (materialCode === "18") return "bg-yellow-100 text-yellow-900";
+  if (materialCode === "24") return "bg-orange-100 text-orange-900";
+  return "bg-[var(--chip)] text-[var(--muted)]";
+}
 
 export function CatalogMobileScreen() {
   const [keyword, setKeyword] = useState("");
@@ -205,42 +240,81 @@ export function CatalogMobileScreen() {
 
       <div className="grid grid-cols-2 gap-2">
         {pageItems.map((item, index) => (
-          <button
-            key={String(item.master_id ?? item.model_name ?? `row-${index}`)}
-            type="button"
-            className="group overflow-hidden rounded-[14px] border border-[var(--panel-border)] bg-[var(--panel)] text-left shadow-sm transition hover:shadow-md"
-            onClick={() => setSelected(item)}
-          >
-            <div className="relative aspect-square w-full bg-gradient-to-br from-[var(--panel)] to-[var(--background)]">
-              {item.image_url ? (
-                <img src={item.image_url} alt={item.model_name ?? "catalog-item"} className="h-full w-full object-cover" loading="lazy" />
-              ) : (
-                <div className="flex h-full items-center justify-center text-xs text-[var(--muted)]">No Image</div>
-              )}
-            </div>
-            <div className="space-y-1 p-2">
-              <div className="truncate text-sm font-semibold text-[var(--foreground)]">{item.model_name ?? "-"}</div>
-              <div className="rounded-md border border-[var(--panel-border)] bg-[var(--panel)]/80 px-2 py-1.5 text-[11px] text-[var(--muted)]">
-                <div className="flex items-center justify-between">
-                  <span>중량</span>
-                  <span className="tabular-nums">
-                    <NumberText value={Number(item.weight_default_g ?? 0)} />g
-                    {Number(item.deduction_weight_default_g ?? 0) > 0 ? (
-                      <span className="ml-1 text-[var(--muted-weak)]">
-                        (-<NumberText value={Number(item.deduction_weight_default_g ?? 0)} />)
-                      </span>
-                    ) : null}
-                  </span>
+          (() => {
+            const materialCode = String(item.material_code_default ?? "").trim() || "00";
+            const categoryCode = String(item.category_code ?? "").trim().toUpperCase();
+            const categoryLabel = CATEGORY_LABEL_MAP[categoryCode] ?? (categoryCode || "기타");
+            const materialLabel = materialCode || "-";
+            const grossWeight = Number(item.weight_default_g ?? 0);
+            const deductionWeight = Number(item.deduction_weight_default_g ?? 0);
+            const netWeight = Math.max(0, grossWeight - deductionWeight);
+            const isSilver = materialCode === "925" || materialCode === "999";
+            const marketPrice = Math.ceil(Number(isSilver ? marketTicksQuery.data?.silver : marketTicksQuery.data?.gold) || 0);
+            const materialPriceComputed = Math.ceil(netWeight * marketPrice * getPurityRate(materialCode));
+            const materialPrice = Number(item.material_price ?? 0) > 0 ? Number(item.material_price ?? 0) : materialPriceComputed;
+            const laborSell = Number(item.labor_total_sell ?? item.labor_base_sell ?? 0);
+            const totalSell = materialPrice + laborSell;
+
+            return (
+              <button
+                key={String(item.master_id ?? item.model_name ?? `row-${index}`)}
+                type="button"
+                className={cn(
+                  "group relative overflow-hidden rounded-[16px] border border-[var(--panel-border)] bg-[var(--panel)] text-left transition-all hover:ring-2 hover:ring-[var(--primary)]",
+                  getMaterialBgColor(materialCode)
+                )}
+                onClick={() => setSelected(item)}
+              >
+                <div className="relative aspect-square w-full bg-[var(--white)] dark:bg-[var(--black)]">
+                  {item.image_url ? (
+                    <img
+                      src={item.image_url}
+                      alt={item.model_name ?? "catalog-item"}
+                      className="h-full w-full object-contain transition-transform duration-500 group-hover:scale-105"
+                      loading="lazy"
+                    />
+                  ) : (
+                    <div className="flex h-full w-full items-center justify-center bg-[var(--subtle-bg)] text-[var(--muted)]">
+                      <span className="text-xs">No Image</span>
+                    </div>
+                  )}
                 </div>
-                <div className="mt-1 flex items-center justify-between">
-                  <span>공임</span>
-                  <span className="tabular-nums">
-                    <NumberText value={Number(item.labor_total_sell ?? item.labor_base_sell ?? 0)} />원
-                  </span>
+
+                <div className="border-t border-[var(--panel-border)] bg-[var(--panel)] p-2.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="truncate font-semibold text-[var(--foreground)]">{item.model_name ?? "-"}</div>
+                    <div className="flex shrink-0 items-center gap-1 text-[10px] text-[var(--muted)]">
+                      <span className={cn("rounded px-1.5 py-0.5", getMaterialChipColorClass(materialCode))}>{materialLabel}</span>
+                      <span className="rounded bg-[var(--chip)] px-1.5 py-0.5">{categoryLabel}</span>
+                    </div>
+                  </div>
+
+                  <div className="mt-1 space-y-1 text-[11px] text-[var(--foreground)]" style={{ fontFamily: "'Malgun Gothic', '맑은 고딕', sans-serif" }}>
+                    <div className="rounded border border-green-400 bg-[var(--primary-soft)] px-2 py-1.5">
+                      <div className="text-[10px] text-[var(--muted)]">총가격(판매)</div>
+                      <div className="text-right text-sm font-extrabold tabular-nums">
+                        <NumberText value={totalSell} /> 원
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div className="rounded border border-[var(--panel-border)] bg-[var(--subtle-bg)] px-2 py-1">
+                        <div className="text-[10px] font-semibold text-[var(--muted)]">총공임(판매)</div>
+                        <div className="text-right font-bold tabular-nums">
+                          <NumberText value={laborSell} /> 원
+                        </div>
+                      </div>
+                      <div className="rounded border border-[var(--panel-border)] bg-[var(--subtle-bg)] px-2 py-1">
+                        <div className="text-[10px] font-semibold text-[var(--muted)]">총중량</div>
+                        <div className="text-right font-bold tabular-nums">
+                          <NumberText value={netWeight} /> g
+                        </div>
+                      </div>
+                    </div>
+                  </div>
                 </div>
-              </div>
-            </div>
-          </button>
+              </button>
+            );
+          })()
         ))}
       </div>
 
