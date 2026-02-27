@@ -7,6 +7,9 @@ export const revalidate = 0;
 
 type Params = { params: Promise<{ id: string }> };
 
+const hasOwn = (obj: Record<string, unknown>, key: string): boolean =>
+  Object.prototype.hasOwnProperty.call(obj, key);
+
 export async function GET(_request: Request, { params }: Params) {
   const sb = getShopAdminClient();
   if (!sb) return jsonError("Supabase server env missing", 500);
@@ -17,12 +20,34 @@ export async function GET(_request: Request, { params }: Params) {
 
   const { data, error } = await sb
     .from("sales_channel_account")
-    .select("account_id, channel_id, mall_id, shop_no, api_version, status, access_token_expires_at, refresh_token_expires_at, last_error_code, last_error_message, created_at, updated_at")
+    .select("account_id, channel_id, mall_id, shop_no, api_version, status, access_token_expires_at, refresh_token_expires_at, last_error_code, last_error_message, created_at, updated_at, client_id_enc, client_secret_enc, access_token_enc, refresh_token_enc")
     .eq("channel_id", channelId)
     .maybeSingle();
 
   if (error) return jsonError(error.message ?? "계정 조회 실패", 500);
-  return NextResponse.json({ data: data ?? null }, { headers: { "Cache-Control": "no-store" } });
+
+  const safe = data
+    ? {
+        account_id: data.account_id,
+        channel_id: data.channel_id,
+        mall_id: data.mall_id,
+        shop_no: data.shop_no,
+        api_version: data.api_version,
+        status: data.status,
+        access_token_expires_at: data.access_token_expires_at,
+        refresh_token_expires_at: data.refresh_token_expires_at,
+        last_error_code: data.last_error_code,
+        last_error_message: data.last_error_message,
+        created_at: data.created_at,
+        updated_at: data.updated_at,
+        has_client_id: Boolean(data.client_id_enc),
+        has_client_secret: Boolean(data.client_secret_enc),
+        has_access_token: Boolean(data.access_token_enc),
+        has_refresh_token: Boolean(data.refresh_token_enc),
+      }
+    : null;
+
+  return NextResponse.json({ data: safe }, { headers: { "Cache-Control": "no-store" } });
 }
 
 export async function POST(request: Request, { params }: Params) {
@@ -54,14 +79,15 @@ export async function POST(request: Request, { params }: Params) {
     mall_id: normalizedMall.mallId,
     shop_no: Math.floor(shopNo),
     api_version: apiVersion,
-    access_token_enc: accessToken,
-    refresh_token_enc: refreshToken,
-    client_id_enc: clientId,
-    client_secret_enc: clientSecret,
     status: "CONNECTED",
     last_error_code: null,
     last_error_message: null,
-  };
+  } as Record<string, unknown>;
+
+  if (hasOwn(body, "access_token")) payload.access_token_enc = accessToken;
+  if (hasOwn(body, "refresh_token")) payload.refresh_token_enc = refreshToken;
+  if (hasOwn(body, "client_id")) payload.client_id_enc = clientId;
+  if (hasOwn(body, "client_secret")) payload.client_secret_enc = clientSecret;
 
   const { data, error } = await sb
     .from("sales_channel_account")

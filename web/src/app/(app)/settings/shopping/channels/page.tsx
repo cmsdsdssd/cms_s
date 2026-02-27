@@ -26,6 +26,10 @@ type ChannelAccount = {
   status: string;
   access_token_expires_at: string | null;
   refresh_token_expires_at: string | null;
+  has_client_id: boolean;
+  has_client_secret: boolean;
+  has_access_token: boolean;
+  has_refresh_token: boolean;
 };
 
 export default function ShoppingChannelsPage() {
@@ -126,10 +130,10 @@ export default function ShoppingChannelsPage() {
         mall_id: mallId,
         shop_no: Number(shopNo),
         api_version: apiVersion,
-        client_id: clientId || null,
-        client_secret: clientSecret || null,
-        access_token: accessToken || null,
-        refresh_token: refreshToken || null,
+        client_id: clientId.trim() ? clientId.trim() : undefined,
+        client_secret: clientSecret.trim() ? clientSecret.trim() : undefined,
+        access_token: accessToken.trim() ? accessToken.trim() : undefined,
+        refresh_token: refreshToken.trim() ? refreshToken.trim() : undefined,
       });
     },
     onSuccess: async () => {
@@ -253,6 +257,10 @@ export default function ShoppingChannelsPage() {
 
             <div className="rounded-[var(--radius)] border border-[var(--hairline)] p-3 text-xs text-[var(--muted)]">
               <div>status: {account?.status ?? "-"}</div>
+              <div>client_id: {account?.has_client_id ? "stored" : "-"}</div>
+              <div>client_secret: {account?.has_client_secret ? "stored" : "-"}</div>
+              <div>access_token: {account?.has_access_token ? "stored" : "-"}</div>
+              <div>refresh_token: {account?.has_refresh_token ? "stored" : "-"}</div>
               <div>access_token_expires_at: {account?.access_token_expires_at ?? "-"}</div>
               <div>refresh_token_expires_at: {account?.refresh_token_expires_at ?? "-"}</div>
             </div>
