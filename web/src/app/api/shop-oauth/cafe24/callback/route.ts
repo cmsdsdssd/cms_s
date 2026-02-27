@@ -15,6 +15,14 @@ type Cafe24TokenResponse = {
   refresh_token_expires_in?: number;
   error?: string;
   error_description?: string;
+  trace_id?: string;
+};
+
+type TokenAttemptResult = {
+  ok: boolean;
+  status: number;
+  json: Cafe24TokenResponse;
+  reason: string;
 };
 
 function getRawQueryParam(requestUrl: string, key: string): string | null {
@@ -56,6 +64,36 @@ function calcExpiryIso(expiresAt?: string, expiresIn?: number, defaultSec = 7200
 
 function sanitizeMessage(input: string): string {
   return String(input ?? "").replace(/[\r\n]/g, " ").slice(0, 180);
+}
+
+async function requestCafe24Token(
+  tokenUrl: string,
+  body: URLSearchParams,
+  authorizationHeader?: string,
+): Promise<TokenAttemptResult> {
+  const headers: HeadersInit = {
+    "Content-Type": "application/x-www-form-urlencoded",
+  };
+  if (authorizationHeader) {
+    headers.Authorization = authorizationHeader;
+  }
+
+  const res = await fetch(tokenUrl, {
+    method: "POST",
+    headers,
+    body,
+  });
+  const json = (await res.json().catch(() => ({}))) as Cafe24TokenResponse;
+  const reason = sanitizeMessage(
+    json.error_description || json.error || (json.trace_id ? `trace_id=${json.trace_id}` : `HTTP_${res.status}`),
+  );
+
+  return {
+    ok: res.ok && Boolean(json.access_token),
+    status: res.status,
+    json,
+    reason,
+  };
 }
 
 export async function GET(request: Request) {
@@ -114,25 +152,57 @@ export async function GET(request: Request) {
 
   const tokenUrl = `https://${normalizedMall.mallId}.cafe24api.com/api/v2/oauth/token`;
   const redirectUri = resolveCafe24CallbackUrl(request);
-  const body = new URLSearchParams();
-  body.set("grant_type", "authorization_code");
-  body.set("code", code);
-  body.set("redirect_uri", redirectUri);
-  body.set("client_id", clientId);
-  body.set("client_secret", clientSecret);
+  const basicAuth = `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString("base64")}`;
 
-  const tokenRes = await fetch(tokenUrl, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body,
-  });
-  const tokenJson = (await tokenRes.json().catch(() => ({}))) as Cafe24TokenResponse;
+  const attempt1Body = new URLSearchParams();
+  attempt1Body.set("grant_type", "authorization_code");
+  attempt1Body.set("code", code);
+  attempt1Body.set("redirect_uri", redirectUri);
+  attempt1Body.set("client_id", clientId);
+  attempt1Body.set("client_secret", clientSecret);
 
-  if (!tokenRes.ok || !tokenJson.access_token) {
-    const reason = sanitizeMessage(tokenJson.error_description || tokenJson.error || `HTTP_${tokenRes.status}`);
+  const attempt2Body = new URLSearchParams();
+  attempt2Body.set("grant_type", "authorization_code");
+  attempt2Body.set("code", code);
+  attempt2Body.set("client_id", clientId);
+  attempt2Body.set("client_secret", clientSecret);
+
+  const attempt3Body = new URLSearchParams();
+  attempt3Body.set("grant_type", "authorization_code");
+  attempt3Body.set("code", code);
+  attempt3Body.set("redirect_uri", redirectUri);
+
+  const attempt4Body = new URLSearchParams();
+  attempt4Body.set("grant_type", "authorization_code");
+  attempt4Body.set("code", code);
+
+  const attempts: Array<{ name: string; body: URLSearchParams; auth?: string }> = [
+    { name: "body_with_redirect", body: attempt1Body },
+    { name: "body_without_redirect", body: attempt2Body },
+    { name: "basic_with_redirect", body: attempt3Body, auth: basicAuth },
+    { name: "basic_without_redirect", body: attempt4Body, auth: basicAuth },
+  ];
+
+  let tokenJson: Cafe24TokenResponse | null = null;
+  let tokenStatus = 500;
+  const attemptReasons: string[] = [];
+
+  for (const attempt of attempts) {
+    const res = await requestCafe24Token(tokenUrl, attempt.body, attempt.auth);
+    attemptReasons.push(`${attempt.name}:${res.status}:${res.reason}`);
+    if (res.ok) {
+      tokenJson = res.json;
+      tokenStatus = res.status;
+      break;
+    }
+    tokenStatus = res.status;
+  }
+
+  if (!tokenJson?.access_token) {
+    const reason = sanitizeMessage(attemptReasons.join(" | "));
     await sb
       .from("sales_channel_account")
-      .update({ status: "ERROR", last_error_code: String(tokenRes.status), last_error_message: `oauth exchange failed: ${reason}` })
+      .update({ status: "ERROR", last_error_code: String(tokenStatus), last_error_message: `oauth exchange failed: ${reason}` })
       .eq("account_id", account.account_id);
 
     return NextResponse.redirect(
