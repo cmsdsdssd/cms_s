@@ -33,6 +33,11 @@ export async function POST(request: Request) {
   if (!clientId) return jsonError("client_id is required", 400);
 
   const redirectUri = resolveCafe24CallbackUrl(request);
+  const oauthScope = (process.env.CAFE24_OAUTH_SCOPE ?? "").trim();
+  if (!oauthScope) {
+    return jsonError("CAFE24_OAUTH_SCOPE env is required", 500);
+  }
+
   let state = "";
   try {
     state = buildCafe24OAuthState(channelId, 600);
@@ -43,6 +48,7 @@ export async function POST(request: Request) {
   const query = new URLSearchParams();
   query.set("response_type", "code");
   query.set("client_id", clientId);
+  query.set("scope", oauthScope);
   query.set("state", state);
   query.set("redirect_uri", redirectUri);
 

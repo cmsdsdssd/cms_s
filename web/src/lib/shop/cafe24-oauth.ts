@@ -63,9 +63,18 @@ export function resolveCafe24CallbackUrl(request: Request): string {
   return `${proto}://${host}/api/shop-oauth/cafe24/callback`;
 }
 
-export function toChannelsSettingsUrl(request: Request, params?: Record<string, string>): string {
+function resolveRequestOrigin(request: Request): string {
   const reqUrl = new URL(request.url);
-  const target = new URL("/settings/shopping/channels", reqUrl.origin);
+  const forwardedProto = request.headers.get("x-forwarded-proto")?.split(",")[0]?.trim();
+  const forwardedHost = request.headers.get("x-forwarded-host")?.split(",")[0]?.trim();
+
+  const proto = forwardedProto || reqUrl.protocol.replace(":", "");
+  const host = forwardedHost || reqUrl.host;
+  return `${proto}://${host}`;
+}
+
+export function toChannelsSettingsUrl(request: Request, params?: Record<string, string>): string {
+  const target = new URL("/settings/shopping/channels", resolveRequestOrigin(request));
   for (const [k, v] of Object.entries(params ?? {})) {
     target.searchParams.set(k, v);
   }
