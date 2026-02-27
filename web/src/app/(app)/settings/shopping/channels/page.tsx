@@ -56,6 +56,9 @@ export default function ShoppingChannelsPage() {
 
   const [channelCode, setChannelCode] = useState("");
   const [channelName, setChannelName] = useState("");
+  const [editChannelCode, setEditChannelCode] = useState("");
+  const [editChannelName, setEditChannelName] = useState("");
+  const [editChannelActive, setEditChannelActive] = useState(true);
 
   const createChannel = useMutation({
     mutationFn: () =>
@@ -71,6 +74,44 @@ export default function ShoppingChannelsPage() {
       setChannelName("");
       await qc.invalidateQueries({ queryKey: ["shop-channels"] });
       setSelectedChannelId(res.data.channel_id);
+    },
+    onError: (err: Error) => toast.error(err.message),
+  });
+
+  useEffect(() => {
+    setEditChannelCode(selectedChannel?.channel_code ?? "");
+    setEditChannelName(selectedChannel?.channel_name ?? "");
+    setEditChannelActive(selectedChannel?.is_active ?? true);
+  }, [selectedChannel?.channel_id]);
+
+  const updateChannel = useMutation({
+    mutationFn: () => {
+      if (!selectedChannelId) throw new Error("채널을 먼저 선택하세요");
+      return shopApiSend<{ data: Channel }>(`/api/channels/${selectedChannelId}`, "PUT", {
+        channel_code: editChannelCode,
+        channel_name: editChannelName,
+        is_active: editChannelActive,
+      });
+    },
+    onSuccess: async () => {
+      toast.success("채널 수정 완료");
+      await qc.invalidateQueries({ queryKey: ["shop-channels"] });
+    },
+    onError: (err: Error) => toast.error(err.message),
+  });
+
+  const deleteChannel = useMutation({
+    mutationFn: () => {
+      if (!selectedChannelId) throw new Error("채널을 먼저 선택하세요");
+      return shopApiSend<{ ok: boolean }>(`/api/channels/${selectedChannelId}`, "DELETE");
+    },
+    onSuccess: async () => {
+      toast.success("채널 삭제 완료");
+      setSelectedChannelId("");
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: ["shop-channels"] }),
+        qc.invalidateQueries({ queryKey: ["shop-channel-account"] }),
+      ]);
     },
     onError: (err: Error) => toast.error(err.message),
   });
@@ -182,6 +223,36 @@ export default function ShoppingChannelsPage() {
             >
               {createChannel.isPending ? "저장 중..." : "채널 저장"}
             </Button>
+
+            <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
+              <Input value={editChannelCode} onChange={(e) => setEditChannelCode(e.target.value)} placeholder="selected channel code" />
+              <Input value={editChannelName} onChange={(e) => setEditChannelName(e.target.value)} placeholder="selected channel name" />
+              <Select value={editChannelActive ? "ACTIVE" : "INACTIVE"} onChange={(e) => setEditChannelActive(e.target.value === "ACTIVE")}>
+                <option value="ACTIVE">ACTIVE</option>
+                <option value="INACTIVE">INACTIVE</option>
+              </Select>
+            </div>
+
+            <div className="flex flex-wrap gap-2">
+              <Button
+                variant="secondary"
+                onClick={() => updateChannel.mutate()}
+                disabled={updateChannel.isPending || !selectedChannelId || !editChannelCode.trim() || !editChannelName.trim()}
+              >
+                {updateChannel.isPending ? "수정 중..." : "선택 채널 수정"}
+              </Button>
+              <Button
+                variant="secondary"
+                onClick={() => {
+                  if (!selectedChannelId) return;
+                  const ok = window.confirm("선택 채널을 삭제할까요? 관련 매핑/로그/정책 데이터도 함께 삭제될 수 있습니다.");
+                  if (ok) deleteChannel.mutate();
+                }}
+                disabled={deleteChannel.isPending || !selectedChannelId}
+              >
+                {deleteChannel.isPending ? "삭제 중..." : "선택 채널 삭제"}
+              </Button>
+            </div>
 
             <div className="space-y-2">
               <label className="text-xs text-[var(--muted)]">채널 선택</label>
