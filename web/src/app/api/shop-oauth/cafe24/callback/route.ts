@@ -17,6 +17,33 @@ type Cafe24TokenResponse = {
   error_description?: string;
 };
 
+function getRawQueryParam(requestUrl: string, key: string): string | null {
+  const query = requestUrl.split("?", 2)[1] ?? "";
+  if (!query) return null;
+
+  for (const pair of query.split("&")) {
+    if (!pair) continue;
+    const eqIdx = pair.indexOf("=");
+    const rawK = eqIdx >= 0 ? pair.slice(0, eqIdx) : pair;
+    const rawV = eqIdx >= 0 ? pair.slice(eqIdx + 1) : "";
+
+    let decodedK = "";
+    try {
+      decodedK = decodeURIComponent(rawK);
+    } catch {
+      continue;
+    }
+    if (decodedK !== key) continue;
+
+    try {
+      return decodeURIComponent(rawV);
+    } catch {
+      return rawV;
+    }
+  }
+  return null;
+}
+
 function calcExpiryIso(expiresAt?: string, expiresIn?: number, defaultSec = 7200): string {
   if (expiresAt) {
     const t = Date.parse(expiresAt);
@@ -49,8 +76,10 @@ export async function GET(request: Request) {
     );
   }
 
-  const code = url.searchParams.get("code")?.trim();
-  const state = url.searchParams.get("state")?.trim();
+  // NOTE: URLSearchParams may normalize '+' into space.
+  // OAuth providers can issue code/state containing '+', so parse raw query first.
+  const code = (getRawQueryParam(request.url, "code") ?? url.searchParams.get("code") ?? "").trim();
+  const state = (getRawQueryParam(request.url, "state") ?? url.searchParams.get("state") ?? "").trim();
   if (!code || !state) {
     return NextResponse.redirect(toChannelsSettingsUrl(request, { oauth: "error", reason: "missing_code_or_state" }));
   }
