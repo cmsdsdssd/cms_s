@@ -26,6 +26,8 @@ type ChannelAccount = {
   status: string;
   access_token_expires_at: string | null;
   refresh_token_expires_at: string | null;
+  last_error_code: string | null;
+  last_error_message: string | null;
   has_client_id: boolean;
   has_client_secret: boolean;
   has_access_token: boolean;
@@ -303,10 +305,34 @@ export default function ShoppingChannelsPage() {
               <Input value={shopNo} onChange={(e) => setShopNo(e.target.value)} placeholder="shop_no" />
             </div>
             <Input value={apiVersion} onChange={(e) => setApiVersion(e.target.value)} placeholder="api version (예: 2025-12-01)" />
-            <Input value={clientId} onChange={(e) => setClientId(e.target.value)} placeholder="client_id" />
-            <Input value={clientSecret} onChange={(e) => setClientSecret(e.target.value)} placeholder="client_secret" type="password" />
-            <Input value={accessToken} onChange={(e) => setAccessToken(e.target.value)} placeholder="access_token" type="password" />
-            <Input value={refreshToken} onChange={(e) => setRefreshToken(e.target.value)} placeholder="refresh_token" type="password" />
+            <Input value={clientId} onChange={(e) => setClientId(e.target.value)} placeholder="client_id" autoComplete="off" spellCheck={false} />
+            <Input
+              name="shop_client_secret"
+              value={clientSecret}
+              onChange={(e) => setClientSecret(e.target.value)}
+              placeholder="client_secret"
+              type="password"
+              autoComplete="new-password"
+              spellCheck={false}
+            />
+            <Input
+              name="shop_access_token"
+              value={accessToken}
+              onChange={(e) => setAccessToken(e.target.value)}
+              placeholder="access_token"
+              type="password"
+              autoComplete="new-password"
+              spellCheck={false}
+            />
+            <Input
+              name="shop_refresh_token"
+              value={refreshToken}
+              onChange={(e) => setRefreshToken(e.target.value)}
+              placeholder="refresh_token"
+              type="password"
+              autoComplete="new-password"
+              spellCheck={false}
+            />
 
             <Button
               onClick={() => saveAccount.mutate()}
@@ -334,6 +360,8 @@ export default function ShoppingChannelsPage() {
               <div>refresh_token: {account?.has_refresh_token ? "stored" : "-"}</div>
               <div>access_token_expires_at: {account?.access_token_expires_at ?? "-"}</div>
               <div>refresh_token_expires_at: {account?.refresh_token_expires_at ?? "-"}</div>
+              <div>last_error_code: {account?.last_error_code ?? "-"}</div>
+              <div>last_error_message: {account?.last_error_message ?? "-"}</div>
             </div>
           </CardBody>
         </Card>
