@@ -20,6 +20,7 @@ import {
 import { cn } from "@/lib/utils";
 import { Modal } from "@/components/ui/modal";
 import { MarketTicker } from "@/components/ui/market-ticker";
+import { BrandMark } from "@/components/layout/brand-mark";
 
 const navItems = [
     { href: "/dashboard", label: "대시보드", icon: Gauge },
@@ -57,8 +58,8 @@ export function TopNav() {
             {/* Brand */}
             <div className="flex items-center gap-3 shrink-0">
                 <Link href="/dashboard" className="flex items-center gap-3 group">
-                    <div className="flex h-9 w-9 items-center justify-center rounded-[var(--radius-md)] border border-[color:var(--hairline)] bg-gradient-to-br from-[var(--panel)] to-[var(--surface)] shadow-[var(--shadow-sm)] transition-transform duration-200 group-hover:scale-105">
-                        <span className="text-sm font-extrabold tracking-tight text-[var(--primary)]">J</span>
+                    <div className="flex h-9 w-9 items-center justify-center rounded-[var(--radius-md)] border border-[color:var(--hairline)] bg-gradient-to-br from-[var(--panel)] to-[var(--surface)] shadow-[var(--shadow-sm)] text-[#b68a2e] transition-transform duration-200 group-hover:scale-105">
+                        <BrandMark className="h-5 w-5" />
                     </div>
                     <div className="leading-tight">
                         <div className="text-sm font-bold tracking-tight text-[var(--foreground)]">MS</div>

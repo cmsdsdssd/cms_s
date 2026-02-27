@@ -14,6 +14,7 @@ import {
   Wrench,
   Settings,
 } from "lucide-react";
+import { BrandMark } from "@/components/layout/brand-mark";
 
 const navItems = [
   { href: "/dashboard", label: "대시보드", icon: Gauge },
@@ -38,8 +39,8 @@ export default function Sidebar() {
       id="sidebar.root"
     >
       <div className="mb-8 flex items-center gap-3 px-3 pt-6" id="sidebar.brand">
-        <div className="flex h-10 w-10 items-center justify-center rounded-[var(--radius)] bg-[var(--primary)] text-[var(--primary-foreground)]">
-          J
+        <div className="flex h-10 w-10 items-center justify-center rounded-[var(--radius-md)] border border-[color:var(--hairline)] bg-gradient-to-br from-[var(--panel)] to-[var(--surface)] shadow-[var(--shadow-sm)] text-[#b68a2e]">
+          <BrandMark className="h-6 w-6" />
         </div>
         <div className="leading-tight">
           <div className="text-sm font-semibold">MS</div>

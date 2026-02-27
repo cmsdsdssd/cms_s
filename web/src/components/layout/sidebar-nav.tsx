@@ -19,6 +19,7 @@ import {
 } from "./nav-items";
 import { Button } from "@/components/ui/button";
 import { getToggleTargetPath } from "@/lib/analysis-mode";
+import { BrandMark } from "@/components/layout/brand-mark";
 
 interface SidebarNavProps {
   mobileOpen: boolean;
@@ -134,8 +135,8 @@ export function SidebarNav({ mobileOpen, onMobileClose, onWorkbenchOpen }: Sideb
             onClick={handleModeToggle}
             title={mode === "analysis" ? "업무 모드로 전환" : "분석 모드로 전환"}
           >
-            <div className="flex h-8 w-8 items-center justify-center rounded-[var(--radius-md)] bg-gradient-to-br from-[var(--primary)] to-[var(--primary-strong)] text-white shadow-sm">
-              J
+            <div className="flex h-8 w-8 items-center justify-center rounded-[var(--radius-md)] border border-[color:var(--hairline)] bg-gradient-to-br from-[var(--panel)] to-[var(--surface)] shadow-[var(--shadow-sm)] text-[#b68a2e]">
+              <BrandMark className="h-5 w-5" />
             </div>
             <span>{mode === "analysis" ? "AN" : "MS"}</span>
           </button>
@@ -144,11 +145,11 @@ export function SidebarNav({ mobileOpen, onMobileClose, onWorkbenchOpen }: Sideb
            <button
              type="button"
              onClick={handleModeToggle}
-             className="flex h-8 w-8 items-center justify-center rounded-[var(--radius-md)] bg-gradient-to-br from-[var(--primary)] to-[var(--primary-strong)] text-white shadow-sm"
+             className="flex h-8 w-8 items-center justify-center rounded-[var(--radius-md)] border border-[color:var(--hairline)] bg-gradient-to-br from-[var(--panel)] to-[var(--surface)] shadow-[var(--shadow-sm)] text-[#b68a2e]"
              title={mode === "analysis" ? "업무 모드로 전환" : "분석 모드로 전환"}
            >
-             J
-           </button>
+             <BrandMark className="h-5 w-5" />
+            </button>
         )}
         
         {/* Desktop Collapse Toggle */}
