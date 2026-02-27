@@ -18,6 +18,7 @@ import {
   Sparkles,
   ScanSearch,
   ArrowLeftRight,
+  ShoppingCart,
 } from "lucide-react";
 
 export type NavItem = {
@@ -80,6 +81,17 @@ export const appNavItems: NavItem[] = [
     items: [
       { label: "거래처 관리", href: "/party", icon: Store },
       { label: "시세 관리", href: "/market", icon: TrendingUp },
+    ],
+  },
+  {
+    label: "쇼핑몰 연동",
+    items: [
+      { label: "쇼핑몰 홈", href: "/settings/shopping", icon: ShoppingCart },
+      { label: "채널 설정", href: "/settings/shopping/channels", icon: Settings },
+      { label: "상품 매핑", href: "/settings/shopping/mappings", icon: Boxes },
+      { label: "가격 대시보드", href: "/settings/shopping/dashboard", icon: LayoutDashboard },
+      { label: "동기화 로그", href: "/settings/shopping/sync-jobs", icon: Activity },
+      { label: "정책/팩터", href: "/settings/shopping/factors", icon: TrendingUp },
     ],
   },
 ];

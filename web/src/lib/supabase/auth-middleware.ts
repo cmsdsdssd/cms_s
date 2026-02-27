@@ -4,6 +4,7 @@ import { createSupabaseServerClientForMiddleware } from "@/lib/supabase/ssr";
 const PUBLIC_PATHS = ["/login"]; // 로그인 페이지는 항상 통과
 const PUBLIC_API_PREFIXES = [
     "/api/fax-webhook", // 외부 콜백(팩스) - 기존 secret 검증 유지
+    "/api/shop-oauth/cafe24/callback", // Cafe24 OAuth redirect callback
 ];
 
 function isPublicPath(pathname: string) {
