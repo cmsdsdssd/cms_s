@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getShopAdminClient, jsonError, parseJsonObject } from "@/lib/shop/admin";
 import { buildCafe24OAuthState, resolveCafe24CallbackUrl } from "@/lib/shop/cafe24-oauth";
+import { normalizeMallId } from "@/lib/shop/mall-id";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -25,9 +26,10 @@ export async function POST(request: Request) {
   if (error) return jsonError(error.message ?? "채널 계정 조회 실패", 500);
   if (!account) return jsonError("채널 계정이 없습니다. 채널 설정에서 mall/client 정보를 먼저 저장하세요", 400);
 
-  const mallId = String(account.mall_id ?? "").trim();
+  const mallIdRaw = String(account.mall_id ?? "").trim();
   const clientId = String(account.client_id_enc ?? "").trim();
-  if (!mallId) return jsonError("mall_id is required", 400);
+  const normalizedMall = normalizeMallId(mallIdRaw);
+  if (!normalizedMall.ok) return jsonError(normalizedMall.reason, 400);
   if (!clientId) return jsonError("client_id is required", 400);
 
   const redirectUri = resolveCafe24CallbackUrl(request);
@@ -44,7 +46,7 @@ export async function POST(request: Request) {
   query.set("state", state);
   query.set("redirect_uri", redirectUri);
 
-  const authorizeUrl = `https://${mallId}.cafe24api.com/api/v2/oauth/authorize?${query.toString()}`;
+  const authorizeUrl = `https://${normalizedMall.mallId}.cafe24api.com/api/v2/oauth/authorize?${query.toString()}`;
   return NextResponse.json(
     {
       data: {

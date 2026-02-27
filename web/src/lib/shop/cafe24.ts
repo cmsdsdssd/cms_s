@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { normalizeMallId } from "@/lib/shop/mall-id";
 
 type ShopChannelAccount = {
   account_id: string;
@@ -95,7 +96,12 @@ export async function ensureValidCafe24AccessToken(
     throw new Error("refresh token 이 만료되었습니다");
   }
 
-  const tokenUrl = `https://${account.mall_id}.cafe24api.com/api/v2/oauth/token`;
+  const normalizedMall = normalizeMallId(account.mall_id);
+  if (!normalizedMall.ok) {
+    throw new Error(normalizedMall.reason);
+  }
+
+  const tokenUrl = `https://${normalizedMall.mallId}.cafe24api.com/api/v2/oauth/token`;
   const body = new URLSearchParams();
   body.set("grant_type", "refresh_token");
   body.set("refresh_token", account.refresh_token_enc);
@@ -146,7 +152,11 @@ export async function ensureValidCafe24AccessToken(
 }
 
 function adminBase(account: ShopChannelAccount): string {
-  return `https://${account.mall_id}.cafe24api.com/api/v2/admin`;
+  const normalizedMall = normalizeMallId(account.mall_id);
+  if (!normalizedMall.ok) {
+    throw new Error(normalizedMall.reason);
+  }
+  return `https://${normalizedMall.mallId}.cafe24api.com/api/v2/admin`;
 }
 
 function adminHeaders(accessToken: string, apiVersion: string | null): HeadersInit {

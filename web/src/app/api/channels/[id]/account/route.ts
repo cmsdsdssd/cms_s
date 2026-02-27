@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getShopAdminClient, jsonError, parseJsonObject } from "@/lib/shop/admin";
+import { normalizeMallId } from "@/lib/shop/mall-id";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -36,7 +37,7 @@ export async function POST(request: Request, { params }: Params) {
   const body = parseJsonObject(raw);
   if (!body) return jsonError("Invalid request body", 400);
 
-  const mallId = String(body.mall_id ?? "").trim();
+  const mallIdRaw = String(body.mall_id ?? "").trim();
   const shopNo = Number(body.shop_no ?? 1);
   const apiVersion = typeof body.api_version === "string" ? body.api_version.trim() : null;
   const accessToken = typeof body.access_token === "string" ? body.access_token.trim() : null;
@@ -44,12 +45,13 @@ export async function POST(request: Request, { params }: Params) {
   const clientId = typeof body.client_id === "string" ? body.client_id.trim() : null;
   const clientSecret = typeof body.client_secret === "string" ? body.client_secret.trim() : null;
 
-  if (!mallId) return jsonError("mall_id is required", 400);
+  const normalizedMall = normalizeMallId(mallIdRaw);
+  if (!normalizedMall.ok) return jsonError(normalizedMall.reason, 400);
   if (!Number.isFinite(shopNo) || shopNo <= 0) return jsonError("shop_no must be positive", 400);
 
   const payload = {
     channel_id: channelId,
-    mall_id: mallId,
+    mall_id: normalizedMall.mallId,
     shop_no: Math.floor(shopNo),
     api_version: apiVersion,
     access_token_enc: accessToken,

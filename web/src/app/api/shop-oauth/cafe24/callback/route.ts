@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getShopAdminClient } from "@/lib/shop/admin";
 import { resolveCafe24CallbackUrl, toChannelsSettingsUrl, verifyCafe24OAuthState } from "@/lib/shop/cafe24-oauth";
+import { normalizeMallId } from "@/lib/shop/mall-id";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -74,14 +75,15 @@ export async function GET(request: Request) {
     return NextResponse.redirect(toChannelsSettingsUrl(request, { oauth: "error", reason: "account_not_found" }));
   }
 
-  const mallId = String(account.mall_id ?? "").trim();
+  const mallIdRaw = String(account.mall_id ?? "").trim();
   const clientId = String(account.client_id_enc ?? "").trim();
   const clientSecret = String(account.client_secret_enc ?? "").trim();
-  if (!mallId || !clientId || !clientSecret) {
+  const normalizedMall = normalizeMallId(mallIdRaw);
+  if (!normalizedMall.ok || !clientId || !clientSecret) {
     return NextResponse.redirect(toChannelsSettingsUrl(request, { oauth: "error", reason: "account_credentials_missing" }));
   }
 
-  const tokenUrl = `https://${mallId}.cafe24api.com/api/v2/oauth/token`;
+  const tokenUrl = `https://${normalizedMall.mallId}.cafe24api.com/api/v2/oauth/token`;
   const redirectUri = resolveCafe24CallbackUrl(request);
   const body = new URLSearchParams();
   body.set("grant_type", "authorization_code");
