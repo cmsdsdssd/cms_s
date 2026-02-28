@@ -24,6 +24,7 @@ type SyncJob = {
 type SyncJobItem = {
   job_item_id: string;
   external_product_no: string;
+  external_variant_code: string;
   before_price_krw: number | null;
   target_price_krw: number;
   after_price_krw: number | null;
@@ -31,9 +32,26 @@ type SyncJobItem = {
   http_status: number | null;
   error_code: string | null;
   error_message: string | null;
+  raw_response_json?: unknown;
 };
 
 const fmt = (v: number | null | undefined) => (typeof v === "number" && Number.isFinite(v) ? v.toLocaleString() : "-");
+
+const toJobStatusKo = (value: SyncJob["status"]) => {
+  if (value === "RUNNING") return "진행중";
+  if (value === "SUCCESS") return "성공";
+  if (value === "PARTIAL") return "부분성공";
+  if (value === "FAILED") return "실패";
+  if (value === "CANCELLED") return "취소";
+  return value;
+};
+
+const toItemStatusKo = (value: SyncJobItem["status"]) => {
+  if (value === "SUCCESS") return "성공";
+  if (value === "FAILED") return "실패";
+  if (value === "SKIPPED") return "건너뜀";
+  return value;
+};
 
 export default function ShoppingSyncJobsPage() {
   const channelsQuery = useQuery({
@@ -90,15 +108,15 @@ export default function ShoppingSyncJobsPage() {
 
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
         <Card>
-          <CardHeader title="Job 목록" description={`총 ${jobs.length}건`} />
+          <CardHeader title="작업(Job) 목록" description={`총 ${jobs.length}건`} />
           <CardBody>
             <div className="max-h-[520px] overflow-auto rounded-[var(--radius)] border border-[var(--hairline)]">
               <table className="w-full text-sm">
                 <thead className="bg-[var(--panel)] text-left">
                   <tr>
-                    <th className="px-3 py-2">job_id</th>
-                    <th className="px-3 py-2">status</th>
-                    <th className="px-3 py-2">success/failed/skipped</th>
+                    <th className="px-3 py-2">작업 ID(job_id)</th>
+                    <th className="px-3 py-2">상태(status)</th>
+                    <th className="px-3 py-2">성공/실패/건너뜀</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -109,7 +127,7 @@ export default function ShoppingSyncJobsPage() {
                       onClick={() => setSelectedJobId(job.job_id)}
                     >
                       <td className="px-3 py-2">{job.job_id}</td>
-                      <td className="px-3 py-2">{job.status}</td>
+                      <td className="px-3 py-2">{toJobStatusKo(job.status)}</td>
                       <td className="px-3 py-2">{job.success_count}/{job.failed_count}/{job.skipped_count}</td>
                     </tr>
                   ))}
@@ -120,29 +138,33 @@ export default function ShoppingSyncJobsPage() {
         </Card>
 
         <Card>
-          <CardHeader title="Job 상세" description={`items: ${items.length}건`} />
+          <CardHeader title="작업 상세" description={`항목(items): ${items.length}건`} />
           <CardBody>
             <div className="max-h-[520px] overflow-auto rounded-[var(--radius)] border border-[var(--hairline)]">
               <table className="w-full text-sm">
                 <thead className="bg-[var(--panel)] text-left">
                   <tr>
-                    <th className="px-3 py-2">product_no</th>
-                    <th className="px-3 py-2">before</th>
-                    <th className="px-3 py-2">target</th>
-                    <th className="px-3 py-2">after</th>
-                    <th className="px-3 py-2">status</th>
-                    <th className="px-3 py-2">error</th>
+                    <th className="px-3 py-2">상품번호(product_no)</th>
+                    <th className="px-3 py-2">옵션코드(variant_code)</th>
+                    <th className="px-3 py-2">반영전(before_price_krw)</th>
+                    <th className="px-3 py-2">목표가(target_price_krw)</th>
+                    <th className="px-3 py-2">반영후(after_price_krw)</th>
+                    <th className="px-3 py-2">상태(status)</th>
+                    <th className="px-3 py-2">오류코드(error_code)</th>
+                    <th className="px-3 py-2">오류메시지(error_message)</th>
                   </tr>
                 </thead>
                 <tbody>
                   {items.map((it) => (
                     <tr key={it.job_item_id} className="border-t border-[var(--hairline)]">
                       <td className="px-3 py-2">{it.external_product_no}</td>
+                      <td className="px-3 py-2">{it.external_variant_code || "-"}</td>
                       <td className="px-3 py-2">{fmt(it.before_price_krw)}</td>
                       <td className="px-3 py-2">{fmt(it.target_price_krw)}</td>
                       <td className="px-3 py-2">{fmt(it.after_price_krw)}</td>
-                      <td className="px-3 py-2">{it.status}</td>
+                      <td className="px-3 py-2">{toItemStatusKo(it.status)}</td>
                       <td className="px-3 py-2">{it.error_code ?? "-"}</td>
+                      <td className="px-3 py-2 text-xs">{it.error_message ?? "-"}</td>
                     </tr>
                   ))}
                 </tbody>

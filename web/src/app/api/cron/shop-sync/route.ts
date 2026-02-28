@@ -78,8 +78,8 @@ export async function POST(request: Request) {
     .from("v_channel_price_dashboard")
     .select("channel_product_id")
     .eq("channel_id", channelId)
-    .neq("status", "UNMAPPED")
-    .neq("status", "ERROR")
+    .eq("price_state", "OUT_OF_SYNC")
+    .order("channel_price_fetched_at", { ascending: true, nullsFirst: true })
     .limit(batchLimit);
 
   if (diffRes.error) return bad(diffRes.error.message ?? "dashboard diff query failed", 500);

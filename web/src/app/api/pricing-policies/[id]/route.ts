@@ -23,6 +23,7 @@ export async function PUT(request: Request, { params }: Params) {
   if (body.margin_multiplier !== undefined) patch.margin_multiplier = Number(body.margin_multiplier);
   if (body.rounding_unit !== undefined) patch.rounding_unit = Number(body.rounding_unit);
   if (typeof body.rounding_mode === "string") patch.rounding_mode = body.rounding_mode.toUpperCase();
+  if (body.option_18k_weight_multiplier !== undefined) patch.option_18k_weight_multiplier = Number(body.option_18k_weight_multiplier);
   if (body.material_factor_set_id !== undefined) patch.material_factor_set_id = body.material_factor_set_id || null;
   if (body.is_active !== undefined) patch.is_active = body.is_active === true;
 
@@ -30,7 +31,7 @@ export async function PUT(request: Request, { params }: Params) {
     .from("pricing_policy")
     .update(patch)
     .eq("policy_id", policyId)
-    .select("policy_id, channel_id, policy_name, margin_multiplier, rounding_unit, rounding_mode, material_factor_set_id, is_active, created_at, updated_at")
+    .select("policy_id, channel_id, policy_name, margin_multiplier, rounding_unit, rounding_mode, option_18k_weight_multiplier, material_factor_set_id, is_active, created_at, updated_at")
     .single();
   if (error) return jsonError(error.message ?? "정책 수정 실패", 400);
 

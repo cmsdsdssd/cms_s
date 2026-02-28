@@ -26,7 +26,7 @@ export async function POST(request: Request) {
 
   let mapQuery = sb
     .from("sales_channel_product")
-    .select("channel_product_id, channel_id, master_item_id, external_product_no")
+    .select("channel_product_id, channel_id, master_item_id, external_product_no, external_variant_code")
     .eq("channel_id", channelId)
     .eq("is_active", true);
 
@@ -48,22 +48,27 @@ export async function POST(request: Request) {
 
   let successCount = 0;
   let failedCount = 0;
+  const basePriceCache = new Map<string, Awaited<ReturnType<typeof cafe24GetProductPrice>>>();
 
   const rows = [] as Array<Record<string, unknown>>;
 
   for (const m of mappings) {
     const fetchedAt = new Date().toISOString();
 
-    let pull = await cafe24GetProductPrice(account, accessToken, String(m.external_product_no));
+    const variantCode = String((m as { external_variant_code?: string | null }).external_variant_code ?? "").trim();
+    const productNo = String(m.external_product_no ?? "").trim();
+    let pull = basePriceCache.get(productNo) ?? await cafe24GetProductPrice(account, accessToken, productNo);
 
     if (!pull.ok && pull.status === 401) {
       try {
         accessToken = await ensureValidCafe24AccessToken(sb, account);
-        pull = await cafe24GetProductPrice(account, accessToken, String(m.external_product_no));
+        pull = await cafe24GetProductPrice(account, accessToken, productNo);
       } catch {
         // keep original 401 result
       }
     }
+
+    basePriceCache.set(productNo, pull);
 
     if (pull.ok) {
       successCount += 1;
@@ -72,6 +77,7 @@ export async function POST(request: Request) {
         channel_product_id: m.channel_product_id,
         master_item_id: m.master_item_id,
         external_product_no: m.external_product_no,
+        external_variant_code: variantCode,
         current_price_krw: pull.currentPriceKrw,
         currency: "KRW",
         fetched_at: fetchedAt,
@@ -88,6 +94,7 @@ export async function POST(request: Request) {
         channel_product_id: m.channel_product_id,
         master_item_id: m.master_item_id,
         external_product_no: m.external_product_no,
+        external_variant_code: variantCode,
         current_price_krw: null,
         currency: "KRW",
         fetched_at: fetchedAt,
@@ -100,17 +107,54 @@ export async function POST(request: Request) {
     }
   }
 
-  const insertRes = await sb
-    .from("channel_price_snapshot")
-    .insert(rows)
-    .select("channel_price_snapshot_id");
+  const insertWithVariant = async () =>
+    sb
+      .from("channel_price_snapshot")
+      .insert(rows)
+      .select("channel_price_snapshot_id");
+
+  const insertWithoutVariant = async () => {
+    const fallbackRows = rows.map(({ external_variant_code: _variant, ...rest }) => rest);
+    return sb
+      .from("channel_price_snapshot")
+      .insert(fallbackRows)
+      .select("channel_price_snapshot_id");
+  };
+
+  let insertRes = await insertWithVariant();
+
+  if (insertRes.error) {
+    const code = String((insertRes.error as { code?: string }).code ?? "");
+    const message = String(insertRes.error.message ?? "");
+    const missingVariantColumn =
+      code === "PGRST204"
+      || /external_variant_code/i.test(message)
+      || /schema cache/i.test(message);
+
+    if (missingVariantColumn) {
+      insertRes = await insertWithoutVariant();
+    }
+  }
+
   if (insertRes.error) return jsonError(insertRes.error.message ?? "현재가 스냅샷 저장 실패", 500);
+
+  const failedExamples = rows
+    .filter((r) => String(r.fetch_status ?? "") === "FAILED")
+    .slice(0, 3)
+    .map((r) => ({
+      external_product_no: String(r.external_product_no ?? ""),
+      external_variant_code: String(r.external_variant_code ?? ""),
+      http_status: Number(r.http_status ?? 0),
+      error_code: String(r.error_code ?? ""),
+      error_message: String(r.error_message ?? ""),
+    }));
 
   return NextResponse.json({
     ok: true,
     inserted: insertRes.data?.length ?? 0,
     success: successCount,
     failed: failedCount,
+    failed_examples: failedExamples,
     channel_id: channelId,
   }, { headers: { "Cache-Control": "no-store" } });
 }

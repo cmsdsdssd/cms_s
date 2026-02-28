@@ -22,7 +22,7 @@ export async function GET(_request: Request, { params }: Params) {
       .maybeSingle(),
     sb
       .from("price_sync_job_item")
-      .select("job_item_id, job_id, channel_id, channel_product_id, master_item_id, external_product_no, before_price_krw, target_price_krw, after_price_krw, status, http_status, error_code, error_message, raw_response_json, updated_at, created_at")
+      .select("job_item_id, job_id, channel_id, channel_product_id, master_item_id, external_product_no, external_variant_code, before_price_krw, target_price_krw, after_price_krw, status, http_status, error_code, error_message, raw_response_json, updated_at, created_at")
       .eq("job_id", jobId)
       .order("created_at", { ascending: true }),
   ]);

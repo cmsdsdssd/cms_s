@@ -216,8 +216,8 @@ export default function ShoppingChannelsPage() {
           <CardHeader title="채널 목록" description="채널 코드 기준으로 생성/관리" />
           <CardBody className="space-y-3">
             <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
-              <Input value={channelCode} onChange={(e) => setChannelCode(e.target.value)} placeholder="channel code (예: CAFE24_MAIN)" />
-              <Input value={channelName} onChange={(e) => setChannelName(e.target.value)} placeholder="channel name (예: 자사몰)" />
+              <Input value={channelCode} onChange={(e) => setChannelCode(e.target.value)} placeholder="채널 코드(channel_code) 예: CAFE24_MAIN" />
+              <Input value={channelName} onChange={(e) => setChannelName(e.target.value)} placeholder="채널 이름(channel_name) 예: 자사몰" />
             </div>
             <Button
               onClick={() => createChannel.mutate()}
@@ -227,11 +227,11 @@ export default function ShoppingChannelsPage() {
             </Button>
 
             <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
-              <Input value={editChannelCode} onChange={(e) => setEditChannelCode(e.target.value)} placeholder="selected channel code" />
-              <Input value={editChannelName} onChange={(e) => setEditChannelName(e.target.value)} placeholder="selected channel name" />
+              <Input value={editChannelCode} onChange={(e) => setEditChannelCode(e.target.value)} placeholder="선택 채널 코드(channel_code)" />
+              <Input value={editChannelName} onChange={(e) => setEditChannelName(e.target.value)} placeholder="선택 채널 이름(channel_name)" />
               <Select value={editChannelActive ? "ACTIVE" : "INACTIVE"} onChange={(e) => setEditChannelActive(e.target.value === "ACTIVE")}>
-                <option value="ACTIVE">ACTIVE</option>
-                <option value="INACTIVE">INACTIVE</option>
+                <option value="ACTIVE">활성(ACTIVE)</option>
+                <option value="INACTIVE">비활성(INACTIVE)</option>
               </Select>
             </div>
 
@@ -285,7 +285,7 @@ export default function ShoppingChannelsPage() {
                     >
                       <td className="px-3 py-2">{ch.channel_code}</td>
                       <td className="px-3 py-2">{ch.channel_name}</td>
-                      <td className="px-3 py-2">{ch.is_active ? "ACTIVE" : "INACTIVE"}</td>
+                      <td className="px-3 py-2">{ch.is_active ? "활성" : "비활성"}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -301,16 +301,16 @@ export default function ShoppingChannelsPage() {
           />
           <CardBody className="space-y-3">
             <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
-              <Input value={mallId} onChange={(e) => setMallId(e.target.value)} placeholder="mall_id" />
-              <Input value={shopNo} onChange={(e) => setShopNo(e.target.value)} placeholder="shop_no" />
+              <Input value={mallId} onChange={(e) => setMallId(e.target.value)} placeholder="몰 아이디(mall_id)" />
+              <Input value={shopNo} onChange={(e) => setShopNo(e.target.value)} placeholder="상점 번호(shop_no)" />
             </div>
-            <Input value={apiVersion} onChange={(e) => setApiVersion(e.target.value)} placeholder="api version (예: 2025-12-01)" />
-            <Input value={clientId} onChange={(e) => setClientId(e.target.value)} placeholder="client_id" autoComplete="off" spellCheck={false} />
+            <Input value={apiVersion} onChange={(e) => setApiVersion(e.target.value)} placeholder="API 버전(api_version) 예: 2025-12-01" />
+            <Input value={clientId} onChange={(e) => setClientId(e.target.value)} placeholder="클라이언트 아이디(client_id)" autoComplete="off" spellCheck={false} />
             <Input
               name="shop_client_secret"
               value={clientSecret}
               onChange={(e) => setClientSecret(e.target.value)}
-              placeholder="client_secret"
+              placeholder="클라이언트 시크릿(client_secret)"
               type="password"
               autoComplete="new-password"
               spellCheck={false}
@@ -319,7 +319,7 @@ export default function ShoppingChannelsPage() {
               name="shop_access_token"
               value={accessToken}
               onChange={(e) => setAccessToken(e.target.value)}
-              placeholder="access_token"
+              placeholder="액세스 토큰(access_token)"
               type="password"
               autoComplete="new-password"
               spellCheck={false}
@@ -328,7 +328,7 @@ export default function ShoppingChannelsPage() {
               name="shop_refresh_token"
               value={refreshToken}
               onChange={(e) => setRefreshToken(e.target.value)}
-              placeholder="refresh_token"
+              placeholder="리프레시 토큰(refresh_token)"
               type="password"
               autoComplete="new-password"
               spellCheck={false}
@@ -345,7 +345,7 @@ export default function ShoppingChannelsPage() {
               onClick={() => startCafe24Oauth.mutate()}
               disabled={startCafe24Oauth.isPending || !selectedChannelId}
             >
-              {startCafe24Oauth.isPending ? "이동 중..." : "Cafe24 OAuth 승인 페이지로 이동"}
+              {startCafe24Oauth.isPending ? "이동 중..." : "카페24 OAuth 승인 페이지로 이동"}
             </Button>
 
             <div className="text-xs text-[var(--muted)]">
@@ -353,15 +353,15 @@ export default function ShoppingChannelsPage() {
             </div>
 
             <div className="rounded-[var(--radius)] border border-[var(--hairline)] p-3 text-xs text-[var(--muted)]">
-              <div>status: {account?.status ?? "-"}</div>
-              <div>client_id: {account?.has_client_id ? "stored" : "-"}</div>
-              <div>client_secret: {account?.has_client_secret ? "stored" : "-"}</div>
-              <div>access_token: {account?.has_access_token ? "stored" : "-"}</div>
-              <div>refresh_token: {account?.has_refresh_token ? "stored" : "-"}</div>
-              <div>access_token_expires_at: {account?.access_token_expires_at ?? "-"}</div>
-              <div>refresh_token_expires_at: {account?.refresh_token_expires_at ?? "-"}</div>
-              <div>last_error_code: {account?.last_error_code ?? "-"}</div>
-              <div>last_error_message: {account?.last_error_message ?? "-"}</div>
+              <div>상태(status): {account?.status ?? "-"}</div>
+              <div>클라이언트 아이디(client_id): {account?.has_client_id ? "저장됨" : "-"}</div>
+              <div>클라이언트 시크릿(client_secret): {account?.has_client_secret ? "저장됨" : "-"}</div>
+              <div>액세스 토큰(access_token): {account?.has_access_token ? "저장됨" : "-"}</div>
+              <div>리프레시 토큰(refresh_token): {account?.has_refresh_token ? "저장됨" : "-"}</div>
+              <div>액세스 토큰 만료(access_token_expires_at): {account?.access_token_expires_at ?? "-"}</div>
+              <div>리프레시 토큰 만료(refresh_token_expires_at): {account?.refresh_token_expires_at ?? "-"}</div>
+              <div>최근 오류 코드(last_error_code): {account?.last_error_code ?? "-"}</div>
+              <div>최근 오류 메시지(last_error_message): {account?.last_error_message ?? "-"}</div>
             </div>
           </CardBody>
         </Card>
