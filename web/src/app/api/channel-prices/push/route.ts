@@ -51,14 +51,23 @@ async function verifyAppliedVariantPrice(
   externalProductNo: string,
   externalVariantCode: string,
   expectedPrice: number,
+  expectedAdditionalAmount?: number,
 ): Promise<{ ok: boolean; current: number | null; status: number; raw: unknown; error?: string }> {
   let last = await cafe24GetVariantPrice(account, accessToken, externalProductNo, externalVariantCode);
   if (!last.ok) {
     return { ok: false, current: null, status: last.status, raw: last.raw, error: last.error ?? "variant verify failed" };
   }
 
+  const verifyMatched = (currentPrice: number | null, additionalAmount: number | null): boolean => {
+    if (currentPrice === expectedPrice) return true;
+    if (typeof expectedAdditionalAmount === "number" && Number.isFinite(expectedAdditionalAmount)) {
+      if (additionalAmount !== null && Math.round(additionalAmount) === Math.round(expectedAdditionalAmount)) return true;
+    }
+    return false;
+  };
+
   for (let i = 0; i < 2; i += 1) {
-    if (last.currentPriceKrw === expectedPrice) {
+    if (verifyMatched(last.currentPriceKrw, last.additionalAmount)) {
       return { ok: true, current: last.currentPriceKrw, status: last.status, raw: last.raw };
     }
     await new Promise((resolve) => setTimeout(resolve, 600));
@@ -68,12 +77,19 @@ async function verifyAppliedVariantPrice(
     }
   }
 
+  const expectedAdditionalLabel =
+    typeof expectedAdditionalAmount === "number" && Number.isFinite(expectedAdditionalAmount)
+      ? ` expected_additional=${Math.round(expectedAdditionalAmount)} actual_additional=${last.additionalAmount ?? "null"}`
+      : "";
+
   return {
-    ok: last.currentPriceKrw === expectedPrice,
+    ok: verifyMatched(last.currentPriceKrw, last.additionalAmount),
     current: last.currentPriceKrw,
     status: last.status,
     raw: last.raw,
-    error: last.currentPriceKrw === expectedPrice ? undefined : `VERIFY_MISMATCH expected=${expectedPrice} actual=${last.currentPriceKrw ?? "null"}`,
+    error: verifyMatched(last.currentPriceKrw, last.additionalAmount)
+      ? undefined
+      : `VERIFY_MISMATCH expected=${expectedPrice} actual=${last.currentPriceKrw ?? "null"}${expectedAdditionalLabel}`,
   };
 }
 
@@ -259,6 +275,17 @@ export async function POST(request: Request) {
   }
 
   const dedupedMap = new Map<string, (typeof candidates)[number]>();
+  const scoreCandidateRow = (row: (typeof candidates)[number], canonicalProductNo: string): number => {
+    const productNo = String(row.external_product_no ?? "").trim();
+    const target = Number(row.final_target_price_krw);
+    const hasFinitePositiveTarget = Number.isFinite(target) && target > 0;
+    const looksCanonicalCode = /^P/i.test(productNo);
+    let score = 0;
+    if (hasFinitePositiveTarget) score += 1000;
+    if (canonicalProductNo && productNo === canonicalProductNo) score += 100;
+    if (looksCanonicalCode) score += 30;
+    return score;
+  };
   for (const row of candidates) {
     const master = String(row.master_item_id ?? "").trim();
     const variant = String(row.external_variant_code ?? "").trim();
@@ -271,6 +298,15 @@ export async function POST(request: Request) {
     }
 
     const canonical = canonicalProductByMaster.get(master) ?? "";
+    const prevScore = scoreCandidateRow(prev, canonical);
+    const nextScore = scoreCandidateRow(row, canonical);
+    if (nextScore > prevScore) {
+      dedupedMap.set(key, row);
+      continue;
+    }
+    if (prevScore > nextScore) {
+      continue;
+    }
     if (canonical) {
       if (productNo === canonical && String(prev.external_product_no ?? "").trim() !== canonical) {
         dedupedMap.set(key, row);
@@ -318,6 +354,29 @@ export async function POST(request: Request) {
     }
   }
 
+  const missingMasterFallbackIds = Array.from(new Set(
+    sortedCandidates
+      .map((row) => String(row.master_item_id ?? "").trim())
+      .filter((masterKey) => masterKey.length > 0 && !masterFallbackTarget.has(masterKey)),
+  ));
+  if (missingMasterFallbackIds.length > 0) {
+    const fallbackRes = await sb
+      .from("v_channel_price_dashboard")
+      .select("master_item_id, final_target_price_krw")
+      .eq("channel_id", channelId)
+      .eq("external_variant_code", "")
+      .in("master_item_id", missingMasterFallbackIds);
+    if (fallbackRes.error) return jsonError(fallbackRes.error.message ?? "기준옵션 목표가 조회 실패", 500);
+    for (const row of fallbackRes.data ?? []) {
+      const masterKey = String(row.master_item_id ?? "").trim();
+      const target = Number(row.final_target_price_krw);
+      if (!masterKey || masterFallbackTarget.has(masterKey)) continue;
+      if (Number.isFinite(target) && target > 0) {
+        masterFallbackTarget.set(masterKey, Math.round(target));
+      }
+    }
+  }
+
   if (dryRun) {
     return NextResponse.json({
       ok: true,
@@ -344,6 +403,7 @@ export async function POST(request: Request) {
 
   const itemRows = [] as Array<Record<string, unknown>>;
   const successfulVariantDeltaByProduct = new Map<string, Map<string, number>>();
+  const labelDeltaByProduct = new Map<string, Map<string, number>>();
   let successCount = 0;
   let failedCount = 0;
   let skippedCount = 0;
@@ -356,6 +416,25 @@ export async function POST(request: Request) {
     return `${stripped} (${sign}${amount}원)`;
   };
 
+  const pickRepresentativeDelta = (deltas: Set<number>): number | null => {
+    const values = Array.from(deltas.values()).map((v) => Math.round(Number(v))).filter((v) => Number.isFinite(v));
+    if (values.length === 0) return null;
+    const freq = new Map<number, number>();
+    for (const value of values) {
+      freq.set(value, (freq.get(value) ?? 0) + 1);
+    }
+    const ranked = Array.from(freq.entries()).sort((a, b) => {
+      if (b[1] !== a[1]) return b[1] - a[1];
+      const absDiff = Math.abs(a[0]) - Math.abs(b[0]);
+      if (absDiff !== 0) return absDiff;
+      return a[0] - b[0];
+    });
+    return ranked[0]?.[0] ?? null;
+  };
+
+  const stripPriceDeltaSuffix = (text: string): string =>
+    String(text ?? "").replace(/\s*\([+-][\d,]+원\)\s*$/u, "").trim();
+
   function hasOptionProduct(raw: unknown): boolean {
     const product = (raw as { product?: { has_option?: unknown } } | null)?.product;
     return String(product?.has_option ?? "").trim() === "T";
@@ -364,6 +443,33 @@ export async function POST(request: Request) {
   function getOptionType(raw: unknown): string {
     const product = (raw as { product?: { option_type?: unknown } } | null)?.product;
     return String(product?.option_type ?? "").trim().toUpperCase();
+  }
+
+  async function resolveBasePriceForVariantAdditional(externalProductNo: string, masterKey: string): Promise<{ ok: true; basePrice: number; optionType: string } | { ok: false; status: number; raw: unknown; error: string; optionType: string }> {
+    const base = await getBaseSnapshot(externalProductNo);
+    const optionType = base.ok ? getOptionType(base.raw) : "";
+    if (!base.ok || base.currentPriceKrw === null) {
+      return {
+        ok: false,
+        status: base.status,
+        raw: base.raw,
+        error: base.error ?? "base product price required for variant update",
+        optionType,
+      };
+    }
+
+    const masterBaseTarget = masterFallbackTarget.get(masterKey);
+    const targetBase = Number.isFinite(Number(masterBaseTarget ?? Number.NaN))
+      ? Math.round(Number(masterBaseTarget))
+      : null;
+
+    // Option type C often keeps base price immutable on Cafe24,
+    // so additional_amount must be based on live base price.
+    const basePrice = optionType === "C"
+      ? base.currentPriceKrw
+      : (targetBase ?? base.currentPriceKrw);
+
+    return { ok: true, basePrice, optionType };
   }
 
   async function getBaseSnapshot(externalProductNo: string) {
@@ -474,27 +580,26 @@ export async function POST(request: Request) {
       }
     }
 
+    let expectedAdditionalAmount: number | undefined;
     let pushRes = variantCode
       ? await (async () => {
-        const masterBaseTarget = masterFallbackTarget.get(masterKey);
-        let basePriceForAdditional: number | null = Number.isFinite(Number(masterBaseTarget ?? Number.NaN))
-          ? Math.round(Number(masterBaseTarget))
-          : null;
-        if (basePriceForAdditional === null) {
-          const base = await getBaseSnapshot(externalProductNo);
-          if (!base.ok || base.currentPriceKrw === null) {
-            return {
-              ok: false,
-              status: base.status,
-              raw: base.raw,
-              error: base.error ?? "base product price required for variant update",
-              attempt_key: "variant_base_price_lookup",
-            };
-          }
-          basePriceForAdditional = base.currentPriceKrw;
+        const baseResolved = await resolveBasePriceForVariantAdditional(externalProductNo, masterKey);
+        if (!baseResolved.ok) {
+          return {
+            ok: false,
+            status: baseResolved.status,
+            raw: baseResolved.raw,
+            error: baseResolved.error,
+            attempt_key: "variant_base_price_lookup",
+          };
         }
 
-        const additionalAmount = targetPrice - basePriceForAdditional;
+        const preferredBaseForDelta = Number(masterFallbackTarget.get(masterKey));
+        const baseForDelta = Number.isFinite(preferredBaseForDelta)
+          ? Math.round(preferredBaseForDelta)
+          : baseResolved.basePrice;
+        const additionalAmount = targetPrice - baseForDelta;
+        expectedAdditionalAmount = additionalAmount;
         return cafe24UpdateVariantAdditionalAmount(
           account,
           accessToken,
@@ -510,25 +615,23 @@ export async function POST(request: Request) {
         accessToken = await ensureValidCafe24AccessToken(sb, account);
         pushRes = variantCode
           ? await (async () => {
-            const masterBaseTarget = masterFallbackTarget.get(masterKey);
-            let basePriceForAdditional: number | null = Number.isFinite(Number(masterBaseTarget ?? Number.NaN))
-              ? Math.round(Number(masterBaseTarget))
-              : null;
-            if (basePriceForAdditional === null) {
-              const base = await getBaseSnapshot(externalProductNo);
-              if (!base.ok || base.currentPriceKrw === null) {
-                return {
-                  ok: false,
-                  status: base.status,
-                  raw: base.raw,
-                  error: base.error ?? "base product price required for variant update",
-                  attempt_key: "variant_base_price_lookup",
-                };
-              }
-              basePriceForAdditional = base.currentPriceKrw;
+            const baseResolved = await resolveBasePriceForVariantAdditional(externalProductNo, masterKey);
+            if (!baseResolved.ok) {
+              return {
+                ok: false,
+                status: baseResolved.status,
+                raw: baseResolved.raw,
+                error: baseResolved.error,
+                attempt_key: "variant_base_price_lookup",
+              };
             }
 
-            const additionalAmount = targetPrice - basePriceForAdditional;
+            const preferredBaseForDelta = Number(masterFallbackTarget.get(masterKey));
+            const baseForDelta = Number.isFinite(preferredBaseForDelta)
+              ? Math.round(preferredBaseForDelta)
+              : baseResolved.basePrice;
+            const additionalAmount = targetPrice - baseForDelta;
+            expectedAdditionalAmount = additionalAmount;
             return cafe24UpdateVariantAdditionalAmount(
               account,
               accessToken,
@@ -587,7 +690,14 @@ export async function POST(request: Request) {
       }
 
       const verify = variantCode
-        ? await verifyAppliedVariantPrice(account, accessToken, String(c.external_product_no), variantCode, targetPrice)
+        ? await verifyAppliedVariantPrice(
+          account,
+          accessToken,
+          String(c.external_product_no),
+          variantCode,
+          targetPrice,
+          expectedAdditionalAmount,
+        )
         : await verifyAppliedPrice(account, accessToken, String(c.external_product_no), targetPrice);
 
       if (verify.ok) {
@@ -670,7 +780,7 @@ export async function POST(request: Request) {
             raw_response_json: { push: pushRes.raw, verify: verify.raw },
           });
         } else if (variantAdditionalMismatch) {
-          failedCount += 1;
+          skippedCount += 1;
           itemRows.push({
             job_id: jobId,
             channel_id: c.channel_id,
@@ -681,10 +791,10 @@ export async function POST(request: Request) {
             before_price_krw: c.current_channel_price_krw,
             target_price_krw: targetPrice,
             after_price_krw: verify.current ?? c.current_channel_price_krw,
-            status: "FAILED",
+            status: "SKIPPED",
             http_status: verify.status || pushRes.status,
             error_code: "VARIANT_ADDITIONAL_IMMUTABLE_OPTION_TYPE_C",
-            error_message: "옵션타입 C 상품은 카페24 정책상 variant 추가금(additional_amount) 반영이 제한될 수 있습니다",
+            error_message: "옵션타입 C 상품은 카페24 정책상 variant 추가금(additional_amount) 반영이 제한되어 자동 동기화에서 제외했습니다",
             raw_response_json: { push: pushRes.raw, verify: verify.raw, option_type: optionType },
           });
         } else {
@@ -713,7 +823,9 @@ export async function POST(request: Request) {
       const variantAdditionalMismatch = Boolean(variantCode)
         && optionType === "C"
         && String(pushRes.error ?? "").includes("additional_amount mismatch");
-      failedCount += 1;
+      const itemStatus = variantAdditionalMismatch ? "SKIPPED" : "FAILED";
+      if (variantAdditionalMismatch) skippedCount += 1;
+      else failedCount += 1;
       itemRows.push({
         job_id: jobId,
         channel_id: c.channel_id,
@@ -724,13 +836,13 @@ export async function POST(request: Request) {
         before_price_krw: c.current_channel_price_krw,
         target_price_krw: targetPrice,
         after_price_krw: c.current_channel_price_krw,
-        status: "FAILED",
+        status: itemStatus,
         http_status: pushRes.status,
         error_code: variantAdditionalMismatch
           ? "VARIANT_ADDITIONAL_IMMUTABLE_OPTION_TYPE_C"
           : `HTTP_${pushRes.status}`,
         error_message: variantAdditionalMismatch
-          ? "옵션타입 C 상품은 카페24 정책상 variant 추가금(additional_amount) 반영이 제한될 수 있습니다"
+          ? "옵션타입 C 상품은 카페24 정책상 variant 추가금(additional_amount) 반영이 제한되어 자동 동기화에서 제외했습니다"
           : (pushRes.error ?? "카페24 push 실패"),
         raw_response_json: variantAdditionalMismatch
           ? { push: pushRes.raw, option_type: optionType }
@@ -739,9 +851,47 @@ export async function POST(request: Request) {
     }
   }
 
+  if (syncOptionLabels) {
+    for (const [productNo, byVariant] of successfulVariantDeltaByProduct.entries()) {
+      labelDeltaByProduct.set(productNo, new Map(byVariant));
+    }
+    for (const c of sortedCandidates) {
+      const variantCode = String(c.external_variant_code ?? "").trim();
+      if (!variantCode) continue;
+      const externalProductNo = String(c.external_product_no ?? "").trim();
+      const masterKey = String(c.master_item_id ?? "").trim();
+      if (!externalProductNo || !masterKey) continue;
+
+      const rawTarget = Number(c.final_target_price_krw);
+      const fallbackTarget = masterFallbackTarget.get(masterKey);
+      const hasFiniteRawTarget = Number.isFinite(rawTarget);
+      const shouldUseFallbackForVariant = Boolean(variantCode)
+        && fallbackTarget !== undefined
+        && (!hasFiniteRawTarget || rawTarget <= 0);
+      const targetPrice = shouldUseFallbackForVariant
+        ? Math.round(fallbackTarget)
+        : (hasFiniteRawTarget ? Math.round(rawTarget) : Number.NaN);
+      if (!Number.isFinite(targetPrice) || targetPrice <= 0) continue;
+
+      let basePriceForDelta: number | null = Number.isFinite(Number(masterFallbackTarget.get(masterKey) ?? Number.NaN))
+        ? Math.round(Number(masterFallbackTarget.get(masterKey)))
+        : null;
+      if (basePriceForDelta === null) {
+        const base = await getBaseSnapshot(externalProductNo);
+        if (base.ok && base.currentPriceKrw !== null) basePriceForDelta = base.currentPriceKrw;
+      }
+      if (basePriceForDelta === null) continue;
+
+      const delta = Math.round(targetPrice - basePriceForDelta);
+      const byVariant = labelDeltaByProduct.get(externalProductNo) ?? new Map<string, number>();
+      byVariant.set(variantCode, delta);
+      labelDeltaByProduct.set(externalProductNo, byVariant);
+    }
+  }
+
   const labelSyncErrors: Array<{ external_product_no: string; error: string }> = [];
-  if (syncOptionLabels && successfulVariantDeltaByProduct.size > 0) {
-    for (const [externalProductNo, deltaByVariant] of successfulVariantDeltaByProduct.entries()) {
+  if (syncOptionLabels && labelDeltaByProduct.size > 0) {
+    for (const [externalProductNo, deltaByVariant] of labelDeltaByProduct.entries()) {
       let variantsRes = await cafe24ListProductVariants(account, accessToken, externalProductNo);
       if (!variantsRes.ok && variantsRes.status === 401) {
         try {
@@ -756,31 +906,95 @@ export async function POST(request: Request) {
         continue;
       }
 
-      const optionGroups = new Map<string, { optionName: string; currentText: string; deltas: Set<number> }>();
+      const optionGroups = new Map<string, { optionName: string; currentTextRaw: string; normalizedText: string; deltas: Set<number> }>();
+      const optionOrder = variantsRes.variants.find((v) => v.options.length > 0)?.options.map((o) => String(o.name ?? "").trim()).filter(Boolean) ?? [];
+      const firstAxisName = optionOrder[0] ?? "";
+      const secondAxisName = optionOrder[1] ?? "";
+      const variantAxisMap = new Map<string, { firstValue: string; secondValue: string }>();
       for (const variant of variantsRes.variants) {
-        const delta = deltaByVariant.get(variant.variantCode);
+        const firstOpt = variant.options.find((o) => String(o.name ?? "").trim() === firstAxisName);
+        const secondOpt = variant.options.find((o) => String(o.name ?? "").trim() === secondAxisName);
+        variantAxisMap.set(String(variant.variantCode ?? "").trim(), {
+          firstValue: stripPriceDeltaSuffix(String(firstOpt?.value ?? "").trim()),
+          secondValue: stripPriceDeltaSuffix(String(secondOpt?.value ?? "").trim()),
+        });
+      }
+
+      const firstAxisBaseDeltaByValue = new Map<string, number>();
+      for (const variant of variantsRes.variants) {
+        const variantCode = String(variant.variantCode ?? "").trim();
+        const delta = deltaByVariant.get(variantCode);
         if (delta === undefined) continue;
+        const axis = variantAxisMap.get(variantCode);
+        const firstValue = String(axis?.firstValue ?? "").trim();
+        if (!firstValue) continue;
+        const prev = firstAxisBaseDeltaByValue.get(firstValue);
+        if (prev == null || Math.round(delta) < prev) {
+          firstAxisBaseDeltaByValue.set(firstValue, Math.round(delta));
+        }
+      }
+
+      const secondAxisResidualByValue = new Map<string, Set<number>>();
+      for (const variant of variantsRes.variants) {
+        const variantCode = String(variant.variantCode ?? "").trim();
+        const delta = deltaByVariant.get(variantCode);
+        if (delta === undefined) continue;
+        const axis = variantAxisMap.get(variantCode);
+        const firstValue = String(axis?.firstValue ?? "").trim();
+        const secondValue = String(axis?.secondValue ?? "").trim();
+        if (!firstValue || !secondValue) continue;
+        const firstBase = firstAxisBaseDeltaByValue.get(firstValue);
+        if (firstBase == null) continue;
+        const residual = Math.round(delta) - firstBase;
+        const prev = secondAxisResidualByValue.get(secondValue) ?? new Set<number>();
+        prev.add(residual);
+        secondAxisResidualByValue.set(secondValue, prev);
+      }
+
+      const secondAxisDeltaByValue = new Map<string, number>();
+      for (const [value, deltas] of secondAxisResidualByValue.entries()) {
+        const picked = pickRepresentativeDelta(deltas);
+        if (picked != null) secondAxisDeltaByValue.set(value, picked);
+      }
+
+      for (const variant of variantsRes.variants) {
+        const variantCode = String(variant.variantCode ?? "").trim();
+        const totalDelta = deltaByVariant.get(variantCode);
+        if (totalDelta === undefined) continue;
         for (const opt of variant.options) {
           const optionName = String(opt.name ?? "").trim();
-          const optionValueText = String(opt.value ?? "").trim();
+          const optionValueTextRaw = String(opt.value ?? "").trim();
+          const optionValueText = stripPriceDeltaSuffix(optionValueTextRaw);
           if (!optionName || !optionValueText) continue;
+
+          let deltaForLabel: number = Math.round(totalDelta);
+          if (optionName === firstAxisName) {
+            const firstDelta = firstAxisBaseDeltaByValue.get(optionValueText);
+            if (firstDelta != null) deltaForLabel = firstDelta;
+          } else if (optionName === secondAxisName) {
+            const secondDelta = secondAxisDeltaByValue.get(optionValueText);
+            if (secondDelta != null) deltaForLabel = secondDelta;
+          }
+
           const key = `${optionName}::${optionValueText}`;
-          const prev = optionGroups.get(key) ?? { optionName, currentText: optionValueText, deltas: new Set<number>() };
-          prev.deltas.add(delta);
+          const prev = optionGroups.get(key) ?? { optionName, currentTextRaw: optionValueTextRaw || optionValueText, normalizedText: optionValueText, deltas: new Set<number>() };
+          prev.deltas.add(deltaForLabel);
+          if (!prev.currentTextRaw && optionValueTextRaw) prev.currentTextRaw = optionValueTextRaw;
           optionGroups.set(key, prev);
         }
       }
 
       const updates = Array.from(optionGroups.values())
-        .filter((g) => g.deltas.size === 1)
         .map((g) => {
-          const [delta] = Array.from(g.deltas.values());
+          const delta = pickRepresentativeDelta(g.deltas);
+          if (delta === null) return null;
           return {
             optionName: g.optionName,
-            currentText: g.currentText,
-            nextText: formatOptionTextWithDelta(g.currentText, delta),
+            currentText: g.currentTextRaw,
+            nextText: formatOptionTextWithDelta(g.normalizedText, delta),
           };
         })
+        .filter((u): u is { optionName: string; currentText: string; nextText: string } => Boolean(u))
         .filter((u) => u.currentText !== u.nextText);
 
       if (updates.length === 0) continue;

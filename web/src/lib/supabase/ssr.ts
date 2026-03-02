@@ -2,12 +2,12 @@ import { createServerClient } from "@supabase/ssr";
 import type { NextRequest, NextResponse } from "next/server";
 
 function getSbUrl() {
-    return process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
+    return process.env["NEXT_PUBLIC_SUPABASE_URL"] ?? "";
 }
 function getSbKey() {
     return (
-        process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ??
-        process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ??
+        process.env["NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY"] ??
+        process.env["NEXT_PUBLIC_SUPABASE_ANON_KEY"] ??
         ""
     );
 }
