@@ -6,6 +6,7 @@ const PUBLIC_API_PREFIXES = [
     "/api/fax-webhook", // 외부 콜백(팩스) - 기존 secret 검증 유지
     "/api/shop-oauth/cafe24/callback", // Cafe24 OAuth redirect callback
     "/api/cron/shop-sync", // Cloud Scheduler secured endpoint (x-shop-sync-secret)
+    "/api/public/storefront-option-breakdown", // 카페24 테마에서 읽는 옵션 분해값
 ];
 
 function isPublicPath(pathname: string) {

@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { ActionBar } from "@/components/layout/action-bar";
+import { ShoppingPageHeader } from "@/components/layout/shopping-page-header";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input, Select } from "@/components/ui/field";
@@ -209,6 +210,19 @@ export default function ShoppingChannelsPage() {
       <ActionBar
         title="쇼핑몰 채널 설정"
         subtitle="채널 생성 및 카페24 계정 연결"
+      />
+
+      <ShoppingPageHeader
+        purpose="채널 생성, 계정/OAuth 연결, 토큰 상태 점검을 한 화면에서 처리합니다."
+        status={[
+          { label: "등록 채널", value: `${channels.length}개` },
+          { label: "선택 채널", value: selectedChannel ? selectedChannel.channel_name : "미선택", tone: selectedChannel ? "good" : "warn" },
+          { label: "연결 상태", value: account?.status ?? "미연결", tone: account?.status === "ACTIVE" ? "good" : "warn" },
+        ]}
+        nextActions={[
+          { label: "상품 매핑으로", href: "/settings/shopping/mappings" },
+          { label: "동기화 로그 보기", href: "/settings/shopping/sync-jobs" },
+        ]}
       />
 
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">

@@ -1093,8 +1093,22 @@ export default function CatalogPage() {
     }));
 
     if (options?.syncEditor) {
-      const activeMarketMode = options.marketMode ?? cnRawMarketModeRef.current;
-      const filteredRows = normalizedRows.filter((row) => row.marketMode === activeMarketMode);
+      const requestedMarketMode = options.marketMode ?? cnRawMarketModeRef.current;
+      let activeMarketMode = requestedMarketMode;
+      let filteredRows = normalizedRows.filter((row) => row.marketMode === activeMarketMode);
+
+      if (filteredRows.length === 0 && normalizedRows.length > 0) {
+        const hasCnRows = normalizedRows.some((row) => row.marketMode === "CN");
+        const hasKrRows = normalizedRows.some((row) => row.marketMode === "KR");
+        const fallbackMode = hasCnRows ? "CN" : hasKrRows ? "KR" : null;
+        if (fallbackMode && fallbackMode !== activeMarketMode) {
+          activeMarketMode = fallbackMode;
+          filteredRows = normalizedRows.filter((row) => row.marketMode === activeMarketMode);
+          setCnRawMarketMode(activeMarketMode);
+          cnRawMarketModeRef.current = activeMarketMode;
+        }
+      }
+
       setCnRawEntries(
         sortCnRawEntriesAsc(
           filteredRows.length > 0
@@ -3917,6 +3931,8 @@ export default function CatalogPage() {
     setCnLaborBasicBasis("PER_G");
     setCnLaborExtraItems([]);
     setCnRawEntries([createEmptyCnRawEntry()]);
+    setCnRawMarketMode("CN");
+    cnRawMarketModeRef.current = "CN";
     setIsUnitPricing(false);
     setAbsorbLaborItems([]);
     setAbsorbBucket("BASE_LABOR");
@@ -4068,15 +4084,19 @@ export default function CatalogPage() {
         laborBasis: cnRawLaborBasisValue,
       }),
     ]);
-    setCnRawMarketMode("CN");
-    cnRawMarketModeRef.current = "CN";
+    const cachedHistoryRows = cnRawHistoryByMasterId[selectedItem.id] ?? [];
+    const hasCachedCnRows = cachedHistoryRows.some((historyRow) => historyRow.marketMode === "CN");
+    const hasCachedKrRows = cachedHistoryRows.some((historyRow) => historyRow.marketMode === "KR");
+    const initialMarketMode: CnRawMarketMode = hasCachedCnRows ? "CN" : hasCachedKrRows ? "KR" : "CN";
+    setCnRawMarketMode(initialMarketMode);
+    cnRawMarketModeRef.current = initialMarketMode;
 
     if (selectedItem.id) {
       void loadAbsorbLaborItems(selectedItem.id).catch((error) => {
         const message = error instanceof Error ? error.message : "흡수공임 조회 실패";
         toast.error("처리 실패", { description: message });
       });
-      void loadCnRawHistory(selectedItem.id, { syncEditor: true, marketMode: "CN" }).catch((error) => {
+      void loadCnRawHistory(selectedItem.id, { syncEditor: true, marketMode: initialMarketMode }).catch((error) => {
         console.error("Failed to load RAW history for editor:", error);
       });
     }

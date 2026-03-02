@@ -69,3 +69,71 @@ export async function POST(request: Request) {
 
   return NextResponse.json({ data }, { headers: { "Cache-Control": "no-store" } });
 }
+
+export async function PUT(request: Request) {
+  const sb = getShopAdminClient();
+  if (!sb) return jsonError("Supabase server env missing", 500);
+
+  const raw = await request.json().catch(() => null);
+  const body = parseJsonObject(raw);
+  if (!body) return jsonError("Invalid request body", 400);
+
+  const adjustmentLogId = String(body.adjustment_log_id ?? "").trim();
+  const reasonRaw = body.reason;
+  const deltaRaw = body.delta_krw;
+  const hasReason = typeof reasonRaw === "string";
+  const hasDelta = deltaRaw !== undefined && deltaRaw !== null && String(deltaRaw).trim() !== "";
+  const reason = String(reasonRaw ?? "").trim();
+  const deltaKrw = Number(deltaRaw ?? Number.NaN);
+
+  if (!adjustmentLogId) return jsonError("adjustment_log_id is required", 400);
+  if (!hasReason && !hasDelta) return jsonError("reason or delta_krw is required", 400);
+  if (hasReason && !reason) return jsonError("reason is required", 400);
+  if (hasDelta) {
+    if (!Number.isFinite(deltaKrw) || deltaKrw === 0) return jsonError("delta_krw must be non-zero number", 400);
+    if (!isHundredStep(Math.round(deltaKrw))) return jsonError("delta_krw must be 100 KRW step", 400);
+  }
+
+  const payload: { reason?: string; delta_krw?: number } = {};
+  if (hasReason) payload.reason = reason;
+  if (hasDelta) payload.delta_krw = Math.round(deltaKrw);
+
+  const { data, error } = await sb
+    .from("channel_base_price_adjustment_log")
+    .update(payload)
+    .eq("adjustment_log_id", adjustmentLogId)
+    .select("adjustment_log_id, channel_id, master_item_id, delta_krw, reason, created_by, created_at")
+    .single();
+
+  if (error) return jsonError(error.message ?? "기본가격 조정 로그 수정 실패", 400);
+
+  return NextResponse.json({ data }, { headers: { "Cache-Control": "no-store" } });
+}
+
+export async function DELETE(request: Request) {
+  const sb = getShopAdminClient();
+  if (!sb) return jsonError("Supabase server env missing", 500);
+
+  const { searchParams } = new URL(request.url);
+  const raw = await request.json().catch(() => null);
+  const body = parseJsonObject(raw) ?? {};
+
+  const adjustmentLogId = String(body.adjustment_log_id ?? searchParams.get("adjustment_log_id") ?? "").trim();
+  const channelId = String(body.channel_id ?? searchParams.get("channel_id") ?? "").trim();
+  const masterItemId = String(body.master_item_id ?? searchParams.get("master_item_id") ?? "").trim();
+
+  let q = sb.from("channel_base_price_adjustment_log").delete();
+  if (adjustmentLogId) {
+    q = q.eq("adjustment_log_id", adjustmentLogId);
+  } else if (channelId && masterItemId) {
+    q = q.eq("channel_id", channelId).eq("master_item_id", masterItemId);
+  } else {
+    return jsonError("adjustment_log_id or (channel_id and master_item_id) is required", 400);
+  }
+
+  const { error } = await q;
+
+  if (error) return jsonError(error.message ?? "기본가격 조정 로그 삭제 실패", 400);
+
+  return NextResponse.json({ ok: true }, { headers: { "Cache-Control": "no-store" } });
+}

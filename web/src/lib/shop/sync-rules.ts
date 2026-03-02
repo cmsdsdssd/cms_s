@@ -153,3 +153,10 @@ export const isSilverMaterial = (materialCodeRaw: string | null | undefined): bo
   const code = String(materialCodeRaw ?? "").trim().toUpperCase();
   return code === "925" || code === "999";
 };
+
+export const normalizePlatingComboCode = (value: string | null | undefined): string => {
+  const text = String(value ?? "").trim().toUpperCase();
+  if (!text) return "";
+  const letters = Array.from(new Set(text.replace(/[^PGWB]/g, "").split("").filter((ch) => ch.length > 0))).sort();
+  return letters.join("");
+};

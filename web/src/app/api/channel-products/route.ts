@@ -1,9 +1,12 @@
 import { NextResponse } from "next/server";
 import { getShopAdminClient, jsonError, parseJsonObject } from "@/lib/shop/admin";
 import { normalizeMaterialCode } from "@/lib/material-factors";
+import { normalizePlatingComboCode } from "@/lib/shop/sync-rules";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
+
+const isHundredStep = (value: number): boolean => Number.isInteger(value) && value % 100 === 0;
 
 export async function GET(request: Request) {
   const sb = getShopAdminClient();
@@ -58,7 +61,7 @@ export async function POST(request: Request) {
   const mappingSource = String(body.mapping_source ?? "MANUAL").trim().toUpperCase();
   const syncRuleSetId = typeof body.sync_rule_set_id === "string" ? body.sync_rule_set_id.trim() || null : null;
   const optionMaterialCode = typeof body.option_material_code === "string" ? normalizeMaterialCode(body.option_material_code) || null : null;
-  const optionColorCode = typeof body.option_color_code === "string" ? body.option_color_code.trim().toUpperCase() || null : null;
+  const optionColorCode = typeof body.option_color_code === "string" ? normalizePlatingComboCode(body.option_color_code) || null : null;
   const optionDecorationCode = typeof body.option_decoration_code === "string" ? body.option_decoration_code.trim().toUpperCase() || null : null;
   const optionSizeValue =
     body.option_size_value === null || body.option_size_value === undefined || body.option_size_value === ""
@@ -83,6 +86,9 @@ export async function POST(request: Request) {
   }
   if (optionPriceDeltaKrw !== null && (!Number.isFinite(optionPriceDeltaKrw) || optionPriceDeltaKrw < -100000000 || optionPriceDeltaKrw > 100000000)) {
     return jsonError("option_price_delta_krw must be between -100000000 and 100000000", 400);
+  }
+  if (optionPriceDeltaKrw !== null && !isHundredStep(Math.round(optionPriceDeltaKrw))) {
+    return jsonError("option_price_delta_krw must be 100 KRW step", 400);
   }
   if (!["SYNC", "MANUAL"].includes(optionPriceMode)) {
     return jsonError("option_price_mode must be SYNC or MANUAL", 400);

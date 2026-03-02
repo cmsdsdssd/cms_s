@@ -20,6 +20,7 @@ import {
   ArrowLeftRight,
   ShoppingCart,
 } from "lucide-react";
+import { isShoppingPathname } from "@/lib/analysis-mode";
 
 export type NavItem = {
   label: string;
@@ -28,12 +29,30 @@ export type NavItem = {
   items?: NavItem[];
 };
 
-export type AppMode = "app" | "analysis";
+export type AppMode = "home" | "shopping" | "analysis";
+
+export const MODE_LABELS: Record<AppMode, string> = {
+  home: "홈",
+  shopping: "쇼핑몰",
+  analysis: "분석",
+};
 
 export const isAnalysisPath = (pathname: string) =>
   pathname === "/analysis" || pathname.startsWith("/analysis/");
 
-export const appNavItems: NavItem[] = [
+const shoppingNavGroup: NavItem = {
+  label: "쇼핑몰 연동",
+  items: [
+    { label: "쇼핑몰 홈", href: "/settings/shopping", icon: ShoppingCart },
+    { label: "채널 설정", href: "/settings/shopping/channels", icon: Settings },
+    { label: "상품 매핑", href: "/settings/shopping/mappings", icon: Boxes },
+    { label: "가격 대시보드", href: "/settings/shopping/dashboard", icon: LayoutDashboard },
+    { label: "동기화 로그", href: "/settings/shopping/sync-jobs", icon: Activity },
+    { label: "정책/팩터", href: "/settings/shopping/factors", icon: TrendingUp },
+  ],
+};
+
+export const homeNavItems: NavItem[] = [
   {
     label: "통합 작업대",
     items: [
@@ -83,18 +102,9 @@ export const appNavItems: NavItem[] = [
       { label: "시세 관리", href: "/market", icon: TrendingUp },
     ],
   },
-  {
-    label: "쇼핑몰 연동",
-    items: [
-      { label: "쇼핑몰 홈", href: "/settings/shopping", icon: ShoppingCart },
-      { label: "채널 설정", href: "/settings/shopping/channels", icon: Settings },
-      { label: "상품 매핑", href: "/settings/shopping/mappings", icon: Boxes },
-      { label: "가격 대시보드", href: "/settings/shopping/dashboard", icon: LayoutDashboard },
-      { label: "동기화 로그", href: "/settings/shopping/sync-jobs", icon: Activity },
-      { label: "정책/팩터", href: "/settings/shopping/factors", icon: TrendingUp },
-    ],
-  },
 ];
+
+export const shoppingNavItems: NavItem[] = [shoppingNavGroup];
 
 export const analysisNavItems: NavItem[] = [
   {
@@ -111,16 +121,20 @@ export const analysisNavItems: NavItem[] = [
   },
 ];
 
-export const appBottomNavItems: NavItem[] = [
+export const homeBottomNavItems: NavItem[] = [
   { label: "설정", href: "/settings", icon: Settings },
 ];
 
-export const analysisBottomNavItems: NavItem[] = [
-  { label: "업무 모드로 복귀", href: "/dashboard", icon: ArrowLeftRight },
+export const shoppingBottomNavItems: NavItem[] = [
+  { label: "홈으로", href: "/dashboard", icon: ArrowLeftRight },
 ];
 
-export const navItems = appNavItems;
-export const bottomNavItems = appBottomNavItems;
+export const analysisBottomNavItems: NavItem[] = [
+  { label: "홈으로", href: "/dashboard", icon: ArrowLeftRight },
+];
+
+export const navItems = homeNavItems;
+export const bottomNavItems = homeBottomNavItems;
 
 export type NavMatch = {
   groupLabel: string;
@@ -132,14 +146,20 @@ const isExactOrChild = (pathname: string, href: string) =>
 
 export const resolveMode = (pathname: string, forcedMode?: AppMode): AppMode => {
   if (forcedMode) return forcedMode;
-  return isAnalysisPath(pathname) ? "analysis" : "app";
+  if (isAnalysisPath(pathname)) return "analysis";
+  if (isShoppingPathname(pathname)) return "shopping";
+  return "home";
 };
 
 export const getNavItemsByMode = (mode: AppMode): NavItem[] =>
-  mode === "analysis" ? analysisNavItems : appNavItems;
+  mode === "analysis" ? analysisNavItems : mode === "shopping" ? shoppingNavItems : homeNavItems;
 
 export const getBottomNavItemsByMode = (mode: AppMode): NavItem[] =>
-  mode === "analysis" ? analysisBottomNavItems : appBottomNavItems;
+  mode === "analysis"
+    ? analysisBottomNavItems
+    : mode === "shopping"
+      ? shoppingBottomNavItems
+      : homeBottomNavItems;
 
 export const isNavItemActive = (pathname: string, href: string) => {
   if (href === "/analysis/overview") return pathname.startsWith("/analysis");
@@ -166,7 +186,7 @@ export const findNavMatch = (pathname: string, forcedMode?: AppMode): NavMatch |
   for (const item of groupedBottomNavItems) {
     if (!item.href) continue;
     if (isNavItemActive(pathname, item.href)) {
-      return { groupLabel: mode === "analysis" ? "분석" : "Settings", item };
+      return { groupLabel: mode === "analysis" ? "분석" : mode === "shopping" ? "쇼핑몰" : "Settings", item };
     }
   }
 

@@ -73,6 +73,32 @@ export async function GET(request: Request) {
 
   const mappedRows = (data ?? []) as DashboardRow[];
 
+  if (mappedRows.length > 0) {
+    const masterIds = Array.from(
+      new Set(mappedRows.map((row) => String(row.master_item_id ?? "").trim()).filter(Boolean)),
+    );
+    if (masterIds.length > 0) {
+      const masterMetaRes = await sb
+        .from("cms_master_item")
+        .select("master_item_id, material_code_default")
+        .in("master_item_id", masterIds);
+      if (masterMetaRes.error) {
+        return jsonError(masterMetaRes.error.message ?? "마스터 소재 조회 실패", 500);
+      }
+      const masterMaterialById = new Map(
+        (masterMetaRes.data ?? []).map((row) => [
+          String((row as { master_item_id?: string | null }).master_item_id ?? ""),
+          (row as { material_code_default?: string | null }).material_code_default ?? null,
+        ]),
+      );
+      for (const row of mappedRows) {
+        if (row.material_code) continue;
+        const key = String(row.master_item_id ?? "").trim();
+        row.material_code = masterMaterialById.get(key) ?? null;
+      }
+    }
+  }
+
   if (!channelId || !includeUnmapped || onlyOverrides || onlyAdjustments) {
     return NextResponse.json({ data: mappedRows }, { headers: { "Cache-Control": "no-store" } });
   }

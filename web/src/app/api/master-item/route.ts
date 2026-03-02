@@ -174,11 +174,16 @@ export async function DELETE(request: Request) {
 
   if (deleteError) {
     const isReferenceError = deleteError.code === "23503";
+    const lower = String(deleteError.message ?? "").toLowerCase();
+    const isAppendOnlySnapshotError =
+      lower.includes("cms_master_item_cn_raw_cost_snapshot") && lower.includes("append-only");
     return NextResponse.json(
       {
         error: isReferenceError
           ? "이 마스터를 참조하는 데이터가 있어 삭제할 수 없습니다. 먼저 연결된 데이터를 정리해 주세요."
-          : deleteError.message ?? "삭제에 실패했습니다.",
+          : isAppendOnlySnapshotError
+            ? "RAW 분석 스냅샷 이력 제약으로 삭제가 차단되었습니다. 최신 DB 마이그레이션 적용 후 다시 시도해 주세요."
+            : deleteError.message ?? "삭제에 실패했습니다.",
       },
       { status: 400 }
     );

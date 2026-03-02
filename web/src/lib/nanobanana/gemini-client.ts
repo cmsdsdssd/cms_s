@@ -14,7 +14,7 @@ type GeminiGenerateResult = {
 
 const DEFAULT_TIMEOUT_MS = 120_000;
 const DEFAULT_BASE_URL = "https://generativelanguage.googleapis.com";
-const DEFAULT_MODEL = "gemini-2.5-flash-image";
+const DEFAULT_MODEL = "gemini-3.1-flash-image-preview";
 
 function getModelCandidates() {
   const configured = (process.env.NANOBANANA_MODEL ?? "").trim();
@@ -24,7 +24,7 @@ function getModelCandidates() {
       .map((v) => v.trim())
       .filter(Boolean);
   }
-  return ["nano-banana-pro-preview", "nanobanana-pro", "nano-banana-pro", "gemini-3-pro-image-preview", DEFAULT_MODEL];
+  return [DEFAULT_MODEL, "nano-banana-pro-preview", "nanobanana-pro", "nano-banana-pro", "gemini-3-pro-image-preview", "gemini-2.5-flash-image"];
 }
 
 function toBase64(bytes: Uint8Array) {
@@ -92,14 +92,17 @@ export async function generateNanobananaImage(input: GeminiGenerateInput): Promi
   let lastErrorText = "";
 
   for (const model of modelCandidates) {
-    const endpoint = `${baseUrl}/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`;
+    const endpoint = `${baseUrl}/v1beta/models/${encodeURIComponent(model)}:generateContent`;
     for (let attempt = 0; attempt < 3; attempt += 1) {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), timeoutMs);
       try {
         const response = await fetch(endpoint, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: {
+            "Content-Type": "application/json",
+            "x-goog-api-key": apiKey,
+          },
           body: JSON.stringify(payload),
           signal: controller.signal,
         });

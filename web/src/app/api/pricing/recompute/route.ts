@@ -601,7 +601,7 @@ export async function POST(request: Request) {
     const weight = toNum(master.weight_default_g, 0);
     const deduction = toNum(master.deduction_weight_default_g, 0);
     const baseNetWeight = Math.max(weight - deduction, 0);
-    const applyRule1 = m.sync_rule_material_enabled !== false;
+    const applyRule1 = false;
     const applyRule2 = m.sync_rule_weight_enabled !== false;
     const applyRule3 = m.sync_rule_plating_enabled !== false;
     const applyRuleDecor = m.sync_rule_decoration_enabled !== false;
@@ -619,7 +619,7 @@ export async function POST(request: Request) {
     const materialRaw = netWeight * targetTick;
     const factor = factorMap.get(optionMaterialCode) ?? 1;
     const hasVariant = String(m.external_variant_code ?? "").trim().length > 0;
-    const needsR1 = applyRule1 && hasVariant && optionMaterialCode !== materialCode;
+    const needsR1 = false;
     const needsR2 = applyRule2 && hasVariant && optionSizeValue !== null && Number.isFinite(optionSizeValue);
     const needsR3 = applyRule3 && hasVariant && optionColorCode.length > 0;
     const needsR4Decor = applyRuleDecor && hasVariant && optionDecorationCode.length > 0;
@@ -652,7 +652,8 @@ export async function POST(request: Request) {
     let r2Delta = 0;
     let r3Delta = 0;
     let r4Delta = 0;
-    let effectiveMaterialCode = optionMaterialCode || materialCode;
+    let effectiveMaterialCode = materialCode;
+    let matchedR4Rule: SyncRuleR4Row | null = null;
     const ruleHitTrace: Array<{ rule_type: "R1" | "R2" | "R3" | "R4"; rule_id: string }> = [];
 
     const applyRuleSetPricing = useRuleSetEngine;
@@ -665,34 +666,36 @@ export async function POST(request: Request) {
         new Set([primaryR1BaseMaterialCode, inferredR1BaseMaterialCode, baseMaterialCode].filter((value) => value && value !== "00")),
       );
 
-      outerR1: for (const sourceMaterialCode of r1SourceCandidates) {
-        const sourcePurity = getMaterialPurityFromMap(purityMap, sourceMaterialCode, 0);
-        const sourceAdjust = materialAdjustMap.get(sourceMaterialCode) ?? 1;
-        for (const rule of (r1BySet.get(setId) ?? [])) {
-          const src = normalizeOptionalMaterialCode(rule.source_material_code);
-          const tgt = normalizeOptionalMaterialCode(rule.target_material_code);
-          const cat = String(rule.match_category_code ?? "").trim();
-          const category = String(master.category_code ?? "").trim();
-          if (!src) continue;
-          if (src !== sourceMaterialCode) continue;
-          if (tgt !== optionMaterialCode) continue;
-          if (cat && cat !== category) continue;
-          if (!isRangeMatched(rule.weight_min_g, rule.weight_max_g, netWeight)) continue;
+      if (applyRule1) {
+        outerR1: for (const sourceMaterialCode of r1SourceCandidates) {
+          const sourcePurity = getMaterialPurityFromMap(purityMap, sourceMaterialCode, 0);
+          const sourceAdjust = materialAdjustMap.get(sourceMaterialCode) ?? 1;
+          for (const rule of (r1BySet.get(setId) ?? [])) {
+            const src = normalizeOptionalMaterialCode(rule.source_material_code);
+            const tgt = normalizeOptionalMaterialCode(rule.target_material_code);
+            const cat = String(rule.match_category_code ?? "").trim();
+            const category = String(master.category_code ?? "").trim();
+            if (!src) continue;
+            if (src !== sourceMaterialCode) continue;
+            if (tgt !== optionMaterialCode) continue;
+            if (cat && cat !== category) continue;
+            if (!isRangeMatched(rule.weight_min_g, rule.weight_max_g, netWeight)) continue;
 
-          const ruleMul = Math.max(toNum(rule.option_weight_multiplier, 1), 0.000001);
-          const target18kMul = optionMaterialCode === "18" ? option18Multiplier : 1;
-          const mul = Math.max(ruleMul * target18kMul, 0.000001);
-          const sourceTick = tickByMaterialCode(sourceMaterialCode);
-          const targetTick = tickByMaterialCode(optionMaterialCode);
-          const sourceWeight = baseNetWeight;
-          const targetWeight = baseNetWeight * mul;
-          const sourceMaterialPrice = sourcePurity * sourceAdjust * sourceWeight * sourceTick;
-          const targetMaterialPrice = targetPurity * targetAdjust * targetWeight * targetTick;
-          r1Delta = roundByRule(targetMaterialPrice - sourceMaterialPrice, rule.rounding_unit, rule.rounding_mode);
-          r1SourceMaterialCodeUsed = sourceMaterialCode;
-          effectiveMaterialCode = tgt || optionMaterialCode || sourceMaterialCode;
-          ruleHitTrace.push({ rule_type: "R1", rule_id: rule.rule_id });
-          break outerR1;
+            const ruleMul = Math.max(toNum(rule.option_weight_multiplier, 1), 0.000001);
+            const target18kMul = optionMaterialCode === "18" ? option18Multiplier : 1;
+            const mul = Math.max(ruleMul * target18kMul, 0.000001);
+            const sourceTick = tickByMaterialCode(sourceMaterialCode);
+            const targetTick = tickByMaterialCode(optionMaterialCode);
+            const sourceWeight = baseNetWeight;
+            const targetWeight = baseNetWeight * mul;
+            const sourceMaterialPrice = sourcePurity * sourceAdjust * sourceWeight * sourceTick;
+            const targetMaterialPrice = targetPurity * targetAdjust * targetWeight * targetTick;
+            r1Delta = roundByRule(targetMaterialPrice - sourceMaterialPrice, rule.rounding_unit, rule.rounding_mode);
+            r1SourceMaterialCodeUsed = sourceMaterialCode;
+            effectiveMaterialCode = tgt || optionMaterialCode || sourceMaterialCode;
+            ruleHitTrace.push({ rule_type: "R1", rule_id: rule.rule_id });
+            break outerR1;
+          }
         }
       }
 
@@ -702,9 +705,8 @@ export async function POST(request: Request) {
         const cat = String(rule.match_category_code ?? "").trim();
         const category = String(master.category_code ?? "").trim();
         if (!mat) continue;
-        if (!cat) continue;
-        if (mat !== effectiveMaterialCode) continue;
-        if (cat !== category) continue;
+        if (mat !== materialCode) continue;
+        if (cat && cat !== category) continue;
         if (netWeight < Number(rule.weight_min_g) || netWeight > Number(rule.weight_max_g)) continue;
         const hasMarginBand = rule.margin_min_krw !== null && rule.margin_max_krw !== null;
         const singleMarginMode = hasMarginBand && Number(rule.margin_min_krw) === Number(rule.margin_max_krw);
@@ -724,13 +726,10 @@ export async function POST(request: Request) {
         break;
       }
 
-      const preR3Margin = r1Delta + r2Delta;
       for (const rule of (r3BySet.get(setId) ?? [])) {
         const cc = normalizePlatingComboCode(String(rule.color_code ?? ""));
         if (cc && cc !== optionColorCode) continue;
         const singleMarginMode = Number(rule.margin_min_krw) === Number(rule.margin_max_krw);
-        if (!singleMarginMode && (preR3Margin < Number(rule.margin_min_krw) || preR3Margin > Number(rule.margin_max_krw))) continue;
-
         let r3BaseDelta = Number(rule.delta_krw ?? 0);
         if (singleMarginMode && r3BaseDelta === 0) {
           r3BaseDelta = Number(rule.margin_min_krw ?? 0);
@@ -752,7 +751,7 @@ export async function POST(request: Request) {
         if (clr && clr !== optionColorCode) continue;
         if (cat && cat !== category) continue;
 
-        r4Delta = roundByRule(Number(rule.delta_krw ?? 0), rule.rounding_unit, rule.rounding_mode);
+        matchedR4Rule = rule;
         ruleHitTrace.push({ rule_type: "R4", rule_id: rule.rule_id });
         break;
       }
@@ -787,6 +786,10 @@ export async function POST(request: Request) {
     const laborRawBase = masterLaborSell + decorLaborSell;
     const laborBaseDelta = laborDeltaByMaster.get(m.master_item_id) ?? 0;
     const laborRaw = laborRawBase + laborBaseDelta;
+
+    if (matchedR4Rule) {
+      r4Delta = roundByRule(laborRawBase, matchedR4Rule.rounding_unit, matchedR4Rule.rounding_mode);
+    }
 
     const adjForLine = adjustments.filter((a) =>
       (a.channel_product_id && String(a.channel_product_id) === m.channel_product_id)
@@ -880,6 +883,7 @@ export async function POST(request: Request) {
         r1_base_material_policy_code: configuredR1BaseMaterialCode || null,
         r1_base_material_inferred_code: inferredR1BaseMaterialCode || null,
         effective_material_code: effectiveMaterialCode,
+        r2_match_material_code_used: materialCode,
         option_color_code: optionColorCode || null,
         option_decoration_code: optionDecorationCode || null,
         option_size_value: optionSizeValue,
@@ -895,6 +899,7 @@ export async function POST(request: Request) {
         labor_sot_master_sell_krw: masterLaborSell,
         labor_sot_decor_sell_krw: decorLaborSell,
         labor_sot_total_sell_krw: laborRawBase,
+        r4_labor_delta_source_krw: matchedR4Rule ? laborRawBase : 0,
         labor_base_price_delta_krw: laborBaseDelta,
         base_price_delta_krw: applyRule4 ? basePriceDelta : 0,
         option_price_delta_krw: applyRule4 ? optionPriceDelta : 0,

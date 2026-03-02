@@ -8,6 +8,7 @@ type PlatingOption = {
     color_code: string;
     thickness_code: string;
     display_name: string;
+    is_active: boolean;
 };
 
 function getSupabaseAdmin() {
@@ -26,7 +27,8 @@ export async function GET() {
 
     const { data, error } = await schema
         .from("cms_plating_variant")
-        .select("plating_variant_id, plating_type, color_code, thickness_code, display_name")
+        .select("plating_variant_id, plating_type, color_code, thickness_code, display_name, is_active")
+        .eq("is_active", true)
         .order("display_name", { ascending: true });
 
     if (error) {

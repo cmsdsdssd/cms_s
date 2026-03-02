@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { ActionBar } from "@/components/layout/action-bar";
+import { ShoppingPageHeader } from "@/components/layout/shopping-page-header";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input, Select } from "@/components/ui/field";
@@ -333,6 +334,19 @@ export default function ShoppingFactorsPage() {
   return (
     <div className="space-y-4">
       <ActionBar title="정책/팩터 관리" subtitle="채널별 마진/반올림/소재 배수(Factor Set) 설정" />
+
+      <ShoppingPageHeader
+        purpose="채널의 가격 정책(마진/반올림)과 소재 팩터 세트를 조정해 재계산 기준을 안정화합니다."
+        status={[
+          { label: "활성 정책", value: activePolicy ? "설정됨" : "미설정", tone: activePolicy ? "good" : "warn" },
+          { label: "팩터 세트", value: `${factorSetsQuery.data?.length ?? 0}개` },
+          { label: "선택 세트", value: selectedFactorSetId ? "선택됨" : "미선택", tone: selectedFactorSetId ? "good" : "warn" },
+        ]}
+        nextActions={[
+          { label: "옵션 룰 설정", href: "/settings/shopping/rules" },
+          { label: "가격 대시보드로", href: "/settings/shopping/dashboard" },
+        ]}
+      />
 
       <Card>
         <CardHeader title="채널 정책" description="마진/반올림/팩터 세트 연결" />

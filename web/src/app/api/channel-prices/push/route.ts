@@ -58,16 +58,10 @@ async function verifyAppliedVariantPrice(
     return { ok: false, current: null, status: last.status, raw: last.raw, error: last.error ?? "variant verify failed" };
   }
 
-  const verifyMatched = (currentPrice: number | null, additionalAmount: number | null): boolean => {
-    if (currentPrice === expectedPrice) return true;
-    if (typeof expectedAdditionalAmount === "number" && Number.isFinite(expectedAdditionalAmount)) {
-      if (additionalAmount !== null && Math.round(additionalAmount) === Math.round(expectedAdditionalAmount)) return true;
-    }
-    return false;
-  };
+  const verifyMatched = (currentPrice: number | null): boolean => currentPrice === expectedPrice;
 
   for (let i = 0; i < 2; i += 1) {
-    if (verifyMatched(last.currentPriceKrw, last.additionalAmount)) {
+    if (verifyMatched(last.currentPriceKrw)) {
       return { ok: true, current: last.currentPriceKrw, status: last.status, raw: last.raw };
     }
     await new Promise((resolve) => setTimeout(resolve, 600));
@@ -83,11 +77,11 @@ async function verifyAppliedVariantPrice(
       : "";
 
   return {
-    ok: verifyMatched(last.currentPriceKrw, last.additionalAmount),
+    ok: verifyMatched(last.currentPriceKrw),
     current: last.currentPriceKrw,
     status: last.status,
     raw: last.raw,
-    error: verifyMatched(last.currentPriceKrw, last.additionalAmount)
+    error: verifyMatched(last.currentPriceKrw)
       ? undefined
       : `VERIFY_MISMATCH expected=${expectedPrice} actual=${last.currentPriceKrw ?? "null"}${expectedAdditionalLabel}`,
   };
@@ -653,23 +647,7 @@ export async function POST(request: Request) {
       })();
 
       if (verifyPending) {
-        successCount += 1;
-        if (variantCode) {
-          const masterBaseTarget = masterFallbackTarget.get(masterKey);
-          let basePriceForDelta: number | null = Number.isFinite(Number(masterBaseTarget ?? Number.NaN))
-            ? Math.round(Number(masterBaseTarget))
-            : null;
-          if (basePriceForDelta === null) {
-            const base = await getBaseSnapshot(externalProductNo);
-            if (base.ok && base.currentPriceKrw !== null) basePriceForDelta = base.currentPriceKrw;
-          }
-          if (basePriceForDelta !== null) {
-            const delta = Math.round(targetPrice - basePriceForDelta);
-            const byVariant = successfulVariantDeltaByProduct.get(String(c.external_product_no)) ?? new Map<string, number>();
-            byVariant.set(variantCode, delta);
-            successfulVariantDeltaByProduct.set(String(c.external_product_no), byVariant);
-          }
-        }
+        skippedCount += 1;
         itemRows.push({
           job_id: jobId,
           channel_id: c.channel_id,
@@ -679,11 +657,11 @@ export async function POST(request: Request) {
           external_variant_code: variantCode,
           before_price_krw: c.current_channel_price_krw,
           target_price_krw: targetPrice,
-          after_price_krw: targetPrice,
-          status: "SUCCESS",
+          after_price_krw: c.current_channel_price_krw,
+          status: "SKIPPED",
           http_status: pushRes.status,
-          error_code: null,
-          error_message: null,
+          error_code: "VERIFY_PENDING",
+          error_message: "카페24 반영 검증이 대기 상태여서 성공 처리하지 않았습니다",
           raw_response_json: { push: pushRes.raw, verify: { pending: true } },
         });
         continue;

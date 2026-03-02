@@ -19,8 +19,7 @@ import { findNavMatch } from "@/components/layout/nav-items";
 import { CommandPalette } from "@/components/layout/command-palette";
 import { ThemeToggle } from "@/components/ui/theme-toggle";
 import { MarketTicker } from "@/components/ui/market-ticker";
-import { getToggleTargetPath } from "@/lib/analysis-mode";
-import { isAnalysisPath } from "@/components/layout/nav-items";
+import { getCycleToggleMeta, getWorkspaceModeLabel } from "@/lib/analysis-mode";
 
 interface GlobalTopBarProps {
   onMobileMenuOpen: () => void;
@@ -31,7 +30,8 @@ export function GlobalTopBar({ onMobileMenuOpen, onWorkbenchOpen }: GlobalTopBar
   const pathname = usePathname();
   const router = useRouter();
   const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
-  const analysisMode = isAnalysisPath(pathname);
+  const cycleToggle = getCycleToggleMeta(pathname);
+  const currentModeLabel = getWorkspaceModeLabel(pathname);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -135,21 +135,19 @@ export function GlobalTopBar({ onMobileMenuOpen, onWorkbenchOpen }: GlobalTopBar
 
       {/* Right Actions */}
       <div className="flex items-center gap-2 sm:gap-4 ml-auto">
-        {analysisMode ? (
-          <span className="hidden sm:inline-flex items-center rounded-full border border-[var(--hairline)] bg-[var(--chip)] px-2.5 py-1 text-xs font-semibold text-[var(--foreground)]">
-            분석 모드
-          </span>
-        ) : null}
+        <span className="hidden sm:inline-flex items-center rounded-full border border-[var(--hairline)] bg-[var(--chip)] px-2.5 py-1 text-xs font-semibold text-[var(--foreground)]">
+          {currentModeLabel} 모드
+        </span>
 
         <Button
           variant="secondary"
           size="sm"
-          onClick={() => router.push(getToggleTargetPath(pathname))}
+          onClick={() => router.push(cycleToggle.targetPath)}
           className="hidden sm:inline-flex"
-          title={analysisMode ? "업무 모드로 전환" : "분석 모드로 전환"}
+          title={`${cycleToggle.label}으로 이동`}
         >
           <ArrowLeftRight className="h-4 w-4" />
-          {analysisMode ? "업무" : "분석"}
+          {cycleToggle.label}
         </Button>
 
         {/* Quick Actions ... */}

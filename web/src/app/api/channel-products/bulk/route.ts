@@ -1,9 +1,12 @@
 import { NextResponse } from "next/server";
 import { getShopAdminClient, jsonError, parseJsonObject } from "@/lib/shop/admin";
 import { normalizeMaterialCode } from "@/lib/material-factors";
+import { normalizePlatingComboCode } from "@/lib/shop/sync-rules";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
+
+const isHundredStep = (value: number): boolean => Number.isInteger(value) && value % 100 === 0;
 
 type BulkRow = {
   channel_id: string;
@@ -61,7 +64,7 @@ function normalizeRow(raw: unknown): { ok: true; row: BulkRow } | { ok: false; e
   const optionPriceMode: "SYNC" | "MANUAL" = optionPriceModeRaw === "MANUAL" ? "MANUAL" : "SYNC";
   const syncRuleSetId = typeof body.sync_rule_set_id === "string" ? body.sync_rule_set_id.trim() || null : null;
   const optionMaterialCode = typeof body.option_material_code === "string" ? normalizeMaterialCode(body.option_material_code) || null : null;
-  const optionColorCode = typeof body.option_color_code === "string" ? body.option_color_code.trim().toUpperCase() || null : null;
+  const optionColorCode = typeof body.option_color_code === "string" ? normalizePlatingComboCode(body.option_color_code) || null : null;
   const optionDecorationCode = typeof body.option_decoration_code === "string" ? body.option_decoration_code.trim().toUpperCase() || null : null;
   const optionSizeValue =
     body.option_size_value === null
@@ -104,6 +107,9 @@ function normalizeRow(raw: unknown): { ok: true; row: BulkRow } | { ok: false; e
   }
   if (optionPriceDeltaKrw !== null && (!Number.isFinite(optionPriceDeltaKrw) || optionPriceDeltaKrw < -100000000 || optionPriceDeltaKrw > 100000000)) {
     return { ok: false, error: "option_price_delta_krw must be between -100000000 and 100000000" };
+  }
+  if (optionPriceDeltaKrw !== null && !isHundredStep(Math.round(optionPriceDeltaKrw))) {
+    return { ok: false, error: "option_price_delta_krw must be 100 KRW step" };
   }
   if (optionManualTargetKrw !== null && (!Number.isFinite(optionManualTargetKrw) || optionManualTargetKrw < 0 || optionManualTargetKrw > 1000000000)) {
     return { ok: false, error: "option_manual_target_krw must be between 0 and 1000000000" };

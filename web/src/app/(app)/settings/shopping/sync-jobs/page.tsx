@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ActionBar } from "@/components/layout/action-bar";
+import { ShoppingPageHeader } from "@/components/layout/shopping-page-header";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
 import { Select } from "@/components/ui/field";
 import { shopApiGet } from "@/lib/shop/http";
@@ -19,6 +20,7 @@ type SyncJob = {
   skipped_count: number;
   started_at: string;
   finished_at: string | null;
+  created_at?: string;
 };
 
 type SyncJobItem = {
@@ -33,9 +35,17 @@ type SyncJobItem = {
   error_code: string | null;
   error_message: string | null;
   raw_response_json?: unknown;
+  created_at?: string;
+  updated_at?: string;
 };
 
 const fmt = (v: number | null | undefined) => (typeof v === "number" && Number.isFinite(v) ? v.toLocaleString() : "-");
+const fmtTs = (v: string | null | undefined) => {
+  if (!v) return "-";
+  const d = new Date(v);
+  if (Number.isNaN(d.getTime())) return "-";
+  return d.toLocaleString("ko-KR");
+};
 
 const toJobStatusKo = (value: SyncJob["status"]) => {
   if (value === "RUNNING") return "진행중";
@@ -92,6 +102,19 @@ export default function ShoppingSyncJobsPage() {
     <div className="space-y-4">
       <ActionBar title="동기화 로그" subtitle="push 작업 및 item 결과 추적" />
 
+      <ShoppingPageHeader
+        purpose="반영 작업의 성공/실패/건너뜀을 추적하고 실패 항목의 원인을 빠르게 확인합니다."
+        status={[
+          { label: "최근 작업", value: `${jobs.length}건` },
+          { label: "선택 작업", value: selectedJobId ? selectedJobId.slice(0, 8) : "미선택", tone: selectedJobId ? "good" : "warn" },
+          { label: "상세 항목", value: `${items.length}건` },
+        ]}
+        nextActions={[
+          { label: "가격 대시보드로", href: "/settings/shopping/dashboard" },
+          { label: "채널 설정으로", href: "/settings/shopping/channels" },
+        ]}
+      />
+
       <Card>
         <CardHeader title="조회 조건" />
         <CardBody>
@@ -115,6 +138,7 @@ export default function ShoppingSyncJobsPage() {
                 <thead className="bg-[var(--panel)] text-left">
                   <tr>
                     <th className="px-3 py-2">작업 ID(job_id)</th>
+                    <th className="px-3 py-2">동기화 시간(sync_time)</th>
                     <th className="px-3 py-2">상태(status)</th>
                     <th className="px-3 py-2">성공/실패/건너뜀</th>
                   </tr>
@@ -127,6 +151,7 @@ export default function ShoppingSyncJobsPage() {
                       onClick={() => setSelectedJobId(job.job_id)}
                     >
                       <td className="px-3 py-2">{job.job_id}</td>
+                      <td className="px-3 py-2 whitespace-nowrap">{fmtTs(job.started_at || job.created_at)}</td>
                       <td className="px-3 py-2">{toJobStatusKo(job.status)}</td>
                       <td className="px-3 py-2">{job.success_count}/{job.failed_count}/{job.skipped_count}</td>
                     </tr>
@@ -149,6 +174,7 @@ export default function ShoppingSyncJobsPage() {
                     <th className="px-3 py-2">반영전(before_price_krw)</th>
                     <th className="px-3 py-2">목표가(target_price_krw)</th>
                     <th className="px-3 py-2">반영후(after_price_krw)</th>
+                    <th className="px-3 py-2">동기화 시간(sync_time)</th>
                     <th className="px-3 py-2">상태(status)</th>
                     <th className="px-3 py-2">오류코드(error_code)</th>
                     <th className="px-3 py-2">오류메시지(error_message)</th>
@@ -162,6 +188,7 @@ export default function ShoppingSyncJobsPage() {
                       <td className="px-3 py-2">{fmt(it.before_price_krw)}</td>
                       <td className="px-3 py-2">{fmt(it.target_price_krw)}</td>
                       <td className="px-3 py-2">{fmt(it.after_price_krw)}</td>
+                      <td className="px-3 py-2 whitespace-nowrap">{fmtTs(it.updated_at ?? it.created_at)}</td>
                       <td className="px-3 py-2">{toItemStatusKo(it.status)}</td>
                       <td className="px-3 py-2">{it.error_code ?? "-"}</td>
                       <td className="px-3 py-2 text-xs">{it.error_message ?? "-"}</td>

@@ -5,6 +5,7 @@ import {
   getMaterialPurityFromMap,
   isRangeMatched,
   isSilverMaterial,
+  normalizePlatingComboCode,
   parseOptionRangeExpr,
   roundByRule,
   toNum,
@@ -16,6 +17,14 @@ import { normalizeMaterialCode } from "@/lib/material-factors";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
+
+const isHundredStep = (value: number): boolean => Number.isInteger(value) && value % 100 === 0;
+
+const normalizeOptionalMaterialCode = (value: unknown): string => {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "";
+  return normalizeMaterialCode(raw);
+};
 
 type Params = { params: Promise<{ id: string }> };
 
@@ -38,7 +47,7 @@ export async function PUT(request: Request, { params }: Params) {
   if (body.external_variant_code !== undefined) patch.external_variant_code = String(body.external_variant_code ?? "").trim();
   if (body.sync_rule_set_id !== undefined) patch.sync_rule_set_id = typeof body.sync_rule_set_id === "string" ? body.sync_rule_set_id.trim() || null : null;
   if (body.option_material_code !== undefined) patch.option_material_code = typeof body.option_material_code === "string" ? normalizeMaterialCode(body.option_material_code) || null : null;
-  if (body.option_color_code !== undefined) patch.option_color_code = typeof body.option_color_code === "string" ? body.option_color_code.trim().toUpperCase() || null : null;
+  if (body.option_color_code !== undefined) patch.option_color_code = typeof body.option_color_code === "string" ? normalizePlatingComboCode(body.option_color_code) || null : null;
   if (body.option_decoration_code !== undefined) patch.option_decoration_code = typeof body.option_decoration_code === "string" ? body.option_decoration_code.trim().toUpperCase() || null : null;
   if (body.option_size_value !== undefined) {
     patch.option_size_value =
@@ -93,6 +102,10 @@ export async function PUT(request: Request, { params }: Params) {
   if (optionPriceDeltaKrw !== undefined && optionPriceDeltaKrw !== null && (!Number.isFinite(optionPriceDeltaKrw) || optionPriceDeltaKrw < -100000000 || optionPriceDeltaKrw > 100000000)) {
     return jsonError("option_price_delta_krw must be between -100000000 and 100000000", 400);
   }
+  if (optionPriceDeltaKrw !== undefined && optionPriceDeltaKrw !== null && !isHundredStep(Math.round(optionPriceDeltaKrw))) {
+    return jsonError("option_price_delta_krw must be 100 KRW step", 400);
+  }
+  const optionDeltaReason = typeof body.option_delta_reason === "string" ? body.option_delta_reason.trim() : "";
   const optionPriceMode = patch.option_price_mode as string | undefined;
   if (optionPriceMode !== undefined && !["SYNC", "MANUAL"].includes(optionPriceMode)) {
     return jsonError("option_price_mode must be SYNC or MANUAL", 400);
@@ -113,6 +126,26 @@ export async function PUT(request: Request, { params }: Params) {
     return jsonError("sync_rule_set_id is required when option_price_mode is SYNC", 400);
   }
 
+  if (optionPriceDeltaKrw !== undefined) {
+    const currentDeltaRes = await sb
+      .from("sales_channel_product")
+      .select("option_price_delta_krw")
+      .eq("channel_product_id", channelProductId)
+      .maybeSingle();
+    if (currentDeltaRes.error) return jsonError(currentDeltaRes.error.message ?? "기존 옵션 추가금 조회 실패", 500);
+    const currentDelta = currentDeltaRes.data;
+    if (!currentDelta) return jsonError("channel product not found", 404);
+
+    const previousDelta =
+      currentDelta.option_price_delta_krw === null || currentDelta.option_price_delta_krw === undefined
+        ? null
+        : Math.round(Number(currentDelta.option_price_delta_krw));
+    const nextDelta = optionPriceDeltaKrw === null ? null : Math.round(optionPriceDeltaKrw);
+    if (nextDelta !== previousDelta && !optionDeltaReason) {
+      return jsonError("option_delta_reason is required when option_price_delta_krw changes", 400);
+    }
+  }
+
   if (optionPriceMode === "SYNC") {
     const currentRes = await sb
       .from("sales_channel_product")
@@ -125,7 +158,7 @@ export async function PUT(request: Request, { params }: Params) {
 
     const effectiveRuleSetId = String((syncRuleSetId ?? current.sync_rule_set_id ?? "")).trim();
     const requestedMaterial = normalizeMaterialCode(String((patch.option_material_code ?? current.option_material_code ?? "")));
-    const effectiveColor = String((patch.option_color_code ?? current.option_color_code ?? "")).trim().toUpperCase();
+    const effectiveColor = normalizePlatingComboCode(String((patch.option_color_code ?? current.option_color_code ?? "")));
     const effectiveSizeRaw = patch.option_size_value ?? current.option_size_value;
     const effectiveSize = effectiveSizeRaw === null || effectiveSizeRaw === undefined || effectiveSizeRaw === "" ? null : Number(effectiveSizeRaw);
 
@@ -203,6 +236,49 @@ export async function PUT(request: Request, { params }: Params) {
     const defaultNetWeight = Math.max(Number(master.weight_default_g ?? 0) - Number(master.deduction_weight_default_g ?? 0), 0);
     const netWeight = Math.max(defaultNetWeight + (Number.isFinite(effectiveSizeWeightDelta) ? effectiveSizeWeightDelta : 0), 0);
     const baseMaterial = normalizeMaterialCode(String(master.material_code_default ?? ""));
+
+    let r1BaseMaterial = baseMaterial;
+    const [policyBaseRes, siblingRes] = await Promise.all([
+      sb
+        .from("channel_option_value_policy")
+        .select("axis_key, axis_value")
+        .eq("channel_id", String(current.channel_id ?? ""))
+        .eq("master_item_id", String(current.master_item_id ?? ""))
+        .eq("rule_type", "R1")
+        .eq("value_mode", "BASE")
+        .limit(50),
+      sb
+        .from("sales_channel_product")
+        .select("option_material_code, external_variant_code, sync_rule_material_enabled")
+        .eq("channel_id", String(current.channel_id ?? ""))
+        .eq("master_item_id", String(current.master_item_id ?? ""))
+        .eq("is_active", true),
+    ]);
+    if (policyBaseRes.error) return jsonError(policyBaseRes.error.message ?? "R1 기준 정책 조회 실패", 500);
+    if (siblingRes.error) return jsonError(siblingRes.error.message ?? "R1 기준 옵션 조회 실패", 500);
+
+    const policyCandidate = (policyBaseRes.data ?? []).find((r) => {
+      const material = normalizeMaterialCode(String((r as { axis_value?: string | null }).axis_value ?? ""));
+      return Boolean(material) && material !== "00";
+    });
+    const policyBaseMaterial = normalizeMaterialCode(String((policyCandidate as { axis_value?: string | null } | undefined)?.axis_value ?? ""));
+
+    if (policyBaseMaterial && policyBaseMaterial !== "00") {
+      r1BaseMaterial = policyBaseMaterial;
+    } else {
+      const counts = new Map<string, number>();
+      const siblings = (siblingRes.data ?? []) as Array<{ option_material_code: string | null; external_variant_code: string | null; sync_rule_material_enabled: boolean | null }>;
+      const preferRows = siblings.filter((r) => String(r.external_variant_code ?? "").trim() && r.sync_rule_material_enabled === false);
+      const sourceRows = preferRows.length > 0 ? preferRows : siblings.filter((r) => String(r.external_variant_code ?? "").trim());
+      for (const row of sourceRows) {
+        const code = normalizeMaterialCode(String(row.option_material_code ?? ""));
+        if (!code || code === "00") continue;
+        counts.set(code, (counts.get(code) ?? 0) + 1);
+      }
+      const inferred = Array.from(counts.entries()).sort((a, b) => b[1] - a[1])[0]?.[0] ?? "";
+      if (inferred) r1BaseMaterial = inferred;
+    }
+
     const category = String(master.category_code ?? "").trim();
     const candidateMaterial = requestedMaterial || baseMaterial;
 
@@ -223,24 +299,26 @@ export async function PUT(request: Request, { params }: Params) {
     let r1Delta = 0;
     let r2Delta = 0;
 
-    const basePurity = getMaterialPurityFromMap(purityMap, baseMaterial, 0);
+    const basePurity = getMaterialPurityFromMap(purityMap, r1BaseMaterial, 0);
     const targetPurity = getMaterialPurityFromMap(purityMap, candidateMaterial, 0);
-    const baseAdjust = materialAdjustMap.get(baseMaterial) ?? 1;
+    const baseAdjust = materialAdjustMap.get(r1BaseMaterial) ?? 1;
     const targetAdjust = materialAdjustMap.get(candidateMaterial) ?? 1;
     const default18kMul = Math.max(toNum(policyRes.data?.option_18k_weight_multiplier, 1.2), 0.000001);
 
     const hasR1Match = !enableR1 || (r1Res.data ?? []).some((rule) => {
       const r = rule as SyncRuleR1Row;
-      const src = normalizeMaterialCode(String(r.source_material_code ?? ""));
-      const tgt = normalizeMaterialCode(String(r.target_material_code ?? ""));
+      const src = normalizeOptionalMaterialCode(r.source_material_code);
+      const tgt = normalizeOptionalMaterialCode(r.target_material_code);
       const cat = String(r.match_category_code ?? "").trim();
-      if (src && src !== baseMaterial) return false;
+      if (src && src !== r1BaseMaterial) return false;
       if (tgt && tgt !== candidateMaterial) return false;
       if (cat && cat !== category) return false;
       const matched = isRangeMatched(r.weight_min_g, r.weight_max_g, netWeight);
       if (matched) {
-        const mul = Math.max(toNum(r.option_weight_multiplier, default18kMul), 0.000001);
-        const sourceTick = tickByMaterialCode(baseMaterial);
+        const ruleMul = Math.max(toNum(r.option_weight_multiplier, 1), 0.000001);
+        const target18kMul = candidateMaterial === "18" ? default18kMul : 1;
+        const mul = Math.max(ruleMul * target18kMul, 0.000001);
+        const sourceTick = tickByMaterialCode(r1BaseMaterial);
         const targetTick = tickByMaterialCode(candidateMaterial);
         const sourceWeight = defaultNetWeight;
         const targetWeight = defaultNetWeight * mul;
@@ -256,27 +334,33 @@ export async function PUT(request: Request, { params }: Params) {
     const hasR2Match = !enableR2 || (r2Res.data ?? []).some((rule) => {
       const r = rule as SyncRuleR2Row;
       if (r.linked_r1_rule_id && hitR1RuleId !== r.linked_r1_rule_id) return false;
-      const mat = normalizeMaterialCode(String(r.match_material_code ?? ""));
+      const mat = normalizeOptionalMaterialCode(r.match_material_code);
       const cat = String(r.match_category_code ?? "").trim();
       if (mat && mat !== effectiveMaterialCode) return false;
       if (cat && cat !== category) return false;
       if (netWeight < Number(r.weight_min_g) || netWeight > Number(r.weight_max_g)) return false;
       const hasMarginBand = r.margin_min_krw !== null && r.margin_max_krw !== null;
+      const singleMarginMode = hasMarginBand && Number(r.margin_min_krw) === Number(r.margin_max_krw);
       const matched = hasMarginBand
-        ? (r1Delta >= Number(r.margin_min_krw) && r1Delta <= Number(r.margin_max_krw))
+        ? (singleMarginMode || (r1Delta >= Number(r.margin_min_krw) && r1Delta <= Number(r.margin_max_krw)))
         : parseOptionRangeExpr(r.option_range_expr)(effectiveSize);
       if (matched) {
-        r2Delta = roundByRule(Number(r.delta_krw ?? 0), r.rounding_unit, r.rounding_mode);
+        let r2BaseDelta = Number(r.delta_krw ?? 0);
+        if (singleMarginMode && r2BaseDelta === 0) {
+          r2BaseDelta = Number(r.margin_min_krw ?? 0);
+        }
+        r2Delta = roundByRule(r2BaseDelta, r.rounding_unit, r.rounding_mode);
       }
       return matched;
     });
 
     const hasR3Match = !enableR3 || (r3Res.data ?? []).some((rule) => {
       const r = rule as SyncRuleR3Row;
-      const cc = String(r.color_code ?? "").trim().toUpperCase();
+      const cc = normalizePlatingComboCode(String(r.color_code ?? ""));
       if (cc && cc !== effectiveColor) return false;
       const preR3Margin = r1Delta + r2Delta;
-      return preR3Margin >= Number(r.margin_min_krw) && preR3Margin <= Number(r.margin_max_krw);
+      const singleMarginMode = Number(r.margin_min_krw) === Number(r.margin_max_krw);
+      return singleMarginMode || (preR3Margin >= Number(r.margin_min_krw) && preR3Margin <= Number(r.margin_max_krw));
     });
 
     const effectiveDecoration = String((patch.option_decoration_code ?? current.option_decoration_code ?? "")).trim().toUpperCase();
@@ -286,8 +370,8 @@ export async function PUT(request: Request, { params }: Params) {
       const linkedR1 = String((rule as { linked_r1_rule_id?: string | null }).linked_r1_rule_id ?? "").trim();
       if (linkedR1 && hitR1RuleId !== linkedR1) return false;
       const decoration = String((rule as { match_decoration_code?: string | null }).match_decoration_code ?? "").trim().toUpperCase();
-      const mat = normalizeMaterialCode(String((rule as { match_material_code?: string | null }).match_material_code ?? ""));
-      const clr = String((rule as { match_color_code?: string | null }).match_color_code ?? "").trim().toUpperCase();
+      const mat = normalizeOptionalMaterialCode((rule as { match_material_code?: string | null }).match_material_code ?? "");
+      const clr = normalizePlatingComboCode(String((rule as { match_color_code?: string | null }).match_color_code ?? ""));
       const cat = String((rule as { match_category_code?: string | null }).match_category_code ?? "").trim();
       if (decoration && decoration !== effectiveDecoration) return false;
       if (mat && mat !== effectiveMaterialCode) return false;

@@ -18,7 +18,7 @@ import {
   getNavItemsByMode,
 } from "./nav-items";
 import { Button } from "@/components/ui/button";
-import { getToggleTargetPath } from "@/lib/analysis-mode";
+import { getCycleToggleMeta, getToggleTargetPath } from "@/lib/analysis-mode";
 import { BrandMark } from "@/components/layout/brand-mark";
 
 interface SidebarNavProps {
@@ -32,6 +32,7 @@ export function SidebarNav({ mobileOpen, onMobileClose, onWorkbenchOpen }: Sideb
   const router = useRouter();
   const [isCollapsed, setIsCollapsed] = useState(false);
   const mode = resolveMode(pathname);
+  const cycleToggle = getCycleToggleMeta(pathname);
   const navItems = getNavItemsByMode(mode);
   const bottomNavItems = getBottomNavItemsByMode(mode);
 
@@ -133,7 +134,7 @@ export function SidebarNav({ mobileOpen, onMobileClose, onWorkbenchOpen }: Sideb
             type="button"
             className="flex items-center gap-2 font-bold text-[var(--foreground)]"
             onClick={handleModeToggle}
-            title={mode === "analysis" ? "업무 모드로 전환" : "분석 모드로 전환"}
+            title={`${cycleToggle.label}으로 이동`}
           >
             <div className="flex h-8 w-8 items-center justify-center rounded-[var(--radius-md)] border border-[color:var(--hairline)] bg-gradient-to-br from-[var(--panel)] to-[var(--surface)] shadow-[var(--shadow-sm)] text-[#b68a2e]">
               <BrandMark className="h-5 w-5" />
@@ -146,7 +147,7 @@ export function SidebarNav({ mobileOpen, onMobileClose, onWorkbenchOpen }: Sideb
              type="button"
              onClick={handleModeToggle}
              className="flex h-8 w-8 items-center justify-center rounded-[var(--radius-md)] border border-[color:var(--hairline)] bg-gradient-to-br from-[var(--panel)] to-[var(--surface)] shadow-[var(--shadow-sm)] text-[#b68a2e]"
-             title={mode === "analysis" ? "업무 모드로 전환" : "분석 모드로 전환"}
+             title={`${cycleToggle.label}으로 이동`}
            >
              <BrandMark className="h-5 w-5" />
             </button>
@@ -235,7 +236,7 @@ export function SidebarNav({ mobileOpen, onMobileClose, onWorkbenchOpen }: Sideb
                 className="mb-4 flex w-full items-center justify-center gap-2 rounded-[var(--radius-md)] border border-[var(--hairline)] px-3 py-2 text-sm font-medium text-[var(--muted-strong)]"
               >
                 <ArrowLeftRight className="h-4 w-4" />
-                {mode === "analysis" ? "업무 모드로" : "분석 모드로"}
+                {`${cycleToggle.label}으로`}
               </button>
               {navItems.map((group) => (
                 <div key={group.label} className="mb-6">

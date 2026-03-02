@@ -172,6 +172,7 @@ export async function GET(request: Request) {
     sb
       .from("cms_plating_variant")
       .select("color_code")
+      .eq("is_active", true)
       .limit(5000),
     sb
       .from("sales_channel_product")
@@ -347,7 +348,6 @@ export async function GET(request: Request) {
   const colors = Array.from(
     new Set([
       ...(platingRes.data ?? []).map((row) => String((row as { color_code?: string | null }).color_code ?? "").trim().toUpperCase()),
-      ...(mappedColorRes.data ?? []).map((row) => String((row as { option_color_code?: string | null }).option_color_code ?? "").trim().toUpperCase()),
     ].filter((v) => v.length > 0)),
   ).sort((a, b) => a.localeCompare(b));
 

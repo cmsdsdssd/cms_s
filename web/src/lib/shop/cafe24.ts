@@ -425,6 +425,12 @@ function parseVariantOptions(optionsRaw: unknown): Cafe24VariantOption[] {
     .filter((v): v is Cafe24VariantOption => Boolean(v));
 }
 
+function stripPriceDeltaSuffix(text: string): string {
+  return String(text ?? "")
+    .replace(/\s*\([+-][\d,]+원\)\s*$/u, "")
+    .trim();
+}
+
 function parseVariantListFromJson(json: Record<string, unknown>): Cafe24VariantSummary[] {
   const list = Array.isArray(json.variants)
     ? json.variants
@@ -811,6 +817,7 @@ export async function cafe24UpdateVariantAdditionalAmount(
   let lastJson: unknown = null;
   let lastErr = "unknown";
   let lastAttempt = "unknown";
+  let hadSuccessfulButUnverified = false;
   const verifyDelaysMs = UPDATE_VERIFY_DELAYS_MS;
 
   const tryUpdateByProductNoLike = async (productNo: string): Promise<boolean> => {
@@ -873,7 +880,8 @@ export async function cafe24UpdateVariantAdditionalAmount(
             verify_expected_additional_amount: asNumber,
             verify_pending: true,
           };
-          return true;
+          hadSuccessfulButUnverified = true;
+          continue;
         }
 
           lastErr = extractApiErrorMessage(json, res.status);
@@ -893,6 +901,10 @@ export async function cafe24UpdateVariantAdditionalAmount(
 
   const resolvedProductNo = await lookupProductNoByProductCode(account, accessToken, productNoLike);
   if (resolvedProductNo && await tryUpdateByProductNoLike(resolvedProductNo)) {
+    return { ok: true, status: lastStatus, raw: lastJson, attempt_key: lastAttempt };
+  }
+
+  if (hadSuccessfulButUnverified) {
     return { ok: true, status: lastStatus, raw: lastJson, attempt_key: lastAttempt };
   }
 
@@ -925,7 +937,11 @@ export async function cafe24GetProductOptions(
         lastJson = json;
         lastErr = extractApiErrorMessage(json, res.status);
         if (res.ok) {
-          const list = Array.isArray(json.options) ? json.options : [];
+          const listDirect = Array.isArray(json.options) ? json.options : [];
+          const listNested = Array.isArray((json.option as Record<string, unknown> | undefined)?.options)
+            ? ((json.option as Record<string, unknown>).options as unknown[])
+            : [];
+          const list = listDirect.length > 0 ? listDirect : listNested;
           return list
             .map((entry) => {
               if (!entry || typeof entry !== "object") return null;
@@ -995,7 +1011,8 @@ export async function cafe24UpdateProductOptionLabels(
       for (const valueRaw of values) {
         if (!valueRaw || typeof valueRaw !== "object") continue;
         const value = valueRaw as Record<string, unknown>;
-        if (String(value.option_text ?? "").trim() === currentText) {
+        const optionText = String(value.option_text ?? "").trim();
+        if (optionText === currentText || stripPriceDeltaSuffix(optionText) === stripPriceDeltaSuffix(currentText)) {
           value.option_text = nextText;
           updated += 1;
         }
@@ -1010,17 +1027,33 @@ export async function cafe24UpdateProductOptionLabels(
   const resolvedProductNo = await lookupProductNoByProductCode(account, accessToken, productNoLike);
   const productNoForWrite = resolvedProductNo ?? productNoLike;
   const basePath = `${adminBase(account)}/products/${productNoFromValue(productNoForWrite)}/options`;
-  const body = {
-    request: {
-      options,
-      original_options: source.options,
-    },
-  };
+  const sourceOptionContainer = (() => {
+    if (!source.raw || typeof source.raw !== "object") return null;
+    const obj = source.raw as Record<string, unknown>;
+    if (!obj.option || typeof obj.option !== "object") return null;
+    return obj.option as Record<string, unknown>;
+  })();
+
+  const body = sourceOptionContainer
+    ? {
+        request: {
+          option: {
+            ...sourceOptionContainer,
+            options,
+          },
+        },
+      }
+    : {
+        request: {
+          options,
+          original_options: source.options,
+        },
+      };
 
   let lastStatus = 0;
   let lastJson: unknown = null;
   let lastErr = "unknown";
-  let lastAttempt = "update_options";
+  const lastAttempt = "update_options";
 
   for (const headers of adminHeaderCandidates(accessToken, account.api_version)) {
     for (const url of [withShopNo(basePath, account.shop_no), basePath]) {
