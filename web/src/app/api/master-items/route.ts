@@ -104,7 +104,11 @@ export async function GET(request: Request) {
     return NextResponse.json({ data: data ?? [] }, { headers: { "Cache-Control": "no-store" } });
   }
 
-  const { data, error } = await supabase.from("cms_master_item").select("*").limit(100);
+  const { data, error } = await supabase
+    .from("cms_master_item")
+    .select("*")
+    .order("created_at", { ascending: false })
+    .limit(300);
   if (error) {
     return NextResponse.json({ error: error.message ?? "데이터 조회 실패" }, { status: 500 });
   }
