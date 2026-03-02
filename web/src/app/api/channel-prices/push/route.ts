@@ -97,6 +97,7 @@ export async function POST(request: Request) {
 
   const channelId = String(body.channel_id ?? "").trim();
   const channelProductIds = parseUuidArray(body.channel_product_ids);
+  const pinnedComputeRequestId = String(body.compute_request_id ?? "").trim();
   const runType = String(body.run_type ?? "MANUAL").toUpperCase() === "AUTO" ? "AUTO" : "MANUAL";
   const dryRun = body.dry_run === true;
   const syncOptionLabels = body.sync_option_labels !== false;
@@ -138,6 +139,28 @@ export async function POST(request: Request) {
   const initialCandidates = await filterActiveCandidates(
     (initialRes.data ?? []).filter((r) => r.channel_product_id && r.external_product_no),
   );
+
+  let pinnedTargetByChannelProduct = new Map<string, number>();
+  if (pinnedComputeRequestId) {
+    let pinnedQuery = sb
+      .from("pricing_snapshot")
+      .select("channel_product_id, final_target_price_krw")
+      .eq("channel_id", channelId)
+      .eq("compute_request_id", pinnedComputeRequestId);
+    if (channelProductIds && channelProductIds.length > 0) {
+      pinnedQuery = pinnedQuery.in("channel_product_id", channelProductIds);
+    }
+    const pinnedRes = await pinnedQuery;
+    if (pinnedRes.error) return jsonError(pinnedRes.error.message ?? "고정 스냅샷 조회 실패", 500);
+    const pinnedPairs: Array<[string, number]> = (pinnedRes.data ?? [])
+      .map((r) => [String(r.channel_product_id ?? "").trim(), Number(r.final_target_price_krw)] as [string, number])
+      .filter(([id, target]) => id.length > 0 && Number.isFinite(target))
+      .map(([id, target]) => [id, Math.round(target)] as [string, number]);
+    pinnedTargetByChannelProduct = new Map<string, number>(pinnedPairs);
+    if (pinnedTargetByChannelProduct.size === 0) {
+      return jsonError("해당 compute_request_id로 사용할 대상 스냅샷이 없습니다", 422);
+    }
+  }
 
   const baseRows = initialCandidates.filter((r) => String(r.external_variant_code ?? "").trim().length === 0);
   if (baseRows.length > 0) {
@@ -317,7 +340,28 @@ export async function POST(request: Request) {
     }
   }
 
-  const dedupedCandidates = Array.from(dedupedMap.values());
+  let dedupedCandidates = Array.from(dedupedMap.values());
+
+  if (pinnedTargetByChannelProduct.size > 0) {
+    dedupedCandidates = dedupedCandidates
+      .map((row) => {
+        const id = String(row.channel_product_id ?? "").trim();
+        const pinned = pinnedTargetByChannelProduct.get(id);
+        if (!id || !Number.isFinite(pinned)) return null;
+        return {
+          ...row,
+          final_target_price_krw: pinned,
+        };
+      })
+      .filter((row): row is NonNullable<typeof row> => row !== null);
+
+    if (channelProductIds && channelProductIds.length > 0) {
+      const missingPinned = channelProductIds.filter((id) => !pinnedTargetByChannelProduct.has(id));
+      if (missingPinned.length > 0) {
+        return jsonError(`compute_request_id에 없는 channel_product_id가 있습니다: ${missingPinned.slice(0, 5).join(",")}`, 422);
+      }
+    }
+  }
 
   const sortedCandidates = [...dedupedCandidates].sort((a, b) => {
     const am = String(a.master_item_id ?? "");
@@ -1021,6 +1065,7 @@ export async function POST(request: Request) {
   return NextResponse.json({
     ok: true,
     job_id: jobId,
+    compute_request_id: pinnedComputeRequestId || null,
     total: dedupedCandidates.length,
     success: successCount,
     failed: failedCount,

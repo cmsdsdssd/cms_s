@@ -927,6 +927,7 @@ export async function POST(request: Request) {
       blocked_by_missing_rules: blockedByMissingRules.slice(0, 50),
       channel_id: channelId,
       factor_set_id_used: selectedFactorSetId,
+      compute_request_id: computeRequestId,
     }, { headers: { "Cache-Control": "no-store" } });
   }
 
@@ -941,5 +942,6 @@ export async function POST(request: Request) {
     blocked_by_missing_rules: blockedByMissingRules.slice(0, 50),
     channel_id: channelId,
     factor_set_id_used: selectedFactorSetId,
+    compute_request_id: computeRequestId,
   }, { headers: { "Cache-Control": "no-store" } });
 }

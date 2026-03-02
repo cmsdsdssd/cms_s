@@ -2342,8 +2342,12 @@ export default function CatalogPage() {
   }, [cnRawEntriesComputed, cnyAdRate, cnyFxAsOf, netWeightG]);
 
   const saveCnCostPayload = useCallback(async (targetMasterId: string, options?: { silent?: boolean }) => {
-    if (!targetMasterId || !isUuid(targetMasterId)) return;
-    if (options?.silent && cnRawAutoSaveBusyRef.current) return;
+    if (!targetMasterId || !isUuid(targetMasterId)) {
+      return { ok: false as const, error: "유효한 마스터 ID가 없습니다." };
+    }
+    if (options?.silent && cnRawAutoSaveBusyRef.current) {
+      return { ok: false as const, error: "자동 저장이 이미 진행 중입니다." };
+    }
 
     const extraPayload = buildCnExtraPayload();
     const cnRawEntriesPayload = buildCnRawEntriesPayload();
@@ -2411,11 +2415,11 @@ export default function CatalogPage() {
       };
 
       if (!cnResp.ok) {
+        const desc = cnResult.error ? `중국 원가 저장 실패: ${cnResult.error}` : "중국 원가 저장에 실패했습니다.";
         if (!options?.silent) {
-          const desc = cnResult.error ? `중국 원가 저장 실패: ${cnResult.error}` : "중국 원가 저장에 실패했습니다.";
           toast.error("부가 저장 실패", { description: desc });
         }
-        return;
+        return { ok: false as const, error: desc };
       }
 
       if (!options?.silent && cnResult.raw_saved === false && cnResult.hint) {
@@ -2431,11 +2435,13 @@ export default function CatalogPage() {
       await loadCnRawHistory(targetMasterId, {
         syncEditor: isEditMode && (selectedItemId === targetMasterId || masterId === targetMasterId),
       });
+      return { ok: true as const };
     } catch (err) {
+      const desc = err instanceof Error ? err.message : "중국 원가 저장에 실패했습니다.";
       if (!options?.silent) {
-        const desc = err instanceof Error ? err.message : "중국 원가 저장에 실패했습니다.";
         toast.error("부가 저장 실패", { description: desc });
       }
+      return { ok: false as const, error: desc };
     } finally {
       if (options?.silent) {
         cnRawAutoSaveBusyRef.current = false;
@@ -4199,7 +4205,12 @@ export default function CatalogPage() {
 
       // China cost inputs: add-only backend endpoint
       if (savedId) {
-        await saveCnCostPayload(savedId, { silent: false });
+        const cnSaveResult = await saveCnCostPayload(savedId, { silent: false });
+        if (!cnSaveResult.ok) {
+          toast.warning("제품 저장 완료 / RAW 저장 실패", {
+            description: cnSaveResult.error ?? "중국 원가 저장에 실패했습니다.",
+          });
+        }
       }
 
       toast.success("저장 완료");

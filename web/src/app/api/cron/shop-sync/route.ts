@@ -226,6 +226,13 @@ async function runCron(request: Request) {
       { status: recomputeRes.status, headers: { "Cache-Control": "no-store" } },
     );
   }
+  const computeRequestId = String((recomputeJson as { compute_request_id?: unknown }).compute_request_id ?? "").trim();
+  if (!computeRequestId) {
+    return NextResponse.json(
+      { ok: false, stage: "recompute", status: 500, detail: "compute_request_id missing", channel_id: channelId },
+      { status: 500, headers: { "Cache-Control": "no-store" } },
+    );
+  }
 
   const diffRes = await sb
     .from("v_channel_price_dashboard")
@@ -249,6 +256,7 @@ async function runCron(request: Request) {
         channel_id: channelId,
         pull: pullJson,
         recompute: recomputeJson,
+        compute_request_id: computeRequestId,
       },
       { headers: { "Cache-Control": "no-store" } },
     );
@@ -258,6 +266,7 @@ async function runCron(request: Request) {
     mkJsonRequest("/api/channel-prices/push", {
       channel_id: channelId,
       channel_product_ids: diffIds,
+      compute_request_id: computeRequestId,
       run_type: "AUTO",
       dry_run: false,
     }),
@@ -279,6 +288,7 @@ async function runCron(request: Request) {
       candidate_count: diffIds.length,
       pull: pullJson,
       recompute: recomputeJson,
+      compute_request_id: computeRequestId,
       push: pushJson,
     },
     { headers: { "Cache-Control": "no-store" } },
