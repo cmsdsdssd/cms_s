@@ -276,11 +276,11 @@ const isDecorationAxisName = (axis: string) => {
 };
 
 const allowedRuleTypesForAxis = (axis: string): SyncRuleType[] => {
-  if (isMaterialAxisName(axis)) return ["R1", "R2", "R3", "R4"];
-  if (isSizeAxisName(axis)) return ["R1", "R2", "R3", "R4"];
-  if (isColorAxisName(axis)) return ["R1", "R2", "R3", "R4"];
-  if (isDecorationAxisName(axis)) return ["R1", "R2", "R3", "R4"];
-  return ["R1", "R2", "R3", "R4"];
+  if (isMaterialAxisName(axis)) return ["R2", "R3", "R4"];
+  if (isSizeAxisName(axis)) return ["R2", "R3", "R4"];
+  if (isColorAxisName(axis)) return ["R2", "R3", "R4"];
+  if (isDecorationAxisName(axis)) return ["R2", "R3", "R4"];
+  return ["R2", "R3", "R4"];
 };
 
 const normalizeRuleTypeForAxis = (axis: string, ruleType: SyncRuleType): SyncRuleType => {
@@ -289,7 +289,7 @@ const normalizeRuleTypeForAxis = (axis: string, ruleType: SyncRuleType): SyncRul
 };
 
 const ruleTypeLabel = (ruleType: SyncRuleType) => {
-  if (ruleType === "R1") return "R1 소재시세차액";
+  if (ruleType === "R1") return "R1(비활성)";
   if (ruleType === "R2") return "R2 사이즈/중량";
   if (ruleType === "R3") return "R3 색상도금마진";
   return "R4 장식";
@@ -322,7 +322,6 @@ const resolveR1RuleForValue = (
 const optionStrategyLabel = (m: MappingRow): string => {
   if (m.option_price_mode === "MANUAL") return "Override";
   const activeRules: string[] = [];
-  if (m.sync_rule_material_enabled) activeRules.push("R1");
   if (m.sync_rule_weight_enabled) activeRules.push("R2");
   if (m.sync_rule_plating_enabled) activeRules.push("R3");
   if (m.sync_rule_decoration_enabled) activeRules.push("R4");
@@ -1046,7 +1045,7 @@ export default function ShoppingDashboardPage() {
 
   const doRecompute = useMutation({
     mutationFn: () =>
-      shopApiSend<{ ok: boolean; inserted: number }>("/api/pricing/recompute", "POST", {
+      shopApiSend<{ ok: boolean; inserted: number; compute_request_id?: string }>("/api/pricing/recompute", "POST", {
         channel_id: activeChannelId,
         master_item_ids: selectedMasterIds.length > 0 ? selectedMasterIds : undefined,
       }),
@@ -1072,12 +1071,22 @@ export default function ShoppingDashboardPage() {
   });
 
   const doPush = useMutation({
-    mutationFn: () =>
-      shopApiSend<{ ok: boolean; job_id: string; success: number; failed: number; skipped: number; label_sync?: { failed?: number } }>("/api/channel-prices/push", "POST", {
+    mutationFn: async () => {
+      const recompute = await shopApiSend<{ ok: boolean; inserted: number; compute_request_id?: string }>("/api/pricing/recompute", "POST", {
+        channel_id: activeChannelId,
+        master_item_ids: selectedMasterIds.length > 0 ? selectedMasterIds : undefined,
+      });
+      const computeRequestId = String(recompute.compute_request_id ?? "").trim();
+      if (!computeRequestId) {
+        throw new Error("재계산 버전 식별자(compute_request_id)를 받지 못했습니다");
+      }
+      return shopApiSend<{ ok: boolean; job_id: string; success: number; failed: number; skipped: number; label_sync?: { failed?: number } }>("/api/channel-prices/push", "POST", {
         channel_id: activeChannelId,
         channel_product_ids: selectedChannelProductIds.length > 0 ? selectedChannelProductIds : undefined,
+        compute_request_id: computeRequestId,
         sync_option_labels: true,
-      }),
+      });
+    },
     onSuccess: async (res) => {
       if ((res.failed ?? 0) > 0) toast.error(`push 완료(실패 있음): 성공 ${res.success} / 실패 ${res.failed}`);
       else if ((res.label_sync?.failed ?? 0) > 0) toast.error(`push 완료, 옵션명 동기화 일부 실패: ${res.label_sync?.failed ?? 0}건`);
@@ -1221,7 +1230,7 @@ export default function ShoppingDashboardPage() {
         });
         const missing = precheck.data.unmatched_samples?.[0]?.missing_rules ?? [];
         if (precheck.data.blocked > 0 || missing.length > 0) {
-          throw new Error(`등록된 룰이 없어 동기화할 수 없습니다: ${missing.join(", ") || "R1/R2/R3/R4"}`);
+          throw new Error(`등록된 룰이 없어 동기화할 수 없습니다: ${missing.join(", ") || "R2/R3/R4"}`);
         }
       }
 
@@ -2483,7 +2492,7 @@ export default function ShoppingDashboardPage() {
                   </div>
                 </section>
 
-                <div className="text-xs text-[var(--muted)]">R1=소재시세차액, R2=사이즈/중량구간, R3=색상도금마진, R4=장식</div>
+                <div className="text-xs text-[var(--muted)]">R2=사이즈/중량구간, R3=색상도금마진, R4=장식</div>
                 <div className="rounded border border-[var(--hairline)] bg-[var(--background)] px-3 py-2 text-sm">
                   <span className="text-[var(--muted)]">마스터 등록 소재:</span>{" "}
                   <span className="font-semibold">{detailMasterRow?.material_code ?? "-"}</span>
@@ -2506,10 +2515,10 @@ export default function ShoppingDashboardPage() {
                           <th key={axis} className="px-3 py-2 whitespace-nowrap">{axis}</th>
                         ))}
                         <th className="px-3 py-2 whitespace-nowrap">수동Δ</th>
-                        <th className="px-3 py-2 whitespace-nowrap">소재Δ</th>
-                        <th className="px-3 py-2 whitespace-nowrap">색상Δ</th>
-                        <th className="px-3 py-2 whitespace-nowrap">룰합Δ</th>
-                        <th className="px-3 py-2 whitespace-nowrap">옵션Δ</th>
+                        <th className="px-3 py-2 whitespace-nowrap">R2Δ(사이즈)</th>
+                        <th className="px-3 py-2 whitespace-nowrap">R3Δ(색상)</th>
+                        <th className="px-3 py-2 whitespace-nowrap">룰합Δ(R2~R4)</th>
+                        <th className="px-3 py-2 whitespace-nowrap">총옵션Δ(수동+룰)</th>
                         <th className="px-3 py-2 whitespace-nowrap">기준보정Δ</th>
                         <th className="px-3 py-2 whitespace-nowrap">현재가</th>
                         <th className="px-3 py-2 whitespace-nowrap">최종가</th>
@@ -2537,15 +2546,8 @@ export default function ShoppingDashboardPage() {
                           : impliedOptionDeltaFromBase != null
                             ? Math.round(impliedOptionDeltaFromBase - manualDelta)
                             : Math.round(Number((row?.option_price_delta_krw ?? 0) - manualDelta));
+                        const r2Delta = breakdown ? Math.round(Number(breakdown.r2_delta_krw ?? 0)) : null;
                         const colorRuleDelta = breakdown ? Math.round(Number(breakdown.r3_delta_krw ?? 0)) : null;
-                        const hasMaterialRule = Boolean(m && m.option_price_mode === "SYNC" && m.sync_rule_material_enabled !== false);
-                        const materialRuleDeltaRaw = breakdown ? Math.round(Number(breakdown.r1_delta_krw ?? 0)) : null;
-                        const materialRuleDelta =
-                          materialRuleDeltaRaw != null && materialRuleDeltaRaw !== 0
-                            ? materialRuleDeltaRaw
-                            : hasMaterialRule
-                              ? Math.round(ruleDelta - Number(colorRuleDelta ?? 0))
-                              : materialRuleDeltaRaw;
                         const pureOptionDelta = manualDelta + ruleDelta;
                         const baseAdjustmentDelta = Math.round(detailBaseDeltaTotal);
                         const opts = variantOptionsByCode.get(variantCode) ?? [];
@@ -2554,14 +2556,10 @@ export default function ShoppingDashboardPage() {
                             {optionAxisNames.map((axis) => {
                               const found = opts.find((o) => o.name === axis);
                               const value = found?.value ?? "-";
-                              const withMaterialDelta =
-                                isMaterialAxis(axis) && value !== "-"
-                                  ? `${value} (${signedFmt(materialRuleDelta ?? 0)})`
-                                  : value;
-                              return <td key={`${variantCode}-${axis}`} className="px-3 py-2 whitespace-nowrap">{withMaterialDelta}</td>;
+                              return <td key={`${variantCode}-${axis}`} className="px-3 py-2 whitespace-nowrap">{value}</td>;
                             })}
                             <td className="px-3 py-2 whitespace-nowrap">{fmt(manualDelta)}</td>
-                            <td className="px-3 py-2 whitespace-nowrap">{materialRuleDelta == null ? "-" : fmt(materialRuleDelta)}</td>
+                            <td className="px-3 py-2 whitespace-nowrap">{r2Delta == null ? "-" : fmt(r2Delta)}</td>
                             <td className="px-3 py-2 whitespace-nowrap">{colorRuleDelta == null ? "-" : fmt(colorRuleDelta)}</td>
                             <td className="px-3 py-2 whitespace-nowrap">{fmt(ruleDelta)}</td>
                             <td className="px-3 py-2 whitespace-nowrap">{fmt(pureOptionDelta)}</td>
@@ -2573,7 +2571,7 @@ export default function ShoppingDashboardPage() {
                               {m ? optionStrategyLabel(m) : (row ? "가격미수집" : "미매핑")}
                               {breakdown && m ? (
                                 <div className="mt-0.5 text-[10px] text-[var(--muted)]">
-                                  R1 {signedFmt(Math.round(Number(breakdown.r1_delta_krw ?? 0)))} / R2 {signedFmt(Math.round(Number(breakdown.r2_delta_krw ?? 0)))} / R3 {signedFmt(Math.round(Number(breakdown.r3_delta_krw ?? 0)))} / R4 {signedFmt(Math.round(Number(breakdown.r4_delta_krw ?? 0)))}
+                                  R2 {signedFmt(Math.round(Number(breakdown.r2_delta_krw ?? 0)))} / R3 {signedFmt(Math.round(Number(breakdown.r3_delta_krw ?? 0)))} / R4 {signedFmt(Math.round(Number(breakdown.r4_delta_krw ?? 0)))}
                                 </div>
                               ) : null}
                             </td>
@@ -2681,7 +2679,6 @@ export default function ShoppingDashboardPage() {
                     </div>
 
                     <div className="mt-2 flex flex-wrap gap-3 text-xs">
-                      <label className="inline-flex items-center gap-1"><input type="checkbox" checked={optionEditDraft.sync_rule_material_enabled} onChange={(e) => setOptionEditDraft((prev) => (prev ? { ...prev, sync_rule_material_enabled: e.target.checked } : prev))} />R1</label>
                       <label className="inline-flex items-center gap-1"><input type="checkbox" checked={optionEditDraft.sync_rule_weight_enabled} onChange={(e) => setOptionEditDraft((prev) => (prev ? { ...prev, sync_rule_weight_enabled: e.target.checked } : prev))} />R2</label>
                       <label className="inline-flex items-center gap-1"><input type="checkbox" checked={optionEditDraft.sync_rule_plating_enabled} onChange={(e) => setOptionEditDraft((prev) => (prev ? { ...prev, sync_rule_plating_enabled: e.target.checked } : prev))} />R3</label>
                       <label className="inline-flex items-center gap-1"><input type="checkbox" checked={optionEditDraft.sync_rule_decoration_enabled} onChange={(e) => setOptionEditDraft((prev) => (prev ? { ...prev, sync_rule_decoration_enabled: e.target.checked } : prev))} />R4</label>
@@ -2994,7 +2991,6 @@ export default function ShoppingDashboardPage() {
                           }}
                           disabled={draft.mode !== "SYNC"}
                         >
-                          <option value="R1" disabled={!allowedRuleTypes.includes("R1")}>R1 소재시세차액</option>
                           <option value="R2" disabled={!allowedRuleTypes.includes("R2")}>R2 사이즈/중량</option>
                           <option value="R3" disabled={!allowedRuleTypes.includes("R3")}>R3 색상도금마진</option>
                           <option value="R4" disabled={!allowedRuleTypes.includes("R4")}>R4 장식</option>
@@ -3011,11 +3007,7 @@ export default function ShoppingDashboardPage() {
                     <div className="text-xs text-[var(--muted)]">
                       {draft.mode === "SYNC" ? "Sync 모드: 값별 전략/룰항목을 지정하고 추가금(+/-)을 더해 최종 옵션금액을 만듭니다." : "Override 모드: 값별 추가금(+/-)만 직접 관리합니다."}
                     </div>
-                    {draft.mode === "SYNC" && draft.ruleType === "R1" ? (
-                      <div className="rounded border border-[var(--hairline)] bg-[var(--background)] px-2 py-1 text-xs text-[var(--muted)]">
-                        마스터 아이템 소재: <span className="font-medium text-[var(--text)]">{detailMasterMaterialCode ?? "-"}</span> · 소재축은 BASE 1개를 기준 소재로 사용합니다.
-                      </div>
-                    ) : null}
+
 
                     <div className="rounded border border-[var(--hairline)] bg-[var(--background)] p-2">
                       <div className="mb-2 text-sm font-medium text-[var(--muted)]">옵션-규칙 작업 테이블</div>

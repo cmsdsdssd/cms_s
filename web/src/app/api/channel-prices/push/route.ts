@@ -103,6 +103,9 @@ export async function POST(request: Request) {
   const syncOptionLabels = body.sync_option_labels !== false;
 
   if (!channelId) return jsonError("channel_id is required", 400);
+  if (!dryRun && !pinnedComputeRequestId) {
+    return jsonError("compute_request_id is required for deterministic push", 400);
+  }
 
   const account = await loadCafe24Account(sb, channelId);
   if (!account) return jsonError("채널 계정이 없습니다", 422);

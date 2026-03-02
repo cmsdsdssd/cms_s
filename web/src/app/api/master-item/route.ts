@@ -16,6 +16,7 @@ export async function POST(request: Request) {
   }
 
   const body = (await request.json()) as Record<string, unknown>;
+  const requestedMasterId = typeof body.master_id === "string" ? body.master_id.trim() : "";
   const modelName = String(body.model_name ?? "").trim();
   if (!modelName) {
     return NextResponse.json({ error: "model_name 값이 필요합니다." }, { status: 400 });
@@ -36,9 +37,69 @@ export async function POST(request: Request) {
   const forcedLaborProfileMode = "BAND";
   const forcedLaborBandCode = "DEFAULT";
 
+  // EDIT path: update by master_id directly to avoid rename-save failure
+  // when DB RPC upsert path conflicts on (model_name) instead of (master_id).
+  if (requestedMasterId) {
+    const directUpdatePayload: Record<string, unknown> = {
+      model_name: modelName,
+      master_kind: (body.master_kind as string | null) ?? "MODEL",
+      category_code: (body.category_code as string | null) ?? null,
+      material_code_default: (body.material_code_default as string | null) ?? null,
+      weight_default_g: (body.weight_default_g as number | null) ?? null,
+      deduction_weight_default_g: (body.deduction_weight_default_g as number | null) ?? 0,
+      center_qty_default: (body.center_qty_default as number | null) ?? 0,
+      sub1_qty_default: (body.sub1_qty_default as number | null) ?? 0,
+      sub2_qty_default: (body.sub2_qty_default as number | null) ?? 0,
+      labor_base_sell: (body.labor_base_sell as number | null) ?? 0,
+      labor_center_sell: (body.labor_center_sell as number | null) ?? 0,
+      labor_sub1_sell: (body.labor_sub1_sell as number | null) ?? 0,
+      labor_sub2_sell: (body.labor_sub2_sell as number | null) ?? 0,
+      labor_base_cost: (body.labor_base_cost as number | null) ?? 0,
+      labor_center_cost: (body.labor_center_cost as number | null) ?? 0,
+      labor_sub1_cost: (body.labor_sub1_cost as number | null) ?? 0,
+      labor_sub2_cost: (body.labor_sub2_cost as number | null) ?? 0,
+      plating_price_sell_default: (body.plating_price_sell_default as number | null) ?? 0,
+      plating_price_cost_default: (body.plating_price_cost_default as number | null) ?? 0,
+      labor_profile_mode: forcedLaborProfileMode,
+      labor_band_code: forcedLaborBandCode,
+      vendor_party_id: (body.vendor_party_id as string | null) ?? null,
+      note: (body.note as string | null) ?? null,
+      image_path: (body.image_path as string | null) ?? null,
+      center_stone_name_default: (body.center_stone_name_default as string | null) ?? null,
+      sub1_stone_name_default: (body.sub1_stone_name_default as string | null) ?? null,
+      sub2_stone_name_default: (body.sub2_stone_name_default as string | null) ?? null,
+      center_stone_source_default: centerStoneSourceDefault,
+      sub1_stone_source_default: sub1StoneSourceDefault,
+      sub2_stone_source_default: sub2StoneSourceDefault,
+      buy_margin_profile_id: buyMarginProfileId,
+    };
+
+    if (typeof body.setting_addon_margin_krw_per_piece === "number") {
+      directUpdatePayload.setting_addon_margin_krw_per_piece = Math.max(body.setting_addon_margin_krw_per_piece, 0);
+    }
+    if (typeof body.stone_addon_margin_krw_per_piece === "number") {
+      directUpdatePayload.stone_addon_margin_krw_per_piece = Math.max(body.stone_addon_margin_krw_per_piece, 0);
+    }
+
+    const { data: updatedRow, error: directUpdateError } = await supabase
+      .from("cms_master_item")
+      .update(directUpdatePayload)
+      .eq("master_id", requestedMasterId)
+      .select("master_id")
+      .maybeSingle();
+
+    if (directUpdateError) {
+      return NextResponse.json({ error: directUpdateError.message ?? "저장에 실패했습니다." }, { status: 400 });
+    }
+
+    if (updatedRow?.master_id) {
+      return NextResponse.json({ master_id: String(updatedRow.master_id) });
+    }
+  }
+
   // ✅ WRITE는 RPC만
   const rpcPayload = {
-    p_master_id: (body.master_id as string | null) ?? null,
+    p_master_id: requestedMasterId || null,
     p_model_name: modelName,
     p_master_kind: (body.master_kind as string | null) ?? "MODEL",
     p_category_code: (body.category_code as string | null) ?? null,
