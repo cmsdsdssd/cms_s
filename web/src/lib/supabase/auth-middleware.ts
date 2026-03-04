@@ -6,6 +6,7 @@ const PUBLIC_API_PREFIXES = [
     "/api/fax-webhook", // 외부 콜백(팩스) - 기존 secret 검증 유지
     "/api/shop-oauth/cafe24/callback", // Cafe24 OAuth redirect callback
     "/api/cron/shop-sync", // Cloud Scheduler secured endpoint (x-shop-sync-secret)
+    "/api/cron/shop-sync-v2", // Cloud Scheduler secured endpoint v2 (x-shop-sync-secret)
     "/api/public/storefront-option-breakdown", // 카페24 테마에서 읽는 옵션 분해값
 ];
 
@@ -20,6 +21,10 @@ function isPublicApi(pathname: string) {
 export async function updateSessionAndGuard(req: NextRequest) {
     // 정적 리소스는 matcher에서 제외되지만, 2중 방어
     const pathname = req.nextUrl.pathname;
+
+    if ((process.env.CMS_E2E_BYPASS_AUTH ?? "") === "1") {
+        return NextResponse.next();
+    }
 
     if (isPublicPath(pathname)) {
         return NextResponse.next();

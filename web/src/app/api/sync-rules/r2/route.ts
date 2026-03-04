@@ -11,7 +11,7 @@ const toNullableText = (value: unknown): string | null => {
   return trimmed ? trimmed : null;
 };
 
-const isHundredStep = (value: number): boolean => Number.isInteger(value) && value % 100 === 0;
+const isThousandStep = (value: number): boolean => Number.isInteger(value) && value % 1000 === 0;
 const parseRuleId = (value: unknown): string => String(value ?? "").trim();
 
 export async function GET(request: Request) {
@@ -43,7 +43,7 @@ export async function POST(request: Request) {
   const ruleSetId = String(body.rule_set_id ?? "").trim();
   const matchMaterialCodeRaw = toNullableText(body.match_material_code);
   const matchMaterialCode = matchMaterialCodeRaw ? normalizeMaterialCode(matchMaterialCodeRaw) : null;
-  const matchCategoryCode = toNullableText(body.match_category_code);
+  const matchCategoryCode = null;
   const linkedR1RuleId = typeof body.linked_r1_rule_id === "string" ? body.linked_r1_rule_id.trim() || null : null;
   const weightMin = Number(body.weight_min_g ?? 0);
   const weightMax = Number(body.weight_max_g ?? 999999);
@@ -67,12 +67,12 @@ export async function POST(request: Request) {
   if (marginMax !== null && !Number.isFinite(marginMax)) return jsonError("margin_max_krw must be a number", 400);
   if ((marginMin === null) !== (marginMax === null)) return jsonError("margin_min_krw and margin_max_krw must be both null or both numbers", 400);
   if (marginMin !== null && marginMax !== null && marginMin > marginMax) return jsonError("margin range is invalid", 400);
-  if (marginMin !== null && !isHundredStep(Math.round(marginMin))) return jsonError("margin_min_krw must be 100 KRW step", 400);
-  if (marginMax !== null && !isHundredStep(Math.round(marginMax))) return jsonError("margin_max_krw must be 100 KRW step", 400);
+  if (marginMin !== null && !isThousandStep(Math.round(marginMin))) return jsonError("margin_min_krw must be 1000 KRW step", 400);
+  if (marginMax !== null && !isThousandStep(Math.round(marginMax))) return jsonError("margin_max_krw must be 1000 KRW step", 400);
   if (!Number.isFinite(deltaKrw)) return jsonError("delta_krw must be a number", 400);
-  if (!isHundredStep(Math.round(deltaKrw))) return jsonError("delta_krw must be 100 KRW step", 400);
+  if (!isThousandStep(Math.round(deltaKrw))) return jsonError("delta_krw must be 1000 KRW step", 400);
   if (!Number.isFinite(roundingUnit) || roundingUnit <= 0) return jsonError("rounding_unit must be > 0", 400);
-  if (!isHundredStep(Math.round(roundingUnit))) return jsonError("rounding_unit must be 100 KRW step", 400);
+  if (!isThousandStep(Math.round(roundingUnit))) return jsonError("rounding_unit must be 1000 KRW step", 400);
   if (!Number.isFinite(priority)) return jsonError("priority must be a number", 400);
   if (!["CEIL", "ROUND", "FLOOR"].includes(roundingMode)) return jsonError("rounding_mode must be CEIL/ROUND/FLOOR", 400);
 
@@ -101,16 +101,6 @@ export async function POST(request: Request) {
     if (!matRes.data?.material_code) return jsonError("match_material_code must exist in settings material config", 400);
   }
 
-  if (matchCategoryCode) {
-    const categoryRes = await sb
-      .from("cms_master_item")
-      .select("category_code")
-      .eq("category_code", matchCategoryCode)
-      .limit(1)
-      .maybeSingle();
-    if (categoryRes.error) return jsonError(categoryRes.error.message ?? "카테고리 조회 실패", 500);
-    if (!categoryRes.data?.category_code) return jsonError("match_category_code must exist in master_item category pool", 400);
-  }
 
 
   const { data, error } = await sb
@@ -149,7 +139,7 @@ export async function PUT(request: Request) {
   const ruleId = parseRuleId(body.rule_id);
   const matchMaterialCodeRaw = toNullableText(body.match_material_code);
   const matchMaterialCode = matchMaterialCodeRaw ? normalizeMaterialCode(matchMaterialCodeRaw) : null;
-  const matchCategoryCode = toNullableText(body.match_category_code);
+  const matchCategoryCode = null;
   const linkedR1RuleId = typeof body.linked_r1_rule_id === "string" ? body.linked_r1_rule_id.trim() || null : null;
   const weightMin = Number(body.weight_min_g ?? 0);
   const weightMax = Number(body.weight_max_g ?? 999999);
@@ -173,12 +163,12 @@ export async function PUT(request: Request) {
   if (marginMax !== null && !Number.isFinite(marginMax)) return jsonError("margin_max_krw must be a number", 400);
   if ((marginMin === null) !== (marginMax === null)) return jsonError("margin_min_krw and margin_max_krw must be both null or both numbers", 400);
   if (marginMin !== null && marginMax !== null && marginMin > marginMax) return jsonError("margin range is invalid", 400);
-  if (marginMin !== null && !isHundredStep(Math.round(marginMin))) return jsonError("margin_min_krw must be 100 KRW step", 400);
-  if (marginMax !== null && !isHundredStep(Math.round(marginMax))) return jsonError("margin_max_krw must be 100 KRW step", 400);
+  if (marginMin !== null && !isThousandStep(Math.round(marginMin))) return jsonError("margin_min_krw must be 1000 KRW step", 400);
+  if (marginMax !== null && !isThousandStep(Math.round(marginMax))) return jsonError("margin_max_krw must be 1000 KRW step", 400);
   if (!Number.isFinite(deltaKrw)) return jsonError("delta_krw must be a number", 400);
-  if (!isHundredStep(Math.round(deltaKrw))) return jsonError("delta_krw must be 100 KRW step", 400);
+  if (!isThousandStep(Math.round(deltaKrw))) return jsonError("delta_krw must be 1000 KRW step", 400);
   if (!Number.isFinite(roundingUnit) || roundingUnit <= 0) return jsonError("rounding_unit must be > 0", 400);
-  if (!isHundredStep(Math.round(roundingUnit))) return jsonError("rounding_unit must be 100 KRW step", 400);
+  if (!isThousandStep(Math.round(roundingUnit))) return jsonError("rounding_unit must be 1000 KRW step", 400);
   if (!Number.isFinite(priority)) return jsonError("priority must be a number", 400);
   if (!["CEIL", "ROUND", "FLOOR"].includes(roundingMode)) return jsonError("rounding_mode must be CEIL/ROUND/FLOOR", 400);
 
@@ -204,18 +194,6 @@ export async function PUT(request: Request) {
     if (!matRes.data?.material_code) return jsonError("match_material_code must exist in settings material config", 400);
   }
 
-  if (matchCategoryCode) {
-    const categoryRes = await sb
-      .from("cms_master_item")
-      .select("category_code")
-      .eq("category_code", matchCategoryCode)
-      .limit(1)
-      .maybeSingle();
-    if (categoryRes.error) return jsonError(categoryRes.error.message ?? "카테고리 조회 실패", 500);
-    if (!categoryRes.data?.category_code) {
-      return jsonError("match_category_code must exist in master_item category pool", 400);
-    }
-  }
 
   const { data, error } = await sb
     .from("sync_rule_r2_size_weight")

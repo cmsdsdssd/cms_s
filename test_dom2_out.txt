@@ -1,0 +1,56 @@
+--- Found button ---
+Button HTML: <button class="btn btn-outline-secondary btn-endpoint-show" data-title="categories__products">더보기</button>
+Parent HTML: <div class="endpoint-btn text-center"> <button class="btn btn-outline-secondary btn-endpoint-show" data-title="categories__products">더보기</button> </div>
+Next sibling HTML: <section id="" class="endpoint method"> <div id="" class="description"> <h3 id="categories__products-property-list" data-text="Categories products property list"> Categories products property list <a href="#categories__products-property-list" class="btnLink"><em class="icoLink"></em></a> </h3> <div 
+--- Found button ---
+Button HTML: <button class="btn btn-outline-secondary btn-endpoint-show" data-title="mains__products">더보기</button>
+Parent HTML: <div class="endpoint-btn text-center"> <button class="btn btn-outline-secondary btn-endpoint-show" data-title="mains__products">더보기</button> </div>
+Next sibling HTML: <section id="" class="endpoint method"> <div id="" class="description"> <h3 id="mains__products-property-list" data-text="Mains products property list"> Mains products property list <a href="#mains__products-property-list" class="btnLink"><em class="icoLink"></em></a> </h3> <div class="table-area"> 
+--- Found button ---
+Button HTML: <button class="btn btn-outline-secondary btn-endpoint-show" data-title="products">더보기</button>
+Parent HTML: <div class="endpoint-btn text-center"> <button class="btn btn-outline-secondary btn-endpoint-show" data-title="products">더보기</button> </div>
+Next sibling HTML: <section id="" class="endpoint method"> <div id="" class="description"> <h3 id="products-property-list" data-text="Products property list"> Products property list <a href="#products-property-list" class="btnLink"><em class="icoLink"></em></a> </h3> <div class="table-area"> <table> <tbody><tr> <th><s
+--- Found button ---
+Button HTML: <button class="btn btn-outline-secondary btn-endpoint-show" data-title="products__decorationimages">더보기</button>
+Parent HTML: <div class="endpoint-btn text-center"> <button class="btn btn-outline-secondary btn-endpoint-show" data-title="products__decorationimages">더보기</button> </div>
+Next sibling HTML: <section id="" class="endpoint method"> <div id="" class="description"> <h3 id="products__decorationimages-property-list" data-text="Products decorationimages property list"> Products decorationimages property list <a href="#products__decorationimages-property-list" class="btnLink"><em class="icoLin
+--- Found button ---
+Button HTML: <button class="btn btn-outline-secondary btn-endpoint-show" data-title="products__discountprice">더보기</button>
+Parent HTML: <div class="endpoint-btn text-center"> <button class="btn btn-outline-secondary btn-endpoint-show" data-title="products__discountprice">더보기</button> </div>
+Next sibling HTML: <section id="" class="endpoint method"> <div id="" class="description"> <h3 id="products__discountprice-property-list" data-text="Products discountprice property list"> Products discountprice property list <a href="#products__discountprice-property-list" class="btnLink"><em class="icoLink"></em></a>
+--- Found button ---
+Button HTML: <button class="btn btn-outline-secondary btn-endpoint-show" data-title="products__hits">더보기</button>
+Parent HTML: <div class="endpoint-btn text-center"> <button class="btn btn-outline-secondary btn-endpoint-show" data-title="products__hits">더보기</button> </div>
+Next sibling HTML: <section id="" class="endpoint method"> <div id="" class="description"> </div> </section>
+--- Found button ---
+Button HTML: <button class="btn btn-outline-secondary btn-endpoint-show" data-title="products__icons">더보기</button>
+Parent HTML: <div class="endpoint-btn text-center"> <button class="btn btn-outline-secondary btn-endpoint-show" data-title="products__icons">더보기</button> </div>
+Next sibling HTML: <section id="" class="endpoint method"> <div id="" class="description"> <h3 id="products__icons-property-list" data-text="Products icons property list"> Products icons property list <a href="#products__icons-property-list" class="btnLink"><em class="icoLink"></em></a> </h3> <div class="table-area"> 
+--- Found button ---
+Button HTML: <button class="btn btn-outline-secondary btn-endpoint-show" data-title="products__options">더보기</button>
+Parent HTML: <div class="endpoint-btn text-center"> <button class="btn btn-outline-secondary btn-endpoint-show" data-title="products__options">더보기</button> </div>
+Next sibling HTML: <section id="" class="endpoint method"> <div id="" class="description"> <h3 id="products__options-property-list" data-text="Products options property list"> Products options property list <a href="#products__options-property-list" class="btnLink"><em class="icoLink"></em></a> </h3> <div class="table
+--- Found button ---
+Button HTML: <button class="btn btn-outline-secondary btn-endpoint-show" data-title="products__variants">더보기</button>
+Parent HTML: <div class="endpoint-btn text-center"> <button class="btn btn-outline-secondary btn-endpoint-show" data-title="products__variants">더보기</button> </div>
+Next sibling HTML: <section id="" class="endpoint method"> <div id="" class="description"> <h3 id="products__variants-property-list" data-text="Products variants property list"> Products variants property list <a href="#products__variants-property-list" class="btnLink"><em class="icoLink"></em></a> </h3> <div class="t
+--- Found button ---
+Button HTML: <button class="btn btn-outline-secondary btn-endpoint-show" data-title="products__variants__inventories">더보기</button>
+Parent HTML: <div class="endpoint-btn text-center"> <button class="btn btn-outline-secondary btn-endpoint-show" data-title="products__variants__inventories">더보기</button> </div>
+Next sibling HTML: <section id="" class="endpoint method"> <div id="" class="description"> <h3 id="products__variants__inventories-property-list" data-text="Products variants inventories property list"> Products variants inventories property list <a href="#products__variants__inventories-property-list" class="btnLink"
+--- Found button ---
+Button HTML: <button class="btn btn-outline-secondary btn-endpoint-show" data-title="productsdetail">더보기</button>
+Parent HTML: <div class="endpoint-btn text-center"> <button class="btn btn-outline-secondary btn-endpoint-show" data-title="productsdetail">더보기</button> </div>
+Next sibling HTML: <section id="" class="endpoint method"> <div id="" class="description"> <h3 id="productsdetail-property-list" data-text="Productsdetail property list"> Productsdetail property list <a href="#productsdetail-property-list" class="btnLink"><em class="icoLink"></em></a> </h3> <div class="table-area"> <t
+--- Found button ---
+Button HTML: <button class="btn btn-outline-secondary btn-endpoint-show" data-title="categories">더보기</button>
+Parent HTML: <div class="endpoint-btn text-center"> <button class="btn btn-outline-secondary btn-endpoint-show" data-title="categories">더보기</button> </div>
+Next sibling HTML: <section id="" class="endpoint method"> <div id="" class="description"> <h3 id="categories-property-list" data-text="Categories property list"> Categories property list <a href="#categories-property-list" class="btnLink"><em class="icoLink"></em></a> </h3> <div class="table-area"> <table> <tbody><tr
+--- Found button ---
+Button HTML: <button class="btn btn-outline-secondary btn-endpoint-show" data-title="carts">더보기</button>
+Parent HTML: <div class="endpoint-btn text-center"> <button class="btn btn-outline-secondary btn-endpoint-show" data-title="carts">더보기</button> </div>
+Next sibling HTML: <section id="" class="endpoint method"> <div id="" class="description"> <h3 id="carts-property-list" data-text="Carts property list"> Carts property list <a href="#carts-property-list" class="btnLink"><em class="icoLink"></em></a> </h3> <div class="table-area"> <table> <tbody><tr> <th><strong>Attrib
+--- Found button ---
+Button HTML: <button class="btn btn-outline-secondary btn-endpoint-show" data-title="products__carts">더보기</button>
+Parent HTML: <div class="endpoint-btn text-center"> <button class="btn btn-outline-secondary btn-endpoint-show" data-title="products__carts">더보기</button> </div>
+Next sibling HTML: <section id="" class="endpoint method"> <div id="" class="description"> </div> </section>

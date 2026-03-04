@@ -46,8 +46,10 @@ const shoppingNavGroup: NavItem = {
     { label: "쇼핑몰 홈", href: "/settings/shopping", icon: ShoppingCart },
     { label: "채널 설정", href: "/settings/shopping/channels", icon: Settings },
     { label: "상품 매핑", href: "/settings/shopping/mappings", icon: Boxes },
-    { label: "가격 대시보드", href: "/settings/shopping/dashboard", icon: LayoutDashboard },
+    { label: "자동 가격", href: "/settings/shopping/auto-price", icon: Target },
+    { label: "운영 워크플로우", href: "/settings/shopping/workflow", icon: Activity },
     { label: "동기화 로그", href: "/settings/shopping/sync-jobs", icon: Activity },
+    { label: "자동동기화 런 로그", href: "/settings/shopping/cron-runs", icon: Activity },
     { label: "정책/팩터", href: "/settings/shopping/factors", icon: TrendingUp },
   ],
 };

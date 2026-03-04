@@ -37,11 +37,6 @@ type MappingRow = {
   sync_rule_material_enabled?: boolean | null;
 };
 
-type OptionValuePolicyRow = {
-  master_item_id: string;
-  axis_value: string;
-};
-
 type CandidatePreview = {
   channel_product_id: string;
   master_item_id: string;
@@ -97,31 +92,23 @@ export async function POST(request: Request) {
     mappingQuery.eq("sync_rule_set_id", ruleSetId);
   }
 
-  const [mapRes, masterRes, tickRes, policyRes, purityRes, optionPolicyRes, r1Res, r2Res, r3Res, r4Res] = await Promise.all([
+  const [mapRes, masterRes, tickRes, policyRes, purityRes, r1Res, r2Res, r3Res, r4Res] = await Promise.all([
     mappingQuery,
     sb.from("cms_master_item").select("master_item_id, material_code_default, category_code, weight_default_g, deduction_weight_default_g"),
     sb.from("cms_v_market_tick_latest_gold_silver_ops_v1").select("gold_price_krw_per_g, silver_price_krw_per_g").maybeSingle(),
     sb.from("pricing_policy").select("option_18k_weight_multiplier").eq("channel_id", channelId).eq("is_active", true).order("updated_at", { ascending: false }).limit(1).maybeSingle(),
     sb.from("cms_material_factor_config").select("material_code, purity_rate, material_adjust_factor, gold_adjust_factor, price_basis"),
-    sb.from("channel_option_value_policy").select("master_item_id, axis_value").eq("channel_id", channelId).eq("rule_type", "R1").eq("value_mode", "BASE"),
     sb.from("sync_rule_r1_material_delta").select("rule_id, rule_set_id, source_material_code, target_material_code, match_category_code, weight_min_g, weight_max_g, option_weight_multiplier, rounding_unit, rounding_mode, priority, is_active").eq("rule_set_id", ruleSetId).eq("is_active", true).order("priority", { ascending: true }),
     sb.from("sync_rule_r2_size_weight").select("rule_id, rule_set_id, linked_r1_rule_id, match_material_code, match_category_code, weight_min_g, weight_max_g, option_range_expr, margin_min_krw, margin_max_krw, delta_krw, rounding_unit, rounding_mode, priority, is_active").eq("rule_set_id", ruleSetId).eq("is_active", true).order("priority", { ascending: true }),
     sb.from("sync_rule_r3_color_margin").select("rule_id, rule_set_id, color_code, margin_min_krw, margin_max_krw, delta_krw, rounding_unit, rounding_mode, priority, is_active").eq("rule_set_id", ruleSetId).eq("is_active", true).order("priority", { ascending: true }),
     sb.from("sync_rule_r4_decoration").select("rule_id, rule_set_id, linked_r1_rule_id, match_decoration_code, match_material_code, match_color_code, match_category_code, delta_krw, rounding_unit, rounding_mode, priority, is_active").eq("rule_set_id", ruleSetId).eq("is_active", true).order("priority", { ascending: true }),
   ]);
 
-  for (const r of [mapRes, masterRes, tickRes, policyRes, purityRes, optionPolicyRes, r1Res, r2Res, r3Res, r4Res]) {
+  for (const r of [mapRes, masterRes, tickRes, policyRes, purityRes, r1Res, r2Res, r3Res, r4Res]) {
     if (r.error) return jsonError(r.error.message ?? "preview 조회 실패", 500);
   }
 
   const mappings = (mapRes.data ?? []) as MappingRow[];
-  const r1BaseMaterialByMaster = new Map<string, string>();
-  for (const row of (optionPolicyRes.data ?? []) as OptionValuePolicyRow[]) {
-    const masterId = String(row.master_item_id ?? "").trim();
-    const baseMaterialCode = normalizeMaterialCode(String(row.axis_value ?? ""));
-    if (!masterId || !baseMaterialCode || baseMaterialCode === "00") continue;
-    if (!r1BaseMaterialByMaster.has(masterId)) r1BaseMaterialByMaster.set(masterId, baseMaterialCode);
-  }
   const inferredR1BaseMaterialByMaster = new Map<string, string>();
   const mappingByMaster = new Map<string, MappingRow[]>();
   for (const m of mappings) {
@@ -189,8 +176,7 @@ export async function POST(request: Request) {
     if (!master) continue;
 
     const baseMaterial =
-      r1BaseMaterialByMaster.get(String(m.master_item_id ?? "").trim())
-      ?? inferredR1BaseMaterialByMaster.get(String(m.master_item_id ?? "").trim())
+      inferredR1BaseMaterialByMaster.get(String(m.master_item_id ?? "").trim())
       ?? normalizeMaterialCode(String(master.material_code_default ?? ""));
     const targetMaterial = normalizeMaterialCode(String(m.option_material_code ?? master.material_code_default ?? ""));
     const categoryCode = String(master.category_code ?? "").trim();
@@ -241,9 +227,8 @@ export async function POST(request: Request) {
       const mat = normalizeOptionalMaterialCode(rule.match_material_code);
       const cat = String(rule.match_category_code ?? "").trim();
       if (!mat) continue;
-      if (!cat) continue;
       if (mat !== effectiveMaterialCode) continue;
-      if (cat !== categoryCode) continue;
+      if (cat && cat !== categoryCode) continue;
       if (netWeight < Number(rule.weight_min_g) || netWeight > Number(rule.weight_max_g)) continue;
       const hasMarginBand = rule.margin_min_krw !== null && rule.margin_max_krw !== null;
       const singleMarginMode = hasMarginBand && Number(rule.margin_min_krw) === Number(rule.margin_max_krw);

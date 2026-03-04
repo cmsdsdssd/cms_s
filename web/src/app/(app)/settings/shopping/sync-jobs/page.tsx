@@ -33,10 +33,21 @@ type SyncJobItem = {
   status: "SUCCESS" | "FAILED" | "SKIPPED";
   http_status: number | null;
   error_code: string | null;
+  reason_code?: string | null;
+  reason_label?: string | null;
+  reason_category?: string | null;
   error_message: string | null;
   raw_response_json?: unknown;
   created_at?: string;
   updated_at?: string;
+};
+
+type ReasonSummaryRow = {
+  status: "FAILED" | "SKIPPED";
+  reason_code: string;
+  reason_label: string;
+  reason_category: string;
+  count: number;
 };
 
 const fmt = (v: number | null | undefined) => (typeof v === "number" && Number.isFinite(v) ? v.toLocaleString() : "-");
@@ -92,11 +103,14 @@ export default function ShoppingSyncJobsPage() {
     queryKey: ["shop-sync-job-detail", selectedJobId],
     enabled: Boolean(selectedJobId),
     queryFn: () =>
-      shopApiGet<{ data: { job: SyncJob; items: SyncJobItem[] } }>(`/api/price-sync-jobs/${selectedJobId}`),
+      shopApiGet<{ data: { job: SyncJob; items: SyncJobItem[]; summary?: { reasons: ReasonSummaryRow[]; skipped_reasons: ReasonSummaryRow[]; failed_reasons: ReasonSummaryRow[] } } }>(`/api/price-sync-jobs/${selectedJobId}`),
     refetchInterval: 10_000,
   });
 
   const items = detailQuery.data?.data.items ?? [];
+  const reasonSummary = detailQuery.data?.data.summary?.reasons ?? [];
+  const skippedReasons = detailQuery.data?.data.summary?.skipped_reasons ?? [];
+  const failedReasons = detailQuery.data?.data.summary?.failed_reasons ?? [];
 
   return (
     <div className="space-y-4">
@@ -108,9 +122,10 @@ export default function ShoppingSyncJobsPage() {
           { label: "최근 작업", value: `${jobs.length}건` },
           { label: "선택 작업", value: selectedJobId ? selectedJobId.slice(0, 8) : "미선택", tone: selectedJobId ? "good" : "warn" },
           { label: "상세 항목", value: `${items.length}건` },
+          { label: "사유 유형", value: `${reasonSummary.length}개` },
         ]}
         nextActions={[
-          { label: "가격 대시보드로", href: "/settings/shopping/dashboard" },
+          { label: "자동 가격으로", href: "/settings/shopping/auto-price" },
           { label: "채널 설정으로", href: "/settings/shopping/channels" },
         ]}
       />
@@ -165,6 +180,38 @@ export default function ShoppingSyncJobsPage() {
         <Card>
           <CardHeader title="작업 상세" description={`항목(items): ${items.length}건`} />
           <CardBody>
+            <div className="mb-3 grid grid-cols-1 gap-3 md:grid-cols-2">
+              <div className="rounded-[var(--radius)] border border-[var(--hairline)] p-3">
+                <div className="mb-2 text-sm font-medium">건너뜀 사유</div>
+                {skippedReasons.length === 0 ? (
+                  <div className="text-xs text-[var(--muted)]">없음</div>
+                ) : (
+                  <div className="space-y-1 text-xs">
+                    {skippedReasons.map((row) => (
+                      <div key={`skipped-${row.reason_code}`} className="flex items-center justify-between gap-2">
+                        <span className="truncate">{row.reason_label} ({row.reason_code})</span>
+                        <span className="shrink-0">{row.count}건</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <div className="rounded-[var(--radius)] border border-[var(--hairline)] p-3">
+                <div className="mb-2 text-sm font-medium">실패 사유</div>
+                {failedReasons.length === 0 ? (
+                  <div className="text-xs text-[var(--muted)]">없음</div>
+                ) : (
+                  <div className="space-y-1 text-xs">
+                    {failedReasons.map((row) => (
+                      <div key={`failed-${row.reason_code}`} className="flex items-center justify-between gap-2">
+                        <span className="truncate">{row.reason_label} ({row.reason_code})</span>
+                        <span className="shrink-0">{row.count}건</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
             <div className="max-h-[520px] overflow-auto rounded-[var(--radius)] border border-[var(--hairline)]">
               <table className="w-full text-sm">
                 <thead className="bg-[var(--panel)] text-left">
@@ -176,7 +223,8 @@ export default function ShoppingSyncJobsPage() {
                     <th className="px-3 py-2">반영후(after_price_krw)</th>
                     <th className="px-3 py-2">동기화 시간(sync_time)</th>
                     <th className="px-3 py-2">상태(status)</th>
-                    <th className="px-3 py-2">오류코드(error_code)</th>
+                    <th className="px-3 py-2">사유코드(reason_code)</th>
+                    <th className="px-3 py-2">사유라벨(reason_label)</th>
                     <th className="px-3 py-2">오류메시지(error_message)</th>
                   </tr>
                 </thead>
@@ -190,7 +238,8 @@ export default function ShoppingSyncJobsPage() {
                       <td className="px-3 py-2">{fmt(it.after_price_krw)}</td>
                       <td className="px-3 py-2 whitespace-nowrap">{fmtTs(it.updated_at ?? it.created_at)}</td>
                       <td className="px-3 py-2">{toItemStatusKo(it.status)}</td>
-                      <td className="px-3 py-2">{it.error_code ?? "-"}</td>
+                      <td className="px-3 py-2">{it.reason_code ?? it.error_code ?? "-"}</td>
+                      <td className="px-3 py-2 text-xs">{it.reason_label ?? "-"}</td>
                       <td className="px-3 py-2 text-xs">{it.error_message ?? "-"}</td>
                     </tr>
                   ))}

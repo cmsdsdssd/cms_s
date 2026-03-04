@@ -11,7 +11,7 @@ const toNum = (value: unknown): number | null => {
   return Number.isFinite(n) ? n : null;
 };
 
-const isHundredStep = (value: number): boolean => Number.isInteger(value) && value % 100 === 0;
+const isThousandStep = (value: number): boolean => Number.isInteger(value) && value % 1000 === 0;
 
 export async function POST(request: Request) {
   const sb = getShopAdminClient();
@@ -26,7 +26,7 @@ export async function POST(request: Request) {
   const delta = toNum(body.delta_krw);
   if (!ruleSetId) return jsonError("rule_set_id is required", 400);
   if (!delta || delta === 0) return jsonError("delta_krw must be non-zero", 400);
-  if (!isHundredStep(Math.round(delta))) return jsonError("delta_krw must be 100 KRW step", 400);
+  if (!isThousandStep(Math.round(delta))) return jsonError("delta_krw must be 1000 KRW step", 400);
   if (!["R2", "R3"].includes(ruleType)) return jsonError("rule_type must be R2 or R3", 400);
 
   if (ruleType === "R2") {

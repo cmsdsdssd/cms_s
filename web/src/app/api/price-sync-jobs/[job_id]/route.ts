@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getShopAdminClient, jsonError } from "@/lib/shop/admin";
+import { buildSyncReasonSummary, inferSyncReasonCode, syncReasonMeta } from "@/lib/shop/sync-reasons";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -31,10 +32,46 @@ export async function GET(_request: Request, { params }: Params) {
   if (!jobRes.data) return jsonError("작업을 찾을 수 없습니다", 404);
   if (itemRes.error) return jsonError(itemRes.error.message ?? "작업 아이템 조회 실패", 500);
 
+  const items = (itemRes.data ?? []).map((row) => {
+    const status = String(row.status ?? "").trim().toUpperCase() as "SUCCESS" | "FAILED" | "SKIPPED";
+    const reasonCode = inferSyncReasonCode({
+      status,
+      error_code: String(row.error_code ?? "").trim() || null,
+      error_message: String(row.error_message ?? "").trim() || null,
+      raw_response_json: row.raw_response_json,
+    });
+    const meta = syncReasonMeta(reasonCode);
+    return {
+      ...row,
+      reason_code: reasonCode,
+      reason_label: meta.label,
+      reason_category: meta.category,
+    };
+  });
+
+  const reasonSummary = buildSyncReasonSummary(items.map((row) => ({
+    status: String(row.status ?? "").trim().toUpperCase() as "SUCCESS" | "FAILED" | "SKIPPED",
+    error_code: String((row as { error_code?: unknown }).error_code ?? "").trim() || null,
+    error_message: String((row as { error_message?: unknown }).error_message ?? "").trim() || null,
+    raw_response_json: (row as { raw_response_json?: unknown }).raw_response_json,
+  })));
+
+  const statusSummary = {
+    success: items.filter((row) => String(row.status ?? "").toUpperCase() === "SUCCESS").length,
+    failed: items.filter((row) => String(row.status ?? "").toUpperCase() === "FAILED").length,
+    skipped: items.filter((row) => String(row.status ?? "").toUpperCase() === "SKIPPED").length,
+  };
+
   return NextResponse.json({
     data: {
       job: jobRes.data,
-      items: itemRes.data ?? [],
+      items,
+      summary: {
+        status: statusSummary,
+        reasons: reasonSummary,
+        skipped_reasons: reasonSummary.filter((row) => row.status === "SKIPPED"),
+        failed_reasons: reasonSummary.filter((row) => row.status === "FAILED"),
+      },
     },
   }, { headers: { "Cache-Control": "no-store" } });
 }

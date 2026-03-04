@@ -1,0 +1,465 @@
+import { NextResponse } from "next/server";
+import { getShopAdminClient, jsonError, parseJsonObject, parseUuidArray } from "@/lib/shop/admin";
+
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
+const makeIdempotencyKey = (parts: Array<string | number>) => parts.map((v) => String(v ?? "").trim()).join(":");
+const TERMINAL_RUN_STATUSES = ["SUCCESS", "PARTIAL", "FAILED", "CANCELLED"] as const;
+const IN_QUERY_CHUNK_SIZE = 500;
+const INSERT_CHUNK_SIZE = 1000;
+const CRON_TICK_ERROR_PREFIX = "CRON_TICK:";
+
+const looksCanonicalProductCode = (productNo: string) => /^P/i.test(String(productNo ?? "").trim());
+
+const shouldPreferMappingProductNo = (currentProductNo: string, nextProductNo: string): boolean => {
+  const current = String(currentProductNo ?? "").trim();
+  const next = String(nextProductNo ?? "").trim();
+  if (!current && next) return true;
+  if (!next) return false;
+  const currentCanonical = looksCanonicalProductCode(current);
+  const nextCanonical = looksCanonicalProductCode(next);
+  if (nextCanonical !== currentCanonical) return nextCanonical;
+  return next.localeCompare(current) < 0;
+};
+
+const toMs = (value: unknown): number | null => {
+  if (typeof value !== "string" || value.trim().length === 0) return null;
+  const ms = Date.parse(value);
+  return Number.isFinite(ms) ? ms : null;
+};
+
+const isCronTickError = (value: unknown): boolean =>
+  String(value ?? "").trim().toUpperCase().startsWith(CRON_TICK_ERROR_PREFIX);
+
+const toPositiveInt = (value: unknown, fallback: number, max = 10000): number => {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(1, Math.min(max, Math.floor(n)));
+};
+
+const resolveRunningStaleWindowMs = (): number => {
+  const staleMinutes = toPositiveInt(process.env.SHOP_SYNC_RUNNING_STALE_MINUTES, 360, 7 * 24 * 60);
+  return staleMinutes * 60 * 1000;
+};
+
+const chunkArray = <T,>(items: T[], chunkSize: number): T[][] => {
+  if (items.length === 0) return [];
+  const chunks: T[][] = [];
+  for (let i = 0; i < items.length; i += chunkSize) chunks.push(items.slice(i, i + chunkSize));
+  return chunks;
+};
+
+const pickMostRecentByStartedAt = <T extends { started_at?: unknown }>(rows: T[]): T | null => {
+  let best: T | null = null;
+  let bestMs = -1;
+  for (const row of rows) {
+    const ms = toMs(row.started_at);
+    if (ms === null) continue;
+    if (ms > bestMs) {
+      best = row;
+      bestMs = ms;
+    }
+  }
+  return best;
+};
+
+export async function GET(request: Request) {
+  const sb = getShopAdminClient();
+  if (!sb) return jsonError("Supabase server env missing", 500);
+
+  const { searchParams } = new URL(request.url);
+  const channelId = String(searchParams.get("channel_id") ?? "").trim();
+  if (!channelId) return jsonError("channel_id is required", 400);
+
+  const limitRaw = Number(searchParams.get("limit") ?? 50);
+  const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(200, Math.floor(limitRaw))) : 50;
+
+  const runsRes = await sb
+    .from("price_sync_run_v2")
+    .select("run_id, channel_id, pinned_compute_request_id, interval_minutes, trigger_type, status, total_count, success_count, failed_count, skipped_count, started_at, finished_at, error_message, created_at")
+    .eq("channel_id", channelId)
+    .order("started_at", { ascending: false })
+    .limit(limit);
+
+  if (runsRes.error) return jsonError(runsRes.error.message ?? "자동동기화 run 조회 실패", 500);
+  return NextResponse.json({ data: runsRes.data ?? [] }, { headers: { "Cache-Control": "no-store" } });
+}
+
+export async function POST(request: Request) {
+  const sb = getShopAdminClient();
+  if (!sb) return jsonError("Supabase server env missing", 500);
+
+  const raw = await request.json().catch(() => null);
+  const body = parseJsonObject(raw);
+  if (!body) return jsonError("Invalid request body", 400);
+
+  const channelId = String(body.channel_id ?? "").trim();
+  if (!channelId) return jsonError("channel_id is required", 400);
+
+  const intervalRaw = Number(body.interval_minutes ?? 20);
+  const intervalMinutes = Number.isFinite(intervalRaw) ? Math.max(1, Math.min(60, Math.floor(intervalRaw))) : 20;
+  const runningStaleWindowMs = resolveRunningStaleWindowMs();
+  const triggerType = String(body.trigger_type ?? "AUTO").trim().toUpperCase() === "MANUAL" ? "MANUAL" : "AUTO";
+  const masterItemIds = parseUuidArray(body.master_item_ids);
+  const pinnedComputeRequestId = String(body.compute_request_id ?? "").trim();
+
+  const nowMs = Date.now();
+
+  const runningRes = await sb
+    .from("price_sync_run_v2")
+    .select("run_id, status, started_at")
+    .eq("channel_id", channelId)
+    .eq("status", "RUNNING")
+    .order("started_at", { ascending: false })
+    .limit(10);
+  if (runningRes.error) return jsonError(runningRes.error.message ?? "running run 조회 실패", 500);
+
+  const activeRunning = (runningRes.data ?? []).find((row) => {
+    const startedAtMs = toMs(row.started_at);
+    if (startedAtMs === null) return true;
+    return nowMs - startedAtMs <= runningStaleWindowMs;
+  });
+  if (activeRunning) {
+    return NextResponse.json(
+      {
+        ok: true,
+        run_id: String(activeRunning.run_id ?? "").trim(),
+        skipped: true,
+        skip_reason: "OVERLAP_RUNNING",
+      },
+      { headers: { "Cache-Control": "no-store" } },
+    );
+  }
+
+  const recentRes = await sb
+    .from("price_sync_run_v2")
+    .select("run_id, status, started_at, error_message")
+    .eq("channel_id", channelId)
+    .in("status", [...TERMINAL_RUN_STATUSES])
+    .order("started_at", { ascending: false })
+    .limit(20);
+  if (recentRes.error) return jsonError(recentRes.error.message ?? "최근 run 조회 실패", 500);
+
+  const recentNonTickRows = (recentRes.data ?? []).filter((row) => !isCronTickError((row as { error_message?: unknown }).error_message));
+  const latestTerminal = pickMostRecentByStartedAt(recentNonTickRows);
+  if (latestTerminal) {
+    const startedAtMs = toMs(latestTerminal.started_at);
+    if (startedAtMs !== null) {
+      const elapsedMs = nowMs - startedAtMs;
+      const intervalWindowMs = intervalMinutes * 60 * 1000;
+      if (elapsedMs >= 0 && elapsedMs < intervalWindowMs) {
+        return NextResponse.json(
+          {
+            ok: true,
+            run_id: String(latestTerminal.run_id ?? "").trim(),
+            skipped: true,
+            skip_reason: "INTERVAL_NOT_ELAPSED",
+            interval_minutes: intervalMinutes,
+            elapsed_minutes: Math.floor(elapsedMs / 60000),
+          },
+          { headers: { "Cache-Control": "no-store" } },
+        );
+      }
+    }
+  }
+
+  let cursorQuery = sb
+    .from("pricing_compute_cursor")
+    .select("channel_id, master_item_id, compute_request_id, computed_at")
+    .eq("channel_id", channelId);
+  if (masterItemIds && masterItemIds.length > 0) cursorQuery = cursorQuery.in("master_item_id", masterItemIds);
+  if (pinnedComputeRequestId) cursorQuery = cursorQuery.eq("compute_request_id", pinnedComputeRequestId);
+  const cursorRes = await cursorQuery;
+  if (cursorRes.error) return jsonError(cursorRes.error.message ?? "compute cursor 조회 실패", 500);
+
+  const cursors = (cursorRes.data ?? []).filter((row) => String(row.compute_request_id ?? "").trim().length > 0);
+  if (cursors.length === 0) {
+    return jsonError("자동동기화 대상 compute_request_id가 없습니다. 먼저 재계산을 실행하세요", 422);
+  }
+
+  const runInsertRes = await sb
+    .from("price_sync_run_v2")
+    .insert({
+      channel_id: channelId,
+      pinned_compute_request_id: pinnedComputeRequestId || String(cursors[0]?.compute_request_id ?? "").trim() || null,
+      interval_minutes: intervalMinutes,
+      trigger_type: triggerType,
+      status: "RUNNING",
+      request_payload: body,
+      started_at: new Date().toISOString(),
+    })
+    .select("run_id")
+    .single();
+  if (runInsertRes.error) return jsonError(runInsertRes.error.message ?? "자동동기화 run 생성 실패", 500);
+
+  const runId = String(runInsertRes.data.run_id ?? "").trim();
+  if (!runId) return jsonError("run_id 생성 실패", 500);
+
+  const masterIds = Array.from(new Set(cursors.map((r) => String(r.master_item_id ?? "").trim()).filter(Boolean)));
+  const floorRows: Array<{ master_item_id: string | null; floor_price_krw: number | null }> = [];
+  for (const masterChunk of chunkArray(masterIds, IN_QUERY_CHUNK_SIZE)) {
+    if (masterChunk.length === 0) continue;
+    const floorRes = await sb
+      .from("product_price_guard_v2")
+      .select("master_item_id, floor_price_krw")
+      .eq("channel_id", channelId)
+      .eq("is_active", true)
+      .in("master_item_id", masterChunk);
+    if (floorRes.error) return jsonError(floorRes.error.message ?? "바닥가격 조회 실패", 500);
+    floorRows.push(...(floorRes.data ?? []));
+  }
+  const floorByMaster = new Map(floorRows.map((r) => [String(r.master_item_id ?? ""), Math.max(0, Math.round(Number(r.floor_price_krw ?? 0)))]));
+  const missingFloorMasters = masterIds.filter((id) => !floorByMaster.has(id));
+  if (missingFloorMasters.length > 0) {
+    await sb
+      .from("price_sync_run_v2")
+      .update({ status: "FAILED", error_message: "MISSING_FLOOR_PRICE", finished_at: new Date().toISOString() })
+      .eq("run_id", runId);
+    return jsonError("바닥가격 미설정 마스터가 있어 자동동기화를 시작할 수 없습니다", 422, {
+      code: "MISSING_FLOOR_PRICE",
+      master_item_ids: missingFloorMasters,
+    });
+  }
+
+  const computeIds = Array.from(new Set(cursors.map((r) => String(r.compute_request_id ?? "").trim()).filter(Boolean)));
+  if (pinnedComputeRequestId && !computeIds.includes(pinnedComputeRequestId)) {
+    await sb
+      .from("price_sync_run_v2")
+      .update({ status: "FAILED", error_message: "PINNED_COMPUTE_REQUEST_NOT_FOUND", finished_at: new Date().toISOString() })
+      .eq("run_id", runId);
+    return jsonError("요청한 compute_request_id를 찾을 수 없습니다", 422, { code: "PINNED_COMPUTE_REQUEST_NOT_FOUND" });
+  }
+
+  const fullAutoScope = triggerType === "AUTO" && (!masterItemIds || masterItemIds.length === 0);
+  if (fullAutoScope && computeIds.length !== 1) {
+    await sb
+      .from("price_sync_run_v2")
+      .update({ status: "FAILED", error_message: "MIXED_COMPUTE_REQUESTS", finished_at: new Date().toISOString() })
+      .eq("run_id", runId);
+    return jsonError("전체 자동동기화는 단일 compute_request_id 스냅샷이어야 합니다", 409, {
+      code: "MIXED_COMPUTE_REQUESTS",
+      compute_request_ids: computeIds,
+    });
+  }
+  const snapshotRows: Array<{
+    channel_id: string | null;
+    master_item_id: string | null;
+    channel_product_id: string | null;
+    compute_request_id: string | null;
+    final_target_price_krw: number | null;
+  }> = [];
+
+  for (const computeChunk of chunkArray(computeIds, Math.max(1, Math.min(50, IN_QUERY_CHUNK_SIZE)))) {
+    if (computeChunk.length === 0) continue;
+
+    if (fullAutoScope || masterIds.length === 0) {
+      const snapshotRes = await sb
+        .from("pricing_snapshot")
+        .select("channel_id, master_item_id, channel_product_id, compute_request_id, final_target_price_krw")
+        .eq("channel_id", channelId)
+        .in("compute_request_id", computeChunk);
+      if (snapshotRes.error) return jsonError(snapshotRes.error.message ?? "스냅샷 조회 실패", 500);
+      snapshotRows.push(...(snapshotRes.data ?? []));
+      continue;
+    }
+
+    for (const masterChunk of chunkArray(masterIds, IN_QUERY_CHUNK_SIZE)) {
+      if (masterChunk.length === 0) continue;
+      const snapshotRes = await sb
+        .from("pricing_snapshot")
+        .select("channel_id, master_item_id, channel_product_id, compute_request_id, final_target_price_krw")
+        .eq("channel_id", channelId)
+        .in("compute_request_id", computeChunk)
+        .in("master_item_id", masterChunk);
+      if (snapshotRes.error) return jsonError(snapshotRes.error.message ?? "스냅샷 조회 실패", 500);
+      snapshotRows.push(...(snapshotRes.data ?? []));
+    }
+  }
+
+  const snapshotChannelProductIds = Array.from(
+    new Set(snapshotRows.map((r) => String(r.channel_product_id ?? "").trim()).filter(Boolean)),
+  );
+
+  const activeMapRows: Array<{
+    channel_product_id: string | null;
+    external_product_no: string | null;
+    external_variant_code: string | null;
+  }> = [];
+  for (const idChunk of chunkArray(snapshotChannelProductIds, IN_QUERY_CHUNK_SIZE)) {
+    if (idChunk.length === 0) continue;
+    const activeMapRes = await sb
+      .from("sales_channel_product")
+      .select("channel_product_id, external_product_no, external_variant_code")
+      .eq("channel_id", channelId)
+      .eq("is_active", true)
+      .in("channel_product_id", idChunk);
+    if (activeMapRes.error) return jsonError(activeMapRes.error.message ?? "활성 매핑 조회 실패", 500);
+    activeMapRows.push(...(activeMapRes.data ?? []));
+  }
+
+  const activeByChannelProduct = new Map(activeMapRows.map((r) => [
+    String(r.channel_product_id ?? ""),
+    {
+      external_product_no: String(r.external_product_no ?? "").trim(),
+      external_variant_code: String(r.external_variant_code ?? "").trim(),
+    },
+  ]));
+
+  const intentRows: Array<Record<string, unknown>> = [];
+  const taskRows: Array<Record<string, unknown>> = [];
+  const dedupeByLogicalTarget = new Map<
+    string,
+    {
+      idx: number;
+      desired: number;
+      floorApplied: boolean;
+      channelProductId: string;
+      externalProductNo: string;
+      externalVariantCode: string;
+    }
+  >();
+  for (const row of snapshotRows) {
+    const channelProductId = String(row.channel_product_id ?? "").trim();
+    const mapping = activeByChannelProduct.get(channelProductId);
+    if (!channelProductId || !mapping || !mapping.external_product_no) continue;
+
+    const masterItemId = String(row.master_item_id ?? "").trim();
+    const floorPrice = floorByMaster.get(masterItemId) ?? 0;
+    const target = Math.round(Number(row.final_target_price_krw ?? 0));
+    const desired = Math.max(target, floorPrice);
+    if (!(desired > 0)) continue;
+
+    const intentId = crypto.randomUUID();
+    const computeRequestId = String(row.compute_request_id ?? "").trim();
+    const variantCode = String(mapping.external_variant_code ?? "").trim();
+    const logicalTargetKey = `${masterItemId}:${variantCode || "BASE"}:${computeRequestId}`;
+    const existing = dedupeByLogicalTarget.get(logicalTargetKey);
+
+    if (existing) {
+      const nextDesired = Math.max(existing.desired, desired);
+      const nextFloorApplied = existing.floorApplied || desired > target;
+      const intentIdx = existing.idx;
+      const shouldReplaceMapping = shouldPreferMappingProductNo(existing.externalProductNo, mapping.external_product_no);
+      const selectedChannelProductId = shouldReplaceMapping ? channelProductId : existing.channelProductId;
+      const selectedProductNo = shouldReplaceMapping ? mapping.external_product_no : existing.externalProductNo;
+      const selectedVariantCode = shouldReplaceMapping ? variantCode : existing.externalVariantCode;
+      intentRows[intentIdx] = {
+        ...intentRows[intentIdx],
+        channel_product_id: selectedChannelProductId,
+        external_product_no: selectedProductNo,
+        external_variant_code: selectedVariantCode || null,
+        desired_price_krw: nextDesired,
+        floor_applied: nextFloorApplied,
+      };
+      const existingTask = taskRows[intentIdx] ?? {};
+      taskRows[intentIdx] = {
+        ...existingTask,
+        idempotency_key: makeIdempotencyKey([
+          channelId,
+          selectedChannelProductId,
+          selectedVariantCode || "BASE",
+          computeRequestId,
+          nextDesired,
+        ]),
+      };
+      dedupeByLogicalTarget.set(logicalTargetKey, {
+        idx: intentIdx,
+        desired: nextDesired,
+        floorApplied: nextFloorApplied,
+        channelProductId: selectedChannelProductId,
+        externalProductNo: selectedProductNo,
+        externalVariantCode: selectedVariantCode,
+      });
+      continue;
+    }
+
+    const floorApplied = desired > target;
+
+    intentRows.push({
+      intent_id: intentId,
+      run_id: runId,
+      channel_id: channelId,
+      channel_product_id: channelProductId,
+      master_item_id: masterItemId,
+      external_product_no: mapping.external_product_no,
+      external_variant_code: variantCode || null,
+      compute_request_id: computeRequestId,
+      desired_price_krw: desired,
+      floor_price_krw: floorPrice,
+      floor_applied: floorApplied,
+      intent_version: Date.now(),
+      inputs_hash: makeIdempotencyKey([channelId, channelProductId, computeRequestId, target, floorPrice]),
+      state: "PENDING",
+    });
+
+    taskRows.push({
+      intent_id: intentId,
+      idempotency_key: makeIdempotencyKey([
+        channelId,
+        channelProductId,
+        variantCode || "BASE",
+        computeRequestId,
+        desired,
+      ]),
+      state: "PENDING",
+      attempt_count: 0,
+    });
+    dedupeByLogicalTarget.set(logicalTargetKey, {
+      idx: intentRows.length - 1,
+      desired,
+      floorApplied,
+      channelProductId,
+      externalProductNo: mapping.external_product_no,
+      externalVariantCode: variantCode,
+    });
+  }
+
+  if (intentRows.length === 0) {
+    await sb
+      .from("price_sync_run_v2")
+      .update({ status: "SUCCESS", total_count: 0, finished_at: new Date().toISOString() })
+      .eq("run_id", runId);
+    return NextResponse.json({ ok: true, run_id: runId, total_count: 0, reason: "NO_INTENTS" }, { headers: { "Cache-Control": "no-store" } });
+  }
+
+  for (const chunk of chunkArray(intentRows, INSERT_CHUNK_SIZE)) {
+    if (chunk.length === 0) continue;
+    const intentInsertRes = await sb.from("price_sync_intent_v2").insert(chunk);
+    if (intentInsertRes.error) {
+      await sb
+        .from("price_sync_run_v2")
+        .update({ status: "FAILED", error_message: intentInsertRes.error.message ?? "INTENT_INSERT_FAILED", finished_at: new Date().toISOString() })
+        .eq("run_id", runId);
+      return jsonError(intentInsertRes.error.message ?? "intent 저장 실패", 500);
+    }
+  }
+
+  for (const chunk of chunkArray(taskRows, INSERT_CHUNK_SIZE)) {
+    if (chunk.length === 0) continue;
+    const taskInsertRes = await sb.from("price_sync_push_task_v2").insert(chunk);
+    if (taskInsertRes.error) {
+      await sb
+        .from("price_sync_run_v2")
+        .update({ status: "FAILED", error_message: taskInsertRes.error.message ?? "TASK_INSERT_FAILED", finished_at: new Date().toISOString() })
+        .eq("run_id", runId);
+      return jsonError(taskInsertRes.error.message ?? "push task 저장 실패", 500);
+    }
+  }
+
+  await sb
+    .from("price_sync_run_v2")
+    .update({ total_count: intentRows.length, updated_at: new Date().toISOString() })
+    .eq("run_id", runId);
+
+  return NextResponse.json(
+    {
+      ok: true,
+      run_id: runId,
+      total_count: intentRows.length,
+      floor_applied_count: intentRows.filter((row) => row.floor_applied === true).length,
+      compute_request_ids: computeIds,
+    },
+    { headers: { "Cache-Control": "no-store" } },
+  );
+}

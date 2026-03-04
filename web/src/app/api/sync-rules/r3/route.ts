@@ -11,7 +11,7 @@ const toNullableText = (value: unknown): string | null => {
   return trimmed ? trimmed : null;
 };
 
-const isHundredStep = (value: number): boolean => Number.isInteger(value) && value % 100 === 0;
+const isThousandStep = (value: number): boolean => Number.isInteger(value) && value % 1000 === 0;
 
 const parseRuleId = (value: unknown): string => String(value ?? "").trim();
 
@@ -55,12 +55,12 @@ export async function POST(request: Request) {
   if (!ruleSetId) return jsonError("rule_set_id is required", 400);
   if (!colorCode) return jsonError("color_code is required", 400);
   if (!Number.isFinite(marginMin) || !Number.isFinite(marginMax) || marginMin > marginMax) return jsonError("margin range is invalid", 400);
-  if (!isHundredStep(Math.round(marginMin))) return jsonError("margin_min_krw must be 100 KRW step", 400);
-  if (!isHundredStep(Math.round(marginMax))) return jsonError("margin_max_krw must be 100 KRW step", 400);
+  if (!isThousandStep(Math.round(marginMin))) return jsonError("margin_min_krw must be 1000 KRW step", 400);
+  if (!isThousandStep(Math.round(marginMax))) return jsonError("margin_max_krw must be 1000 KRW step", 400);
   if (!Number.isFinite(deltaKrw)) return jsonError("delta_krw must be a number", 400);
-  if (!isHundredStep(Math.round(deltaKrw))) return jsonError("delta_krw must be 100 KRW step", 400);
+  if (!isThousandStep(Math.round(deltaKrw))) return jsonError("delta_krw must be 1000 KRW step", 400);
   if (!Number.isFinite(roundingUnit) || roundingUnit <= 0) return jsonError("rounding_unit must be > 0", 400);
-  if (!isHundredStep(Math.round(roundingUnit))) return jsonError("rounding_unit must be 100 KRW step", 400);
+  if (!isThousandStep(Math.round(roundingUnit))) return jsonError("rounding_unit must be 1000 KRW step", 400);
   if (!Number.isFinite(priority)) return jsonError("priority must be a number", 400);
   if (!["CEIL", "ROUND", "FLOOR"].includes(roundingMode)) return jsonError("rounding_mode must be CEIL/ROUND/FLOOR", 400);
 
@@ -106,12 +106,12 @@ export async function PUT(request: Request) {
   if (!ruleId) return jsonError("rule_id is required", 400);
   if (!colorCode) return jsonError("color_code is required", 400);
   if (!Number.isFinite(marginMin) || !Number.isFinite(marginMax) || marginMin > marginMax) return jsonError("margin range is invalid", 400);
-  if (!isHundredStep(Math.round(marginMin))) return jsonError("margin_min_krw must be 100 KRW step", 400);
-  if (!isHundredStep(Math.round(marginMax))) return jsonError("margin_max_krw must be 100 KRW step", 400);
+  if (!isThousandStep(Math.round(marginMin))) return jsonError("margin_min_krw must be 1000 KRW step", 400);
+  if (!isThousandStep(Math.round(marginMax))) return jsonError("margin_max_krw must be 1000 KRW step", 400);
   if (!Number.isFinite(deltaKrw)) return jsonError("delta_krw must be a number", 400);
-  if (!isHundredStep(Math.round(deltaKrw))) return jsonError("delta_krw must be 100 KRW step", 400);
+  if (!isThousandStep(Math.round(deltaKrw))) return jsonError("delta_krw must be 1000 KRW step", 400);
   if (!Number.isFinite(roundingUnit) || roundingUnit <= 0) return jsonError("rounding_unit must be > 0", 400);
-  if (!isHundredStep(Math.round(roundingUnit))) return jsonError("rounding_unit must be 100 KRW step", 400);
+  if (!isThousandStep(Math.round(roundingUnit))) return jsonError("rounding_unit must be 1000 KRW step", 400);
   if (!Number.isFinite(priority)) return jsonError("priority must be a number", 400);
   if (!["CEIL", "ROUND", "FLOOR"].includes(roundingMode)) return jsonError("rounding_mode must be CEIL/ROUND/FLOOR", 400);
 

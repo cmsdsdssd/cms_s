@@ -6,7 +6,7 @@ import { normalizePlatingComboCode } from "@/lib/shop/sync-rules";
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
-const isHundredStep = (value: number): boolean => Number.isInteger(value) && value % 100 === 0;
+const isThousandStep = (value: number): boolean => Number.isInteger(value) && value % 1000 === 0;
 
 export async function GET(request: Request) {
   const sb = getShopAdminClient();
@@ -78,6 +78,7 @@ export async function POST(request: Request) {
   if (!channelId) return jsonError("channel_id is required", 400);
   if (!masterItemId) return jsonError("master_item_id is required", 400);
   if (!externalProductNo) return jsonError("external_product_no is required", 400);
+  if (!isActive) return jsonError("활성 매핑만 허용됩니다 (is_active must be true)", 422);
   if (materialMultiplierOverride !== null && (!Number.isFinite(materialMultiplierOverride) || materialMultiplierOverride <= 0)) {
     return jsonError("material_multiplier_override must be > 0", 400);
   }
@@ -87,8 +88,8 @@ export async function POST(request: Request) {
   if (optionPriceDeltaKrw !== null && (!Number.isFinite(optionPriceDeltaKrw) || optionPriceDeltaKrw < -100000000 || optionPriceDeltaKrw > 100000000)) {
     return jsonError("option_price_delta_krw must be between -100000000 and 100000000", 400);
   }
-  if (optionPriceDeltaKrw !== null && !isHundredStep(Math.round(optionPriceDeltaKrw))) {
-    return jsonError("option_price_delta_krw must be 100 KRW step", 400);
+  if (optionPriceDeltaKrw !== null && !isThousandStep(Math.round(optionPriceDeltaKrw))) {
+    return jsonError("option_price_delta_krw must be 1000 KRW step", 400);
   }
   if (!["SYNC", "MANUAL"].includes(optionPriceMode)) {
     return jsonError("option_price_mode must be SYNC or MANUAL", 400);
@@ -104,6 +105,40 @@ export async function POST(request: Request) {
   }
   if (optionPriceMode === "SYNC" && !syncRuleSetId) {
     return jsonError("sync_rule_set_id is required when option_price_mode is SYNC", 400);
+  }
+
+  const siblingRes = await sb
+    .from("sales_channel_product")
+    .select("channel_product_id, option_price_mode, sync_rule_set_id, is_active")
+    .eq("channel_id", channelId)
+    .eq("master_item_id", masterItemId);
+  if (siblingRes.error) return jsonError(siblingRes.error.message ?? "동일 마스터 옵션 조회 실패", 500);
+
+  const projectedRows = [
+    ...(siblingRes.data ?? []).map((row) => ({
+      option_price_mode: String(row.option_price_mode ?? "SYNC").toUpperCase() === "MANUAL" ? "MANUAL" : "SYNC",
+      sync_rule_set_id: row.sync_rule_set_id,
+      is_active: row.is_active !== false,
+    })),
+    {
+      option_price_mode: optionPriceMode as "SYNC" | "MANUAL",
+      sync_rule_set_id: syncRuleSetId,
+      is_active: isActive,
+    },
+  ];
+  const syncRuleSetIds = new Set(
+    projectedRows
+      .filter((row) => row.is_active && row.option_price_mode === "SYNC")
+      .map((row) => String(row.sync_rule_set_id ?? "").trim())
+      .filter(Boolean),
+  );
+  if (syncRuleSetIds.size > 1) {
+    return jsonError("동일 master_item_id의 SYNC 매핑은 sync_rule_set_id가 단일값이어야 합니다", 422, {
+      code: "SOT_RULESET_INCONSISTENT",
+      channel_id: channelId,
+      master_item_id: masterItemId,
+      sync_rule_set_ids: Array.from(syncRuleSetIds),
+    });
   }
 
   const payload = {

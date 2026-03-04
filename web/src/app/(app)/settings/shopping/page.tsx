@@ -8,7 +8,10 @@ import { Button } from "@/components/ui/button";
 
 const primaryActions = [
   { href: "/settings/shopping/mappings", title: "미매핑 처리", desc: "상품번호/옵션코드 매핑을 먼저 정리" },
+  { href: "/settings/shopping/auto-price", title: "자동 가격", desc: "바닥가격 + 주기 실행 기반 자동 반영" },
+  { href: "/settings/shopping/workflow", title: "운영 워크플로우", desc: "매핑/정책/실행 경로 한눈에" },
   { href: "/settings/shopping/sync-jobs", title: "실패 로그 확인", desc: "최근 실패/부분성공 건 즉시 확인" },
+  { href: "/settings/shopping/cron-runs", title: "자동동기화 런 로그", desc: "run/intent 기준 실행 이력 확인" },
   { href: "/settings/shopping/rules", title: "정책 충돌 점검", desc: "R1~R4 룰과 정책 우선순위 재검토" },
 ];
 
@@ -17,8 +20,10 @@ const sectionGroups = [
     title: "운영 현황",
     items: [
       { href: "/settings/shopping", title: "쇼핑몰 홈", desc: "오늘 운영 상태를 빠르게 확인" },
-      { href: "/settings/shopping/dashboard", title: "가격 대시보드", desc: "권장가/현재가 비교 및 재계산" },
+      { href: "/settings/shopping/auto-price", title: "자동 가격", desc: "의도 기반(auto run) 반영 현황" },
+      { href: "/settings/shopping/workflow", title: "운영 워크플로우", desc: "매핑/정책/로그 운영 경로" },
       { href: "/settings/shopping/sync-jobs", title: "동기화 로그", desc: "push 성공/실패/건너뜀 추적" },
+      { href: "/settings/shopping/cron-runs", title: "자동동기화 런 로그", desc: "run/intent 기준 자동실행 추적" },
     ],
   },
   {
@@ -69,7 +74,7 @@ export default function ShoppingSettingsHomePage() {
           <CardBody>
             <div className="flex items-center gap-2 text-sm text-[var(--muted-strong)]">
               <AlertTriangle className="h-4 w-4" />
-              <span>가격 대시보드 불일치와 룰 충돌을 점검하세요.</span>
+              <span>동기화 런 로그 실패와 룰 충돌을 점검하세요.</span>
             </div>
           </CardBody>
         </Card>

@@ -26,6 +26,8 @@ export type Cafe24VariantSummary = {
   customVariantCode: string | null;
   options: Cafe24VariantOption[];
   additionalAmount: number | null;
+  selling: string | null;
+  display: string | null;
 };
 
 export type Cafe24ProductOptionValue = {
@@ -449,9 +451,213 @@ function parseVariantListFromJson(json: Record<string, unknown>): Cafe24VariantS
         customVariantCode: customCodeRaw || null,
         options: parseVariantOptions(variant.options),
         additionalAmount: parseVariantAdditionalAmount(variant),
+        selling: String(variant.selling ?? "").trim() || null,
+        display: String(variant.display ?? "").trim() || null,
       } satisfies Cafe24VariantSummary;
     })
     .filter((v): v is Cafe24VariantSummary => Boolean(v));
+}
+
+export type Cafe24ProductDetailSummary = {
+  productNo: string;
+  productName: string;
+  price: number | null;
+  retailPrice: number | null;
+  selling: string | null;
+  display: string | null;
+  imageUrl: string | null;
+  options: Cafe24ProductOptionGroup[];
+  variants: Cafe24VariantSummary[];
+  raw: unknown;
+};
+
+function parseNumberLike(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return Math.round(value);
+  if (typeof value === "string") {
+    const cleaned = value.replace(/[^0-9+\-.]/g, "");
+    if (!cleaned) return null;
+    const n = Number(cleaned);
+    if (Number.isFinite(n)) return Math.round(n);
+  }
+  return null;
+}
+
+export async function cafe24GetProductDetail(
+  account: ShopChannelAccount,
+  accessToken: string,
+  externalProductNo: string,
+): Promise<{ ok: boolean; status: number; data: Cafe24ProductDetailSummary | null; error?: string; raw: unknown }> {
+  const productNoLike = String(externalProductNo ?? "").trim();
+  if (!productNoLike) return { ok: false, status: 400, data: null, error: "missing product_no", raw: {} };
+
+  const tryFetch = async (productNo: string) => {
+    let lastStatus = 0;
+    let lastJson: Record<string, unknown> = {};
+    let lastErr = "unknown";
+    const basePath = `${adminBase(account)}/products/${productNoFromValue(productNo)}`;
+    const withEmbed = `${basePath}?embed=options,variants`;
+
+    for (const headers of adminHeaderCandidates(accessToken, account.api_version)) {
+      for (const url of [withShopNo(withEmbed, account.shop_no), withEmbed, withShopNo(basePath, account.shop_no), basePath]) {
+        const res = await fetchWithRetry(url, { method: "GET", headers });
+        const json = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+        lastStatus = res.status;
+        lastJson = json;
+        lastErr = extractApiErrorMessage(json, res.status);
+        if (!res.ok) {
+          if ([400, 404].includes(res.status)) continue;
+          return { ok: false as const, status: lastStatus, data: null, error: lastErr, raw: lastJson };
+        }
+
+        const product = (json.product as Record<string, unknown> | undefined)
+          ?? ((Array.isArray(json.products) ? json.products[0] : null) as Record<string, unknown> | null)
+          ?? null;
+        if (!product) {
+          return { ok: false as const, status: 404, data: null, error: "product not found", raw: json };
+        }
+
+        const productNoResolved = String(product.product_no ?? productNo).trim();
+        const optionsRaw = Array.isArray(product.options) ? product.options : (Array.isArray(json.options) ? json.options : []);
+        const variantsEmbedded = parseVariantListFromJson(json);
+        const optionsFromEndpoint = await cafe24GetProductOptions(account, accessToken, productNoResolved || productNo);
+        const variantsFromEndpoint = await cafe24ListProductVariants(account, accessToken, productNoResolved || productNo);
+        const variants = variantsFromEndpoint.ok && variantsFromEndpoint.variants.length > 0
+          ? variantsFromEndpoint.variants
+          : variantsEmbedded;
+        const optionSource = optionsFromEndpoint.ok && optionsFromEndpoint.options.length > 0
+          ? optionsFromEndpoint.options
+          : optionsRaw;
+        const options = optionsRaw
+          .map((entry) => {
+            if (!entry || typeof entry !== "object") return null;
+            const obj = entry as Record<string, unknown>;
+            const optionName = String(obj.option_name ?? "").trim();
+            if (!optionName) return null;
+            return {
+              ...obj,
+              option_name: optionName,
+              option_value: Array.isArray(obj.option_value) ? obj.option_value : [],
+            } as Cafe24ProductOptionGroup;
+          })
+          .filter((v): v is Cafe24ProductOptionGroup => Boolean(v));
+        const normalizedOptions = optionSource
+          .map((entry) => {
+            if (!entry || typeof entry !== "object") return null;
+            const obj = entry as Record<string, unknown>;
+            const optionName = String(obj.option_name ?? "").trim();
+            if (!optionName) return null;
+            return {
+              ...obj,
+              option_name: optionName,
+              option_value: Array.isArray(obj.option_value) ? obj.option_value : [],
+            } as Cafe24ProductOptionGroup;
+          })
+          .filter((v): v is Cafe24ProductOptionGroup => Boolean(v));
+
+        const imageUrl = [
+          product.list_image,
+          product.small_image,
+          product.medium_image,
+          product.large_image,
+          product.detail_image,
+        ].map((v) => String(v ?? "").trim()).find(Boolean) || null;
+
+        const data: Cafe24ProductDetailSummary = {
+          productNo: productNoResolved || productNo,
+          productName: String(product.product_name ?? product.item_name ?? "").trim() || productNo,
+          price: parseNumberLike(product.price ?? product.selling_price),
+          retailPrice: parseNumberLike(product.retail_price),
+          selling: String(product.selling ?? "").trim() || null,
+          display: String(product.display ?? "").trim() || null,
+          imageUrl,
+          options: normalizedOptions.length > 0 ? normalizedOptions : options,
+          variants,
+          raw: json,
+        };
+
+        return { ok: true as const, status: res.status, data, raw: json };
+      }
+    }
+
+    return { ok: false as const, status: lastStatus, data: null, error: lastErr, raw: lastJson };
+  };
+
+  const direct = await tryFetch(productNoLike);
+  if (direct.ok) return direct;
+
+  const resolvedProductNo = await lookupProductNoByProductCode(account, accessToken, productNoLike);
+  if (resolvedProductNo) {
+    const resolved = await tryFetch(resolvedProductNo);
+    if (resolved.ok) return resolved;
+    return resolved;
+  }
+
+  return direct;
+}
+
+export async function cafe24UpdateProductFields(
+  account: ShopChannelAccount,
+  accessToken: string,
+  externalProductNo: string,
+  fields: {
+    price?: number | null;
+    retail_price?: number | null;
+    selling?: string | null;
+    display?: string | null;
+  },
+): Promise<{ ok: boolean; status: number; raw: unknown; error?: string }> {
+  const productNoLike = String(externalProductNo ?? "").trim();
+  if (!productNoLike) return { ok: false, status: 400, raw: {}, error: "missing product_no" };
+
+  const requestBody = {
+    request: {
+      ...(Number.isFinite(Number(fields.price)) ? { price: Math.round(Number(fields.price)) } : {}),
+      ...(Number.isFinite(Number(fields.retail_price)) ? { retail_price: Math.round(Number(fields.retail_price)) } : {}),
+      ...(fields.selling ? { selling: String(fields.selling).toUpperCase() } : {}),
+      ...(fields.display ? { display: String(fields.display).toUpperCase() } : {}),
+    },
+  };
+
+  if (Object.keys(requestBody.request).length === 0) {
+    return { ok: true, status: 200, raw: { skipped: "no_fields" } };
+  }
+
+  const tryUpdate = async (productNo: string) => {
+    let lastStatus = 0;
+    let lastJson: unknown = null;
+    let lastErr = "unknown";
+    const path = `${adminBase(account)}/products/${productNoFromValue(productNo)}`;
+
+    for (const headers of adminHeaderCandidates(accessToken, account.api_version)) {
+      for (const url of [withShopNo(path, account.shop_no), path]) {
+        const res = await fetchWithRetry(url, {
+          method: "PUT",
+          headers,
+          body: JSON.stringify(requestBody),
+        });
+        const json = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+        lastStatus = res.status;
+        lastJson = json;
+        lastErr = extractApiErrorMessage(json, res.status);
+        if (res.ok) return { ok: true as const, status: lastStatus, raw: lastJson };
+        if ([400, 404].includes(res.status)) continue;
+        return { ok: false as const, status: lastStatus, raw: lastJson, error: lastErr };
+      }
+    }
+
+    return { ok: false as const, status: lastStatus, raw: lastJson, error: lastErr };
+  };
+
+  const direct = await tryUpdate(productNoLike);
+  if (direct.ok) return direct;
+
+  const resolvedProductNo = await lookupProductNoByProductCode(account, accessToken, productNoLike);
+  if (resolvedProductNo) {
+    const resolved = await tryUpdate(resolvedProductNo);
+    return resolved;
+  }
+
+  return direct;
 }
 
 async function lookupProductNoByProductCode(
@@ -817,7 +1023,6 @@ export async function cafe24UpdateVariantAdditionalAmount(
   let lastJson: unknown = null;
   let lastErr = "unknown";
   let lastAttempt = "unknown";
-  let hadSuccessfulButUnverified = false;
   const verifyDelaysMs = UPDATE_VERIFY_DELAYS_MS;
 
   const tryUpdateByProductNoLike = async (productNo: string): Promise<boolean> => {
@@ -844,43 +1049,40 @@ export async function cafe24UpdateVariantAdditionalAmount(
         if (res.ok) {
           const responseVariant = parseVariantFromJson(json);
           const responseAdditional = parseVariantAdditionalAmount(responseVariant);
-          if (responseAdditional !== null && Math.round(responseAdditional) === asNumber) {
-            lastJson = {
-              attempt_key: payload.key,
-              response: json,
-              verify: { source: "response", additional_amount: responseAdditional },
-            };
-            return true;
-          }
 
           let verified = false;
           let verifyAdditionalAmount: number | null = null;
           let verifyRaw: unknown = null;
 
-            for (const waitMs of verifyDelaysMs) {
-              if (waitMs > 0) await sleep(waitMs);
-              const verify = await cafe24GetVariantPrice(account, accessToken, productNo, variantCode);
-              verifyAdditionalAmount = verify.additionalAmount;
-              verifyRaw = verify.raw;
-              if (verify.ok && verifyAdditionalAmount !== null && Math.round(verifyAdditionalAmount) === asNumber) {
-                verified = true;
-                break;
-              }
+          for (const waitMs of verifyDelaysMs) {
+            if (waitMs > 0) await sleep(waitMs);
+            const verify = await cafe24GetVariantPrice(account, accessToken, productNo, variantCode);
+            verifyAdditionalAmount = verify.additionalAmount;
+            verifyRaw = verify.raw;
+            if (verify.ok && verifyAdditionalAmount !== null && Math.round(verifyAdditionalAmount) === asNumber) {
+              verified = true;
+              break;
             }
+          }
 
           if (verified) {
-            lastJson = { attempt_key: payload.key, response: json, verify: verifyRaw };
+            lastJson = {
+              attempt_key: payload.key,
+              response: json,
+              verify: verifyRaw,
+              response_additional_amount: responseAdditional,
+            };
             return true;
           }
           lastJson = {
             attempt_key: payload.key,
             response: json,
             verify: verifyRaw,
+            response_additional_amount: responseAdditional,
             verify_additional_amount: verifyAdditionalAmount,
             verify_expected_additional_amount: asNumber,
             verify_pending: true,
           };
-          hadSuccessfulButUnverified = true;
           continue;
         }
 
@@ -901,10 +1103,6 @@ export async function cafe24UpdateVariantAdditionalAmount(
 
   const resolvedProductNo = await lookupProductNoByProductCode(account, accessToken, productNoLike);
   if (resolvedProductNo && await tryUpdateByProductNoLike(resolvedProductNo)) {
-    return { ok: true, status: lastStatus, raw: lastJson, attempt_key: lastAttempt };
-  }
-
-  if (hadSuccessfulButUnverified) {
     return { ok: true, status: lastStatus, raw: lastJson, attempt_key: lastAttempt };
   }
 

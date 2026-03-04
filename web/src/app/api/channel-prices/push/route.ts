@@ -14,6 +14,17 @@ import {
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
+const VERIFY_RETRY_DELAYS_MS = [600, 1200, 2000, 3500, 5000] as const;
+const IN_QUERY_CHUNK_SIZE = 500;
+const ITEM_INSERT_CHUNK_SIZE = 1000;
+
+const chunkArray = <T,>(items: T[], chunkSize: number): T[][] => {
+  if (items.length === 0) return [];
+  const chunks: T[][] = [];
+  for (let i = 0; i < items.length; i += chunkSize) chunks.push(items.slice(i, i + chunkSize));
+  return chunks;
+};
+
 async function verifyAppliedPrice(
   account: Awaited<ReturnType<typeof loadCafe24Account>> extends infer T ? NonNullable<T> : never,
   accessToken: string,
@@ -25,11 +36,11 @@ async function verifyAppliedPrice(
     return { ok: false, current: null, status: last.status, raw: last.raw, error: last.error ?? "verify failed" };
   }
 
-  for (let i = 0; i < 2; i += 1) {
+  for (const waitMs of VERIFY_RETRY_DELAYS_MS) {
     if (last.currentPriceKrw === expectedPrice) {
       return { ok: true, current: last.currentPriceKrw, status: last.status, raw: last.raw };
     }
-    await new Promise((resolve) => setTimeout(resolve, 600));
+    await new Promise((resolve) => setTimeout(resolve, waitMs));
     last = await cafe24GetProductPrice(account, accessToken, externalProductNo);
     if (!last.ok) {
       return { ok: false, current: null, status: last.status, raw: last.raw, error: last.error ?? "verify failed" };
@@ -59,12 +70,17 @@ async function verifyAppliedVariantPrice(
   }
 
   const verifyMatched = (currentPrice: number | null): boolean => currentPrice === expectedPrice;
+  const additionalMatched = (additionalAmount: number | null): boolean => {
+    if (typeof expectedAdditionalAmount !== "number" || !Number.isFinite(expectedAdditionalAmount)) return false;
+    if (additionalAmount == null || !Number.isFinite(Number(additionalAmount))) return false;
+    return Math.round(Number(additionalAmount)) === Math.round(expectedAdditionalAmount);
+  };
 
-  for (let i = 0; i < 2; i += 1) {
-    if (verifyMatched(last.currentPriceKrw)) {
+  for (const waitMs of VERIFY_RETRY_DELAYS_MS) {
+    if (verifyMatched(last.currentPriceKrw) || additionalMatched(last.additionalAmount)) {
       return { ok: true, current: last.currentPriceKrw, status: last.status, raw: last.raw };
     }
-    await new Promise((resolve) => setTimeout(resolve, 600));
+    await new Promise((resolve) => setTimeout(resolve, waitMs));
     last = await cafe24GetVariantPrice(account, accessToken, externalProductNo, externalVariantCode);
     if (!last.ok) {
       return { ok: false, current: null, status: last.status, raw: last.raw, error: last.error ?? "variant verify failed" };
@@ -76,12 +92,14 @@ async function verifyAppliedVariantPrice(
       ? ` expected_additional=${Math.round(expectedAdditionalAmount)} actual_additional=${last.additionalAmount ?? "null"}`
       : "";
 
+  const matchedByPrice = verifyMatched(last.currentPriceKrw);
+  const matchedByAdditional = additionalMatched(last.additionalAmount);
   return {
-    ok: verifyMatched(last.currentPriceKrw),
+    ok: matchedByPrice || matchedByAdditional,
     current: last.currentPriceKrw,
     status: last.status,
     raw: last.raw,
-    error: verifyMatched(last.currentPriceKrw)
+    error: (matchedByPrice || matchedByAdditional)
       ? undefined
       : `VERIFY_MISMATCH expected=${expectedPrice} actual=${last.currentPriceKrw ?? "null"}${expectedAdditionalLabel}`,
   };
@@ -130,36 +148,107 @@ export async function POST(request: Request) {
     return variants;
   };
 
-  let q = sb
-    .from("v_channel_price_dashboard")
-    .select("channel_id, channel_product_id, master_item_id, external_product_no, external_variant_code, final_target_price_krw, current_channel_price_krw")
-    .eq("channel_id", channelId);
-
-  if (channelProductIds && channelProductIds.length > 0) q = q.in("channel_product_id", channelProductIds);
-
-  const initialRes = await q;
-  if (initialRes.error) return jsonError(initialRes.error.message ?? "반영 대상 조회 실패", 500);
+  const initialRows: Array<{
+    channel_id: string | null;
+    channel_product_id: string | null;
+    master_item_id: string | null;
+    external_product_no: string | null;
+    external_variant_code: string | null;
+    final_target_price_krw: number | null;
+    current_channel_price_krw: number | null;
+  }> = [];
+  if (channelProductIds && channelProductIds.length > 0) {
+    for (const idChunk of chunkArray(channelProductIds, IN_QUERY_CHUNK_SIZE)) {
+      if (idChunk.length === 0) continue;
+      const initialRes = await sb
+        .from("v_channel_price_dashboard")
+        .select("channel_id, channel_product_id, master_item_id, external_product_no, external_variant_code, final_target_price_krw, current_channel_price_krw")
+        .eq("channel_id", channelId)
+        .in("channel_product_id", idChunk);
+      if (initialRes.error) return jsonError(initialRes.error.message ?? "반영 대상 조회 실패", 500);
+      initialRows.push(...(initialRes.data ?? []));
+    }
+  } else {
+    const initialRes = await sb
+      .from("v_channel_price_dashboard")
+      .select("channel_id, channel_product_id, master_item_id, external_product_no, external_variant_code, final_target_price_krw, current_channel_price_krw")
+      .eq("channel_id", channelId);
+    if (initialRes.error) return jsonError(initialRes.error.message ?? "반영 대상 조회 실패", 500);
+    initialRows.push(...(initialRes.data ?? []));
+  }
   const initialCandidates = await filterActiveCandidates(
-    (initialRes.data ?? []).filter((r) => r.channel_product_id && r.external_product_no),
+    initialRows.filter((r) => r.channel_product_id && r.external_product_no),
   );
 
+  const logicalTargetKey = (masterItemId: string, externalVariantCode: string) => `${masterItemId}::${externalVariantCode || "BASE"}`;
   let pinnedTargetByChannelProduct = new Map<string, number>();
+  let pinnedTargetByLogical = new Map<string, number>();
   if (pinnedComputeRequestId) {
-    let pinnedQuery = sb
-      .from("pricing_snapshot")
-      .select("channel_product_id, final_target_price_krw")
-      .eq("channel_id", channelId)
-      .eq("compute_request_id", pinnedComputeRequestId);
+    const pinnedRows: Array<{
+      channel_product_id: string | null;
+      master_item_id: string | null;
+      final_target_price_krw: number | null;
+    }> = [];
     if (channelProductIds && channelProductIds.length > 0) {
-      pinnedQuery = pinnedQuery.in("channel_product_id", channelProductIds);
+      for (const idChunk of chunkArray(channelProductIds, IN_QUERY_CHUNK_SIZE)) {
+        if (idChunk.length === 0) continue;
+        const pinnedRes = await sb
+          .from("pricing_snapshot")
+          .select("channel_product_id, master_item_id, final_target_price_krw")
+          .eq("channel_id", channelId)
+          .eq("compute_request_id", pinnedComputeRequestId)
+          .in("channel_product_id", idChunk);
+        if (pinnedRes.error) return jsonError(pinnedRes.error.message ?? "고정 스냅샷 조회 실패", 500);
+        pinnedRows.push(...(pinnedRes.data ?? []));
+      }
+    } else {
+      const pinnedRes = await sb
+        .from("pricing_snapshot")
+        .select("channel_product_id, master_item_id, final_target_price_krw")
+        .eq("channel_id", channelId)
+        .eq("compute_request_id", pinnedComputeRequestId);
+      if (pinnedRes.error) return jsonError(pinnedRes.error.message ?? "고정 스냅샷 조회 실패", 500);
+      pinnedRows.push(...(pinnedRes.data ?? []));
     }
-    const pinnedRes = await pinnedQuery;
-    if (pinnedRes.error) return jsonError(pinnedRes.error.message ?? "고정 스냅샷 조회 실패", 500);
-    const pinnedPairs: Array<[string, number]> = (pinnedRes.data ?? [])
+    const pinnedPairs: Array<[string, number]> = pinnedRows
       .map((r) => [String(r.channel_product_id ?? "").trim(), Number(r.final_target_price_krw)] as [string, number])
       .filter(([id, target]) => id.length > 0 && Number.isFinite(target))
       .map(([id, target]) => [id, Math.round(target)] as [string, number]);
     pinnedTargetByChannelProduct = new Map<string, number>(pinnedPairs);
+
+    const pinnedChannelProductIds = Array.from(
+      new Set(
+        pinnedRows
+          .map((r) => String(r.channel_product_id ?? "").trim())
+          .filter(Boolean),
+      ),
+    );
+    const variantCodeByChannelProduct = new Map<string, string>();
+    for (const idChunk of chunkArray(pinnedChannelProductIds, IN_QUERY_CHUNK_SIZE)) {
+      if (idChunk.length === 0) continue;
+      const mapRes = await sb
+        .from("sales_channel_product")
+        .select("channel_product_id, external_variant_code")
+        .in("channel_product_id", idChunk);
+      if (mapRes.error) return jsonError(mapRes.error.message ?? "고정 스냅샷 매핑 조회 실패", 500);
+      for (const row of mapRes.data ?? []) {
+        const channelProductId = String(row.channel_product_id ?? "").trim();
+        if (!channelProductId) continue;
+        variantCodeByChannelProduct.set(channelProductId, String(row.external_variant_code ?? "").trim());
+      }
+    }
+
+    const pinnedLogicalPairs: Array<[string, number]> = pinnedRows
+      .map((r) => {
+        const masterId = String(r.master_item_id ?? "").trim();
+        const channelProductId = String(r.channel_product_id ?? "").trim();
+        const variantCode = variantCodeByChannelProduct.get(channelProductId) ?? "";
+        const target = Number(r.final_target_price_krw);
+        if (!masterId || !Number.isFinite(target)) return null;
+        return [logicalTargetKey(masterId, variantCode), Math.round(target)] as [string, number];
+      })
+      .filter((pair): pair is [string, number] => pair !== null);
+    pinnedTargetByLogical = new Map<string, number>(pinnedLogicalPairs);
     if (pinnedTargetByChannelProduct.size === 0) {
       return jsonError("해당 compute_request_id로 사용할 대상 스냅샷이 없습니다", 422);
     }
@@ -169,27 +258,79 @@ export async function POST(request: Request) {
   if (baseRows.length > 0) {
     const externalProductNos = Array.from(new Set(baseRows.map((r) => String(r.external_product_no ?? "").trim()).filter(Boolean)));
     const baseChannelProductIds = Array.from(new Set(baseRows.map((r) => String(r.channel_product_id ?? "").trim()).filter(Boolean)));
-
-    const [existingMapRes, baseDetailRes] = await Promise.all([
-      sb
+    const existingMapRows: Array<{ external_product_no: string | null; external_variant_code: string | null }> = [];
+    for (const productChunk of chunkArray(externalProductNos, IN_QUERY_CHUNK_SIZE)) {
+      if (productChunk.length === 0) continue;
+      const existingMapRes = await sb
         .from("sales_channel_product")
         .select("external_product_no, external_variant_code")
         .eq("channel_id", channelId)
         .eq("is_active", true)
-        .in("external_product_no", externalProductNos),
-      sb
+        .in("external_product_no", productChunk);
+      if (existingMapRes.error) return jsonError(existingMapRes.error.message ?? "기존 매핑 조회 실패", 500);
+      existingMapRows.push(...(existingMapRes.data ?? []));
+    }
+
+    const baseDetailRows: Array<{
+      channel_product_id: string | null;
+      master_item_id: string | null;
+      external_product_no: string | null;
+      sync_rule_set_id: string | null;
+      option_material_code: string | null;
+      option_color_code: string | null;
+      option_decoration_code: string | null;
+      option_size_value: string | null;
+      material_multiplier_override: number | null;
+      size_weight_delta_g: number | null;
+      option_price_delta_krw: number | null;
+      option_price_mode: string | null;
+      option_manual_target_krw: number | null;
+      include_master_plating_labor: boolean | null;
+      sync_rule_material_enabled: boolean | null;
+      sync_rule_weight_enabled: boolean | null;
+      sync_rule_plating_enabled: boolean | null;
+      sync_rule_decoration_enabled: boolean | null;
+      sync_rule_margin_rounding_enabled: boolean | null;
+    }> = [];
+    for (const baseIdChunk of chunkArray(baseChannelProductIds, IN_QUERY_CHUNK_SIZE)) {
+      if (baseIdChunk.length === 0) continue;
+      const baseDetailRes = await sb
         .from("sales_channel_product")
         .select("channel_product_id, master_item_id, external_product_no, sync_rule_set_id, option_material_code, option_color_code, option_decoration_code, option_size_value, material_multiplier_override, size_weight_delta_g, option_price_delta_krw, option_price_mode, option_manual_target_krw, include_master_plating_labor, sync_rule_material_enabled, sync_rule_weight_enabled, sync_rule_plating_enabled, sync_rule_decoration_enabled, sync_rule_margin_rounding_enabled")
         .eq("channel_id", channelId)
         .eq("is_active", true)
-        .in("channel_product_id", baseChannelProductIds),
-    ]);
+        .in("channel_product_id", baseIdChunk);
+      if (baseDetailRes.error) return jsonError(baseDetailRes.error.message ?? "기준 매핑 조회 실패", 500);
+      baseDetailRows.push(...(baseDetailRes.data ?? []));
+    }
 
-    if (existingMapRes.error) return jsonError(existingMapRes.error.message ?? "기존 매핑 조회 실패", 500);
-    if (baseDetailRes.error) return jsonError(baseDetailRes.error.message ?? "기준 매핑 조회 실패", 500);
+    const baseMasterIds = Array.from(new Set(
+      baseDetailRows
+        .map((row) => String(row.master_item_id ?? "").trim())
+        .filter(Boolean),
+    ));
+    let siblingRuleSetRows: Array<{
+      master_item_id: string | null;
+      option_price_mode: string | null;
+      sync_rule_set_id: string | null;
+      is_active: boolean | null;
+    }> = [];
+    if (baseMasterIds.length > 0) {
+      for (const masterChunk of chunkArray(baseMasterIds, IN_QUERY_CHUNK_SIZE)) {
+        if (masterChunk.length === 0) continue;
+        const siblingRuleSetRes = await sb
+          .from("sales_channel_product")
+          .select("master_item_id, option_price_mode, sync_rule_set_id, is_active")
+          .eq("channel_id", channelId)
+          .in("master_item_id", masterChunk)
+          .eq("is_active", true);
+        if (siblingRuleSetRes.error) return jsonError(siblingRuleSetRes.error.message ?? "룰셋 보정 조회 실패", 500);
+        siblingRuleSetRows.push(...(siblingRuleSetRes.data ?? []));
+      }
+    }
 
     const existingVariantByProduct = new Map<string, Set<string>>();
-    for (const row of existingMapRes.data ?? []) {
+    for (const row of existingMapRows) {
       const p = String(row.external_product_no ?? "").trim();
       const v = String(row.external_variant_code ?? "").trim();
       if (!p || !v) continue;
@@ -199,8 +340,18 @@ export async function POST(request: Request) {
     }
 
     const baseDetailByChannelProduct = new Map(
-      (baseDetailRes.data ?? []).map((r) => [String(r.channel_product_id), r]),
+      baseDetailRows.map((r) => [String(r.channel_product_id), r]),
     );
+    const syncRuleSetCandidatesByMaster = new Map<string, Set<string>>();
+    for (const row of siblingRuleSetRows) {
+      const masterId = String(row.master_item_id ?? "").trim();
+      const optionMode = String(row.option_price_mode ?? "SYNC").trim().toUpperCase();
+      const ruleSetId = String(row.sync_rule_set_id ?? "").trim();
+      if (!masterId || optionMode !== "SYNC" || !ruleSetId) continue;
+      const set = syncRuleSetCandidatesByMaster.get(masterId) ?? new Set<string>();
+      set.add(ruleSetId);
+      syncRuleSetCandidatesByMaster.set(masterId, set);
+    }
 
     for (const baseRow of baseRows) {
       const externalProductNo = String(baseRow.external_product_no ?? "").trim();
@@ -217,27 +368,158 @@ export async function POST(request: Request) {
 
       const baseDetail = baseDetailByChannelProduct.get(String(baseRow.channel_product_id));
       if (!baseDetail?.master_item_id) continue;
+      const baseOptionMode = String(baseDetail.option_price_mode ?? "SYNC").trim().toUpperCase() === "MANUAL" ? "MANUAL" : "SYNC";
+      let resolvedRuleSetId = String(baseDetail.sync_rule_set_id ?? "").trim();
+      if (baseOptionMode === "SYNC" && !resolvedRuleSetId) {
+        const candidates = syncRuleSetCandidatesByMaster.get(String(baseDetail.master_item_id ?? "").trim());
+        if (candidates && candidates.size === 1) {
+          resolvedRuleSetId = Array.from(candidates)[0] ?? "";
+        }
+      }
+      if (baseOptionMode === "SYNC" && !resolvedRuleSetId) {
+        return jsonError("SYNC 모드 자동 옵션 매핑에 sync_rule_set_id가 필요합니다", 422, {
+          code: "SOT_SYNC_RULESET_REQUIRED",
+          channel_id: channelId,
+          master_item_id: String(baseDetail.master_item_id ?? ""),
+          external_product_no: externalProductNo,
+        });
+      }
 
       const variantCodes = Array.from(new Set(
         variantsRes.variants.map((v) => String(v.variantCode ?? "").trim()).filter(Boolean),
       ));
       if (variantCodes.length === 0) continue;
 
-      await sb
+      const preConflictRes = await sb
+        .from("sales_channel_product")
+        .select("external_product_no")
+        .eq("channel_id", channelId)
+        .eq("master_item_id", String(baseDetail.master_item_id))
+        .eq("is_active", true)
+        .in("external_variant_code", variantCodes)
+        .not("external_product_no", "is", null)
+        .neq("external_product_no", externalProductNo);
+      if (preConflictRes.error) {
+        return jsonError(preConflictRes.error.message ?? "옵션 자동 매핑 사전 충돌 조회 실패", 500);
+      }
+
+      const conflictingProductNos = Array.from(new Set(
+        (preConflictRes.data ?? [])
+          .map((row) => String(row.external_product_no ?? "").trim())
+          .filter(Boolean),
+      ));
+
+      if (conflictingProductNos.length > 0) {
+        const activeBaseRes = await sb
+          .from("sales_channel_product")
+          .select("external_product_no, external_variant_code")
+          .eq("channel_id", channelId)
+          .eq("master_item_id", String(baseDetail.master_item_id))
+          .eq("is_active", true)
+          .in("external_product_no", conflictingProductNos);
+        if (activeBaseRes.error) {
+          return jsonError(activeBaseRes.error.message ?? "레거시 상품 기준행 조회 실패", 500);
+        }
+
+        const hasActiveBaseByProductNo = new Set(
+          (activeBaseRes.data ?? [])
+            .filter((row) => String(row.external_variant_code ?? "").trim().length === 0)
+            .map((row) => String(row.external_product_no ?? "").trim())
+            .filter(Boolean),
+        );
+
+        const keepAliveBaseRows = conflictingProductNos
+          .filter((productNo) => !hasActiveBaseByProductNo.has(productNo))
+          .map((productNo) => ({
+            channel_id: channelId,
+            master_item_id: String(baseDetail.master_item_id),
+            external_product_no: productNo,
+            external_variant_code: "",
+            sync_rule_set_id: resolvedRuleSetId || null,
+            option_material_code: baseDetail.option_material_code ?? null,
+            option_color_code: baseDetail.option_color_code ?? null,
+            option_decoration_code: baseDetail.option_decoration_code ?? null,
+            option_size_value: baseDetail.option_size_value ?? null,
+            material_multiplier_override: baseDetail.material_multiplier_override ?? null,
+            size_weight_delta_g: baseDetail.size_weight_delta_g ?? null,
+            option_price_delta_krw: baseDetail.option_price_delta_krw ?? null,
+            option_price_mode: baseOptionMode,
+            option_manual_target_krw: baseDetail.option_manual_target_krw ?? null,
+            include_master_plating_labor: baseDetail.include_master_plating_labor ?? true,
+            sync_rule_material_enabled: baseDetail.sync_rule_material_enabled ?? true,
+            sync_rule_weight_enabled: baseDetail.sync_rule_weight_enabled ?? true,
+            sync_rule_plating_enabled: baseDetail.sync_rule_plating_enabled ?? true,
+            sync_rule_decoration_enabled: baseDetail.sync_rule_decoration_enabled ?? true,
+            sync_rule_margin_rounding_enabled: baseDetail.sync_rule_margin_rounding_enabled ?? true,
+            mapping_source: "AUTO",
+            is_active: true,
+          }));
+
+        if (keepAliveBaseRows.length > 0) {
+          const keepAliveUpsertRes = await sb
+            .from("sales_channel_product")
+            .upsert(keepAliveBaseRows, { onConflict: "channel_id,external_product_no,external_variant_code" });
+          if (keepAliveUpsertRes.error) {
+            return jsonError(keepAliveUpsertRes.error.message ?? "레거시 상품 기준행 보정 실패", 500, {
+              code: "ENSURE_LEGACY_PRODUCT_BASE_MAPPING_FAILED",
+              channel_id: channelId,
+              master_item_id: String(baseDetail.master_item_id ?? ""),
+              conflicting_external_product_nos: conflictingProductNos,
+            });
+          }
+        }
+      }
+
+      const deactivateRes = await sb
         .from("sales_channel_product")
         .update({ is_active: false })
         .eq("channel_id", channelId)
         .eq("master_item_id", String(baseDetail.master_item_id))
+        .not("external_product_no", "is", null)
         .neq("external_product_no", externalProductNo)
         .in("external_variant_code", variantCodes)
         .eq("is_active", true);
+      if (deactivateRes.error) {
+        return jsonError(deactivateRes.error.message ?? "옵션 자동 매핑 비활성화 실패", 500, {
+          code: "DEACTIVATE_CONFLICTING_VARIANTS_FAILED",
+          channel_id: channelId,
+          master_item_id: String(baseDetail.master_item_id ?? ""),
+          external_product_no: externalProductNo,
+          variant_codes: variantCodes,
+        });
+      }
+
+      const postConflictRes = await sb
+        .from("sales_channel_product")
+        .select("channel_product_id, external_product_no, external_variant_code")
+        .eq("channel_id", channelId)
+        .eq("master_item_id", String(baseDetail.master_item_id))
+        .eq("is_active", true)
+        .in("external_variant_code", variantCodes)
+        .not("external_product_no", "is", null)
+        .neq("external_product_no", externalProductNo);
+      if (postConflictRes.error) {
+        return jsonError(postConflictRes.error.message ?? "옵션 자동 매핑 잔여 충돌 조회 실패", 500);
+      }
+
+      const postConflicts = postConflictRes.data ?? [];
+      if (postConflicts.length > 0) {
+        return jsonError("옵션 자동 매핑 충돌: 동일 master+variant가 다른 상품번호에 이미 활성화되어 있습니다", 409, {
+          code: "ACTIVE_VARIANT_MAPPING_CONFLICT",
+          channel_id: channelId,
+          master_item_id: String(baseDetail.master_item_id ?? ""),
+          target_external_product_no: externalProductNo,
+          variant_codes: variantCodes,
+          conflicts: postConflicts.slice(0, 50),
+        });
+      }
 
       const upsertRows = variantCodes.map((variantCode) => ({
         channel_id: channelId,
         master_item_id: String(baseDetail.master_item_id),
         external_product_no: externalProductNo,
         external_variant_code: variantCode,
-        sync_rule_set_id: baseDetail.sync_rule_set_id ?? null,
+        sync_rule_set_id: resolvedRuleSetId || null,
         option_material_code: baseDetail.option_material_code ?? null,
         option_color_code: baseDetail.option_color_code ?? null,
         option_decoration_code: baseDetail.option_decoration_code ?? null,
@@ -245,7 +527,7 @@ export async function POST(request: Request) {
         material_multiplier_override: baseDetail.material_multiplier_override ?? null,
         size_weight_delta_g: baseDetail.size_weight_delta_g ?? null,
         option_price_delta_krw: baseDetail.option_price_delta_krw ?? null,
-        option_price_mode: baseDetail.option_price_mode ?? "SYNC",
+        option_price_mode: baseOptionMode,
         option_manual_target_krw: baseDetail.option_manual_target_krw ?? null,
         include_master_plating_labor: baseDetail.include_master_plating_labor ?? true,
         sync_rule_material_enabled: baseDetail.sync_rule_material_enabled ?? true,
@@ -264,23 +546,54 @@ export async function POST(request: Request) {
     }
   }
 
-  let finalQuery = sb
-    .from("v_channel_price_dashboard")
-    .select("channel_id, channel_product_id, master_item_id, external_product_no, external_variant_code, final_target_price_krw, current_channel_price_krw")
-    .eq("channel_id", channelId);
+  const finalRows: Array<{
+    channel_id: string | null;
+    channel_product_id: string | null;
+    master_item_id: string | null;
+    external_product_no: string | null;
+    external_variant_code: string | null;
+    final_target_price_krw: number | null;
+    current_channel_price_krw: number | null;
+  }> = [];
 
   if (channelProductIds && channelProductIds.length > 0) {
     const targetMasterIds = Array.from(new Set(
       initialCandidates.map((r) => String(r.master_item_id ?? "").trim()).filter(Boolean),
     ));
-    if (targetMasterIds.length > 0) finalQuery = finalQuery.in("master_item_id", targetMasterIds);
-    else finalQuery = finalQuery.in("channel_product_id", channelProductIds);
+    if (targetMasterIds.length > 0) {
+      for (const masterChunk of chunkArray(targetMasterIds, IN_QUERY_CHUNK_SIZE)) {
+        if (masterChunk.length === 0) continue;
+        const candRes = await sb
+          .from("v_channel_price_dashboard")
+          .select("channel_id, channel_product_id, master_item_id, external_product_no, external_variant_code, final_target_price_krw, current_channel_price_krw")
+          .eq("channel_id", channelId)
+          .in("master_item_id", masterChunk);
+        if (candRes.error) return jsonError(candRes.error.message ?? "반영 대상 재조회 실패", 500);
+        finalRows.push(...(candRes.data ?? []));
+      }
+    } else {
+      for (const idChunk of chunkArray(channelProductIds, IN_QUERY_CHUNK_SIZE)) {
+        if (idChunk.length === 0) continue;
+        const candRes = await sb
+          .from("v_channel_price_dashboard")
+          .select("channel_id, channel_product_id, master_item_id, external_product_no, external_variant_code, final_target_price_krw, current_channel_price_krw")
+          .eq("channel_id", channelId)
+          .in("channel_product_id", idChunk);
+        if (candRes.error) return jsonError(candRes.error.message ?? "반영 대상 재조회 실패", 500);
+        finalRows.push(...(candRes.data ?? []));
+      }
+    }
+  } else {
+    const candRes = await sb
+      .from("v_channel_price_dashboard")
+      .select("channel_id, channel_product_id, master_item_id, external_product_no, external_variant_code, final_target_price_krw, current_channel_price_krw")
+      .eq("channel_id", channelId);
+    if (candRes.error) return jsonError(candRes.error.message ?? "반영 대상 재조회 실패", 500);
+    finalRows.push(...(candRes.data ?? []));
   }
 
-  const candRes = await finalQuery;
-  if (candRes.error) return jsonError(candRes.error.message ?? "반영 대상 재조회 실패", 500);
   const candidates = await filterActiveCandidates(
-    (candRes.data ?? []).filter((r) => r.channel_product_id && r.external_product_no),
+    finalRows.filter((r) => r.channel_product_id && r.external_product_no),
   );
 
   const canonicalProductByMaster = new Map<string, string>();
@@ -349,11 +662,15 @@ export async function POST(request: Request) {
     dedupedCandidates = dedupedCandidates
       .map((row) => {
         const id = String(row.channel_product_id ?? "").trim();
-        const pinned = pinnedTargetByChannelProduct.get(id);
-        if (!id || !Number.isFinite(pinned)) return null;
+        const master = String(row.master_item_id ?? "").trim();
+        const variant = String(row.external_variant_code ?? "").trim();
+        const pinned = pinnedTargetByChannelProduct.get(id)
+          ?? (master ? pinnedTargetByLogical.get(logicalTargetKey(master, variant)) : undefined);
+        if (!id || pinned == null || !Number.isFinite(pinned)) return null;
+        const normalizedPinned = Math.round(pinned);
         return {
           ...row,
-          final_target_price_krw: pinned,
+          final_target_price_krw: normalizedPinned,
         };
       })
       .filter((row): row is NonNullable<typeof row> => row !== null);
@@ -377,12 +694,7 @@ export async function POST(request: Request) {
     return av.localeCompare(bv);
   });
 
-  const mastersWithVariantRows = new Set(
-    sortedCandidates
-      .filter((r) => String(r.external_variant_code ?? "").trim().length > 0)
-      .map((r) => String(r.master_item_id ?? "").trim())
-      .filter(Boolean),
-  );
+  const mastersWithExplicitBaseRows = new Set<string>();
 
   const masterFallbackTarget = new Map<string, number>();
   for (const row of sortedCandidates) {
@@ -390,6 +702,7 @@ export async function POST(request: Request) {
     const variantCode = String(row.external_variant_code ?? "").trim();
     const target = Number(row.final_target_price_krw);
     if (!masterKey || variantCode) continue;
+    mastersWithExplicitBaseRows.add(masterKey);
     if (Number.isFinite(target) && !masterFallbackTarget.has(masterKey)) {
       masterFallbackTarget.set(masterKey, Math.round(target));
     }
@@ -401,19 +714,22 @@ export async function POST(request: Request) {
       .filter((masterKey) => masterKey.length > 0 && !masterFallbackTarget.has(masterKey)),
   ));
   if (missingMasterFallbackIds.length > 0) {
-    const fallbackRes = await sb
-      .from("v_channel_price_dashboard")
-      .select("master_item_id, final_target_price_krw")
-      .eq("channel_id", channelId)
-      .eq("external_variant_code", "")
-      .in("master_item_id", missingMasterFallbackIds);
-    if (fallbackRes.error) return jsonError(fallbackRes.error.message ?? "기준옵션 목표가 조회 실패", 500);
-    for (const row of fallbackRes.data ?? []) {
-      const masterKey = String(row.master_item_id ?? "").trim();
-      const target = Number(row.final_target_price_krw);
-      if (!masterKey || masterFallbackTarget.has(masterKey)) continue;
-      if (Number.isFinite(target) && target > 0) {
-        masterFallbackTarget.set(masterKey, Math.round(target));
+    for (const masterChunk of chunkArray(missingMasterFallbackIds, IN_QUERY_CHUNK_SIZE)) {
+      if (masterChunk.length === 0) continue;
+      const fallbackRes = await sb
+        .from("v_channel_price_dashboard")
+        .select("master_item_id, final_target_price_krw")
+        .eq("channel_id", channelId)
+        .eq("external_variant_code", "")
+        .in("master_item_id", masterChunk);
+      if (fallbackRes.error) return jsonError(fallbackRes.error.message ?? "기준옵션 목표가 조회 실패", 500);
+      for (const row of fallbackRes.data ?? []) {
+        const masterKey = String(row.master_item_id ?? "").trim();
+        const target = Number(row.final_target_price_krw);
+        if (!masterKey || masterFallbackTarget.has(masterKey)) continue;
+        if (Number.isFinite(target) && target > 0) {
+          masterFallbackTarget.set(masterKey, Math.round(target));
+        }
       }
     }
   }
@@ -476,13 +792,36 @@ export async function POST(request: Request) {
   const stripPriceDeltaSuffix = (text: string): string =>
     String(text ?? "").replace(/\s*\([+-][\d,]+원\)\s*$/u, "").trim();
 
+  function extractProductLike(raw: unknown): Record<string, unknown> | null {
+    if (!raw || typeof raw !== "object") return null;
+    const obj = raw as Record<string, unknown>;
+    const direct = obj.product;
+    if (direct && typeof direct === "object") return direct as Record<string, unknown>;
+    const list = Array.isArray(obj.products) ? obj.products : [];
+    const first = list[0];
+    if (first && typeof first === "object") return first as Record<string, unknown>;
+    const nestedResource = obj.resource;
+    if (nestedResource && typeof nestedResource === "object") {
+      const nestedObj = nestedResource as Record<string, unknown>;
+      if (nestedObj.product && typeof nestedObj.product === "object") {
+        return nestedObj.product as Record<string, unknown>;
+      }
+      const nestedProducts = Array.isArray(nestedObj.products) ? nestedObj.products : [];
+      const nestedFirst = nestedProducts[0];
+      if (nestedFirst && typeof nestedFirst === "object") {
+        return nestedFirst as Record<string, unknown>;
+      }
+    }
+    return null;
+  }
+
   function hasOptionProduct(raw: unknown): boolean {
-    const product = (raw as { product?: { has_option?: unknown } } | null)?.product;
-    return String(product?.has_option ?? "").trim() === "T";
+    const product = extractProductLike(raw);
+    return String(product?.has_option ?? "").trim().toUpperCase() === "T";
   }
 
   function getOptionType(raw: unknown): string {
-    const product = (raw as { product?: { option_type?: unknown } } | null)?.product;
+    const product = extractProductLike(raw);
     return String(product?.option_type ?? "").trim().toUpperCase();
   }
 
@@ -499,16 +838,7 @@ export async function POST(request: Request) {
       };
     }
 
-    const masterBaseTarget = masterFallbackTarget.get(masterKey);
-    const targetBase = Number.isFinite(Number(masterBaseTarget ?? Number.NaN))
-      ? Math.round(Number(masterBaseTarget))
-      : null;
-
-    // Option type C often keeps base price immutable on Cafe24,
-    // so additional_amount must be based on live base price.
-    const basePrice = optionType === "C"
-      ? base.currentPriceKrw
-      : (targetBase ?? base.currentPriceKrw);
+    const basePrice = base.currentPriceKrw;
 
     return { ok: true, basePrice, optionType };
   }
@@ -529,14 +859,18 @@ export async function POST(request: Request) {
   async function filterActiveCandidates<T extends { channel_product_id?: unknown }>(rows: T[]): Promise<T[]> {
     const ids = Array.from(new Set(rows.map((r) => String(r.channel_product_id ?? "").trim()).filter(Boolean)));
     if (ids.length === 0) return [];
-    const activeRes = await sb!
-      .from("sales_channel_product")
-      .select("channel_product_id")
-      .eq("channel_id", channelId)
-      .eq("is_active", true)
-      .in("channel_product_id", ids);
-    if (activeRes.error) return rows;
-    const activeSet = new Set((activeRes.data ?? []).map((r) => String(r.channel_product_id)));
+    const activeSet = new Set<string>();
+    for (const idChunk of chunkArray(ids, IN_QUERY_CHUNK_SIZE)) {
+      if (idChunk.length === 0) continue;
+      const activeRes = await sb!
+        .from("sales_channel_product")
+        .select("channel_product_id")
+        .eq("channel_id", channelId)
+        .eq("is_active", true)
+        .in("channel_product_id", idChunk);
+      if (activeRes.error) return rows;
+      for (const row of activeRes.data ?? []) activeSet.add(String(row.channel_product_id));
+    }
     return rows.filter((r) => activeSet.has(String(r.channel_product_id ?? "")));
   }
 
@@ -554,8 +888,9 @@ export async function POST(request: Request) {
     const targetPrice = shouldUseFallbackForVariant
       ? Math.round(fallbackTarget)
       : (hasFiniteRawTarget ? Math.round(rawTarget) : Number.NaN);
+
     if (!Number.isFinite(targetPrice) || targetPrice <= 0) {
-      skippedCount += 1;
+      failedCount += 1;
       itemRows.push({
         job_id: jobId,
         channel_id: c.channel_id,
@@ -566,59 +901,13 @@ export async function POST(request: Request) {
         before_price_krw: c.current_channel_price_krw,
         target_price_krw: 0,
         after_price_krw: c.current_channel_price_krw,
-        status: "SKIPPED",
+        status: "FAILED",
         http_status: 422,
         error_code: "INVALID_TARGET_PRICE",
         error_message: "target price must be > 0",
         raw_response_json: { target: c.final_target_price_krw, fallback_target: fallbackTarget ?? null },
       });
       continue;
-    }
-
-    if (!variantCode) {
-      const baseCheck = await getBaseSnapshot(externalProductNo);
-      if (baseCheck.ok && hasOptionProduct(baseCheck.raw) && !mastersWithVariantRows.has(masterKey)) {
-        const optionType = getOptionType(baseCheck.raw);
-        if (optionType === "C") {
-          skippedCount += 1;
-          itemRows.push({
-            job_id: jobId,
-            channel_id: c.channel_id,
-            channel_product_id: c.channel_product_id,
-            master_item_id: c.master_item_id,
-            external_product_no: c.external_product_no,
-            external_variant_code: variantCode,
-            before_price_krw: c.current_channel_price_krw,
-            target_price_krw: targetPrice,
-            after_price_krw: baseCheck.currentPriceKrw ?? c.current_channel_price_krw,
-            status: "SKIPPED",
-            http_status: baseCheck.status,
-            error_code: "BASE_PRICE_IMMUTABLE_OPTION_TYPE_C",
-            error_message: "옵션타입 C 상품은 기본가 직접 반영이 제한됩니다. 옵션코드 매핑 후 옵션행 기준으로 동기화하세요",
-            raw_response_json: { verify: baseCheck.raw },
-          });
-          continue;
-        }
-
-        failedCount += 1;
-        itemRows.push({
-          job_id: jobId,
-          channel_id: c.channel_id,
-          channel_product_id: c.channel_product_id,
-          master_item_id: c.master_item_id,
-          external_product_no: c.external_product_no,
-          external_variant_code: variantCode,
-          before_price_krw: c.current_channel_price_krw,
-          target_price_krw: targetPrice,
-          after_price_krw: baseCheck.currentPriceKrw ?? c.current_channel_price_krw,
-          status: "FAILED",
-          http_status: baseCheck.status,
-          error_code: "BASE_PRICE_IMMUTABLE_NEEDS_VARIANT_MAPPING",
-          error_message: "옵션상품 기본가는 직접 반영이 어려워 옵션코드 매핑 후 옵션 전체 push가 필요합니다",
-          raw_response_json: { verify: baseCheck.raw },
-        });
-        continue;
-      }
     }
 
     let expectedAdditionalAmount: number | undefined;
@@ -636,9 +925,8 @@ export async function POST(request: Request) {
         }
 
         const preferredBaseForDelta = Number(masterFallbackTarget.get(masterKey));
-        const baseForDelta = Number.isFinite(preferredBaseForDelta)
-          ? Math.round(preferredBaseForDelta)
-          : baseResolved.basePrice;
+        const usePreferredBase = mastersWithExplicitBaseRows.has(masterKey) && Number.isFinite(preferredBaseForDelta);
+        const baseForDelta = usePreferredBase ? Math.round(preferredBaseForDelta) : baseResolved.basePrice;
         const additionalAmount = targetPrice - baseForDelta;
         expectedAdditionalAmount = additionalAmount;
         return cafe24UpdateVariantAdditionalAmount(
@@ -668,9 +956,8 @@ export async function POST(request: Request) {
             }
 
             const preferredBaseForDelta = Number(masterFallbackTarget.get(masterKey));
-            const baseForDelta = Number.isFinite(preferredBaseForDelta)
-              ? Math.round(preferredBaseForDelta)
-              : baseResolved.basePrice;
+            const usePreferredBase = mastersWithExplicitBaseRows.has(masterKey) && Number.isFinite(preferredBaseForDelta);
+            const baseForDelta = usePreferredBase ? Math.round(preferredBaseForDelta) : baseResolved.basePrice;
             const additionalAmount = targetPrice - baseForDelta;
             expectedAdditionalAmount = additionalAmount;
             return cafe24UpdateVariantAdditionalAmount(
@@ -688,32 +975,6 @@ export async function POST(request: Request) {
     }
 
     if (pushRes.ok) {
-      const verifyPending = (() => {
-        const raw = (pushRes.raw ?? null) as { verify_pending?: unknown } | null;
-        return raw?.verify_pending === true;
-      })();
-
-      if (verifyPending) {
-        skippedCount += 1;
-        itemRows.push({
-          job_id: jobId,
-          channel_id: c.channel_id,
-          channel_product_id: c.channel_product_id,
-          master_item_id: c.master_item_id,
-          external_product_no: c.external_product_no,
-          external_variant_code: variantCode,
-          before_price_krw: c.current_channel_price_krw,
-          target_price_krw: targetPrice,
-          after_price_krw: c.current_channel_price_krw,
-          status: "SKIPPED",
-          http_status: pushRes.status,
-          error_code: "VERIFY_PENDING",
-          error_message: "카페24 반영 검증이 대기 상태여서 성공 처리하지 않았습니다",
-          raw_response_json: { push: pushRes.raw, verify: { pending: true } },
-        });
-        continue;
-      }
-
       const verify = variantCode
         ? await verifyAppliedVariantPrice(
           account,
@@ -760,97 +1021,111 @@ export async function POST(request: Request) {
           raw_response_json: { push: pushRes.raw, verify: verify.raw },
         });
       } else {
-        const baseMeta = await getBaseSnapshot(externalProductNo);
-        const optionType = baseMeta.ok ? getOptionType(baseMeta.raw) : "";
-        const variantAdditionalMismatch = Boolean(variantCode)
-          && String(verify.error ?? "").includes("VERIFY_MISMATCH")
-          && optionType === "C";
-        const optionMasterBaseImmutable = !variantCode && mastersWithVariantRows.has(masterKey) && hasOptionProduct(verify.raw);
-        const optionProductWithoutMappedVariants = !variantCode && !mastersWithVariantRows.has(masterKey) && hasOptionProduct(verify.raw);
-
-        if (optionMasterBaseImmutable) {
-          skippedCount += 1;
-          itemRows.push({
-            job_id: jobId,
-            channel_id: c.channel_id,
-            channel_product_id: c.channel_product_id,
-            master_item_id: c.master_item_id,
-            external_product_no: c.external_product_no,
-            external_variant_code: variantCode,
-            before_price_krw: c.current_channel_price_krw,
-            target_price_krw: targetPrice,
-            after_price_krw: verify.current ?? c.current_channel_price_krw,
-            status: "SKIPPED",
-            http_status: verify.status || pushRes.status,
-            error_code: "BASE_PRICE_IMMUTABLE_OPTION_PRODUCT",
-            error_message: "옵션상품은 카페24 정책상 기본가가 즉시 변경되지 않아 옵션가 기준으로 동기화했습니다",
-            raw_response_json: { push: pushRes.raw, verify: verify.raw },
-          });
-        } else if (optionProductWithoutMappedVariants) {
-          failedCount += 1;
-          itemRows.push({
-            job_id: jobId,
-            channel_id: c.channel_id,
-            channel_product_id: c.channel_product_id,
-            master_item_id: c.master_item_id,
-            external_product_no: c.external_product_no,
-            external_variant_code: variantCode,
-            before_price_krw: c.current_channel_price_krw,
-            target_price_krw: targetPrice,
-            after_price_krw: verify.current ?? c.current_channel_price_krw,
-            status: "FAILED",
-            http_status: verify.status || pushRes.status,
-            error_code: "BASE_PRICE_IMMUTABLE_NEEDS_VARIANT_MAPPING",
-            error_message: "옵션상품 기본가는 직접 반영이 어려워 옵션코드 매핑 후 옵션 전체 push가 필요합니다",
-            raw_response_json: { push: pushRes.raw, verify: verify.raw },
-          });
-        } else if (variantAdditionalMismatch) {
-          skippedCount += 1;
-          itemRows.push({
-            job_id: jobId,
-            channel_id: c.channel_id,
-            channel_product_id: c.channel_product_id,
-            master_item_id: c.master_item_id,
-            external_product_no: c.external_product_no,
-            external_variant_code: variantCode,
-            before_price_krw: c.current_channel_price_krw,
-            target_price_krw: targetPrice,
-            after_price_krw: verify.current ?? c.current_channel_price_krw,
-            status: "SKIPPED",
-            http_status: verify.status || pushRes.status,
-            error_code: "VARIANT_ADDITIONAL_IMMUTABLE_OPTION_TYPE_C",
-            error_message: "옵션타입 C 상품은 카페24 정책상 variant 추가금(additional_amount) 반영이 제한되어 자동 동기화에서 제외했습니다",
-            raw_response_json: { push: pushRes.raw, verify: verify.raw, option_type: optionType },
-          });
+        let retryRecorded = false;
+        if (variantCode) {
+          const retryBase = await resolveBasePriceForVariantAdditional(externalProductNo, masterKey);
+          if (retryBase.ok) {
+            expectedAdditionalAmount = targetPrice - retryBase.basePrice;
+            const retryPush = await cafe24UpdateVariantAdditionalAmount(
+              account,
+              accessToken,
+              externalProductNo,
+              variantCode,
+              expectedAdditionalAmount,
+            );
+            if (retryPush.ok) {
+              const retryVerify = await verifyAppliedVariantPrice(
+                account,
+                accessToken,
+                String(c.external_product_no),
+                variantCode,
+                targetPrice,
+                expectedAdditionalAmount,
+              );
+              if (retryVerify.ok) {
+                successCount += 1;
+                itemRows.push({
+                  job_id: jobId,
+                  channel_id: c.channel_id,
+                  channel_product_id: c.channel_product_id,
+                  master_item_id: c.master_item_id,
+                  external_product_no: c.external_product_no,
+                  external_variant_code: variantCode,
+                  before_price_krw: c.current_channel_price_krw,
+                  target_price_krw: targetPrice,
+                  after_price_krw: retryVerify.current ?? targetPrice,
+                  status: "SUCCESS",
+                  http_status: retryPush.status,
+                  error_code: null,
+                  error_message: null,
+                  raw_response_json: {
+                    push: pushRes.raw,
+                    verify: verify.raw,
+                    retry: { push: retryPush.raw, verify: retryVerify.raw, retry_reason: "VERIFY_MISMATCH_RETRY_WITH_FRESH_BASE" },
+                  },
+                });
+                retryRecorded = true;
+              }
+            }
+          }
         } else {
-          failedCount += 1;
-          itemRows.push({
-            job_id: jobId,
-            channel_id: c.channel_id,
-            channel_product_id: c.channel_product_id,
-            master_item_id: c.master_item_id,
-            external_product_no: c.external_product_no,
-            external_variant_code: variantCode,
-            before_price_krw: c.current_channel_price_krw,
-            target_price_krw: targetPrice,
-            after_price_krw: verify.current ?? c.current_channel_price_krw,
-            status: "FAILED",
-            http_status: verify.status || pushRes.status,
-            error_code: "VERIFY_MISMATCH",
-            error_message: `${verify.error ?? "push succeeded but verify mismatch"}${pushRes.attempt_key ? ` (attempt=${pushRes.attempt_key})` : ""}`,
-            raw_response_json: { push: pushRes.raw, verify: verify.raw },
-          });
+          const retryPush = await cafe24UpdateProductPrice(account, accessToken, externalProductNo, targetPrice);
+          if (retryPush.ok) {
+            const retryVerify = await verifyAppliedPrice(account, accessToken, String(c.external_product_no), targetPrice);
+            if (retryVerify.ok) {
+              successCount += 1;
+              itemRows.push({
+                job_id: jobId,
+                channel_id: c.channel_id,
+                channel_product_id: c.channel_product_id,
+                master_item_id: c.master_item_id,
+                external_product_no: c.external_product_no,
+                external_variant_code: variantCode,
+                before_price_krw: c.current_channel_price_krw,
+                target_price_krw: targetPrice,
+                after_price_krw: retryVerify.current ?? targetPrice,
+                status: "SUCCESS",
+                http_status: retryPush.status,
+                error_code: null,
+                error_message: null,
+                raw_response_json: {
+                  push: pushRes.raw,
+                  verify: verify.raw,
+                  retry: { push: retryPush.raw, verify: retryVerify.raw, retry_reason: "VERIFY_MISMATCH_RETRY_PRODUCT_PRICE" },
+                },
+              });
+              retryRecorded = true;
+            }
+          }
         }
+
+        if (retryRecorded) {
+          continue;
+        }
+
+        failedCount += 1;
+        itemRows.push({
+          job_id: jobId,
+          channel_id: c.channel_id,
+          channel_product_id: c.channel_product_id,
+          master_item_id: c.master_item_id,
+          external_product_no: c.external_product_no,
+          external_variant_code: variantCode,
+          before_price_krw: c.current_channel_price_krw,
+          target_price_krw: targetPrice,
+          after_price_krw: verify.current ?? c.current_channel_price_krw,
+          status: "FAILED",
+          http_status: verify.status || pushRes.status,
+          error_code: "VERIFY_MISMATCH",
+          error_message: `${verify.error ?? "push succeeded but verify mismatch"}${pushRes.attempt_key ? ` (attempt=${pushRes.attempt_key})` : ""}`,
+          raw_response_json: { push: pushRes.raw, verify: verify.raw, mismatch_reason: "VERIFY_MISMATCH_AFTER_WRITE_OK" },
+        });
       }
     } else {
-      const baseMeta = await getBaseSnapshot(externalProductNo);
-      const optionType = baseMeta.ok ? getOptionType(baseMeta.raw) : "";
-      const variantAdditionalMismatch = Boolean(variantCode)
-        && optionType === "C"
-        && String(pushRes.error ?? "").includes("additional_amount mismatch");
-      const itemStatus = variantAdditionalMismatch ? "SKIPPED" : "FAILED";
-      if (variantAdditionalMismatch) skippedCount += 1;
-      else failedCount += 1;
+      const pushErrorMessage = String(pushRes.error ?? "");
+      const noApiFound = /no api found/i.test(pushErrorMessage);
+      const itemStatus = "FAILED";
+      failedCount += 1;
       itemRows.push({
         job_id: jobId,
         channel_id: c.channel_id,
@@ -863,14 +1138,12 @@ export async function POST(request: Request) {
         after_price_krw: c.current_channel_price_krw,
         status: itemStatus,
         http_status: pushRes.status,
-        error_code: variantAdditionalMismatch
-          ? "VARIANT_ADDITIONAL_IMMUTABLE_OPTION_TYPE_C"
-          : `HTTP_${pushRes.status}`,
-        error_message: variantAdditionalMismatch
-          ? "옵션타입 C 상품은 카페24 정책상 variant 추가금(additional_amount) 반영이 제한되어 자동 동기화에서 제외했습니다"
+        error_code: noApiFound ? "PRODUCT_ENDPOINT_NOT_FOUND" : `HTTP_${pushRes.status}`,
+        error_message: noApiFound
+          ? "카페24 상품 엔드포인트를 찾지 못했습니다(상품번호/코드 매핑 확인 필요)"
           : (pushRes.error ?? "카페24 push 실패"),
-        raw_response_json: variantAdditionalMismatch
-          ? { push: pushRes.raw, option_type: optionType }
+        raw_response_json: noApiFound
+          ? { push: pushRes.raw, external_product_no: externalProductNo, external_variant_code: variantCode || null }
           : pushRes.raw,
       });
     }
@@ -1040,8 +1313,11 @@ export async function POST(request: Request) {
   }
 
   if (itemRows.length > 0) {
-    const itemRes = await sb.from("price_sync_job_item").insert(itemRows);
-    if (itemRes.error) return jsonError(itemRes.error.message ?? "동기화 작업 아이템 저장 실패", 500);
+    for (const chunk of chunkArray(itemRows, ITEM_INSERT_CHUNK_SIZE)) {
+      if (chunk.length === 0) continue;
+      const itemRes = await sb.from("price_sync_job_item").insert(chunk);
+      if (itemRes.error) return jsonError(itemRes.error.message ?? "동기화 작업 아이템 저장 실패", 500);
+    }
   }
 
   const finalStatus =

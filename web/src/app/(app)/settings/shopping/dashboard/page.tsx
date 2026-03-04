@@ -9,9 +9,11 @@ import { Card, CardBody, CardHeader } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input, Select } from "@/components/ui/field";
 import { Sheet } from "@/components/ui/sheet";
+import { PricingSnapshotDrawer } from "@/components/shop/PricingSnapshotDrawer";
 import { shopApiGet, shopApiSend } from "@/lib/shop/http";
-import { roundByRule } from "@/lib/shop/sync-rules";
+import { normalizePlatingComboCode, roundByRule } from "@/lib/shop/sync-rules";
 import { normalizeMaterialCode } from "@/lib/material-factors";
+import type { PricingSnapshotExplainResponse } from "@/types/pricingSnapshot";
 
 type Channel = { channel_id: string; channel_name: string; channel_code: string };
 
@@ -132,6 +134,8 @@ type OptionEditDraft = {
   sync_rule_decoration_enabled: boolean;
 };
 
+type OptionRuleCategory = "SIZE_RULE" | "PLATING_RULE" | "DECORATION_RULE" | "MISC_OVERRIDE";
+
 type OptionValueItem = {
   axis: string;
   value: string;
@@ -233,6 +237,60 @@ type R4RuleRow = {
 
 const fmt = (v: number | null | undefined) => (typeof v === "number" && Number.isFinite(v) ? v.toLocaleString() : "-");
 const signedFmt = (amount: number) => `${amount > 0 ? "+" : amount < 0 ? "-" : ""}${fmt(Math.abs(amount))}`;
+const roundToThousand = (v: number) => Math.round(v / 1000) * 1000;
+const thousandDeltaOptions = (() => {
+  const positives: number[] = [];
+  const negatives: number[] = [];
+  for (let v = 1000; v <= 1000000; v += 1000) positives.push(v);
+  for (let v = -1000; v >= -1000000; v -= 1000) negatives.push(v);
+  return [0, ...positives, ...negatives];
+})();
+const deltaOptionLabel = (value: number) => (value === 0 ? "0원" : `${value.toLocaleString()}원`);
+
+const getOptionRuleCategory = (draft: OptionEditDraft): OptionRuleCategory => {
+  if (draft.option_price_mode === "MANUAL") return "MISC_OVERRIDE";
+  if (draft.sync_rule_weight_enabled && !draft.sync_rule_plating_enabled && !draft.sync_rule_decoration_enabled) return "SIZE_RULE";
+  if (!draft.sync_rule_weight_enabled && draft.sync_rule_plating_enabled && !draft.sync_rule_decoration_enabled) return "PLATING_RULE";
+  if (!draft.sync_rule_weight_enabled && !draft.sync_rule_plating_enabled && draft.sync_rule_decoration_enabled) return "DECORATION_RULE";
+  return "MISC_OVERRIDE";
+};
+
+const applyOptionRuleCategory = (draft: OptionEditDraft, category: OptionRuleCategory): OptionEditDraft => {
+  if (category === "SIZE_RULE") {
+    return {
+      ...draft,
+      option_price_mode: "SYNC",
+      sync_rule_weight_enabled: true,
+      sync_rule_plating_enabled: false,
+      sync_rule_decoration_enabled: false,
+    };
+  }
+  if (category === "PLATING_RULE") {
+    return {
+      ...draft,
+      option_price_mode: "SYNC",
+      sync_rule_weight_enabled: false,
+      sync_rule_plating_enabled: true,
+      sync_rule_decoration_enabled: false,
+    };
+  }
+  if (category === "DECORATION_RULE") {
+    return {
+      ...draft,
+      option_price_mode: "SYNC",
+      sync_rule_weight_enabled: false,
+      sync_rule_plating_enabled: false,
+      sync_rule_decoration_enabled: true,
+    };
+  }
+  return {
+    ...draft,
+    option_price_mode: "MANUAL",
+    sync_rule_weight_enabled: false,
+    sync_rule_plating_enabled: false,
+    sync_rule_decoration_enabled: false,
+  };
+};
 const fmtDateTime = (value: string | null | undefined) => {
   if (!value) return "-";
   const t = Date.parse(value);
@@ -273,6 +331,31 @@ const isColorAxisName = (axis: string) => {
 const isDecorationAxisName = (axis: string) => {
   const name = axis.toLowerCase();
   return name.includes("장식") || name.includes("decoration");
+};
+
+const stripPriceDeltaSuffix = (text: string) =>
+  String(text ?? "").replace(/\s*\([+-][\d,]+원\)\s*$/u, "").trim();
+
+const normalizeOptionDisplayValue = (axis: string, value: string): string => {
+  const base = stripPriceDeltaSuffix(value);
+  if (!base) return "";
+  if (isMaterialAxisName(axis)) {
+    const code = normalizeMaterialCode(base);
+    return code || base;
+  }
+  if (isColorAxisName(axis)) {
+    const code = normalizePlatingComboCode(base);
+    return code || base;
+  }
+  if (isSizeAxisName(axis)) {
+    const numeric = Number(base.replace(/[^0-9.+-]/g, ""));
+    if (Number.isFinite(numeric)) return Number.isInteger(numeric) ? String(numeric) : String(numeric);
+    return base;
+  }
+  if (isDecorationAxisName(axis)) {
+    return base.toUpperCase();
+  }
+  return base;
 };
 
 const allowedRuleTypesForAxis = (axis: string): SyncRuleType[] => {
@@ -360,7 +443,6 @@ export default function ShoppingDashboardPage() {
   const [editingChannelProductId, setEditingChannelProductId] = useState<string | null>(null);
   const [optionEditDraft, setOptionEditDraft] = useState<OptionEditDraft | null>(null);
   const [optionEditOriginalDelta, setOptionEditOriginalDelta] = useState<number>(0);
-  const [optionEditDeltaReason, setOptionEditDeltaReason] = useState("");
   const [isBulkPolicyDrawerOpen, setIsBulkPolicyDrawerOpen] = useState(false);
   const [dashboardViewTab, setDashboardViewTab] = useState<"MASTER_GALLERY" | "OPTION_GROUPS">("MASTER_GALLERY");
   const [optionGroupFilterMode, setOptionGroupFilterMode] = useState<"SINGLE" | "AND" | "OR">("SINGLE");
@@ -371,9 +453,12 @@ export default function ShoppingDashboardPage() {
   const [bulkGlobalRuleSetId, setBulkGlobalRuleSetId] = useState("");
   const [axisPolicyDrafts, setAxisPolicyDrafts] = useState<Record<string, AxisPolicyDraft>>({});
   const [syncPreview, setSyncPreview] = useState<SyncPreviewResult | null>(null);
+  const [pinnedComputeRequestId, setPinnedComputeRequestId] = useState("");
+  const [isSnapshotDrawerOpen, setIsSnapshotDrawerOpen] = useState(false);
+  const [selectedMasterIdForDrawer, setSelectedMasterIdForDrawer] = useState("");
 
   const dashboardQuery = useQuery({
-    queryKey: ["shop-dashboard", activeChannelId, priceState, modelName],
+    queryKey: ["shop-dashboard", activeChannelId, priceState, modelName, pinnedComputeRequestId],
     enabled: Boolean(activeChannelId),
     placeholderData: (prev) => prev,
     queryFn: () => {
@@ -381,6 +466,7 @@ export default function ShoppingDashboardPage() {
       query.set("channel_id", activeChannelId);
       query.set("include_unmapped", "false");
       query.set("limit", "1000");
+      if (pinnedComputeRequestId) query.set("compute_request_id", pinnedComputeRequestId);
       if (priceState) query.set("price_state", priceState);
       if (modelName.trim()) query.set("model_name", modelName.trim());
       return shopApiGet<{ data: DashboardRow[] }>(`/api/channel-price-dashboard?${query.toString()}`);
@@ -521,7 +607,22 @@ export default function ShoppingDashboardPage() {
       });
     }
 
-    return out.sort((a, b) => {
+    const dedupByProductNo = new Map<string, MasterRow>();
+    for (const row of out) {
+      const key = String(row.product_no ?? "").trim() || `__master__${row.master_item_id}`;
+      const prev = dedupByProductNo.get(key);
+      if (!prev) {
+        dedupByProductNo.set(key, row);
+        continue;
+      }
+      const prevTime = Date.parse(String(prev.latest_updated_at ?? ""));
+      const rowTime = Date.parse(String(row.latest_updated_at ?? ""));
+      const prevScore = (Number.isFinite(prevTime) ? prevTime : -1) + (prev.option_count * 1000);
+      const rowScore = (Number.isFinite(rowTime) ? rowTime : -1) + (row.option_count * 1000);
+      if (rowScore > prevScore) dedupByProductNo.set(key, row);
+    }
+
+    return Array.from(dedupByProductNo.values()).sort((a, b) => {
       const am = a.model_name ?? "";
       const bm = b.model_name ?? "";
       return am.localeCompare(bm) || a.master_item_id.localeCompare(b.master_item_id);
@@ -635,7 +736,16 @@ export default function ShoppingDashboardPage() {
         if (Number.isFinite(updated)) s += Math.floor(updated / 10000000);
         return s;
       };
-      return score(next) > score(prev) ? next : prev;
+      const nextScore = score(next);
+      const prevScore = score(prev);
+      if (nextScore > prevScore) return next;
+      if (prevScore > nextScore) return prev;
+      const prevUpdated = Date.parse(String(prev.updated_at ?? ""));
+      const nextUpdated = Date.parse(String(next.updated_at ?? ""));
+      if (Number.isFinite(prevUpdated) && Number.isFinite(nextUpdated)) {
+        return nextUpdated >= prevUpdated ? next : prev;
+      }
+      return next;
     };
 
     const out = new Map<string, MappingRow>();
@@ -717,6 +827,23 @@ export default function ShoppingDashboardPage() {
   });
 
   const optionGroupPersistedPolicies = optionGroupPoliciesQuery.data?.data ?? [];
+  const snapshotDrawerMasterId = selectedMasterIdForDrawer || effectiveDetailMasterId;
+  const snapshotExplainQuery = useQuery({
+    queryKey: ["shop-snapshot-explain", activeChannelId, snapshotDrawerMasterId, pinnedComputeRequestId, isSnapshotDrawerOpen],
+    enabled: Boolean(
+      isSnapshotDrawerOpen
+      && activeChannelId
+      && snapshotDrawerMasterId
+      && pinnedComputeRequestId,
+    ),
+    queryFn: () => {
+      const query = new URLSearchParams();
+      query.set("channel_id", activeChannelId);
+      query.set("master_item_id", snapshotDrawerMasterId);
+      query.set("compute_request_id", pinnedComputeRequestId);
+      return shopApiGet<PricingSnapshotExplainResponse>(`/api/channel-price-snapshot-explain?${query.toString()}`);
+    },
+  });
   const optionGroupRuleSetId = useMemo(() => {
     const fromPolicy = optionGroupPersistedPolicies.find((p) => String(p.sync_rule_set_id ?? "").trim())?.sync_rule_set_id ?? "";
     return (
@@ -758,7 +885,14 @@ export default function ShoppingDashboardPage() {
       const code = String(v.variant_code ?? "").trim();
       if (!code) continue;
       const opts = Array.isArray(v.options) ? v.options : [];
-      map.set(code, opts.map((o) => ({ name: String(o.name ?? "").trim(), value: String(o.value ?? "").trim() })).filter((o) => o.name && o.value));
+      const normalized = opts
+        .map((o) => {
+          const name = String(o.name ?? "").trim();
+          const value = stripPriceDeltaSuffix(String(o.value ?? "").trim());
+          return { name, value };
+        })
+        .filter((o) => o.name && o.value);
+      map.set(code, Array.from(new Map(normalized.map((o) => [`${o.name}::${o.value}`, o])).values()));
     }
     return map;
   }, [variantMetaQuery.data?.data?.variants]);
@@ -788,14 +922,52 @@ export default function ShoppingDashboardPage() {
       .map((variantCode) => {
         const mapping = detailMappingByVariantCode.get(variantCode) ?? null;
         const row = mapping ? rowsByChannelProduct.get(mapping.channel_product_id) : undefined;
-        const breakdown = mapping ? optionRuleBreakdownByProduct.get(String(mapping.channel_product_id)) : undefined;
+        const useRuleBreakdown = Boolean(
+          mapping
+          && (
+            mapping.sync_rule_weight_enabled === true
+            || mapping.sync_rule_plating_enabled === true
+            || mapping.sync_rule_decoration_enabled === true
+          ),
+        );
+        const breakdown = useRuleBreakdown && mapping
+          ? optionRuleBreakdownByProduct.get(String(mapping.channel_product_id))
+          : undefined;
         return { variantCode, mapping, row, breakdown };
       });
   }, [detailMappingByVariantCode, detailOptionMappings, optionRuleBreakdownByProduct, rowsByChannelProduct, variantMetaQuery.data?.data?.variants]);
 
   const optionValueItems = useMemo<OptionValueItem[]>(() => {
+    const toSizeLabel = (sizeValue: number | null): string => {
+      if (sizeValue == null || !Number.isFinite(sizeValue)) return "";
+      const n = Number(sizeValue);
+      return Number.isInteger(n) ? String(n) : String(n);
+    };
+
+    const fallbackOptions = (m: MappingRow): Array<{ name: string; value: string }> => {
+      const options: Array<{ name: string; value: string }> = [];
+      const materialRaw = String(m.option_material_code ?? "").trim();
+      const colorRaw = String(m.option_color_code ?? "").trim();
+      const decorationRaw = String(m.option_decoration_code ?? "").trim();
+      const sizeRaw = toSizeLabel(m.option_size_value ?? null).trim();
+      const material = normalizeOptionDisplayValue("소재", materialRaw);
+      const color = normalizeOptionDisplayValue("색상/도금", colorRaw);
+      const decoration = normalizeOptionDisplayValue("장식", decorationRaw);
+      const size = normalizeOptionDisplayValue("사이즈", sizeRaw);
+      if (material) options.push({ name: "소재", value: material });
+      if (color) options.push({ name: "색상/도금", value: color });
+      if (decoration) options.push({ name: "장식", value: decoration });
+      if (size) options.push({ name: "사이즈", value: size });
+      return options;
+    };
+
     const axisMap = new Map<string, Map<string, Set<string>>>();
-    for (const [variantCode, opts] of variantOptionsByCode.entries()) {
+    for (const m of detailOptionMappings) {
+      const variantCode = String(m.external_variant_code ?? "").trim();
+      if (!variantCode) continue;
+      const fromVariantMeta = variantOptionsByCode.get(variantCode) ?? [];
+      const fromMapping = fallbackOptions(m);
+      const opts = fromVariantMeta.length > 0 ? fromVariantMeta : fromMapping;
       for (const o of opts) {
         if (!axisMap.has(o.name)) axisMap.set(o.name, new Map());
         const valueMap = axisMap.get(o.name)!;
@@ -810,7 +982,7 @@ export default function ShoppingDashboardPage() {
       }
     }
     return out.sort((a, b) => a.axis.localeCompare(b.axis) || a.value.localeCompare(b.value));
-  }, [variantOptionsByCode]);
+  }, [detailOptionMappings, variantOptionsByCode]);
 
   const optionAxisGroups = useMemo<OptionAxisGroup[]>(() => {
     const grouped = new Map<string, OptionValueItem[]>();
@@ -828,32 +1000,44 @@ export default function ShoppingDashboardPage() {
     const map = new Map<string, MappingRow[]>();
     for (const item of optionValueItems) {
       const key = `${item.axis}::${item.value}`;
-      const rows = detailOptionMappings.filter((m) => item.variant_codes.includes(String(m.external_variant_code ?? "").trim()));
+      const rows = detailMappings.filter((m) => item.variant_codes.includes(String(m.external_variant_code ?? "").trim()));
       map.set(key, rows);
     }
     return map;
-  }, [detailOptionMappings, optionValueItems]);
+  }, [detailMappings, optionValueItems]);
 
-  const optionGroupFacetGroups = useMemo(() => {
-    const grouped = new Map<string, Map<string, number>>();
-    for (const m of detailOptionMappings) {
+  const optionGroupOptionsByChannelProduct = useMemo(() => {
+    const out = new Map<string, Array<{ name: string; value: string }>>();
+    const toSizeLabel = (sizeValue: number | null): string => {
+      if (sizeValue == null || !Number.isFinite(sizeValue)) return "";
+      const n = Number(sizeValue);
+      return Number.isInteger(n) ? String(n) : String(n);
+    };
+    const fallbackOptions = (m: MappingRow): Array<{ name: string; value: string }> => {
+      const options: Array<{ name: string; value: string }> = [];
+      const material = normalizeOptionDisplayValue("소재", String(m.option_material_code ?? "").trim());
+      const color = normalizeOptionDisplayValue("색상/도금", String(m.option_color_code ?? "").trim());
+      const decoration = normalizeOptionDisplayValue("장식", String(m.option_decoration_code ?? "").trim());
+      const size = normalizeOptionDisplayValue("사이즈", toSizeLabel(m.option_size_value ?? null).trim());
+      if (material) options.push({ name: "소재", value: material });
+      if (color) options.push({ name: "색상/도금", value: color });
+      if (decoration) options.push({ name: "장식", value: decoration });
+      if (size) options.push({ name: "사이즈", value: size });
+      return options;
+    };
+
+    for (const m of mappings) {
+      const channelProductId = String(m.channel_product_id ?? "").trim();
+      if (!channelProductId) continue;
       const variantCode = String(m.external_variant_code ?? "").trim();
-      if (!variantCode) continue;
-      for (const opt of variantOptionsByCode.get(variantCode) ?? []) {
-        if (!grouped.has(opt.name)) grouped.set(opt.name, new Map());
-        const values = grouped.get(opt.name)!;
-        values.set(opt.value, (values.get(opt.value) ?? 0) + 1);
-      }
+      const fromVariantMeta = variantCode ? (variantOptionsByCode.get(variantCode) ?? []) : [];
+      const fromMapping = fallbackOptions(m);
+      const options = fromVariantMeta.length > 0 ? fromVariantMeta : fromMapping;
+      out.set(channelProductId, options);
     }
-    return Array.from(grouped.entries())
-      .map(([axis, values]) => ({
-        axis,
-        values: Array.from(values.entries())
-          .map(([value, count]) => ({ value, count }))
-          .sort((a, b) => a.value.localeCompare(b.value)),
-      }))
-      .sort((a, b) => a.axis.localeCompare(b.axis));
-  }, [detailOptionMappings, variantOptionsByCode]);
+
+    return out;
+  }, [mappings, variantOptionsByCode]);
 
   const selectedOptionPairs = useMemo(
     () => Object.entries(optionGroupSelections).flatMap(([axis, values]) => values.map((value) => ({ axis, value }))),
@@ -932,9 +1116,8 @@ export default function ShoppingDashboardPage() {
 
   const optionGroupedGalleryItems = useMemo(() => {
     const q = optionGroupSearch.trim().toLowerCase();
-    const matchesSelection = (variantCode: string): boolean => {
+    const matchesSelection = (options: Array<{ name: string; value: string }>): boolean => {
       if (selectedOptionPairs.length === 0) return true;
-      const options = variantOptionsByCode.get(variantCode) ?? [];
       const hasPair = (axis: string, value: string) =>
         options.some((o) => String(o.name) === axis && String(o.value) === value);
       if (optionGroupFilterMode === "AND") {
@@ -945,7 +1128,7 @@ export default function ShoppingDashboardPage() {
 
     const items = Array.from(
       new Map(
-        detailOptionMappings.map((m) => [
+        mappings.map((m) => [
           String(m.channel_product_id),
           {
             channelProductId: String(m.channel_product_id),
@@ -953,25 +1136,55 @@ export default function ShoppingDashboardPage() {
             row: rowsByChannelProduct.get(m.channel_product_id),
             variantCode: String(m.external_variant_code ?? "").trim() || "-",
             productNo: String(m.external_product_no ?? "").trim() || "-",
+            options: optionGroupOptionsByChannelProduct.get(String(m.channel_product_id)) ?? [],
           },
         ]),
       ).values(),
     )
       .filter((item) => item.variantCode !== "-")
-      .filter((item) => matchesSelection(item.variantCode))
+      .filter((item) => item.row)
+      .filter((item) => matchesSelection(item.options))
       .filter((item) => {
         if (!q) return true;
-        const optionsText = (variantOptionsByCode.get(item.variantCode) ?? [])
+        const optionsText = item.options
           .map((o) => `${o.name}:${o.value}`)
           .join(" ")
           .toLowerCase();
         const blob = `${item.productNo} ${item.variantCode} ${item.row?.model_name ?? ""} ${optionsText}`.toLowerCase();
         return blob.includes(q);
       })
-      .sort((a, b) => a.variantCode.localeCompare(b.variantCode));
+      .sort((a, b) => {
+        const p = a.productNo.localeCompare(b.productNo);
+        if (p !== 0) return p;
+        return a.variantCode.localeCompare(b.variantCode);
+      });
 
     return items;
-  }, [detailOptionMappings, optionGroupFilterMode, optionGroupSearch, rowsByChannelProduct, selectedOptionPairs, variantOptionsByCode]);
+  }, [mappings, optionGroupFilterMode, optionGroupOptionsByChannelProduct, optionGroupSearch, rowsByChannelProduct, selectedOptionPairs]);
+
+  const optionGroupFacetGroups = useMemo(() => {
+    const grouped = new Map<string, Map<string, number>>();
+    for (const item of optionGroupedGalleryItems) {
+      for (const opt of item.options) {
+        if (!grouped.has(opt.name)) grouped.set(opt.name, new Map());
+        const values = grouped.get(opt.name)!;
+        values.set(opt.value, (values.get(opt.value) ?? 0) + 1);
+      }
+    }
+    return Array.from(grouped.entries())
+      .map(([axis, values]) => ({
+        axis,
+        values: Array.from(values.entries())
+          .map(([value, count]) => ({ value, count }))
+          .sort((a, b) => a.value.localeCompare(b.value)),
+      }))
+      .sort((a, b) => a.axis.localeCompare(b.axis));
+  }, [optionGroupedGalleryItems]);
+
+  const optionGroupFacetChips = useMemo(() =>
+    optionGroupFacetGroups.flatMap((group) =>
+      group.values.map((v) => ({ axis: group.axis, value: v.value, count: v.count }))),
+  [optionGroupFacetGroups]);
 
   const optionGroupedByTotal = useMemo(() => {
     const grouped = new Map<number, Array<typeof optionGroupedGalleryItems[number] & {
@@ -981,10 +1194,15 @@ export default function ShoppingDashboardPage() {
       ruleDeltaSource: "POLICY" | "INFERRED";
     }>>();
     for (const item of optionGroupedGalleryItems) {
-      const total = Math.round(Number(item.row?.option_price_delta_krw ?? 0));
-      const manual = Math.round(Number(item.mapping.option_price_delta_krw ?? 0));
-      const policyRuleDelta = optionGroupRuleDeltaByVariant.get(item.variantCode);
-      const ruleDelta = policyRuleDelta == null ? (total - manual) : policyRuleDelta;
+      const total = Math.round(Number(item.mapping.option_price_delta_krw ?? 0));
+      const manual = total;
+      const hasRuleFlags = Boolean(
+        item.mapping.sync_rule_weight_enabled
+        || item.mapping.sync_rule_plating_enabled
+        || item.mapping.sync_rule_decoration_enabled,
+      );
+      const policyRuleDelta = hasRuleFlags ? (optionGroupRuleDeltaByVariant.get(item.variantCode) ?? null) : 0;
+      const ruleDelta = policyRuleDelta == null ? 0 : policyRuleDelta;
       const bucketValue = optionGroupPriceBasis === "RULE" ? ruleDelta : total;
       const prev = grouped.get(bucketValue) ?? [];
       prev.push({
@@ -1043,6 +1261,20 @@ export default function ShoppingDashboardPage() {
     ]);
   };
 
+  const recomputeByMaster = async (masterItemIds?: string[]) => {
+    const normalizedMasterIds = (masterItemIds ?? []).map((v) => String(v ?? "").trim()).filter(Boolean);
+    const recompute = await shopApiSend<{ ok: boolean; inserted: number; compute_request_id?: string }>("/api/pricing/recompute", "POST", {
+      channel_id: activeChannelId,
+      master_item_ids: normalizedMasterIds.length > 0 ? normalizedMasterIds : undefined,
+    });
+    const computeRequestId = String(recompute.compute_request_id ?? "").trim();
+    if (!computeRequestId) {
+      throw new Error("재계산 버전 식별자(compute_request_id)를 받지 못했습니다");
+    }
+    setPinnedComputeRequestId(computeRequestId);
+    return recompute;
+  };
+
   const doRecompute = useMutation({
     mutationFn: () =>
       shopApiSend<{ ok: boolean; inserted: number; compute_request_id?: string }>("/api/pricing/recompute", "POST", {
@@ -1050,6 +1282,8 @@ export default function ShoppingDashboardPage() {
         master_item_ids: selectedMasterIds.length > 0 ? selectedMasterIds : undefined,
       }),
     onSuccess: async (res) => {
+      const computeRequestId = String(res.compute_request_id ?? "").trim();
+      if (computeRequestId) setPinnedComputeRequestId(computeRequestId);
       toast.success(`재계산 완료: ${res.inserted}건`);
       await refreshAll();
     },
@@ -1082,7 +1316,6 @@ export default function ShoppingDashboardPage() {
       }
       return shopApiSend<{ ok: boolean; job_id: string; success: number; failed: number; skipped: number; label_sync?: { failed?: number } }>("/api/channel-prices/push", "POST", {
         channel_id: activeChannelId,
-        channel_product_ids: selectedChannelProductIds.length > 0 ? selectedChannelProductIds : undefined,
         compute_request_id: computeRequestId,
         sync_option_labels: true,
       });
@@ -1215,11 +1448,7 @@ export default function ShoppingDashboardPage() {
       }
 
       const parsedDelta = toNullableNumber(optionEditDraft.option_price_delta_krw);
-      const normalizedDelta = parsedDelta == null ? 0 : Math.round(parsedDelta);
-      const deltaChanged = normalizedDelta !== Math.round(optionEditOriginalDelta);
-      if (deltaChanged && !optionEditDeltaReason.trim()) {
-        throw new Error("옵션 추가금액을 변경할 때는 사유를 필수로 입력하세요");
-      }
+      const normalizedDelta = parsedDelta == null ? null : roundToThousand(parsedDelta);
 
       if (optionEditDraft.option_price_mode === "SYNC") {
         const precheck = await shopApiSend<{ data: SyncPreviewResult }>("/api/sync-rules/preview", "POST", {
@@ -1242,7 +1471,7 @@ export default function ShoppingDashboardPage() {
         option_decoration_code: optionEditDraft.option_decoration_code || null,
         option_size_value: toNullableNumber(optionEditDraft.option_size_value),
         option_price_delta_krw: normalizedDelta,
-        option_delta_reason: optionEditDeltaReason.trim() || null,
+        option_delta_reason: null,
         option_manual_target_krw: toNullableNumber(optionEditDraft.option_manual_target_krw),
         sync_rule_material_enabled: optionEditDraft.sync_rule_material_enabled,
         sync_rule_weight_enabled: optionEditDraft.sync_rule_weight_enabled,
@@ -1250,17 +1479,13 @@ export default function ShoppingDashboardPage() {
         sync_rule_decoration_enabled: optionEditDraft.sync_rule_decoration_enabled,
       });
 
-      await shopApiSend("/api/pricing/recompute", "POST", {
-        channel_id: activeChannelId,
-        master_item_ids: effectiveDetailMasterId ? [effectiveDetailMasterId] : undefined,
-      });
+      await recomputeByMaster(effectiveDetailMasterId ? [effectiveDetailMasterId] : []);
     },
     onSuccess: async () => {
-      toast.success("옵션 설정 저장 및 재계산 완료");
+      toast.success("옵션 저장 및 재계산 완료");
       setEditingChannelProductId(null);
       setOptionEditDraft(null);
       setOptionEditOriginalDelta(0);
-      setOptionEditDeltaReason("");
       await refreshAll();
       if (isBulkPolicyDrawerOpen) {
         await loadBulkPolicyDrafts();
@@ -1292,19 +1517,20 @@ export default function ShoppingDashboardPage() {
     onError: (err: Error) => toast.error(err.message),
   });
 
-  const applyCategoryPolicy = useMutation({
-    mutationFn: async ({
+  const applyAxisPolicyMutationFn = async ({
       axis,
       axisMode,
       values,
       ruleSetId,
       ruleType,
+      skipRecompute,
     }: {
       axis: string;
       axisMode: "OVERRIDE" | "SYNC";
       values: Record<string, AxisValueDraft>;
       ruleSetId?: string;
       ruleType?: SyncRuleType;
+      skipRecompute?: boolean;
     }) => {
       const group = optionAxisGroups.find((g) => g.axis === axis);
       if (!group) throw new Error("옵션 카테고리를 찾지 못했습니다");
@@ -1316,25 +1542,24 @@ export default function ShoppingDashboardPage() {
         if (!Number.isFinite(parsedDelta)) {
           throw new Error(`${axis} / ${item.value}: 추가금액은 숫자여야 합니다`);
         }
+        const nextMode: "BASE" | "SYNC" = "SYNC";
         normalizedValues[item.value] = {
-          mode: raw?.mode === "BASE" ? "BASE" : "SYNC",
+          mode: nextMode,
           ruleId: String(raw?.ruleId ?? "").trim(),
-          deltaKrw: String(Math.round(parsedDelta)),
+          deltaKrw: String(roundToThousand(parsedDelta)),
         };
       }
+
       const hasSyncValue = axisMode === "SYNC" && group.values.some((item) => normalizedValues[item.value].mode === "SYNC");
 
-      const selectedRuleTypeRaw = (ruleType ?? guessRuleByAxis(axis));
-      const selectedRuleType = normalizeRuleTypeForAxis(axis, selectedRuleTypeRaw);
-      const selectedRuleSetId = (ruleSetId ?? "").trim() || "";
-      const fallbackRuleSetId = selectedRuleSetId || syncRuleSetQuery.data?.data?.[0]?.rule_set_id || "";
-      const persistedRuleSetIdForPolicy = selectedRuleSetId || fallbackRuleSetId || null;
-      if (hasSyncValue && !selectedRuleSetId) {
-        throw new Error("SYNC 적용을 위한 룰셋을 선택하세요");
-      }
-      if (axisMode === "SYNC" && selectedRuleTypeRaw !== selectedRuleType) {
-        throw new Error(`${axis}: ${ruleTypeLabel(selectedRuleTypeRaw)}는 이 옵션축에 적용할 수 없습니다. (${allowedRuleTypesForAxis(axis).map(ruleTypeLabel).join(", ")}만 가능)`);
-      }
+      const effectiveAxisDrafts: Record<string, AxisPolicyDraft> = {
+        ...axisPolicyDrafts,
+        [axis]: {
+          mode: axisMode,
+          ruleType: normalizeRuleTypeForAxis(axis, (ruleType ?? guessRuleByAxis(axis))),
+          values: normalizedValues,
+        },
+      };
 
       const parseSizeStrict = (value: string) => {
         const onlyNumber = value.replace(/[^0-9.+-]/g, "");
@@ -1343,12 +1568,81 @@ export default function ShoppingDashboardPage() {
         return Number.isFinite(n) ? n : null;
       };
 
-      if (axisMode === "SYNC" && (selectedRuleType === "R1" || selectedRuleType === "R2")) {
-        const baseCount = group.values.filter((item) => normalizedValues[item.value].mode === "BASE").length;
-        if (baseCount !== 1) {
-          throw new Error(`${axis}: ${selectedRuleType}는 기준값(BASE)이 정확히 1개여야 합니다`);
+      const axisDeltaByRowKey = new Map<string, number>();
+      const findAffectedMappings = (axisName: string, axisValue: string): MappingRow[] => {
+        const directKey = `${axisName}::${axisValue}`;
+        const mergedByRowKey = new Map<string, MappingRow>();
+        const addRows = (rows: MappingRow[]) => {
+          for (const row of rows) {
+            const rowKey = `${row.channel_id}::${row.external_product_no}::${String(row.external_variant_code ?? "")}`;
+            if (!mergedByRowKey.has(rowKey)) mergedByRowKey.set(rowKey, row);
+          }
+        };
+
+        addRows(optionValueMappingsByKey.get(directKey) ?? []);
+
+        const materialCode = normalizeMaterialCode(axisValue);
+        if (materialCode) {
+          addRows(detailOptionMappings.filter((m) => normalizeMaterialCode(String(m.option_material_code ?? "")) === materialCode));
+        }
+
+        const colorCode = normalizePlatingComboCode(axisValue);
+        if (colorCode) {
+          addRows(detailOptionMappings.filter((m) => normalizePlatingComboCode(String(m.option_color_code ?? "")) === colorCode));
+        }
+
+        const sizeValue = parseSizeStrict(axisValue);
+        if (sizeValue != null) {
+          addRows(detailOptionMappings.filter((m) => Number(m.option_size_value ?? Number.NaN) === sizeValue));
+        }
+
+        const decorCode = String(axisValue ?? "").trim().toUpperCase();
+        if (decorCode) {
+          addRows(detailOptionMappings.filter((m) => String(m.option_decoration_code ?? "").trim().toUpperCase() === decorCode));
+        }
+
+        return Array.from(mergedByRowKey.values());
+      };
+
+      for (const axisGroup of optionAxisGroups) {
+        const axisDraft = effectiveAxisDrafts[axisGroup.axis] ?? {
+          mode: "SYNC" as const,
+          ruleType: guessRuleByAxis(axisGroup.axis),
+          values: Object.fromEntries(axisGroup.values.map((v) => [v.value, { mode: "SYNC", ruleId: "", deltaKrw: "0" }])) as Record<string, AxisValueDraft>,
+        };
+        const isMaterialGroup = isMaterialAxisName(axisGroup.axis);
+        for (const axisValue of axisGroup.values) {
+          const vDraft = axisDraft.values[axisValue.value] ?? { mode: "SYNC", ruleId: "", deltaKrw: "0" };
+          const isSyncValue = axisDraft.mode === "SYNC" && vDraft.mode === "SYNC";
+          const raw = Number(vDraft.deltaKrw ?? "0");
+          const rounded = Number.isFinite(raw) ? roundToThousand(raw) : 0;
+          const contribution = isSyncValue ? (isMaterialGroup ? 0 : rounded) : 0;
+          const matchedRows = findAffectedMappings(axisValue.axis, axisValue.value);
+          for (const row of matchedRows) {
+            const rowKey = `${row.channel_id}::${row.external_product_no}::${String(row.external_variant_code ?? "")}`;
+            axisDeltaByRowKey.set(rowKey, (axisDeltaByRowKey.get(rowKey) ?? 0) + contribution);
+          }
         }
       }
+
+      const selectedRuleTypeRaw = (ruleType ?? guessRuleByAxis(axis));
+      const selectedRuleType = normalizeRuleTypeForAxis(axis, selectedRuleTypeRaw);
+      const selectedRuleSetId = (ruleSetId ?? "").trim() || "";
+      const fallbackRuleSetId = selectedRuleSetId || syncRuleSetQuery.data?.data?.[0]?.rule_set_id || "";
+      const requiresRuleSet = hasSyncValue && selectedRuleType === "R4";
+      if (requiresRuleSet && !selectedRuleSetId) {
+        throw new Error("SYNC 적용을 위한 룰셋을 선택하세요");
+      }
+      if (axisMode === "SYNC" && selectedRuleTypeRaw !== selectedRuleType) {
+        throw new Error(`${axis}: ${ruleTypeLabel(selectedRuleTypeRaw)}는 이 옵션축에 적용할 수 없습니다. (${allowedRuleTypesForAxis(axis).map(ruleTypeLabel).join(", ")}만 가능)`);
+      }
+
+      const isMaterialAxis = isMaterialAxisName(axis);
+      const isSizeAxisRule = isSizeAxisName(axis);
+      const isDecorationAxisRule = isDecorationAxisName(axis);
+      const axisUsesRuleEngine = isDecorationAxisRule;
+
+
 
       const rowsMap = new Map<string, {
         channel_id: string;
@@ -1371,20 +1665,15 @@ export default function ShoppingDashboardPage() {
         mapping_source: "MANUAL" | "CSV" | "AUTO";
         is_active: boolean;
       }>();
-      const resolvedRuleIdByValue = new Map<string, string>();
-      const baseValueForR1 = group.values.find((item) => normalizedValues[item.value]?.mode === "BASE")?.value;
+      const baseValueForR1 = group.values[0]?.value;
       const r1Rules = r1RulesQuery.data?.data ?? [];
 
       for (const item of group.values) {
-        const key = `${item.axis}::${item.value}`;
-        const affectedMappings = optionValueMappingsByKey.get(key) ?? [];
+        const affectedMappings = findAffectedMappings(item.axis, item.value);
         const valueDraft = normalizedValues[item.value];
         const valueMode = valueDraft.mode;
-        const valueDeltaAbsolute = Number(valueDraft.deltaKrw);
 
         const selectedR1 = (r1RulesQuery.data?.data ?? []).find((r) => r.rule_id === valueDraft.ruleId);
-        const selectedR2 = (r2RulesQuery.data?.data ?? []).find((r) => r.rule_id === valueDraft.ruleId);
-        const selectedR3 = (r3RulesQuery.data?.data ?? []).find((r) => r.rule_id === valueDraft.ruleId);
         const selectedR4 = (r4RulesQuery.data?.data ?? []).find((r) => r.rule_id === valueDraft.ruleId);
         const resolvedR1 =
           selectedRuleType === "R1"
@@ -1392,48 +1681,41 @@ export default function ShoppingDashboardPage() {
             : null;
 
         if (axisMode === "SYNC" && valueMode === "SYNC") {
-          if (selectedRuleType !== "R1" && !valueDraft.ruleId) throw new Error(`${axis} / ${item.value}: 룰 항목을 선택하세요`);
           if (selectedRuleType === "R1" && !resolvedR1) throw new Error(`${axis} / ${item.value}: 선택한/매칭된 R1 룰을 찾을 수 없습니다`);
-          if (selectedRuleType === "R2" && !selectedR2) throw new Error(`${axis} / ${item.value}: 선택한 R2 룰을 찾을 수 없습니다`);
-          if (selectedRuleType === "R3" && !selectedR3) throw new Error(`${axis} / ${item.value}: 선택한 R3 룰을 찾을 수 없습니다`);
-          if (selectedRuleType === "R4" && !selectedR4) throw new Error(`${axis} / ${item.value}: 선택한 R4 룰을 찾을 수 없습니다`);
+          if (selectedRuleType === "R4" && valueDraft.ruleId && !selectedR4) throw new Error(`${axis} / ${item.value}: 선택한 R4 룰을 찾을 수 없습니다`);
         }
-        if (axisMode === "SYNC" && valueMode === "SYNC") {
-          if (selectedRuleType === "R1" && resolvedR1?.rule_id) resolvedRuleIdByValue.set(item.value, resolvedR1.rule_id);
-          else if (valueDraft.ruleId) resolvedRuleIdByValue.set(item.value, valueDraft.ruleId);
-        }
-
         for (const m of affectedMappings) {
           const useSync = axisMode === "SYNC" && valueMode === "SYNC";
+          const hasExplicitRuleSelection = String(valueDraft.ruleId ?? "").trim().length > 0;
+          const useRuleSyncForValue = useSync && (axisUsesRuleEngine ? hasExplicitRuleSelection : true);
           const enforcedRuleSetId = selectedRuleSetId || m.sync_rule_set_id || fallbackRuleSetId;
           if (!enforcedRuleSetId) {
             throw new Error("적용 가능한 Sync 룰셋이 없습니다. 먼저 룰셋을 생성/선택해주세요.");
           }
-          const axisMaterialCode = selectedRuleType === "R1"
-            ? normalizeMaterialCode(item.value)
-            : null;
-          const nextMaterial = selectedRuleType === "R1"
-            ? (
-              useSync
-                ? (resolvedR1?.target_material_code ?? axisMaterialCode ?? m.option_material_code)
-                : (axisMaterialCode ?? m.option_material_code)
-            )
-            : m.option_material_code;
-          const nextColor = selectedRuleType === "R3" && useSync
-            ? (selectedR3?.color_code ?? m.option_color_code)
-            : m.option_color_code;
-          const nextDecoration = selectedRuleType === "R4" && useSync
+          const axisMaterialCode = normalizeMaterialCode(item.value);
+          const nextMaterial = isMaterialAxis
+            ? (axisMaterialCode || m.option_material_code)
+            : (selectedRuleType === "R1"
+              ? (
+                useSync
+                  ? (resolvedR1?.target_material_code ?? axisMaterialCode ?? m.option_material_code)
+                  : (axisMaterialCode ?? m.option_material_code)
+              )
+              : m.option_material_code);
+          const nextColor = m.option_color_code;
+          const nextDecoration = selectedRuleType === "R4" && useRuleSyncForValue
             ? (selectedR4?.match_decoration_code ?? m.option_decoration_code)
             : m.option_decoration_code;
-          const parsedSize = selectedRuleType === "R2" ? parseSizeStrict(item.value) : null;
-          if (selectedRuleType === "R2" && useSync && parsedSize == null) {
+          const parsedSize = isSizeAxisRule ? parseSizeStrict(item.value) : null;
+          if (isSizeAxisRule && axisUsesRuleEngine && useRuleSyncForValue && parsedSize == null) {
             throw new Error(`${axis} / ${item.value}: 사이즈 숫자 파싱에 실패했습니다 (예: 12, 12.5)`);
           }
-          const nextSize = selectedRuleType === "R2" && useSync
+          const nextSize = isSizeAxisRule && axisUsesRuleEngine && useRuleSyncForValue
             ? parsedSize
             : m.option_size_value;
 
           const rowKey = `${m.channel_id}::${m.external_product_no}::${String(m.external_variant_code ?? "")}`;
+          const nextTotal = Math.round(axisDeltaByRowKey.get(rowKey) ?? 0);
           rowsMap.set(rowKey, {
             channel_id: m.channel_id,
             master_item_id: m.master_item_id,
@@ -1445,25 +1727,13 @@ export default function ShoppingDashboardPage() {
             option_color_code: nextColor,
             option_decoration_code: nextDecoration,
             option_size_value: nextSize,
-            option_price_delta_krw: Math.round(valueDeltaAbsolute),
+            option_price_delta_krw: nextTotal,
             option_manual_target_krw: null,
             include_master_plating_labor: m.include_master_plating_labor,
-            sync_rule_material_enabled:
-              selectedRuleType === "R1"
-                ? useSync
-                : (m.sync_rule_material_enabled !== false),
-            sync_rule_weight_enabled:
-              selectedRuleType === "R2"
-                ? useSync
-                : (m.sync_rule_weight_enabled !== false),
-            sync_rule_plating_enabled:
-              selectedRuleType === "R3"
-                ? useSync
-                : (m.sync_rule_plating_enabled !== false),
-            sync_rule_decoration_enabled:
-              selectedRuleType === "R4"
-                ? useSync
-                : (m.sync_rule_decoration_enabled !== false),
+            sync_rule_material_enabled: false,
+            sync_rule_weight_enabled: false,
+            sync_rule_plating_enabled: false,
+            sync_rule_decoration_enabled: axisUsesRuleEngine && useRuleSyncForValue && selectedRuleType === "R4",
             mapping_source: m.mapping_source ?? "MANUAL",
             is_active: m.is_active !== false,
           });
@@ -1473,14 +1743,14 @@ export default function ShoppingDashboardPage() {
       const rows = Array.from(rowsMap.values());
       if (rows.length === 0) throw new Error("적용 대상 옵션이 없습니다");
 
-      if (!effectiveDetailMasterId) {
-        throw new Error("마스터 선택 정보가 없습니다");
-      }
-
       const policyRows = group.values.map((item) => {
         const valueDraft = normalizedValues[item.value];
+        const hasExplicitRuleSelection = String(valueDraft.ruleId ?? "").trim().length > 0;
         const isSyncValue = axisMode === "SYNC" && valueDraft.mode === "SYNC";
-        const resolvedRuleId = resolvedRuleIdByValue.get(item.value) ?? valueDraft.ruleId;
+        const persistedRuleId = axisUsesRuleEngine && hasExplicitRuleSelection ? valueDraft.ruleId : null;
+        const persistedManualDelta = isSyncValue
+          ? (isMaterialAxis ? 0 : Number(valueDraft.deltaKrw))
+          : 0;
         return {
           channel_id: activeChannelId,
           master_item_id: effectiveDetailMasterId,
@@ -1489,24 +1759,105 @@ export default function ShoppingDashboardPage() {
           axis_mode: axisMode,
           rule_type: selectedRuleType,
           value_mode: valueDraft.mode,
-          sync_rule_set_id: isSyncValue ? persistedRuleSetIdForPolicy : null,
-          selected_rule_id: isSyncValue ? (resolvedRuleId || null) : null,
-          manual_delta_krw: Number(valueDraft.deltaKrw),
+          sync_rule_set_id: isSyncValue ? (selectedRuleSetId || fallbackRuleSetId || null) : null,
+          selected_rule_id: isSyncValue ? persistedRuleId : null,
+          manual_delta_krw: persistedManualDelta,
         };
       });
+
+      if (!effectiveDetailMasterId) {
+        throw new Error("마스터 선택 정보가 없습니다");
+      }
 
       await shopApiSend("/api/channel-products/bulk", "POST", { rows });
       await shopApiSend("/api/channel-option-value-policies", "POST", {
         rows: policyRows,
         change_reason: "dashboard-axis-policy-apply",
       });
-      await shopApiSend("/api/pricing/recompute", "POST", {
-        channel_id: activeChannelId,
-        master_item_ids: effectiveDetailMasterId ? [effectiveDetailMasterId] : undefined,
-      });
-    },
+      if (!skipRecompute) {
+        await recomputeByMaster(effectiveDetailMasterId ? [effectiveDetailMasterId] : []);
+      }
+    };
+
+  const applyCategoryPolicy = useMutation({
+    mutationFn: applyAxisPolicyMutationFn,
     onSuccess: async () => {
       toast.success("옵션 카테고리 정책 저장 및 재계산 완료");
+      await refreshAll();
+      if (isBulkPolicyDrawerOpen) {
+        await loadBulkPolicyDrafts();
+      }
+    },
+    onError: (err: Error) => toast.error(err.message),
+  });
+
+  const applyAllCategoryPolicies = useMutation({
+    mutationFn: async () => {
+      const enforcedGlobalRuleSetId = String(
+        bulkGlobalRuleSetId
+        || detailOptionMappings.find((m) => String(m.sync_rule_set_id ?? "").trim())?.sync_rule_set_id
+        || syncRuleSetQuery.data?.data?.[0]?.rule_set_id
+        || "",
+      ).trim();
+      if (!enforcedGlobalRuleSetId) {
+        throw new Error("전체 옵션 저장 전에 Sync 룰셋을 먼저 선택하세요");
+      }
+
+      const missingRuleSetRows = detailOptionMappings
+        .filter((m) => (m.is_active !== false) && String(m.option_price_mode ?? "SYNC").toUpperCase() === "SYNC" && !String(m.sync_rule_set_id ?? "").trim())
+        .map((m) => ({
+          channel_id: m.channel_id,
+          master_item_id: m.master_item_id,
+          external_product_no: m.external_product_no,
+          external_variant_code: String(m.external_variant_code ?? ""),
+          option_price_mode: "SYNC" as const,
+          sync_rule_set_id: enforcedGlobalRuleSetId,
+          option_material_code: m.option_material_code,
+          option_color_code: m.option_color_code,
+          option_decoration_code: m.option_decoration_code,
+          option_size_value: m.option_size_value,
+          option_price_delta_krw: m.option_price_delta_krw == null ? 0 : Math.round(Number(m.option_price_delta_krw ?? 0)),
+          option_manual_target_krw: null,
+          include_master_plating_labor: m.include_master_plating_labor,
+          sync_rule_material_enabled: m.sync_rule_material_enabled !== false,
+          sync_rule_weight_enabled: m.sync_rule_weight_enabled !== false,
+          sync_rule_plating_enabled: m.sync_rule_plating_enabled !== false,
+          sync_rule_decoration_enabled: m.sync_rule_decoration_enabled !== false,
+          mapping_source: m.mapping_source ?? "MANUAL",
+          is_active: m.is_active !== false,
+        }));
+      if (missingRuleSetRows.length > 0) {
+        await shopApiSend("/api/channel-products/bulk", "POST", { rows: missingRuleSetRows });
+      }
+
+      const targets = optionAxisGroups.map((group) => {
+        const fallbackValues = Object.fromEntries(
+          group.values.map((v) => [
+            v.value,
+            { mode: "SYNC", ruleId: "", deltaKrw: "0" } satisfies AxisValueDraft,
+          ]),
+        ) as Record<string, AxisValueDraft>;
+        const draft = axisPolicyDrafts[group.axis] ?? {
+          mode: "SYNC" as const,
+          ruleType: guessRuleByAxis(group.axis),
+          values: fallbackValues,
+        };
+        return {
+          axis: group.axis,
+          axisMode: draft.mode,
+          values: draft.values,
+          ruleSetId: enforcedGlobalRuleSetId,
+          ruleType: draft.ruleType,
+        };
+      });
+      if (targets.length === 0) throw new Error("적용할 옵션축이 없습니다");
+      for (const target of targets) {
+        await applyAxisPolicyMutationFn({ ...target, skipRecompute: true });
+      }
+      await recomputeByMaster(effectiveDetailMasterId ? [effectiveDetailMasterId] : []);
+    },
+    onSuccess: async () => {
+      toast.success("전체 옵션 저장 및 재계산 완료");
       await refreshAll();
       if (isBulkPolicyDrawerOpen) {
         await loadBulkPolicyDrafts();
@@ -1518,7 +1869,6 @@ export default function ShoppingDashboardPage() {
   const startOptionEdit = (m: MappingRow) => {
     setEditingChannelProductId(m.channel_product_id);
     setOptionEditOriginalDelta(Math.round(Number(m.option_price_delta_krw ?? 0)));
-    setOptionEditDeltaReason("");
     setOptionEditDraft({
       option_price_mode: m.option_price_mode === "MANUAL" ? "MANUAL" : "SYNC",
       sync_rule_set_id: m.sync_rule_set_id ?? "",
@@ -1526,9 +1876,9 @@ export default function ShoppingDashboardPage() {
       option_color_code: m.option_color_code ?? "",
       option_decoration_code: m.option_decoration_code ?? "",
       option_size_value: m.option_size_value == null ? "" : String(m.option_size_value),
-      option_price_delta_krw: String(Math.round(Number(m.option_price_delta_krw ?? 0))),
+      option_price_delta_krw: m.option_price_delta_krw == null ? "" : String(roundToThousand(Number(m.option_price_delta_krw ?? 0))),
       option_manual_target_krw: m.option_manual_target_krw == null ? "" : String(m.option_manual_target_krw),
-      sync_rule_material_enabled: m.sync_rule_material_enabled !== false,
+      sync_rule_material_enabled: false,
       sync_rule_weight_enabled: m.sync_rule_weight_enabled !== false,
       sync_rule_plating_enabled: m.sync_rule_plating_enabled !== false,
       sync_rule_decoration_enabled: m.sync_rule_decoration_enabled !== false,
@@ -1538,7 +1888,6 @@ export default function ShoppingDashboardPage() {
   const cancelOptionEdit = () => {
     setEditingChannelProductId(null);
     setOptionEditDraft(null);
-    setOptionEditDeltaReason("");
     setSyncPreview(null);
   };
 
@@ -1591,82 +1940,26 @@ export default function ShoppingDashboardPage() {
       const axisRuleType = normalizeRuleTypeForAxis(group.axis, (persistedRuleType ?? inferredRuleType));
 
       const values: Record<string, AxisValueDraft> = {};
-      for (const [idx, item] of group.values.entries()) {
+      for (const item of group.values) {
         const key = `${item.axis}::${item.value}`;
         const valueRows = optionValueMappingsByKey.get(key) ?? [];
         const persisted = persistedByAxisValue.get(key);
-        let liveDelta = 0;
-        if (valueRows.length > 0) {
-          const latest = valueRows
-            .slice()
-            .sort((a, b) => {
-              const at = Date.parse(String(a.updated_at ?? ""));
-              const bt = Date.parse(String(b.updated_at ?? ""));
-              const av = Number.isFinite(at) ? at : 0;
-              const bv = Number.isFinite(bt) ? bt : 0;
-              return bv - av;
-            })[0];
-          liveDelta = Math.round(Number(latest?.option_price_delta_krw ?? 0));
-        }
-        const hasSync = valueRows.some((row) => hasAnySyncFlag(row));
+        const persistedDelta = Number(persisted?.manual_delta_krw ?? 0);
+        const normalizedPersistedDelta = Number.isFinite(persistedDelta) ? roundToThousand(persistedDelta) : 0;
         values[item.value] = {
-          mode: persisted?.value_mode ?? (hasSync ? "SYNC" : (idx === 0 ? "BASE" : "SYNC")),
+          mode: "SYNC",
           ruleId: persisted?.selected_rule_id ?? "",
-          deltaKrw: String(liveDelta),
+          deltaKrw: String(normalizedPersistedDelta),
         };
       }
 
       const nextAxisRuleType = axisRuleType;
       const nextAxisMode: AxisPolicyDraft["mode"] = persistedAxisMode ?? inferredMode;
-      if (nextAxisMode === "SYNC" && group.values.length > 0) {
-        const ordered = group.values.map((item) => item.value);
-        const baseValues = ordered.filter((value) => (values[value]?.mode ?? "SYNC") === "BASE");
-        const syncValues = ordered.filter((value) => (values[value]?.mode ?? "SYNC") === "SYNC");
-
-        if (syncValues.length === 0) {
-          const baseValue = ordered[0];
-          for (const value of ordered) {
-            const prev = values[value] ?? { mode: "SYNC", ruleId: "", deltaKrw: "0" };
-            values[value] = {
-              ...prev,
-              mode: value === baseValue ? "BASE" : "SYNC",
-              deltaKrw: prev.deltaKrw,
-            };
-          }
-        } else if (baseValues.length === 0) {
-          const baseValue = ordered[0];
-          const prev = values[baseValue] ?? { mode: "SYNC", ruleId: "", deltaKrw: "0" };
-          values[baseValue] = { ...prev, mode: "BASE" };
-        } else if (baseValues.length > 1) {
-          const keepBase = baseValues[0];
-          for (const value of baseValues.slice(1)) {
-            const prev = values[value] ?? { mode: "SYNC", ruleId: "", deltaKrw: "0" };
-            values[value] = { ...prev, mode: "SYNC" };
-          }
-          const keepPrev = values[keepBase] ?? { mode: "BASE", ruleId: "", deltaKrw: "0" };
-          values[keepBase] = { ...keepPrev, mode: "BASE" };
-        }
-      }
-
       if (nextAxisRuleType === "R1") {
-        const persistedBaseValue = axisPersisted.find((row) => row.value_mode === "BASE")?.axis_value;
-        const fallbackBase = group.values[0]?.value;
-        const preferredBase = persistedBaseValue || fallbackBase;
-
-        if (nextAxisMode === "SYNC" && preferredBase) {
-          for (const item of group.values) {
-            const prev = values[item.value] ?? { mode: "SYNC", ruleId: "", deltaKrw: "0" };
-            values[item.value] = {
-              ...prev,
-              mode: item.value === preferredBase ? "BASE" : "SYNC",
-              ruleId: item.value === preferredBase ? "" : prev.ruleId,
-              deltaKrw: prev.deltaKrw,
-            };
-          }
-        }
-
         const baseValueForR1 = group.values.find((item) => (values[item.value]?.mode ?? "SYNC") === "BASE")?.value;
         for (const item of group.values) {
+          const key = `${item.axis}::${item.value}`;
+          if (persistedByAxisValue.has(key)) continue;
           const draftValue = values[item.value];
           if (!draftValue || draftValue.mode !== "SYNC" || draftValue.ruleId) continue;
           const resolved = resolveR1RuleForValue(r1Rules, item.value, baseValueForR1);
@@ -1675,9 +1968,10 @@ export default function ShoppingDashboardPage() {
       }
       if (nextAxisRuleType === "R3") {
         for (const item of group.values) {
+          const key = `${item.axis}::${item.value}`;
+          if (persistedByAxisValue.has(key)) continue;
           const draftValue = values[item.value];
           if (!draftValue || draftValue.mode !== "SYNC" || draftValue.ruleId) continue;
-          const key = `${item.axis}::${item.value}`;
           const valueRows = optionValueMappingsByKey.get(key) ?? [];
           const mappedCode = Array.from(
             new Set(valueRows.map((row) => String(row.option_color_code ?? "").trim().toUpperCase()).filter(Boolean)),
@@ -1687,15 +1981,6 @@ export default function ShoppingDashboardPage() {
           if (matched?.rule_id) {
             values[item.value] = { ...draftValue, ruleId: matched.rule_id };
           }
-        }
-        for (const item of group.values) {
-          const draftValue = values[item.value];
-          if (!draftValue || draftValue.mode !== "SYNC") continue;
-          if (draftValue.ruleId) continue;
-          values[item.value] = {
-            ...draftValue,
-            mode: "BASE",
-          };
         }
       }
 
@@ -1726,7 +2011,6 @@ export default function ShoppingDashboardPage() {
           `/api/channel-option-value-policies?channel_id=${encodeURIComponent(activeChannelId)}&master_item_id=${encodeURIComponent(effectiveDetailMasterId)}`,
         ),
     });
-
     const persistedPolicies = policiesResp.data ?? [];
     const mappedRuleSetId = resolveMappedRuleSetId(persistedPolicies);
     const r1Rules = mappedRuleSetId
@@ -1965,10 +2249,6 @@ export default function ShoppingDashboardPage() {
     const hasSyncValue = group.values.some((v) => (draft.values[v.value]?.mode ?? "SYNC") === "SYNC");
     if (draft.mode === "SYNC" && !allowedRuleTypesForAxis(axis).includes(draft.ruleType)) {
       return false;
-    }
-    if (draft.ruleType === "R1" || draft.ruleType === "R2") {
-      const baseCount = group.values.filter((v) => (draft.values[v.value]?.mode ?? "SYNC") === "BASE").length;
-      if (baseCount !== 1) return false;
     }
     if (!hasSyncValue) return true;
     if (!bulkGlobalRuleSetId) return false;
@@ -2243,25 +2523,12 @@ export default function ShoppingDashboardPage() {
             </>
           ) : (
             <div className="space-y-3">
-              <div className="rounded border border-[var(--hairline)] bg-[var(--background)] p-3 space-y-2">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="text-sm font-medium">묶기 조건</span>
+              <div className="rounded border border-[var(--hairline)] bg-[var(--background)] p-3">
+                <div className="flex items-center gap-2 overflow-x-auto whitespace-nowrap pb-1">
+                  <span className="text-sm font-medium">조건</span>
                   <Button size="sm" variant={optionGroupFilterMode === "SINGLE" ? "primary" : "secondary"} onClick={() => setOptionGroupMode("SINGLE")}>단일</Button>
                   <Button size="sm" variant={optionGroupFilterMode === "AND" ? "primary" : "secondary"} onClick={() => setOptionGroupMode("AND")}>AND</Button>
                   <Button size="sm" variant={optionGroupFilterMode === "OR" ? "primary" : "secondary"} onClick={() => setOptionGroupMode("OR")}>OR</Button>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => {
-                      setOptionGroupSelections({});
-                      setOptionGroupSelectedBuckets([]);
-                    }}
-                  >
-                    조건 초기화
-                  </Button>
-                </div>
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="text-xs text-[var(--muted)]">가격 묶음 기준</span>
                   <Button
                     size="sm"
                     variant={optionGroupPriceBasis === "RULE" ? "primary" : "secondary"}
@@ -2270,7 +2537,7 @@ export default function ShoppingDashboardPage() {
                       setOptionGroupSelectedBuckets([]);
                     }}
                   >
-                    룰추가금 기준
+                    룰기여금 기준
                   </Button>
                   <Button
                     size="sm"
@@ -2280,56 +2547,53 @@ export default function ShoppingDashboardPage() {
                       setOptionGroupSelectedBuckets([]);
                     }}
                   >
-                    옵션합 기준
+                    SoT 기준
                   </Button>
+                  {optionGroupBucketChips.map((chip) => {
+                    const active = optionGroupSelectedBuckets.includes(chip.bucket);
+                    return (
+                      <Button
+                        key={`bucket-chip-${chip.bucket}`}
+                        size="sm"
+                        variant={active ? "primary" : "secondary"}
+                        onClick={() => toggleOptionGroupBucket(chip.bucket)}
+                      >
+                        {signedFmt(chip.bucket)} ({chip.count})
+                      </Button>
+                    );
+                  })}
+                  {optionGroupFacetChips.map((chip) => {
+                    const isActive = (optionGroupSelections[chip.axis] ?? []).includes(chip.value);
+                    return (
+                      <Button
+                        key={`${chip.axis}-${chip.value}`}
+                        size="sm"
+                        variant={isActive ? "primary" : "secondary"}
+                        onClick={() => toggleOptionGroupSelection(chip.axis, chip.value)}
+                      >
+                        {chip.axis}:{chip.value} ({chip.count})
+                      </Button>
+                    );
+                  })}
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => {
+                      setOptionGroupSelections({});
+                      setOptionGroupSelectedBuckets([]);
+                    }}
+                  >
+                    초기화
+                  </Button>
+                  <Input
+                    value={optionGroupSearch}
+                    onChange={(e) => setOptionGroupSearch(e.target.value)}
+                    placeholder="검색"
+                    className="w-56"
+                  />
                 </div>
-                <div className="space-y-1">
-                  <div className="text-xs text-[var(--muted)]">금액 버킷 선택 (원하는 금액만 보기)</div>
-                  <div className="flex flex-wrap gap-1">
-                    {optionGroupBucketChips.length === 0 ? (
-                      <div className="text-xs text-[var(--muted)]">버킷 없음</div>
-                    ) : (
-                      optionGroupBucketChips.map((chip) => {
-                        const active = optionGroupSelectedBuckets.includes(chip.bucket);
-                        return (
-                          <Button
-                            key={`bucket-chip-${chip.bucket}`}
-                            size="sm"
-                            variant={active ? "primary" : "secondary"}
-                            onClick={() => toggleOptionGroupBucket(chip.bucket)}
-                          >
-                            {signedFmt(chip.bucket)} ({chip.count})
-                          </Button>
-                        );
-                      })
-                    )}
-                  </div>
-                </div>
-                <Input value={optionGroupSearch} onChange={(e) => setOptionGroupSearch(e.target.value)} placeholder="모델/상품번호/옵션값 검색" />
-                <div className="text-xs text-[var(--muted)]">
+                <div className="mt-1 text-xs text-[var(--muted)]">
                   검색 결과 {optionGroupedGalleryItems.length}개 / 버킷 {optionGroupedBySelectedBuckets.length}개
-                </div>
-                <div className="space-y-2">
-                  {optionGroupFacetGroups.map((group) => (
-                    <div key={group.axis} className="rounded border border-[var(--hairline)] bg-[var(--panel)] p-2">
-                      <div className="mb-1 text-xs font-semibold text-[var(--muted)]">{group.axis}</div>
-                      <div className="flex flex-wrap gap-1">
-                        {group.values.map((v) => {
-                          const isActive = (optionGroupSelections[group.axis] ?? []).includes(v.value);
-                          return (
-                            <Button
-                              key={`${group.axis}-${v.value}`}
-                              size="sm"
-                              variant={isActive ? "primary" : "secondary"}
-                              onClick={() => toggleOptionGroupSelection(group.axis, v.value)}
-                            >
-                              {v.value} ({v.count})
-                            </Button>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  ))}
                 </div>
               </div>
 
@@ -2342,12 +2606,15 @@ export default function ShoppingDashboardPage() {
                 {optionGroupedBySelectedBuckets.map((bucket) => (
                   <div key={`bucket-${bucket.bucket}`} className="rounded border border-[var(--hairline)] bg-[var(--background)] p-2 space-y-2">
                     <div className="text-sm font-semibold">
-                      {optionGroupPriceBasis === "RULE" ? "룰추가금" : "옵션합"} {signedFmt(bucket.bucket)} ({bucket.items.length}개)
+                      {optionGroupPriceBasis === "RULE" ? "룰기여금" : "적용추가금(SoT)"} {signedFmt(bucket.bucket)} ({bucket.items.length}개)
                     </div>
                     <div className="grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(240px,1fr))]">
                       {bucket.items.map((item) => {
                         const imageUrl = detailImageUrl;
                         const options = variantOptionsByCode.get(item.variantCode) ?? [];
+                        const optionName = options.length > 0
+                          ? options.map((o) => `${o.name}:${o.value}`).join(" / ")
+                          : item.variantCode;
                         return (
                           <div key={item.channelProductId} className="rounded-[var(--radius)] border border-[var(--hairline)] bg-[var(--panel)] overflow-hidden">
                             <div className="relative aspect-square bg-[var(--subtle-bg)]">
@@ -2359,15 +2626,16 @@ export default function ShoppingDashboardPage() {
                               )}
                             </div>
                             <div className="space-y-1 p-3 text-xs">
-                              <div className="font-mono font-semibold">{item.productNo} / {item.variantCode}</div>
+                              <div className="font-semibold">{optionName}</div>
+                              <div className="text-[10px] text-[var(--muted)] font-mono">{item.productNo} / {item.variantCode}</div>
                               <div className="text-[var(--muted)]">{item.row?.model_name ?? detailTitle}</div>
                               <div className="text-[var(--muted)]">{optionStrategyLabel(item.mapping)}</div>
                               <div>
-                                룰추가금 {signedFmt(item.ruleOptionDelta)}
+                                룰기여금 {signedFmt(item.ruleOptionDelta)}
                                 <span className="ml-1 text-[10px] text-[var(--muted)]">({item.ruleDeltaSource === "POLICY" ? "정책" : "역산"})</span>
                               </div>
-                              <div>옵션합 {signedFmt(item.totalOptionDelta)}</div>
-                              <div>수동추가금 {signedFmt(item.manualOptionDelta)}</div>
+                              <div>적용추가금(SoT) {signedFmt(item.totalOptionDelta)}</div>
+                              <div>저장추가금 {signedFmt(item.manualOptionDelta)}</div>
                               <div>목표 {fmt(item.row?.final_target_price_krw)}</div>
                               <div className="rounded border border-[var(--hairline)] bg-[var(--background)] p-1">
                                 {options.length === 0 ? (
@@ -2453,6 +2721,19 @@ export default function ShoppingDashboardPage() {
                         <div className="text-xs text-[var(--muted)]">가격 구성식</div>
                         <div className="mt-1 font-semibold">{fmt(detailMasterOriginal)} {detailBaseDeltaTotal >= 0 ? "+" : "-"} {fmt(Math.abs(detailBaseDeltaTotal))} = {fmt(detailFinalTarget)}</div>
                         <div className="mt-1 text-xs text-[var(--muted)]">(마스터 원본가 +/- 조정 누적 = 운영 목표가)</div>
+                        <div className="mt-2">
+                          <Button
+                            size="sm"
+                            variant="secondary"
+                            onClick={() => {
+                              setSelectedMasterIdForDrawer(effectiveDetailMasterId);
+                              setIsSnapshotDrawerOpen(true);
+                            }}
+                            disabled={!pinnedComputeRequestId || !activeChannelId || !effectiveDetailMasterId}
+                          >
+                            스냅샷 계산식 보기
+                          </Button>
+                        </div>
                       </div>
 
                       <div className="grid grid-cols-1 gap-2 md:grid-cols-[1fr_1fr_auto_auto_auto]">
@@ -2585,19 +2866,21 @@ export default function ShoppingDashboardPage() {
                 {optionEditDraft && editingChannelProductId ? (
                   <div className="rounded border border-[var(--hairline)] bg-[var(--panel)] p-3">
                     <div className="mb-2 text-sm font-semibold">옵션 상세 수정</div>
-                    <div className="mb-3 text-xs text-[var(--muted)]">옵션 가격 전략을 Sync(룰 기반) 또는 Override(직접 목표가)로 명확히 지정합니다.</div>
+                    <div className="mb-3 text-xs text-[var(--muted)]">옵션 분류를 직접 고르고(사이즈/도금/장식/기타), 추가금은 1000원 단위로 지정합니다.</div>
 
                     <div className="grid grid-cols-1 gap-2 md:grid-cols-5">
                       <Select
-                        value={optionEditDraft.option_price_mode}
+                        value={getOptionRuleCategory(optionEditDraft)}
                         onChange={(e) =>
                           setOptionEditDraft((prev) =>
-                            prev ? { ...prev, option_price_mode: e.target.value === "MANUAL" ? "MANUAL" : "SYNC" } : prev,
+                            prev ? applyOptionRuleCategory(prev, e.target.value as OptionRuleCategory) : prev,
                           )
                         }
                       >
-                        <option value="SYNC">Sync (룰 동기화)</option>
-                        <option value="MANUAL">Override (직접 목표가)</option>
+                        <option value="SIZE_RULE">1) 사이즈룰</option>
+                        <option value="PLATING_RULE">2) 도금룰</option>
+                        <option value="DECORATION_RULE">3) 장식룰</option>
+                        <option value="MISC_OVERRIDE">4) 기타(Override)</option>
                       </Select>
 
                       <Select
@@ -2611,17 +2894,21 @@ export default function ShoppingDashboardPage() {
                         ))}
                       </Select>
 
-                      <Input
+                      <Select
                         value={optionEditDraft.option_price_delta_krw}
                         onChange={(e) => setOptionEditDraft((prev) => (prev ? { ...prev, option_price_delta_krw: e.target.value } : prev))}
-                        placeholder="추가금(+/-)"
-                      />
+                      >
+                        <option value="">기존값 유지</option>
+                        {thousandDeltaOptions.map((value) => (
+                          <option key={value} value={String(value)}>{deltaOptionLabel(value)}</option>
+                        ))}
+                      </Select>
 
                       <Input
                         value={optionEditDraft.option_manual_target_krw}
                         onChange={(e) => setOptionEditDraft((prev) => (prev ? { ...prev, option_manual_target_krw: e.target.value } : prev))}
                         placeholder="Override 목표가"
-                        disabled={optionEditDraft.option_price_mode !== "MANUAL"}
+                        disabled={getOptionRuleCategory(optionEditDraft) !== "MISC_OVERRIDE"}
                       />
 
                       <Button
@@ -2646,7 +2933,7 @@ export default function ShoppingDashboardPage() {
                         <div>
                           <div className="text-[var(--muted)]">계산 근거</div>
                           <div className="font-semibold">
-                            {optionEditDraft.option_price_mode === "MANUAL"
+                            {getOptionRuleCategory(optionEditDraft) === "MISC_OVERRIDE"
                               ? `Override 목표가 ${fmt(manualDraftTarget)}`
                               : syncPreviewDeltaForEditing == null
                                 ? `현재 룰추가금 + 수동추가금 ${fmt(Number(optionEditDraft.option_price_delta_krw || 0))}`
@@ -2656,15 +2943,8 @@ export default function ShoppingDashboardPage() {
                       </div>
                     </div>
 
-                    <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-[1fr_auto]">
-                      <Input
-                        value={optionEditDeltaReason}
-                        onChange={(e) => setOptionEditDeltaReason(e.target.value)}
-                        placeholder="추가금 변경 사유(추가금 변경 시 필수)"
-                      />
-                      <div className="text-xs text-[var(--muted)] self-center">
-                        변경 전: {fmt(optionEditOriginalDelta)} / 변경 후: {fmt(Number(optionEditDraft.option_price_delta_krw || 0))}
-                      </div>
+                    <div className="mt-2 text-xs text-[var(--muted)]">
+                      변경 전: {fmt(optionEditOriginalDelta)} / 변경 후: {fmt(Number(optionEditDraft.option_price_delta_krw || 0))}
                     </div>
 
                     <div className="mt-2 rounded border border-[var(--hairline)] bg-[var(--background)] px-2 py-1 text-xs text-[var(--muted)]">
@@ -2678,10 +2958,8 @@ export default function ShoppingDashboardPage() {
                       <Input value={optionEditDraft.option_size_value} onChange={(e) => setOptionEditDraft((prev) => (prev ? { ...prev, option_size_value: e.target.value } : prev))} placeholder="사이즈 값" />
                     </div>
 
-                    <div className="mt-2 flex flex-wrap gap-3 text-xs">
-                      <label className="inline-flex items-center gap-1"><input type="checkbox" checked={optionEditDraft.sync_rule_weight_enabled} onChange={(e) => setOptionEditDraft((prev) => (prev ? { ...prev, sync_rule_weight_enabled: e.target.checked } : prev))} />R2</label>
-                      <label className="inline-flex items-center gap-1"><input type="checkbox" checked={optionEditDraft.sync_rule_plating_enabled} onChange={(e) => setOptionEditDraft((prev) => (prev ? { ...prev, sync_rule_plating_enabled: e.target.checked } : prev))} />R3</label>
-                      <label className="inline-flex items-center gap-1"><input type="checkbox" checked={optionEditDraft.sync_rule_decoration_enabled} onChange={(e) => setOptionEditDraft((prev) => (prev ? { ...prev, sync_rule_decoration_enabled: e.target.checked } : prev))} />R4</label>
+                    <div className="mt-2 text-xs text-[var(--muted)]">
+                      선택 분류 기준으로 룰이 적용됩니다: 사이즈룰=R2, 도금룰=R3, 장식룰=R4, 기타=Override
                     </div>
 
                     <div className="mt-3 flex flex-wrap gap-2">
@@ -2783,6 +3061,14 @@ export default function ShoppingDashboardPage() {
         </div>
       </Sheet>
 
+      <PricingSnapshotDrawer
+        open={isSnapshotDrawerOpen}
+        onOpenChange={setIsSnapshotDrawerOpen}
+        row={snapshotExplainQuery.data?.data ?? null}
+        loading={snapshotExplainQuery.isFetching}
+        errorMessage={snapshotExplainQuery.error instanceof Error ? snapshotExplainQuery.error.message : null}
+      />
+
       <Sheet
         open={isBulkPolicyDrawerOpen}
         onOpenChange={(open) => {
@@ -2799,6 +3085,15 @@ export default function ShoppingDashboardPage() {
           <div className="border-b border-[var(--hairline)] px-4 py-3">
             <div className="text-sm font-semibold">옵션 카테고리 일괄수정</div>
             <div className="text-xs text-[var(--muted)]">옵션축(소재/색상 등) 정책을 먼저 정하고, Sync면 룰을 연결합니다.</div>
+            <div className="mt-2 flex justify-end">
+              <Button
+                size="sm"
+                onClick={() => applyAllCategoryPolicies.mutate()}
+                disabled={applyAllCategoryPolicies.isPending || applyCategoryPolicy.isPending}
+              >
+                {applyAllCategoryPolicies.isPending ? "전체 저장 중..." : "전체 옵션 저장"}
+              </Button>
+            </div>
           </div>
 
           <div className="flex-1 space-y-3 overflow-auto p-4">
@@ -2808,9 +3103,9 @@ export default function ShoppingDashboardPage() {
                   mode: "SYNC" as const,
                   ruleType: guessRuleByAxis(group.axis),
                   values: Object.fromEntries(
-                    group.values.map((v, idx) => [
+                    group.values.map((v) => [
                       v.value,
-                      { mode: idx === 0 ? "BASE" : "SYNC", ruleId: "", deltaKrw: "0" } satisfies AxisValueDraft,
+                      { mode: "SYNC", ruleId: "", deltaKrw: "0" } satisfies AxisValueDraft,
                     ]),
                   ) as Record<string, AxisValueDraft>,
                 };
@@ -2824,6 +3119,9 @@ export default function ShoppingDashboardPage() {
                 const canApply = canApplyAxisPolicy(group.axis);
                 const affectedCount = axisAffectedCountByAxis.get(group.axis) ?? 0;
                 const hasSyncValue = draft.mode === "SYNC" && group.values.some((item) => (draft.values[item.value]?.mode ?? "SYNC") === "SYNC");
+                const deltaOptionsForGroup = isMaterialAxisName(group.axis)
+                  ? [0]
+                  : thousandDeltaOptions;
                 const computeCombinedOptionDelta = (item: OptionValueItem, valueDraft: AxisValueDraft) => {
                   const key = `${item.axis}::${item.value}`;
                   const affectedRows = optionValueMappingsByKey.get(key) ?? [];
@@ -2876,15 +3174,16 @@ export default function ShoppingDashboardPage() {
                         })()
                       : null;
                   const fallbackRuleDeltaAtPoint = currentRuleAvg;
+                  const hasExplicitRuleSelection = String(valueDraft.ruleId ?? "").trim().length > 0;
+                  const shouldApplyRuleDelta = draft.ruleType === "R1" ? true : hasExplicitRuleSelection;
                   const effectiveRuleDelta =
                     draft.mode === "SYNC" && valueDraft.mode === "SYNC"
-                      ? (
-                          selectedRuleDelta
-                        ?? previewRuleDeltaAvg
-                        ?? fallbackRuleDeltaAtPoint
-                      )
+                      ? (shouldApplyRuleDelta ? (selectedRuleDelta ?? previewRuleDeltaAvg ?? fallbackRuleDeltaAtPoint) : 0)
                       : 0;
                   const ruleSource =
+                    !shouldApplyRuleDelta
+                      ? "DIRECT"
+                      :
                     selectedRuleDelta != null
                       ? "RULE"
                       : previewRuleDeltaAvg != null
@@ -2898,8 +3197,8 @@ export default function ShoppingDashboardPage() {
                   };
                 };
 
-                const baseValueItem = group.values.find((item) => (draft.values[item.value]?.mode ?? "SYNC") === "BASE") ?? group.values[0] ?? null;
-                const baseValueDraft = baseValueItem ? (draft.values[baseValueItem.value] ?? { mode: "BASE", ruleId: "", deltaKrw: "0" }) : null;
+                const baseValueItem = group.values.find((item) => (draft.values[item.value]?.mode ?? "SYNC") === "BASE") ?? null;
+                const baseValueDraft = baseValueItem ? (draft.values[baseValueItem.value] ?? { mode: "SYNC", ruleId: "", deltaKrw: "0" }) : null;
                 const baseCombinedOptionDelta =
                   baseValueItem && baseValueDraft
                     ? computeCombinedOptionDelta(baseValueItem, baseValueDraft)
@@ -2989,12 +3288,15 @@ export default function ShoppingDashboardPage() {
                             updateAxisDraft(group.axis, { ruleType: nextRuleType, values: nextValues });
                             setSyncPreview(null);
                           }}
-                          disabled={draft.mode !== "SYNC"}
+                          disabled={draft.mode !== "SYNC" || isMaterialAxisName(group.axis)}
                         >
                           <option value="R2" disabled={!allowedRuleTypes.includes("R2")}>R2 사이즈/중량</option>
                           <option value="R3" disabled={!allowedRuleTypes.includes("R3")}>R3 색상도금마진</option>
                           <option value="R4" disabled={!allowedRuleTypes.includes("R4")}>R4 장식</option>
                         </Select>
+                        {isMaterialAxisName(group.axis) ? (
+                          <div className="mt-1 text-[10px] text-[var(--muted)]">소재축은 표시용(추가금 0원 고정)</div>
+                        ) : null}
                       </div>
                     </div>
 
@@ -3019,7 +3321,7 @@ export default function ShoppingDashboardPage() {
                               <th className="px-2 py-1">전략</th>
                               <th className="px-2 py-1">룰항목</th>
                               <th className="px-2 py-1">룰추가</th>
-                              <th className="px-2 py-1">수동추가</th>
+                              <th className="px-2 py-1">추가금(1000원)</th>
                               <th className="px-2 py-1">라운딩</th>
                               <th className="px-2 py-1">예상 옵션금액</th>
                               <th className="px-2 py-1">예상 최종금액</th>
@@ -3031,8 +3333,8 @@ export default function ShoppingDashboardPage() {
                               const combinedOptionDelta = computeCombinedOptionDelta(item, valueDraft);
                               const ruleDeltaAbsolute = combinedOptionDelta.rule;
                               const manualDeltaAbsolute = combinedOptionDelta.manual;
-                              const ruleDeltaVsBase = combinedOptionDelta.rule - baseCombinedOptionDelta.rule;
-                              const manualDeltaVsBase = combinedOptionDelta.manual - baseCombinedOptionDelta.manual;
+                              const ruleDeltaVsBase = baseValueItem ? (combinedOptionDelta.rule - baseCombinedOptionDelta.rule) : combinedOptionDelta.rule;
+                              const manualDeltaVsBase = baseValueItem ? (combinedOptionDelta.manual - baseCombinedOptionDelta.manual) : combinedOptionDelta.manual;
                               const optionAmountForDisplay = ruleDeltaVsBase + manualDeltaVsBase;
                               const expectedFinalApprox =
                                 baseExpectedFinalApprox == null
@@ -3042,7 +3344,9 @@ export default function ShoppingDashboardPage() {
                                 expectedFinalApprox != null && baseExpectedFinalApprox != null
                                   ? expectedFinalApprox - baseExpectedFinalApprox
                                   : null;
-                              const expectedOptionAmountLabel = `${signedFmt(optionAmountForDisplay)} (기준대비 룰 ${signedFmt(ruleDeltaVsBase)} + 수동 ${signedFmt(manualDeltaVsBase)})`;
+                              const expectedOptionAmountLabel = baseValueItem
+                                ? `${signedFmt(optionAmountForDisplay)} (기준대비 룰 ${signedFmt(ruleDeltaVsBase)} + 수동 ${signedFmt(manualDeltaVsBase)})`
+                                : `${signedFmt(optionAmountForDisplay)} (룰 ${signedFmt(ruleDeltaVsBase)} + 수동 ${signedFmt(manualDeltaVsBase)})`;
                               const roundingLabel =
                                 draft.mode === "SYNC" && valueDraft.mode === "SYNC"
                                   ? getRuleRoundingLabel(draft.ruleType, valueDraft.ruleId)
@@ -3051,64 +3355,33 @@ export default function ShoppingDashboardPage() {
                               return (
                                 <tr key={`${group.axis}-${item.value}`} className="border-t border-[var(--hairline)]">
                                   <td className="px-2 py-1 font-medium">{item.value}</td>
+                                  <td className="px-2 py-1 text-xs">Sync</td>
                                   <td className="px-2 py-1">
-                                    <Select
-                                      value={valueDraft.mode}
-                                      onChange={(e) => {
-                                        if (draft.mode === "OVERRIDE") return;
-                                        const nextMode = e.target.value === "BASE" ? "BASE" : "SYNC";
-                                        const nextValues: Record<string, AxisValueDraft> = {
-                                          ...draft.values,
-                                          [item.value]: {
-                                            ...valueDraft,
-                                            mode: nextMode,
-                                            ruleId: nextMode === "BASE" ? "" : valueDraft.ruleId,
-                                            deltaKrw: valueDraft.deltaKrw,
-                                          },
-                                        };
-                                        if (nextMode === "BASE" && (draft.ruleType === "R1" || draft.ruleType === "R2")) {
-                                          for (const sibling of group.values) {
-                                            if (sibling.value === item.value) continue;
-                                            const prevSibling = nextValues[sibling.value] ?? { mode: "SYNC", ruleId: "", deltaKrw: "0" };
-                                            nextValues[sibling.value] = {
-                                              ...prevSibling,
-                                              mode: "SYNC",
-                                            };
-                                          }
-                                        }
-                                        updateAxisDraft(group.axis, {
-                                          values: nextValues,
-                                        });
-                                        setSyncPreview(null);
-                                      }}
-                                      disabled={draft.mode === "OVERRIDE"}
-                                    >
-                                      <option value="BASE">기본값(+0)</option>
-                                      <option value="SYNC">Sync</option>
-                                    </Select>
-                                  </td>
-                                  <td className="px-2 py-1">
-                                    <Select
-                                      value={valueDraft.ruleId}
-                                      onChange={(e) => {
-                                        updateAxisDraft(group.axis, {
-                                          values: {
-                                            ...draft.values,
-                                            [item.value]: {
-                                              ...valueDraft,
-                                              ruleId: e.target.value,
+                                    {draft.ruleType === "R2" || draft.ruleType === "R3" ? (
+                                      <span className="text-xs text-[var(--muted)]">직접설정</span>
+                                    ) : (
+                                      <Select
+                                        value={valueDraft.ruleId}
+                                        onChange={(e) => {
+                                          updateAxisDraft(group.axis, {
+                                            values: {
+                                              ...draft.values,
+                                              [item.value]: {
+                                                ...valueDraft,
+                                                ruleId: e.target.value,
+                                              },
                                             },
-                                          },
-                                        });
-                                        setSyncPreview(null);
-                                      }}
-                                      disabled={!bulkGlobalRuleSetId || draft.mode !== "SYNC" || valueDraft.mode !== "SYNC"}
-                                    >
-                                      <option value="">룰 항목 선택</option>
-                                      {ruleOptions.map((rule) => (
-                                        <option key={rule.id} value={rule.id}>{rule.label}</option>
-                                      ))}
-                                    </Select>
+                                          });
+                                          setSyncPreview(null);
+                                        }}
+                                        disabled={!bulkGlobalRuleSetId || draft.mode !== "SYNC" || valueDraft.mode !== "SYNC"}
+                                      >
+                                        <option value="">룰 항목 선택</option>
+                                        {ruleOptions.map((rule) => (
+                                          <option key={rule.id} value={rule.id}>{rule.label}</option>
+                                        ))}
+                                      </Select>
+                                    )}
                                   </td>
                                   <td className="px-2 py-1 text-xs">
                                     {signedFmt(ruleDeltaAbsolute)}
@@ -3119,23 +3392,24 @@ export default function ShoppingDashboardPage() {
                                     ) : null}
                                   </td>
                                   <td className="px-2 py-1">
-                                    <Input
-                                      value={String(manualDeltaAbsolute)}
+                                    <Select
+                                      value={String(isMaterialAxisName(group.axis) ? 0 : roundToThousand(manualDeltaAbsolute))}
                                       onChange={(e) => {
-                                        const nextManual = Number(e.target.value);
-                                        const normalizedNextManual = Number.isFinite(nextManual) ? Math.round(nextManual) : 0;
                                         updateAxisDraft(group.axis, {
                                           values: {
                                             ...draft.values,
                                             [item.value]: {
                                               ...valueDraft,
-                                              deltaKrw: String(normalizedNextManual),
+                                              deltaKrw: isMaterialAxisName(group.axis) ? "0" : e.target.value,
                                             },
                                           },
                                         });
                                       }}
-                                      placeholder="+/-"
-                                    />
+                                    >
+                                      {deltaOptionsForGroup.map((value) => (
+                                        <option key={value} value={String(value)}>{deltaOptionLabel(value)}</option>
+                                      ))}
+                                    </Select>
                                   </td>
                                   <td className="px-2 py-1 text-xs">{roundingLabel}</td>
                                   <td className="px-2 py-1 text-xs">{expectedOptionAmountLabel}</td>

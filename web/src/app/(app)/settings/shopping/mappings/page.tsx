@@ -410,7 +410,7 @@ export default function ShoppingMappingsPage() {
           { label: "옵션 로드", value: `${loadedVariants.length}건`, tone: loadedVariants.length > 0 ? "good" : "neutral" },
         ]}
         nextActions={[
-          { label: "가격 대시보드로", href: "/settings/shopping/dashboard" },
+          { label: "자동 가격으로", href: "/settings/shopping/auto-price" },
           { label: "정책/팩터로", href: "/settings/shopping/factors" },
         ]}
       />

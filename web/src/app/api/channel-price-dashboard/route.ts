@@ -48,8 +48,10 @@ export async function GET(request: Request) {
 
   const { searchParams } = new URL(request.url);
   const channelId = (searchParams.get("channel_id") ?? "").trim();
+  const computeRequestId = (searchParams.get("compute_request_id") ?? "").trim();
   const priceState = (searchParams.get("price_state") ?? "").trim();
   const modelName = (searchParams.get("model_name") ?? "").trim();
+  const masterItemId = (searchParams.get("master_item_id") ?? "").trim();
   const onlyOverrides = searchParams.get("only_overrides") === "true";
   const onlyAdjustments = searchParams.get("only_adjustments") === "true";
   const includeUnmapped = searchParams.get("include_unmapped") !== "false";
@@ -63,6 +65,7 @@ export async function GET(request: Request) {
     .limit(limit);
 
   if (channelId) q = q.eq("channel_id", channelId);
+  if (masterItemId) q = q.eq("master_item_id", masterItemId);
   if (priceState) q = q.eq("price_state", priceState);
   if (modelName) q = q.ilike("model_name", `%${modelName}%`);
   if (onlyOverrides) q = q.not("active_override_id", "is", null);
@@ -72,6 +75,76 @@ export async function GET(request: Request) {
   if (error) return jsonError(error.message ?? "대시보드 조회 실패", 500);
 
   const mappedRows = (data ?? []) as DashboardRow[];
+
+  if (channelId && computeRequestId) {
+    const snapshotRes = await sb
+      .from("pricing_snapshot")
+      .select("channel_product_id, master_item_id, net_weight_g, material_raw_krw, factor_set_id_used, material_factor_multiplier_used, material_final_krw, labor_raw_krw, labor_pre_margin_adj_krw, labor_post_margin_adj_krw, margin_multiplier_used, rounding_unit_used, rounding_mode_used, final_target_price_krw, computed_at")
+      .eq("channel_id", channelId)
+      .eq("compute_request_id", computeRequestId);
+    if (snapshotRes.error) return jsonError(snapshotRes.error.message ?? "스냅샷 조회 실패", 500);
+
+    const snapshotByKey = new Map(
+      (snapshotRes.data ?? []).map((row) => [
+        `${String((row as { channel_product_id?: string | null }).channel_product_id ?? "")}::${String((row as { master_item_id?: string | null }).master_item_id ?? "")}`,
+        row as {
+          net_weight_g: number | null;
+          material_raw_krw: number | null;
+          factor_set_id_used: string | null;
+          material_factor_multiplier_used: number | null;
+          material_final_krw: number | null;
+          labor_raw_krw: number | null;
+          labor_pre_margin_adj_krw: number | null;
+          labor_post_margin_adj_krw: number | null;
+          margin_multiplier_used: number | null;
+          rounding_unit_used: number | null;
+          rounding_mode_used: "CEIL" | "ROUND" | "FLOOR" | null;
+          final_target_price_krw: number | null;
+          computed_at: string | null;
+        },
+      ]),
+    );
+
+    const pinnedRows = mappedRows
+      .map((row) => {
+        const key = `${String(row.channel_product_id ?? "")}::${String(row.master_item_id ?? "")}`;
+        const snap = snapshotByKey.get(key);
+        if (!snap) return null;
+        const currentPrice = row.current_channel_price_krw;
+        const nextTarget = snap.final_target_price_krw;
+        const nextDiff = nextTarget == null || currentPrice == null ? null : nextTarget - currentPrice;
+        const nextDiffPct = nextTarget == null || currentPrice == null || currentPrice === 0
+          ? null
+          : nextDiff! / currentPrice;
+        const nextState = currentPrice == null || nextTarget == null
+          ? "ERROR"
+          : Math.abs(nextTarget - currentPrice) >= 1
+            ? "OUT_OF_SYNC"
+            : "OK";
+        return {
+          ...row,
+          net_weight_g: snap.net_weight_g,
+          material_raw_krw: snap.material_raw_krw,
+          factor_set_id_used: snap.factor_set_id_used,
+          material_factor_multiplier_used: snap.material_factor_multiplier_used,
+          material_final_krw: snap.material_final_krw,
+          labor_raw_krw: snap.labor_raw_krw,
+          labor_pre_margin_adj_krw: snap.labor_pre_margin_adj_krw,
+          labor_post_margin_adj_krw: snap.labor_post_margin_adj_krw,
+          margin_multiplier_used: snap.margin_multiplier_used,
+          rounding_unit_used: snap.rounding_unit_used,
+          rounding_mode_used: snap.rounding_mode_used,
+          final_target_price_krw: nextTarget,
+          computed_at: snap.computed_at,
+          diff_krw: nextDiff,
+          diff_pct: nextDiffPct,
+          price_state: nextState as DashboardRow["price_state"],
+        };
+      })
+      .filter((row): row is DashboardRow => Boolean(row));
+
+    return NextResponse.json({ data: pinnedRows }, { headers: { "Cache-Control": "no-store" } });
+  }
 
   if (mappedRows.length > 0) {
     const masterIds = Array.from(

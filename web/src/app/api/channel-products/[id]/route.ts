@@ -18,7 +18,7 @@ import { normalizeMaterialCode } from "@/lib/material-factors";
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
-const isHundredStep = (value: number): boolean => Number.isInteger(value) && value % 100 === 0;
+const isThousandStep = (value: number): boolean => Number.isInteger(value) && value % 1000 === 0;
 
 const normalizeOptionalMaterialCode = (value: unknown): string => {
   const raw = String(value ?? "").trim();
@@ -102,10 +102,9 @@ export async function PUT(request: Request, { params }: Params) {
   if (optionPriceDeltaKrw !== undefined && optionPriceDeltaKrw !== null && (!Number.isFinite(optionPriceDeltaKrw) || optionPriceDeltaKrw < -100000000 || optionPriceDeltaKrw > 100000000)) {
     return jsonError("option_price_delta_krw must be between -100000000 and 100000000", 400);
   }
-  if (optionPriceDeltaKrw !== undefined && optionPriceDeltaKrw !== null && !isHundredStep(Math.round(optionPriceDeltaKrw))) {
-    return jsonError("option_price_delta_krw must be 100 KRW step", 400);
+  if (optionPriceDeltaKrw !== undefined && optionPriceDeltaKrw !== null && !isThousandStep(Math.round(optionPriceDeltaKrw))) {
+    return jsonError("option_price_delta_krw must be 1000 KRW step", 400);
   }
-  const optionDeltaReason = typeof body.option_delta_reason === "string" ? body.option_delta_reason.trim() : "";
   const optionPriceMode = patch.option_price_mode as string | undefined;
   if (optionPriceMode !== undefined && !["SYNC", "MANUAL"].includes(optionPriceMode)) {
     return jsonError("option_price_mode must be SYNC or MANUAL", 400);
@@ -121,42 +120,64 @@ export async function PUT(request: Request, { params }: Params) {
   if (optionSizeValue !== undefined && optionSizeValue !== null && (!Number.isFinite(optionSizeValue) || optionSizeValue < 0)) {
     return jsonError("option_size_value must be >= 0", 400);
   }
+  if (patch.is_active === false) {
+    return jsonError("활성 매핑만 허용됩니다 (is_active must be true)", 422);
+  }
   const syncRuleSetId = patch.sync_rule_set_id as string | null | undefined;
-  if (optionPriceMode === "SYNC" && (syncRuleSetId === null || syncRuleSetId === undefined || syncRuleSetId === "")) {
+
+  const currentRes = await sb
+    .from("sales_channel_product")
+    .select("channel_product_id, channel_id, master_item_id, external_product_no, external_variant_code, sync_rule_set_id, option_material_code, option_color_code, option_decoration_code, option_size_value, size_weight_delta_g, option_price_mode, is_active, sync_rule_material_enabled, sync_rule_weight_enabled, sync_rule_plating_enabled, sync_rule_decoration_enabled")
+    .eq("channel_product_id", channelProductId)
+    .maybeSingle();
+  if (currentRes.error) return jsonError(currentRes.error.message ?? "기존 옵션 조회 실패", 500);
+  const current = currentRes.data;
+  if (!current) return jsonError("channel product not found", 404);
+
+  const effectiveOptionPriceMode = String((optionPriceMode ?? current.option_price_mode ?? "SYNC")).toUpperCase();
+  const effectiveSyncRuleSetId = String((syncRuleSetId ?? current.sync_rule_set_id ?? "")).trim();
+  const effectiveIsActive = patch.is_active !== undefined ? patch.is_active === true : current.is_active !== false;
+
+  if (effectiveOptionPriceMode === "SYNC" && !effectiveSyncRuleSetId) {
     return jsonError("sync_rule_set_id is required when option_price_mode is SYNC", 400);
   }
 
-  if (optionPriceDeltaKrw !== undefined) {
-    const currentDeltaRes = await sb
-      .from("sales_channel_product")
-      .select("option_price_delta_krw")
-      .eq("channel_product_id", channelProductId)
-      .maybeSingle();
-    if (currentDeltaRes.error) return jsonError(currentDeltaRes.error.message ?? "기존 옵션 추가금 조회 실패", 500);
-    const currentDelta = currentDeltaRes.data;
-    if (!currentDelta) return jsonError("channel product not found", 404);
+  const siblingResForInvariant = await sb
+    .from("sales_channel_product")
+    .select("channel_product_id, option_price_mode, sync_rule_set_id, is_active")
+    .eq("channel_id", String(current.channel_id ?? ""))
+    .eq("master_item_id", String(current.master_item_id ?? ""));
+  if (siblingResForInvariant.error) return jsonError(siblingResForInvariant.error.message ?? "동일 마스터 옵션 조회 실패", 500);
 
-    const previousDelta =
-      currentDelta.option_price_delta_krw === null || currentDelta.option_price_delta_krw === undefined
-        ? null
-        : Math.round(Number(currentDelta.option_price_delta_krw));
-    const nextDelta = optionPriceDeltaKrw === null ? null : Math.round(optionPriceDeltaKrw);
-    if (nextDelta !== previousDelta && !optionDeltaReason) {
-      return jsonError("option_delta_reason is required when option_price_delta_krw changes", 400);
-    }
+  const projected = (siblingResForInvariant.data ?? []).map((row) => {
+    if (String(row.channel_product_id ?? "") !== channelProductId) return row;
+    return {
+      ...row,
+      option_price_mode: effectiveOptionPriceMode,
+      sync_rule_set_id: effectiveSyncRuleSetId || null,
+      is_active: effectiveIsActive,
+    };
+  });
+  const syncRuleSetIds = new Set(
+    projected
+      .filter((row) => row.is_active !== false && String(row.option_price_mode ?? "SYNC").toUpperCase() === "SYNC")
+      .map((row) => String(row.sync_rule_set_id ?? "").trim())
+      .filter(Boolean),
+  );
+  if (syncRuleSetIds.size > 1) {
+    return jsonError("동일 master_item_id의 SYNC 매핑은 sync_rule_set_id가 단일값이어야 합니다", 422, {
+      code: "SOT_RULESET_INCONSISTENT",
+      master_item_id: current.master_item_id,
+      channel_id: current.channel_id,
+      sync_rule_set_ids: Array.from(syncRuleSetIds),
+    });
   }
 
-  if (optionPriceMode === "SYNC") {
-    const currentRes = await sb
-      .from("sales_channel_product")
-      .select("channel_product_id, channel_id, master_item_id, sync_rule_set_id, option_material_code, option_color_code, option_decoration_code, option_size_value, size_weight_delta_g, sync_rule_material_enabled, sync_rule_weight_enabled, sync_rule_plating_enabled, sync_rule_decoration_enabled")
-      .eq("channel_product_id", channelProductId)
-      .maybeSingle();
-    if (currentRes.error) return jsonError(currentRes.error.message ?? "기존 옵션 조회 실패", 500);
-    const current = currentRes.data;
-    if (!current) return jsonError("channel product not found", 404);
 
-    const effectiveRuleSetId = String((syncRuleSetId ?? current.sync_rule_set_id ?? "")).trim();
+
+  if (effectiveOptionPriceMode === "SYNC") {
+
+    const effectiveRuleSetId = effectiveSyncRuleSetId;
     const requestedMaterial = normalizeMaterialCode(String((patch.option_material_code ?? current.option_material_code ?? "")));
     const effectiveColor = normalizePlatingComboCode(String((patch.option_color_code ?? current.option_color_code ?? "")));
     const effectiveSizeRaw = patch.option_size_value ?? current.option_size_value;
@@ -238,46 +259,25 @@ export async function PUT(request: Request, { params }: Params) {
     const baseMaterial = normalizeMaterialCode(String(master.material_code_default ?? ""));
 
     let r1BaseMaterial = baseMaterial;
-    const [policyBaseRes, siblingRes] = await Promise.all([
-      sb
-        .from("channel_option_value_policy")
-        .select("axis_key, axis_value")
-        .eq("channel_id", String(current.channel_id ?? ""))
-        .eq("master_item_id", String(current.master_item_id ?? ""))
-        .eq("rule_type", "R1")
-        .eq("value_mode", "BASE")
-        .limit(50),
-      sb
-        .from("sales_channel_product")
-        .select("option_material_code, external_variant_code, sync_rule_material_enabled")
-        .eq("channel_id", String(current.channel_id ?? ""))
-        .eq("master_item_id", String(current.master_item_id ?? ""))
-        .eq("is_active", true),
-    ]);
-    if (policyBaseRes.error) return jsonError(policyBaseRes.error.message ?? "R1 기준 정책 조회 실패", 500);
+    const siblingRes = await sb
+      .from("sales_channel_product")
+      .select("option_material_code, external_variant_code, sync_rule_material_enabled")
+      .eq("channel_id", String(current.channel_id ?? ""))
+      .eq("master_item_id", String(current.master_item_id ?? ""))
+      .eq("is_active", true);
     if (siblingRes.error) return jsonError(siblingRes.error.message ?? "R1 기준 옵션 조회 실패", 500);
 
-    const policyCandidate = (policyBaseRes.data ?? []).find((r) => {
-      const material = normalizeMaterialCode(String((r as { axis_value?: string | null }).axis_value ?? ""));
-      return Boolean(material) && material !== "00";
-    });
-    const policyBaseMaterial = normalizeMaterialCode(String((policyCandidate as { axis_value?: string | null } | undefined)?.axis_value ?? ""));
-
-    if (policyBaseMaterial && policyBaseMaterial !== "00") {
-      r1BaseMaterial = policyBaseMaterial;
-    } else {
-      const counts = new Map<string, number>();
-      const siblings = (siblingRes.data ?? []) as Array<{ option_material_code: string | null; external_variant_code: string | null; sync_rule_material_enabled: boolean | null }>;
-      const preferRows = siblings.filter((r) => String(r.external_variant_code ?? "").trim() && r.sync_rule_material_enabled === false);
-      const sourceRows = preferRows.length > 0 ? preferRows : siblings.filter((r) => String(r.external_variant_code ?? "").trim());
-      for (const row of sourceRows) {
-        const code = normalizeMaterialCode(String(row.option_material_code ?? ""));
-        if (!code || code === "00") continue;
-        counts.set(code, (counts.get(code) ?? 0) + 1);
-      }
-      const inferred = Array.from(counts.entries()).sort((a, b) => b[1] - a[1])[0]?.[0] ?? "";
-      if (inferred) r1BaseMaterial = inferred;
+    const counts = new Map<string, number>();
+    const siblings = (siblingRes.data ?? []) as Array<{ option_material_code: string | null; external_variant_code: string | null; sync_rule_material_enabled: boolean | null }>;
+    const preferRows = siblings.filter((r) => String(r.external_variant_code ?? "").trim() && r.sync_rule_material_enabled === false);
+    const sourceRows = preferRows.length > 0 ? preferRows : siblings.filter((r) => String(r.external_variant_code ?? "").trim());
+    for (const row of sourceRows) {
+      const code = normalizeMaterialCode(String(row.option_material_code ?? ""));
+      if (!code || code === "00") continue;
+      counts.set(code, (counts.get(code) ?? 0) + 1);
     }
+    const inferred = Array.from(counts.entries()).sort((a, b) => b[1] - a[1])[0]?.[0] ?? "";
+    if (inferred) r1BaseMaterial = inferred;
 
     const category = String(master.category_code ?? "").trim();
     const candidateMaterial = requestedMaterial || baseMaterial;

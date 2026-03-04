@@ -6,7 +6,7 @@ import { normalizePlatingComboCode } from "@/lib/shop/sync-rules";
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
-const isHundredStep = (value: number): boolean => Number.isInteger(value) && value % 100 === 0;
+const isThousandStep = (value: number): boolean => Number.isInteger(value) && value % 1000 === 0;
 
 type BulkRow = {
   channel_id: string;
@@ -95,6 +95,7 @@ function normalizeRow(raw: unknown): { ok: true; row: BulkRow } | { ok: false; e
   if (!masterItemId) return { ok: false, error: "master_item_id is required" };
   if (!externalProductNo) return { ok: false, error: "external_product_no is required" };
   if (!externalVariantCode) return { ok: false, error: "external_variant_code is required" };
+  if (!isActive) return { ok: false, error: "활성 매핑만 허용됩니다 (is_active must be true)" };
 
   if (
     materialMultiplierOverride !== null
@@ -108,8 +109,8 @@ function normalizeRow(raw: unknown): { ok: true; row: BulkRow } | { ok: false; e
   if (optionPriceDeltaKrw !== null && (!Number.isFinite(optionPriceDeltaKrw) || optionPriceDeltaKrw < -100000000 || optionPriceDeltaKrw > 100000000)) {
     return { ok: false, error: "option_price_delta_krw must be between -100000000 and 100000000" };
   }
-  if (optionPriceDeltaKrw !== null && !isHundredStep(Math.round(optionPriceDeltaKrw))) {
-    return { ok: false, error: "option_price_delta_krw must be 100 KRW step" };
+  if (optionPriceDeltaKrw !== null && !isThousandStep(Math.round(optionPriceDeltaKrw))) {
+    return { ok: false, error: "option_price_delta_krw must be 1000 KRW step" };
   }
   if (optionManualTargetKrw !== null && (!Number.isFinite(optionManualTargetKrw) || optionManualTargetKrw < 0 || optionManualTargetKrw > 1000000000)) {
     return { ok: false, error: "option_manual_target_krw must be between 0 and 1000000000" };
@@ -176,7 +177,128 @@ export async function POST(request: Request) {
     const key = `${row.channel_id}::${row.external_product_no}::${row.external_variant_code}`;
     dedup.set(key, row);
   }
-  const rows = Array.from(dedup.values());
+  let rows = Array.from(dedup.values());
+
+  const affectedPairSet = new Set(rows.map((row) => `${row.channel_id}::${row.master_item_id}`));
+  const affectedChannelIds = Array.from(new Set(rows.map((row) => row.channel_id)));
+  const affectedMasterIds = Array.from(new Set(rows.map((row) => row.master_item_id)));
+  const existingRes = await sb
+    .from("sales_channel_product")
+    .select("channel_id, master_item_id, external_product_no, external_variant_code, option_price_mode, sync_rule_set_id, is_active")
+    .in("channel_id", affectedChannelIds)
+    .in("master_item_id", affectedMasterIds);
+  if (existingRes.error) return jsonError(existingRes.error.message ?? "기존 옵션 조회 실패", 500);
+
+  const projectedByKey = new Map<string, {
+    channel_id: string;
+    master_item_id: string;
+    external_product_no: string;
+    external_variant_code: string;
+    option_price_mode: "SYNC" | "MANUAL";
+    sync_rule_set_id: string | null;
+    is_active: boolean;
+  }>();
+  for (const row of (existingRes.data ?? []) as Array<{
+    channel_id: string;
+    master_item_id: string;
+    external_product_no: string;
+    external_variant_code: string;
+    option_price_mode: "SYNC" | "MANUAL" | null;
+    sync_rule_set_id: string | null;
+    is_active: boolean | null;
+  }>) {
+    const pairKey = `${row.channel_id}::${row.master_item_id}`;
+    if (!affectedPairSet.has(pairKey)) continue;
+    const key = `${row.channel_id}::${row.external_product_no}::${row.external_variant_code}`;
+    projectedByKey.set(key, {
+      channel_id: row.channel_id,
+      master_item_id: row.master_item_id,
+      external_product_no: row.external_product_no,
+      external_variant_code: row.external_variant_code,
+      option_price_mode: String(row.option_price_mode ?? "SYNC").toUpperCase() === "MANUAL" ? "MANUAL" : "SYNC",
+      sync_rule_set_id: row.sync_rule_set_id,
+      is_active: row.is_active !== false,
+    });
+  }
+  for (const row of rows) {
+    const key = `${row.channel_id}::${row.external_product_no}::${row.external_variant_code}`;
+    projectedByKey.set(key, {
+      channel_id: row.channel_id,
+      master_item_id: row.master_item_id,
+      external_product_no: row.external_product_no,
+      external_variant_code: row.external_variant_code,
+      option_price_mode: row.option_price_mode,
+      sync_rule_set_id: row.sync_rule_set_id,
+      is_active: row.is_active,
+    });
+  }
+
+  const candidateRuleSetIdsByPair = new Map<string, Set<string>>();
+  for (const row of projectedByKey.values()) {
+    if (!row.is_active) continue;
+    if (row.option_price_mode !== "SYNC") continue;
+    const ruleSetId = String(row.sync_rule_set_id ?? "").trim();
+    if (!ruleSetId) continue;
+    const pairKey = `${row.channel_id}::${row.master_item_id}`;
+    const set = candidateRuleSetIdsByPair.get(pairKey) ?? new Set<string>();
+    set.add(ruleSetId);
+    candidateRuleSetIdsByPair.set(pairKey, set);
+  }
+
+  rows = rows.map((row) => {
+    if (row.option_price_mode !== "SYNC") return row;
+    const current = String(row.sync_rule_set_id ?? "").trim();
+    if (current) return row;
+    const pairKey = `${row.channel_id}::${row.master_item_id}`;
+    const candidates = candidateRuleSetIdsByPair.get(pairKey);
+    if (!candidates || candidates.size !== 1) return row;
+    const inferred = Array.from(candidates)[0] ?? "";
+    return {
+      ...row,
+      sync_rule_set_id: inferred || null,
+    };
+  });
+
+  for (const row of rows) {
+    const key = `${row.channel_id}::${row.external_product_no}::${row.external_variant_code}`;
+    projectedByKey.set(key, {
+      channel_id: row.channel_id,
+      master_item_id: row.master_item_id,
+      external_product_no: row.external_product_no,
+      external_variant_code: row.external_variant_code,
+      option_price_mode: row.option_price_mode,
+      sync_rule_set_id: row.sync_rule_set_id,
+      is_active: row.is_active,
+    });
+  }
+
+  for (const pairKey of affectedPairSet) {
+    const [channelId, masterItemId] = pairKey.split("::");
+    const syncRows = Array.from(projectedByKey.values()).filter((row) =>
+      row.channel_id === channelId
+      && row.master_item_id === masterItemId
+      && row.is_active
+      && row.option_price_mode === "SYNC",
+    );
+    const missingRuleSetRows = syncRows.filter((row) => !String(row.sync_rule_set_id ?? "").trim());
+    if (missingRuleSetRows.length > 0) {
+      return jsonError("SYNC 모드 매핑에 sync_rule_set_id가 필요합니다", 422, {
+        code: "SOT_SYNC_RULESET_REQUIRED",
+        channel_id: channelId,
+        master_item_id: masterItemId,
+        count: missingRuleSetRows.length,
+      });
+    }
+    const syncRuleSetIds = new Set(syncRows.map((row) => String(row.sync_rule_set_id ?? "").trim()).filter(Boolean));
+    if (syncRuleSetIds.size > 1) {
+      return jsonError("동일 master_item_id의 SYNC 매핑은 sync_rule_set_id가 단일값이어야 합니다", 422, {
+        code: "SOT_RULESET_INCONSISTENT",
+        channel_id: channelId,
+        master_item_id: masterItemId,
+        sync_rule_set_ids: Array.from(syncRuleSetIds),
+      });
+    }
+  }
 
   const { data, error } = await sb
     .from("sales_channel_product")

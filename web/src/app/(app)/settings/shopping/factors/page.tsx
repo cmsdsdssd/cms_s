@@ -344,7 +344,7 @@ export default function ShoppingFactorsPage() {
         ]}
         nextActions={[
           { label: "옵션 룰 설정", href: "/settings/shopping/rules" },
-          { label: "가격 대시보드로", href: "/settings/shopping/dashboard" },
+          { label: "자동 가격으로", href: "/settings/shopping/auto-price" },
         ]}
       />
 

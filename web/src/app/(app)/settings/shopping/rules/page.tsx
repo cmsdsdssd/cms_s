@@ -651,7 +651,7 @@ export default function ShoppingRulesPage() {
           { label: "작업 가능", value: coreDisabledReason ? "대기" : "가능", tone: coreDisabledReason ? "warn" : "good" },
         ]}
         nextActions={[
-          { label: "가격 대시보드로", href: "/settings/shopping/dashboard" },
+          { label: "자동 가격으로", href: "/settings/shopping/auto-price" },
           { label: "정책/팩터로", href: "/settings/shopping/factors" },
         ]}
       />
