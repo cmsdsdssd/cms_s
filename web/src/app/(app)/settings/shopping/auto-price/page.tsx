@@ -100,6 +100,8 @@ type MappingSummary = {
     product_nos: string[];
     variant_count: number;
     base_row_count: number;
+    base_row_count_raw?: number;
+    base_product_no?: string | null;
   }>;
 };
 
@@ -962,7 +964,7 @@ export default function ShoppingAutoPricePage() {
               <thead className="bg-[var(--panel)] text-left">
                 <tr>
                   <th className="px-3 py-2">master_item_id</th>
-                  <th className="px-3 py-2">product_no</th>
+                  <th className="px-3 py-2">대표 base product_no</th>
                   <th className="px-3 py-2">variant 수</th>
                   <th className="px-3 py-2">base 행 수</th>
                 </tr>
@@ -971,7 +973,7 @@ export default function ShoppingAutoPricePage() {
                 {(mappingSummaryQuery.data?.data.mapped_masters ?? []).slice(0, 100).map((row) => (
                   <tr key={row.master_item_id} className="border-t border-[var(--hairline)]">
                     <td className="px-3 py-2">{row.master_item_id}</td>
-                    <td className="px-3 py-2">{row.product_nos.join(", ") || "-"}</td>
+                    <td className="px-3 py-2">{row.base_product_no ?? row.product_nos[0] ?? "-"}</td>
                     <td className="px-3 py-2">{row.variant_count}</td>
                     <td className="px-3 py-2">{row.base_row_count}</td>
                   </tr>
