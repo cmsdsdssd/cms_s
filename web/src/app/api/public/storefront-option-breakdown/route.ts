@@ -1,15 +1,9 @@
 import { NextResponse } from "next/server";
 import { getShopAdminClient, jsonError } from "@/lib/shop/admin";
-import { ensureValidCafe24AccessToken, loadCafe24Account, cafe24ListProductVariants } from "@/lib/shop/cafe24";
+import { ensureValidCafe24AccessToken, loadCafe24Account, cafe24GetProductPrice, cafe24ListProductVariants } from "@/lib/shop/cafe24";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
-
-type DashboardRow = {
-  master_item_id: string | null;
-  external_variant_code: string | null;
-  final_target_price_krw: number | null;
-};
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
@@ -79,44 +73,6 @@ export async function GET(request: Request) {
   if (!accountRes.data?.channel_id) return withCors(jsonError("channel not found", 404));
   const channelId = String(accountRes.data.channel_id);
 
-  const dashRes = await sb
-    .from("v_channel_price_dashboard")
-    .select("master_item_id, external_variant_code, final_target_price_krw")
-    .eq("channel_id", channelId)
-    .eq("external_product_no", productNo);
-  if (dashRes.error) return withCors(jsonError(dashRes.error.message ?? "dashboard lookup failed", 500));
-
-  const rows = (dashRes.data ?? []) as DashboardRow[];
-  if (rows.length === 0) {
-    return withCors(NextResponse.json({
-      ok: false,
-      channel_id: channelId,
-      mall_id: mallId,
-      product_no: productNo,
-      reason: "NO_DASHBOARD_ROWS",
-      data: null,
-    }, { headers: { "Cache-Control": "no-store" } }));
-  }
-
-  const baseRow = rows.find((r) => String(r.external_variant_code ?? "").trim() === "");
-  const baseTarget = Number(baseRow?.final_target_price_krw ?? Number.NaN);
-  const fallbackBaseTarget = rows
-    .map((r) => Math.round(Number(r.final_target_price_krw ?? Number.NaN)))
-    .filter((n) => Number.isFinite(n) && n > 0)
-    .sort((a, b) => a - b)[0] ?? 0;
-  const basePrice = Number.isFinite(baseTarget) && baseTarget > 0
-    ? Math.round(baseTarget)
-    : fallbackBaseTarget;
-
-  const byVariantTarget = new Map<string, number>();
-  for (const row of rows) {
-    const code = String(row.external_variant_code ?? "").trim();
-    if (!code) continue;
-    const target = Math.round(Number(row.final_target_price_krw ?? Number.NaN));
-    if (!Number.isFinite(target) || target <= 0) continue;
-    byVariantTarget.set(code, target);
-  }
-
   const account = await loadCafe24Account(sb, channelId);
   if (!account) return withCors(jsonError("cafe24 account missing", 422));
 
@@ -126,6 +82,22 @@ export async function GET(request: Request) {
   } catch (e) {
     return withCors(jsonError(e instanceof Error ? e.message : "token refresh failed", 422));
   }
+
+  let basePriceRes = await cafe24GetProductPrice(account, token, productNo);
+  if (!basePriceRes.ok && basePriceRes.status === 401) {
+    try {
+      token = await ensureValidCafe24AccessToken(sb, account);
+      basePriceRes = await cafe24GetProductPrice(account, token, productNo);
+    } catch {
+      // Keep original error result.
+    }
+  }
+  if (!basePriceRes.ok || basePriceRes.currentPriceKrw == null || !Number.isFinite(Number(basePriceRes.currentPriceKrw))) {
+    return withCors(jsonError(basePriceRes.error ?? "base product price read failed", 422, {
+      status: basePriceRes.status,
+    }));
+  }
+  const basePrice = Math.round(Number(basePriceRes.currentPriceKrw));
 
   let variantsRes = await cafe24ListProductVariants(account, token, productNo);
   if (!variantsRes.ok && variantsRes.status === 401) {
@@ -143,6 +115,17 @@ export async function GET(request: Request) {
   }
 
   const variants = variantsRes.variants;
+  if (variants.length === 0) {
+    return withCors(NextResponse.json({
+      ok: false,
+      channel_id: channelId,
+      mall_id: mallId,
+      product_no: productNo,
+      resolved_product_no: variantsRes.resolvedProductNo,
+      reason: "NO_VARIANTS",
+      data: null,
+    }, { headers: { "Cache-Control": "no-store" } }));
+  }
   const firstAxisName = String(variants.find((v) => v.options.length > 0)?.options[0]?.name ?? "").trim();
   const secondAxisName = String(variants.find((v) => v.options.length > 1)?.options[1]?.name ?? "").trim();
 
@@ -150,13 +133,11 @@ export async function GET(request: Request) {
   for (const variant of variants) {
     const code = String(variant.variantCode ?? "").trim();
     if (!code) continue;
-    const target = byVariantTarget.get(code);
-    if (target == null || !Number.isFinite(target)) continue;
     const firstRaw = variant.options.find((o) => String(o.name ?? "").trim() === firstAxisName)?.value ?? "";
     const secondRaw = variant.options.find((o) => String(o.name ?? "").trim() === secondAxisName)?.value ?? "";
     const first = stripPriceDeltaSuffix(String(firstRaw));
     const second = stripPriceDeltaSuffix(String(secondRaw));
-    const totalDelta = Math.round(target - basePrice);
+    const totalDelta = Math.round(Number(variant.additionalAmount ?? 0));
     variantAxis.set(code, { first, second, totalDelta });
   }
 
@@ -190,6 +171,7 @@ export async function GET(request: Request) {
     channel_id: channelId,
     mall_id: mallId,
     product_no: productNo,
+    resolved_product_no: variantsRes.resolvedProductNo,
     base_price_krw: basePrice,
     axis: {
       first: {

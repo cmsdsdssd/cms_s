@@ -125,6 +125,7 @@ type ProductEditorPreview = {
     variantCode: string;
     options: Array<{ name: string; value: string }>;
     additionalAmount: number | null;
+    savedTargetAdditionalAmount?: number | null;
     selling: string | null;
     display: string | null;
   }>;
@@ -212,7 +213,7 @@ export default function ShoppingAutoPricePage() {
   const [option18kWeightMultiplier, setOption18kWeightMultiplier] = useState("1.2");
   const [policyFactorSetId, setPolicyFactorSetId] = useState("");
   const [policySaveError, setPolicySaveError] = useState<string | null>(null);
-  const [intervalMinutes, setIntervalMinutes] = useState("20");
+  const [intervalMinutes, setIntervalMinutes] = useState("5");
   const [selectedRunId, setSelectedRunId] = useState("");
   const [runMasterIds, setRunMasterIds] = useState("");
   const [editorProductNo, setEditorProductNo] = useState("");
@@ -355,8 +356,8 @@ export default function ShoppingAutoPricePage() {
         productNo: string;
         productNos: Set<string>;
         modelNames: Set<string>;
-        variantCount: number;
-        outOfSyncCount: number;
+        variantCodes: Set<string>;
+        outOfSyncVariantCodes: Set<string>;
         latestComputedAt: string | null;
         sampleTargetPrice: number | null;
         primaryMasterId: string;
@@ -373,8 +374,8 @@ export default function ShoppingAutoPricePage() {
         productNo,
         productNos: new Set<string>(),
         modelNames: new Set<string>(),
-        variantCount: 0,
-        outOfSyncCount: 0,
+        variantCodes: new Set<string>(),
+        outOfSyncVariantCodes: new Set<string>(),
         latestComputedAt: null,
         sampleTargetPrice: null,
         primaryMasterId: "",
@@ -390,8 +391,11 @@ export default function ShoppingAutoPricePage() {
       }
       const modelName = String(row.model_name ?? "").trim();
       if (modelName) item.modelNames.add(modelName);
-      item.variantCount += 1;
-      if (row.price_state === "OUT_OF_SYNC") item.outOfSyncCount += 1;
+      const variantCode = String(row.external_variant_code ?? "").trim();
+      if (variantCode) {
+        item.variantCodes.add(variantCode);
+        if (row.price_state === "OUT_OF_SYNC") item.outOfSyncVariantCodes.add(variantCode);
+      }
       if (!item.latestComputedAt || (row.computed_at && row.computed_at > item.latestComputedAt)) {
         item.latestComputedAt = row.computed_at ?? item.latestComputedAt;
       }
@@ -405,6 +409,8 @@ export default function ShoppingAutoPricePage() {
     return Array.from(grouped.values())
       .map((item) => ({
         ...item,
+        variantCount: item.variantCodes.size,
+        outOfSyncCount: item.outOfSyncVariantCodes.size,
         modelNameText: Array.from(item.modelNames.values()).join(" / "),
         productAliasText: Array.from(item.productNos.values()).sort((a, b) => a.localeCompare(b)).join(" / "),
         imageUrl: item.primaryMasterId ? (galleryImageByMasterId.get(item.primaryMasterId) ?? null) : null,
@@ -622,20 +628,29 @@ export default function ShoppingAutoPricePage() {
       if (!resolvedMasterItemId) throw new Error("master_item_id가 없어 계산값을 조회할 수 없습니다");
       const resolvedProductNo = String(editorPreview?.productNo ?? editorProductNo).trim();
       if (!resolvedProductNo) throw new Error("product_no가 필요합니다");
+      const candidateProductNos = Array.from(new Set([
+        String(editorPreview?.productNo ?? "").trim(),
+        String(editorProductNo ?? "").trim(),
+      ].filter(Boolean)));
 
       const res = await shopApiGet<{ data: DashboardGalleryRow[] }>(
         `/api/channel-price-dashboard?channel_id=${encodeURIComponent(effectiveChannelId)}&master_item_id=${encodeURIComponent(resolvedMasterItemId)}&include_unmapped=false&limit=1000`,
       );
 
       const allRows = (res.data ?? []).filter((row) => Number.isFinite(Number(row.final_target_price_krw ?? Number.NaN)));
-      const rowsForProduct = allRows.filter((row) => String(row.external_product_no ?? "").trim() === resolvedProductNo);
+      const rowsForProduct = allRows.filter((row) => {
+        const productNo = String(row.external_product_no ?? "").trim();
+        return candidateProductNos.includes(productNo);
+      });
       const pickPreferred = (rows: DashboardGalleryRow[]) =>
         rows.find((row) => String(row.external_variant_code ?? "").trim().length === 0)
         ?? rows.find((row) => Number.isFinite(Number(row.final_target_price_krw ?? Number.NaN)))
         ?? rows[0]
         ?? null;
 
-      const picked = pickPreferred(rowsForProduct) ?? pickPreferred(allRows);
+      const pCodeRows = allRows.filter((row) => /^P/i.test(String(row.external_product_no ?? "").trim()));
+
+      const picked = pickPreferred(rowsForProduct) ?? pickPreferred(pCodeRows) ?? pickPreferred(allRows);
       const computed = Number(picked?.final_target_price_krw ?? Number.NaN);
       if (!Number.isFinite(computed)) {
         throw new Error("해당 상품의 마스터 계산값(final_target_price_krw)을 찾지 못했습니다");
@@ -1339,8 +1354,10 @@ export default function ShoppingAutoPricePage() {
                         ))}
                         <th className="px-2 py-1">저장기반 옵션가</th>
                         <th className="px-2 py-1">동기화 계산 옵션가</th>
+                        <th className="px-2 py-1">쇼핑몰 옵션가</th>
+                        <th className="px-2 py-1">base 판매가</th>
                         <th className="px-2 py-1">옵션가격(additional)</th>
-                        <th className="px-2 py-1">저장반영</th>
+                        <th className="px-2 py-1">쇼핑몰반영</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -1348,22 +1365,39 @@ export default function ShoppingAutoPricePage() {
                         const valueByName = new Map(
                           (variant.options ?? []).map((o) => [String(o.name ?? "").trim(), String(o.value ?? "").trim()]),
                         );
+                        const savedTargetAdditionalAmount = variant.savedTargetAdditionalAmount == null
+                          ? null
+                          : Math.round(Number(variant.savedTargetAdditionalAmount));
+                        const storefrontAdditionalAmount = variant.additionalAmount == null
+                          ? null
+                          : Math.round(Number(variant.additionalAmount));
+                        const computedAdditionalAmount = Math.round(Number(computedVariantAdditionalByCode.get(variant.variantCode) ?? 0));
+
+                        let syncState = "확인필요";
+                        if (savedTargetAdditionalAmount == null) {
+                          syncState = "저장값없음";
+                        } else if (storefrontAdditionalAmount == null) {
+                          syncState = "확인필요";
+                        } else if (storefrontAdditionalAmount === savedTargetAdditionalAmount) {
+                          syncState = "일치";
+                        } else {
+                          syncState = "불일치";
+                        }
+
                         return (
                           <tr key={variant.variantCode} className="border-t border-[var(--hairline)]">
                             <td className="px-2 py-1">{variant.variantCode}</td>
                             {variantOptionColumnNames.map((name) => (
                               <td key={`${variant.variantCode}::${name}`} className="px-2 py-1">{valueByName.get(name) || "-"}</td>
                             ))}
-                            <td className="px-2 py-1">{fmt(persistedVariantAdditionalByCode.get(variant.variantCode) ?? 0)}</td>
-                            <td className="px-2 py-1">{fmt(computedVariantAdditionalByCode.get(variant.variantCode) ?? 0)}</td>
+                            <td className="px-2 py-1">{fmt(savedTargetAdditionalAmount)}</td>
+                            <td className="px-2 py-1">{fmt(computedAdditionalAmount)}</td>
+                            <td className="px-2 py-1">{fmt(variant.additionalAmount)}</td>
+                            <td className="px-2 py-1">{fmt(editorPreview.price)}</td>
                             <td className="px-2 py-1">
-                              <Input value={String(computedVariantAdditionalByCode.get(variant.variantCode) ?? 0)} type="number" readOnly />
+                              <Input value={String(savedTargetAdditionalAmount ?? computedAdditionalAmount)} type="number" readOnly />
                             </td>
-                            <td className="px-2 py-1">
-                              {Number(computedVariantAdditionalByCode.get(variant.variantCode) ?? 0) === Number(persistedVariantAdditionalByCode.get(variant.variantCode) ?? 0)
-                                ? "일치"
-                                : "확인필요"}
-                            </td>
+                            <td className="px-2 py-1">{syncState}</td>
                           </tr>
                         );
                       })}
@@ -1468,9 +1502,10 @@ export default function ShoppingAutoPricePage() {
           <CardBody className="space-y-3">
             <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
               <Select value={intervalMinutes} onChange={(e) => setIntervalMinutes(e.target.value)}>
-                <option value="20">20분</option>
-                <option value="10">10분</option>
                 <option value="5">5분</option>
+                <option value="10">10분</option>
+                <option value="20">20분</option>
+                <option value="60">60분</option>
               </Select>
               <Input value={runMasterIds} onChange={(e) => setRunMasterIds(e.target.value)} placeholder="master_item_id 쉼표 구분(비우면 전체)" />
               <Button onClick={() => createRunMutation.mutate()} disabled={!effectiveChannelId || createRunMutation.isPending}>

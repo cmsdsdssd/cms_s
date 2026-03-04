@@ -84,13 +84,13 @@ async function verifyAppliedVariantPrice(
 
   const verifyMatched = (currentPrice: number | null): boolean => currentPrice === expectedPrice;
   const additionalMatched = (additionalAmount: number | null): boolean => {
-    if (typeof expectedAdditionalAmount !== "number" || !Number.isFinite(expectedAdditionalAmount)) return false;
+    if (typeof expectedAdditionalAmount !== "number" || !Number.isFinite(expectedAdditionalAmount)) return true;
     if (additionalAmount == null || !Number.isFinite(Number(additionalAmount))) return false;
     return Math.round(Number(additionalAmount)) === Math.round(expectedAdditionalAmount);
   };
 
   for (const waitMs of VERIFY_RETRY_DELAYS_MS) {
-    if (verifyMatched(last.currentPriceKrw) || additionalMatched(last.additionalAmount)) {
+    if (verifyMatched(last.currentPriceKrw) && additionalMatched(last.additionalAmount)) {
       return { ok: true, current: last.currentPriceKrw, status: last.status, raw: last.raw };
     }
     await new Promise((resolve) => setTimeout(resolve, waitMs));
@@ -108,11 +108,11 @@ async function verifyAppliedVariantPrice(
   const matchedByPrice = verifyMatched(last.currentPriceKrw);
   const matchedByAdditional = additionalMatched(last.additionalAmount);
   return {
-    ok: matchedByPrice || matchedByAdditional,
+    ok: matchedByPrice && matchedByAdditional,
     current: last.currentPriceKrw,
     status: last.status,
     raw: last.raw,
-    error: (matchedByPrice || matchedByAdditional)
+    error: (matchedByPrice && matchedByAdditional)
       ? undefined
       : `VERIFY_MISMATCH expected=${expectedPrice} actual=${last.currentPriceKrw ?? "null"}${expectedAdditionalLabel}`,
   };
@@ -167,6 +167,7 @@ export async function POST(request: Request) {
     master_item_id: string | null;
     external_product_no: string | null;
     external_variant_code: string | null;
+    target_price_raw_krw: number | null;
     final_target_price_krw: number | null;
     current_channel_price_krw: number | null;
   }> = [];
@@ -175,7 +176,7 @@ export async function POST(request: Request) {
       if (idChunk.length === 0) continue;
       const initialRes = await sb
         .from("v_channel_price_dashboard")
-        .select("channel_id, channel_product_id, master_item_id, external_product_no, external_variant_code, final_target_price_krw, current_channel_price_krw")
+        .select("channel_id, channel_product_id, master_item_id, external_product_no, external_variant_code, target_price_raw_krw, final_target_price_krw, current_channel_price_krw")
         .eq("channel_id", channelId)
         .in("channel_product_id", idChunk);
       if (initialRes.error) return jsonError(initialRes.error.message ?? "반영 대상 조회 실패", 500);
@@ -184,7 +185,7 @@ export async function POST(request: Request) {
   } else {
     const initialRes = await sb
       .from("v_channel_price_dashboard")
-      .select("channel_id, channel_product_id, master_item_id, external_product_no, external_variant_code, final_target_price_krw, current_channel_price_krw")
+      .select("channel_id, channel_product_id, master_item_id, external_product_no, external_variant_code, target_price_raw_krw, final_target_price_krw, current_channel_price_krw")
       .eq("channel_id", channelId);
     if (initialRes.error) return jsonError(initialRes.error.message ?? "반영 대상 조회 실패", 500);
     initialRows.push(...(initialRes.data ?? []));
@@ -582,6 +583,7 @@ export async function POST(request: Request) {
     master_item_id: string | null;
     external_product_no: string | null;
     external_variant_code: string | null;
+    target_price_raw_krw: number | null;
     final_target_price_krw: number | null;
     current_channel_price_krw: number | null;
   }> = [];
@@ -595,7 +597,7 @@ export async function POST(request: Request) {
         if (masterChunk.length === 0) continue;
         const candRes = await sb
           .from("v_channel_price_dashboard")
-          .select("channel_id, channel_product_id, master_item_id, external_product_no, external_variant_code, final_target_price_krw, current_channel_price_krw")
+          .select("channel_id, channel_product_id, master_item_id, external_product_no, external_variant_code, target_price_raw_krw, final_target_price_krw, current_channel_price_krw")
           .eq("channel_id", channelId)
           .in("master_item_id", masterChunk);
         if (candRes.error) return jsonError(candRes.error.message ?? "반영 대상 재조회 실패", 500);
@@ -606,7 +608,7 @@ export async function POST(request: Request) {
         if (idChunk.length === 0) continue;
         const candRes = await sb
           .from("v_channel_price_dashboard")
-          .select("channel_id, channel_product_id, master_item_id, external_product_no, external_variant_code, final_target_price_krw, current_channel_price_krw")
+          .select("channel_id, channel_product_id, master_item_id, external_product_no, external_variant_code, target_price_raw_krw, final_target_price_krw, current_channel_price_krw")
           .eq("channel_id", channelId)
           .in("channel_product_id", idChunk);
         if (candRes.error) return jsonError(candRes.error.message ?? "반영 대상 재조회 실패", 500);
@@ -616,7 +618,7 @@ export async function POST(request: Request) {
   } else {
     const candRes = await sb
       .from("v_channel_price_dashboard")
-      .select("channel_id, channel_product_id, master_item_id, external_product_no, external_variant_code, final_target_price_krw, current_channel_price_krw")
+      .select("channel_id, channel_product_id, master_item_id, external_product_no, external_variant_code, target_price_raw_krw, final_target_price_krw, current_channel_price_krw")
       .eq("channel_id", channelId);
     if (candRes.error) return jsonError(candRes.error.message ?? "반영 대상 재조회 실패", 500);
     finalRows.push(...(candRes.data ?? []));
@@ -725,16 +727,21 @@ export async function POST(request: Request) {
   });
 
   const mastersWithExplicitBaseRows = new Set<string>();
+  const masterBaseRawTarget = new Map<string, number>();
 
   const masterFallbackTarget = new Map<string, number>();
   for (const row of sortedCandidates) {
     const masterKey = String(row.master_item_id ?? "").trim();
     const variantCode = String(row.external_variant_code ?? "").trim();
     const target = Number(row.final_target_price_krw);
+    const targetRaw = Number(row.target_price_raw_krw);
     if (!masterKey || variantCode) continue;
     mastersWithExplicitBaseRows.add(masterKey);
     if (Number.isFinite(target) && !masterFallbackTarget.has(masterKey)) {
       masterFallbackTarget.set(masterKey, Math.round(target));
+    }
+    if (Number.isFinite(targetRaw) && !masterBaseRawTarget.has(masterKey)) {
+      masterBaseRawTarget.set(masterKey, targetRaw);
     }
   }
 
@@ -764,6 +771,113 @@ export async function POST(request: Request) {
     }
   }
 
+  const variantAdditionalOverrideByMasterVariant = new Map<string, number>();
+  const variantAdditionalOverrideByProductVariant = new Map<string, number>();
+  const overrideMasterIds = Array.from(new Set(
+    sortedCandidates
+      .map((row) => String(row.master_item_id ?? "").trim())
+      .filter(Boolean),
+  ));
+  const overrideProductNos = Array.from(new Set(
+    sortedCandidates
+      .map((row) => String(row.external_product_no ?? "").trim())
+      .filter(Boolean),
+  ));
+  const overrideMasterUpdatedAt = new Map<string, number>();
+  const overrideProductUpdatedAt = new Map<string, number>();
+
+  const upsertOverride = (
+    map: Map<string, number>,
+    tsMap: Map<string, number>,
+    key: string,
+    delta: number,
+    updatedAt: unknown,
+  ) => {
+    const ts = Date.parse(String(updatedAt ?? ""));
+    const nextTs = Number.isFinite(ts) ? ts : Number.MIN_SAFE_INTEGER;
+    const prevTs = tsMap.get(key);
+    if (prevTs === undefined || nextTs >= prevTs) {
+      map.set(key, Math.round(delta));
+      tsMap.set(key, nextTs);
+    }
+  };
+
+  if (overrideMasterIds.length > 0) {
+    for (const masterChunk of chunkArray(overrideMasterIds, IN_QUERY_CHUNK_SIZE)) {
+      if (masterChunk.length === 0) continue;
+      const stateRes = await sb
+        .from("channel_option_current_state_v1")
+        .select("state_id, master_item_id, external_product_no, external_variant_code, final_target_additional_amount_krw, updated_at")
+        .eq("channel_id", channelId)
+        .in("master_item_id", masterChunk)
+        .order("updated_at", { ascending: false })
+        .order("state_id", { ascending: false });
+      if (stateRes.error) return jsonError(stateRes.error.message ?? "옵션 현재상태 조회 실패", 500);
+
+      for (const row of stateRes.data ?? []) {
+        const variantCode = String(row.external_variant_code ?? "").trim();
+        if (!variantCode) continue;
+        const delta = Number(row.final_target_additional_amount_krw ?? Number.NaN);
+        if (!Number.isFinite(delta)) continue;
+
+        const masterKey = String(row.master_item_id ?? "").trim();
+        const productNo = String(row.external_product_no ?? "").trim();
+
+        if (masterKey) {
+          const mk = `${masterKey}::${variantCode}`;
+          upsertOverride(variantAdditionalOverrideByMasterVariant, overrideMasterUpdatedAt, mk, delta, row.updated_at);
+        }
+
+        if (productNo) {
+          const pk = `${productNo}::${variantCode}`;
+          upsertOverride(variantAdditionalOverrideByProductVariant, overrideProductUpdatedAt, pk, delta, row.updated_at);
+        }
+      }
+    }
+  }
+
+  if (overrideProductNos.length > 0) {
+    for (const productChunk of chunkArray(overrideProductNos, IN_QUERY_CHUNK_SIZE)) {
+      if (productChunk.length === 0) continue;
+      const stateRes = await sb
+        .from("channel_option_current_state_v1")
+        .select("state_id, master_item_id, external_product_no, external_variant_code, final_target_additional_amount_krw, updated_at")
+        .eq("channel_id", channelId)
+        .in("external_product_no", productChunk)
+        .order("updated_at", { ascending: false })
+        .order("state_id", { ascending: false });
+      if (stateRes.error) return jsonError(stateRes.error.message ?? "옵션 현재상태 조회 실패", 500);
+
+      for (const row of stateRes.data ?? []) {
+        const variantCode = String(row.external_variant_code ?? "").trim();
+        if (!variantCode) continue;
+        const delta = Number(row.final_target_additional_amount_krw ?? Number.NaN);
+        if (!Number.isFinite(delta)) continue;
+
+        const masterKey = String(row.master_item_id ?? "").trim();
+        const productNo = String(row.external_product_no ?? "").trim();
+
+        if (masterKey) {
+          const mk = `${masterKey}::${variantCode}`;
+          upsertOverride(variantAdditionalOverrideByMasterVariant, overrideMasterUpdatedAt, mk, delta, row.updated_at);
+        }
+
+        if (productNo) {
+          const pk = `${productNo}::${variantCode}`;
+          upsertOverride(variantAdditionalOverrideByProductVariant, overrideProductUpdatedAt, pk, delta, row.updated_at);
+        }
+      }
+    }
+  }
+
+  const resolveVariantAdditionalOverride = (masterKey: string, productNo: string, variantCode: string): number | undefined => {
+    const byProduct = variantAdditionalOverrideByProductVariant.get(`${productNo}::${variantCode}`);
+    if (Number.isFinite(Number(byProduct))) return Math.round(Number(byProduct));
+    const byMaster = variantAdditionalOverrideByMasterVariant.get(`${masterKey}::${variantCode}`);
+    if (Number.isFinite(Number(byMaster))) return Math.round(Number(byMaster));
+    return undefined;
+  };
+
   if (dryRun) {
     return NextResponse.json({
       ok: true,
@@ -791,6 +905,7 @@ export async function POST(request: Request) {
   const itemRows = [] as Array<Record<string, unknown>>;
   const successfulVariantDeltaByProduct = new Map<string, Map<string, number>>();
   const labelDeltaByProduct = new Map<string, Map<string, number>>();
+  const blockedMastersByBaseFailure = new Set<string>();
   let successCount = 0;
   let failedCount = 0;
   let skippedCount = 0;
@@ -915,11 +1030,31 @@ export async function POST(request: Request) {
     const shouldUseFallbackForVariant = Boolean(variantCode)
       && fallbackTarget !== undefined
       && (!hasFiniteRawTarget || rawTarget <= 0);
-    const targetPrice = shouldUseFallbackForVariant
+    let targetPrice = shouldUseFallbackForVariant
       ? Math.round(fallbackTarget)
       : (hasFiniteRawTarget ? Math.round(rawTarget) : Number.NaN);
 
-    if (!Number.isFinite(targetPrice) || targetPrice <= 0) {
+    if (variantCode) {
+      const baseFinalTarget = masterFallbackTarget.get(masterKey);
+      const baseRawTarget = masterBaseRawTarget.get(masterKey);
+      const variantRawTarget = Number(c.target_price_raw_krw);
+      const hasBaseFinal = Number.isFinite(Number(baseFinalTarget ?? Number.NaN));
+      const hasBaseRaw = Number.isFinite(Number(baseRawTarget ?? Number.NaN));
+      const hasVariantRaw = Number.isFinite(variantRawTarget);
+      if (hasBaseFinal && hasBaseRaw && hasVariantRaw) {
+        const baseFinalRounded = Math.round(Number(baseFinalTarget));
+        const rawDelta = Math.round(variantRawTarget - Number(baseRawTarget));
+        if (rawDelta > 0 && targetPrice === baseFinalRounded) {
+          targetPrice = baseFinalRounded + rawDelta;
+        }
+      }
+    }
+
+    const overrideAdditionalForValidation = variantCode
+      ? resolveVariantAdditionalOverride(masterKey, String(c.external_product_no ?? "").trim(), variantCode)
+      : undefined;
+    if ((!Number.isFinite(targetPrice) || targetPrice <= 0) && !Number.isFinite(Number(overrideAdditionalForValidation ?? Number.NaN))) {
+      if (!variantCode && masterKey) blockedMastersByBaseFailure.add(masterKey);
       failedCount += 1;
       itemRows.push({
         job_id: jobId,
@@ -940,7 +1075,33 @@ export async function POST(request: Request) {
       continue;
     }
 
+    if (variantCode && masterKey && blockedMastersByBaseFailure.has(masterKey)) {
+      skippedCount += 1;
+      itemRows.push({
+        job_id: jobId,
+        channel_id: c.channel_id,
+        channel_product_id: c.channel_product_id,
+        master_item_id: c.master_item_id,
+        external_product_no: c.external_product_no,
+        external_variant_code: variantCode,
+        before_price_krw: c.current_channel_price_krw,
+        target_price_krw: targetPrice,
+        after_price_krw: c.current_channel_price_krw,
+        status: "SKIPPED",
+        http_status: null,
+        error_code: "BASE_PRICE_UNSTABLE",
+        error_message: "기준(base) 가격 반영이 안정화되지 않아 variant 반영을 건너뜀",
+        raw_response_json: { blocked_master_item_id: masterKey },
+      });
+      continue;
+    }
+
     let expectedAdditionalAmount: number | undefined;
+    let targetPriceForPush = targetPrice;
+    const overrideAdditionalAmount = variantCode
+      ? resolveVariantAdditionalOverride(masterKey, String(c.external_product_no ?? "").trim(), variantCode)
+      : undefined;
+
     let pushRes = variantCode
       ? await (async () => {
         const baseResolved = await resolveBasePriceForVariantAdditional(externalProductNo, masterKey);
@@ -957,7 +1118,8 @@ export async function POST(request: Request) {
         const preferredBaseForDelta = Number(masterFallbackTarget.get(masterKey));
         const usePreferredBase = mastersWithExplicitBaseRows.has(masterKey) && Number.isFinite(preferredBaseForDelta);
         const baseForDelta = usePreferredBase ? Math.round(preferredBaseForDelta) : baseResolved.basePrice;
-        const additionalAmount = targetPrice - baseForDelta;
+        const additionalAmount = Number.isFinite(Number(overrideAdditionalAmount ?? Number.NaN)) ? Math.round(Number(overrideAdditionalAmount)) : (targetPrice - baseForDelta);
+        targetPriceForPush = baseForDelta + additionalAmount;
         expectedAdditionalAmount = additionalAmount;
         return cafe24UpdateVariantAdditionalAmount(
           account,
@@ -988,7 +1150,8 @@ export async function POST(request: Request) {
             const preferredBaseForDelta = Number(masterFallbackTarget.get(masterKey));
             const usePreferredBase = mastersWithExplicitBaseRows.has(masterKey) && Number.isFinite(preferredBaseForDelta);
             const baseForDelta = usePreferredBase ? Math.round(preferredBaseForDelta) : baseResolved.basePrice;
-            const additionalAmount = targetPrice - baseForDelta;
+            const additionalAmount = Number.isFinite(Number(overrideAdditionalAmount ?? Number.NaN)) ? Math.round(Number(overrideAdditionalAmount)) : (targetPrice - baseForDelta);
+            targetPriceForPush = baseForDelta + additionalAmount;
             expectedAdditionalAmount = additionalAmount;
             return cafe24UpdateVariantAdditionalAmount(
               account,
@@ -1011,7 +1174,7 @@ export async function POST(request: Request) {
           accessToken,
           String(c.external_product_no),
           variantCode,
-          targetPrice,
+          targetPriceForPush,
           expectedAdditionalAmount,
         )
         : await verifyAppliedPrice(account, accessToken, String(c.external_product_no), targetPrice);
@@ -1028,7 +1191,7 @@ export async function POST(request: Request) {
             if (base.ok && base.currentPriceKrw !== null) basePriceForDelta = base.currentPriceKrw;
           }
           if (basePriceForDelta !== null) {
-            const delta = Math.round(targetPrice - basePriceForDelta);
+            const delta = Math.round(targetPriceForPush - basePriceForDelta);
             const byVariant = successfulVariantDeltaByProduct.get(String(c.external_product_no)) ?? new Map<string, number>();
             byVariant.set(variantCode, delta);
             successfulVariantDeltaByProduct.set(String(c.external_product_no), byVariant);
@@ -1042,8 +1205,8 @@ export async function POST(request: Request) {
           external_product_no: c.external_product_no,
           external_variant_code: variantCode,
           before_price_krw: c.current_channel_price_krw,
-          target_price_krw: targetPrice,
-          after_price_krw: verify.current ?? targetPrice,
+          target_price_krw: variantCode ? targetPriceForPush : targetPrice,
+          after_price_krw: verify.current ?? (variantCode ? targetPriceForPush : targetPrice),
           status: "SUCCESS",
           http_status: pushRes.status,
           error_code: null,
@@ -1055,7 +1218,8 @@ export async function POST(request: Request) {
         if (variantCode) {
           const retryBase = await resolveBasePriceForVariantAdditional(externalProductNo, masterKey);
           if (retryBase.ok) {
-            expectedAdditionalAmount = targetPrice - retryBase.basePrice;
+            expectedAdditionalAmount = Number.isFinite(Number(overrideAdditionalAmount ?? Number.NaN)) ? Math.round(Number(overrideAdditionalAmount)) : (targetPrice - retryBase.basePrice);
+            targetPriceForPush = retryBase.basePrice + expectedAdditionalAmount;
             const retryPush = await cafe24UpdateVariantAdditionalAmount(
               account,
               accessToken,
@@ -1069,7 +1233,7 @@ export async function POST(request: Request) {
                 accessToken,
                 String(c.external_product_no),
                 variantCode,
-                targetPrice,
+                targetPriceForPush,
                 expectedAdditionalAmount,
               );
               if (retryVerify.ok) {
@@ -1082,8 +1246,8 @@ export async function POST(request: Request) {
                   external_product_no: c.external_product_no,
                   external_variant_code: variantCode,
                   before_price_krw: c.current_channel_price_krw,
-                  target_price_krw: targetPrice,
-                  after_price_krw: retryVerify.current ?? targetPrice,
+                  target_price_krw: variantCode ? targetPriceForPush : targetPrice,
+                  after_price_krw: retryVerify.current ?? (variantCode ? targetPriceForPush : targetPrice),
                   status: "SUCCESS",
                   http_status: retryPush.status,
                   error_code: null,
@@ -1112,8 +1276,8 @@ export async function POST(request: Request) {
                 external_product_no: c.external_product_no,
                 external_variant_code: variantCode,
                 before_price_krw: c.current_channel_price_krw,
-                target_price_krw: targetPrice,
-                after_price_krw: retryVerify.current ?? targetPrice,
+                target_price_krw: variantCode ? targetPriceForPush : targetPrice,
+                after_price_krw: retryVerify.current ?? (variantCode ? targetPriceForPush : targetPrice),
                 status: "SUCCESS",
                 http_status: retryPush.status,
                 error_code: null,
@@ -1134,6 +1298,7 @@ export async function POST(request: Request) {
         }
 
         failedCount += 1;
+        if (!variantCode && masterKey) blockedMastersByBaseFailure.add(masterKey);
         itemRows.push({
           job_id: jobId,
           channel_id: c.channel_id,
@@ -1142,7 +1307,7 @@ export async function POST(request: Request) {
           external_product_no: c.external_product_no,
           external_variant_code: variantCode,
           before_price_krw: c.current_channel_price_krw,
-          target_price_krw: targetPrice,
+          target_price_krw: variantCode ? targetPriceForPush : targetPrice,
           after_price_krw: verify.current ?? c.current_channel_price_krw,
           status: "FAILED",
           http_status: verify.status || pushRes.status,
@@ -1156,6 +1321,7 @@ export async function POST(request: Request) {
       const noApiFound = /no api found/i.test(pushErrorMessage);
       const itemStatus = "FAILED";
       failedCount += 1;
+      if (!variantCode && masterKey) blockedMastersByBaseFailure.add(masterKey);
       itemRows.push({
         job_id: jobId,
         channel_id: c.channel_id,
@@ -1164,7 +1330,7 @@ export async function POST(request: Request) {
         external_product_no: c.external_product_no,
         external_variant_code: variantCode,
         before_price_krw: c.current_channel_price_krw,
-        target_price_krw: targetPrice,
+        target_price_krw: variantCode ? targetPriceForPush : targetPrice,
         after_price_krw: c.current_channel_price_krw,
         status: itemStatus,
         http_status: pushRes.status,
@@ -1190,15 +1356,38 @@ export async function POST(request: Request) {
       const masterKey = String(c.master_item_id ?? "").trim();
       if (!externalProductNo || !masterKey) continue;
 
+      const overrideAdditionalAmount = resolveVariantAdditionalOverride(masterKey, externalProductNo, variantCode);
+      if (Number.isFinite(Number(overrideAdditionalAmount ?? Number.NaN))) {
+        const byVariant = labelDeltaByProduct.get(externalProductNo) ?? new Map<string, number>();
+        byVariant.set(variantCode, Math.round(Number(overrideAdditionalAmount)));
+        labelDeltaByProduct.set(externalProductNo, byVariant);
+        continue;
+      }
+
       const rawTarget = Number(c.final_target_price_krw);
       const fallbackTarget = masterFallbackTarget.get(masterKey);
       const hasFiniteRawTarget = Number.isFinite(rawTarget);
       const shouldUseFallbackForVariant = Boolean(variantCode)
         && fallbackTarget !== undefined
         && (!hasFiniteRawTarget || rawTarget <= 0);
-      const targetPrice = shouldUseFallbackForVariant
+      let targetPrice = shouldUseFallbackForVariant
         ? Math.round(fallbackTarget)
         : (hasFiniteRawTarget ? Math.round(rawTarget) : Number.NaN);
+      if (variantCode) {
+        const baseFinalTarget = masterFallbackTarget.get(masterKey);
+        const baseRawTarget = masterBaseRawTarget.get(masterKey);
+        const variantRawTarget = Number(c.target_price_raw_krw);
+        const hasBaseFinal = Number.isFinite(Number(baseFinalTarget ?? Number.NaN));
+        const hasBaseRaw = Number.isFinite(Number(baseRawTarget ?? Number.NaN));
+        const hasVariantRaw = Number.isFinite(variantRawTarget);
+        if (hasBaseFinal && hasBaseRaw && hasVariantRaw) {
+          const baseFinalRounded = Math.round(Number(baseFinalTarget));
+          const rawDelta = Math.round(variantRawTarget - Number(baseRawTarget));
+          if (rawDelta > 0 && targetPrice === baseFinalRounded) {
+            targetPrice = baseFinalRounded + rawDelta;
+          }
+        }
+      }
       if (!Number.isFinite(targetPrice) || targetPrice <= 0) continue;
 
       let basePriceForDelta: number | null = Number.isFinite(Number(masterFallbackTarget.get(masterKey) ?? Number.NaN))

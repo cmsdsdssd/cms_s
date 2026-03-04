@@ -226,7 +226,7 @@ export async function POST(_request: Request, { params }: Params) {
 
       const itemRes = await sb
         .from("price_sync_job_item")
-        .select("channel_product_id, master_item_id, external_variant_code, status, http_status, error_code, error_message, raw_response_json")
+        .select("channel_product_id, master_item_id, external_variant_code, before_price_krw, target_price_krw, after_price_krw, status, http_status, error_code, error_message, raw_response_json")
         .eq("job_id", jobId);
       if (itemRes.error) return jsonError(itemRes.error.message ?? "push item 조회 실패", 500);
 
@@ -287,6 +287,10 @@ export async function POST(_request: Request, { params }: Params) {
           {
             ...(item.raw_response_json && typeof item.raw_response_json === "object" ? (item.raw_response_json as Record<string, unknown>) : { raw: item.raw_response_json ?? null }),
             ...(itemErrorCode ? { error_code: itemErrorCode } : {}),
+            sync_job_id: jobId,
+            applied_before_price_krw: item.before_price_krw,
+            applied_target_price_krw: item.target_price_krw,
+            applied_after_price_krw: item.after_price_krw,
           },
         );
       }

@@ -38,10 +38,29 @@ const toPositiveInt = (value: unknown, fallback: number, max = 10000): number =>
   return Math.max(1, Math.min(max, Math.floor(n)));
 };
 
+const toBool = (value: unknown): boolean => {
+  if (typeof value === "boolean") return value;
+  const normalized = String(value ?? "").trim().toLowerCase();
+  return normalized === "1" || normalized === "true" || normalized === "y" || normalized === "yes";
+};
+
 const resolveRunningStaleWindowMs = (): number => {
   const staleMinutes = toPositiveInt(process.env.SHOP_SYNC_RUNNING_STALE_MINUTES, 360, 7 * 24 * 60);
   return staleMinutes * 60 * 1000;
 };
+
+const resolveIntervalEarlyGraceMs = (): number => {
+  const graceSeconds = toPositiveInt(process.env.SHOP_SYNC_INTERVAL_EARLY_GRACE_SECONDS, 30, 300);
+  return graceSeconds * 1000;
+};
+const resolveDefaultIntervalMinutes = (): number => {
+  return toPositiveInt(process.env.SHOP_SYNC_DEFAULT_INTERVAL_MINUTES, 60, 24 * 60);
+};
+
+const resolveMinChangeThresholdKrw = (): number => {
+  return toPositiveInt(process.env.SHOP_SYNC_MIN_CHANGE_KRW, 5000, 10_000_000);
+};
+
 
 const chunkArray = <T,>(items: T[], chunkSize: number): T[][] => {
   if (items.length === 0) return [];
@@ -97,8 +116,15 @@ export async function POST(request: Request) {
   const channelId = String(body.channel_id ?? "").trim();
   if (!channelId) return jsonError("channel_id is required", 400);
 
-  const intervalRaw = Number(body.interval_minutes ?? 20);
-  const intervalMinutes = Number.isFinite(intervalRaw) ? Math.max(1, Math.min(60, Math.floor(intervalRaw))) : 20;
+  const intervalRaw = Number(body.interval_minutes ?? resolveDefaultIntervalMinutes());
+  const intervalMinutes = Number.isFinite(intervalRaw)
+    ? Math.max(1, Math.min(24 * 60, Math.floor(intervalRaw)))
+    : resolveDefaultIntervalMinutes();
+  const minChangeRaw = Number(body.min_change_krw ?? resolveMinChangeThresholdKrw());
+  const minChangeKrw = Number.isFinite(minChangeRaw)
+    ? Math.max(0, Math.min(10_000_000, Math.round(minChangeRaw)))
+    : resolveMinChangeThresholdKrw();
+  const forceFullSync = toBool(body.force_full_sync ?? false);
   const runningStaleWindowMs = resolveRunningStaleWindowMs();
   const triggerType = String(body.trigger_type ?? "AUTO").trim().toUpperCase() === "MANUAL" ? "MANUAL" : "AUTO";
   const masterItemIds = parseUuidArray(body.master_item_ids);
@@ -148,7 +174,11 @@ export async function POST(request: Request) {
     if (startedAtMs !== null) {
       const elapsedMs = nowMs - startedAtMs;
       const intervalWindowMs = intervalMinutes * 60 * 1000;
-      if (elapsedMs >= 0 && elapsedMs < intervalWindowMs) {
+      const intervalEarlyGraceMs = Math.min(
+        resolveIntervalEarlyGraceMs(),
+        Math.max(0, Math.floor(intervalWindowMs * 0.1)),
+      );
+      if (!forceFullSync && elapsedMs >= 0 && (elapsedMs + intervalEarlyGraceMs) < intervalWindowMs) {
         return NextResponse.json(
           {
             ok: true,
@@ -157,6 +187,7 @@ export async function POST(request: Request) {
             skip_reason: "INTERVAL_NOT_ELAPSED",
             interval_minutes: intervalMinutes,
             elapsed_minutes: Math.floor(elapsedMs / 60000),
+            interval_early_grace_seconds: Math.floor(intervalEarlyGraceMs / 1000),
           },
           { headers: { "Cache-Control": "no-store" } },
         );
@@ -178,6 +209,12 @@ export async function POST(request: Request) {
     return jsonError("자동동기화 대상 compute_request_id가 없습니다. 먼저 재계산을 실행하세요", 422);
   }
 
+  const runRequestPayload: Record<string, unknown> = {
+    ...body,
+    interval_minutes: intervalMinutes,
+    min_change_krw: minChangeKrw,
+  };
+
   const runInsertRes = await sb
     .from("price_sync_run_v2")
     .insert({
@@ -186,7 +223,7 @@ export async function POST(request: Request) {
       interval_minutes: intervalMinutes,
       trigger_type: triggerType,
       status: "RUNNING",
-      request_payload: body,
+      request_payload: runRequestPayload,
       started_at: new Date().toISOString(),
     })
     .select("run_id")
@@ -306,8 +343,29 @@ export async function POST(request: Request) {
     },
   ]));
 
+  const currentRows: Array<{ channel_product_id: string | null; current_price_krw: number | null }> = [];
+  for (const idChunk of chunkArray(snapshotChannelProductIds, IN_QUERY_CHUNK_SIZE)) {
+    if (idChunk.length === 0) continue;
+    const currentRes = await sb
+      .from("channel_price_snapshot_latest")
+      .select("channel_product_id, current_price_krw")
+      .eq("channel_id", channelId)
+      .in("channel_product_id", idChunk);
+    if (currentRes.error) return jsonError(currentRes.error.message ?? "현재가 스냅샷 조회 실패", 500);
+    currentRows.push(...(currentRes.data ?? []));
+  }
+  const currentByChannelProduct = new Map<string, number>();
+  for (const row of currentRows) {
+    const key = String(row.channel_product_id ?? "").trim();
+    if (!key || currentByChannelProduct.has(key)) continue;
+    const current = Number(row.current_price_krw ?? Number.NaN);
+    if (Number.isFinite(current)) currentByChannelProduct.set(key, Math.round(current));
+  }
+
   const intentRows: Array<Record<string, unknown>> = [];
   const taskRows: Array<Record<string, unknown>> = [];
+  let thresholdFilteredCount = 0;
+  let thresholdEvaluatedCount = 0;
   const dedupeByLogicalTarget = new Map<
     string,
     {
@@ -329,6 +387,15 @@ export async function POST(request: Request) {
     const target = Math.round(Number(row.final_target_price_krw ?? 0));
     const desired = Math.max(target, floorPrice);
     if (!(desired > 0)) continue;
+
+    const currentPrice = currentByChannelProduct.get(channelProductId);
+    if (triggerType === "AUTO" && !forceFullSync && Number.isFinite(Number(currentPrice ?? Number.NaN))) {
+      thresholdEvaluatedCount += 1;
+      if (Math.abs(desired - Math.round(Number(currentPrice))) < minChangeKrw) {
+        thresholdFilteredCount += 1;
+        continue;
+      }
+    }
 
     const intentId = crypto.randomUUID();
     const computeRequestId = String(row.compute_request_id ?? "").trim();
@@ -416,11 +483,34 @@ export async function POST(request: Request) {
   }
 
   if (intentRows.length === 0) {
+    const reason = thresholdFilteredCount > 0 ? "NO_INTENTS_AFTER_MIN_CHANGE_THRESHOLD" : "NO_INTENTS";
     await sb
       .from("price_sync_run_v2")
-      .update({ status: "SUCCESS", total_count: 0, finished_at: new Date().toISOString() })
+      .update({
+        status: "SUCCESS",
+        total_count: 0,
+        finished_at: new Date().toISOString(),
+        request_payload: {
+          ...runRequestPayload,
+          summary: {
+            threshold_min_change_krw: minChangeKrw,
+            threshold_evaluated_count: thresholdEvaluatedCount,
+            threshold_filtered_count: thresholdFilteredCount,
+            force_full_sync: forceFullSync,
+          },
+        },
+      })
       .eq("run_id", runId);
-    return NextResponse.json({ ok: true, run_id: runId, total_count: 0, reason: "NO_INTENTS" }, { headers: { "Cache-Control": "no-store" } });
+    return NextResponse.json({
+      ok: true,
+      run_id: runId,
+      total_count: 0,
+      reason,
+      threshold_min_change_krw: minChangeKrw,
+      threshold_evaluated_count: thresholdEvaluatedCount,
+      threshold_filtered_count: thresholdFilteredCount,
+      force_full_sync: forceFullSync,
+    }, { headers: { "Cache-Control": "no-store" } });
   }
 
   for (const chunk of chunkArray(intentRows, INSERT_CHUNK_SIZE)) {
@@ -449,7 +539,19 @@ export async function POST(request: Request) {
 
   await sb
     .from("price_sync_run_v2")
-    .update({ total_count: intentRows.length, updated_at: new Date().toISOString() })
+    .update({
+      total_count: intentRows.length,
+      updated_at: new Date().toISOString(),
+      request_payload: {
+        ...runRequestPayload,
+        summary: {
+          threshold_min_change_krw: minChangeKrw,
+          threshold_evaluated_count: thresholdEvaluatedCount,
+          threshold_filtered_count: thresholdFilteredCount,
+          force_full_sync: forceFullSync,
+        },
+      },
+    })
     .eq("run_id", runId);
 
   return NextResponse.json(
@@ -459,6 +561,10 @@ export async function POST(request: Request) {
       total_count: intentRows.length,
       floor_applied_count: intentRows.filter((row) => row.floor_applied === true).length,
       compute_request_ids: computeIds,
+      threshold_min_change_krw: minChangeKrw,
+      threshold_evaluated_count: thresholdEvaluatedCount,
+      threshold_filtered_count: thresholdFilteredCount,
+      force_full_sync: forceFullSync,
     },
     { headers: { "Cache-Control": "no-store" } },
   );

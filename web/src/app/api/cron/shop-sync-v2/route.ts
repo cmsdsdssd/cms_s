@@ -25,9 +25,80 @@ const toPositiveInt = (value: unknown, fallback: number, max = 10000): number =>
   return Math.max(1, Math.min(max, Math.floor(n)));
 };
 
+const toIntInRange = (value: unknown, fallback: number, min: number, max: number): number => {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(min, Math.min(max, Math.floor(n)));
+};
+
 const resolveRunningStaleWindowMs = (): number => {
   const staleMinutes = toPositiveInt(process.env.SHOP_SYNC_RUNNING_STALE_MINUTES, 360, 7 * 24 * 60);
   return staleMinutes * 60 * 1000;
+};
+
+const resolveIntervalEarlyGraceMs = (): number => {
+  const graceSeconds = toPositiveInt(process.env.SHOP_SYNC_INTERVAL_EARLY_GRACE_SECONDS, 30, 300);
+  return graceSeconds * 1000;
+};
+
+const resolveDefaultIntervalMinutes = (): number => {
+  return toPositiveInt(process.env.SHOP_SYNC_DEFAULT_INTERVAL_MINUTES, 5, 24 * 60);
+};
+
+const resolveForcedIntervalMinutes = (): number => {
+  return toPositiveInt(process.env.SHOP_SYNC_FORCE_INTERVAL_MINUTES, 5, 24 * 60);
+};
+
+const resolvePolicyTimezone = (): string => {
+  const raw = String(process.env.SHOP_SYNC_POLICY_TIMEZONE ?? "").trim();
+  return raw || "Asia/Seoul";
+};
+
+const resolveDailyFullSyncHour = (): number => {
+  return toIntInRange(process.env.SHOP_SYNC_DAILY_FULL_SYNC_HOUR, 0, 0, 23);
+};
+
+const resolveDailyFullSyncWindowMinutes = (): number => {
+  return toPositiveInt(process.env.SHOP_SYNC_DAILY_FULL_SYNC_WINDOW_MINUTES, 15, 180);
+};
+
+const toBool = (value: unknown): boolean => {
+  if (typeof value === "boolean") return value;
+  const normalized = String(value ?? "").trim().toLowerCase();
+  return normalized === "1" || normalized === "true" || normalized === "y" || normalized === "yes";
+};
+
+const getLocalTimeParts = (date: Date, timeZone: string): { dateKey: string; hour: number; minute: number } => {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(date);
+
+  const byType = new Map(parts.map((part) => [part.type, part.value]));
+  const year = String(byType.get("year") ?? "").trim();
+  const month = String(byType.get("month") ?? "").trim();
+  const day = String(byType.get("day") ?? "").trim();
+  const hour = Number(byType.get("hour") ?? Number.NaN);
+  const minute = Number(byType.get("minute") ?? Number.NaN);
+
+  if (year && month && day && Number.isFinite(hour) && Number.isFinite(minute)) {
+    return {
+      dateKey: `${year}-${month}-${day}`,
+      hour: Math.max(0, Math.min(23, Math.floor(hour))),
+      minute: Math.max(0, Math.min(59, Math.floor(minute))),
+    };
+  }
+
+  return {
+    dateKey: date.toISOString().slice(0, 10),
+    hour: date.getUTCHours(),
+    minute: date.getUTCMinutes(),
+  };
 };
 
 const toMs = (value: unknown): number | null => {
@@ -109,18 +180,27 @@ function parseInput(request: Request, bodyObj: Record<string, unknown>) {
   const intervalRaw = Number(
     bodyObj.interval_minutes
     ?? searchParams.get("interval_minutes")
-    ?? 20,
+    ?? resolveDefaultIntervalMinutes(),
   );
-  const intervalMinutes = Number.isFinite(intervalRaw) ? Math.max(1, Math.min(60, Math.floor(intervalRaw))) : 20;
+  const requestedIntervalMinutes = Number.isFinite(intervalRaw)
+    ? Math.max(1, Math.min(24 * 60, Math.floor(intervalRaw)))
+    : resolveDefaultIntervalMinutes();
+  const intervalMinutes = resolveForcedIntervalMinutes();
 
-  return { channelId, intervalMinutes };
+  const forceFullSyncRequested = toBool(
+    bodyObj.force_full_sync
+    ?? searchParams.get("force_full_sync")
+    ?? false,
+  );
+
+  return { channelId, intervalMinutes, requestedIntervalMinutes, forceFullSyncRequested };
 }
 
 async function runCron(request: Request) {
   const body = await request.json().catch(() => ({}));
   const bodyObj = typeof body === "object" && body && !Array.isArray(body) ? (body as Record<string, unknown>) : {};
 
-  let input: { channelId: string; intervalMinutes: number };
+  let input: { channelId: string; intervalMinutes: number; requestedIntervalMinutes: number; forceFullSyncRequested: boolean };
   try {
     input = parseInput(request, bodyObj);
   } catch (err) {
@@ -128,13 +208,23 @@ async function runCron(request: Request) {
     return bad(err instanceof Error ? err.message : "invalid request", status);
   }
 
-  const { channelId, intervalMinutes } = input;
+  const { channelId, intervalMinutes, requestedIntervalMinutes, forceFullSyncRequested } = input;
   const runningStaleWindowMs = resolveRunningStaleWindowMs();
   const executeRoundLimit = toPositiveInt(process.env.SHOP_SYNC_EXECUTE_MAX_ROUNDS, 12, 200);
   const executeIntentBatchSize = toPositiveInt(process.env.SHOP_SYNC_EXECUTE_INTENT_BATCH_SIZE, 300, 5000);
   const pushChunkSize = toPositiveInt(process.env.SHOP_SYNC_PUSH_CHUNK_SIZE, 150, 1000);
   const sb = getShopAdminClient();
-  if (!sb) return bad("Supabase server env missing", 500);
+  if (!sb) {
+    return NextResponse.json(
+      {
+        ok: false,
+        error: "Supabase server env missing",
+        has_next_public_supabase_url: Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL),
+        has_supabase_service_role_key: Boolean(process.env.SUPABASE_SERVICE_ROLE_KEY),
+      },
+      { status: 500, headers: { "Cache-Control": "no-store" } },
+    );
+  }
 
   const runningRes = await sb
     .from("price_sync_run_v2")
@@ -166,6 +256,7 @@ async function runCron(request: Request) {
           mode: "AUTO_SYNC_V2",
           channel_id: channelId,
           interval_minutes: intervalMinutes,
+          requested_interval_minutes: requestedIntervalMinutes,
           skipped: true,
           skip_reason: "OVERLAP_RUNNING",
           running_stale_minutes: Math.floor(runningStaleWindowMs / 60000),
@@ -178,7 +269,7 @@ async function runCron(request: Request) {
 
   const recentRes = await sb
     .from("price_sync_run_v2")
-    .select("run_id, status, started_at, error_message")
+    .select("run_id, status, started_at, error_message, request_payload")
     .eq("channel_id", channelId)
     .in("status", ["SUCCESS", "PARTIAL", "FAILED", "CANCELLED"])
     .order("started_at", { ascending: false })
@@ -187,21 +278,39 @@ async function runCron(request: Request) {
     return bad(recentRes.error.message ?? "최근 run 조회 실패", 500);
   }
 
+  const policyTimezone = resolvePolicyTimezone();
+  const nowLocal = getLocalTimeParts(new Date(), policyTimezone);
+  const isDailyWindow = nowLocal.hour === resolveDailyFullSyncHour()
+    && nowLocal.minute < resolveDailyFullSyncWindowMinutes();
+  const hasDailyFullSyncToday = (recentRes.data ?? []).some((row) => {
+    if (isCronTickError((row as { error_message?: unknown }).error_message)) return false;
+    const payload = (row as { request_payload?: unknown }).request_payload;
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
+    const payloadObj = payload as Record<string, unknown>;
+    return toBool(payloadObj.daily_full_sync) && String(payloadObj.daily_full_sync_date ?? "").trim() === nowLocal.dateKey;
+  });
+  const forceFullSync = forceFullSyncRequested || (isDailyWindow && !hasDailyFullSyncToday);
+
   const recent = (recentRes.data ?? []).find((row) => !isCronTickError((row as { error_message?: unknown }).error_message));
   if (recent) {
     const startedAtMs = toMs((recent as { started_at?: unknown }).started_at);
     if (startedAtMs !== null) {
       const elapsedMs = Date.now() - startedAtMs;
       const intervalWindowMs = intervalMinutes * 60 * 1000;
-      if (elapsedMs >= 0 && elapsedMs < intervalWindowMs) {
+      const intervalEarlyGraceMs = Math.min(
+        resolveIntervalEarlyGraceMs(),
+        Math.max(0, Math.floor(intervalWindowMs * 0.1)),
+      );
+      if (!forceFullSync && elapsedMs >= 0 && (elapsedMs + intervalEarlyGraceMs) < intervalWindowMs) {
         const recentRunId = String((recent as { run_id?: unknown }).run_id ?? "").trim() || null;
         const elapsedMinutes = Math.floor(elapsedMs / 60000);
+        const graceSeconds = Math.floor(intervalEarlyGraceMs / 1000);
         await recordCronTickRun(sb, {
           channelId,
           intervalMinutes,
           reason: "INTERVAL_NOT_ELAPSED",
           relatedRunId: recentRunId,
-          detail: { elapsed_minutes: elapsedMinutes },
+          detail: { elapsed_minutes: elapsedMinutes, interval_early_grace_seconds: graceSeconds },
         });
         return NextResponse.json(
           {
@@ -209,9 +318,11 @@ async function runCron(request: Request) {
             mode: "AUTO_SYNC_V2",
             channel_id: channelId,
             interval_minutes: intervalMinutes,
+            requested_interval_minutes: requestedIntervalMinutes,
             skipped: true,
             skip_reason: "INTERVAL_NOT_ELAPSED",
             elapsed_minutes: elapsedMinutes,
+            interval_early_grace_seconds: graceSeconds,
             run_id: recentRunId,
           },
           { headers: { "Cache-Control": "no-store" } },
@@ -243,6 +354,9 @@ async function runCron(request: Request) {
       channel_id: channelId,
       interval_minutes: intervalMinutes,
       trigger_type: "AUTO",
+      force_full_sync: forceFullSync,
+      daily_full_sync: forceFullSync,
+      daily_full_sync_date: forceFullSync ? nowLocal.dateKey : undefined,
       compute_request_id: String((recomputeJson as { compute_request_id?: unknown }).compute_request_id ?? "").trim() || undefined,
     }),
   );
@@ -277,6 +391,8 @@ async function runCron(request: Request) {
         run: runCreateJson,
         skipped: true,
         skip_reason: skipReason || "RUN_SKIPPED",
+        force_full_sync: forceFullSync,
+        daily_full_sync_date: forceFullSync ? nowLocal.dateKey : null,
       },
       { headers: { "Cache-Control": "no-store" } },
     );
@@ -323,6 +439,8 @@ async function runCron(request: Request) {
       recompute: recomputeJson,
       run: runCreateJson,
       execute: executeJson,
+      force_full_sync: forceFullSync,
+      daily_full_sync_date: forceFullSync ? nowLocal.dateKey : null,
       execute_rounds: executeSnapshots,
       execute_round_limit: executeRoundLimit,
       execute_intent_batch_size: executeIntentBatchSize,

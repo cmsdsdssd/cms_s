@@ -4,6 +4,13 @@ import { getShopAdminClient, jsonError } from "@/lib/shop/admin";
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
+const chunkArray = <T,>(items: T[], chunkSize: number): T[][] => {
+  if (items.length === 0) return [];
+  const out: T[][] = [];
+  for (let i = 0; i < items.length; i += chunkSize) out.push(items.slice(i, i + chunkSize));
+  return out;
+};
+
 type DashboardRow = {
   channel_id: string;
   channel_product_id: string;
@@ -168,6 +175,98 @@ export async function GET(request: Request) {
         if (row.material_code) continue;
         const key = String(row.master_item_id ?? "").trim();
         row.material_code = masterMaterialById.get(key) ?? null;
+      }
+
+      const stateRows: Array<{
+        master_item_id: string | null;
+        external_product_no: string | null;
+        external_variant_code: string | null;
+        final_target_additional_amount_krw: number | null;
+      }> = [];
+      for (const masterChunk of chunkArray(masterIds, 500)) {
+        if (masterChunk.length === 0) continue;
+        const stateRes = await sb
+          .from("channel_option_current_state_v1")
+          .select("master_item_id, external_product_no, external_variant_code, final_target_additional_amount_krw, updated_at")
+          .eq("channel_id", channelId)
+          .in("master_item_id", masterChunk)
+          .order("updated_at", { ascending: false });
+        if (stateRes.error) {
+          return jsonError(stateRes.error.message ?? "옵션 현재상태 조회 실패", 500);
+        }
+        stateRows.push(...((stateRes.data ?? []) as typeof stateRows));
+      }
+
+      const desiredAdditionalByMasterVariant = new Map<string, number>();
+      const desiredAdditionalByProductVariant = new Map<string, number>();
+      for (const row of stateRows) {
+        const variantCode = String(row.external_variant_code ?? "").trim();
+        if (!variantCode) continue;
+        const delta = Number(row.final_target_additional_amount_krw ?? Number.NaN);
+        if (!Number.isFinite(delta)) continue;
+        const roundedDelta = Math.round(delta);
+
+        const masterKey = String(row.master_item_id ?? "").trim();
+        if (masterKey) {
+          const key = `${masterKey}::${variantCode}`;
+          if (!desiredAdditionalByMasterVariant.has(key)) desiredAdditionalByMasterVariant.set(key, roundedDelta);
+        }
+
+        const productNo = String(row.external_product_no ?? "").trim();
+        if (productNo) {
+          const key = `${productNo}::${variantCode}`;
+          if (!desiredAdditionalByProductVariant.has(key)) desiredAdditionalByProductVariant.set(key, roundedDelta);
+        }
+      }
+
+      const baseCurrentByMaster = new Map<string, number>();
+      const baseCurrentByProduct = new Map<string, number>();
+      for (const row of mappedRows) {
+        const variantCode = String(row.external_variant_code ?? "").trim();
+        if (variantCode) continue;
+        const current = Number(row.current_channel_price_krw ?? Number.NaN);
+        if (!Number.isFinite(current)) continue;
+        const roundedCurrent = Math.round(current);
+
+        const masterKey = String(row.master_item_id ?? "").trim();
+        if (masterKey && !baseCurrentByMaster.has(masterKey)) {
+          baseCurrentByMaster.set(masterKey, roundedCurrent);
+        }
+        const productNo = String(row.external_product_no ?? "").trim();
+        if (productNo && !baseCurrentByProduct.has(productNo)) {
+          baseCurrentByProduct.set(productNo, roundedCurrent);
+        }
+      }
+
+      for (const row of mappedRows) {
+        const variantCode = String(row.external_variant_code ?? "").trim();
+        if (!variantCode) continue;
+
+        const masterKey = String(row.master_item_id ?? "").trim();
+        const productNo = String(row.external_product_no ?? "").trim();
+        const desiredAdditional = desiredAdditionalByMasterVariant.get(`${masterKey}::${variantCode}`)
+          ?? desiredAdditionalByProductVariant.get(`${productNo}::${variantCode}`);
+        if (!Number.isFinite(Number(desiredAdditional ?? Number.NaN))) continue;
+
+        const baseCurrent = baseCurrentByMaster.get(masterKey) ?? baseCurrentByProduct.get(productNo);
+        if (!Number.isFinite(Number(baseCurrent ?? Number.NaN))) continue;
+
+        const nextTarget = Math.round(Number(baseCurrent) + Number(desiredAdditional));
+        row.final_target_price_krw = nextTarget;
+
+        const current = Number(row.current_channel_price_krw ?? Number.NaN);
+        if (!Number.isFinite(current)) {
+          row.diff_krw = null;
+          row.diff_pct = null;
+          row.price_state = "ERROR";
+          continue;
+        }
+
+        const roundedCurrent = Math.round(current);
+        const diff = nextTarget - roundedCurrent;
+        row.diff_krw = diff;
+        row.diff_pct = roundedCurrent === 0 ? null : diff / roundedCurrent;
+        row.price_state = Math.abs(diff) >= 1 ? "OUT_OF_SYNC" : "OK";
       }
     }
   }

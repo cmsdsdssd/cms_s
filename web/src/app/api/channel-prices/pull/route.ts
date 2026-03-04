@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getShopAdminClient, jsonError, parseJsonObject, parseUuidArray } from "@/lib/shop/admin";
 import {
   cafe24GetProductPrice,
+  cafe24GetVariantPrice,
   ensureValidCafe24AccessToken,
   loadCafe24Account,
 } from "@/lib/shop/cafe24";
@@ -49,6 +50,7 @@ export async function POST(request: Request) {
   let successCount = 0;
   let failedCount = 0;
   const basePriceCache = new Map<string, Awaited<ReturnType<typeof cafe24GetProductPrice>>>();
+  const variantPriceCache = new Map<string, Awaited<ReturnType<typeof cafe24GetVariantPrice>>>();
 
   const rows = [] as Array<Record<string, unknown>>;
 
@@ -57,6 +59,60 @@ export async function POST(request: Request) {
 
     const variantCode = String((m as { external_variant_code?: string | null }).external_variant_code ?? "").trim();
     const productNo = String(m.external_product_no ?? "").trim();
+
+    if (variantCode) {
+      const variantKey = `${productNo}::${variantCode}`;
+      let pull = variantPriceCache.get(variantKey) ?? await cafe24GetVariantPrice(account, accessToken, productNo, variantCode);
+
+      if (!pull.ok && pull.status === 401) {
+        try {
+          accessToken = await ensureValidCafe24AccessToken(sb, account);
+          pull = await cafe24GetVariantPrice(account, accessToken, productNo, variantCode);
+        } catch {
+          // keep original 401 result
+        }
+      }
+
+      variantPriceCache.set(variantKey, pull);
+
+      if (pull.ok) {
+        successCount += 1;
+        rows.push({
+          channel_id: m.channel_id,
+          channel_product_id: m.channel_product_id,
+          master_item_id: m.master_item_id,
+          external_product_no: m.external_product_no,
+          external_variant_code: variantCode,
+          current_price_krw: pull.currentPriceKrw,
+          currency: "KRW",
+          fetched_at: fetchedAt,
+          http_status: pull.status,
+          fetch_status: "SUCCESS",
+          error_code: null,
+          error_message: null,
+          raw_json: pull.raw,
+        });
+      } else {
+        failedCount += 1;
+        rows.push({
+          channel_id: m.channel_id,
+          channel_product_id: m.channel_product_id,
+          master_item_id: m.master_item_id,
+          external_product_no: m.external_product_no,
+          external_variant_code: variantCode,
+          current_price_krw: null,
+          currency: "KRW",
+          fetched_at: fetchedAt,
+          http_status: pull.status,
+          fetch_status: "FAILED",
+          error_code: `HTTP_${pull.status}`,
+          error_message: pull.error ?? "카페24 variant pull 실패",
+          raw_json: pull.raw,
+        });
+      }
+      continue;
+    }
+
     let pull = basePriceCache.get(productNo) ?? await cafe24GetProductPrice(account, accessToken, productNo);
 
     if (!pull.ok && pull.status === 401) {

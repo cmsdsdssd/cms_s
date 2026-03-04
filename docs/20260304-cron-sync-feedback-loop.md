@@ -66,3 +66,27 @@
 - Executed: Investigated `run_id=f1dcbdbe-7881-406a-9c55-8d49b2351fee` full failure and patched `web/src/app/api/channel-prices/push/route.ts` to stop selecting non-existent `pricing_snapshot.external_variant_code`; logical variant key is now derived via `sales_channel_product` join.
 - Result: Root-cause confirmed (`last_error=column pricing_snapshot.external_variant_code does not exist`, 19건) and fixed; re-smoke succeeded (`run_id=348d54cd-e95d-4a9d-ab49-141400f192de`, `success=19`, `failed=0`, `skipped=0`).
 - Next: Keep schema-compatible projection rule (snapshot minimal columns + mapping join) and alert immediately when any run emits SQL-column errors in `price_sync_push_task_v2.last_error`.
+
+
+## Attempt 013
+- Executed: Screenshot case를 실데이터로 대조해 `channel_option_current_state_v1`는 `external_product_no=13`에 저장/VERIFY_FAILED가 누적되고, 활성 매핑은 `sales_channel_product.external_product_no=P000000N`인 분리 상태를 확인한 뒤 `editor POST`에 canonical product 해석(활성 alias 우선) + 상태저장/실반영 대상 통일 로직을 추가했습니다.
+- Result: `web/src/app/api/channel-products/editor/route.ts`가 요청 product_no가 비활성 alias여도 활성 product_no로 정규화해 반영하고, `web/src/app/api/channel-prices/push/route.ts`는 product+variant override를 우선 사용하도록 유지되어 alias flattening 위험을 줄였으며, `npm run build`/`npm run test:shipments-regression` 통과로 코드 안정성 확인했습니다.
+- Next: 다음 cron 실행에서 해당 master(4551f046-607f-4bf0-85db-9eafab542cd0)의 job_item target/after와 storefront additional(0 고정 해소 여부)를 같은 창에서 재검증하고, 필요 시 `channel_option_current_state_v1` 조회 정렬에 `state_id` tie-break를 추가합니다.
+
+
+## Attempt 014
+- Executed: 17:40 run/job/item을 실데이터로 대조해 `run_id=072bffcf-d971-4d25-87d1-183d6efae1a2`, `job_id=a99e0fd6-067f-4aa3-af00-5d4bd2aeb10c`에서 N/O variant가 모두 base target(2,159,000 / 27,000)으로 평탄화됨을 재확인했고, `channel_option_current_state_v1` 저장값이 활성 product_no(`P...`)가 아닌 비활성 alias(`12/13/14`)에 남아있는 분리를 확인했습니다.
+- Result: `channel_option_current_state_v1`를 활성 매핑 키(`P000000M/N/O + variant`)로 16건 canonical upsert해 저장 SoT를 복구했고, 코드에는 `shop-sync-v2` 5분 강제 interval/관측값, `push` variant verify(가격+additional), state 조회 tie-break를 반영했으며 build+회귀테스트 통과했습니다.
+- Next: 운영 인스턴스에서 5분 interval이 실제 적용되도록 배포/환경 반영 후 다음 run에서 M/N/O variant `target_price_krw`가 base와 분리되는지, storefront additional이 0 고정 해소되는지 즉시 검증합니다.
+
+
+## Attempt 015
+- Executed: Cloud Scheduler `shop-sync-10m`를 `*/5` + `interval_minutes=5`로 수정하고, Cloud Run 최신 리비전에 서버용 `SUPABASE_URL` fallback(`src/lib/shop/admin.ts`)과 5분 정책 env를 반영한 뒤 `force_full_sync=true`로 즉시 실행했습니다.
+- Result: `job_id=06905723-4a8b-471c-9377-ebbce27492e5`에서 N/O variant target이 base와 분리되어 평탄화가 해소됨(`P000000N000B=2,128,000`, `P000000O000D=40,000` 등), `flatten_count_n_o=0` 확인; 실패 2건은 M의 `PRODUCT_ENDPOINT_NOT_FOUND`로 별도 이슈입니다.
+- Next: 5분 스케줄 연속 실행에서 N/O가 계속 비평탄 유지되는지 모니터링하고, M의 `PRODUCT_ENDPOINT_NOT_FOUND`(P000000M000C/D) 매핑/엔드포인트 이슈를 분리 조치합니다.
+
+
+## Attempt 016
+- Executed: 운영 배포에서 `Supabase server env missing` 재발 원인을 `NEXT_PUBLIC_SUPABASE_URL` 빌드/런타임 분리 문제로 확정하고, 서버 클라이언트가 `SUPABASE_URL`을 우선 사용하도록 수정(`web/src/lib/shop/admin.ts`) 후 Cloud Run를 build-env/runtime-env/secrets 포함으로 재배포했습니다.
+- Result: cron API 500 해소(`POST /api/cron/shop-sync-v2` 200), 로그인 경로 정상(`GET /login` 200), Scheduler 5분+force_full_sync 연속 실행에서 최신 잡(`2b44a3f8-280f-48cf-aa7e-6e588814af8a`) 기준 N/O 평탄화 0건 확인.
+- Next: M의 잔여 실패(`PRODUCT_ENDPOINT_NOT_FOUND` for P000000M000C/D)를 별도 트랙으로 분리해 매핑/엔드포인트 호환 처리 후 전체 19/0/0 안정화.

@@ -1074,6 +1074,22 @@ export async function cafe24UpdateVariantAdditionalAmount(
             };
             return true;
           }
+
+          const responseMatches = responseAdditional !== null && Math.round(responseAdditional) === asNumber;
+          if (responseMatches) {
+            lastJson = {
+              attempt_key: payload.key,
+              response: json,
+              verify: verifyRaw,
+              response_additional_amount: responseAdditional,
+              verify_additional_amount: verifyAdditionalAmount,
+              verify_expected_additional_amount: asNumber,
+              verify_pending: true,
+              accepted_via_response_amount_match: true,
+            };
+            return true;
+          }
+
           lastJson = {
             attempt_key: payload.key,
             response: json,

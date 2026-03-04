@@ -41,6 +41,10 @@ type RunIntent = {
   reason_code?: string | null;
   reason_label?: string | null;
   task_last_error?: string | null;
+  applied_before_price_krw?: number | null;
+  applied_target_price_krw?: number | null;
+  applied_after_price_krw?: number | null;
+  task_sync_job_id?: string | null;
 };
 
 type ReasonSummaryRow = {
@@ -245,6 +249,10 @@ export default function ShoppingCronRunsPage() {
               </div>
             </div>
 
+            <div className='mb-2 text-xs text-[var(--muted)]'>
+              계산 목표가는 재계산 스냅샷 기준이며, 실반영 목표가/실반영 후는 push 작업 결과 기준입니다.
+            </div>
+
             <div className="max-h-[520px] overflow-auto rounded-[var(--radius)] border border-[var(--hairline)]">
               <table className="w-full text-sm">
                 <thead className="bg-[var(--panel)] text-left">
@@ -252,7 +260,9 @@ export default function ShoppingCronRunsPage() {
                     <th className="px-3 py-2">master_item_id</th>
                     <th className="px-3 py-2">product_no</th>
                     <th className="px-3 py-2">variant_code</th>
-                    <th className="px-3 py-2">목표가</th>
+                    <th className="px-3 py-2">계산 목표가</th>
+                    <th className="px-3 py-2">실반영 목표가</th>
+                    <th className="px-3 py-2">실반영 후</th>
                     <th className="px-3 py-2">바닥가</th>
                     <th className="px-3 py-2">floor_applied</th>
                     <th className="px-3 py-2">상태</th>
@@ -267,6 +277,8 @@ export default function ShoppingCronRunsPage() {
                       <td className="px-3 py-2">{it.external_product_no}</td>
                       <td className="px-3 py-2">{it.external_variant_code || "-"}</td>
                       <td className="px-3 py-2">{fmt(it.desired_price_krw)}</td>
+                      <td className="px-3 py-2">{fmt(it.applied_target_price_krw ?? it.desired_price_krw)}</td>
+                      <td className="px-3 py-2">{fmt(it.applied_after_price_krw)}</td>
                       <td className="px-3 py-2">{fmt(it.floor_price_krw)}</td>
                       <td className="px-3 py-2">{it.floor_applied ? "Y" : "N"}</td>
                       <td className="px-3 py-2">{toIntentStateKo(it.state)}</td>

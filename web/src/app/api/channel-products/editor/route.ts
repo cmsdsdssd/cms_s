@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getShopAdminClient, jsonError, parseJsonObject } from "@/lib/shop/admin";
 import {
   type Cafe24ProductDetailSummary,
+  type Cafe24VariantSummary,
   cafe24GetProductDetail,
   cafe24ListProductVariants,
   cafe24UpdateProductFields,
@@ -78,6 +79,10 @@ const mkJsonRequest = (path: string, payload: Record<string, unknown>): Request 
 const toIntCeilNonNegative = (value: unknown, fallback = 0) => Math.max(0, toIntCeil(value, fallback));
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+const normalizeProductNoCandidates = (values: Array<unknown>): string[] => {
+  return Array.from(new Set(values.map((v) => String(v ?? "").trim()).filter(Boolean)));
+};
+
 function applyExpectedVariantAdditionalToPreview(
   detail: Cafe24ProductDetailSummary,
   expectedByVariant: Map<string, number>,
@@ -152,20 +157,30 @@ function applyExpectedProductFieldsToPreview(
 async function loadDbOptionAdditionalByVariant(
   sb: NonNullable<ReturnType<typeof getShopAdminClient>>,
   channelId: string,
-  externalProductNo: string,
+  externalProductNos: string[],
 ): Promise<Map<string, number>> {
   const map = new Map<string, number>();
-  const stateRes = await sb
+  if (externalProductNos.length === 0) return map;
+
+  let stateQuery = sb
     .from("channel_option_current_state_v1")
-    .select("external_variant_code, final_target_additional_amount_krw")
+    .select("state_id, external_variant_code, final_target_additional_amount_krw, updated_at")
     .eq("channel_id", channelId)
-    .eq("external_product_no", externalProductNo);
+    .order("updated_at", { ascending: false })
+    .order("state_id", { ascending: false });
+  if (externalProductNos.length === 1) {
+    stateQuery = stateQuery.eq("external_product_no", externalProductNos[0]);
+  } else {
+    stateQuery = stateQuery.in("external_product_no", externalProductNos);
+  }
+  const stateRes = await stateQuery;
   if (stateRes.error) {
     throw new Error(stateRes.error.message ?? "current_state 조회 실패");
   }
   for (const row of stateRes.data ?? []) {
     const code = String((row as { external_variant_code?: string | null }).external_variant_code ?? "").trim();
     if (!code) continue;
+    if (map.has(code)) continue;
     const amount = toIntCeil((row as { final_target_additional_amount_krw?: number | null }).final_target_additional_amount_krw ?? Number.NaN, Number.NaN);
     if (!Number.isFinite(amount)) continue;
     map.set(code, amount);
@@ -173,12 +188,17 @@ async function loadDbOptionAdditionalByVariant(
   return map;
 }
 
+type EditorPreviewVariant = Cafe24VariantSummary & { savedTargetAdditionalAmount: number | null };
+
 function applyDbOptionAdditionalToPreview(
   detail: Cafe24ProductDetailSummary,
   dbAdditionalByVariant: Map<string, number>,
-): Cafe24ProductDetailSummary {
-  if (!Array.isArray(detail.variants) || detail.variants.length === 0 || dbAdditionalByVariant.size === 0) {
-    return detail;
+): Cafe24ProductDetailSummary & { variants: EditorPreviewVariant[] } {
+  if (!Array.isArray(detail.variants) || detail.variants.length === 0) {
+    return {
+      ...detail,
+      variants: [],
+    };
   }
 
   const nextVariants = detail.variants.map((variant) => {
@@ -187,11 +207,10 @@ function applyDbOptionAdditionalToPreview(
     const fromCanonical = canonical ? dbAdditionalByVariant.get(canonical) : undefined;
     const fromCustom = custom ? dbAdditionalByVariant.get(custom) : undefined;
     const nextAmount = fromCanonical ?? fromCustom;
-    if (!Number.isFinite(Number(nextAmount))) return variant;
     return {
       ...variant,
-      additionalAmount: toIntCeil(nextAmount),
-    };
+      savedTargetAdditionalAmount: Number.isFinite(Number(nextAmount)) ? toIntCeil(nextAmount) : null,
+    } as EditorPreviewVariant;
   });
 
   return {
@@ -203,7 +222,7 @@ function applyDbOptionAdditionalToPreview(
 async function loadEditorMeta(
   sb: NonNullable<ReturnType<typeof getShopAdminClient>>,
   channelId: string,
-  externalProductNo: string,
+  externalProductNos: string[],
   masterItemId: string,
 ): Promise<EditorMeta> {
   const tickRes = await sb
@@ -212,14 +231,20 @@ async function loadEditorMeta(
     .maybeSingle();
   if (tickRes.error) throw new Error(tickRes.error.message ?? "시세 조회 실패");
 
-  const stateLatestRes = await sb
+  const productNos = normalizeProductNoCandidates(externalProductNos);
+  let stateLatestQuery = sb
     .from("channel_option_current_state_v1")
     .select("exclude_plating_labor, plating_labor_sell_krw, total_labor_sell_krw, floor_price_krw")
     .eq("channel_id", channelId)
-    .eq("external_product_no", externalProductNo)
     .order("updated_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
+    .order("state_id", { ascending: false })
+    .limit(1);
+  if (productNos.length === 1) {
+    stateLatestQuery = stateLatestQuery.eq("external_product_no", productNos[0]);
+  } else if (productNos.length > 1) {
+    stateLatestQuery = stateLatestQuery.in("external_product_no", productNos);
+  }
+  const stateLatestRes = await stateLatestQuery.maybeSingle();
   if (stateLatestRes.error) throw new Error(stateLatestRes.error.message ?? "current_state 조회 실패");
 
   const floorRes = masterItemId
@@ -347,28 +372,53 @@ export async function GET(request: Request) {
     });
   }
 
-  const mappingRes = await sb
+  const requestedProductNo = externalProductNo;
+  const productNoCandidates = normalizeProductNoCandidates([
+    requestedProductNo,
+    detail.data.productNo,
+  ]);
+
+  let mappingQuery = sb
     .from("sales_channel_product")
     .select("master_item_id")
     .eq("channel_id", channelId)
-    .eq("external_product_no", externalProductNo)
     .eq("is_active", true)
     .order("updated_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
+    .limit(1);
+  if (productNoCandidates.length === 1) {
+    mappingQuery = mappingQuery.eq("external_product_no", productNoCandidates[0]);
+  } else {
+    mappingQuery = mappingQuery.in("external_product_no", productNoCandidates);
+  }
+  const mappingRes = await mappingQuery.maybeSingle();
   if (mappingRes.error) return jsonError(mappingRes.error.message ?? "매핑 조회 실패", 500);
   const resolvedMasterItemId = String(mappingRes.data?.master_item_id ?? "").trim();
 
+  if (resolvedMasterItemId) {
+    const aliasRes = await sb
+      .from("sales_channel_product")
+      .select("external_product_no")
+      .eq("channel_id", channelId)
+      .eq("master_item_id", resolvedMasterItemId)
+      .eq("is_active", true);
+    if (!aliasRes.error) {
+      for (const row of aliasRes.data ?? []) {
+        productNoCandidates.push(String((row as { external_product_no?: string | null }).external_product_no ?? "").trim());
+      }
+    }
+  }
+  const normalizedCandidates = normalizeProductNoCandidates(productNoCandidates);
+
   let meta: EditorMeta;
   try {
-    meta = await loadEditorMeta(sb, channelId, externalProductNo, resolvedMasterItemId);
+    meta = await loadEditorMeta(sb, channelId, normalizedCandidates, resolvedMasterItemId);
   } catch (e) {
     return jsonError(e instanceof Error ? e.message : "에디터 메타 조회 실패", 500);
   }
 
   let detailWithDb = detail.data;
   try {
-    const dbAdditionalByVariant = await loadDbOptionAdditionalByVariant(sb, channelId, externalProductNo);
+    const dbAdditionalByVariant = await loadDbOptionAdditionalByVariant(sb, channelId, normalizedCandidates);
     detailWithDb = applyDbOptionAdditionalToPreview(detail.data, dbAdditionalByVariant);
   } catch {
     // fallback to Cafe24 detail when DB overlay read fails
@@ -410,7 +460,7 @@ export async function POST(request: Request) {
       raw: detailBefore.raw,
     });
   }
-  const detailBeforeData = detailBefore.data;
+  let detailBeforeData = detailBefore.data;
 
   const product = parseJsonObject(body.product) ?? {};
   const fields = {
@@ -436,16 +486,17 @@ export async function POST(request: Request) {
 
   const mappingRes = await sb
     .from("sales_channel_product")
-    .select("channel_product_id, master_item_id, external_variant_code, option_material_code, option_size_value, option_color_code, option_decoration_code")
+    .select("channel_product_id, master_item_id, external_product_no, external_variant_code, option_material_code, option_size_value, option_color_code, option_decoration_code")
     .eq("channel_id", channelId)
     .eq("external_product_no", externalProductNo)
     .eq("is_active", true)
     .order("updated_at", { ascending: false });
   if (mappingRes.error) return jsonError(mappingRes.error.message ?? "매핑 조회 실패", 500);
 
-  const mappings = (mappingRes.data ?? []) as Array<{
+  let mappings = (mappingRes.data ?? []) as Array<{
     channel_product_id: string;
     master_item_id: string;
+    external_product_no: string;
     external_variant_code: string | null;
     option_material_code: string | null;
     option_size_value: number | null;
@@ -486,6 +537,94 @@ export async function POST(request: Request) {
     }
   }
 
+  const detailProductNo = String(detailBeforeData.productNo ?? "").trim();
+  const productNoCandidates = normalizeProductNoCandidates([externalProductNo, detailProductNo]);
+  let resolvedExternalProductNo = externalProductNo;
+
+  if (resolvedMasterItemId) {
+    const aliasRes = await sb
+      .from("sales_channel_product")
+      .select("channel_product_id, master_item_id, external_product_no, external_variant_code, option_material_code, option_size_value, option_color_code, option_decoration_code")
+      .eq("channel_id", channelId)
+      .eq("master_item_id", resolvedMasterItemId)
+      .eq("is_active", true)
+      .order("updated_at", { ascending: false });
+    if (aliasRes.error) return jsonError(aliasRes.error.message ?? "활성 별칭 매핑 조회 실패", 500);
+
+    const aliasMappings = (aliasRes.data ?? []) as Array<{
+      channel_product_id: string;
+      master_item_id: string;
+      external_product_no: string;
+      external_variant_code: string | null;
+      option_material_code: string | null;
+      option_size_value: number | null;
+      option_color_code: string | null;
+      option_decoration_code: string | null;
+    }>;
+    if (mappings.length === 0 && aliasMappings.length > 0) {
+      mappings = aliasMappings;
+    }
+    for (const row of aliasMappings) {
+      const productNo = String(row.external_product_no ?? "").trim();
+      if (productNo) productNoCandidates.push(productNo);
+    }
+  }
+
+  const normalizedProductCandidates = normalizeProductNoCandidates(productNoCandidates);
+  if (normalizedProductCandidates.length > 0) {
+    let activeMappingQuery = sb
+      .from("sales_channel_product")
+      .select("channel_product_id, master_item_id, external_product_no, external_variant_code, option_material_code, option_size_value, option_color_code, option_decoration_code")
+      .eq("channel_id", channelId)
+      .eq("is_active", true);
+    if (normalizedProductCandidates.length === 1) {
+      activeMappingQuery = activeMappingQuery.eq("external_product_no", normalizedProductCandidates[0]);
+    } else {
+      activeMappingQuery = activeMappingQuery.in("external_product_no", normalizedProductCandidates);
+    }
+
+    const activeMappingRes = await activeMappingQuery.order("updated_at", { ascending: false });
+    if (activeMappingRes.error) return jsonError(activeMappingRes.error.message ?? "활성 매핑 조회 실패", 500);
+
+    const activeMappings = (activeMappingRes.data ?? []) as Array<{
+      channel_product_id: string;
+      master_item_id: string;
+      external_product_no: string;
+      external_variant_code: string | null;
+      option_material_code: string | null;
+      option_size_value: number | null;
+      option_color_code: string | null;
+      option_decoration_code: string | null;
+    }>;
+
+    if (activeMappings.length > 0) {
+      const activeProductNos = Array.from(
+        new Set(activeMappings.map((row) => String(row.external_product_no ?? "").trim()).filter(Boolean)),
+      );
+      if (activeProductNos.includes(externalProductNo)) {
+        resolvedExternalProductNo = externalProductNo;
+      } else if (detailProductNo && activeProductNos.includes(detailProductNo)) {
+        resolvedExternalProductNo = detailProductNo;
+      } else {
+        resolvedExternalProductNo = activeProductNos.find((value) => /^P/i.test(value)) ?? activeProductNos[0] ?? externalProductNo;
+      }
+
+      const rowsForResolvedProduct = activeMappings.filter(
+        (row) => String(row.external_product_no ?? "").trim() === resolvedExternalProductNo,
+      );
+      if (rowsForResolvedProduct.length > 0) {
+        mappings = rowsForResolvedProduct;
+      }
+    }
+  }
+
+  if (resolvedExternalProductNo !== externalProductNo) {
+    const canonicalDetailBefore = await cafe24GetProductDetail(account, accessToken, resolvedExternalProductNo);
+    if (canonicalDetailBefore.ok && canonicalDetailBefore.data) {
+      detailBeforeData = canonicalDetailBefore.data;
+    }
+  }
+
   if (hasFloorUpdate && resolvedMasterItemId) {
     const actor = "AUTO_PRICE_EDITOR_APPLY";
     const nowIso = new Date().toISOString();
@@ -512,7 +651,7 @@ export async function POST(request: Request) {
   }
 
   const canonicalVariantCodeByAnyCode = new Map<string, string>();
-  const variantsMeta = await cafe24ListProductVariants(account, accessToken, externalProductNo);
+  const variantsMeta = await cafe24ListProductVariants(account, accessToken, resolvedExternalProductNo);
   if (variantsMeta.ok) {
     for (const variant of variantsMeta.variants) {
       const canonical = String(variant.variantCode ?? "").trim();
@@ -587,7 +726,7 @@ export async function POST(request: Request) {
 
   let editorMetaBefore: EditorMeta;
   try {
-    editorMetaBefore = await loadEditorMeta(sb, channelId, externalProductNo, resolvedMasterItemId);
+    editorMetaBefore = await loadEditorMeta(sb, channelId, [resolvedExternalProductNo, externalProductNo], resolvedMasterItemId);
   } catch (e) {
     return jsonError(e instanceof Error ? e.message : "에디터 메타 조회 실패", 500);
   }
@@ -622,7 +761,7 @@ export async function POST(request: Request) {
   }
   fields.price = basePriceResolved;
 
-  const updateProductRes = await cafe24UpdateProductFields(account, accessToken, externalProductNo, fields);
+  const updateProductRes = await cafe24UpdateProductFields(account, accessToken, resolvedExternalProductNo, fields);
   if (!updateProductRes.ok) {
     return jsonError(updateProductRes.error ?? "상품 필드 수정 실패", updateProductRes.status || 500, {
       raw: updateProductRes.raw,
@@ -684,7 +823,7 @@ export async function POST(request: Request) {
       channel_id: channelId,
       channel_product_id: mapping?.channel_product_id || null,
       master_item_id: masterItemId || null,
-      external_product_no: externalProductNo,
+      external_product_no: resolvedExternalProductNo,
       external_variant_code: resolvedVariantCode,
       product_name: detailBeforeData.productName ?? null,
       option_path: variantOptionPathByAnyCode.get(resolvedVariantCode) ?? variantOptionPathByAnyCode.get(patch.variant_code) ?? [],
@@ -762,7 +901,7 @@ export async function POST(request: Request) {
         const variantRes = await cafe24UpdateVariantAdditionalAmount(
           account,
           accessToken,
-          externalProductNo,
+          resolvedExternalProductNo,
           resolvedVariantCode,
           targetAdditionalAmount,
         );
@@ -789,7 +928,7 @@ export async function POST(request: Request) {
     const retryRes = await cafe24UpdateVariantAdditionalAmount(
       account,
       accessToken,
-      externalProductNo,
+      resolvedExternalProductNo,
       resolvedVariantCode,
       targetAdditionalAmount,
     );
@@ -808,7 +947,7 @@ export async function POST(request: Request) {
   }
 
   const actualAdditionalByVariant = new Map<string, number | null>();
-  let detailAfter = await cafe24GetProductDetail(account, accessToken, externalProductNo);
+  let detailAfter = await cafe24GetProductDetail(account, accessToken, resolvedExternalProductNo);
   const hydrateActualMap = () => {
     actualAdditionalByVariant.clear();
     for (const variant of detailAfter.data?.variants ?? []) {
@@ -829,7 +968,7 @@ export async function POST(request: Request) {
     });
     if (allMatched || failedVariants.length > 0) break;
     await sleep(waitMs);
-    detailAfter = await cafe24GetProductDetail(account, accessToken, externalProductNo);
+    detailAfter = await cafe24GetProductDetail(account, accessToken, resolvedExternalProductNo);
     hydrateActualMap();
   }
 
@@ -842,7 +981,7 @@ export async function POST(request: Request) {
     const status = !transportOk ? "FAILED" : (verified ? "SUCCEEDED" : "VERIFY_FAILED");
     return {
       channel_id: channelId,
-      external_product_no: externalProductNo,
+      external_product_no: resolvedExternalProductNo,
       external_variant_code: resolvedVariantCode,
       last_pushed_additional_amount_krw: transportOk ? expected : null,
       last_push_status: status,
@@ -886,7 +1025,7 @@ export async function POST(request: Request) {
       channel_id: channelId,
       channel_product_id: null,
       master_item_id: resolvedMasterItemId || null,
-      external_product_no: externalProductNo,
+      external_product_no: resolvedExternalProductNo,
       external_variant_code: resolvedVariantCode || null,
       action_type: transportOk ? "VERIFIED" : "FAILED",
       result_status: logStatus,
@@ -900,7 +1039,7 @@ export async function POST(request: Request) {
       verify_payload: {
         actual_additional_amount: actual,
       },
-      source_snapshot_hash: [channelId, externalProductNo, resolvedVariantCode, String(expected)].join("|"),
+      source_snapshot_hash: [channelId, resolvedExternalProductNo, resolvedVariantCode, String(expected)].join("|"),
       triggered_by: "AUTO_PRICE_EDITOR_APPLY",
     };
   });
@@ -1097,7 +1236,7 @@ export async function POST(request: Request) {
     if (detailAfter.ok && detailAfter.data) {
       detailAfterWithMeta = { ...detailAfter.data, ...fallbackMeta };
       try {
-        const metaAfter = await loadEditorMeta(sb, channelId, externalProductNo, resolvedMasterItemId);
+        const metaAfter = await loadEditorMeta(sb, channelId, [resolvedExternalProductNo, externalProductNo], resolvedMasterItemId);
         detailAfterWithMeta = { ...detailAfter.data, ...metaAfter };
       } catch {
         // keep original detailAfter.data
@@ -1132,7 +1271,7 @@ export async function POST(request: Request) {
   if (detailAfter.ok && detailAfter.data) {
     finalData = { ...detailAfter.data, ...fallbackMeta };
     try {
-      const metaAfter = await loadEditorMeta(sb, channelId, externalProductNo, resolvedMasterItemId);
+      const metaAfter = await loadEditorMeta(sb, channelId, [resolvedExternalProductNo, externalProductNo], resolvedMasterItemId);
       finalData = { ...detailAfter.data, ...metaAfter };
     } catch {
       // keep detailAfter.data
