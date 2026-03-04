@@ -99,8 +99,15 @@ export async function GET(_request: Request, { params }: Params) {
       : null;
     const reasonMeta = reasonCode ? syncReasonMeta(reasonCode) : null;
 
+    const snapshotDesiredPrice = toNullableNumber(row.desired_price_krw);
+    const appliedTargetPrice = task?.applied_target_price_krw ?? null;
+    const effectiveDesiredPrice = appliedTargetPrice ?? snapshotDesiredPrice;
+
     return {
       ...row,
+      desired_price_krw: effectiveDesiredPrice,
+      snapshot_desired_price_krw: snapshotDesiredPrice,
+      effective_desired_price_krw: effectiveDesiredPrice,
       reason_code: reasonCode,
       reason_label: reasonMeta?.label ?? null,
       reason_category: reasonMeta?.category ?? null,
@@ -108,7 +115,7 @@ export async function GET(_request: Request, { params }: Params) {
       task_last_error: task?.last_error ?? null,
       task_sync_job_id: task?.sync_job_id ?? null,
       applied_before_price_krw: task?.applied_before_price_krw ?? null,
-      applied_target_price_krw: task?.applied_target_price_krw ?? null,
+      applied_target_price_krw: appliedTargetPrice,
       applied_after_price_krw: task?.applied_after_price_krw ?? null,
     };
   });

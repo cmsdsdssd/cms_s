@@ -32,7 +32,9 @@ type RunIntent = {
   master_item_id: string;
   external_product_no: string;
   external_variant_code: string | null;
-  desired_price_krw: number;
+  desired_price_krw: number | null;
+  snapshot_desired_price_krw?: number | null;
+  effective_desired_price_krw?: number | null;
   floor_price_krw: number;
   floor_applied: boolean;
   state: "PENDING" | "SUCCEEDED" | "SKIPPED" | "FAILED";
@@ -260,8 +262,8 @@ export default function ShoppingCronRunsPage() {
                     <th className="px-3 py-2">master_item_id</th>
                     <th className="px-3 py-2">product_no</th>
                     <th className="px-3 py-2">variant_code</th>
-                    <th className="px-3 py-2">계산 목표가</th>
-                    <th className="px-3 py-2">실반영 목표가</th>
+                    <th className="px-3 py-2">계산 목표가(스냅샷)</th>
+                    <th className="px-3 py-2">옵션반영 목표가</th>
                     <th className="px-3 py-2">실반영 후</th>
                     <th className="px-3 py-2">바닥가</th>
                     <th className="px-3 py-2">floor_applied</th>
@@ -276,8 +278,8 @@ export default function ShoppingCronRunsPage() {
                       <td className="px-3 py-2">{it.master_item_id}</td>
                       <td className="px-3 py-2">{it.external_product_no}</td>
                       <td className="px-3 py-2">{it.external_variant_code || "-"}</td>
-                      <td className="px-3 py-2">{fmt(it.desired_price_krw)}</td>
-                      <td className="px-3 py-2">{fmt(it.applied_target_price_krw ?? it.desired_price_krw)}</td>
+                      <td className="px-3 py-2">{fmt(it.snapshot_desired_price_krw ?? it.desired_price_krw)}</td>
+                      <td className="px-3 py-2">{fmt(it.effective_desired_price_krw ?? it.applied_target_price_krw ?? it.desired_price_krw)}</td>
                       <td className="px-3 py-2">{fmt(it.applied_after_price_krw)}</td>
                       <td className="px-3 py-2">{fmt(it.floor_price_krw)}</td>
                       <td className="px-3 py-2">{it.floor_applied ? "Y" : "N"}</td>
