@@ -25,6 +25,19 @@ const chunkArray = <T,>(items: T[], chunkSize: number): T[][] => {
   return chunks;
 };
 
+const looksCanonicalProductCode = (productNo: string): boolean => /^P/i.test(String(productNo ?? "").trim());
+
+const shouldPreferProductNo = (currentProductNo: string, nextProductNo: string): boolean => {
+  const current = String(currentProductNo ?? "").trim();
+  const next = String(nextProductNo ?? "").trim();
+  if (!current && next) return true;
+  if (!next) return false;
+  const currentCanonical = looksCanonicalProductCode(current);
+  const nextCanonical = looksCanonicalProductCode(next);
+  if (nextCanonical !== currentCanonical) return nextCanonical;
+  return next.localeCompare(current) < 0;
+};
+
 async function verifyAppliedPrice(
   account: Awaited<ReturnType<typeof loadCafe24Account>> extends infer T ? NonNullable<T> : never,
   accessToken: string,
@@ -342,6 +355,20 @@ export async function POST(request: Request) {
     const baseDetailByChannelProduct = new Map(
       baseDetailRows.map((r) => [String(r.channel_product_id), r]),
     );
+
+    const canonicalBaseProductByMaster = new Map<string, string>();
+    for (const row of baseRows) {
+      const channelProductId = String(row.channel_product_id ?? "").trim();
+      const productNo = String(row.external_product_no ?? "").trim();
+      const detail = baseDetailByChannelProduct.get(channelProductId);
+      const masterId = String(detail?.master_item_id ?? "").trim();
+      if (!masterId || !productNo) continue;
+      const current = canonicalBaseProductByMaster.get(masterId) ?? "";
+      if (shouldPreferProductNo(current, productNo)) {
+        canonicalBaseProductByMaster.set(masterId, productNo);
+      }
+    }
+
     const syncRuleSetCandidatesByMaster = new Map<string, Set<string>>();
     for (const row of siblingRuleSetRows) {
       const masterId = String(row.master_item_id ?? "").trim();
@@ -368,10 +395,13 @@ export async function POST(request: Request) {
 
       const baseDetail = baseDetailByChannelProduct.get(String(baseRow.channel_product_id));
       if (!baseDetail?.master_item_id) continue;
+      const masterId = String(baseDetail.master_item_id ?? "").trim();
+      const canonicalBaseProductNo = canonicalBaseProductByMaster.get(masterId) ?? "";
+      if (canonicalBaseProductNo && externalProductNo !== canonicalBaseProductNo) continue;
       const baseOptionMode = String(baseDetail.option_price_mode ?? "SYNC").trim().toUpperCase() === "MANUAL" ? "MANUAL" : "SYNC";
       let resolvedRuleSetId = String(baseDetail.sync_rule_set_id ?? "").trim();
       if (baseOptionMode === "SYNC" && !resolvedRuleSetId) {
-        const candidates = syncRuleSetCandidatesByMaster.get(String(baseDetail.master_item_id ?? "").trim());
+        const candidates = syncRuleSetCandidatesByMaster.get(masterId);
         if (candidates && candidates.size === 1) {
           resolvedRuleSetId = Array.from(candidates)[0] ?? "";
         }
@@ -380,7 +410,7 @@ export async function POST(request: Request) {
         return jsonError("SYNC 모드 자동 옵션 매핑에 sync_rule_set_id가 필요합니다", 422, {
           code: "SOT_SYNC_RULESET_REQUIRED",
           channel_id: channelId,
-          master_item_id: String(baseDetail.master_item_id ?? ""),
+          master_item_id: masterId,
           external_product_no: externalProductNo,
         });
       }
@@ -394,7 +424,7 @@ export async function POST(request: Request) {
         .from("sales_channel_product")
         .select("external_product_no")
         .eq("channel_id", channelId)
-        .eq("master_item_id", String(baseDetail.master_item_id))
+        .eq("master_item_id", masterId)
         .eq("is_active", true)
         .in("external_variant_code", variantCodes)
         .not("external_product_no", "is", null)
@@ -414,7 +444,7 @@ export async function POST(request: Request) {
           .from("sales_channel_product")
           .select("external_product_no, external_variant_code")
           .eq("channel_id", channelId)
-          .eq("master_item_id", String(baseDetail.master_item_id))
+          .eq("master_item_id", masterId)
           .eq("is_active", true)
           .in("external_product_no", conflictingProductNos);
         if (activeBaseRes.error) {
@@ -432,7 +462,7 @@ export async function POST(request: Request) {
           .filter((productNo) => !hasActiveBaseByProductNo.has(productNo))
           .map((productNo) => ({
             channel_id: channelId,
-            master_item_id: String(baseDetail.master_item_id),
+            master_item_id: masterId,
             external_product_no: productNo,
             external_variant_code: "",
             sync_rule_set_id: resolvedRuleSetId || null,
@@ -463,7 +493,7 @@ export async function POST(request: Request) {
             return jsonError(keepAliveUpsertRes.error.message ?? "레거시 상품 기준행 보정 실패", 500, {
               code: "ENSURE_LEGACY_PRODUCT_BASE_MAPPING_FAILED",
               channel_id: channelId,
-              master_item_id: String(baseDetail.master_item_id ?? ""),
+              master_item_id: masterId,
               conflicting_external_product_nos: conflictingProductNos,
             });
           }
@@ -474,7 +504,7 @@ export async function POST(request: Request) {
         .from("sales_channel_product")
         .update({ is_active: false })
         .eq("channel_id", channelId)
-        .eq("master_item_id", String(baseDetail.master_item_id))
+        .eq("master_item_id", masterId)
         .not("external_product_no", "is", null)
         .neq("external_product_no", externalProductNo)
         .in("external_variant_code", variantCodes)
@@ -483,7 +513,7 @@ export async function POST(request: Request) {
         return jsonError(deactivateRes.error.message ?? "옵션 자동 매핑 비활성화 실패", 500, {
           code: "DEACTIVATE_CONFLICTING_VARIANTS_FAILED",
           channel_id: channelId,
-          master_item_id: String(baseDetail.master_item_id ?? ""),
+          master_item_id: masterId,
           external_product_no: externalProductNo,
           variant_codes: variantCodes,
         });
@@ -493,7 +523,7 @@ export async function POST(request: Request) {
         .from("sales_channel_product")
         .select("channel_product_id, external_product_no, external_variant_code")
         .eq("channel_id", channelId)
-        .eq("master_item_id", String(baseDetail.master_item_id))
+        .eq("master_item_id", masterId)
         .eq("is_active", true)
         .in("external_variant_code", variantCodes)
         .not("external_product_no", "is", null)
@@ -507,7 +537,7 @@ export async function POST(request: Request) {
         return jsonError("옵션 자동 매핑 충돌: 동일 master+variant가 다른 상품번호에 이미 활성화되어 있습니다", 409, {
           code: "ACTIVE_VARIANT_MAPPING_CONFLICT",
           channel_id: channelId,
-          master_item_id: String(baseDetail.master_item_id ?? ""),
+          master_item_id: masterId,
           target_external_product_no: externalProductNo,
           variant_codes: variantCodes,
           conflicts: postConflicts.slice(0, 50),
@@ -516,7 +546,7 @@ export async function POST(request: Request) {
 
       const upsertRows = variantCodes.map((variantCode) => ({
         channel_id: channelId,
-        master_item_id: String(baseDetail.master_item_id),
+        master_item_id: masterId,
         external_product_no: externalProductNo,
         external_variant_code: variantCode,
         sync_rule_set_id: resolvedRuleSetId || null,
