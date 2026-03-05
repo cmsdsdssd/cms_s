@@ -11,6 +11,33 @@ type CategoryKey = "MATERIAL" | "SIZE" | "COLOR_PLATING" | "DECOR" | "OTHER";
 const normalizeOptionValue = (value: string) =>
   String(value ?? "").replace(/\s*\([+-][\d,]+원\)\s*$/u, "").trim();
 
+const resolveCanonicalExternalProductNo = async (
+  sb: NonNullable<ReturnType<typeof getShopAdminClient>>,
+  channelId: string,
+  masterItemId: string,
+  requestedExternalProductNo: string,
+): Promise<string> => {
+  const requested = String(requestedExternalProductNo ?? "").trim();
+  if (!requested || !masterItemId) return requested;
+
+  const aliasRes = await sb
+    .from("sales_channel_product")
+    .select("external_product_no")
+    .eq("channel_id", channelId)
+    .eq("master_item_id", masterItemId)
+    .eq("is_active", true)
+    .order("updated_at", { ascending: false });
+
+  if (aliasRes.error) throw new Error(aliasRes.error.message ?? "활성 별칭 매핑 조회 실패");
+
+  const activeProductNos = Array.from(
+    new Set((aliasRes.data ?? []).map((row) => String(row.external_product_no ?? "").trim()).filter(Boolean)),
+  );
+  if (activeProductNos.length === 0) return requested;
+  if (activeProductNos.includes(requested)) return requested;
+  return activeProductNos.find((value) => /^P/i.test(value)) ?? activeProductNos[0] ?? requested;
+};
+
 export async function GET(request: Request) {
   const sb = getShopAdminClient();
   if (!sb) return jsonError("Supabase server env missing", 500);
@@ -88,6 +115,13 @@ export async function POST(request: Request) {
 
   if (!masterItemId) return jsonError("master_item_id is required (매핑 없음)", 422);
 
+  let resolvedExternalProductNo = externalProductNo;
+  try {
+    resolvedExternalProductNo = await resolveCanonicalExternalProductNo(sb, channelId, masterItemId, externalProductNo);
+  } catch (error) {
+    return jsonError(error instanceof Error ? error.message : "활성 별칭 매핑 조회 실패", 500);
+  }
+
   const upsertRows: Array<Record<string, unknown>> = [];
   const categoryByOptionName = new Map<string, CategoryKey>();
 
@@ -119,7 +153,7 @@ export async function POST(request: Request) {
     upsertRows.push({
       channel_id: channelId,
       master_item_id: masterItemId,
-      external_product_no: externalProductNo,
+      external_product_no: resolvedExternalProductNo,
       option_name: optionName,
       option_value: optionValue,
       category_key: categoryKey,

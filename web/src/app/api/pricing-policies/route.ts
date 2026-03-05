@@ -31,13 +31,23 @@ export async function POST(request: Request) {
   if (!body) return jsonError("Invalid request body", 400);
 
   const policyName = String(body.policy_name ?? "DEFAULT_POLICY").trim();
+  const hasMargin = Object.prototype.hasOwnProperty.call(body, "margin_multiplier");
+  const hasRoundingUnit = Object.prototype.hasOwnProperty.call(body, "rounding_unit");
+  const hasRoundingMode = Object.prototype.hasOwnProperty.call(body, "rounding_mode");
+  const hasOption18k = Object.prototype.hasOwnProperty.call(body, "option_18k_weight_multiplier");
+
+  const marginMultiplier = hasMargin ? Number(body.margin_multiplier) : 1;
+  const roundingUnit = hasRoundingUnit ? Number(body.rounding_unit) : 1000;
+  const roundingMode = String(hasRoundingMode ? body.rounding_mode : "CEIL").toUpperCase();
+  const option18kWeightMultiplier = hasOption18k ? Number(body.option_18k_weight_multiplier) : 1.2;
+
   const basePayload = {
     channel_id: String(body.channel_id ?? "").trim(),
     policy_name: policyName,
-    margin_multiplier: Number(body.margin_multiplier ?? 1),
-    rounding_unit: Number(body.rounding_unit ?? 1000),
-    rounding_mode: String(body.rounding_mode ?? "CEIL").toUpperCase(),
-    option_18k_weight_multiplier: Number(body.option_18k_weight_multiplier ?? 1.2),
+    margin_multiplier: marginMultiplier,
+    rounding_unit: roundingUnit,
+    rounding_mode: roundingMode,
+    option_18k_weight_multiplier: option18kWeightMultiplier,
     material_factor_set_id: typeof body.material_factor_set_id === "string" ? body.material_factor_set_id : null,
     is_active: body.is_active === false ? false : true,
   };
@@ -51,8 +61,19 @@ export async function POST(request: Request) {
 
   const selectCols = "policy_id, channel_id, policy_name, margin_multiplier, rounding_unit, rounding_mode, option_18k_weight_multiplier, material_factor_set_id, is_active, created_at, updated_at";
 
+  const deactivateOtherPolicies = async (savedPolicyId: string) => {
+    if (!basePayload.is_active) return;
+    await sb
+      .from("pricing_policy")
+      .update({ is_active: false })
+      .eq("channel_id", basePayload.channel_id)
+      .neq("policy_id", savedPolicyId)
+      .eq("is_active", true);
+  };
+
   const firstTry = await sb.from("pricing_policy").insert(basePayload).select(selectCols).single();
   if (!firstTry.error) {
+    await deactivateOtherPolicies(String(firstTry.data.policy_id));
     return NextResponse.json({ data: firstTry.data }, { headers: { "Cache-Control": "no-store" } });
   }
 
@@ -66,6 +87,7 @@ export async function POST(request: Request) {
     .select(selectCols)
     .single();
   if (!secondTry.error) {
+    await deactivateOtherPolicies(String(secondTry.data.policy_id));
     return NextResponse.json({ data: secondTry.data }, { headers: { "Cache-Control": "no-store" } });
   }
 
@@ -79,5 +101,6 @@ export async function POST(request: Request) {
     .single();
   if (thirdTry.error) return jsonError(thirdTry.error.message ?? "정책 생성 실패", 400);
 
+  await deactivateOtherPolicies(String(thirdTry.data.policy_id));
   return NextResponse.json({ data: thirdTry.data }, { headers: { "Cache-Control": "no-store" } });
 }

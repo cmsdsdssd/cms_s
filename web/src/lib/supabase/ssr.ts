@@ -1,15 +1,13 @@
 import { createServerClient } from "@supabase/ssr";
 import type { NextRequest, NextResponse } from "next/server";
+import { SUPABASE_PUBLIC_ANON_KEY, SUPABASE_PUBLIC_URL } from "@/lib/supabase/public-config";
 
 function getSbUrl() {
-    return process.env["SUPABASE_URL"] ?? process.env["NEXT_PUBLIC_SUPABASE_URL"] ?? "";
+    const serverUrl = process.env.SUPABASE_URL ?? "";
+    return SUPABASE_PUBLIC_URL || serverUrl;
 }
 function getSbKey() {
-    return (
-        process.env["NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY"] ??
-        process.env["NEXT_PUBLIC_SUPABASE_ANON_KEY"] ??
-        ""
-    );
+    return SUPABASE_PUBLIC_ANON_KEY;
 }
 
 /**

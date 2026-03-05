@@ -90,3 +90,9 @@
 - Executed: 운영 배포에서 `Supabase server env missing` 재발 원인을 `NEXT_PUBLIC_SUPABASE_URL` 빌드/런타임 분리 문제로 확정하고, 서버 클라이언트가 `SUPABASE_URL`을 우선 사용하도록 수정(`web/src/lib/shop/admin.ts`) 후 Cloud Run를 build-env/runtime-env/secrets 포함으로 재배포했습니다.
 - Result: cron API 500 해소(`POST /api/cron/shop-sync-v2` 200), 로그인 경로 정상(`GET /login` 200), Scheduler 5분+force_full_sync 연속 실행에서 최신 잡(`2b44a3f8-280f-48cf-aa7e-6e588814af8a`) 기준 N/O 평탄화 0건 확인.
 - Next: M의 잔여 실패(`PRODUCT_ENDPOINT_NOT_FOUND` for P000000M000C/D)를 별도 트랙으로 분리해 매핑/엔드포인트 호환 처리 후 전체 19/0/0 안정화.
+
+
+## Attempt 017
+- Executed: Run instance 표시 불일치를 해결하기 위해 `price-sync-runs-v2/[run_id]` 응답에 `snapshot_desired_price_krw`/`effective_desired_price_krw`를 추가하고(`desired_price_krw`는 effective로 정렬), `cron-runs` 테이블을 "계산(스냅샷) vs 옵션반영 목표가"로 분리 표시했습니다.
+- Result: 배포환경 로그인 이슈는 `NEXT_PUBLIC_*`가 빈 문자열로 인라인될 때 fallback이 무력화되는 문제로 확정되어 `src/lib/supabase/public-config.ts`를 추가(빈 문자열 트랩 방지)하고 `supabase/client|rpc|ssr`를 교체 후 재배포, Playwright 검증에서 `Supabase env missing` 사라지고 `Invalid login credentials`로 정상 전환 확인했습니다.
+- Next: 사용자 계정으로 실로그인 확인 및 `/settings/shopping/cron-runs`에서 run detail이 옵션반영 목표가 기준으로 보이는지 UI 캡처 검증을 추가하고, 5분 주기 강제 실행(job `62b696ef-16ea-401e-89f6-1b5f3bd256d6`)의 M/N/O `19/0/0`, `flatten_count_n_o=0`를 계속 모니터링합니다.

@@ -341,6 +341,42 @@ export async function POST(request: Request) {
     mappings.map((m) => String(m.external_product_no ?? "").trim()).filter(Boolean),
   )];
 
+  const externalProductNosByMaster = new Map<string, string[]>();
+  for (const m of mappings) {
+    const masterId = String(m.master_item_id ?? "").trim();
+    const productNo = String(m.external_product_no ?? "").trim();
+    if (!masterId || !productNo) continue;
+    const prev = externalProductNosByMaster.get(masterId) ?? [];
+    if (!prev.includes(productNo)) prev.push(productNo);
+    externalProductNosByMaster.set(masterId, prev);
+  }
+
+  const productNoPriority = (value: string): number => (/^P/i.test(value) ? 0 : 1);
+  for (const [masterId, values] of externalProductNosByMaster.entries()) {
+    const sorted = [...values].sort((a, b) => {
+      const pa = productNoPriority(a);
+      const pb = productNoPriority(b);
+      if (pa !== pb) return pa - pb;
+      return a.localeCompare(b);
+    });
+    externalProductNosByMaster.set(masterId, sorted);
+  }
+
+  const buildProductNoCandidates = (masterId: string, requestedProductNo: string): string[] => {
+    const out: string[] = [];
+    const seen = new Set<string>();
+    const push = (value: string) => {
+      const trimmed = String(value ?? "").trim();
+      if (!trimmed || seen.has(trimmed)) return;
+      seen.add(trimmed);
+      out.push(trimmed);
+    };
+
+    push(requestedProductNo);
+    for (const productNo of externalProductNosByMaster.get(masterId) ?? []) push(productNo);
+    return out;
+  };
+
   const [optionCategoryRes, scopedOptionDeltaRes] = await Promise.all([
     sb
       .from("channel_option_category_v2")
@@ -404,16 +440,26 @@ export async function POST(request: Request) {
   ): number => {
     const normalizedMaterial = normalizeOptionalMaterialCode(optionMaterialCode);
     const scopedMaterial = normalizedMaterial === "00" ? "" : normalizedMaterial;
+    const productNoCandidates = buildProductNoCandidates(masterId, productNo);
+
     if (scopedMaterial) {
-      const exactScoped = scopedCategoryDeltaMap.get(`${masterId}::${productNo}::${categoryKey}::${scopedMaterial}`);
-      if (exactScoped != null) return exactScoped;
+      for (const candidateProductNo of productNoCandidates) {
+        const exactScoped = scopedCategoryDeltaMap.get(`${masterId}::${candidateProductNo}::${categoryKey}::${scopedMaterial}`);
+        if (exactScoped != null) return exactScoped;
+      }
     }
 
-    const defaultScoped = scopedCategoryDeltaMap.get(`${masterId}::${productNo}::${categoryKey}::`);
-    if (defaultScoped != null) return defaultScoped;
+    for (const candidateProductNo of productNoCandidates) {
+      const defaultScoped = scopedCategoryDeltaMap.get(`${masterId}::${candidateProductNo}::${categoryKey}::`);
+      if (defaultScoped != null) return defaultScoped;
+    }
 
-    const legacy = categoryDeltaByScope.get(`${masterId}::${productNo}::${categoryKey}`);
-    return legacy ?? 0;
+    for (const candidateProductNo of productNoCandidates) {
+      const legacy = categoryDeltaByScope.get(`${masterId}::${candidateProductNo}::${categoryKey}`);
+      if (legacy != null) return legacy;
+    }
+
+    return 0;
   };
 
   const floorGuardRes = await sb
@@ -734,6 +780,28 @@ export async function POST(request: Request) {
     laborDeltaByMaster.set(key, prev + toNum(row.delta_krw, 0));
   }
 
+  const optionStateRes = await sb
+    .from("channel_option_current_state_v1")
+    .select("state_id, master_item_id, external_product_no, external_variant_code, final_target_additional_amount_krw, updated_at")
+    .eq("channel_id", channelId)
+    .in("master_item_id", uniqueMasterIds)
+    .order("updated_at", { ascending: false })
+    .order("state_id", { ascending: false });
+  if (optionStateRes.error) return jsonError(optionStateRes.error.message ?? "옵션 현재상태 조회 실패", 500);
+
+  const optionStateDeltaByMasterVariant = new Map<string, { additionalKrw: number; productNo: string }>();
+  for (const row of optionStateRes.data ?? []) {
+    const masterId = String((row as { master_item_id?: string | null }).master_item_id ?? "").trim();
+    const variantCode = String((row as { external_variant_code?: string | null }).external_variant_code ?? "").trim();
+    if (!masterId || !variantCode) continue;
+    const additional = Math.round(Number((row as { final_target_additional_amount_krw?: unknown }).final_target_additional_amount_krw ?? Number.NaN));
+    if (!Number.isFinite(additional)) continue;
+    const key = `${masterId}::${variantCode}`;
+    if (optionStateDeltaByMasterVariant.has(key)) continue;
+    const productNo = String((row as { external_product_no?: string | null }).external_product_no ?? "").trim();
+    optionStateDeltaByMasterVariant.set(key, { additionalKrw: additional, productNo });
+  }
+
   const blockedByMissingRules: Array<{ channel_product_id: string; missing_rules: string[] }> = [];
   const recomputeAt = new Date().toISOString();
   const computeRequestId = crypto.randomUUID();
@@ -766,7 +834,17 @@ export async function POST(request: Request) {
     const targetTick = tickByMaterialCode(optionMaterialCode);
     const materialRaw = netWeight * targetTick;
     const factor = factorMap.get(optionMaterialCode) ?? 1;
-    const hasVariant = String(m.external_variant_code ?? "").trim().length > 0;
+    const variantCode = String(m.external_variant_code ?? "").trim();
+    const hasVariant = variantCode.length > 0;
+    const hasStructuredOptionSignal = Boolean(
+      String(m.option_material_code ?? "").trim()
+      || optionColorCode
+      || optionDecorationCode
+      || (optionSizeValue !== null && Number.isFinite(optionSizeValue)),
+    );
+    const optionStateDelta = hasVariant
+      ? optionStateDeltaByMasterVariant.get(`${m.master_item_id}::${variantCode}`)
+      : undefined;
     const needsR1 = false;
     const needsR2 = applyRule2 && hasVariant && optionSizeValue !== null && Number.isFinite(optionSizeValue);
     const needsR3 = applyRule3 && hasVariant && optionColorCode.length > 0;
@@ -1028,12 +1106,24 @@ export async function POST(request: Request) {
     const ruleDecorDelta = applyRuleSetPricing && applyRuleDecor ? r4Delta : 0;
     const baseOptionDelta = toNum(m.option_price_delta_krw, 0);
 
-    const deltaMaterialBucket = Math.round(ruleMaterialDelta + categoryScopedDeltaBuckets.material);
-    const deltaSizeBucket = Math.round(ruleSizeDelta + categoryScopedDeltaBuckets.size);
-    const deltaColorBucket = Math.round(ruleColorDelta + categoryScopedDeltaBuckets.colorPlating);
-    const deltaDecorBucket = Math.round(ruleDecorDelta + categoryScopedDeltaBuckets.decor);
-    const deltaOtherBucket = Math.round(baseOptionDelta + categoryScopedDeltaBuckets.other);
-    const optionPriceDelta = deltaMaterialBucket + deltaSizeBucket + deltaColorBucket + deltaDecorBucket + deltaOtherBucket;
+    let deltaMaterialBucket = Math.round(ruleMaterialDelta + categoryScopedDeltaBuckets.material);
+    let deltaSizeBucket = Math.round(ruleSizeDelta + categoryScopedDeltaBuckets.size);
+    let deltaColorBucket = Math.round(ruleColorDelta + categoryScopedDeltaBuckets.colorPlating);
+    let deltaDecorBucket = Math.round(ruleDecorDelta + categoryScopedDeltaBuckets.decor);
+    let deltaOtherBucket = Math.round(baseOptionDelta + categoryScopedDeltaBuckets.other);
+    let optionPriceDelta = deltaMaterialBucket + deltaSizeBucket + deltaColorBucket + deltaDecorBucket + deltaOtherBucket;
+    let optionPriceDeltaSource: "COMPUTED" | "STATE_FALLBACK" = "COMPUTED";
+
+    if (hasVariant && optionStateDelta && Number.isFinite(optionStateDelta.additionalKrw)) {
+      deltaMaterialBucket = 0;
+      deltaSizeBucket = 0;
+      deltaColorBucket = 0;
+      deltaDecorBucket = 0;
+      deltaOtherBucket = Math.round(optionStateDelta.additionalKrw);
+      optionPriceDelta = deltaOtherBucket;
+      optionPriceDeltaSource = "STATE_FALLBACK";
+    }
+
     const basePriceDelta = baseDeltaByMaster.get(m.master_item_id) ?? 0;
     const targetRawSync = applyRule4
       ? afterMargin + laborPost + totalPost + basePriceDelta + optionPriceDelta
@@ -1125,6 +1215,10 @@ export async function POST(request: Request) {
         labor_base_price_delta_krw: laborBaseDelta,
         base_price_delta_krw: applyRule4 ? basePriceDelta : 0,
         option_price_delta_krw: applyRule4 ? optionPriceDelta : 0,
+        option_price_delta_source: optionPriceDeltaSource,
+        option_state_fallback_applied: optionPriceDeltaSource === "STATE_FALLBACK",
+        option_state_fallback_delta_krw: optionStateDelta?.additionalKrw ?? null,
+        option_state_fallback_product_no: optionStateDelta?.productNo || null,
         option_category_sync_delta_krw: categoryScopedDeltaBuckets.total,
         option_category_scoped_delta_material_krw: categoryScopedDeltaBuckets.material,
         option_category_scoped_delta_size_krw: categoryScopedDeltaBuckets.size,

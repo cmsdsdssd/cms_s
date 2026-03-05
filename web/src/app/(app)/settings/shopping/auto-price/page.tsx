@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ActionBar } from "@/components/layout/action-bar";
 import { ShoppingPageHeader } from "@/components/layout/shopping-page-header";
 import { Button } from "@/components/ui/button";
@@ -9,6 +9,7 @@ import { Card, CardBody, CardHeader } from "@/components/ui/card";
 import { Input, Select } from "@/components/ui/field";
 import { Sheet } from "@/components/ui/sheet";
 import { shopApiGet, shopApiSend } from "@/lib/shop/http";
+import type { PricingSnapshotExplainResponse } from "@/types/pricingSnapshot";
 
 type Channel = { channel_id: string; channel_name: string; channel_code: string };
 type FloorGuard = {
@@ -44,11 +45,13 @@ type SyncRun = {
   failed_count: number;
   skipped_count: number;
   started_at: string;
+  error_message?: string | null;
 };
 type SyncIntent = {
   intent_id: string;
   external_product_no: string;
   external_variant_code: string | null;
+  master_item_id?: string | null;
   desired_price_krw: number;
   floor_price_krw: number;
   floor_applied: boolean;
@@ -56,6 +59,17 @@ type SyncIntent = {
   reason_code?: string | null;
   reason_label?: string | null;
   reason_category?: string | null;
+  applied_target_price_krw?: number | null;
+  applied_after_price_krw?: number | null;
+  updated_at?: string | null;
+};
+type SyncRunDetail = {
+  run: {
+    run_id: string;
+    pinned_compute_request_id?: string | null;
+    started_at?: string | null;
+  };
+  intents: SyncIntent[];
 };
 type ReasonSummaryRow = {
   status: "FAILED" | "SKIPPED";
@@ -123,6 +137,7 @@ type ProductEditorPreview = {
   options: Array<{ option_name: string; option_value: Array<{ option_text: string }> }>;
   variants: Array<{
     variantCode: string;
+    customVariantCode?: string | null;
     options: Array<{ name: string; value: string }>;
     additionalAmount: number | null;
     savedTargetAdditionalAmount?: number | null;
@@ -171,6 +186,27 @@ const guessCategoryByOptionName = (name: string): OptionCategoryRow["category_ke
 };
 
 const fmt = (v: number | null | undefined) => (typeof v === "number" && Number.isFinite(v) ? v.toLocaleString() : "-");
+const fmtKrw = (v: number | null | undefined) =>
+  typeof v === "number" && Number.isFinite(v) ? Math.round(v).toLocaleString() + "원" : "-";
+const fmtSignedKrw = (v: number | null | undefined) => {
+  if (typeof v !== "number" || !Number.isFinite(v)) return "-";
+  const rounded = Math.round(v);
+  const sign = rounded > 0 ? "+" : "";
+  return sign + rounded.toLocaleString() + "원";
+};
+const fmtMultiplier = (v: number | null | undefined) => {
+  if (typeof v !== "number" || !Number.isFinite(v)) return "-";
+  const text = v
+    .toFixed(3)
+    .replace(/\.0+$/u, "")
+    .replace(/(\.\d*?)0+$/u, "$1")
+    .replace(/\.$/u, "");
+  return "x" + text;
+};
+const toRoundedNumber = (value: unknown): number | null => {
+  const n = Number(value ?? Number.NaN);
+  return Number.isFinite(n) ? Math.round(n) : null;
+};
 const normalizeOptionValue = (value: string) => String(value ?? "").replace(/\s*\([+-][\d,]+원\)\s*$/u, "").trim();
 const optionEntryKey = (optionName: string, optionValue: string) => `${String(optionName ?? "").trim()}::${normalizeOptionValue(optionValue)}`;
 const parseNumericInput = (value: unknown): number | null => {
@@ -192,6 +228,19 @@ const fmtTs = (v: string | null | undefined) => {
   if (!v) return "-";
   const d = new Date(v);
   return Number.isNaN(d.getTime()) ? "-" : d.toLocaleString("ko-KR");
+};
+const pad2 = (value: number) => String(value).padStart(2, "0");
+const fmtTsCompact = (v: string | null | undefined) => {
+  if (!v) return "-";
+  const d = new Date(v);
+  if (Number.isNaN(d.getTime())) return "-";
+  const yy = pad2(d.getFullYear() % 100);
+  const mm = pad2(d.getMonth() + 1);
+  const dd = pad2(d.getDate());
+  const hh = pad2(d.getHours());
+  const mi = pad2(d.getMinutes());
+  const ss = pad2(d.getSeconds());
+  return `${yy}.${mm}.${dd}-${hh}:${mi}:${ss}`;
 };
 
 const toRunKo = (value: string) => {
@@ -307,6 +356,335 @@ export default function ShoppingAutoPricePage() {
 
   const runSkippedReasons = runDetailQuery.data?.data.summary?.skipped_reasons ?? [];
   const runFailedReasons = runDetailQuery.data?.data.summary?.failed_reasons ?? [];
+
+  const editorMasterItemId = useMemo(() => {
+    if (!editorPreview) return "";
+    const fromPreview = String(editorPreview.master_item_id ?? "").trim();
+    if (fromPreview) return fromPreview;
+    const productNoCandidates = new Set([
+      String(editorProductNo ?? "").trim(),
+      String(editorPreview.productNo ?? "").trim(),
+    ].filter(Boolean));
+    const found = (mappingSummaryQuery.data?.data.mapped_masters ?? []).find((row) =>
+      (row.product_nos ?? []).some((productNo) => productNoCandidates.has(String(productNo ?? "").trim())),
+    );
+    return found?.master_item_id ?? "";
+  }, [editorPreview, editorProductNo, mappingSummaryQuery.data]);
+
+  const recentRunIds = useMemo(
+    () => (runsQuery.data?.data ?? [])
+      .filter((row) => !String(row.error_message ?? "").trim().toUpperCase().startsWith("CRON_TICK:"))
+      .slice(0, 20)
+      .map((row) => String(row.run_id ?? "").trim())
+      .filter(Boolean),
+    [runsQuery.data?.data],
+  );
+
+  const recentRunDetailQueries = useQueries({
+    queries: recentRunIds.map((runId) => ({
+      queryKey: ["price-sync-run-v2", "preview", runId],
+      enabled: Boolean(effectiveChannelId && runId),
+      queryFn: () => shopApiGet<{ data: SyncRunDetail }>("/api/price-sync-runs-v2/" + runId),
+      staleTime: 20_000,
+      refetchInterval: 15_000,
+    })),
+  });
+
+  const latestComputeRequestIdForPreview = useMemo(() => {
+    for (const query of recentRunDetailQueries) {
+      const computeRequestId = String(query.data?.data?.run?.pinned_compute_request_id ?? "").trim();
+      if (computeRequestId) return computeRequestId;
+    }
+    return "";
+  }, [recentRunDetailQueries]);
+
+  const recentRunExplainTargets = useMemo(
+    () =>
+      recentRunDetailQueries
+        .map((query) => {
+          const runId = String(query.data?.data?.run?.run_id ?? "").trim();
+          const computeRequestId = String(query.data?.data?.run?.pinned_compute_request_id ?? "").trim();
+          return { runId, computeRequestId };
+        })
+        .filter((row) => row.runId && row.computeRequestId),
+    [recentRunDetailQueries],
+  );
+
+  const snapshotExplainQuery = useQuery({
+    queryKey: ["pricing-snapshot-explain", effectiveChannelId, editorMasterItemId, latestComputeRequestIdForPreview],
+    enabled: Boolean(effectiveChannelId && editorMasterItemId && latestComputeRequestIdForPreview),
+    queryFn: () => shopApiGet<PricingSnapshotExplainResponse>(
+      "/api/channel-price-snapshot-explain?channel_id="
+      + encodeURIComponent(effectiveChannelId)
+      + "&master_item_id="
+      + encodeURIComponent(editorMasterItemId)
+      + "&compute_request_id="
+      + encodeURIComponent(latestComputeRequestIdForPreview),
+    ),
+    staleTime: 30_000,
+    refetchInterval: 30_000,
+  });
+
+  const snapshotExplainRow = snapshotExplainQuery.data?.data ?? null;
+
+  const previewEffectiveFloor = useMemo(() => {
+    const floorRaw = Math.max(0, Math.round(Number(editorPreview?.floor_price_krw ?? 0)));
+    const margin = Number(activePolicy?.margin_multiplier ?? 1);
+    const unit = Math.max(1, Math.round(Number(activePolicy?.rounding_unit ?? 1000)));
+    const mode = String(activePolicy?.rounding_mode ?? "CEIL").toUpperCase() as "CEIL" | "ROUND" | "FLOOR";
+    if (!Number.isFinite(margin) || margin <= 0) return floorRaw;
+    const floorWithMargin = roundByMode(floorRaw * margin, unit, mode);
+    return Math.max(floorRaw, floorWithMargin);
+  }, [editorPreview?.floor_price_krw, activePolicy?.margin_multiplier, activePolicy?.rounding_unit, activePolicy?.rounding_mode]);
+
+
+  const recentRunSnapshotQueries = useQueries({
+    queries: recentRunExplainTargets.map((target) => ({
+      queryKey: [
+        "pricing-snapshot-explain",
+        "history",
+        effectiveChannelId,
+        editorMasterItemId,
+        target.runId,
+        target.computeRequestId,
+      ],
+      enabled: Boolean(effectiveChannelId && editorMasterItemId && target.computeRequestId),
+      queryFn: () =>
+        shopApiGet<PricingSnapshotExplainResponse>(
+          "/api/channel-price-snapshot-explain?channel_id="
+            + encodeURIComponent(effectiveChannelId)
+            + "&master_item_id="
+            + encodeURIComponent(editorMasterItemId)
+            + "&compute_request_id="
+            + encodeURIComponent(target.computeRequestId),
+        ),
+      staleTime: 30_000,
+      refetchInterval: 30_000,
+    })),
+  });
+
+  const runSnapshotByRunId = useMemo(() => {
+    const map = new Map<string, PricingSnapshotExplainResponse["data"]>();
+    recentRunExplainTargets.forEach((target, index) => {
+      const row = recentRunSnapshotQueries[index]?.data?.data;
+      if (target.runId && row) map.set(target.runId, row);
+    });
+    return map;
+  }, [recentRunExplainTargets, recentRunSnapshotQueries]);
+
+  const previewSelected = useMemo(() => {
+    const base = toRoundedNumber(snapshotExplainRow?.final_target_price_krw);
+    const floor = toRoundedNumber(previewEffectiveFloor);
+    if (base == null || floor == null) {
+      return {
+        selected: null as number | null,
+        reason: "-" as "TARGET" | "FLOOR" | "OVERRIDE" | "-",
+        floorDelta: null as number | null,
+      };
+    }
+    const selected = Math.max(base, floor);
+    const hasOverride = toRoundedNumber(snapshotExplainRow?.override_price_krw) != null;
+    const floorClamped = snapshotExplainRow?.floor_clamped === true;
+    const reason: "TARGET" | "FLOOR" | "OVERRIDE" = floorClamped
+      ? "FLOOR"
+      : hasOverride
+        ? "OVERRIDE"
+        : "TARGET";
+    return { selected, reason, floorDelta: selected - floor };
+  }, [snapshotExplainRow?.final_target_price_krw, snapshotExplainRow?.override_price_krw, snapshotExplainRow?.floor_clamped, previewEffectiveFloor]);
+
+  const previewCompositionRows = useMemo(() => {
+    if (!snapshotExplainRow) return [] as Array<{ key: string; label: string; valueText: string }>;
+
+    const materialRaw = toRoundedNumber(snapshotExplainRow.material_raw_krw);
+    const materialFinal = toRoundedNumber(snapshotExplainRow.material_final_krw);
+    const laborRaw = toRoundedNumber(snapshotExplainRow.labor_raw_krw);
+    const laborSellTotal = toRoundedNumber(snapshotExplainRow.labor_sell_total_krw);
+    const laborSellMaster = toRoundedNumber(snapshotExplainRow.labor_sell_master_krw);
+    const laborSellDecor = toRoundedNumber(snapshotExplainRow.labor_sell_decor_krw);
+    const afterGap = (() => {
+      const finalTarget = toRoundedNumber(snapshotExplainRow.final_target_price_krw);
+      const afterMargin = toRoundedNumber(snapshotExplainRow.price_after_margin_krw);
+      if (finalTarget == null || afterMargin == null) return null;
+      return finalTarget - afterMargin;
+    })();
+
+    return [
+      { key: "base", label: "기준가", valueText: fmtKrw(snapshotExplainRow.master_base_price_krw) },
+      { key: "mul", label: "마진", valueText: fmtMultiplier(snapshotExplainRow.shop_margin_multiplier) },
+      { key: "material-raw", label: "소재원가", valueText: fmtKrw(materialRaw) },
+      { key: "material-final", label: "소재환산", valueText: fmtKrw(materialFinal) },
+      { key: "labor-raw", label: "공임원가", valueText: fmtKrw(laborRaw) },
+      { key: "labor-sell-total", label: "총공임(판매)", valueText: fmtKrw(laborSellTotal) },
+      { key: "labor-sell-master", label: "마스터공임", valueText: fmtKrw(laborSellMaster) },
+      { key: "labor-sell-decor", label: "장식공임", valueText: fmtKrw(laborSellDecor) },
+      { key: "master-labor-profile-sell", label: "마스터공임합(판매)", valueText: fmtKrw(snapshotExplainRow.master_labor_sell_profile_krw) },
+      { key: "master-labor-profile-cost", label: "마스터공임합(원가)", valueText: fmtKrw(snapshotExplainRow.master_labor_cost_profile_krw) },
+      { key: "master-labor-base-sell", label: "기본공임(판매)", valueText: fmtKrw(snapshotExplainRow.master_labor_base_sell_krw) },
+      { key: "master-labor-center-sell", label: "센터공임(판매)", valueText: fmtKrw(snapshotExplainRow.master_labor_center_sell_krw) },
+      { key: "master-labor-sub1-sell", label: "보조1공임(판매)", valueText: fmtKrw(snapshotExplainRow.master_labor_sub1_sell_krw) },
+      { key: "master-labor-sub2-sell", label: "보조2공임(판매)", valueText: fmtKrw(snapshotExplainRow.master_labor_sub2_sell_krw) },
+      { key: "master-plating-sell", label: "도금공임(판매)", valueText: fmtKrw(snapshotExplainRow.master_plating_sell_krw) },
+      { key: "master-labor-base-cost", label: "기본공임(원가)", valueText: fmtKrw(snapshotExplainRow.master_labor_base_cost_krw) },
+      { key: "master-labor-center-cost", label: "센터공임(원가)", valueText: fmtKrw(snapshotExplainRow.master_labor_center_cost_krw) },
+      { key: "master-labor-sub1-cost", label: "보조1공임(원가)", valueText: fmtKrw(snapshotExplainRow.master_labor_sub1_cost_krw) },
+      { key: "master-labor-sub2-cost", label: "보조2공임(원가)", valueText: fmtKrw(snapshotExplainRow.master_labor_sub2_cost_krw) },
+      { key: "master-plating-cost", label: "도금공임(원가)", valueText: fmtKrw(snapshotExplainRow.master_plating_cost_krw) },
+      { key: "master-center-qty", label: "센터수량", valueText: fmt(snapshotExplainRow.master_center_qty) },
+      { key: "master-sub1-qty", label: "보조1수량", valueText: fmt(snapshotExplainRow.master_sub1_qty) },
+      { key: "master-sub2-qty", label: "보조2수량", valueText: fmt(snapshotExplainRow.master_sub2_qty) },
+      { key: "absorb-total", label: "흡수공임합", valueText: fmtKrw(snapshotExplainRow.absorb_total_krw) },
+      { key: "absorb-base", label: "흡수-기본", valueText: fmtKrw(snapshotExplainRow.absorb_base_labor_krw) },
+      { key: "absorb-stone", label: "흡수-석", valueText: fmtKrw(snapshotExplainRow.absorb_stone_labor_krw) },
+      { key: "absorb-plating", label: "흡수-도금", valueText: fmtKrw(snapshotExplainRow.absorb_plating_krw) },
+      { key: "absorb-etc", label: "흡수-기타", valueText: fmtKrw(snapshotExplainRow.absorb_etc_krw) },
+      { key: "absorb-general", label: "흡수-일반", valueText: fmtKrw(snapshotExplainRow.absorb_general_class_krw) },
+      { key: "absorb-material", label: "흡수-소재", valueText: fmtKrw(snapshotExplainRow.absorb_material_class_krw) },
+      { key: "absorb-count", label: "흡수항목수", valueText: fmt(snapshotExplainRow.absorb_item_count) },
+      { key: "after", label: "마진후", valueText: fmtKrw(snapshotExplainRow.price_after_margin_krw) },
+      { key: "delta", label: "옵션합", valueText: fmtSignedKrw(snapshotExplainRow.delta_total_krw) },
+      { key: "rounded", label: "반올림", valueText: fmtKrw(snapshotExplainRow.rounded_target_price_krw) },
+      { key: "override", label: "오버라이드", valueText: fmtKrw(snapshotExplainRow.override_price_krw) },
+      { key: "floor", label: "바닥가", valueText: fmtKrw(previewEffectiveFloor) },
+      { key: "selected", label: "선택가", valueText: fmtKrw(previewSelected.selected) },
+      { key: "after-gap", label: "마진후대비", valueText: fmtSignedKrw(afterGap) },
+      { key: "floor-gap", label: "Floor 대비", valueText: previewSelected.floorDelta == null ? "-" : fmtSignedKrw(previewSelected.floorDelta) },
+      { key: "clamp", label: "클램프", valueText: snapshotExplainRow.floor_clamped ? "Y" : "N" },
+      { key: "reason", label: "선택근거", valueText: previewSelected.reason },
+    ];
+  }, [previewEffectiveFloor, previewSelected.floorDelta, previewSelected.reason, previewSelected.selected, snapshotExplainRow]);
+
+  const previewHistoryRows = useMemo(() => {
+    if (!editorPreview) return [] as Array<{
+      runId: string;
+      at: string;
+      basePrice: number | null;
+      floorPrice: number | null;
+      selectedPrice: number | null;
+      reason: "TARGET" | "FLOOR" | "-";
+      variantAvg: number | null;
+    }>;
+
+    const productNoSet = new Set([
+      String(editorPreview.productNo ?? "").trim(),
+      String(editorProductNo ?? "").trim(),
+    ].filter(Boolean));
+    const variantCodeSet = new Set(
+      (editorPreview.variants ?? [])
+        .flatMap((variant) => [
+          String(variant.variantCode ?? "").trim(),
+          String(variant.customVariantCode ?? "").trim(),
+        ])
+        .filter(Boolean),
+    );
+
+    const rows = recentRunDetailQueries
+      .map((query) => query.data?.data)
+      .filter((data): data is SyncRunDetail => Boolean(data))
+      .map((data) => {
+        const runId = String(data.run?.run_id ?? "").trim();
+        const at = String(data.run?.started_at ?? "").trim();
+        const snapshotFallback = runSnapshotByRunId.get(runId) ?? null;
+        const intents = (data.intents ?? []).filter((intent) => {
+          const masterMatched = editorMasterItemId && String(intent.master_item_id ?? "").trim() === editorMasterItemId;
+          if (masterMatched) return true;
+          const productNo = String(intent.external_product_no ?? "").trim();
+          if (productNo && productNoSet.has(productNo)) return true;
+          const variantCode = String(intent.external_variant_code ?? "").trim();
+          return Boolean(variantCode && variantCodeSet.has(variantCode));
+        });
+        if (!runId) return null;
+        if (intents.length === 0 && !snapshotFallback) return null;
+
+        const pickSelectedPrice = (intent: SyncIntent): number | null => {
+          const candidates = [intent.applied_after_price_krw, intent.applied_target_price_krw, intent.desired_price_krw];
+          for (const candidate of candidates) {
+            const n = toRoundedNumber(candidate);
+            if (n != null) return n;
+          }
+          return null;
+        };
+
+        const pickBasePrice = (intent: SyncIntent): number | null => {
+          const candidates = [intent.desired_price_krw, intent.applied_target_price_krw, intent.applied_after_price_krw];
+          for (const candidate of candidates) {
+            const n = toRoundedNumber(candidate);
+            if (n != null) return n;
+          }
+          return null;
+        };
+
+        const baseIntent = intents.find((intent) => !String(intent.external_variant_code ?? "").trim());
+        const basePriceFromIntent = baseIntent ? pickBasePrice(baseIntent) : null;
+        const basePrice = basePriceFromIntent ?? toRoundedNumber(snapshotFallback?.final_target_price_krw);
+        const floorPrice = toRoundedNumber(
+          baseIntent?.floor_price_krw
+            ?? intents.find((intent) => toRoundedNumber(intent.floor_price_krw) != null)?.floor_price_krw
+            ?? snapshotFallback?.floor_price_krw
+            ?? null,
+        );
+        const selectedFromBase = baseIntent ? pickSelectedPrice(baseIntent) : null;
+        const variantPrices = intents
+          .filter((intent) => String(intent.external_variant_code ?? "").trim())
+          .map(pickSelectedPrice)
+          .filter((v): v is number => typeof v === "number");
+
+        const variantAvg = variantPrices.length > 0
+          ? Math.round(variantPrices.reduce((sum, value) => sum + value, 0) / variantPrices.length)
+          : null;
+
+        const selectedPrice = selectedFromBase
+          ?? (basePrice != null && floorPrice != null ? Math.max(basePrice, floorPrice) : basePrice);
+
+        const reasonFromIntent: "TARGET" | "FLOOR" | null = baseIntent
+          ? (baseIntent.floor_applied ? "FLOOR" : "TARGET")
+          : null;
+        const reasonFromPrices: "TARGET" | "FLOOR" | "-" =
+          selectedPrice == null || basePrice == null
+            ? "-"
+            : selectedPrice > basePrice
+              ? "FLOOR"
+                            : "TARGET";
+        const reasonFromSnapshot: "TARGET" | "FLOOR" | null = !baseIntent && snapshotFallback
+          ? (snapshotFallback.floor_clamped ? "FLOOR" : "TARGET")
+          : null;
+        const reason: "TARGET" | "FLOOR" | "-" = reasonFromIntent ?? reasonFromSnapshot ?? reasonFromPrices;
+
+        return { runId, at, basePrice, floorPrice, selectedPrice, reason, variantAvg };
+      })
+      .filter((row): row is {
+        runId: string;
+        at: string;
+        basePrice: number | null;
+        floorPrice: number | null;
+        selectedPrice: number | null;
+        reason: "TARGET" | "FLOOR" | "-";
+        variantAvg: number | null;
+      } => Boolean(row))
+      .sort((a, b) => b.at.localeCompare(a.at));
+
+    return rows.slice(0, 8);
+  }, [editorPreview, editorMasterItemId, editorProductNo, recentRunDetailQueries, runSnapshotByRunId]);
+
+  const latestHistory = previewHistoryRows[0] ?? null;
+  const previousHistory = previewHistoryRows[1] ?? null;
+  const historyTrendDelta =
+    latestHistory?.selectedPrice != null && previousHistory?.selectedPrice != null
+      ? latestHistory.selectedPrice - previousHistory.selectedPrice
+      : null;
+
+  const previewTrend = useMemo(() => {
+    const prices = previewHistoryRows
+      .map((row) => row.selectedPrice)
+      .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+
+    const latest = prices[0] ?? null;
+    const oldest = prices[prices.length - 1] ?? null;
+    const netDelta = latest != null && oldest != null ? latest - oldest : null;
+    const min = prices.length > 0 ? Math.min(...prices) : null;
+    const max = prices.length > 0 ? Math.max(...prices) : null;
+    return { count: prices.length, latest, oldest, netDelta, min, max };
+  }, [previewHistoryRows]);
 
   const dashboardGalleryQuery = useQuery({
     queryKey: ["shop-dashboard-gallery", effectiveChannelId],
@@ -431,23 +809,6 @@ export default function ShoppingAutoPricePage() {
       });
   }, [dashboardGalleryQuery.data?.data, gallerySearch, galleryImageByMasterId]);
 
-  const editorMasterItemId = useMemo(() => {
-    if (!editorPreview) return "";
-    const fromPreview = String(editorPreview.master_item_id ?? "").trim();
-    if (fromPreview) return fromPreview;
-    const found = (mappingSummaryQuery.data?.data.mapped_masters ?? []).find((row) => row.product_nos.includes(editorPreview.productNo));
-    return found?.master_item_id ?? "";
-  }, [editorPreview, mappingSummaryQuery.data]);
-
-  const previewEffectiveFloor = useMemo(() => {
-    const floorRaw = Math.max(0, Math.round(Number(editorPreview?.floor_price_krw ?? 0)));
-    const margin = Number(activePolicy?.margin_multiplier ?? 1);
-    const unit = Math.max(1, Math.round(Number(activePolicy?.rounding_unit ?? 1000)));
-    const mode = String(activePolicy?.rounding_mode ?? "CEIL").toUpperCase() as "CEIL" | "ROUND" | "FLOOR";
-    if (!Number.isFinite(margin) || margin <= 0) return floorRaw;
-    const floorWithMargin = roundByMode(floorRaw * margin, unit, mode);
-    return Math.max(floorRaw, floorWithMargin);
-  }, [editorPreview?.floor_price_krw, activePolicy?.margin_multiplier, activePolicy?.rounding_unit, activePolicy?.rounding_mode]);
 
   const optionEntries = useMemo(() => {
     if (!editorPreview) return [] as Array<{ option_name: string; option_value: string }>;
@@ -1082,7 +1443,7 @@ export default function ShoppingAutoPricePage() {
             ) : (
               <div className="space-y-4">
                 <div className="space-y-4">
-                  <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
+                  <div className="grid grid-cols-1 gap-4 lg:grid-cols-[220px_minmax(0,1fr)]">
                     <div className="space-y-2">
                       <div className="text-base font-semibold">{editorPreview.productName}</div>
                       <div className="text-xs text-[var(--muted)]">product_no: {editorPreview.productNo}</div>
@@ -1096,26 +1457,143 @@ export default function ShoppingAutoPricePage() {
                       </div>
                     </div>
 
-                    <div className="space-y-3">
-                      <div className="rounded border border-[var(--hairline)] bg-[var(--panel)] px-3 py-2 text-xs text-[var(--muted)]">
-                        이 화면은 조회 전용입니다. 상세수정은 좌측 드로어에서 진행합니다.
-                      </div>
-                      <div className="grid grid-cols-1 gap-2 text-sm">
-                        <div className="rounded border border-[var(--hairline)] px-2 py-1">판매가: {fmt(editorPreview.price)}</div>
-                        <div className="rounded border border-[var(--hairline)] px-2 py-1">소비자가: {fmt(editorPreview.retailPrice)}</div>
-                        <div className="rounded border border-[var(--hairline)] px-2 py-1">진열(display): {editorPreview.display ?? "-"}</div>
-                        <div className="rounded border border-[var(--hairline)] px-2 py-1">판매(selling): {editorPreview.selling ?? "-"}</div>
-                        <div className="rounded border border-[var(--hairline)] px-2 py-1">바닥가: {fmt(editorPreview.floor_price_krw ?? null)}</div>
-                        <div className="rounded border border-[var(--hairline)] px-2 py-1">유효바닥가(마진반영): {fmt(previewEffectiveFloor)}</div>
-                        <div className="rounded border border-[var(--hairline)] px-2 py-1">총공임(판매): {fmt(editorPreview.total_labor_sell_krw ?? null)}</div>
-                        <div className="rounded border border-[var(--hairline)] px-2 py-1">도금공임(판매): {fmt(editorPreview.plating_labor_sell_krw ?? null)}</div>
-                        <div className="rounded border border-[var(--hairline)] px-2 py-1">금시세(g): {fmt(editorPreview.tick_gold_krw_per_g ?? null)}</div>
-                        <div className="rounded border border-[var(--hairline)] px-2 py-1">은시세(g): {fmt(editorPreview.tick_silver_krw_per_g ?? null)}</div>
-                      </div>
-                      <div className="flex justify-end">
-                        <Button size="sm" variant="secondary" onClick={() => setIsEditDrawerOpen(true)}>
-                          상세수정
-                        </Button>
+                    <div className="rounded-[var(--radius)] border border-[var(--hairline)] bg-[var(--panel)]">
+                      <div className="flex min-h-[560px] flex-col">
+                        <div className="border-b border-[var(--hairline)] px-3 py-2">
+                          <div className="flex items-start justify-between gap-2">
+                            <div>
+                              <div className="text-xs font-semibold">가격 분석</div>
+                              <div className="text-[11px] text-[var(--muted)]">snapshot explain + 최근 run history</div>
+                            </div>
+                            <Button size="sm" variant="secondary" onClick={() => setIsEditDrawerOpen(true)}>
+                              상세수정
+                            </Button>
+                          </div>
+                        </div>
+
+                        <div className="flex flex-1 flex-col gap-3 p-3">
+                          <div className="rounded border border-[var(--hairline)] bg-[var(--bg)] p-2">
+                            <div className="mb-2 flex items-baseline justify-between gap-2">
+                              <div className="text-[11px] font-semibold">구성(스냅샷)</div>
+                              <div className="text-[10px] text-[var(--muted)] tabular-nums">
+                                {snapshotExplainRow
+                                  ? `Au ${fmtKrw(snapshotExplainRow.tick_gold_krw_g)} / Ag ${fmtKrw(snapshotExplainRow.tick_silver_krw_g)} · ${fmtTsCompact(snapshotExplainRow.computed_at)}`
+                                  : snapshotExplainQuery.isFetching
+                                    ? "불러오는 중"
+                                    : "-"}
+                              </div>
+                            </div>
+
+                            {snapshotExplainRow ? (
+                              <div className="overflow-auto rounded border border-[var(--hairline)]">
+                                <table className="w-max min-w-full text-[11px]">
+                                  <thead className="bg-[var(--panel)]">
+                                    <tr>
+                                      {previewCompositionRows.map((row) => (
+                                        <th key={`head-${row.key}`} className="whitespace-nowrap border-r border-[var(--hairline)] px-2 py-1 text-left font-medium text-[var(--muted)] last:border-r-0">
+                                          {row.label}
+                                        </th>
+                                      ))}
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    <tr>
+                                      {previewCompositionRows.map((row) => (
+                                        <td key={`value-${row.key}`} className="whitespace-nowrap border-r border-t border-[var(--hairline)] px-2 py-1 text-right font-semibold tabular-nums last:border-r-0">
+                                          {row.valueText}
+                                        </td>
+                                      ))}
+                                    </tr>
+                                  </tbody>
+                                </table>
+                              </div>
+                            ) : (
+                              <div className="text-[11px] text-[var(--muted)]">
+                                pinned compute_request_id 기반 스냅샷이 없습니다.
+                              </div>
+                            )}
+
+                            {snapshotExplainRow ? (
+                              <div className="mt-2 truncate text-[10px] text-[var(--muted)] tabular-nums">
+                                compute_request_id: {snapshotExplainRow.compute_request_id}
+                              </div>
+                            ) : null}
+                          </div>
+
+                          <div className="rounded border border-[var(--hairline)] bg-[var(--bg)] p-2">
+                            <div className="mb-2 flex items-baseline justify-between gap-2">
+                              <div className="text-[11px] font-semibold">히스토리(최근 run)</div>
+                              <div className="text-[10px] text-[var(--muted)]">최대 8건</div>
+                            </div>
+
+                            {previewHistoryRows.length === 0 ? (
+                              <div className="text-[11px] text-[var(--muted)]">최근 run에서 해당 상품 intent를 찾지 못했습니다.</div>
+                            ) : (
+                              <div className="max-h-[180px] overflow-auto rounded border border-[var(--hairline)]">
+                                <table className="w-full text-[11px]">
+                                  <thead className="bg-[var(--panel)] text-left">
+                                    <tr>
+                                      <th className="px-2 py-1">일시</th>
+                                      <th className="px-2 py-1 text-right tabular-nums">기준</th>
+                                      <th className="px-2 py-1 text-right tabular-nums">바닥</th>
+                                      <th className="px-2 py-1 text-right tabular-nums">선택</th>
+                                      <th className="px-2 py-1 text-center">근거</th>
+                                      <th className="px-2 py-1 text-right tabular-nums">옵션평균</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {previewHistoryRows.map((row) => (
+                                      <tr key={row.runId} className="border-t border-[var(--hairline)]">
+                                        <td className="px-2 py-1 whitespace-nowrap tabular-nums">{fmtTsCompact(row.at)}</td>
+                                        <td className="px-2 py-1 whitespace-nowrap text-right tabular-nums">{fmtKrw(row.basePrice)}</td>
+                                        <td className="px-2 py-1 whitespace-nowrap text-right tabular-nums">{fmtKrw(row.floorPrice)}</td>
+                                        <td className="px-2 py-1 whitespace-nowrap text-right tabular-nums">{fmtKrw(row.selectedPrice)}</td>
+                                        <td className="px-2 py-1 whitespace-nowrap text-center">{row.reason}</td>
+                                        <td className="px-2 py-1 whitespace-nowrap text-right tabular-nums">{fmtKrw(row.variantAvg)}</td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                            )}
+                          </div>
+
+                          <div className="rounded border border-[var(--hairline)] bg-[var(--bg)] p-2">
+                            <div className="mb-2 text-[11px] font-semibold">추세</div>
+                            <div className="grid grid-cols-[1fr_auto] gap-x-3 gap-y-1 text-[11px]">
+                              <div className="text-[var(--muted)]">최근 변화(1회)</div>
+                              <div className="whitespace-nowrap text-right font-medium tabular-nums">
+                                {historyTrendDelta == null ? "-" : fmtSignedKrw(historyTrendDelta)}
+                              </div>
+                              <div className="text-[var(--muted)]">최근 {previewTrend.count}회 범위</div>
+                              <div className="whitespace-nowrap text-right font-medium tabular-nums">
+                                {previewTrend.count > 0 ? `${fmtKrw(previewTrend.min)} ~ ${fmtKrw(previewTrend.max)}` : "-"}
+                              </div>
+                              <div className="text-[var(--muted)]">순변화(최근 {previewTrend.count}회)</div>
+                              <div className="whitespace-nowrap text-right font-medium tabular-nums">
+                                {previewTrend.netDelta == null ? "-" : fmtSignedKrw(previewTrend.netDelta)}
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="mt-auto rounded border border-[var(--hairline)] bg-[var(--bg)] p-3">
+                            <div className="text-[10px] text-[var(--muted)]">판매가(쇼핑몰)</div>
+                            <div className="mt-1 flex items-end justify-between gap-2">
+                              <div className="text-2xl font-semibold tabular-nums">{fmtKrw(editorPreview.price)}</div>
+                              <div className="text-right text-[11px] text-[var(--muted)] tabular-nums">
+                                유효바닥가 {fmtKrw(previewEffectiveFloor)}
+                              </div>
+                            </div>
+                            <div className="mt-2 grid grid-cols-[1fr_auto] gap-x-3 gap-y-1 text-[11px]">
+                              <div className="text-[var(--muted)]">소비자가</div>
+                              <div className="whitespace-nowrap text-right tabular-nums">{fmtKrw(editorPreview.retailPrice)}</div>
+                              <div className="text-[var(--muted)]">display / selling</div>
+                              <div className="whitespace-nowrap text-right tabular-nums">{editorPreview.display ?? "-"} / {editorPreview.selling ?? "-"}</div>
+                              <div className="text-[var(--muted)]">스냅샷 최종 타겟</div>
+                              <div className="whitespace-nowrap text-right tabular-nums">{snapshotExplainRow ? fmtKrw(snapshotExplainRow.final_target_price_krw) : "-"}</div>
+                            </div>
+                          </div>
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -1132,8 +1610,8 @@ export default function ShoppingAutoPricePage() {
                           {variantOptionColumnNames.map((name) => (
                             <th key={name} className="px-2 py-1">{name}</th>
                           ))}
-                          <th className="px-2 py-1">옵션가</th>
-                          <th className="px-2 py-1">최종가(max(판매가+옵션가, 유효바닥가))</th>
+                          <th className="px-2 py-1 text-right tabular-nums">옵션가</th>
+                          <th className="px-2 py-1 text-right tabular-nums">최종가(max(판매가+옵션가, 유효바닥가))</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -1147,8 +1625,8 @@ export default function ShoppingAutoPricePage() {
                               {variantOptionColumnNames.map((name) => (
                                 <td key={`${variant.variantCode}::${name}`} className="px-2 py-1">{valueByName.get(name) || "-"}</td>
                               ))}
-                              <td className="px-2 py-1">{fmt(variant.additionalAmount)}</td>
-                              <td className="px-2 py-1">
+                              <td className="px-2 py-1 whitespace-nowrap text-right tabular-nums">{fmt(variant.additionalAmount)}</td>
+                              <td className="px-2 py-1 whitespace-nowrap text-right tabular-nums">
                                 {editorPreview.price == null || variant.additionalAmount == null
                                   ? "-"
                                   : fmt(Math.max(
@@ -1597,7 +2075,7 @@ export default function ShoppingAutoPricePage() {
                     <th className="px-3 py-2">product_no</th>
                     <th className="px-3 py-2">variant_code</th>
                     <th className="px-3 py-2">desired</th>
-                    <th className="px-3 py-2">floor</th>
+                    <th className="px-3 py-2">바닥</th>
                     <th className="px-3 py-2">clamp</th>
                     <th className="px-3 py-2">state</th>
                     <th className="px-3 py-2">reason_code</th>

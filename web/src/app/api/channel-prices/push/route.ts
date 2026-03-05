@@ -38,6 +38,20 @@ const shouldPreferProductNo = (currentProductNo: string, nextProductNo: string):
   return next.localeCompare(current) < 0;
 };
 
+const isProductWriteAcceptedButVerifyPending = (raw: unknown, expectedPrice: number): boolean => {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return false;
+  const payload = raw as Record<string, unknown>;
+  if (payload.verify_pending !== true) return false;
+  const verifyExpected = Math.round(Number(payload.verify_expected ?? Number.NaN));
+  if (!Number.isFinite(verifyExpected) || verifyExpected !== Math.round(expectedPrice)) return false;
+  const response = payload.response;
+  if (!response || typeof response !== "object" || Array.isArray(response)) return false;
+  const product = (response as Record<string, unknown>).product;
+  if (!product || typeof product !== "object" || Array.isArray(product)) return false;
+  const responsePrice = Math.round(Number((product as Record<string, unknown>).price ?? Number.NaN));
+  return Number.isFinite(responsePrice) && responsePrice === Math.round(expectedPrice);
+};
+
 async function verifyAppliedPrice(
   account: Awaited<ReturnType<typeof loadCafe24Account>> extends infer T ? NonNullable<T> : never,
   accessToken: string,
@@ -133,6 +147,18 @@ export async function POST(request: Request) {
   const dryRun = body.dry_run === true;
   const syncOptionLabels = body.sync_option_labels !== false;
 
+  const desiredTargetByChannelProduct = new Map<string, number>();
+  const desiredRaw = body.desired_target_price_by_channel_product;
+  if (desiredRaw && typeof desiredRaw === "object" && !Array.isArray(desiredRaw)) {
+    for (const [key, value] of Object.entries(desiredRaw as Record<string, unknown>)) {
+      const channelProductId = String(key ?? "").trim();
+      if (!channelProductId) continue;
+      const desired = Math.round(Number(value ?? Number.NaN));
+      if (!Number.isFinite(desired) || desired <= 0) continue;
+      desiredTargetByChannelProduct.set(channelProductId, desired);
+    }
+  }
+
   if (!channelId) return jsonError("channel_id is required", 400);
   if (!dryRun && !pinnedComputeRequestId) {
     return jsonError("compute_request_id is required for deterministic push", 400);
@@ -195,6 +221,7 @@ export async function POST(request: Request) {
   );
 
   const logicalTargetKey = (masterItemId: string, externalVariantCode: string) => `${masterItemId}::${externalVariantCode || "BASE"}`;
+  const allowVariantAdditionalOverride = pinnedComputeRequestId.length === 0;
   let pinnedTargetByChannelProduct = new Map<string, number>();
   let pinnedTargetByLogical = new Map<string, number>();
   if (pinnedComputeRequestId) {
@@ -1034,6 +1061,11 @@ export async function POST(request: Request) {
       ? Math.round(fallbackTarget)
       : (hasFiniteRawTarget ? Math.round(rawTarget) : Number.NaN);
 
+    const forcedDesiredTarget = desiredTargetByChannelProduct.get(String(c.channel_product_id ?? "").trim());
+    if (Number.isFinite(Number(forcedDesiredTarget ?? Number.NaN))) {
+      targetPrice = Math.round(Number(forcedDesiredTarget));
+    }
+
     if (variantCode) {
       const baseFinalTarget = masterFallbackTarget.get(masterKey);
       const baseRawTarget = masterBaseRawTarget.get(masterKey);
@@ -1050,7 +1082,7 @@ export async function POST(request: Request) {
       }
     }
 
-    const overrideAdditionalForValidation = variantCode
+    const overrideAdditionalForValidation = allowVariantAdditionalOverride && variantCode
       ? resolveVariantAdditionalOverride(masterKey, String(c.external_product_no ?? "").trim(), variantCode)
       : undefined;
     if ((!Number.isFinite(targetPrice) || targetPrice <= 0) && !Number.isFinite(Number(overrideAdditionalForValidation ?? Number.NaN))) {
@@ -1098,7 +1130,7 @@ export async function POST(request: Request) {
 
     let expectedAdditionalAmount: number | undefined;
     let targetPriceForPush = targetPrice;
-    const overrideAdditionalAmount = variantCode
+    const overrideAdditionalAmount = allowVariantAdditionalOverride && variantCode
       ? resolveVariantAdditionalOverride(masterKey, String(c.external_product_no ?? "").trim(), variantCode)
       : undefined;
 
@@ -1179,7 +1211,8 @@ export async function POST(request: Request) {
         )
         : await verifyAppliedPrice(account, accessToken, String(c.external_product_no), targetPrice);
 
-      if (verify.ok) {
+      const verifyPendingAccepted = !variantCode && isProductWriteAcceptedButVerifyPending(pushRes.raw, targetPrice);
+      if (verify.ok || verifyPendingAccepted) {
         successCount += 1;
         if (variantCode) {
           const masterBaseTarget = masterFallbackTarget.get(masterKey);
@@ -1206,12 +1239,18 @@ export async function POST(request: Request) {
           external_variant_code: variantCode,
           before_price_krw: c.current_channel_price_krw,
           target_price_krw: variantCode ? targetPriceForPush : targetPrice,
-          after_price_krw: verify.current ?? (variantCode ? targetPriceForPush : targetPrice),
+          after_price_krw: verify.ok
+            ? (verify.current ?? (variantCode ? targetPriceForPush : targetPrice))
+            : (variantCode ? targetPriceForPush : targetPrice),
           status: "SUCCESS",
           http_status: pushRes.status,
           error_code: null,
           error_message: null,
-          raw_response_json: { push: pushRes.raw, verify: verify.raw },
+          raw_response_json: {
+            push: pushRes.raw,
+            verify: verify.raw,
+            verify_pending_accepted: verifyPendingAccepted,
+          },
         });
       } else {
         let retryRecorded = false;
@@ -1266,7 +1305,8 @@ export async function POST(request: Request) {
           const retryPush = await cafe24UpdateProductPrice(account, accessToken, externalProductNo, targetPrice);
           if (retryPush.ok) {
             const retryVerify = await verifyAppliedPrice(account, accessToken, String(c.external_product_no), targetPrice);
-            if (retryVerify.ok) {
+            const retryPendingAccepted = isProductWriteAcceptedButVerifyPending(retryPush.raw, targetPrice);
+            if (retryVerify.ok || retryPendingAccepted) {
               successCount += 1;
               itemRows.push({
                 job_id: jobId,
@@ -1277,7 +1317,9 @@ export async function POST(request: Request) {
                 external_variant_code: variantCode,
                 before_price_krw: c.current_channel_price_krw,
                 target_price_krw: variantCode ? targetPriceForPush : targetPrice,
-                after_price_krw: retryVerify.current ?? (variantCode ? targetPriceForPush : targetPrice),
+                after_price_krw: retryVerify.ok
+                  ? (retryVerify.current ?? (variantCode ? targetPriceForPush : targetPrice))
+                  : (variantCode ? targetPriceForPush : targetPrice),
                 status: "SUCCESS",
                 http_status: retryPush.status,
                 error_code: null,
@@ -1285,7 +1327,12 @@ export async function POST(request: Request) {
                 raw_response_json: {
                   push: pushRes.raw,
                   verify: verify.raw,
-                  retry: { push: retryPush.raw, verify: retryVerify.raw, retry_reason: "VERIFY_MISMATCH_RETRY_PRODUCT_PRICE" },
+                  retry: {
+                    push: retryPush.raw,
+                    verify: retryVerify.raw,
+                    retry_reason: "VERIFY_MISMATCH_RETRY_PRODUCT_PRICE",
+                    verify_pending_accepted: retryPendingAccepted,
+                  },
                 },
               });
               retryRecorded = true;
@@ -1356,7 +1403,9 @@ export async function POST(request: Request) {
       const masterKey = String(c.master_item_id ?? "").trim();
       if (!externalProductNo || !masterKey) continue;
 
-      const overrideAdditionalAmount = resolveVariantAdditionalOverride(masterKey, externalProductNo, variantCode);
+      const overrideAdditionalAmount = allowVariantAdditionalOverride
+        ? resolveVariantAdditionalOverride(masterKey, externalProductNo, variantCode)
+        : undefined;
       if (Number.isFinite(Number(overrideAdditionalAmount ?? Number.NaN))) {
         const byVariant = labelDeltaByProduct.get(externalProductNo) ?? new Map<string, number>();
         byVariant.set(variantCode, Math.round(Number(overrideAdditionalAmount)));

@@ -1,8 +1,9 @@
 import { CMS_SCHEMA } from "@/lib/contracts";
 import { assertSupabaseConfig, getSchemaClient } from "@/lib/supabase/client";
+import { SUPABASE_PUBLIC_ANON_KEY, SUPABASE_PUBLIC_URL } from "@/lib/supabase/public-config";
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
-const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? "";
+const supabaseUrl = SUPABASE_PUBLIC_URL;
+const supabaseAnonKey = SUPABASE_PUBLIC_ANON_KEY;
 
 const resolveRpcName = (fn: string) => {
   const raw = (fn ?? "").trim();

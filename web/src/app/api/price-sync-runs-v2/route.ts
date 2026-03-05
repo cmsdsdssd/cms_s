@@ -44,6 +44,15 @@ const toBool = (value: unknown): boolean => {
   return normalized === "1" || normalized === "true" || normalized === "y" || normalized === "yes";
 };
 
+const roundByMode = (value: number, unit: number, mode: "CEIL" | "ROUND" | "FLOOR") => {
+  if (!Number.isFinite(value)) return 0;
+  const safeUnit = Number.isFinite(unit) && unit > 0 ? unit : 1;
+  const q = value / safeUnit;
+  if (mode === "FLOOR") return Math.floor(q) * safeUnit;
+  if (mode === "ROUND") return Math.round(q) * safeUnit;
+  return Math.ceil(q) * safeUnit;
+};
+
 const resolveRunningStaleWindowMs = (): number => {
   const staleMinutes = toPositiveInt(process.env.SHOP_SYNC_RUNNING_STALE_MINUTES, 360, 7 * 24 * 60);
   return staleMinutes * 60 * 1000;
@@ -259,6 +268,23 @@ export async function POST(request: Request) {
     });
   }
 
+  const policyRes = await sb
+    .from("pricing_policy")
+    .select("rounding_unit, rounding_mode, updated_at")
+    .eq("channel_id", channelId)
+    .eq("is_active", true)
+    .order("updated_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (policyRes.error) return jsonError(policyRes.error.message ?? "가격정책 조회 실패", 500);
+  const roundingUnit = Math.max(1, Math.round(Number(policyRes.data?.rounding_unit ?? 1000)));
+  const roundingModeRaw = String(policyRes.data?.rounding_mode ?? "CEIL").trim().toUpperCase();
+  const roundingMode: "CEIL" | "ROUND" | "FLOOR" = roundingModeRaw === "FLOOR"
+    ? "FLOOR"
+    : roundingModeRaw === "ROUND"
+      ? "ROUND"
+      : "CEIL";
+
   const computeIds = Array.from(new Set(cursors.map((r) => String(r.compute_request_id ?? "").trim()).filter(Boolean)));
   if (pinnedComputeRequestId && !computeIds.includes(pinnedComputeRequestId)) {
     await sb
@@ -285,6 +311,8 @@ export async function POST(request: Request) {
     channel_product_id: string | null;
     compute_request_id: string | null;
     final_target_price_krw: number | null;
+    base_total_pre_margin_krw: number | null;
+    total_after_margin_krw: number | null;
   }> = [];
 
   for (const computeChunk of chunkArray(computeIds, Math.max(1, Math.min(50, IN_QUERY_CHUNK_SIZE)))) {
@@ -293,7 +321,7 @@ export async function POST(request: Request) {
     if (fullAutoScope || masterIds.length === 0) {
       const snapshotRes = await sb
         .from("pricing_snapshot")
-        .select("channel_id, master_item_id, channel_product_id, compute_request_id, final_target_price_krw")
+        .select("channel_id, master_item_id, channel_product_id, compute_request_id, final_target_price_krw, base_total_pre_margin_krw, total_after_margin_krw")
         .eq("channel_id", channelId)
         .in("compute_request_id", computeChunk);
       if (snapshotRes.error) return jsonError(snapshotRes.error.message ?? "스냅샷 조회 실패", 500);
@@ -305,7 +333,7 @@ export async function POST(request: Request) {
       if (masterChunk.length === 0) continue;
       const snapshotRes = await sb
         .from("pricing_snapshot")
-        .select("channel_id, master_item_id, channel_product_id, compute_request_id, final_target_price_krw")
+        .select("channel_id, master_item_id, channel_product_id, compute_request_id, final_target_price_krw, base_total_pre_margin_krw, total_after_margin_krw")
         .eq("channel_id", channelId)
         .in("compute_request_id", computeChunk)
         .in("master_item_id", masterChunk);
@@ -362,10 +390,54 @@ export async function POST(request: Request) {
     if (Number.isFinite(current)) currentByChannelProduct.set(key, Math.round(current));
   }
 
+  const baseSnapshotTargetByMaster = new Map<string, number>();
+  const forcedBaseTargetByMaster = new Map<string, number>();
+  for (const row of snapshotRows) {
+    const channelProductId = String(row.channel_product_id ?? "").trim();
+    const mapping = activeByChannelProduct.get(channelProductId);
+    if (!channelProductId || !mapping || !mapping.external_product_no) continue;
+    const variantCode = String(mapping.external_variant_code ?? "").trim();
+    if (variantCode.length > 0) continue;
+
+    const masterItemId = String(row.master_item_id ?? "").trim();
+    if (!masterItemId) continue;
+
+    const floorPrice = floorByMaster.get(masterItemId) ?? 0;
+    const baseTarget = Math.round(Number(row.final_target_price_krw ?? Number.NaN));
+    if (!Number.isFinite(baseTarget)) continue;
+    const prevBaseTarget = baseSnapshotTargetByMaster.get(masterItemId);
+    if (!Number.isFinite(Number(prevBaseTarget ?? Number.NaN))) {
+      baseSnapshotTargetByMaster.set(masterItemId, baseTarget);
+    } else {
+      baseSnapshotTargetByMaster.set(masterItemId, Math.max(Math.round(Number(prevBaseTarget)), baseTarget));
+    }
+
+    if (triggerType !== "AUTO") continue;
+    const current = currentByChannelProduct.get(channelProductId);
+    if (!Number.isFinite(Number(current ?? Number.NaN))) continue;
+
+    const marketBasePrice = Math.round(Number(row.base_total_pre_margin_krw ?? Number.NaN));
+    const marketAfterMarginRaw = Number(row.total_after_margin_krw ?? Number.NaN);
+    const marketAfterMargin = roundByMode(marketAfterMarginRaw, roundingUnit, roundingMode);
+    if (!Number.isFinite(marketBasePrice) || !Number.isFinite(marketAfterMargin) || marketAfterMargin <= 0) continue;
+
+    if ((marketAfterMargin - Math.round(Number(current))) < minChangeKrw) continue;
+    const forcedTarget = Math.max(baseTarget, marketAfterMargin, floorPrice);
+    const prevForcedTarget = forcedBaseTargetByMaster.get(masterItemId);
+    if (!Number.isFinite(Number(prevForcedTarget ?? Number.NaN))) {
+      forcedBaseTargetByMaster.set(masterItemId, forcedTarget);
+    } else {
+      forcedBaseTargetByMaster.set(masterItemId, Math.max(Math.round(Number(prevForcedTarget)), forcedTarget));
+    }
+  }
+
   const intentRows: Array<Record<string, unknown>> = [];
   const taskRows: Array<Record<string, unknown>> = [];
   let thresholdFilteredCount = 0;
   let thresholdEvaluatedCount = 0;
+  let marketGapForcedCount = 0;
+  let downsyncSuppressedCount = 0;
+  const marketGapForcedMasterKeys = new Set<string>();
   const dedupeByLogicalTarget = new Map<
     string,
     {
@@ -385,13 +457,48 @@ export async function POST(request: Request) {
     const masterItemId = String(row.master_item_id ?? "").trim();
     const floorPrice = floorByMaster.get(masterItemId) ?? 0;
     const target = Math.round(Number(row.final_target_price_krw ?? 0));
-    const desired = Math.max(target, floorPrice);
+    const variantCode = String(mapping.external_variant_code ?? "").trim();
+    let desired = Math.max(target, floorPrice);
     if (!(desired > 0)) continue;
 
+    const forcedBaseTarget = forcedBaseTargetByMaster.get(masterItemId);
+    const baseSnapshotTarget = baseSnapshotTargetByMaster.get(masterItemId);
+    const masterHasForcedMarketSync = Number.isFinite(Number(forcedBaseTarget ?? Number.NaN))
+      && Number.isFinite(Number(baseSnapshotTarget ?? Number.NaN))
+      && Number(forcedBaseTarget) > Number(baseSnapshotTarget);
+
     const currentPrice = currentByChannelProduct.get(channelProductId);
-    if (triggerType === "AUTO" && !forceFullSync && Number.isFinite(Number(currentPrice ?? Number.NaN))) {
+    const rowCurrentRounded = Number.isFinite(Number(currentPrice ?? Number.NaN))
+      ? Math.round(Number(currentPrice))
+      : null;
+    const rowMarketAfterMarginRaw = Number(row.total_after_margin_krw ?? Number.NaN);
+    const rowMarketAfterMargin = roundByMode(rowMarketAfterMarginRaw, roundingUnit, roundingMode);
+    const rowHasDirectMarketForce = triggerType === "AUTO"
+      && variantCode.length === 0
+      && rowCurrentRounded !== null
+      && Number.isFinite(rowMarketAfterMargin)
+      && rowMarketAfterMargin > 0
+      && ((rowMarketAfterMargin - rowCurrentRounded) >= minChangeKrw);
+
+    if (variantCode.length === 0 && (rowHasDirectMarketForce || masterHasForcedMarketSync)) {
+      if (rowHasDirectMarketForce) desired = Math.max(desired, rowMarketAfterMargin, floorPrice);
+      if (masterHasForcedMarketSync) desired = Math.max(desired, Math.round(Number(forcedBaseTarget)), floorPrice);
+      if (!marketGapForcedMasterKeys.has(masterItemId)) {
+        marketGapForcedMasterKeys.add(masterItemId);
+        marketGapForcedCount += 1;
+      }
+    }
+
+    if (triggerType === "AUTO" && Number.isFinite(Number(currentPrice ?? Number.NaN))) {
+      const currentRounded = Math.round(Number(currentPrice));
+      const isForcedBaseUplift = variantCode.length === 0 && (rowHasDirectMarketForce || masterHasForcedMarketSync);
+      if (!isForcedBaseUplift && desired <= currentRounded) {
+        downsyncSuppressedCount += 1;
+        continue;
+      }
+
       thresholdEvaluatedCount += 1;
-      if (Math.abs(desired - Math.round(Number(currentPrice))) < minChangeKrw) {
+      if (!masterHasForcedMarketSync && Math.abs(desired - currentRounded) < minChangeKrw) {
         thresholdFilteredCount += 1;
         continue;
       }
@@ -399,7 +506,6 @@ export async function POST(request: Request) {
 
     const intentId = crypto.randomUUID();
     const computeRequestId = String(row.compute_request_id ?? "").trim();
-    const variantCode = String(mapping.external_variant_code ?? "").trim();
     const logicalTargetKey = `${masterItemId}:${variantCode || "BASE"}:${computeRequestId}`;
     const existing = dedupeByLogicalTarget.get(logicalTargetKey);
 
@@ -496,6 +602,8 @@ export async function POST(request: Request) {
             threshold_min_change_krw: minChangeKrw,
             threshold_evaluated_count: thresholdEvaluatedCount,
             threshold_filtered_count: thresholdFilteredCount,
+            market_gap_forced_count: marketGapForcedCount,
+            downsync_suppressed_count: downsyncSuppressedCount,
             force_full_sync: forceFullSync,
           },
         },
@@ -509,6 +617,8 @@ export async function POST(request: Request) {
       threshold_min_change_krw: minChangeKrw,
       threshold_evaluated_count: thresholdEvaluatedCount,
       threshold_filtered_count: thresholdFilteredCount,
+      market_gap_forced_count: marketGapForcedCount,
+      downsync_suppressed_count: downsyncSuppressedCount,
       force_full_sync: forceFullSync,
     }, { headers: { "Cache-Control": "no-store" } });
   }
@@ -548,6 +658,8 @@ export async function POST(request: Request) {
           threshold_min_change_krw: minChangeKrw,
           threshold_evaluated_count: thresholdEvaluatedCount,
           threshold_filtered_count: thresholdFilteredCount,
+          market_gap_forced_count: marketGapForcedCount,
+          downsync_suppressed_count: downsyncSuppressedCount,
           force_full_sync: forceFullSync,
         },
       },
@@ -564,6 +676,8 @@ export async function POST(request: Request) {
       threshold_min_change_krw: minChangeKrw,
       threshold_evaluated_count: thresholdEvaluatedCount,
       threshold_filtered_count: thresholdFilteredCount,
+      market_gap_forced_count: marketGapForcedCount,
+      downsync_suppressed_count: downsyncSuppressedCount,
       force_full_sync: forceFullSync,
     },
     { headers: { "Cache-Control": "no-store" } },

@@ -20,10 +20,26 @@ export async function PUT(request: Request, { params }: Params) {
 
   const patch: Record<string, unknown> = {};
   if (typeof body.policy_name === "string") patch.policy_name = body.policy_name.trim();
-  if (body.margin_multiplier !== undefined) patch.margin_multiplier = Number(body.margin_multiplier);
-  if (body.rounding_unit !== undefined) patch.rounding_unit = Number(body.rounding_unit);
-  if (typeof body.rounding_mode === "string") patch.rounding_mode = body.rounding_mode.toUpperCase();
-  if (body.option_18k_weight_multiplier !== undefined) patch.option_18k_weight_multiplier = Number(body.option_18k_weight_multiplier);
+  if (body.margin_multiplier !== undefined) {
+    const margin = Number(body.margin_multiplier);
+    if (!Number.isFinite(margin) || margin < 0) return jsonError("margin_multiplier must be >= 0", 400);
+    patch.margin_multiplier = margin;
+  }
+  if (body.rounding_unit !== undefined) {
+    const unit = Number(body.rounding_unit);
+    if (!Number.isFinite(unit) || unit <= 0) return jsonError("rounding_unit must be > 0", 400);
+    patch.rounding_unit = Math.max(1, Math.round(unit));
+  }
+  if (typeof body.rounding_mode === "string") {
+    const mode = body.rounding_mode.toUpperCase();
+    if (!["CEIL", "ROUND", "FLOOR"].includes(mode)) return jsonError("rounding_mode must be CEIL/ROUND/FLOOR", 400);
+    patch.rounding_mode = mode;
+  }
+  if (body.option_18k_weight_multiplier !== undefined) {
+    const option18k = Number(body.option_18k_weight_multiplier);
+    if (!Number.isFinite(option18k) || option18k <= 0) return jsonError("option_18k_weight_multiplier must be > 0", 400);
+    patch.option_18k_weight_multiplier = option18k;
+  }
   if (body.material_factor_set_id !== undefined) patch.material_factor_set_id = body.material_factor_set_id || null;
   if (body.is_active !== undefined) patch.is_active = body.is_active === true;
 
@@ -34,6 +50,15 @@ export async function PUT(request: Request, { params }: Params) {
     .select("policy_id, channel_id, policy_name, margin_multiplier, rounding_unit, rounding_mode, option_18k_weight_multiplier, material_factor_set_id, is_active, created_at, updated_at")
     .single();
   if (error) return jsonError(error.message ?? "정책 수정 실패", 400);
+
+  if (data?.is_active === true) {
+    await sb
+      .from("pricing_policy")
+      .update({ is_active: false })
+      .eq("channel_id", String(data.channel_id ?? "").trim())
+      .neq("policy_id", String(data.policy_id ?? "").trim())
+      .eq("is_active", true);
+  }
 
   return NextResponse.json({ data }, { headers: { "Cache-Control": "no-store" } });
 }

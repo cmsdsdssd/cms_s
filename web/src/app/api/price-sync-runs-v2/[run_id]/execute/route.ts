@@ -37,6 +37,7 @@ type IntentRow = {
   master_item_id: string;
   external_variant_code: string;
   compute_request_id: string;
+  desired_price_krw: number | null;
   state: string;
 };
 
@@ -83,7 +84,7 @@ export async function POST(_request: Request, { params }: Params) {
 
   const intentRes = await sb
     .from("price_sync_intent_v2")
-    .select("intent_id, channel_product_id, master_item_id, external_variant_code, compute_request_id, state")
+    .select("intent_id, channel_product_id, master_item_id, external_variant_code, compute_request_id, desired_price_krw, state")
     .eq("run_id", runId)
     .in("state", ["PENDING", "FAILED"]);
   if (intentRes.error) return jsonError(intentRes.error.message ?? "intent 조회 실패", 500);
@@ -95,6 +96,7 @@ export async function POST(_request: Request, { params }: Params) {
       master_item_id: String(row.master_item_id ?? "").trim(),
       external_variant_code: String(row.external_variant_code ?? "").trim(),
       compute_request_id: String(row.compute_request_id ?? "").trim(),
+      desired_price_krw: row.desired_price_krw == null ? null : Number(row.desired_price_krw),
       state: String(row.state ?? "").trim().toUpperCase(),
     }))
     .filter((row) => row.intent_id && row.channel_product_id && row.master_item_id && row.compute_request_id);
@@ -199,6 +201,15 @@ export async function POST(_request: Request, { params }: Params) {
         if (logical) chunkLogicalTargets.add(logical);
       }
 
+      const desiredTargetByChannelProduct: Record<string, number> = {};
+      for (const row of pendingIntents) {
+        if (row.compute_request_id !== computeRequestId) continue;
+        if (!productChunk.includes(row.channel_product_id)) continue;
+        const desired = Number(row.desired_price_krw ?? Number.NaN);
+        if (!Number.isFinite(desired) || desired <= 0) continue;
+        desiredTargetByChannelProduct[row.channel_product_id] = Math.round(desired);
+      }
+
       const pushRes = await pushPost(
         mkJsonRequest("/api/channel-prices/push", {
           channel_id: channelId,
@@ -206,6 +217,7 @@ export async function POST(_request: Request, { params }: Params) {
           compute_request_id: computeRequestId,
           run_type: "AUTO",
           dry_run: false,
+          desired_target_price_by_channel_product: desiredTargetByChannelProduct,
         }),
       );
       const pushJson = await pushRes.json().catch(() => ({}));

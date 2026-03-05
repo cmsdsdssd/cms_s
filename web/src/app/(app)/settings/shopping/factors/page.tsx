@@ -61,6 +61,14 @@ type MaterialConfig = {
 
 const STANDARD_MATERIAL_CODES = ["14", "18", "24", "925", "999", "00"] as const;
 
+const parseNumericInput = (value: unknown): number | null => {
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  const cleaned = String(value ?? "").replaceAll(",", "").trim();
+  if (!cleaned) return null;
+  const n = Number(cleaned);
+  return Number.isFinite(n) ? n : null;
+};
+
 export default function ShoppingFactorsPage() {
   const qc = useQueryClient();
 
@@ -137,25 +145,29 @@ export default function ShoppingFactorsPage() {
 
   const upsertPolicy = useMutation({
     mutationFn: async () => {
+      const margin = parseNumericInput(marginMultiplier);
+      const unit = parseNumericInput(roundingUnit);
+      const option18k = parseNumericInput(option18kWeightMultiplier);
+      if (margin == null || margin < 0) throw new Error("마진은 0 이상 숫자여야 합니다");
+      if (unit == null || unit <= 0) throw new Error("반올림 단위는 1 이상 숫자여야 합니다");
+      if (option18k == null || option18k <= 0) throw new Error("18K 배수는 0보다 커야 합니다");
+
+      const payload = {
+        margin_multiplier: margin,
+        rounding_unit: Math.max(1, Math.round(unit)),
+        rounding_mode: roundingMode,
+        material_factor_set_id: policyFactorSetId || null,
+        option_18k_weight_multiplier: option18k,
+        is_active: true,
+      };
+
       if (activePolicy) {
-        return shopApiSend<{ data: Policy }>(`/api/pricing-policies/${activePolicy.policy_id}`, "PUT", {
-          margin_multiplier: Number(marginMultiplier),
-          rounding_unit: Number(roundingUnit),
-          rounding_mode: roundingMode,
-          material_factor_set_id: policyFactorSetId || null,
-          option_18k_weight_multiplier: Number(option18kWeightMultiplier),
-          is_active: true,
-        });
+        return shopApiSend<{ data: Policy }>(`/api/pricing-policies/${activePolicy.policy_id}`, "PUT", payload);
       }
       return shopApiSend<{ data: Policy }>("/api/pricing-policies", "POST", {
         channel_id: channelId,
         policy_name: "DEFAULT_POLICY",
-        margin_multiplier: Number(marginMultiplier),
-        rounding_unit: Number(roundingUnit),
-        rounding_mode: roundingMode,
-        option_18k_weight_multiplier: Number(option18kWeightMultiplier),
-        material_factor_set_id: policyFactorSetId || null,
-        is_active: true,
+        ...payload,
       });
     },
     onSuccess: async () => {
