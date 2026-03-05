@@ -10,6 +10,7 @@ import {
   ensureValidCafe24AccessToken,
   loadCafe24Account,
 } from "@/lib/shop/cafe24";
+import { restoreVariantTargetFromRawDelta } from "@/lib/shop/price-sync-guards";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -25,6 +26,7 @@ const chunkArray = <T,>(items: T[], chunkSize: number): T[][] => {
   return chunks;
 };
 
+const isNumericProductNo = (productNo: string): boolean => /^[0-9]+$/u.test(String(productNo ?? "").trim());
 const looksCanonicalProductCode = (productNo: string): boolean => /^P/i.test(String(productNo ?? "").trim());
 
 const shouldPreferProductNo = (currentProductNo: string, nextProductNo: string): boolean => {
@@ -32,6 +34,9 @@ const shouldPreferProductNo = (currentProductNo: string, nextProductNo: string):
   const next = String(nextProductNo ?? "").trim();
   if (!current && next) return true;
   if (!next) return false;
+  const currentNumeric = isNumericProductNo(current);
+  const nextNumeric = isNumericProductNo(next);
+  if (nextNumeric !== currentNumeric) return nextNumeric;
   const currentCanonical = looksCanonicalProductCode(current);
   const nextCanonical = looksCanonicalProductCode(next);
   if (nextCanonical !== currentCanonical) return nextCanonical;
@@ -121,12 +126,14 @@ async function verifyAppliedVariantPrice(
 
   const matchedByPrice = verifyMatched(last.currentPriceKrw);
   const matchedByAdditional = additionalMatched(last.additionalAmount);
+  const hasExpectedAdditional = typeof expectedAdditionalAmount === "number" && Number.isFinite(expectedAdditionalAmount);
+  const verificationAccepted = hasExpectedAdditional ? matchedByAdditional : (matchedByPrice && matchedByAdditional);
   return {
-    ok: matchedByPrice && matchedByAdditional,
+    ok: verificationAccepted,
     current: last.currentPriceKrw,
     status: last.status,
     raw: last.raw,
-    error: (matchedByPrice && matchedByAdditional)
+    error: verificationAccepted
       ? undefined
       : `VERIFY_MISMATCH expected=${expectedPrice} actual=${last.currentPriceKrw ?? "null"}${expectedAdditionalLabel}`,
   };
@@ -660,8 +667,9 @@ export async function POST(request: Request) {
     const master = String(row.master_item_id ?? "").trim();
     const variant = String(row.external_variant_code ?? "").trim();
     const productNo = String(row.external_product_no ?? "").trim();
-    if (!master || !productNo) continue;
-    if (!variant && !canonicalProductByMaster.has(master)) {
+    if (!master || !productNo || variant) continue;
+    const current = canonicalProductByMaster.get(master) ?? "";
+    if (shouldPreferProductNo(current, productNo)) {
       canonicalProductByMaster.set(master, productNo);
     }
   }
@@ -1074,11 +1082,12 @@ export async function POST(request: Request) {
       const hasBaseRaw = Number.isFinite(Number(baseRawTarget ?? Number.NaN));
       const hasVariantRaw = Number.isFinite(variantRawTarget);
       if (hasBaseFinal && hasBaseRaw && hasVariantRaw) {
-        const baseFinalRounded = Math.round(Number(baseFinalTarget));
-        const rawDelta = Math.round(variantRawTarget - Number(baseRawTarget));
-        if (rawDelta > 0 && targetPrice === baseFinalRounded) {
-          targetPrice = baseFinalRounded + rawDelta;
-        }
+        targetPrice = restoreVariantTargetFromRawDelta({
+          targetPrice,
+          baseFinalTarget: Number(baseFinalTarget),
+          baseRawTarget: Number(baseRawTarget),
+          variantRawTarget,
+        });
       }
     }
 
@@ -1422,6 +1431,10 @@ export async function POST(request: Request) {
       let targetPrice = shouldUseFallbackForVariant
         ? Math.round(fallbackTarget)
         : (hasFiniteRawTarget ? Math.round(rawTarget) : Number.NaN);
+      const forcedDesiredTarget = desiredTargetByChannelProduct.get(String(c.channel_product_id ?? "").trim());
+      if (Number.isFinite(Number(forcedDesiredTarget ?? Number.NaN))) {
+        targetPrice = Math.round(Number(forcedDesiredTarget));
+      }
       if (variantCode) {
         const baseFinalTarget = masterFallbackTarget.get(masterKey);
         const baseRawTarget = masterBaseRawTarget.get(masterKey);
@@ -1430,11 +1443,12 @@ export async function POST(request: Request) {
         const hasBaseRaw = Number.isFinite(Number(baseRawTarget ?? Number.NaN));
         const hasVariantRaw = Number.isFinite(variantRawTarget);
         if (hasBaseFinal && hasBaseRaw && hasVariantRaw) {
-          const baseFinalRounded = Math.round(Number(baseFinalTarget));
-          const rawDelta = Math.round(variantRawTarget - Number(baseRawTarget));
-          if (rawDelta > 0 && targetPrice === baseFinalRounded) {
-            targetPrice = baseFinalRounded + rawDelta;
-          }
+          targetPrice = restoreVariantTargetFromRawDelta({
+            targetPrice,
+            baseFinalTarget: Number(baseFinalTarget),
+            baseRawTarget: Number(baseRawTarget),
+            variantRawTarget,
+          });
         }
       }
       if (!Number.isFinite(targetPrice) || targetPrice <= 0) continue;

@@ -57,6 +57,56 @@ export type PricingSnapshotExplainRow = {
   tick_silver_krw_g: number;
   compute_request_id: string;
   computed_at: string;
+
+  // V2 extension fields (optional during rollout)
+  pricing_algo_version?: string;
+  calc_version?: string | null;
+  material_code_effective?: string | null;
+  material_basis_resolved?: "GOLD" | "SILVER" | "NONE" | string | null;
+  material_purity_rate_resolved?: number | null;
+  material_adjust_factor_resolved?: number | null;
+  effective_tick_krw_g?: number | null;
+  net_weight_g?: number | null;
+  current_channel_price_krw?: number | null;
+  diff_krw?: number | null;
+  diff_pct?: number | null;
+
+  labor_cost_applied_krw?: number | null;
+  labor_sell_total_plus_absorb_krw?: number | null;
+  absorb_total_krw_raw?: number | null;
+  absorb_total_krw_applied?: number | null;
+  absorb_excluded_from_price_krw?: number | null;
+
+  base_labor_sell_plus_absorb_krw?: number | null;
+  stone_labor_sell_plus_absorb_krw?: number | null;
+  plating_labor_sell_plus_absorb_krw?: number | null;
+  etc_labor_sell_plus_absorb_krw?: number | null;
+  decor_labor_sell_plus_absorb_krw?: number | null;
+
+  fee_rate?: number | null;
+  min_margin_rate_total?: number | null;
+  cost_sum_krw?: number | null;
+  material_pre_fee_krw?: number | null;
+  labor_pre_fee_krw?: number | null;
+  fixed_pre_fee_krw?: number | null;
+  candidate_pre_fee_krw?: number | null;
+  candidate_price_krw?: number | null;
+  min_margin_price_krw?: number | null;
+  guardrail_price_krw?: number | null;
+  guardrail_reason_code?: string | null;
+  final_target_price_v2_krw?: number | null;
+
+  labor_component_json?: Record<string, {
+    labor_cost_krw?: number;
+    labor_absorb_applied_krw?: number;
+    labor_absorb_raw_krw?: number;
+    labor_cost_plus_absorb_krw?: number;
+    labor_sell_krw?: number;
+    labor_sell_plus_absorb_krw?: number;
+    labor_class?: string;
+  }> | null;
+  absorb_total_applied_krw?: number | null;
+  absorb_total_raw_krw?: number | null;
 };
 
 export type PricingSnapshotExplainResponse = {

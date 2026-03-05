@@ -32,10 +32,15 @@ type MasterRow = {
   category_code: string | null;
   weight_default_g: number | null;
   deduction_weight_default_g: number | null;
+  labor_base_cost: number | null;
+  labor_center_cost: number | null;
+  labor_sub1_cost: number | null;
+  labor_sub2_cost: number | null;
   labor_base_sell: number | null;
   labor_center_sell: number | null;
   labor_sub1_sell: number | null;
   labor_sub2_sell: number | null;
+  plating_price_cost_default: number | null;
   plating_price_sell_default: number | null;
   center_qty_default: number | null;
   sub1_qty_default: number | null;
@@ -109,6 +114,17 @@ type BomRecipeLineEnrichedRow = {
   qty_per_unit?: number | null;
   note?: string | null;
   is_void?: boolean | null;
+};
+
+type V2LaborComponentInput = {
+  component_key: "BASE_LABOR" | "STONE_LABOR" | "PLATING" | "ETC" | "DECOR";
+  labor_class: "GENERAL" | "MATERIAL";
+  labor_cost_krw: number;
+  labor_absorb_applied_krw: number;
+  labor_absorb_raw_krw: number;
+  labor_cost_plus_absorb_krw: number;
+  labor_sell_krw: number;
+  labor_sell_plus_absorb_krw: number;
 };
 
 const KNOWN_MATERIAL_CODES = new Set(["14", "18", "24", "925", "999"]);
@@ -226,6 +242,149 @@ const computeMasterLaborSellPerUnit = (
   return baseSell + absorbSell;
 };
 
+const computeMasterLaborProfileWithoutAbsorb = (
+  masterRow: MasterRow | null | undefined,
+  includePlating: boolean,
+): {
+  baseSell: number;
+  stoneSell: number;
+  platingSell: number;
+  baseCost: number;
+  stoneCost: number;
+  platingCost: number;
+} => {
+  if (!masterRow) {
+    return {
+      baseSell: 0,
+      stoneSell: 0,
+      platingSell: 0,
+      baseCost: 0,
+      stoneCost: 0,
+      platingCost: 0,
+    };
+  }
+
+  const centerQty = Math.max(toNum(masterRow.center_qty_default, 0), 0);
+  const sub1Qty = Math.max(toNum(masterRow.sub1_qty_default, 0), 0);
+  const sub2Qty = Math.max(toNum(masterRow.sub2_qty_default, 0), 0);
+
+  const platingSell = includePlating ? toNum(masterRow.plating_price_sell_default, 0) : 0;
+  const platingCost = includePlating ? toNum(masterRow.plating_price_cost_default, 0) : 0;
+
+  return {
+    baseSell: toNum(masterRow.labor_base_sell, 0),
+    stoneSell:
+      toNum(masterRow.labor_center_sell, 0) * centerQty
+      + toNum(masterRow.labor_sub1_sell, 0) * sub1Qty
+      + toNum(masterRow.labor_sub2_sell, 0) * sub2Qty,
+    platingSell,
+    baseCost: toNum(masterRow.labor_base_cost, 0),
+    stoneCost:
+      toNum(masterRow.labor_center_cost, 0) * centerQty
+      + toNum(masterRow.labor_sub1_cost, 0) * sub1Qty
+      + toNum(masterRow.labor_sub2_cost, 0) * sub2Qty,
+    platingCost,
+  };
+};
+
+const computeAbsorbAppliedSummary = (
+  masterRow: MasterRow | null | undefined,
+  absorbItems: AbsorbRow[],
+  includePlating: boolean,
+): {
+  base: number;
+  stone: number;
+  plating: number;
+  etc: number;
+  general: number;
+  material: number;
+  total: number;
+  rawTotal: number;
+} => {
+  if (!masterRow) {
+    return {
+      base: 0,
+      stone: 0,
+      plating: 0,
+      etc: 0,
+      general: 0,
+      material: 0,
+      total: 0,
+      rawTotal: 0,
+    };
+  }
+
+  const centerQty = Math.max(toNum(masterRow.center_qty_default, 0), 0);
+  const sub1Qty = Math.max(toNum(masterRow.sub1_qty_default, 0), 0);
+  const sub2Qty = Math.max(toNum(masterRow.sub2_qty_default, 0), 0);
+
+  let base = 0;
+  let stone = 0;
+  let plating = 0;
+  let etc = 0;
+  let general = 0;
+  let material = 0;
+  let total = 0;
+  let rawTotal = 0;
+
+  const activeAll = absorbItems.filter((item) => item.is_active !== false);
+  for (const item of activeAll) {
+    const amount = toNum(item.amount_krw, 0);
+    if (!amount) continue;
+    rawTotal += amount;
+
+    if (shouldExcludeEtcAbsorbItem(item)) continue;
+
+    let applied = amount;
+    if (item.bucket === "STONE_LABOR") {
+      const role = parseAbsorbStoneRole(item.note);
+      if (role === "SUB1") applied = amount * Math.max(sub1Qty, 1);
+      else if (role === "SUB2") applied = amount * Math.max(sub2Qty, 1);
+      else applied = amount * Math.max(centerQty, 1);
+    }
+
+    if (item.bucket === "PLATING" && !includePlating) {
+      applied = 0;
+    }
+
+    if (isMaterialAbsorbItem(item)) {
+      const qtyPerUnit = Math.max(toNum(item.material_qty_per_unit, 1), 0);
+      applied = applied * qtyPerUnit;
+    }
+
+    if (!applied) continue;
+
+    if (item.bucket === "BASE_LABOR") base += applied;
+    else if (item.bucket === "STONE_LABOR") stone += applied;
+    else if (item.bucket === "PLATING") plating += applied;
+    else etc += applied;
+
+    const laborClass = String(item.labor_class ?? "GENERAL").trim().toUpperCase();
+    if (laborClass === "MATERIAL") material += applied;
+    else general += applied;
+
+    total += applied;
+  }
+
+  return { base, stone, plating, etc, general, material, total, rawTotal };
+};
+
+const clampRate = (value: unknown): { value: number; clamped: boolean } => {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return { value: 0, clamped: true };
+  if (n < 0) return { value: 0, clamped: true };
+  if (n >= 1) return { value: 0.999999, clamped: true };
+  return { value: n, clamped: false };
+};
+
+const gmCostToPreFeePrice = (costKrw: number, gmRate: number): number => {
+  const safeCost = Number.isFinite(costKrw) ? costKrw : 0;
+  const denom = 1 - gmRate;
+  if (!(denom > 0)) return safeCost;
+  return safeCost / denom;
+};
+
+
 export async function POST(request: Request) {
   const sb = getShopAdminClient();
   if (!sb) return jsonError("Supabase server env missing", 500);
@@ -239,20 +398,71 @@ export async function POST(request: Request) {
   const factorSetOverride = typeof body.factor_set_id === "string" ? body.factor_set_id.trim() : null;
   if (!channelId) return jsonError("channel_id is required", 400);
 
+  const policySelectV2 = "policy_id, margin_multiplier, rounding_unit, rounding_mode, option_18k_weight_multiplier, material_factor_set_id, gm_material, gm_labor, gm_fixed, fee_rate, min_margin_rate_total, fixed_cost_krw, pricing_algo_default";
+  const policySelectLegacy = "policy_id, margin_multiplier, rounding_unit, rounding_mode, option_18k_weight_multiplier, material_factor_set_id";
+
+  let policy: Record<string, unknown> | null = null;
   const policyRes = await sb
     .from("pricing_policy")
-    .select("policy_id, margin_multiplier, rounding_unit, rounding_mode, option_18k_weight_multiplier, material_factor_set_id")
+    .select(policySelectV2)
     .eq("channel_id", channelId)
     .eq("is_active", true)
     .order("updated_at", { ascending: false })
     .limit(1)
     .maybeSingle();
 
-  if (policyRes.error) return jsonError(policyRes.error.message ?? "정책 조회 실패", 500);
-  const policy = policyRes.data;
+  if (policyRes.error) {
+    const msg = String(policyRes.error.message ?? "");
+    if (!msg.includes("gm_material")) return jsonError(msg || "정책 조회 실패", 500);
+    const legacyRes = await sb
+      .from("pricing_policy")
+      .select(policySelectLegacy)
+      .eq("channel_id", channelId)
+      .eq("is_active", true)
+      .order("updated_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (legacyRes.error) return jsonError(legacyRes.error.message ?? "정책 조회 실패", 500);
+    if (legacyRes.data) {
+      policy = {
+        ...legacyRes.data,
+        gm_material: 0,
+        gm_labor: 0,
+        gm_fixed: 0,
+        fee_rate: 0,
+        min_margin_rate_total: 0,
+        fixed_cost_krw: 0,
+        pricing_algo_default: "LEGACY_V1",
+      };
+    }
+  } else {
+    policy = (policyRes.data as Record<string, unknown> | null);
+  }
+
   if (!policy) return jsonError("활성 정책이 없습니다", 422);
 
-  const selectedFactorSetId = factorSetOverride || policy.material_factor_set_id || null;
+  const snapshotV2Probe = await sb.from("pricing_snapshot").select("pricing_algo_version").limit(1);
+  const hasV2SnapshotColumns = !snapshotV2Probe.error;
+
+  const selectedFactorSetId = factorSetOverride || String(policy.material_factor_set_id ?? "").trim() || null;
+  const requestedPricingAlgo = String(body.pricing_algo_version ?? body.pricing_algo ?? "").trim().toUpperCase();
+  const pricingAlgoVersion = hasV2SnapshotColumns && requestedPricingAlgo !== "LEGACY_V1"
+    ? "REVERSE_FEE_V2"
+    : "LEGACY_V1";
+
+  const gmMaterialRate = clampRate(policy.gm_material);
+  const gmLaborRate = clampRate(policy.gm_labor);
+  const gmFixedRate = clampRate(policy.gm_fixed);
+  const feeRate = clampRate(policy.fee_rate);
+  const minMarginRateTotal = clampRate(policy.min_margin_rate_total);
+  const fixedCostKrw = Math.max(0, Math.round(toNum(policy.fixed_cost_krw, 0)));
+  const hasInvalidV2Param =
+    gmMaterialRate.clamped
+    || gmLaborRate.clamped
+    || gmFixedRate.clamped
+    || feeRate.clamped
+    || minMarginRateTotal.clamped
+    || ((feeRate.value + minMarginRateTotal.value) >= 1);
 
   const mapQuery = sb
     .from("sales_channel_product")
@@ -475,15 +685,6 @@ export async function POST(request: Request) {
       Math.max(0, Math.round(Number((row as { floor_price_krw?: unknown }).floor_price_krw ?? 0))),
     ]),
   );
-  const missingFloorMasterIds = uniqueMasterIds.filter((masterId) => !floorPriceByMaster.has(String(masterId ?? "")));
-  if (missingFloorMasterIds.length > 0) {
-    return jsonError("바닥가격 미설정 마스터가 있어 재계산을 진행할 수 없습니다", 422, {
-      code: "MISSING_FLOOR_PRICE",
-      channel_id: channelId,
-      master_item_ids: missingFloorMasterIds.slice(0, 200),
-      count: missingFloorMasterIds.length,
-    });
-  }
 
   const inferredR1BaseMaterialByMaster = new Map<string, string>();
   const mappingsByMaster = new Map<string, MappingRow[]>();
@@ -509,7 +710,7 @@ export async function POST(request: Request) {
 
   const masterRes = await sb
     .from("cms_master_item")
-    .select("master_item_id, material_code_default, category_code, weight_default_g, deduction_weight_default_g, labor_base_sell, labor_center_sell, labor_sub1_sell, labor_sub2_sell, plating_price_sell_default, center_qty_default, sub1_qty_default, sub2_qty_default, model_name")
+    .select("master_item_id, material_code_default, category_code, weight_default_g, deduction_weight_default_g, labor_base_cost, labor_center_cost, labor_sub1_cost, labor_sub2_cost, labor_base_sell, labor_center_sell, labor_sub1_sell, labor_sub2_sell, plating_price_cost_default, plating_price_sell_default, center_qty_default, sub1_qty_default, sub2_qty_default, model_name")
     .in("master_item_id", uniqueMasterIds);
   if (masterRes.error) return jsonError(masterRes.error.message ?? "마스터 조회 실패", 500);
   const masterMap = new Map((masterRes.data ?? []).map((row) => [String((row as MasterRow).master_item_id), row as MasterRow]));
@@ -600,7 +801,7 @@ export async function POST(request: Request) {
   if (componentMasterIds.size > 0) {
     const componentRes = await sb
       .from("cms_master_item")
-      .select("master_item_id, material_code_default, category_code, weight_default_g, deduction_weight_default_g, labor_base_sell, labor_center_sell, labor_sub1_sell, labor_sub2_sell, plating_price_sell_default, center_qty_default, sub1_qty_default, sub2_qty_default, model_name")
+      .select("master_item_id, material_code_default, category_code, weight_default_g, deduction_weight_default_g, labor_base_cost, labor_center_cost, labor_sub1_cost, labor_sub2_cost, labor_base_sell, labor_center_sell, labor_sub1_sell, labor_sub2_sell, plating_price_cost_default, plating_price_sell_default, center_qty_default, sub1_qty_default, sub2_qty_default, model_name")
       .in("master_item_id", Array.from(componentMasterIds));
     if (componentRes.error) return jsonError(componentRes.error.message ?? "컴포넌트 마스터 조회 실패", 500);
     componentMasterMap = new Map(
@@ -805,6 +1006,9 @@ export async function POST(request: Request) {
   const blockedByMissingRules: Array<{ channel_product_id: string; missing_rules: string[] }> = [];
   const recomputeAt = new Date().toISOString();
   const computeRequestId = crypto.randomUUID();
+  const guardrailTraceByChannelProductId = new Map<string, Record<string, unknown>>();
+
+  const laborComponentRowsByChannelProductId = new Map<string, V2LaborComponentInput[]>();
 
   const rows = mappings.flatMap((m) => {
     const master = masterMap.get(m.master_item_id);
@@ -1006,17 +1210,90 @@ export async function POST(request: Request) {
     const includePlating = m.include_master_plating_labor !== false;
     const masterAbsorbItems = absorbByMasterId.get(m.master_item_id) ?? [];
     const masterLaborSell = computeMasterLaborSellPerUnit(master, masterAbsorbItems, includePlating);
+    const masterLaborProfile = computeMasterLaborProfileWithoutAbsorb(master, includePlating);
+    const masterAbsorbSummary = computeAbsorbAppliedSummary(master, masterAbsorbItems, includePlating);
+
     const decorLines = decorLinesByMaster.get(m.master_item_id) ?? [];
-    const decorLaborSell = decorLines.reduce((sum, line) => {
-      const componentMaster = componentMasterMap.get(line.component_master_id) ?? null;
-      if (!componentMaster) return sum;
-      const componentAbsorbItems = absorbByMasterId.get(line.component_master_id) ?? [];
-      const componentSellPerUnit = computeMasterLaborSellPerUnit(componentMaster, componentAbsorbItems, includePlating);
-      return sum + componentSellPerUnit * Math.max(line.qty_per_unit, 0);
-    }, 0);
-    const laborRawBase = masterLaborSell + decorLaborSell;
+    const decorLaborTotals = decorLines.reduce(
+      (sum, line) => {
+        const componentMaster = componentMasterMap.get(line.component_master_id) ?? null;
+        if (!componentMaster) return sum;
+
+        const qtyPerUnit = Math.max(line.qty_per_unit, 0);
+        if (!(qtyPerUnit > 0)) return sum;
+
+        const componentAbsorbItems = absorbByMasterId.get(line.component_master_id) ?? [];
+        const componentProfile = computeMasterLaborProfileWithoutAbsorb(componentMaster, includePlating);
+        const componentAbsorbSummary = computeAbsorbAppliedSummary(componentMaster, componentAbsorbItems, includePlating);
+
+        const componentSellWithoutAbsorbPerUnit =
+          componentProfile.baseSell
+          + componentProfile.stoneSell
+          + componentProfile.platingSell;
+        const componentSellPlusAbsorbPerUnit = computeMasterLaborSellPerUnit(
+          componentMaster,
+          componentAbsorbItems,
+          includePlating,
+        );
+        const componentCostWithoutAbsorbPerUnit =
+          componentProfile.baseCost
+          + componentProfile.stoneCost
+          + componentProfile.platingCost;
+
+        sum.sellWithoutAbsorb += componentSellWithoutAbsorbPerUnit * qtyPerUnit;
+        sum.sellPlusAbsorb += componentSellPlusAbsorbPerUnit * qtyPerUnit;
+        sum.costWithoutAbsorb += componentCostWithoutAbsorbPerUnit * qtyPerUnit;
+        sum.absorbApplied += componentAbsorbSummary.total * qtyPerUnit;
+        sum.absorbRaw += componentAbsorbSummary.rawTotal * qtyPerUnit;
+        return sum;
+      },
+      {
+        sellWithoutAbsorb: 0,
+        sellPlusAbsorb: 0,
+        costWithoutAbsorb: 0,
+        absorbApplied: 0,
+        absorbRaw: 0,
+      },
+    );
+
+    const laborRawBase = masterLaborSell + decorLaborTotals.sellPlusAbsorb;
     const laborBaseDelta = laborDeltaByMaster.get(m.master_item_id) ?? 0;
     const laborRaw = laborRawBase + laborBaseDelta;
+
+    const laborCostAppliedKrw = Math.max(0, Math.round(
+      masterLaborProfile.baseCost
+      + masterLaborProfile.stoneCost
+      + masterLaborProfile.platingCost
+      + masterAbsorbSummary.total
+      + decorLaborTotals.costWithoutAbsorb
+      + decorLaborTotals.absorbApplied,
+    ));
+    const laborSellTotalPlusAbsorbKrw = Math.max(0, Math.round(
+      laborRawBase,
+    ));
+
+    const materialCostAppliedKrw = Math.max(0, Math.round(materialFinal));
+    const materialPreFeeKrw = Math.round(gmCostToPreFeePrice(materialCostAppliedKrw, gmMaterialRate.value));
+    const laborPreFeeKrw = Math.round(gmCostToPreFeePrice(laborCostAppliedKrw, gmLaborRate.value));
+    const fixedPreFeeKrw = Math.round(gmCostToPreFeePrice(fixedCostKrw, gmFixedRate.value));
+    const candidatePreFeeKrw = materialPreFeeKrw + laborPreFeeKrw + fixedPreFeeKrw;
+    const candidatePriceRaw = gmCostToPreFeePrice(candidatePreFeeKrw, feeRate.value);
+    const candidatePriceKrw = roundByRule(candidatePriceRaw, Number(policy.rounding_unit ?? 1000), String(policy.rounding_mode ?? "CEIL"));
+    const costSumKrw = materialCostAppliedKrw + laborCostAppliedKrw + fixedCostKrw;
+    const minMarginDenom = 1 - feeRate.value - minMarginRateTotal.value;
+    const minMarginPriceRaw = minMarginDenom > 0 ? (costSumKrw / minMarginDenom) : costSumKrw;
+    const minMarginPriceKrw = roundByRule(minMarginPriceRaw, Number(policy.rounding_unit ?? 1000), String(policy.rounding_mode ?? "CEIL"));
+    const guardrailPriceKrw = Math.max(candidatePriceKrw, minMarginPriceKrw);
+    const guardrailReasonCode = hasInvalidV2Param
+      ? "INVALID_PARAM_CLAMPED"
+      : (guardrailPriceKrw === minMarginPriceKrw ? "MIN_MARGIN_WIN" : "COMPONENT_CANDIDATE_WIN");
+
+    guardrailTraceByChannelProductId.set(m.channel_product_id, {
+      candidate_price_krw: candidatePriceKrw,
+      min_margin_price_krw: minMarginPriceKrw,
+      guardrail_price_krw: guardrailPriceKrw,
+      guardrail_reason_code: guardrailReasonCode,
+    });
 
     if (matchedR4Rule) {
       r4Delta = roundByRule(laborRawBase, matchedR4Rule.rounding_unit, matchedR4Rule.rounding_mode);
@@ -1140,14 +1417,82 @@ export async function POST(request: Request) {
     const targetRaw = useManual ? manualTarget : targetRawSync;
 
     const override = overrideMap.get(m.master_item_id);
-    const unclampedFinalTarget = override ? toNum(override.override_price_krw, rounded) : rounded;
     const floorPrice = floorPriceByMaster.get(m.master_item_id) ?? 0;
+    const legacyFinalBeforeFloor = override ? toNum(override.override_price_krw, rounded) : rounded;
     const floorWithMargin = applyRule4
       ? roundByRule(floorPrice * marginMultiplier, roundingUnit, roundingMode)
       : floorPrice;
     const effectiveFloor = Math.max(floorPrice, floorWithMargin);
-    const finalTarget = Math.max(unclampedFinalTarget, effectiveFloor);
-    const floorClamped = finalTarget > unclampedFinalTarget;
+    const legacyFinalTarget = Math.max(legacyFinalBeforeFloor, effectiveFloor);
+
+    const guardrail = guardrailTraceByChannelProductId.get(m.channel_product_id) ?? {
+      candidate_price_krw: 0,
+      min_margin_price_krw: 0,
+      guardrail_price_krw: 0,
+      guardrail_reason_code: hasInvalidV2Param ? "INVALID_PARAM_CLAMPED" : "COMPONENT_CANDIDATE_WIN",
+    };
+    const finalTargetV2BeforeOverride = Math.round(Number(guardrail.guardrail_price_krw ?? 0));
+    const finalTargetV2 = override
+      ? Math.round(toNum(override.override_price_krw, finalTargetV2BeforeOverride))
+      : finalTargetV2BeforeOverride;
+
+    const finalTarget = pricingAlgoVersion === "REVERSE_FEE_V2" ? finalTargetV2 : legacyFinalTarget;
+    const finalTargetBeforeFloor = pricingAlgoVersion === "REVERSE_FEE_V2" ? finalTargetV2BeforeOverride : legacyFinalBeforeFloor;
+    const floorClamped = pricingAlgoVersion === "REVERSE_FEE_V2" ? false : (legacyFinalTarget > legacyFinalBeforeFloor);
+
+    const laborComponentRows: V2LaborComponentInput[] = [
+      {
+        component_key: "BASE_LABOR",
+        labor_class: "GENERAL",
+        labor_cost_krw: Math.max(0, Math.round(masterLaborProfile.baseCost)),
+        labor_absorb_applied_krw: Math.max(0, Math.round(masterAbsorbSummary.base)),
+        labor_absorb_raw_krw: Math.max(0, Math.round(masterAbsorbSummary.base)),
+        labor_cost_plus_absorb_krw: Math.max(0, Math.round(masterLaborProfile.baseCost + masterAbsorbSummary.base)),
+        labor_sell_krw: Math.max(0, Math.round(masterLaborProfile.baseSell)),
+        labor_sell_plus_absorb_krw: Math.max(0, Math.round(masterLaborProfile.baseSell + masterAbsorbSummary.base)),
+      },
+      {
+        component_key: "STONE_LABOR",
+        labor_class: "GENERAL",
+        labor_cost_krw: Math.max(0, Math.round(masterLaborProfile.stoneCost)),
+        labor_absorb_applied_krw: Math.max(0, Math.round(masterAbsorbSummary.stone)),
+        labor_absorb_raw_krw: Math.max(0, Math.round(masterAbsorbSummary.stone)),
+        labor_cost_plus_absorb_krw: Math.max(0, Math.round(masterLaborProfile.stoneCost + masterAbsorbSummary.stone)),
+        labor_sell_krw: Math.max(0, Math.round(masterLaborProfile.stoneSell)),
+        labor_sell_plus_absorb_krw: Math.max(0, Math.round(masterLaborProfile.stoneSell + masterAbsorbSummary.stone)),
+      },
+      {
+        component_key: "PLATING",
+        labor_class: "GENERAL",
+        labor_cost_krw: Math.max(0, Math.round(masterLaborProfile.platingCost)),
+        labor_absorb_applied_krw: Math.max(0, Math.round(masterAbsorbSummary.plating)),
+        labor_absorb_raw_krw: Math.max(0, Math.round(masterAbsorbSummary.plating)),
+        labor_cost_plus_absorb_krw: Math.max(0, Math.round(masterLaborProfile.platingCost + masterAbsorbSummary.plating)),
+        labor_sell_krw: Math.max(0, Math.round(masterLaborProfile.platingSell)),
+        labor_sell_plus_absorb_krw: Math.max(0, Math.round(masterLaborProfile.platingSell + masterAbsorbSummary.plating)),
+      },
+      {
+        component_key: "ETC",
+        labor_class: masterAbsorbSummary.material > 0 ? "MATERIAL" : "GENERAL",
+        labor_cost_krw: 0,
+        labor_absorb_applied_krw: Math.max(0, Math.round(masterAbsorbSummary.etc)),
+        labor_absorb_raw_krw: Math.max(0, Math.round(masterAbsorbSummary.etc)),
+        labor_cost_plus_absorb_krw: Math.max(0, Math.round(masterAbsorbSummary.etc)),
+        labor_sell_krw: 0,
+        labor_sell_plus_absorb_krw: Math.max(0, Math.round(masterAbsorbSummary.etc)),
+      },
+      {
+        component_key: "DECOR",
+        labor_class: "GENERAL",
+        labor_cost_krw: Math.max(0, Math.round(decorLaborTotals.costWithoutAbsorb)),
+        labor_absorb_applied_krw: Math.max(0, Math.round(decorLaborTotals.absorbApplied)),
+        labor_absorb_raw_krw: Math.max(0, Math.round(decorLaborTotals.absorbRaw)),
+        labor_cost_plus_absorb_krw: Math.max(0, Math.round(decorLaborTotals.costWithoutAbsorb + decorLaborTotals.absorbApplied)),
+        labor_sell_krw: Math.max(0, Math.round(decorLaborTotals.sellWithoutAbsorb)),
+        labor_sell_plus_absorb_krw: Math.max(0, Math.round(decorLaborTotals.sellPlusAbsorb)),
+      },
+    ];
+    laborComponentRowsByChannelProductId.set(m.channel_product_id, laborComponentRows);
 
     return [{
       channel_id: m.channel_id,
@@ -1176,10 +1521,33 @@ export async function POST(request: Request) {
       rounding_mode_used: roundingMode,
       rounded_target_price_krw: rounded,
       override_price_krw: override ? toNum(override.override_price_krw, rounded) : null,
-      floor_price_krw: floorPrice,
-      final_target_before_floor_krw: unclampedFinalTarget,
+      floor_price_krw: pricingAlgoVersion === "REVERSE_FEE_V2" ? 0 : floorPrice,
+      final_target_before_floor_krw: finalTargetBeforeFloor,
       floor_clamped: floorClamped,
       final_target_price_krw: finalTarget,
+      ...(hasV2SnapshotColumns
+        ? {
+          pricing_algo_version: pricingAlgoVersion,
+          calc_version: pricingAlgoVersion === "REVERSE_FEE_V2" ? "REVERSE_FEE_V2.0" : "LEGACY_V1",
+          material_code_effective: optionMaterialCode || materialCode || null,
+          material_basis_resolved: materialBasisMap.get(optionMaterialCode) ?? materialBasisMap.get(materialCode) ?? "GOLD",
+          material_purity_rate_resolved: getMaterialPurityFromMap(purityMap, optionMaterialCode || materialCode, 0),
+          material_adjust_factor_resolved: materialAdjustMap.get(optionMaterialCode) ?? materialAdjustMap.get(materialCode) ?? 1,
+          effective_tick_krw_g: tickByMaterialCode(optionMaterialCode || materialCode),
+          labor_cost_applied_krw: laborCostAppliedKrw,
+          labor_sell_total_plus_absorb_krw: laborSellTotalPlusAbsorbKrw,
+          cost_sum_krw: materialCostAppliedKrw + laborCostAppliedKrw + fixedCostKrw,
+          material_pre_fee_krw: materialPreFeeKrw,
+          labor_pre_fee_krw: laborPreFeeKrw,
+          fixed_pre_fee_krw: fixedPreFeeKrw,
+          candidate_pre_fee_krw: candidatePreFeeKrw,
+          candidate_price_krw: Number(guardrail.candidate_price_krw ?? 0),
+          min_margin_price_krw: Number(guardrail.min_margin_price_krw ?? 0),
+          guardrail_price_krw: Number(guardrail.guardrail_price_krw ?? 0),
+          guardrail_reason_code: String(guardrail.guardrail_reason_code ?? (hasInvalidV2Param ? "INVALID_PARAM_CLAMPED" : "COMPONENT_CANDIDATE_WIN")),
+          final_target_price_v2_krw: pricingAlgoVersion === "REVERSE_FEE_V2" ? finalTargetV2 : null,
+        }
+        : {}),
       delta_material_krw: deltaMaterialBucket,
       delta_size_krw: deltaSizeBucket,
       delta_color_krw: deltaColorBucket,
@@ -1209,7 +1577,7 @@ export async function POST(request: Request) {
         size_weight_delta_g: sizeWeightDeltaApplied,
         include_master_plating_labor: includePlating,
         labor_sot_master_sell_krw: masterLaborSell,
-        labor_sot_decor_sell_krw: decorLaborSell,
+        labor_sot_decor_sell_krw: decorLaborTotals.sellPlusAbsorb,
         labor_sot_total_sell_krw: laborRawBase,
         r4_labor_delta_source_krw: matchedR4Rule ? laborRawBase : 0,
         labor_base_price_delta_krw: laborBaseDelta,
@@ -1232,9 +1600,12 @@ export async function POST(request: Request) {
         sync_rule_plating_enabled: needsR3,
         sync_rule_decoration_enabled: needsR4Decor,
         sync_rule_margin_rounding_enabled: applyRule4,
-        floor_price_raw_krw: floorPrice,
-        floor_price_effective_krw: effectiveFloor,
-        floor_margin_applied: applyRule4,
+        floor_price_raw_krw: pricingAlgoVersion === "REVERSE_FEE_V2" ? 0 : floorPrice,
+        floor_price_effective_krw: pricingAlgoVersion === "REVERSE_FEE_V2" ? 0 : effectiveFloor,
+        floor_margin_applied: pricingAlgoVersion !== "REVERSE_FEE_V2" && applyRule4,
+        pricing_algo_version: pricingAlgoVersion,
+        guardrail_price_v2_krw: Number(guardrail.guardrail_price_krw ?? 0),
+        guardrail_reason_code_v2: String(guardrail.guardrail_reason_code ?? (hasInvalidV2Param ? "INVALID_PARAM_CLAMPED" : "COMPONENT_CANDIDATE_WIN")),
         target_source: useManual ? "MANUAL" : "SYNC",
       },
       compute_request_id: computeRequestId,
@@ -1256,8 +1627,57 @@ export async function POST(request: Request) {
     }, { headers: { "Cache-Control": "no-store" } });
   }
 
-  const insertRes = await sb.from("pricing_snapshot").insert(rows).select("snapshot_id");
+  const insertRes = await sb.from("pricing_snapshot").insert(rows).select("snapshot_id, channel_product_id");
   if (insertRes.error) return jsonError(insertRes.error.message ?? "스냅샷 저장 실패", 500);
+
+  if (pricingAlgoVersion === "REVERSE_FEE_V2") {
+    const insertedRows = (insertRes.data ?? []) as Array<{ snapshot_id?: string | null; channel_product_id?: string | null }>;
+    const v2LaborComponentRows: Array<Record<string, unknown>> = [];
+    const v2GuardrailRows: Array<Record<string, unknown>> = [];
+
+    for (const row of insertedRows) {
+      const snapshotId = String(row.snapshot_id ?? "").trim();
+      const channelProductId = String(row.channel_product_id ?? "").trim();
+      if (!snapshotId || !channelProductId) continue;
+
+      const laborComponents = laborComponentRowsByChannelProductId.get(channelProductId) ?? [];
+      for (const component of laborComponents) {
+        v2LaborComponentRows.push({
+          snapshot_id: snapshotId,
+          component_key: component.component_key,
+          labor_class: component.labor_class,
+          labor_cost_krw: component.labor_cost_krw,
+          labor_absorb_applied_krw: component.labor_absorb_applied_krw,
+          labor_absorb_raw_krw: component.labor_absorb_raw_krw,
+          labor_cost_plus_absorb_krw: component.labor_cost_plus_absorb_krw,
+          labor_sell_krw: component.labor_sell_krw,
+          labor_sell_plus_absorb_krw: component.labor_sell_plus_absorb_krw,
+        });
+      }
+
+      const guardrailTrace = guardrailTraceByChannelProductId.get(channelProductId);
+      if (guardrailTrace) {
+        v2GuardrailRows.push({
+          snapshot_id: snapshotId,
+          candidate_price_krw: Number(guardrailTrace.candidate_price_krw ?? 0),
+          min_margin_price_krw: Number(guardrailTrace.min_margin_price_krw ?? 0),
+          guardrail_price_krw: Number(guardrailTrace.guardrail_price_krw ?? 0),
+          guardrail_reason_code: String(guardrailTrace.guardrail_reason_code ?? "COMPONENT_CANDIDATE_WIN"),
+          final_target_price_v2_krw: Number(guardrailTrace.guardrail_price_krw ?? 0),
+        });
+      }
+    }
+
+    if (v2LaborComponentRows.length > 0) {
+      const laborComponentInsertRes = await sb.from("pricing_snapshot_labor_component_v2").insert(v2LaborComponentRows);
+      if (laborComponentInsertRes.error) return jsonError(laborComponentInsertRes.error.message ?? "V2 labor component 저장 실패", 500);
+    }
+
+    if (v2GuardrailRows.length > 0) {
+      const guardrailInsertRes = await sb.from("pricing_snapshot_guardrail_trace_v2").insert(v2GuardrailRows);
+      if (guardrailInsertRes.error) return jsonError(guardrailInsertRes.error.message ?? "V2 guardrail trace 저장 실패", 500);
+    }
+  }
 
   const cursorRows = Array.from(new Set(rows.map((row) => `${String(row.channel_id)}::${String(row.master_item_id)}`)))
     .map((key) => {

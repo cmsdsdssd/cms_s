@@ -8,12 +8,28 @@ const fmt = (v: number | null | undefined) =>
 
 const signed = (v: number) => `${v > 0 ? "+" : v < 0 ? "-" : ""}${fmt(Math.abs(v))}`;
 
+const REASON_CODE_LABELS: Record<string, string> = {
+  COMPONENT_CANDIDATE_WIN: "후보가 경로 우선",
+  MIN_MARGIN_WIN: "최소마진보장가 경로 우선",
+  INVALID_PARAM_CLAMPED: "입력값 보정 후 가드레일 적용",
+  UNKNOWN: "알 수 없음",
+};
+
+const LABOR_COMPONENT_ORDER = ["BASE_LABOR", "STONE_LABOR", "PLATING", "ETC", "DECOR"] as const;
+
+const reasonCodeLabel = (code: string | null | undefined) => {
+  const normalized = String(code ?? "").trim().toUpperCase();
+  if (!normalized) return "미적용";
+  return REASON_CODE_LABELS[normalized] ?? `UNKNOWN(${normalized})`;
+};
+
 type Props = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   row: PricingSnapshotExplainRow | null;
   loading: boolean;
   errorMessage: string | null;
+  currentChannelPriceKrw?: number | null;
 };
 
 export function PricingSnapshotDrawer({
@@ -22,15 +38,57 @@ export function PricingSnapshotDrawer({
   row,
   loading,
   errorMessage,
+  currentChannelPriceKrw = null,
 }: Props) {
   const computedAt = row?.computed_at ? new Date(row.computed_at).toLocaleString() : "-";
+  const algoVersion = String(row?.pricing_algo_version ?? "V2").trim() || "V2";
+  const isV2 = algoVersion.toUpperCase().includes("V2");
+  const hasV2Trace = Boolean(
+    row
+    && (
+      typeof row.candidate_price_krw === "number"
+      || typeof row.min_margin_price_krw === "number"
+      || typeof row.guardrail_price_krw === "number"
+      || typeof row.final_target_price_v2_krw === "number"
+    ),
+  );
+
+  const candidate = row?.candidate_price_krw ?? null;
+  const minMargin = row?.min_margin_price_krw ?? null;
+  const guardrail = row?.guardrail_price_krw ?? null;
+  const finalV2 = row?.final_target_price_v2_krw ?? null;
+  const finalLegacy = row?.final_target_price_krw ?? null;
+  const finalShown = (isV2 && finalV2 != null) ? finalV2 : finalLegacy;
+  const currentGap =
+    typeof currentChannelPriceKrw === "number" && Number.isFinite(currentChannelPriceKrw)
+    && typeof finalShown === "number" && Number.isFinite(finalShown)
+      ? Math.round(finalShown - currentChannelPriceKrw)
+      : null;
+
+  const bindingPrice =
+    typeof candidate === "number" && typeof minMargin === "number"
+      ? Math.max(candidate, minMargin)
+      : null;
+  const bindingSource =
+    typeof candidate === "number" && typeof minMargin === "number"
+      ? (candidate >= minMargin ? "candidate" : "min_margin")
+      : null;
+  const laborComponents = LABOR_COMPONENT_ORDER
+    .map((key) => ({ key, value: row?.labor_component_json?.[key] ?? null }))
+    .filter((entry) => entry.value != null);
 
   return (
-    <Sheet open={open} onOpenChange={onOpenChange} title="스냅샷 계산식 설명" side="right">
+    <Sheet
+      open={open}
+      onOpenChange={onOpenChange}
+      title="V2 가격 결정 근거"
+      side="right"
+      className="w-full lg:w-[1380px]"
+    >
       <div className="flex h-full flex-col">
         <div className="border-b border-[var(--hairline)] px-4 py-3">
-          <div className="text-sm font-semibold">스냅샷 계산식 설명</div>
-          <div className="text-xs text-[var(--muted)]">핀된 compute_request_id 기준 설명</div>
+          <div className="text-sm font-semibold">V2 계산 근거</div>
+        <div className="text-xs text-[var(--muted)]">fallback 없이 V2 뷰 최신 스냅샷 값을 그대로 표시합니다.</div>
         </div>
 
         <div className="flex-1 space-y-3 overflow-auto p-4 text-sm">
@@ -41,33 +99,128 @@ export function PricingSnapshotDrawer({
           {row ? (
             <>
               <section className="rounded border border-[var(--hairline)] bg-[var(--panel)] p-3">
-                <div className="mb-2 text-xs text-[var(--muted)]">A. 원래 마스터가 -&gt; 마진 곱 -&gt; 기본 보정</div>
-                <div>{fmt(row.master_base_price_krw)} x {row.shop_margin_multiplier.toFixed(4)} = {fmt(row.price_after_margin_krw)}</div>
-                <div className="mt-1">기본 보정 Δ {signed(row.base_adjust_krw)}</div>
-              </section>
-
-              <section className="rounded border border-[var(--hairline)] bg-[var(--panel)] p-3">
-                <div className="mb-2 text-xs text-[var(--muted)]">B. 축별 delta</div>
-                <div className="grid grid-cols-2 gap-1">
-                  <div>소재</div><div className="text-right">{signed(row.delta_material_krw)}</div>
-                  <div>사이즈</div><div className="text-right">{signed(row.delta_size_krw)}</div>
-                  <div>색상/도금</div><div className="text-right">{signed(row.delta_color_krw)}</div>
-                  <div>장식</div><div className="text-right">{signed(row.delta_decor_krw)}</div>
-                  <div>기타</div><div className="text-right">{signed(row.delta_other_krw)}</div>
-                  <div className="font-semibold">합계</div><div className="text-right font-semibold">{signed(row.delta_total_krw)}</div>
+                <div className="mb-2 text-xs text-[var(--muted)]">Outcome</div>
+                <div className="grid grid-cols-2 gap-x-4 gap-y-2 lg:grid-cols-4">
+                  <div>
+                    <div className="text-[11px] text-[var(--muted)]">쇼핑몰 현재가</div>
+                    <div className="font-semibold">{fmt(currentChannelPriceKrw)}</div>
+                  </div>
+                  <div>
+                    <div className="text-[11px] text-[var(--muted)]">최종 목표가</div>
+                    <div className="font-semibold">{fmt(finalShown)}</div>
+                  </div>
+                  <div>
+                    <div className="text-[11px] text-[var(--muted)]">동기화 Δ</div>
+                    <div className="font-semibold">{currentGap == null ? "-" : signed(currentGap)}</div>
+                  </div>
+                  <div>
+                    <div className="text-[11px] text-[var(--muted)]">알고리즘</div>
+                    <div className="font-semibold">{algoVersion}</div>
+                  </div>
+                </div>
+                <div className="mt-2 text-xs text-[var(--muted)]">
+                  calc_version: {row.calc_version ?? "-"} / guardrail 정책: max(후보가, 최소마진보장가) / floor: 미사용(V2 no-floor)
                 </div>
               </section>
 
               <section className="rounded border border-[var(--hairline)] bg-[var(--panel)] p-3">
-                <div className="mb-2 text-xs text-[var(--muted)]">C. 최종 방정식</div>
-                <div>
-                  {fmt(row.price_after_margin_krw)} {row.base_adjust_krw >= 0 ? "+" : "-"} {fmt(Math.abs(row.base_adjust_krw))}
-                  {" + "}{fmt(row.delta_total_krw)} = {fmt(row.final_target_price_krw)}
+                <div className="mb-2 text-xs text-[var(--muted)]">V2 Decision Trace (후보가 -&gt; 최소마진보장가 -&gt; guardrail -&gt; final)</div>
+                {isV2 && hasV2Trace ? (
+                  <div className="grid grid-cols-[180px_1fr] gap-y-2">
+                    <div className="text-[var(--muted)]">후보가</div>
+                    <div className="font-semibold">
+                      {fmt(candidate)}
+                      <span className="ml-2 text-[11px] font-normal text-[var(--muted)]">(수수료/마진 경로, pre-fee {fmt(row.candidate_pre_fee_krw)})</span>
+                    </div>
+
+                    <div className="text-[var(--muted)]">최소마진보장가</div>
+                    <div className="font-semibold">{fmt(minMargin)} <span className="ml-2 text-[11px] font-normal text-[var(--muted)]">(수수료+최소마진 조건)</span></div>
+
+                    <div className="text-[var(--muted)]">가드레일 공식</div>
+                    <div className="font-semibold">
+                      max(후보가, 최소마진보장가) = {fmt(guardrail)}
+                      <span className="ml-2 text-[11px] font-normal text-[var(--muted)]">
+                        ({bindingSource === "candidate" ? "후보가 선택" : bindingSource === "min_margin" ? "최소마진보장가 선택" : "-"})
+                      </span>
+                    </div>
+
+                    <div className="text-[var(--muted)]">가드레일 사유</div>
+                    <div className="font-semibold">{reasonCodeLabel(row.guardrail_reason_code)}</div>
+
+                    <div className="text-[var(--muted)]">최종가</div>
+                    <div className="font-semibold">{fmt(finalV2 ?? finalLegacy)} <span className="ml-2 text-[11px] font-normal text-[var(--muted)]">(V2 no-floor, guardrail 결과 반영)</span></div>
+                  </div>
+                ) : isV2 ? (
+                  <div className="text-xs text-amber-700">
+                    V2 알고리즘 스냅샷이지만 결정 trace 필드가 누락되어 guardrail 경로를 표시할 수 없습니다.
+                  </div>
+                ) : (
+                  <div className="text-xs text-[var(--muted)]">
+                    V2 trace 필드가 비어 있습니다.
+                  </div>
+                )}
+                <div className="mt-2 text-xs text-[var(--muted)]">
+                  guardrail check: max({fmt(candidate)}, {fmt(minMargin)}) = {fmt(bindingPrice)}
                 </div>
               </section>
+
+              {isV2 && laborComponents.length > 0 ? (
+                <section className="rounded border border-[var(--hairline)] bg-[var(--panel)] p-3">
+                  <div className="mb-2 text-xs text-[var(--muted)]">V2 노무 컴포넌트 상세</div>
+                  <div className="mb-2 grid grid-cols-2 gap-1 text-xs lg:grid-cols-4">
+                    <div>총 absorb(applied)</div><div className="text-right font-semibold">{fmt(row.absorb_total_applied_krw)}</div>
+                    <div>총 absorb(raw)</div><div className="text-right font-semibold">{fmt(row.absorb_total_raw_krw)}</div>
+                    <div>총 labor_cost_applied</div><div className="text-right font-semibold">{fmt(row.labor_cost_applied_krw)}</div>
+                    <div>총 labor_sell_plus_absorb</div><div className="text-right font-semibold">{fmt(row.labor_sell_total_plus_absorb_krw)}</div>
+                  </div>
+                  <div className="overflow-x-auto">
+                    <table className="min-w-full text-xs">
+                      <thead>
+                        <tr className="border-b border-[var(--hairline)] text-[var(--muted)]">
+                          <th className="px-2 py-1 text-left">컴포넌트</th>
+                          <th className="px-2 py-1 text-right">labor_cost_krw</th>
+                          <th className="px-2 py-1 text-right">labor_absorb_applied_krw</th>
+                          <th className="px-2 py-1 text-right">labor_sell_plus_absorb_krw</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {laborComponents.map((entry) => (
+                          <tr key={entry.key} className="border-b border-[var(--hairline)] last:border-0">
+                            <td className="px-2 py-1 font-medium">{entry.key}</td>
+                            <td className="px-2 py-1 text-right">{fmt(entry.value?.labor_cost_krw)}</td>
+                            <td className="px-2 py-1 text-right">{fmt(entry.value?.labor_absorb_applied_krw)}</td>
+                            <td className="px-2 py-1 text-right">{fmt(entry.value?.labor_sell_plus_absorb_krw)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </section>
+              ) : null}
+
+              <details className="rounded border border-[var(--hairline)] bg-[var(--background)] p-3" open>
+                <summary className="cursor-pointer text-xs font-semibold text-[var(--muted)]">Inputs</summary>
+                <div className="mt-3 grid grid-cols-2 gap-1 lg:grid-cols-3">
+                  <div>material_pre_fee</div><div className="text-right">{fmt(row.material_pre_fee_krw)}</div>
+                  <div>labor_pre_fee</div><div className="text-right">{fmt(row.labor_pre_fee_krw)}</div>
+                  <div>fixed_pre_fee</div><div className="text-right">{fmt(row.fixed_pre_fee_krw)}</div>
+                  <div>cost_sum</div><div className="text-right">{fmt(row.cost_sum_krw)}</div>
+                  <div>labor_cost_applied</div><div className="text-right">{fmt(row.labor_cost_applied_krw)}</div>
+                  <div>labor_plus_absorb</div><div className="text-right">{fmt(row.labor_sell_total_plus_absorb_krw)}</div>
+                  <div>material_basis</div><div className="text-right">{row.material_basis_resolved ?? "-"}</div>
+                  <div>material_code</div><div className="text-right">{row.material_code_effective ?? "-"}</div>
+                  <div>purity_rate</div><div className="text-right">{row.material_purity_rate_resolved == null ? "-" : row.material_purity_rate_resolved.toFixed(4)}</div>
+                  <div>adjust_factor</div><div className="text-right">{row.material_adjust_factor_resolved == null ? "-" : row.material_adjust_factor_resolved.toFixed(4)}</div>
+                  <div>effective_tick</div><div className="text-right">{fmt(row.effective_tick_krw_g)}</div>
+                </div>
+              </details>
 
               <section className="rounded border border-[var(--hairline)] bg-[var(--background)] p-3 text-xs">
-                <div>D. 메타데이터</div>
+                <div>Metadata</div>
+                <div className="mt-1 text-[var(--muted)]">algo_version: {algoVersion}</div>
+                <div className="text-[var(--muted)]">master_item_id: {row.master_item_id}</div>
+                <div className="text-[var(--muted)]">channel_product_id: {row.channel_product_id}</div>
+                <div className="text-[var(--muted)]">external_variant_code: {row.external_variant_code ?? "-"}</div>
                 <div className="mt-1 text-[var(--muted)]">compute_request_id: {row.compute_request_id}</div>
                 <div className="text-[var(--muted)]">computed_at: {computedAt}</div>
               </section>

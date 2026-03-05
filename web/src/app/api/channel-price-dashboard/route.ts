@@ -4,13 +4,6 @@ import { getShopAdminClient, jsonError } from "@/lib/shop/admin";
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
-const chunkArray = <T,>(items: T[], chunkSize: number): T[][] => {
-  if (items.length === 0) return [];
-  const out: T[][] = [];
-  for (let i = 0; i < items.length; i += chunkSize) out.push(items.slice(i, i + chunkSize));
-  return out;
-};
-
 type DashboardRow = {
   channel_id: string;
   channel_product_id: string;
@@ -20,6 +13,7 @@ type DashboardRow = {
   external_variant_code: string | null;
   category_code: string | null;
   material_code: string | null;
+  option_price_delta_krw: number | null;
   net_weight_g: number | null;
   as_of_at: string | null;
   tick_gold_krw_g: number | null;
@@ -49,12 +43,97 @@ type DashboardRow = {
   error_message: string | null;
 };
 
+type MappingRow = {
+  channel_product_id: string;
+  channel_id: string;
+  master_item_id: string;
+  external_product_no: string;
+  external_variant_code: string | null;
+  option_price_delta_krw: number | null;
+};
+
+type V2Row = {
+  channel_id: string | null;
+  channel_product_id: string | null;
+  external_product_no: string | null;
+  external_variant_code: string | null;
+  master_item_id: string | null;
+  compute_request_id: string | null;
+  computed_at: string | null;
+  material_code_effective: string | null;
+  net_weight_g: number | null;
+  material_raw_krw: number | null;
+  material_final_krw: number | null;
+  labor_cost_applied_krw_components: number | null;
+  labor_sell_total_plus_absorb_krw_components: number | null;
+  final_target_price_v2_krw: number | null;
+  current_channel_price_krw: number | null;
+  diff_krw: number | null;
+  diff_pct: number | null;
+};
+
+type MasterMetaRow = {
+  master_item_id: string | null;
+  model_name: string | null;
+  category_code: string | null;
+  material_code_default: string | null;
+};
+
+type ActiveOverrideRow = {
+  override_id: string;
+  channel_id: string;
+  master_item_id: string;
+};
+
+type ActiveAdjustmentRow = {
+  adjustment_id: string;
+  channel_id: string;
+  channel_product_id: string | null;
+  master_item_id: string | null;
+};
+
+type CurrentPriceRow = {
+  external_product_no: string | null;
+  external_variant_code: string | null;
+  current_price_krw: number | null;
+  fetched_at: string | null;
+  fetch_status: string | null;
+  http_status: number | null;
+  error_code: string | null;
+  error_message: string | null;
+};
+
+const toKeyPart = (value: string | null | undefined) => String(value ?? "").trim();
+
+const toExternalKey = (externalProductNo: string | null | undefined, externalVariantCode: string | null | undefined) => {
+  return `${toKeyPart(externalProductNo)}::${toKeyPart(externalVariantCode)}`;
+};
+
+const isFetchFailure = (fetchStatus: string | null | undefined) => {
+  if (!fetchStatus) return false;
+  const normalized = fetchStatus.trim().toUpperCase();
+  if (!normalized) return false;
+  return !["SUCCESS", "SUCCEEDED", "OK"].includes(normalized);
+};
+
+const derivePriceState = (
+  currentPrice: number | null,
+  finalTargetPrice: number | null,
+  fetchStatus: string | null,
+): DashboardRow["price_state"] => {
+  if (isFetchFailure(fetchStatus)) return "ERROR";
+  if (currentPrice == null || finalTargetPrice == null) return "ERROR";
+  return Math.abs(finalTargetPrice - currentPrice) >= 1 ? "OUT_OF_SYNC" : "OK";
+};
+
 export async function GET(request: Request) {
   const sb = getShopAdminClient();
   if (!sb) return jsonError("Supabase server env missing", 500);
 
   const { searchParams } = new URL(request.url);
   const channelId = (searchParams.get("channel_id") ?? "").trim();
+  if (!channelId) return jsonError("channel_id is required", 400);
+
   const computeRequestId = (searchParams.get("compute_request_id") ?? "").trim();
   const priceState = (searchParams.get("price_state") ?? "").trim();
   const modelName = (searchParams.get("model_name") ?? "").trim();
@@ -65,213 +144,192 @@ export async function GET(request: Request) {
   const limitRaw = Number(searchParams.get("limit") ?? 200);
   const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(1000, Math.floor(limitRaw))) : 200;
 
-  let q = sb
-    .from("v_channel_price_dashboard")
-    .select("*")
-    .order("computed_at", { ascending: false })
-    .limit(limit);
+  let mappingQuery = sb
+    .from("sales_channel_product")
+    .select("channel_product_id, channel_id, master_item_id, external_product_no, external_variant_code, option_price_delta_krw")
+    .eq("channel_id", channelId)
+    .eq("is_active", true);
+  if (masterItemId) mappingQuery = mappingQuery.eq("master_item_id", masterItemId);
 
-  if (channelId) q = q.eq("channel_id", channelId);
-  if (masterItemId) q = q.eq("master_item_id", masterItemId);
-  if (priceState) q = q.eq("price_state", priceState);
-  if (modelName) q = q.ilike("model_name", `%${modelName}%`);
-  if (onlyOverrides) q = q.not("active_override_id", "is", null);
-  if (onlyAdjustments) q = q.gt("active_adjustment_count", 0);
+  const mappingRes = await mappingQuery;
+  if (mappingRes.error) return jsonError(mappingRes.error.message ?? "활성 매핑 조회 실패", 500);
 
-  const { data, error } = await q;
-  if (error) return jsonError(error.message ?? "대시보드 조회 실패", 500);
+  const mappings = (mappingRes.data ?? []) as MappingRow[];
+  const channelProductIds = Array.from(new Set(mappings.map((row) => toKeyPart(row.channel_product_id)).filter(Boolean)));
+  const masterIds = Array.from(new Set(mappings.map((row) => toKeyPart(row.master_item_id)).filter(Boolean)));
 
-  const mappedRows = (data ?? []) as DashboardRow[];
-
-  if (channelId && computeRequestId) {
-    const snapshotRes = await sb
-      .from("pricing_snapshot")
-      .select("channel_product_id, master_item_id, net_weight_g, material_raw_krw, factor_set_id_used, material_factor_multiplier_used, material_final_krw, labor_raw_krw, labor_pre_margin_adj_krw, labor_post_margin_adj_krw, margin_multiplier_used, rounding_unit_used, rounding_mode_used, final_target_price_krw, computed_at")
+  const v2RowsRes = channelProductIds.length > 0
+    ? await sb
+      .from("v_price_composition_flat_v2")
+      .select("channel_id, channel_product_id, external_product_no, external_variant_code, master_item_id, compute_request_id, computed_at, material_code_effective, net_weight_g, material_raw_krw, material_final_krw, labor_cost_applied_krw_components, labor_sell_total_plus_absorb_krw_components, final_target_price_v2_krw, current_channel_price_krw, diff_krw, diff_pct")
       .eq("channel_id", channelId)
-      .eq("compute_request_id", computeRequestId);
-    if (snapshotRes.error) return jsonError(snapshotRes.error.message ?? "스냅샷 조회 실패", 500);
+      .in("channel_product_id", channelProductIds)
+      .order("computed_at", { ascending: false })
+    : { data: [], error: null };
+  if (v2RowsRes.error) return jsonError(v2RowsRes.error.message ?? "대시보드 조회 실패", 500);
 
-    const snapshotByKey = new Map(
-      (snapshotRes.data ?? []).map((row) => [
-        `${String((row as { channel_product_id?: string | null }).channel_product_id ?? "")}::${String((row as { master_item_id?: string | null }).master_item_id ?? "")}`,
-        row as {
-          net_weight_g: number | null;
-          material_raw_krw: number | null;
-          factor_set_id_used: string | null;
-          material_factor_multiplier_used: number | null;
-          material_final_krw: number | null;
-          labor_raw_krw: number | null;
-          labor_pre_margin_adj_krw: number | null;
-          labor_post_margin_adj_krw: number | null;
-          margin_multiplier_used: number | null;
-          rounding_unit_used: number | null;
-          rounding_mode_used: "CEIL" | "ROUND" | "FLOOR" | null;
-          final_target_price_krw: number | null;
-          computed_at: string | null;
-        },
-      ]),
-    );
+  const sourceRows = (v2RowsRes.data ?? []) as V2Row[];
 
-    const pinnedRows = mappedRows
-      .map((row) => {
-        const key = `${String(row.channel_product_id ?? "")}::${String(row.master_item_id ?? "")}`;
-        const snap = snapshotByKey.get(key);
-        if (!snap) return null;
-        const currentPrice = row.current_channel_price_krw;
-        const nextTarget = snap.final_target_price_krw;
-        const nextDiff = nextTarget == null || currentPrice == null ? null : nextTarget - currentPrice;
-        const nextDiffPct = nextTarget == null || currentPrice == null || currentPrice === 0
-          ? null
-          : nextDiff! / currentPrice;
-        const nextState = currentPrice == null || nextTarget == null
-          ? "ERROR"
-          : Math.abs(nextTarget - currentPrice) >= 1
-            ? "OUT_OF_SYNC"
-            : "OK";
-        return {
-          ...row,
-          net_weight_g: snap.net_weight_g,
-          material_raw_krw: snap.material_raw_krw,
-          factor_set_id_used: snap.factor_set_id_used,
-          material_factor_multiplier_used: snap.material_factor_multiplier_used,
-          material_final_krw: snap.material_final_krw,
-          labor_raw_krw: snap.labor_raw_krw,
-          labor_pre_margin_adj_krw: snap.labor_pre_margin_adj_krw,
-          labor_post_margin_adj_krw: snap.labor_post_margin_adj_krw,
-          margin_multiplier_used: snap.margin_multiplier_used,
-          rounding_unit_used: snap.rounding_unit_used,
-          rounding_mode_used: snap.rounding_mode_used,
-          final_target_price_krw: nextTarget,
-          computed_at: snap.computed_at,
-          diff_krw: nextDiff,
-          diff_pct: nextDiffPct,
-          price_state: nextState as DashboardRow["price_state"],
-        };
-      })
-      .filter((row): row is DashboardRow => Boolean(row));
+  const masterMetaRes = masterIds.length > 0
+    ? await sb
+      .from("cms_master_item")
+      .select("master_item_id, model_name, category_code, material_code_default")
+      .in("master_item_id", masterIds)
+    : { data: [], error: null };
+  if (masterMetaRes.error) return jsonError(masterMetaRes.error.message ?? "마스터 메타 조회 실패", 500);
 
-    return NextResponse.json({ data: pinnedRows }, { headers: { "Cache-Control": "no-store" } });
-  }
+  const activeOverrideRes = masterIds.length > 0
+    ? await sb
+      .from("pricing_override")
+      .select("override_id, channel_id, master_item_id")
+      .eq("is_active", true)
+      .eq("channel_id", channelId)
+      .in("master_item_id", masterIds)
+    : { data: [], error: null };
+  if (activeOverrideRes.error) return jsonError(activeOverrideRes.error.message ?? "활성 오버라이드 조회 실패", 500);
 
-  if (mappedRows.length > 0) {
-    const masterIds = Array.from(
-      new Set(mappedRows.map((row) => String(row.master_item_id ?? "").trim()).filter(Boolean)),
-    );
-    if (masterIds.length > 0) {
-      const masterMetaRes = await sb
-        .from("cms_master_item")
-        .select("master_item_id, material_code_default")
-        .in("master_item_id", masterIds);
-      if (masterMetaRes.error) {
-        return jsonError(masterMetaRes.error.message ?? "마스터 소재 조회 실패", 500);
-      }
-      const masterMaterialById = new Map(
-        (masterMetaRes.data ?? []).map((row) => [
-          String((row as { master_item_id?: string | null }).master_item_id ?? ""),
-          (row as { material_code_default?: string | null }).material_code_default ?? null,
-        ]),
-      );
-      for (const row of mappedRows) {
-        if (row.material_code) continue;
-        const key = String(row.master_item_id ?? "").trim();
-        row.material_code = masterMaterialById.get(key) ?? null;
-      }
+  const activeAdjustmentRes = await sb
+    .from("pricing_adjustment")
+    .select("adjustment_id, channel_id, channel_product_id, master_item_id")
+    .eq("is_active", true)
+    .eq("channel_id", channelId);
+  if (activeAdjustmentRes.error) return jsonError(activeAdjustmentRes.error.message ?? "활성 조정 조회 실패", 500);
 
-      const stateRows: Array<{
-        master_item_id: string | null;
-        external_product_no: string | null;
-        external_variant_code: string | null;
-        final_target_additional_amount_krw: number | null;
-      }> = [];
-      for (const masterChunk of chunkArray(masterIds, 500)) {
-        if (masterChunk.length === 0) continue;
-        const stateRes = await sb
-          .from("channel_option_current_state_v1")
-          .select("master_item_id, external_product_no, external_variant_code, final_target_additional_amount_krw, updated_at")
-          .eq("channel_id", channelId)
-          .in("master_item_id", masterChunk)
-          .order("updated_at", { ascending: false });
-        if (stateRes.error) {
-          return jsonError(stateRes.error.message ?? "옵션 현재상태 조회 실패", 500);
-        }
-        stateRows.push(...((stateRes.data ?? []) as typeof stateRows));
-      }
+  const currentPriceRes = await sb
+    .from("channel_price_snapshot_latest")
+    .select("external_product_no, external_variant_code, current_price_krw, fetched_at, fetch_status, http_status, error_code, error_message")
+    .eq("channel_id", channelId);
+  if (currentPriceRes.error) return jsonError(currentPriceRes.error.message ?? "현재 채널가 조회 실패", 500);
 
-      const desiredAdditionalByMasterVariant = new Map<string, number>();
-      const desiredAdditionalByProductVariant = new Map<string, number>();
-      for (const row of stateRows) {
-        const variantCode = String(row.external_variant_code ?? "").trim();
-        if (!variantCode) continue;
-        const delta = Number(row.final_target_additional_amount_krw ?? Number.NaN);
-        if (!Number.isFinite(delta)) continue;
-        const roundedDelta = Math.round(delta);
-
-        const masterKey = String(row.master_item_id ?? "").trim();
-        if (masterKey) {
-          const key = `${masterKey}::${variantCode}`;
-          if (!desiredAdditionalByMasterVariant.has(key)) desiredAdditionalByMasterVariant.set(key, roundedDelta);
-        }
-
-        const productNo = String(row.external_product_no ?? "").trim();
-        if (productNo) {
-          const key = `${productNo}::${variantCode}`;
-          if (!desiredAdditionalByProductVariant.has(key)) desiredAdditionalByProductVariant.set(key, roundedDelta);
-        }
-      }
-
-      const baseCurrentByMaster = new Map<string, number>();
-      const baseCurrentByProduct = new Map<string, number>();
-      for (const row of mappedRows) {
-        const variantCode = String(row.external_variant_code ?? "").trim();
-        if (variantCode) continue;
-        const current = Number(row.current_channel_price_krw ?? Number.NaN);
-        if (!Number.isFinite(current)) continue;
-        const roundedCurrent = Math.round(current);
-
-        const masterKey = String(row.master_item_id ?? "").trim();
-        if (masterKey && !baseCurrentByMaster.has(masterKey)) {
-          baseCurrentByMaster.set(masterKey, roundedCurrent);
-        }
-        const productNo = String(row.external_product_no ?? "").trim();
-        if (productNo && !baseCurrentByProduct.has(productNo)) {
-          baseCurrentByProduct.set(productNo, roundedCurrent);
-        }
-      }
-
-      for (const row of mappedRows) {
-        const variantCode = String(row.external_variant_code ?? "").trim();
-        if (!variantCode) continue;
-
-        const masterKey = String(row.master_item_id ?? "").trim();
-        const productNo = String(row.external_product_no ?? "").trim();
-        const desiredAdditional = desiredAdditionalByMasterVariant.get(`${masterKey}::${variantCode}`)
-          ?? desiredAdditionalByProductVariant.get(`${productNo}::${variantCode}`);
-        if (!Number.isFinite(Number(desiredAdditional ?? Number.NaN))) continue;
-
-        const baseCurrent = baseCurrentByMaster.get(masterKey) ?? baseCurrentByProduct.get(productNo);
-        if (!Number.isFinite(Number(baseCurrent ?? Number.NaN))) continue;
-
-        const nextTarget = Math.round(Number(baseCurrent) + Number(desiredAdditional));
-        row.final_target_price_krw = nextTarget;
-
-        const current = Number(row.current_channel_price_krw ?? Number.NaN);
-        if (!Number.isFinite(current)) {
-          row.diff_krw = null;
-          row.diff_pct = null;
-          row.price_state = "ERROR";
-          continue;
-        }
-
-        const roundedCurrent = Math.round(current);
-        const diff = nextTarget - roundedCurrent;
-        row.diff_krw = diff;
-        row.diff_pct = roundedCurrent === 0 ? null : diff / roundedCurrent;
-        row.price_state = Math.abs(diff) >= 1 ? "OUT_OF_SYNC" : "OK";
-      }
+  const latestV2ByProduct = new Map<string, V2Row>();
+  const pinnedV2ByProduct = new Map<string, V2Row>();
+  for (const row of sourceRows) {
+    const productKey = toKeyPart(row.channel_product_id);
+    if (!productKey) continue;
+    if (!latestV2ByProduct.has(productKey)) latestV2ByProduct.set(productKey, row);
+    if (computeRequestId && toKeyPart(row.compute_request_id) === computeRequestId && !pinnedV2ByProduct.has(productKey)) {
+      pinnedV2ByProduct.set(productKey, row);
     }
   }
 
-  if (!channelId || !includeUnmapped || onlyOverrides || onlyAdjustments) {
+  const currentPriceByExternal = new Map<string, CurrentPriceRow>();
+  for (const row of (currentPriceRes.data ?? []) as CurrentPriceRow[]) {
+    const key = toExternalKey(row.external_product_no, row.external_variant_code);
+    if (!toKeyPart(row.external_product_no)) continue;
+    if (!currentPriceByExternal.has(key)) currentPriceByExternal.set(key, row);
+  }
+
+  const masterMetaById = new Map(
+    ((masterMetaRes.data ?? []) as MasterMetaRow[]).map((row) => [toKeyPart(row.master_item_id), row]),
+  );
+
+  const activeOverrideIdByChannelMaster = new Map<string, string>();
+  for (const row of (activeOverrideRes.data ?? []) as ActiveOverrideRow[]) {
+    const key = `${toKeyPart(row.channel_id)}::${toKeyPart(row.master_item_id)}`;
+    if (!activeOverrideIdByChannelMaster.has(key)) activeOverrideIdByChannelMaster.set(key, row.override_id);
+  }
+
+  const channelProductSet = new Set(channelProductIds);
+  const masterSet = new Set(masterIds);
+  const adjustmentCountByProduct = new Map<string, number>();
+  const adjustmentCountByMaster = new Map<string, number>();
+  const adjustmentCountByBoth = new Map<string, number>();
+  for (const row of (activeAdjustmentRes.data ?? []) as ActiveAdjustmentRow[]) {
+    const channelKey = toKeyPart(row.channel_id);
+    const productKey = toKeyPart(row.channel_product_id);
+    const masterKey = toKeyPart(row.master_item_id);
+
+    if (productKey && channelProductSet.has(productKey)) {
+      const key = `${channelKey}::${productKey}`;
+      adjustmentCountByProduct.set(key, (adjustmentCountByProduct.get(key) ?? 0) + 1);
+    }
+
+    if (masterKey && masterSet.has(masterKey)) {
+      const key = `${channelKey}::${masterKey}`;
+      adjustmentCountByMaster.set(key, (adjustmentCountByMaster.get(key) ?? 0) + 1);
+    }
+
+    if (productKey && masterKey && channelProductSet.has(productKey) && masterSet.has(masterKey)) {
+      const key = `${channelKey}::${productKey}::${masterKey}`;
+      adjustmentCountByBoth.set(key, (adjustmentCountByBoth.get(key) ?? 0) + 1);
+    }
+  }
+
+  let mappedRows: DashboardRow[] = mappings.map((mapping) => {
+    const normalizedChannelId = toKeyPart(mapping.channel_id);
+    const normalizedMasterId = toKeyPart(mapping.master_item_id);
+    const normalizedChannelProductId = toKeyPart(mapping.channel_product_id);
+    const sourceRow = (computeRequestId ? pinnedV2ByProduct.get(normalizedChannelProductId) : null)
+      ?? latestV2ByProduct.get(normalizedChannelProductId)
+      ?? null;
+    const masterMeta = masterMetaById.get(normalizedMasterId) ?? null;
+    const finalTarget = sourceRow?.final_target_price_v2_krw ?? null;
+
+    const externalProductNo = toKeyPart(mapping.external_product_no) || toKeyPart(sourceRow?.external_product_no) || "-";
+    const externalVariantCode = toKeyPart(mapping.external_variant_code) || toKeyPart(sourceRow?.external_variant_code) || null;
+    const fallbackCurrentPrice = currentPriceByExternal.get(toExternalKey(externalProductNo, externalVariantCode));
+    const currentPrice = sourceRow?.current_channel_price_krw ?? fallbackCurrentPrice?.current_price_krw ?? null;
+    const fetchStatus = fallbackCurrentPrice?.fetch_status ?? null;
+
+    const productAdjustmentCount = adjustmentCountByProduct.get(`${normalizedChannelId}::${normalizedChannelProductId}`) ?? 0;
+    const masterAdjustmentCount = adjustmentCountByMaster.get(`${normalizedChannelId}::${normalizedMasterId}`) ?? 0;
+    const bothAdjustmentCount = adjustmentCountByBoth.get(`${normalizedChannelId}::${normalizedChannelProductId}::${normalizedMasterId}`) ?? 0;
+    const activeAdjustmentCount = Math.max(0, productAdjustmentCount + masterAdjustmentCount - bothAdjustmentCount);
+
+    return {
+      channel_id: normalizedChannelId,
+      channel_product_id: normalizedChannelProductId,
+      master_item_id: normalizedMasterId,
+      model_name: masterMeta?.model_name ?? null,
+      external_product_no: externalProductNo,
+      external_variant_code: externalVariantCode,
+      category_code: masterMeta?.category_code ?? null,
+      option_price_delta_krw: mapping.option_price_delta_krw,
+      material_code: toKeyPart(sourceRow?.material_code_effective) || (masterMeta?.material_code_default ?? null),
+      net_weight_g: sourceRow?.net_weight_g ?? null,
+      as_of_at: null,
+      tick_gold_krw_g: null,
+      tick_silver_krw_g: null,
+      factor_set_id_used: null,
+      material_factor_multiplier_used: null,
+      material_raw_krw: sourceRow?.material_raw_krw ?? null,
+      material_final_krw: sourceRow?.material_final_krw ?? null,
+      labor_raw_krw: sourceRow?.labor_cost_applied_krw_components ?? null,
+      labor_pre_margin_adj_krw: sourceRow?.labor_cost_applied_krw_components ?? null,
+      labor_post_margin_adj_krw: sourceRow?.labor_sell_total_plus_absorb_krw_components ?? null,
+      margin_multiplier_used: null,
+      rounding_unit_used: null,
+      rounding_mode_used: null,
+      final_target_price_krw: finalTarget,
+      current_channel_price_krw: currentPrice,
+      diff_krw: finalTarget != null && currentPrice != null ? finalTarget - currentPrice : null,
+      diff_pct:
+        finalTarget != null && currentPrice != null && currentPrice !== 0
+          ? ((finalTarget - currentPrice) / currentPrice) * 100
+          : null,
+      price_state: derivePriceState(currentPrice, finalTarget, fetchStatus),
+      active_adjustment_count: activeAdjustmentCount,
+      active_override_id: activeOverrideIdByChannelMaster.get(`${normalizedChannelId}::${normalizedMasterId}`) ?? null,
+      computed_at: sourceRow?.computed_at ?? null,
+      channel_price_fetched_at: fallbackCurrentPrice?.fetched_at ?? null,
+      fetch_status: fallbackCurrentPrice?.fetch_status ?? null,
+      http_status: fallbackCurrentPrice?.http_status ?? null,
+      error_code: fallbackCurrentPrice?.error_code ?? null,
+      error_message: fallbackCurrentPrice?.error_message ?? null,
+    };
+  });
+
+  if (modelName) {
+    const needle = modelName.toLowerCase();
+    mappedRows = mappedRows.filter((row) => String(row.model_name ?? "").toLowerCase().includes(needle));
+  }
+
+  if (onlyOverrides) mappedRows = mappedRows.filter((row) => row.active_override_id != null);
+  if (onlyAdjustments) mappedRows = mappedRows.filter((row) => row.active_adjustment_count > 0);
+  if (priceState && priceState !== "UNMAPPED") mappedRows = mappedRows.filter((row) => row.price_state === priceState);
+  mappedRows = mappedRows.slice(0, limit);
+
+  if (!includeUnmapped || onlyOverrides || onlyAdjustments) {
     return NextResponse.json({ data: mappedRows }, { headers: { "Cache-Control": "no-store" } });
   }
 
@@ -314,15 +372,16 @@ export async function GET(request: Request) {
     .filter((r) => !mappedMasterSet.has(String((r as { master_item_id?: string | null }).master_item_id ?? "")))
     .slice(0, remainingLimit)
     .map((r) => {
-      const masterItemId = String((r as { master_item_id?: string | null }).master_item_id ?? "");
+      const unmappedMasterItemId = String((r as { master_item_id?: string | null }).master_item_id ?? "");
       return {
         channel_id: channelId,
-        channel_product_id: masterItemId,
-        master_item_id: masterItemId,
+        channel_product_id: unmappedMasterItemId,
+        master_item_id: unmappedMasterItemId,
         model_name: (r as { model_name?: string | null }).model_name ?? null,
         external_product_no: "-",
         external_variant_code: null,
         category_code: (r as { category_code?: string | null }).category_code ?? null,
+        option_price_delta_krw: null,
         material_code: (r as { material_code_default?: string | null }).material_code_default ?? null,
         net_weight_g: Math.max(
           Number((r as { weight_default_g?: number | null }).weight_default_g ?? 0)

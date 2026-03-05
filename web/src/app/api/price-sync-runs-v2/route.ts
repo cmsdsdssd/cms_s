@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getShopAdminClient, jsonError, parseJsonObject, parseUuidArray } from "@/lib/shop/admin";
+import { buildMissingActiveMappingSummary, resolveNoIntentsReason } from "@/lib/shop/price-sync-run-summary";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -10,6 +11,7 @@ const IN_QUERY_CHUNK_SIZE = 500;
 const INSERT_CHUNK_SIZE = 1000;
 const CRON_TICK_ERROR_PREFIX = "CRON_TICK:";
 
+const isNumericProductNo = (productNo: string) => /^\d+$/u.test(String(productNo ?? "").trim());
 const looksCanonicalProductCode = (productNo: string) => /^P/i.test(String(productNo ?? "").trim());
 
 const shouldPreferMappingProductNo = (currentProductNo: string, nextProductNo: string): boolean => {
@@ -17,6 +19,9 @@ const shouldPreferMappingProductNo = (currentProductNo: string, nextProductNo: s
   const next = String(nextProductNo ?? "").trim();
   if (!current && next) return true;
   if (!next) return false;
+  const currentNumeric = isNumericProductNo(current);
+  const nextNumeric = isNumericProductNo(next);
+  if (nextNumeric !== currentNumeric) return nextNumeric;
   const currentCanonical = looksCanonicalProductCode(current);
   const nextCanonical = looksCanonicalProductCode(next);
   if (nextCanonical !== currentCanonical) return nextCanonical;
@@ -63,7 +68,7 @@ const resolveIntervalEarlyGraceMs = (): number => {
   return graceSeconds * 1000;
 };
 const resolveDefaultIntervalMinutes = (): number => {
-  return toPositiveInt(process.env.SHOP_SYNC_DEFAULT_INTERVAL_MINUTES, 60, 24 * 60);
+  return toPositiveInt(process.env.SHOP_SYNC_DEFAULT_INTERVAL_MINUTES, 60, 60);
 };
 
 const resolveMinChangeThresholdKrw = (): number => {
@@ -127,7 +132,7 @@ export async function POST(request: Request) {
 
   const intervalRaw = Number(body.interval_minutes ?? resolveDefaultIntervalMinutes());
   const intervalMinutes = Number.isFinite(intervalRaw)
-    ? Math.max(1, Math.min(24 * 60, Math.floor(intervalRaw)))
+    ? Math.max(1, Math.min(60, Math.floor(intervalRaw)))
     : resolveDefaultIntervalMinutes();
   const minChangeRaw = Number(body.min_change_krw ?? resolveMinChangeThresholdKrw());
   const minChangeKrw = Number.isFinite(minChangeRaw)
@@ -243,31 +248,6 @@ export async function POST(request: Request) {
   if (!runId) return jsonError("run_id 생성 실패", 500);
 
   const masterIds = Array.from(new Set(cursors.map((r) => String(r.master_item_id ?? "").trim()).filter(Boolean)));
-  const floorRows: Array<{ master_item_id: string | null; floor_price_krw: number | null }> = [];
-  for (const masterChunk of chunkArray(masterIds, IN_QUERY_CHUNK_SIZE)) {
-    if (masterChunk.length === 0) continue;
-    const floorRes = await sb
-      .from("product_price_guard_v2")
-      .select("master_item_id, floor_price_krw")
-      .eq("channel_id", channelId)
-      .eq("is_active", true)
-      .in("master_item_id", masterChunk);
-    if (floorRes.error) return jsonError(floorRes.error.message ?? "바닥가격 조회 실패", 500);
-    floorRows.push(...(floorRes.data ?? []));
-  }
-  const floorByMaster = new Map(floorRows.map((r) => [String(r.master_item_id ?? ""), Math.max(0, Math.round(Number(r.floor_price_krw ?? 0)))]));
-  const missingFloorMasters = masterIds.filter((id) => !floorByMaster.has(id));
-  if (missingFloorMasters.length > 0) {
-    await sb
-      .from("price_sync_run_v2")
-      .update({ status: "FAILED", error_message: "MISSING_FLOOR_PRICE", finished_at: new Date().toISOString() })
-      .eq("run_id", runId);
-    return jsonError("바닥가격 미설정 마스터가 있어 자동동기화를 시작할 수 없습니다", 422, {
-      code: "MISSING_FLOOR_PRICE",
-      master_item_ids: missingFloorMasters,
-    });
-  }
-
   const policyRes = await sb
     .from("pricing_policy")
     .select("rounding_unit, rounding_mode, updated_at")
@@ -305,12 +285,20 @@ export async function POST(request: Request) {
       compute_request_ids: computeIds,
     });
   }
+  const snapshotV2Probe = await sb.from("pricing_snapshot").select("final_target_price_v2_krw").limit(1);
+  const hasV2TargetColumns = !snapshotV2Probe.error;
+  const snapshotSelect = hasV2TargetColumns
+    ? "channel_id, master_item_id, channel_product_id, compute_request_id, final_target_price_krw, final_target_price_v2_krw, pricing_algo_version, base_total_pre_margin_krw, total_after_margin_krw"
+    : "channel_id, master_item_id, channel_product_id, compute_request_id, final_target_price_krw, base_total_pre_margin_krw, total_after_margin_krw";
+
   const snapshotRows: Array<{
     channel_id: string | null;
     master_item_id: string | null;
     channel_product_id: string | null;
     compute_request_id: string | null;
     final_target_price_krw: number | null;
+    final_target_price_v2_krw?: number | null;
+    pricing_algo_version?: string | null;
     base_total_pre_margin_krw: number | null;
     total_after_margin_krw: number | null;
   }> = [];
@@ -321,11 +309,11 @@ export async function POST(request: Request) {
     if (fullAutoScope || masterIds.length === 0) {
       const snapshotRes = await sb
         .from("pricing_snapshot")
-        .select("channel_id, master_item_id, channel_product_id, compute_request_id, final_target_price_krw, base_total_pre_margin_krw, total_after_margin_krw")
+        .select(snapshotSelect)
         .eq("channel_id", channelId)
         .in("compute_request_id", computeChunk);
       if (snapshotRes.error) return jsonError(snapshotRes.error.message ?? "스냅샷 조회 실패", 500);
-      snapshotRows.push(...(snapshotRes.data ?? []));
+      snapshotRows.push(...((snapshotRes.data ?? []) as unknown as Array<typeof snapshotRows[number]>));
       continue;
     }
 
@@ -333,12 +321,12 @@ export async function POST(request: Request) {
       if (masterChunk.length === 0) continue;
       const snapshotRes = await sb
         .from("pricing_snapshot")
-        .select("channel_id, master_item_id, channel_product_id, compute_request_id, final_target_price_krw, base_total_pre_margin_krw, total_after_margin_krw")
+        .select(snapshotSelect)
         .eq("channel_id", channelId)
         .in("compute_request_id", computeChunk)
         .in("master_item_id", masterChunk);
       if (snapshotRes.error) return jsonError(snapshotRes.error.message ?? "스냅샷 조회 실패", 500);
-      snapshotRows.push(...(snapshotRes.data ?? []));
+      snapshotRows.push(...((snapshotRes.data ?? []) as unknown as Array<typeof snapshotRows[number]>));
     }
   }
 
@@ -371,6 +359,11 @@ export async function POST(request: Request) {
     },
   ]));
 
+  const { summary: missingMappingSummary } = buildMissingActiveMappingSummary({
+    snapshotRows,
+    activeByChannelProduct,
+  });
+
   const currentRows: Array<{ channel_product_id: string | null; current_price_krw: number | null }> = [];
   for (const idChunk of chunkArray(snapshotChannelProductIds, IN_QUERY_CHUNK_SIZE)) {
     if (idChunk.length === 0) continue;
@@ -402,8 +395,8 @@ export async function POST(request: Request) {
     const masterItemId = String(row.master_item_id ?? "").trim();
     if (!masterItemId) continue;
 
-    const floorPrice = floorByMaster.get(masterItemId) ?? 0;
-    const baseTarget = Math.round(Number(row.final_target_price_krw ?? Number.NaN));
+    const targetRaw = row.final_target_price_v2_krw ?? row.final_target_price_krw;
+    const baseTarget = Math.round(Number(targetRaw ?? Number.NaN));
     if (!Number.isFinite(baseTarget)) continue;
     const prevBaseTarget = baseSnapshotTargetByMaster.get(masterItemId);
     if (!Number.isFinite(Number(prevBaseTarget ?? Number.NaN))) {
@@ -422,7 +415,7 @@ export async function POST(request: Request) {
     if (!Number.isFinite(marketBasePrice) || !Number.isFinite(marketAfterMargin) || marketAfterMargin <= 0) continue;
 
     if ((marketAfterMargin - Math.round(Number(current))) < minChangeKrw) continue;
-    const forcedTarget = Math.max(baseTarget, marketAfterMargin, floorPrice);
+    const forcedTarget = Math.max(baseTarget, marketAfterMargin);
     const prevForcedTarget = forcedBaseTargetByMaster.get(masterItemId);
     if (!Number.isFinite(Number(prevForcedTarget ?? Number.NaN))) {
       forcedBaseTargetByMaster.set(masterItemId, forcedTarget);
@@ -455,10 +448,10 @@ export async function POST(request: Request) {
     if (!channelProductId || !mapping || !mapping.external_product_no) continue;
 
     const masterItemId = String(row.master_item_id ?? "").trim();
-    const floorPrice = floorByMaster.get(masterItemId) ?? 0;
-    const target = Math.round(Number(row.final_target_price_krw ?? 0));
+    const targetRaw = row.final_target_price_v2_krw ?? row.final_target_price_krw;
+    const target = Math.round(Number(targetRaw ?? 0));
     const variantCode = String(mapping.external_variant_code ?? "").trim();
-    let desired = Math.max(target, floorPrice);
+    let desired = target;
     if (!(desired > 0)) continue;
 
     const forcedBaseTarget = forcedBaseTargetByMaster.get(masterItemId);
@@ -481,8 +474,8 @@ export async function POST(request: Request) {
       && ((rowMarketAfterMargin - rowCurrentRounded) >= minChangeKrw);
 
     if (variantCode.length === 0 && (rowHasDirectMarketForce || masterHasForcedMarketSync)) {
-      if (rowHasDirectMarketForce) desired = Math.max(desired, rowMarketAfterMargin, floorPrice);
-      if (masterHasForcedMarketSync) desired = Math.max(desired, Math.round(Number(forcedBaseTarget)), floorPrice);
+      if (rowHasDirectMarketForce) desired = Math.max(desired, rowMarketAfterMargin);
+      if (masterHasForcedMarketSync) desired = Math.max(desired, Math.round(Number(forcedBaseTarget)));
       if (!marketGapForcedMasterKeys.has(masterItemId)) {
         marketGapForcedMasterKeys.add(masterItemId);
         marketGapForcedCount += 1;
@@ -492,15 +485,17 @@ export async function POST(request: Request) {
     if (triggerType === "AUTO" && Number.isFinite(Number(currentPrice ?? Number.NaN))) {
       const currentRounded = Math.round(Number(currentPrice));
       const isForcedBaseUplift = variantCode.length === 0 && (rowHasDirectMarketForce || masterHasForcedMarketSync);
-      if (!isForcedBaseUplift && desired <= currentRounded) {
+      if (!forceFullSync && !isForcedBaseUplift && desired <= currentRounded) {
         downsyncSuppressedCount += 1;
         continue;
       }
 
-      thresholdEvaluatedCount += 1;
-      if (!masterHasForcedMarketSync && Math.abs(desired - currentRounded) < minChangeKrw) {
-        thresholdFilteredCount += 1;
-        continue;
+      if (!forceFullSync) {
+        thresholdEvaluatedCount += 1;
+        if (!masterHasForcedMarketSync && Math.abs(desired - currentRounded) < minChangeKrw) {
+          thresholdFilteredCount += 1;
+          continue;
+        }
       }
     }
 
@@ -526,9 +521,11 @@ export async function POST(request: Request) {
         floor_applied: nextFloorApplied,
       };
       const existingTask = taskRows[intentIdx] ?? {};
+      const existingIntentId = String((intentRows[intentIdx] as { intent_id?: unknown } | undefined)?.intent_id ?? "").trim();
       taskRows[intentIdx] = {
         ...existingTask,
         idempotency_key: makeIdempotencyKey([
+          existingIntentId || `intent_idx_${intentIdx}`,
           channelId,
           selectedChannelProductId,
           selectedVariantCode || "BASE",
@@ -547,7 +544,7 @@ export async function POST(request: Request) {
       continue;
     }
 
-    const floorApplied = desired > target;
+    const floorApplied = false;
 
     intentRows.push({
       intent_id: intentId,
@@ -559,16 +556,17 @@ export async function POST(request: Request) {
       external_variant_code: variantCode || null,
       compute_request_id: computeRequestId,
       desired_price_krw: desired,
-      floor_price_krw: floorPrice,
+      floor_price_krw: 0,
       floor_applied: floorApplied,
       intent_version: Date.now(),
-      inputs_hash: makeIdempotencyKey([channelId, channelProductId, computeRequestId, target, floorPrice]),
+      inputs_hash: makeIdempotencyKey([channelId, channelProductId, computeRequestId, target, 0]),
       state: "PENDING",
     });
 
     taskRows.push({
       intent_id: intentId,
       idempotency_key: makeIdempotencyKey([
+        intentId,
         channelId,
         channelProductId,
         variantCode || "BASE",
@@ -589,7 +587,10 @@ export async function POST(request: Request) {
   }
 
   if (intentRows.length === 0) {
-    const reason = thresholdFilteredCount > 0 ? "NO_INTENTS_AFTER_MIN_CHANGE_THRESHOLD" : "NO_INTENTS";
+    const reason = resolveNoIntentsReason({
+      thresholdFilteredCount,
+      missingActiveMappingProductCount: missingMappingSummary.missing_active_mapping_product_count,
+    });
     await sb
       .from("price_sync_run_v2")
       .update({
@@ -605,6 +606,7 @@ export async function POST(request: Request) {
             market_gap_forced_count: marketGapForcedCount,
             downsync_suppressed_count: downsyncSuppressedCount,
             force_full_sync: forceFullSync,
+            ...missingMappingSummary,
           },
         },
       })
@@ -620,6 +622,7 @@ export async function POST(request: Request) {
       market_gap_forced_count: marketGapForcedCount,
       downsync_suppressed_count: downsyncSuppressedCount,
       force_full_sync: forceFullSync,
+      ...missingMappingSummary,
     }, { headers: { "Cache-Control": "no-store" } });
   }
 
@@ -661,6 +664,7 @@ export async function POST(request: Request) {
           market_gap_forced_count: marketGapForcedCount,
           downsync_suppressed_count: downsyncSuppressedCount,
           force_full_sync: forceFullSync,
+          ...missingMappingSummary,
         },
       },
     })
@@ -679,6 +683,7 @@ export async function POST(request: Request) {
       market_gap_forced_count: marketGapForcedCount,
       downsync_suppressed_count: downsyncSuppressedCount,
       force_full_sync: forceFullSync,
+      ...missingMappingSummary,
     },
     { headers: { "Cache-Control": "no-store" } },
   );

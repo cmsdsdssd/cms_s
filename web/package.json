@@ -7,7 +7,9 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test:shipments-regression": "node --test tests/shipments-labor-rules.test.mjs tests/shipments-prefill-snapshot.test.mjs"
+    "test:shipments-regression": "node --test tests/shipments-labor-rules.test.mjs tests/shipments-prefill-snapshot.test.mjs",
+    "verify:auto-price-v2": "node scripts/verify-auto-price-v2-run.js",
+    "inspect:auto-price-v2-mapping-gaps": "node scripts/inspect-price-sync-mapping-gaps.js"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.2.2",

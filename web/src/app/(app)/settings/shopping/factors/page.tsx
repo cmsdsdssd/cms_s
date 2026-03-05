@@ -20,6 +20,8 @@ type Policy = {
   rounding_mode: "CEIL" | "ROUND" | "FLOOR";
   option_18k_weight_multiplier: number;
   material_factor_set_id: string | null;
+  fee_rate?: number | null;
+  min_margin_rate_total?: number | null;
   is_active: boolean;
 };
 type FactorSet = {
@@ -94,14 +96,21 @@ export default function ShoppingFactorsPage() {
     [policiesQuery.data?.data],
   );
 
-  const [marginMultiplier, setMarginMultiplier] = useState("1");
+  const [marginRatePercent, setMarginRatePercent] = useState("0");
+  const [feeRatePercent, setFeeRatePercent] = useState("0");
+  const [minMarginRatePercent, setMinMarginRatePercent] = useState("0");
   const [roundingUnit, setRoundingUnit] = useState("1000");
   const [roundingMode, setRoundingMode] = useState<"CEIL" | "ROUND" | "FLOOR">("CEIL");
   const [option18kWeightMultiplier, setOption18kWeightMultiplier] = useState("1.2");
   const [policyFactorSetId, setPolicyFactorSetId] = useState("");
 
   useEffect(() => {
-    setMarginMultiplier(String(activePolicy?.margin_multiplier ?? 1));
+    const marginRate = (Number(activePolicy?.margin_multiplier ?? 1) - 1) * 100;
+    const feeRate = Number(activePolicy?.fee_rate ?? 0) * 100;
+    const minMarginRate = Number(activePolicy?.min_margin_rate_total ?? 0) * 100;
+    setMarginRatePercent(Number.isFinite(marginRate) ? String(marginRate) : "0");
+    setFeeRatePercent(Number.isFinite(feeRate) ? String(feeRate) : "0");
+    setMinMarginRatePercent(Number.isFinite(minMarginRate) ? String(minMarginRate) : "0");
     setRoundingUnit(String(activePolicy?.rounding_unit ?? 1000));
     setRoundingMode((activePolicy?.rounding_mode ?? "CEIL") as "CEIL" | "ROUND" | "FLOOR");
     setOption18kWeightMultiplier(String(activePolicy?.option_18k_weight_multiplier ?? 1.2));
@@ -145,15 +154,22 @@ export default function ShoppingFactorsPage() {
 
   const upsertPolicy = useMutation({
     mutationFn: async () => {
-      const margin = parseNumericInput(marginMultiplier);
+      const marginRate = parseNumericInput(marginRatePercent);
+      const feeRate = parseNumericInput(feeRatePercent);
+      const minMarginRate = parseNumericInput(minMarginRatePercent);
       const unit = parseNumericInput(roundingUnit);
       const option18k = parseNumericInput(option18kWeightMultiplier);
-      if (margin == null || margin < 0) throw new Error("마진은 0 이상 숫자여야 합니다");
+
+      if (marginRate == null || marginRate < 0) throw new Error("마진율(%)은 0 이상 숫자여야 합니다");
+      if (feeRate == null || feeRate < 0) throw new Error("수수료율(%)은 0 이상 숫자여야 합니다");
+      if (minMarginRate == null || minMarginRate < 0) throw new Error("최소마진율(%)은 0 이상 숫자여야 합니다");
       if (unit == null || unit <= 0) throw new Error("반올림 단위는 1 이상 숫자여야 합니다");
       if (option18k == null || option18k <= 0) throw new Error("18K 배수는 0보다 커야 합니다");
 
       const payload = {
-        margin_multiplier: margin,
+        margin_multiplier: 1 + (marginRate / 100),
+        fee_rate: feeRate / 100,
+        min_margin_rate_total: minMarginRate / 100,
         rounding_unit: Math.max(1, Math.round(unit)),
         rounding_mode: roundingMode,
         material_factor_set_id: policyFactorSetId || null,
@@ -361,9 +377,9 @@ export default function ShoppingFactorsPage() {
       />
 
       <Card>
-        <CardHeader title="채널 정책" description="마진/반올림/팩터 세트 연결" />
+        <CardHeader title="채널 정책" description="마진/수수료/최소마진/반올림/팩터 세트 연결" />
         <CardBody className="space-y-3">
-          <div className="grid grid-cols-1 gap-2 md:grid-cols-6">
+          <div className="grid grid-cols-1 gap-2 md:grid-cols-8">
             <div className="space-y-1">
               <div className="text-xs text-[var(--muted)]">채널(channel_id)</div>
               <Select value={channelId} onChange={(e) => setChannelId(e.target.value)}>
@@ -376,8 +392,16 @@ export default function ShoppingFactorsPage() {
               </Select>
             </div>
             <div className="space-y-1">
-              <div className="text-xs text-[var(--muted)]">마진 배수(margin_multiplier)</div>
-              <Input value={marginMultiplier} onChange={(e) => setMarginMultiplier(e.target.value)} placeholder="예: 1" />
+              <div className="text-xs text-[var(--muted)]">마진율(%)</div>
+              <Input value={marginRatePercent} onChange={(e) => setMarginRatePercent(e.target.value)} placeholder="예: 10" />
+            </div>
+            <div className="space-y-1">
+              <div className="text-xs text-[var(--muted)]">수수료율(%)</div>
+              <Input value={feeRatePercent} onChange={(e) => setFeeRatePercent(e.target.value)} placeholder="예: 8.5" />
+            </div>
+            <div className="space-y-1">
+              <div className="text-xs text-[var(--muted)]">최소마진율(%)</div>
+              <Input value={minMarginRatePercent} onChange={(e) => setMinMarginRatePercent(e.target.value)} placeholder="예: 15" />
             </div>
             <div className="space-y-1">
               <div className="text-xs text-[var(--muted)]">반올림 단위(rounding_unit)</div>

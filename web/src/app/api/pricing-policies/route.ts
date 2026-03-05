@@ -13,7 +13,7 @@ export async function GET(request: Request) {
 
   let q = sb
     .from("pricing_policy")
-    .select("policy_id, channel_id, policy_name, margin_multiplier, rounding_unit, rounding_mode, option_18k_weight_multiplier, material_factor_set_id, is_active, created_at, updated_at")
+    .select("policy_id, channel_id, policy_name, margin_multiplier, rounding_unit, rounding_mode, option_18k_weight_multiplier, material_factor_set_id, fee_rate, min_margin_rate_total, is_active, created_at, updated_at")
     .order("updated_at", { ascending: false });
   if (channelId) q = q.eq("channel_id", channelId);
 
@@ -35,11 +35,15 @@ export async function POST(request: Request) {
   const hasRoundingUnit = Object.prototype.hasOwnProperty.call(body, "rounding_unit");
   const hasRoundingMode = Object.prototype.hasOwnProperty.call(body, "rounding_mode");
   const hasOption18k = Object.prototype.hasOwnProperty.call(body, "option_18k_weight_multiplier");
+  const hasFeeRate = Object.prototype.hasOwnProperty.call(body, "fee_rate");
+  const hasMinMarginRateTotal = Object.prototype.hasOwnProperty.call(body, "min_margin_rate_total");
 
   const marginMultiplier = hasMargin ? Number(body.margin_multiplier) : 1;
   const roundingUnit = hasRoundingUnit ? Number(body.rounding_unit) : 1000;
   const roundingMode = String(hasRoundingMode ? body.rounding_mode : "CEIL").toUpperCase();
   const option18kWeightMultiplier = hasOption18k ? Number(body.option_18k_weight_multiplier) : 1.2;
+  const feeRate = hasFeeRate ? Number(body.fee_rate) : 0;
+  const minMarginRateTotal = hasMinMarginRateTotal ? Number(body.min_margin_rate_total) : 0;
 
   const basePayload = {
     channel_id: String(body.channel_id ?? "").trim(),
@@ -49,6 +53,8 @@ export async function POST(request: Request) {
     rounding_mode: roundingMode,
     option_18k_weight_multiplier: option18kWeightMultiplier,
     material_factor_set_id: typeof body.material_factor_set_id === "string" ? body.material_factor_set_id : null,
+    fee_rate: feeRate,
+    min_margin_rate_total: minMarginRateTotal,
     is_active: body.is_active === false ? false : true,
   };
 
@@ -57,9 +63,11 @@ export async function POST(request: Request) {
   if (!Number.isFinite(basePayload.margin_multiplier) || basePayload.margin_multiplier < 0) return jsonError("margin_multiplier must be >= 0", 400);
   if (!Number.isFinite(basePayload.rounding_unit) || basePayload.rounding_unit <= 0) return jsonError("rounding_unit must be > 0", 400);
   if (!Number.isFinite(basePayload.option_18k_weight_multiplier) || basePayload.option_18k_weight_multiplier <= 0) return jsonError("option_18k_weight_multiplier must be > 0", 400);
+  if (!Number.isFinite(basePayload.fee_rate) || basePayload.fee_rate < 0) return jsonError("fee_rate must be >= 0", 400);
+  if (!Number.isFinite(basePayload.min_margin_rate_total) || basePayload.min_margin_rate_total < 0) return jsonError("min_margin_rate_total must be >= 0", 400);
   if (!["CEIL", "ROUND", "FLOOR"].includes(basePayload.rounding_mode)) return jsonError("rounding_mode must be CEIL/ROUND/FLOOR", 400);
 
-  const selectCols = "policy_id, channel_id, policy_name, margin_multiplier, rounding_unit, rounding_mode, option_18k_weight_multiplier, material_factor_set_id, is_active, created_at, updated_at";
+  const selectCols = "policy_id, channel_id, policy_name, margin_multiplier, rounding_unit, rounding_mode, option_18k_weight_multiplier, material_factor_set_id, fee_rate, min_margin_rate_total, is_active, created_at, updated_at";
 
   const deactivateOtherPolicies = async (savedPolicyId: string) => {
     if (!basePayload.is_active) return;

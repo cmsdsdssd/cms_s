@@ -49,6 +49,28 @@ type SyncRun = {
   started_at: string;
   error_message?: string | null;
 };
+type MissingMappingSummary = {
+  snapshot_rows_with_channel_product_count?: number;
+  missing_active_mapping_row_count?: number;
+  missing_active_mapping_product_count?: number;
+  missing_active_mapping_master_count?: number;
+  missing_active_mapping_samples?: Array<{
+    channel_product_id: string;
+    master_item_id: string | null;
+    compute_request_id: string | null;
+  }>;
+};
+type SyncRunCreateResponse = {
+  run_id: string;
+  total_count?: number;
+  reason?: string;
+  threshold_min_change_krw?: number;
+  threshold_evaluated_count?: number;
+  threshold_filtered_count?: number;
+  market_gap_forced_count?: number;
+  downsync_suppressed_count?: number;
+  force_full_sync?: boolean;
+} & MissingMappingSummary;
 type SyncIntent = {
   intent_id: string;
   external_product_no: string;
@@ -73,6 +95,16 @@ type SyncRunDetail = {
     run_id: string;
     pinned_compute_request_id?: string | null;
     started_at?: string | null;
+    request_payload?: {
+      summary?: MissingMappingSummary & {
+        threshold_min_change_krw?: number;
+        threshold_evaluated_count?: number;
+        threshold_filtered_count?: number;
+        market_gap_forced_count?: number;
+        downsync_suppressed_count?: number;
+        force_full_sync?: boolean;
+      };
+    } | null;
   };
   intents: SyncIntent[];
 };
@@ -239,6 +271,13 @@ const fmtTsCompact = (v: string | null | undefined) => {
   return `${yy}.${mm}.${dd}-${hh}:${mi}:${ss}`;
 };
 
+const parseCronTickReason = (errorMessage: string | null | undefined): string | null => {
+  const raw = String(errorMessage ?? "").trim();
+  if (!raw.toUpperCase().startsWith("CRON_TICK:")) return null;
+  const reason = raw.slice("CRON_TICK:".length).trim();
+  return reason || null;
+};
+
 const toRunKo = (value: string) => {
   if (value === "RUNNING") return "진행중";
   if (value === "SUCCESS") return "성공";
@@ -347,12 +386,20 @@ export default function ShoppingAutoPricePage() {
   const runDetailQuery = useQuery({
     queryKey: ["price-sync-run-v2", effectiveRunId],
     enabled: Boolean(effectiveRunId),
-    queryFn: () => shopApiGet<{ data: { intents: SyncIntent[]; summary?: { reasons: ReasonSummaryRow[]; skipped_reasons: ReasonSummaryRow[]; failed_reasons: ReasonSummaryRow[] } } }>(`/api/price-sync-runs-v2/${effectiveRunId}`),
+    queryFn: () => shopApiGet<{ data: { run: SyncRunDetail["run"]; intents: SyncIntent[]; summary?: { reasons: ReasonSummaryRow[]; skipped_reasons: ReasonSummaryRow[]; failed_reasons: ReasonSummaryRow[] } } }>(`/api/price-sync-runs-v2/${effectiveRunId}`),
     refetchInterval: 10_000,
   });
 
   const runSkippedReasons = runDetailQuery.data?.data.summary?.skipped_reasons ?? [];
   const runFailedReasons = runDetailQuery.data?.data.summary?.failed_reasons ?? [];
+  const activeRunMissingMappingSummary = runDetailQuery.data?.data.run?.request_payload?.summary ?? null;
+  const activeRunMissingProductCount = Math.max(0, Math.round(Number(activeRunMissingMappingSummary?.missing_active_mapping_product_count ?? 0)));
+  const activeRunMissingRowCount = Math.max(0, Math.round(Number(activeRunMissingMappingSummary?.missing_active_mapping_row_count ?? 0)));
+  const activeRunSnapshotRowsWithChannelProductCount = Math.max(
+    0,
+    Math.round(Number(activeRunMissingMappingSummary?.snapshot_rows_with_channel_product_count ?? 0)),
+  );
+  const activeRunMissingSamples = (activeRunMissingMappingSummary?.missing_active_mapping_samples ?? []).slice(0, 10);
 
   const masterIdByProductNo = useMemo(() => {
     const map = new Map<string, string>();
@@ -396,6 +443,19 @@ export default function ShoppingAutoPricePage() {
       .filter(Boolean),
     [runsQuery.data?.data],
   );
+
+  const latestCronTick = useMemo(() => {
+    const rows = runsQuery.data?.data ?? [];
+    for (const row of rows) {
+      const reason = parseCronTickReason(row.error_message ?? null);
+      if (!reason) continue;
+      return {
+        at: String(row.started_at ?? "").trim(),
+        reason,
+      };
+    }
+    return null;
+  }, [runsQuery.data?.data]);
 
   const recentRunDetailQueries = useQueries({
     queries: recentRunIds.map((runId) => ({
@@ -957,7 +1017,7 @@ export default function ShoppingAutoPricePage() {
   const createRunMutation = useMutation({
     mutationFn: () => {
       const ids = runMasterIds.split(/[\s,\n]+/).map((v) => v.trim()).filter(Boolean);
-      return shopApiSend<{ run_id: string }>("/api/price-sync-runs-v2", "POST", {
+      return shopApiSend<SyncRunCreateResponse>("/api/price-sync-runs-v2", "POST", {
         channel_id: effectiveChannelId,
         interval_minutes: Number(intervalMinutes),
         trigger_type: "AUTO",
@@ -969,6 +1029,14 @@ export default function ShoppingAutoPricePage() {
       await qc.invalidateQueries({ queryKey: ["price-sync-runs-v2", effectiveChannelId] });
     },
   });
+
+  const latestCreateMissingProductCount = Math.max(0, Math.round(Number(createRunMutation.data?.missing_active_mapping_product_count ?? 0)));
+  const latestCreateMissingRowCount = Math.max(0, Math.round(Number(createRunMutation.data?.missing_active_mapping_row_count ?? 0)));
+  const latestCreateSnapshotRowsWithChannelProductCount = Math.max(
+    0,
+    Math.round(Number(createRunMutation.data?.snapshot_rows_with_channel_product_count ?? 0)),
+  );
+  const latestCreateMissingSamples = (createRunMutation.data?.missing_active_mapping_samples ?? []).slice(0, 10);
 
   const executeRunMutation = useMutation({
     mutationFn: () => shopApiSend<{ ok: boolean }>(`/api/price-sync-runs-v2/${effectiveRunId}/execute`, "POST"),
@@ -1607,7 +1675,12 @@ export default function ShoppingAutoPricePage() {
                           <div className="rounded border border-[var(--hairline)] bg-[var(--bg)] p-2">
                             <div className="mb-2 flex items-baseline justify-between gap-2">
                               <div className="text-[11px] font-semibold">히스토리(최근 run)</div>
-                              <div className="text-[10px] text-[var(--muted)]">최대 8건</div>
+                              <div className="flex flex-wrap justify-end gap-x-2 gap-y-0.5 text-right text-[10px] text-[var(--muted)]">
+                                <div>최대 8건</div>
+                                {latestCronTick ? (
+                                  <div className="tabular-nums">최근 크론체크: {fmtTsCompact(latestCronTick.at)} ({latestCronTick.reason})</div>
+                                ) : null}
+                              </div>
                             </div>
 
                             {previewHistoryRows.length === 0 ? (
@@ -2040,6 +2113,23 @@ export default function ShoppingAutoPricePage() {
               </Button>
             </div>
             <p className="text-xs text-[var(--muted)]">Run 생성 시 floor 미설정 master가 있으면 실패합니다.</p>
+            {latestCreateMissingProductCount > 0 ? (
+              <div className="rounded border border-amber-500/50 bg-amber-500/10 px-3 py-2 text-xs text-amber-100">
+                <div>
+                  최근 생성 run에서 활성 매핑 누락이 감지되었습니다: product {latestCreateMissingProductCount}건, snapshot row {latestCreateMissingRowCount}건 / 기준 row {latestCreateSnapshotRowsWithChannelProductCount}건.
+                  sales_channel_product 활성 매핑을 보강한 뒤 재실행하세요.
+                </div>
+                {latestCreateMissingSamples.length > 0 ? (
+                  <div className="mt-2 max-h-32 overflow-auto rounded border border-amber-500/40 bg-black/20 p-2 text-[11px]">
+                    {latestCreateMissingSamples.map((sample) => (
+                      <div key={`${sample.channel_product_id}:${sample.compute_request_id ?? "-"}`} className="truncate">
+                        cp={sample.channel_product_id} / master={sample.master_item_id ?? "-"} / compute={sample.compute_request_id ?? "-"}
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
           </CardBody>
         </Card>
       </div>
@@ -2085,6 +2175,22 @@ export default function ShoppingAutoPricePage() {
         <Card>
           <CardHeader title="Run Intent 상세" description={`${runDetailQuery.data?.data.intents.length ?? 0}건`} />
           <CardBody>
+            {activeRunMissingProductCount > 0 ? (
+              <div className="mb-3 rounded border border-amber-500/50 bg-amber-500/10 px-3 py-2 text-xs text-amber-100">
+                <div>
+                  선택 run에서 활성 매핑 누락 감지: product {activeRunMissingProductCount}건, snapshot row {activeRunMissingRowCount}건 / 기준 row {activeRunSnapshotRowsWithChannelProductCount}건.
+                </div>
+                {activeRunMissingSamples.length > 0 ? (
+                  <div className="mt-2 max-h-32 overflow-auto rounded border border-amber-500/40 bg-black/20 p-2 text-[11px]">
+                    {activeRunMissingSamples.map((sample) => (
+                      <div key={`${sample.channel_product_id}:${sample.compute_request_id ?? "-"}`} className="truncate">
+                        cp={sample.channel_product_id} / master={sample.master_item_id ?? "-"} / compute={sample.compute_request_id ?? "-"}
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
             <div className="mb-3 grid grid-cols-1 gap-3 md:grid-cols-2">
               <div className="rounded-[var(--radius)] border border-[var(--hairline)] p-3">
                 <div className="mb-2 text-sm font-medium">건너뜀 사유</div>

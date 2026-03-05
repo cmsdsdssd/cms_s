@@ -4,6 +4,7 @@ import { POST as recomputePost } from "@/app/api/pricing/recompute/route";
 import { POST as createRunPost } from "@/app/api/price-sync-runs-v2/route";
 import { POST as executeRunPost } from "@/app/api/price-sync-runs-v2/[run_id]/execute/route";
 import { getShopAdminClient } from "@/lib/shop/admin";
+import { CRON_TICK_ERROR_PREFIX, isCronTickError } from "@/lib/shop/price-sync-guards";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -107,10 +108,36 @@ const toMs = (value: unknown): number | null => {
   return Number.isFinite(ms) ? ms : null;
 };
 
-const CRON_TICK_ERROR_PREFIX = "CRON_TICK:";
-
-const isCronTickError = (value: unknown): boolean =>
-  String(value ?? "").trim().toUpperCase().startsWith(CRON_TICK_ERROR_PREFIX);
+const toDetailSnippet = (value: unknown, depth = 0): unknown => {
+  if (value === null || value === undefined) return null;
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (trimmed.length <= 600) return trimmed;
+    return `${trimmed.slice(0, 600)}...`;
+  }
+  if (typeof value === "number" || typeof value === "boolean") return value;
+  if (Array.isArray(value)) {
+    const sample = value.slice(0, 3).map((item) => (depth >= 1 ? String(item ?? "") : toDetailSnippet(item, depth + 1)));
+    return { type: "array", length: value.length, sample };
+  }
+  if (typeof value === "object") {
+    const obj = value as Record<string, unknown>;
+    const entries = Object.entries(obj);
+    const limited = entries.slice(0, 15);
+    const out: Record<string, unknown> = {};
+    for (const [key, val] of limited) {
+      if (depth >= 1) {
+        if (val && typeof val === "object") out[key] = "[object]";
+        else out[key] = val as unknown;
+      } else {
+        out[key] = toDetailSnippet(val, depth + 1);
+      }
+    }
+    if (entries.length > limited.length) out.__truncated_keys = entries.length - limited.length;
+    return out;
+  }
+  return String(value);
+};
 
 type ShopAdminClient = NonNullable<ReturnType<typeof getShopAdminClient>>;
 
@@ -243,6 +270,76 @@ async function runCron(request: Request) {
     const overlapActive = startedAtMs === null || (Date.now() - startedAtMs) <= runningStaleWindowMs;
     if (overlapActive) {
       const activeRunId = String((running as { run_id?: unknown }).run_id ?? "").trim() || null;
+
+      if (activeRunId) {
+        const resumedExecuteSnapshots: unknown[] = [];
+        let resumedExecuteJson: Record<string, unknown> = {};
+
+        for (let round = 0; round < executeRoundLimit; round += 1) {
+          const executeRes = await executeRunPost(
+            mkJsonRequest(`/api/price-sync-runs-v2/${activeRunId}/execute`, {
+              intent_batch_size: executeIntentBatchSize,
+              push_chunk_size: pushChunkSize,
+            }),
+            { params: Promise.resolve({ run_id: activeRunId }) },
+          );
+          resumedExecuteJson = (await executeRes.json().catch(() => ({}))) as Record<string, unknown>;
+          resumedExecuteSnapshots.push({ round: round + 1, status: executeRes.status, body: resumedExecuteJson });
+
+          if (!executeRes.ok) {
+            await recordCronTickRun(sb, {
+              channelId,
+              intervalMinutes,
+              reason: "EXECUTE_RUN_FAILED",
+              relatedRunId: activeRunId,
+              detail: {
+                stage: "execute_run",
+                status: executeRes.status,
+                round: round + 1,
+                payload_snippet: toDetailSnippet(resumedExecuteJson),
+              },
+            });
+            return NextResponse.json(
+              {
+                ok: false,
+                stage: "execute_run",
+                status: executeRes.status,
+                detail: resumedExecuteJson,
+                channel_id: channelId,
+                run_id: activeRunId,
+                resumed_existing_run: true,
+              },
+              { status: executeRes.status, headers: { "Cache-Control": "no-store" } },
+            );
+          }
+
+          const runStatus = String(resumedExecuteJson.status ?? "").trim().toUpperCase();
+          const pending = Number(resumedExecuteJson.pending ?? 0);
+          if (runStatus !== "RUNNING" || !Number.isFinite(pending) || pending <= 0) break;
+        }
+
+        const resumedStatus = String(resumedExecuteJson.status ?? "").trim().toUpperCase();
+        if (resumedStatus !== "RUNNING") {
+          return NextResponse.json(
+            {
+              ok: true,
+              mode: "AUTO_SYNC_V2",
+              channel_id: channelId,
+              interval_minutes: intervalMinutes,
+              requested_interval_minutes: requestedIntervalMinutes,
+              resumed_existing_run: true,
+              run_id: activeRunId,
+              execute: resumedExecuteJson,
+              execute_rounds: resumedExecuteSnapshots,
+              execute_round_limit: executeRoundLimit,
+              execute_intent_batch_size: executeIntentBatchSize,
+              push_chunk_size: pushChunkSize,
+            },
+            { headers: { "Cache-Control": "no-store" } },
+          );
+        }
+      }
+
       await recordCronTickRun(sb, {
         channelId,
         intervalMinutes,
@@ -261,6 +358,7 @@ async function runCron(request: Request) {
           skip_reason: "OVERLAP_RUNNING",
           running_stale_minutes: Math.floor(runningStaleWindowMs / 60000),
           run_id: activeRunId,
+          resumed_existing_run: true,
         },
         { headers: { "Cache-Control": "no-store" } },
       );
@@ -334,6 +432,17 @@ async function runCron(request: Request) {
   const pullRes = await pullPost(mkJsonRequest("/api/channel-prices/pull", { channel_id: channelId }));
   const pullJson = await pullRes.json().catch(() => ({}));
   if (!pullRes.ok) {
+    await recordCronTickRun(sb, {
+      channelId,
+      intervalMinutes,
+      reason: "PULL_FAILED",
+      relatedRunId: null,
+      detail: {
+        stage: "pull",
+        status: pullRes.status,
+        payload_snippet: toDetailSnippet(pullJson),
+      },
+    });
     return NextResponse.json(
       { ok: false, stage: "pull", status: pullRes.status, detail: pullJson, channel_id: channelId },
       { status: pullRes.status, headers: { "Cache-Control": "no-store" } },
@@ -343,6 +452,17 @@ async function runCron(request: Request) {
   const recomputeRes = await recomputePost(mkJsonRequest("/api/pricing/recompute", { channel_id: channelId, pricing_algo_version: "REVERSE_FEE_V2" }));
   const recomputeJson = await recomputeRes.json().catch(() => ({}));
   if (!recomputeRes.ok) {
+    await recordCronTickRun(sb, {
+      channelId,
+      intervalMinutes,
+      reason: "RECOMPUTE_FAILED",
+      relatedRunId: null,
+      detail: {
+        stage: "recompute",
+        status: recomputeRes.status,
+        payload_snippet: toDetailSnippet(recomputeJson),
+      },
+    });
     return NextResponse.json(
       { ok: false, stage: "recompute", status: recomputeRes.status, detail: recomputeJson, channel_id: channelId },
       { status: recomputeRes.status, headers: { "Cache-Control": "no-store" } },
@@ -362,6 +482,17 @@ async function runCron(request: Request) {
   );
   const runCreateJson = await runCreateRes.json().catch(() => ({}));
   if (!runCreateRes.ok) {
+    await recordCronTickRun(sb, {
+      channelId,
+      intervalMinutes,
+      reason: "CREATE_RUN_FAILED",
+      relatedRunId: null,
+      detail: {
+        stage: "create_run",
+        status: runCreateRes.status,
+        payload_snippet: toDetailSnippet(runCreateJson),
+      },
+    });
     return NextResponse.json(
       { ok: false, stage: "create_run", status: runCreateRes.status, detail: runCreateJson, channel_id: channelId },
       { status: runCreateRes.status, headers: { "Cache-Control": "no-store" } },
@@ -399,6 +530,18 @@ async function runCron(request: Request) {
   }
 
   if (!runId) {
+    await recordCronTickRun(sb, {
+      channelId,
+      intervalMinutes,
+      reason: "CREATE_RUN_FAILED",
+      relatedRunId: null,
+      detail: {
+        stage: "create_run",
+        status: 500,
+        error: "run_id missing",
+        payload_snippet: toDetailSnippet(runCreateJson),
+      },
+    });
     return NextResponse.json(
       { ok: false, stage: "create_run", status: 500, detail: "run_id missing", channel_id: channelId },
       { status: 500, headers: { "Cache-Control": "no-store" } },
@@ -418,6 +561,18 @@ async function runCron(request: Request) {
     executeJson = (await executeRes.json().catch(() => ({}))) as Record<string, unknown>;
     executeSnapshots.push({ round: round + 1, status: executeRes.status, body: executeJson });
     if (!executeRes.ok) {
+      await recordCronTickRun(sb, {
+        channelId,
+        intervalMinutes,
+        reason: "EXECUTE_RUN_FAILED",
+        relatedRunId: runId,
+        detail: {
+          stage: "execute_run",
+          status: executeRes.status,
+          round: round + 1,
+          payload_snippet: toDetailSnippet(executeJson),
+        },
+      });
       return NextResponse.json(
         { ok: false, stage: "execute_run", status: executeRes.status, detail: executeJson, channel_id: channelId, run_id: runId },
         { status: executeRes.status, headers: { "Cache-Control": "no-store" } },

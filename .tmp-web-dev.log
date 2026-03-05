@@ -1,0 +1,13 @@
+
+> web@0.1.0 dev
+> next dev --port 3100
+
+▲ Next.js 16.1.4 (Turbopack)
+- Local:         http://localhost:3100
+- Network:       http://192.168.0.69:3100
+- Environments: .env.local, .env
+
+✓ Starting...
+⚠ Turbopack's filesystem cache has been deleted because we previously detected an internal error in Turbopack. Builds or page loads may be slower as a result.
+⚠ The "middleware" file convention is deprecated. Please use "proxy" instead. Learn more: https://nextjs.org/docs/messages/middleware-to-proxy
+✓ Ready in 2.7s

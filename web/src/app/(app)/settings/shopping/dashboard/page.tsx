@@ -828,19 +828,31 @@ export default function ShoppingDashboardPage() {
 
   const optionGroupPersistedPolicies = optionGroupPoliciesQuery.data?.data ?? [];
   const snapshotDrawerMasterId = selectedMasterIdForDrawer || effectiveDetailMasterId;
+  const snapshotDrawerMasterRow = useMemo(
+    () => masterRows.find((m) => m.master_item_id === snapshotDrawerMasterId) ?? null,
+    [masterRows, snapshotDrawerMasterId],
+  );
+  const snapshotDrawerMappings = useMemo(
+    () => mappings.filter((m) => m.master_item_id === snapshotDrawerMasterId),
+    [mappings, snapshotDrawerMasterId],
+  );
+  const snapshotDrawerChannelProductId = useMemo(() => {
+    const base = snapshotDrawerMappings.find((m) => !String(m.external_variant_code ?? "").trim());
+    return String((base ?? snapshotDrawerMappings[0])?.channel_product_id ?? "").trim();
+  }, [snapshotDrawerMappings]);
+  const snapshotCurrentChannelPriceKrw = snapshotDrawerMasterRow?.base_current_krw ?? null;
   const snapshotExplainQuery = useQuery({
-    queryKey: ["shop-snapshot-explain", activeChannelId, snapshotDrawerMasterId, pinnedComputeRequestId, isSnapshotDrawerOpen],
+    queryKey: ["shop-snapshot-explain", activeChannelId, snapshotDrawerMasterId, snapshotDrawerChannelProductId, isSnapshotDrawerOpen],
     enabled: Boolean(
       isSnapshotDrawerOpen
       && activeChannelId
-      && snapshotDrawerMasterId
-      && pinnedComputeRequestId,
+      && snapshotDrawerMasterId,
     ),
     queryFn: () => {
       const query = new URLSearchParams();
       query.set("channel_id", activeChannelId);
       query.set("master_item_id", snapshotDrawerMasterId);
-      query.set("compute_request_id", pinnedComputeRequestId);
+      if (snapshotDrawerChannelProductId) query.set("channel_product_id", snapshotDrawerChannelProductId);
       return shopApiGet<PricingSnapshotExplainResponse>(`/api/channel-price-snapshot-explain?${query.toString()}`);
     },
   });
@@ -2721,6 +2733,10 @@ export default function ShoppingDashboardPage() {
                         <div className="text-xs text-[var(--muted)]">가격 구성식</div>
                         <div className="mt-1 font-semibold">{fmt(detailMasterOriginal)} {detailBaseDeltaTotal >= 0 ? "+" : "-"} {fmt(Math.abs(detailBaseDeltaTotal))} = {fmt(detailFinalTarget)}</div>
                         <div className="mt-1 text-xs text-[var(--muted)]">(마스터 원본가 +/- 조정 누적 = 운영 목표가)</div>
+                        <div className="mt-2 rounded border border-[var(--hairline)] bg-[var(--panel)] px-2 py-1 text-xs">
+                          <span className="text-[var(--muted)]">핀된 compute_request_id:</span>{" "}
+                          <span className="font-semibold">{pinnedComputeRequestId || "-"}</span>
+                        </div>
                         <div className="mt-2">
                           <Button
                             size="sm"
@@ -2729,10 +2745,11 @@ export default function ShoppingDashboardPage() {
                               setSelectedMasterIdForDrawer(effectiveDetailMasterId);
                               setIsSnapshotDrawerOpen(true);
                             }}
-                            disabled={!pinnedComputeRequestId || !activeChannelId || !effectiveDetailMasterId}
+                            disabled={!activeChannelId || !effectiveDetailMasterId}
                           >
-                            스냅샷 계산식 보기
+                            V2 계산 근거
                           </Button>
+                          <div className="mt-1 text-[11px] text-[var(--muted)]">fallback 없이 V2 뷰 최신 스냅샷 값을 그대로 표시합니다.</div>
                         </div>
                       </div>
 
@@ -3067,6 +3084,7 @@ export default function ShoppingDashboardPage() {
         row={snapshotExplainQuery.data?.data ?? null}
         loading={snapshotExplainQuery.isFetching}
         errorMessage={snapshotExplainQuery.error instanceof Error ? snapshotExplainQuery.error.message : null}
+        currentChannelPriceKrw={snapshotCurrentChannelPriceKrw}
       />
 
       <Sheet
