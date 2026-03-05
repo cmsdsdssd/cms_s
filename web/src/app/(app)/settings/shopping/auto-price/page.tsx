@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ActionBar } from "@/components/layout/action-bar";
 import { ShoppingPageHeader } from "@/components/layout/shopping-page-header";
@@ -27,6 +27,8 @@ type PricingPolicy = {
   rounding_mode: "CEIL" | "ROUND" | "FLOOR";
   option_18k_weight_multiplier: number;
   material_factor_set_id: string | null;
+  fee_rate?: number | null;
+  min_margin_rate_total?: number | null;
   is_active: boolean;
 };
 type FactorSet = {
@@ -59,8 +61,11 @@ type SyncIntent = {
   reason_code?: string | null;
   reason_label?: string | null;
   reason_category?: string | null;
+  applied_before_price_krw?: number | null;
   applied_target_price_krw?: number | null;
   applied_after_price_krw?: number | null;
+  snapshot_desired_price_krw?: number | null;
+  effective_desired_price_krw?: number | null;
   updated_at?: string | null;
 };
 type SyncRunDetail = {
@@ -194,15 +199,6 @@ const fmtSignedKrw = (v: number | null | undefined) => {
   const sign = rounded > 0 ? "+" : "";
   return sign + rounded.toLocaleString() + "원";
 };
-const fmtMultiplier = (v: number | null | undefined) => {
-  if (typeof v !== "number" || !Number.isFinite(v)) return "-";
-  const text = v
-    .toFixed(3)
-    .replace(/\.0+$/u, "")
-    .replace(/(\.\d*?)0+$/u, "$1")
-    .replace(/\.$/u, "");
-  return "x" + text;
-};
 const toRoundedNumber = (value: unknown): number | null => {
   const n = Number(value ?? Number.NaN);
   return Number.isFinite(n) ? Math.round(n) : null;
@@ -268,6 +264,7 @@ export default function ShoppingAutoPricePage() {
   const [editorProductNo, setEditorProductNo] = useState("");
   const [gallerySearch, setGallerySearch] = useState("");
   const [editorPreview, setEditorPreview] = useState<ProductEditorPreview | null>(null);
+  const [editorMasterItemIdHint, setEditorMasterItemIdHint] = useState("");
   const [editorPrice, setEditorPrice] = useState("");
   const [editorRetailPrice, setEditorRetailPrice] = useState("");
   const [editorSelling, setEditorSelling] = useState("T");
@@ -357,19 +354,39 @@ export default function ShoppingAutoPricePage() {
   const runSkippedReasons = runDetailQuery.data?.data.summary?.skipped_reasons ?? [];
   const runFailedReasons = runDetailQuery.data?.data.summary?.failed_reasons ?? [];
 
+  const masterIdByProductNo = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const row of mappingSummaryQuery.data?.data.mapped_masters ?? []) {
+      const masterId = String(row.master_item_id ?? "").trim();
+      if (!masterId) continue;
+      for (const productNo of row.product_nos ?? []) {
+        const key = String(productNo ?? "").trim();
+        if (!key || map.has(key)) continue;
+        map.set(key, masterId);
+      }
+    }
+    return map;
+  }, [mappingSummaryQuery.data?.data.mapped_masters]);
+
   const editorMasterItemId = useMemo(() => {
-    if (!editorPreview) return "";
-    const fromPreview = String(editorPreview.master_item_id ?? "").trim();
-    if (fromPreview) return fromPreview;
-    const productNoCandidates = new Set([
+    if (editorPreview) {
+      const fromPreview = String(editorPreview.master_item_id ?? "").trim();
+      if (fromPreview) return fromPreview;
+    }
+    if (editorMasterItemIdHint) return editorMasterItemIdHint;
+
+    const productNoCandidates = [
       String(editorProductNo ?? "").trim(),
-      String(editorPreview.productNo ?? "").trim(),
-    ].filter(Boolean));
-    const found = (mappingSummaryQuery.data?.data.mapped_masters ?? []).find((row) =>
-      (row.product_nos ?? []).some((productNo) => productNoCandidates.has(String(productNo ?? "").trim())),
-    );
-    return found?.master_item_id ?? "";
-  }, [editorPreview, editorProductNo, mappingSummaryQuery.data]);
+      String(editorPreview?.productNo ?? "").trim(),
+    ].filter(Boolean);
+
+    for (const productNo of productNoCandidates) {
+      const mappedMasterId = masterIdByProductNo.get(productNo);
+      if (mappedMasterId) return mappedMasterId;
+    }
+
+    return "";
+  }, [editorPreview, editorProductNo, editorMasterItemIdHint, masterIdByProductNo]);
 
   const recentRunIds = useMemo(
     () => (runsQuery.data?.data ?? [])
@@ -390,6 +407,8 @@ export default function ShoppingAutoPricePage() {
     })),
   });
 
+  const resolvedPreviewProductNo = String(editorPreview?.productNo ?? editorProductNo ?? "").trim();
+
   const latestComputeRequestIdForPreview = useMemo(() => {
     for (const query of recentRunDetailQueries) {
       const computeRequestId = String(query.data?.data?.run?.pinned_compute_request_id ?? "").trim();
@@ -398,29 +417,22 @@ export default function ShoppingAutoPricePage() {
     return "";
   }, [recentRunDetailQueries]);
 
-  const recentRunExplainTargets = useMemo(
-    () =>
-      recentRunDetailQueries
-        .map((query) => {
-          const runId = String(query.data?.data?.run?.run_id ?? "").trim();
-          const computeRequestId = String(query.data?.data?.run?.pinned_compute_request_id ?? "").trim();
-          return { runId, computeRequestId };
-        })
-        .filter((row) => row.runId && row.computeRequestId),
-    [recentRunDetailQueries],
-  );
-
   const snapshotExplainQuery = useQuery({
-    queryKey: ["pricing-snapshot-explain", effectiveChannelId, editorMasterItemId, latestComputeRequestIdForPreview],
-    enabled: Boolean(effectiveChannelId && editorMasterItemId && latestComputeRequestIdForPreview),
-    queryFn: () => shopApiGet<PricingSnapshotExplainResponse>(
-      "/api/channel-price-snapshot-explain?channel_id="
-      + encodeURIComponent(effectiveChannelId)
-      + "&master_item_id="
-      + encodeURIComponent(editorMasterItemId)
-      + "&compute_request_id="
-      + encodeURIComponent(latestComputeRequestIdForPreview),
-    ),
+    queryKey: ["pricing-snapshot-explain", effectiveChannelId, editorMasterItemId, resolvedPreviewProductNo, latestComputeRequestIdForPreview],
+    enabled: Boolean(effectiveChannelId && editorMasterItemId),
+    queryFn: () =>
+      shopApiGet<PricingSnapshotExplainResponse>(
+        "/api/channel-price-snapshot-explain?channel_id="
+          + encodeURIComponent(effectiveChannelId)
+          + "&master_item_id="
+          + encodeURIComponent(editorMasterItemId)
+          + (resolvedPreviewProductNo
+            ? `&external_product_no=${encodeURIComponent(resolvedPreviewProductNo)}`
+            : "")
+          + (latestComputeRequestIdForPreview
+            ? `&compute_request_id=${encodeURIComponent(latestComputeRequestIdForPreview)}`
+            : ""),
+      ),
     staleTime: 30_000,
     refetchInterval: 30_000,
   });
@@ -438,130 +450,146 @@ export default function ShoppingAutoPricePage() {
   }, [editorPreview?.floor_price_krw, activePolicy?.margin_multiplier, activePolicy?.rounding_unit, activePolicy?.rounding_mode]);
 
 
-  const recentRunSnapshotQueries = useQueries({
-    queries: recentRunExplainTargets.map((target) => ({
-      queryKey: [
-        "pricing-snapshot-explain",
-        "history",
-        effectiveChannelId,
-        editorMasterItemId,
-        target.runId,
-        target.computeRequestId,
-      ],
-      enabled: Boolean(effectiveChannelId && editorMasterItemId && target.computeRequestId),
-      queryFn: () =>
-        shopApiGet<PricingSnapshotExplainResponse>(
-          "/api/channel-price-snapshot-explain?channel_id="
-            + encodeURIComponent(effectiveChannelId)
-            + "&master_item_id="
-            + encodeURIComponent(editorMasterItemId)
-            + "&compute_request_id="
-            + encodeURIComponent(target.computeRequestId),
-        ),
-      staleTime: 30_000,
-      refetchInterval: 30_000,
-    })),
-  });
+  const previewCompositionRowGroups = useMemo(() => {
+    if (!snapshotExplainRow) return [] as Array<Array<{ key: string; label: string; valueText: string }>>;
 
-  const runSnapshotByRunId = useMemo(() => {
-    const map = new Map<string, PricingSnapshotExplainResponse["data"]>();
-    recentRunExplainTargets.forEach((target, index) => {
-      const row = recentRunSnapshotQueries[index]?.data?.data;
-      if (target.runId && row) map.set(target.runId, row);
-    });
-    return map;
-  }, [recentRunExplainTargets, recentRunSnapshotQueries]);
+    const finalTarget = toRoundedNumber(snapshotExplainRow.final_target_price_v2_krw ?? snapshotExplainRow.final_target_price_krw);
+    const currentPrice = toRoundedNumber(snapshotExplainRow.current_channel_price_krw);
+    const diffKrw = toRoundedNumber(
+      snapshotExplainRow.diff_krw
+        ?? (finalTarget != null && currentPrice != null ? finalTarget - currentPrice : null),
+    );
+    const diffPctRatio = Number(snapshotExplainRow.diff_pct ?? Number.NaN);
+    const diffPctText = Number.isFinite(diffPctRatio) ? `${(diffPctRatio * 100).toFixed(2)}%` : "-";
 
-  const previewSelected = useMemo(() => {
-    const base = toRoundedNumber(snapshotExplainRow?.final_target_price_krw);
-    const floor = toRoundedNumber(previewEffectiveFloor);
-    if (base == null || floor == null) {
-      return {
-        selected: null as number | null,
-        reason: "-" as "TARGET" | "FLOOR" | "OVERRIDE" | "-",
-        floorDelta: null as number | null,
-      };
-    }
-    const selected = Math.max(base, floor);
-    const hasOverride = toRoundedNumber(snapshotExplainRow?.override_price_krw) != null;
-    const floorClamped = snapshotExplainRow?.floor_clamped === true;
-    const reason: "TARGET" | "FLOOR" | "OVERRIDE" = floorClamped
-      ? "FLOOR"
-      : hasOverride
-        ? "OVERRIDE"
-        : "TARGET";
-    return { selected, reason, floorDelta: selected - floor };
-  }, [snapshotExplainRow?.final_target_price_krw, snapshotExplainRow?.override_price_krw, snapshotExplainRow?.floor_clamped, previewEffectiveFloor]);
+    const policyMarginMultiplier = Number(activePolicy?.margin_multiplier ?? Number.NaN);
+    const policyMarginMultiplierText = Number.isFinite(policyMarginMultiplier)
+      ? `x${policyMarginMultiplier.toFixed(3).replace(/\.0+$/u, "").replace(/(\.\d*?)0+$/u, "$1")}`
+      : "-";
+    const policyMarginRateText = Number.isFinite(policyMarginMultiplier)
+      ? `${((policyMarginMultiplier - 1) * 100).toFixed(2)}%`
+      : "-";
+    const policyFeeRate = Number(activePolicy?.fee_rate ?? Number.NaN);
+    const policyFeeRateText = Number.isFinite(policyFeeRate)
+      ? `${(policyFeeRate * 100).toFixed(2)}%`
+      : "-";
+    const policyMinMarginRate = Number(activePolicy?.min_margin_rate_total ?? Number.NaN);
+    const policyMinMarginRateText = Number.isFinite(policyMinMarginRate)
+      ? `${(policyMinMarginRate * 100).toFixed(2)}%`
+      : "-";
 
-  const previewCompositionRows = useMemo(() => {
-    if (!snapshotExplainRow) return [] as Array<{ key: string; label: string; valueText: string }>;
+    const selectedLabel = snapshotExplainRow.guardrail_reason_code === "MIN_MARGIN_WIN"
+      ? "최소마진가격"
+      : snapshotExplainRow.guardrail_reason_code === "COMPONENT_CANDIDATE_WIN"
+        ? "목표가격"
+        : snapshotExplainRow.guardrail_reason_code ?? "-";
+    const selectedBase = toRoundedNumber(snapshotExplainRow.guardrail_price_krw ?? finalTarget);
+    const selectedPreFee = selectedBase != null && Number.isFinite(policyFeeRate)
+      ? Math.round(selectedBase * (1 - policyFeeRate))
+      : toRoundedNumber(snapshotExplainRow.candidate_pre_fee_krw);
+    const marginWithoutFee = selectedPreFee != null && snapshotExplainRow.cost_sum_krw != null
+      ? selectedPreFee - (toRoundedNumber(snapshotExplainRow.cost_sum_krw) ?? 0)
+      : null;
+    const feeAmount = selectedBase != null && selectedPreFee != null ? selectedBase - selectedPreFee : null;
+    const purityAdjusted = snapshotExplainRow.material_purity_rate_resolved != null && snapshotExplainRow.material_adjust_factor_resolved != null
+      ? snapshotExplainRow.material_purity_rate_resolved * snapshotExplainRow.material_adjust_factor_resolved
+      : null;
+    const componentAmount = (
+      componentKey: string,
+      field: "labor_cost_krw" | "labor_absorb_applied_krw" | "labor_cost_plus_absorb_krw",
+    ): number | null => toRoundedNumber(snapshotExplainRow.labor_component_json?.[componentKey]?.[field] ?? null);
 
-    const materialRaw = toRoundedNumber(snapshotExplainRow.material_raw_krw);
-    const materialFinal = toRoundedNumber(snapshotExplainRow.material_final_krw);
-    const laborRaw = toRoundedNumber(snapshotExplainRow.labor_raw_krw);
-    const laborSellTotal = toRoundedNumber(snapshotExplainRow.labor_sell_total_krw);
-    const laborSellMaster = toRoundedNumber(snapshotExplainRow.labor_sell_master_krw);
-    const laborSellDecor = toRoundedNumber(snapshotExplainRow.labor_sell_decor_krw);
-    const afterGap = (() => {
-      const finalTarget = toRoundedNumber(snapshotExplainRow.final_target_price_krw);
-      const afterMargin = toRoundedNumber(snapshotExplainRow.price_after_margin_krw);
-      if (finalTarget == null || afterMargin == null) return null;
-      return finalTarget - afterMargin;
-    })();
-
-    return [
-      { key: "base", label: "기준가", valueText: fmtKrw(snapshotExplainRow.master_base_price_krw) },
-      { key: "mul", label: "마진", valueText: fmtMultiplier(snapshotExplainRow.shop_margin_multiplier) },
-      { key: "material-raw", label: "소재원가", valueText: fmtKrw(materialRaw) },
-      { key: "material-final", label: "소재환산", valueText: fmtKrw(materialFinal) },
-      { key: "labor-raw", label: "공임원가", valueText: fmtKrw(laborRaw) },
-      { key: "labor-sell-total", label: "총공임(판매)", valueText: fmtKrw(laborSellTotal) },
-      { key: "labor-sell-master", label: "마스터공임", valueText: fmtKrw(laborSellMaster) },
-      { key: "labor-sell-decor", label: "장식공임", valueText: fmtKrw(laborSellDecor) },
-      { key: "master-labor-profile-sell", label: "마스터공임합(판매)", valueText: fmtKrw(snapshotExplainRow.master_labor_sell_profile_krw) },
-      { key: "master-labor-profile-cost", label: "마스터공임합(원가)", valueText: fmtKrw(snapshotExplainRow.master_labor_cost_profile_krw) },
-      { key: "master-labor-base-sell", label: "기본공임(판매)", valueText: fmtKrw(snapshotExplainRow.master_labor_base_sell_krw) },
-      { key: "master-labor-center-sell", label: "센터공임(판매)", valueText: fmtKrw(snapshotExplainRow.master_labor_center_sell_krw) },
-      { key: "master-labor-sub1-sell", label: "보조1공임(판매)", valueText: fmtKrw(snapshotExplainRow.master_labor_sub1_sell_krw) },
-      { key: "master-labor-sub2-sell", label: "보조2공임(판매)", valueText: fmtKrw(snapshotExplainRow.master_labor_sub2_sell_krw) },
-      { key: "master-plating-sell", label: "도금공임(판매)", valueText: fmtKrw(snapshotExplainRow.master_plating_sell_krw) },
-      { key: "master-labor-base-cost", label: "기본공임(원가)", valueText: fmtKrw(snapshotExplainRow.master_labor_base_cost_krw) },
-      { key: "master-labor-center-cost", label: "센터공임(원가)", valueText: fmtKrw(snapshotExplainRow.master_labor_center_cost_krw) },
-      { key: "master-labor-sub1-cost", label: "보조1공임(원가)", valueText: fmtKrw(snapshotExplainRow.master_labor_sub1_cost_krw) },
-      { key: "master-labor-sub2-cost", label: "보조2공임(원가)", valueText: fmtKrw(snapshotExplainRow.master_labor_sub2_cost_krw) },
-      { key: "master-plating-cost", label: "도금공임(원가)", valueText: fmtKrw(snapshotExplainRow.master_plating_cost_krw) },
-      { key: "master-center-qty", label: "센터수량", valueText: fmt(snapshotExplainRow.master_center_qty) },
-      { key: "master-sub1-qty", label: "보조1수량", valueText: fmt(snapshotExplainRow.master_sub1_qty) },
-      { key: "master-sub2-qty", label: "보조2수량", valueText: fmt(snapshotExplainRow.master_sub2_qty) },
-      { key: "absorb-total", label: "흡수공임합", valueText: fmtKrw(snapshotExplainRow.absorb_total_krw) },
-      { key: "absorb-base", label: "흡수-기본", valueText: fmtKrw(snapshotExplainRow.absorb_base_labor_krw) },
-      { key: "absorb-stone", label: "흡수-석", valueText: fmtKrw(snapshotExplainRow.absorb_stone_labor_krw) },
-      { key: "absorb-plating", label: "흡수-도금", valueText: fmtKrw(snapshotExplainRow.absorb_plating_krw) },
-      { key: "absorb-etc", label: "흡수-기타", valueText: fmtKrw(snapshotExplainRow.absorb_etc_krw) },
-      { key: "absorb-general", label: "흡수-일반", valueText: fmtKrw(snapshotExplainRow.absorb_general_class_krw) },
-      { key: "absorb-material", label: "흡수-소재", valueText: fmtKrw(snapshotExplainRow.absorb_material_class_krw) },
-      { key: "absorb-count", label: "흡수항목수", valueText: fmt(snapshotExplainRow.absorb_item_count) },
-      { key: "after", label: "마진후", valueText: fmtKrw(snapshotExplainRow.price_after_margin_krw) },
-      { key: "delta", label: "옵션합", valueText: fmtSignedKrw(snapshotExplainRow.delta_total_krw) },
-      { key: "rounded", label: "반올림", valueText: fmtKrw(snapshotExplainRow.rounded_target_price_krw) },
-      { key: "override", label: "오버라이드", valueText: fmtKrw(snapshotExplainRow.override_price_krw) },
-      { key: "floor", label: "바닥가", valueText: fmtKrw(previewEffectiveFloor) },
-      { key: "selected", label: "선택가", valueText: fmtKrw(previewSelected.selected) },
-      { key: "after-gap", label: "마진후대비", valueText: fmtSignedKrw(afterGap) },
-      { key: "floor-gap", label: "Floor 대비", valueText: previewSelected.floorDelta == null ? "-" : fmtSignedKrw(previewSelected.floorDelta) },
-      { key: "clamp", label: "클램프", valueText: snapshotExplainRow.floor_clamped ? "Y" : "N" },
-      { key: "reason", label: "선택근거", valueText: previewSelected.reason },
+    const topRow = [
+      { key: "material-code", label: "소재코드", valueText: String(snapshotExplainRow.material_code_effective ?? "-") },
+      { key: "weight", label: "순중량", valueText: fmt(snapshotExplainRow.net_weight_g) },
+      { key: "material-basis", label: "소재기준", valueText: String(snapshotExplainRow.material_basis_resolved ?? "-") },
+      { key: "purity-adjust", label: "함량*보정계수", valueText: purityAdjusted == null ? "-" : purityAdjusted.toFixed(4) },
+      { key: "purity", label: "함량", valueText: snapshotExplainRow.material_purity_rate_resolved == null ? "-" : snapshotExplainRow.material_purity_rate_resolved.toFixed(4) },
+      { key: "adjust", label: "보정계수", valueText: snapshotExplainRow.material_adjust_factor_resolved == null ? "-" : snapshotExplainRow.material_adjust_factor_resolved.toFixed(4) },
     ];
-  }, [previewEffectiveFloor, previewSelected.floorDelta, previewSelected.reason, previewSelected.selected, snapshotExplainRow]);
+
+    const priceRow = [
+      { key: "labor-cost-total", label: "공임합(원가)", valueText: fmtKrw(snapshotExplainRow.labor_cost_applied_krw) },
+      { key: "labor-cost-base", label: "기본공임(원가)", valueText: fmtKrw(componentAmount("BASE_LABOR", "labor_cost_krw")) },
+      { key: "labor-cost-stone", label: "알공임(원가)", valueText: fmtKrw(componentAmount("STONE_LABOR", "labor_cost_krw")) },
+      { key: "labor-cost-etc", label: "기타공임(원가)", valueText: fmtKrw(componentAmount("ETC", "labor_cost_krw")) },
+      { key: "labor-cost-plating", label: "도금공임(원가)", valueText: fmtKrw(componentAmount("PLATING", "labor_cost_krw")) },
+      { key: "labor-cost-decor", label: "장식공임(원가)", valueText: fmtKrw(componentAmount("DECOR", "labor_cost_krw")) },
+    ];
+
+    const policyRow = [
+      { key: "absorb-total", label: "흡수공임합(원가)", valueText: fmtKrw(snapshotExplainRow.absorb_total_applied_krw) },
+      { key: "absorb-base", label: "기본공임(흡수공임)", valueText: fmtKrw(componentAmount("BASE_LABOR", "labor_absorb_applied_krw")) },
+      { key: "absorb-stone", label: "알공임(흡수공임)", valueText: fmtKrw(componentAmount("STONE_LABOR", "labor_absorb_applied_krw")) },
+      { key: "absorb-etc", label: "기타공임(흡수공임)", valueText: fmtKrw(componentAmount("ETC", "labor_absorb_applied_krw")) },
+      { key: "absorb-plating", label: "도금공임(흡수공임)", valueText: fmtKrw(componentAmount("PLATING", "labor_absorb_applied_krw")) },
+      { key: "absorb-decor", label: "장식공임(흡수공임)", valueText: fmtKrw(componentAmount("DECOR", "labor_absorb_applied_krw")) },
+    ];
+
+    const detailRows = [
+      { key: "total-labor-cost", label: "총공임합(원가)", valueText: fmtKrw(snapshotExplainRow.labor_cost_applied_krw) },
+      { key: "total-base", label: "총기본공임(원가)", valueText: fmtKrw(componentAmount("BASE_LABOR", "labor_cost_plus_absorb_krw")) },
+      { key: "total-stone", label: "총알공임(원가)", valueText: fmtKrw(componentAmount("STONE_LABOR", "labor_cost_plus_absorb_krw")) },
+      { key: "total-etc", label: "총기타공임(원가)", valueText: fmtKrw(componentAmount("ETC", "labor_cost_plus_absorb_krw")) },
+      { key: "total-plating", label: "총도금공임(원가)", valueText: fmtKrw(componentAmount("PLATING", "labor_cost_plus_absorb_krw")) },
+      { key: "total-decor", label: "총장식공임(원가)", valueText: fmtKrw(componentAmount("DECOR", "labor_cost_plus_absorb_krw")) },
+
+      { key: "labor-total", label: "총공임", valueText: fmtKrw(snapshotExplainRow.labor_pre_fee_krw) },
+      { key: "material-total", label: "총소재가격(환산)", valueText: fmtKrw(snapshotExplainRow.material_pre_fee_krw) },
+      { key: "target-margin-rate", label: "목표마진율", valueText: policyMarginRateText },
+      { key: "min-margin-rate", label: "최소마진율", valueText: policyMinMarginRateText },
+      { key: "fee-rate", label: "수수료율", valueText: policyFeeRateText },
+      { key: "fee-detail", label: "수수료율 상세", valueText: "- (추후 컬럼 예정)" },
+
+      { key: "final-price", label: "최종가격", valueText: fmtKrw(finalTarget) },
+      { key: "selected-item", label: "선택항목", valueText: selectedLabel },
+      { key: "target-price", label: "목표가격", valueText: fmtKrw(snapshotExplainRow.candidate_price_krw) },
+      { key: "min-margin-price", label: "최소마진가격", valueText: fmtKrw(snapshotExplainRow.min_margin_price_krw) },
+      { key: "margin-no-fee", label: "마진(수수료 제외)", valueText: marginWithoutFee == null ? "-" : fmtSignedKrw(marginWithoutFee) },
+      { key: "fee-amount", label: "수수료", valueText: feeAmount == null ? "-" : fmtKrw(feeAmount) },
+    ];
+
+    const groups = [topRow, priceRow, policyRow] as Array<Array<{ key: string; label: string; valueText: string }>>;
+    for (let i = 0; i < detailRows.length; i += 6) {
+      groups.push(detailRows.slice(i, i + 6));
+    }
+    return groups;
+  }, [activePolicy?.margin_multiplier, activePolicy?.fee_rate, activePolicy?.min_margin_rate_total, snapshotExplainRow]);
+
+  const previewCompositionFlowLines = useMemo(() => {
+    if (!snapshotExplainRow) return [] as string[];
+
+    const finalTarget = toRoundedNumber(snapshotExplainRow.final_target_price_v2_krw ?? snapshotExplainRow.final_target_price_krw);
+    const policyFeeRate = Number(activePolicy?.fee_rate ?? Number.NaN);
+    const policyFeeRateText = Number.isFinite(policyFeeRate) ? `${(policyFeeRate * 100).toFixed(2)}%` : "-";
+    const policyMinMarginRate = Number(activePolicy?.min_margin_rate_total ?? Number.NaN);
+    const policyMinMarginRateText = Number.isFinite(policyMinMarginRate) ? `${(policyMinMarginRate * 100).toFixed(2)}%` : "-";
+    const purityAdjusted = snapshotExplainRow.material_purity_rate_resolved != null && snapshotExplainRow.material_adjust_factor_resolved != null
+      ? snapshotExplainRow.material_purity_rate_resolved * snapshotExplainRow.material_adjust_factor_resolved
+      : null;
+
+    const line1 = `소재가격: ${fmtKrw(snapshotExplainRow.material_final_krw)} (유효틱 ${fmt(snapshotExplainRow.effective_tick_krw_g)}원/g × 순중량 ${fmt(snapshotExplainRow.net_weight_g)} × 함량*보정계수 ${purityAdjusted == null ? "-" : purityAdjusted.toFixed(4)} -> 소재원가 ${fmtKrw(snapshotExplainRow.material_raw_krw)} -> 환산 ${fmtKrw(snapshotExplainRow.material_final_krw)})`;
+
+    const line2 = `총공임: ${fmtKrw(snapshotExplainRow.labor_pre_fee_krw)} (공임원가(흡수반영) ${fmtKrw(snapshotExplainRow.labor_cost_applied_krw)} + 흡수공임(적용) ${fmtKrw(snapshotExplainRow.absorb_total_applied_krw)} -> 공임판매합(흡수포함) ${fmtKrw(snapshotExplainRow.labor_sell_total_plus_absorb_krw)} -> 수수료반영전 공임 ${fmtKrw(snapshotExplainRow.labor_pre_fee_krw)})`;
+
+    const line3 = `총가격 후보(목표가격): ${fmtKrw(snapshotExplainRow.candidate_price_krw)} (수수료반영전 후보합 ${fmtKrw(snapshotExplainRow.candidate_pre_fee_krw)} = 소재 ${fmtKrw(snapshotExplainRow.material_pre_fee_krw)} + 공임 ${fmtKrw(snapshotExplainRow.labor_pre_fee_krw)} + 고정 ${fmtKrw(snapshotExplainRow.fixed_pre_fee_krw)}, 수수료율 ${policyFeeRateText} 역산 반영)`;
+
+    const line4 = `총가격 후보(최소마진): ${fmtKrw(snapshotExplainRow.min_margin_price_krw)} (원가합계 ${fmtKrw(snapshotExplainRow.cost_sum_krw)}와 정책최소마진율 ${policyMinMarginRateText} 기준)`;
+
+    const line5 = `선택된 가격: max(목표가격 ${fmtKrw(snapshotExplainRow.candidate_price_krw)}, 최소마진가격 ${fmtKrw(snapshotExplainRow.min_margin_price_krw)}) = ${fmtKrw(snapshotExplainRow.guardrail_price_krw)} -> 최종가격 ${fmtKrw(finalTarget)}`;
+
+    return [line1, line2, line3, line4, line5];
+  }, [activePolicy?.fee_rate, activePolicy?.min_margin_rate_total, snapshotExplainRow]);
 
   const previewHistoryRows = useMemo(() => {
     if (!editorPreview) return [] as Array<{
       runId: string;
       at: string;
-      basePrice: number | null;
-      floorPrice: number | null;
+      snapshotPrice: number | null;
+      pushTargetPrice: number | null;
+      pushBeforePrice: number | null;
+      selectedItem: "목표가격" | "최소마진가격";
       selectedPrice: number | null;
-      reason: "TARGET" | "FLOOR" | "-";
       variantAvg: number | null;
     }>;
 
@@ -578,13 +606,38 @@ export default function ShoppingAutoPricePage() {
         .filter(Boolean),
     );
 
+    const pickSnapshotPrice = (intent: SyncIntent): number | null => {
+      const candidates = [
+        intent.snapshot_desired_price_krw,
+        intent.desired_price_krw,
+      ];
+      for (const candidate of candidates) {
+        const n = toRoundedNumber(candidate);
+        if (n != null) return n;
+      }
+      return null;
+    };
+
+    const pickSelectedPrice = (intent: SyncIntent): number | null => {
+      const candidates = [
+        intent.applied_after_price_krw,
+        intent.applied_target_price_krw,
+        intent.snapshot_desired_price_krw,
+        intent.desired_price_krw,
+      ];
+      for (const candidate of candidates) {
+        const n = toRoundedNumber(candidate);
+        if (n != null) return n;
+      }
+      return null;
+    };
+
     const rows = recentRunDetailQueries
       .map((query) => query.data?.data)
       .filter((data): data is SyncRunDetail => Boolean(data))
       .map((data) => {
         const runId = String(data.run?.run_id ?? "").trim();
         const at = String(data.run?.started_at ?? "").trim();
-        const snapshotFallback = runSnapshotByRunId.get(runId) ?? null;
         const intents = (data.intents ?? []).filter((intent) => {
           const masterMatched = editorMasterItemId && String(intent.master_item_id ?? "").trim() === editorMasterItemId;
           if (masterMatched) return true;
@@ -593,78 +646,50 @@ export default function ShoppingAutoPricePage() {
           const variantCode = String(intent.external_variant_code ?? "").trim();
           return Boolean(variantCode && variantCodeSet.has(variantCode));
         });
-        if (!runId) return null;
-        if (intents.length === 0 && !snapshotFallback) return null;
 
-        const pickSelectedPrice = (intent: SyncIntent): number | null => {
-          const candidates = [intent.applied_after_price_krw, intent.applied_target_price_krw, intent.desired_price_krw];
-          for (const candidate of candidates) {
-            const n = toRoundedNumber(candidate);
-            if (n != null) return n;
-          }
-          return null;
-        };
+        if (!runId || intents.length === 0) return null;
 
-        const pickBasePrice = (intent: SyncIntent): number | null => {
-          const candidates = [intent.desired_price_krw, intent.applied_target_price_krw, intent.applied_after_price_krw];
-          for (const candidate of candidates) {
-            const n = toRoundedNumber(candidate);
-            if (n != null) return n;
-          }
-          return null;
-        };
+        const baseIntent = intents.find((intent) => !String(intent.external_variant_code ?? "").trim()) ?? intents[0];
+        const snapshotPrice = pickSnapshotPrice(baseIntent);
+        const pushTargetPrice = toRoundedNumber(baseIntent.applied_target_price_krw);
+        const pushBeforePrice = toRoundedNumber(baseIntent.applied_before_price_krw);
+        const pushAfterPrice = toRoundedNumber(baseIntent.applied_after_price_krw);
+        const selectedPrice = pushAfterPrice ?? pushTargetPrice ?? snapshotPrice;
+        const selectedItem: "목표가격" | "최소마진가격" = baseIntent.floor_applied ? "최소마진가격" : "목표가격";
 
-        const baseIntent = intents.find((intent) => !String(intent.external_variant_code ?? "").trim());
-        const basePriceFromIntent = baseIntent ? pickBasePrice(baseIntent) : null;
-        const basePrice = basePriceFromIntent ?? toRoundedNumber(snapshotFallback?.final_target_price_krw);
-        const floorPrice = toRoundedNumber(
-          baseIntent?.floor_price_krw
-            ?? intents.find((intent) => toRoundedNumber(intent.floor_price_krw) != null)?.floor_price_krw
-            ?? snapshotFallback?.floor_price_krw
-            ?? null,
-        );
-        const selectedFromBase = baseIntent ? pickSelectedPrice(baseIntent) : null;
         const variantPrices = intents
           .filter((intent) => String(intent.external_variant_code ?? "").trim())
-          .map(pickSelectedPrice)
+          .map((intent) => pickSelectedPrice(intent))
           .filter((v): v is number => typeof v === "number");
-
         const variantAvg = variantPrices.length > 0
           ? Math.round(variantPrices.reduce((sum, value) => sum + value, 0) / variantPrices.length)
           : null;
 
-        const selectedPrice = selectedFromBase
-          ?? (basePrice != null && floorPrice != null ? Math.max(basePrice, floorPrice) : basePrice);
-
-        const reasonFromIntent: "TARGET" | "FLOOR" | null = baseIntent
-          ? (baseIntent.floor_applied ? "FLOOR" : "TARGET")
-          : null;
-        const reasonFromPrices: "TARGET" | "FLOOR" | "-" =
-          selectedPrice == null || basePrice == null
-            ? "-"
-            : selectedPrice > basePrice
-              ? "FLOOR"
-                            : "TARGET";
-        const reasonFromSnapshot: "TARGET" | "FLOOR" | null = !baseIntent && snapshotFallback
-          ? (snapshotFallback.floor_clamped ? "FLOOR" : "TARGET")
-          : null;
-        const reason: "TARGET" | "FLOOR" | "-" = reasonFromIntent ?? reasonFromSnapshot ?? reasonFromPrices;
-
-        return { runId, at, basePrice, floorPrice, selectedPrice, reason, variantAvg };
+        return {
+          runId,
+          at,
+          snapshotPrice,
+          pushTargetPrice,
+          pushBeforePrice,
+          selectedItem,
+          selectedPrice,
+          variantAvg,
+        };
       })
       .filter((row): row is {
         runId: string;
         at: string;
-        basePrice: number | null;
-        floorPrice: number | null;
+        snapshotPrice: number | null;
+        pushTargetPrice: number | null;
+        pushBeforePrice: number | null;
+        selectedItem: "목표가격" | "최소마진가격";
         selectedPrice: number | null;
-        reason: "TARGET" | "FLOOR" | "-";
         variantAvg: number | null;
       } => Boolean(row))
       .sort((a, b) => b.at.localeCompare(a.at));
 
     return rows.slice(0, 8);
-  }, [editorPreview, editorMasterItemId, editorProductNo, recentRunDetailQueries, runSnapshotByRunId]);
+  }, [editorPreview, editorMasterItemId, editorProductNo, recentRunDetailQueries]);
 
   const latestHistory = previewHistoryRows[0] ?? null;
   const previousHistory = previewHistoryRows[1] ?? null;
@@ -965,6 +990,10 @@ export default function ShoppingAutoPricePage() {
     onSuccess: (res) => {
       const data = res.data;
       setEditorPreview(data);
+      {
+        const previewMasterId = String(data.master_item_id ?? "").trim();
+        if (previewMasterId) setEditorMasterItemIdHint(previewMasterId);
+      }
       setEditorPrice(data.price != null ? String(data.price) : "");
       setEditorRetailPrice(data.retailPrice != null ? String(data.retailPrice) : "");
       setEditorSelling((data.selling || "T").toUpperCase());
@@ -1364,8 +1393,8 @@ export default function ShoppingAutoPricePage() {
         <CardHeader title="쇼핑몰 미리보기 + 상세수정" description="소비자가/판매가/진열상태/옵션가격(additional_amount) 조회·수정" />
         <CardBody className="space-y-3">
           <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
-            <Input value={editorProductNo} onChange={(e) => setEditorProductNo(e.target.value)} placeholder="product_no 또는 product_code" />
-            <Button onClick={() => loadPreviewMutation.mutate(editorProductNo.trim())} disabled={!effectiveChannelId || !editorProductNo.trim() || loadPreviewMutation.isPending}>
+            <Input value={editorProductNo} onChange={(e) => { const next = e.target.value; setEditorProductNo(next); setEditorMasterItemIdHint(masterIdByProductNo.get(next.trim()) ?? ""); }} placeholder="product_no 또는 product_code" />
+            <Button onClick={() => { const productNo = editorProductNo.trim(); setEditorMasterItemIdHint(masterIdByProductNo.get(productNo) ?? ""); loadPreviewMutation.mutate(productNo); }} disabled={!effectiveChannelId || !editorProductNo.trim() || loadPreviewMutation.isPending}>
               상품 미리보기 불러오기
             </Button>
             <div className="text-xs text-[var(--muted)] md:col-span-2">불러오면 우측 드로어에서 쇼핑몰형 미리보기/상세수정을 진행합니다.</div>
@@ -1384,7 +1413,7 @@ export default function ShoppingAutoPricePage() {
             <div className="text-xs text-[var(--muted)]">
               검색된 카드 클릭 시 기존과 동일하게 미리보기/상세수정이 열립니다.
             </div>
-            <div className="grid grid-cols-2 gap-2 md:grid-cols-4 xl:grid-cols-6 2xl:grid-cols-8">
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-7">
               {galleryItems.map((item) => (
                 <button
                   key={item.groupKey}
@@ -1392,6 +1421,7 @@ export default function ShoppingAutoPricePage() {
                   className="rounded border border-[var(--hairline)] bg-[var(--panel)] p-2 text-left hover:border-[var(--primary)]"
                   onClick={() => {
                     setEditorProductNo(item.productNo);
+                    setEditorMasterItemIdHint(String(item.primaryMasterId ?? "").trim() || masterIdByProductNo.get(String(item.productNo ?? "").trim()) || "");
                     setApplyError(null);
                     loadPreviewMutation.mutate(item.productNo);
                   }}
@@ -1430,6 +1460,7 @@ export default function ShoppingAutoPricePage() {
         onOpenChange={setIsPreviewDrawerOpen}
         title="쇼핑몰 미리보기"
         side="right"
+        className="lg:w-[1280px] 2xl:w-[1440px]"
       >
         <div className="flex h-full flex-col">
           <div className="border-b border-[var(--hairline)] px-4 py-3">
@@ -1455,6 +1486,42 @@ export default function ShoppingAutoPricePage() {
                           <div className="grid h-full place-items-center text-xs text-[var(--muted)]">이미지 없음</div>
                         )}
                       </div>
+
+                      <div className="rounded border border-[var(--hairline)] bg-[var(--bg)] p-2">
+                        <div className="mb-2 text-[11px] font-semibold">추세</div>
+                        <div className="grid grid-cols-[1fr_auto] gap-x-3 gap-y-1 text-[11px]">
+                          <div className="text-[var(--muted)]">최근 변화(1회)</div>
+                          <div className="whitespace-nowrap text-right font-medium tabular-nums">
+                            {historyTrendDelta == null ? "-" : fmtSignedKrw(historyTrendDelta)}
+                          </div>
+                          <div className="text-[var(--muted)]">최근 {previewTrend.count}회 범위</div>
+                          <div className="whitespace-nowrap text-right font-medium tabular-nums">
+                            {previewTrend.count > 0 ? `${fmtKrw(previewTrend.min)} ~ ${fmtKrw(previewTrend.max)}` : "-"}
+                          </div>
+                          <div className="text-[var(--muted)]">순변화(최근 {previewTrend.count}회)</div>
+                          <div className="whitespace-nowrap text-right font-medium tabular-nums">
+                            {previewTrend.netDelta == null ? "-" : fmtSignedKrw(previewTrend.netDelta)}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="rounded border border-[var(--hairline)] bg-[var(--bg)] p-3">
+                        <div className="text-[10px] text-[var(--muted)]">판매가(쇼핑몰)</div>
+                        <div className="mt-1 flex items-end justify-between gap-2">
+                          <div className="text-2xl font-semibold tabular-nums">{fmtKrw(editorPreview.price)}</div>
+                          <div className="text-right text-[11px] text-[var(--muted)] tabular-nums">
+                            유효바닥가 {fmtKrw(previewEffectiveFloor)}
+                          </div>
+                        </div>
+                        <div className="mt-2 grid grid-cols-[1fr_auto] gap-x-3 gap-y-1 text-[11px]">
+                          <div className="text-[var(--muted)]">소비자가</div>
+                          <div className="whitespace-nowrap text-right tabular-nums">{fmtKrw(editorPreview.retailPrice)}</div>
+                          <div className="text-[var(--muted)]">display / selling</div>
+                          <div className="whitespace-nowrap text-right tabular-nums">{editorPreview.display ?? "-"} / {editorPreview.selling ?? "-"}</div>
+                          <div className="text-[var(--muted)]">스냅샷 최종 타겟</div>
+                          <div className="whitespace-nowrap text-right tabular-nums">{snapshotExplainRow ? fmtKrw(snapshotExplainRow.final_target_price_v2_krw ?? snapshotExplainRow.final_target_price_krw) : "-"}</div>
+                        </div>
+                      </div>
                     </div>
 
                     <div className="rounded-[var(--radius)] border border-[var(--hairline)] bg-[var(--panel)]">
@@ -1477,7 +1544,7 @@ export default function ShoppingAutoPricePage() {
                               <div className="text-[11px] font-semibold">구성(스냅샷)</div>
                               <div className="text-[10px] text-[var(--muted)] tabular-nums">
                                 {snapshotExplainRow
-                                  ? `Au ${fmtKrw(snapshotExplainRow.tick_gold_krw_g)} / Ag ${fmtKrw(snapshotExplainRow.tick_silver_krw_g)} · ${fmtTsCompact(snapshotExplainRow.computed_at)}`
+                                  ? `유효틱 ${fmt(snapshotExplainRow.effective_tick_krw_g)}원/g · ${fmtTsCompact(snapshotExplainRow.computed_at)}`
                                   : snapshotExplainQuery.isFetching
                                     ? "불러오는 중"
                                     : "-"}
@@ -1485,34 +1552,51 @@ export default function ShoppingAutoPricePage() {
                             </div>
 
                             {snapshotExplainRow ? (
-                              <div className="overflow-auto rounded border border-[var(--hairline)]">
-                                <table className="w-max min-w-full text-[11px]">
-                                  <thead className="bg-[var(--panel)]">
-                                    <tr>
-                                      {previewCompositionRows.map((row) => (
-                                        <th key={`head-${row.key}`} className="whitespace-nowrap border-r border-[var(--hairline)] px-2 py-1 text-left font-medium text-[var(--muted)] last:border-r-0">
-                                          {row.label}
-                                        </th>
+                              <div className="space-y-2 rounded border border-[var(--hairline)] bg-[var(--bg)] p-2">
+                                <div className="overflow-hidden rounded border border-[var(--hairline)]">
+                                  <table className="w-full table-fixed text-[11px]">
+                                    <tbody>
+                                      {previewCompositionRowGroups.map((group, groupIndex) => (
+                                        <Fragment key={`group-${groupIndex}`}>
+                                          <tr key={`head-${groupIndex}`} className={`bg-[var(--panel)] ${group[0]?.key === "final-price" ? "border-t-[3px]" : (group[0]?.key === "labor-cost-total" || group[0]?.key === "labor-total") ? "border-t-2" : "border-t"} border-[var(--hairline)]`}>
+                                            {group.map((row) => (
+                                              <th key={`head-${groupIndex}-${row.key}`} className="border-r border-[var(--hairline)] px-2 py-1 text-left font-medium text-[var(--muted)] last:border-r-0">
+                                                {row.label}
+                                              </th>
+                                            ))}
+                                            {Array.from({ length: Math.max(0, 6 - group.length) }).map((_, emptyIdx) => (
+                                              <th key={`head-${groupIndex}-empty-${emptyIdx}`} className="border-r border-[var(--hairline)] px-2 py-1 last:border-r-0" />
+                                            ))}
+                                          </tr>
+                                          <tr key={`value-${groupIndex}`}>
+                                            {group.map((row) => (
+                                              <td key={`value-${groupIndex}-${row.key}`} className="border-r border-t border-[var(--hairline)] px-2 py-1 text-right font-semibold tabular-nums last:border-r-0">
+                                                {row.valueText}
+                                              </td>
+                                            ))}
+                                            {Array.from({ length: Math.max(0, 6 - group.length) }).map((_, emptyIdx) => (
+                                              <td key={`value-${groupIndex}-empty-${emptyIdx}`} className="border-r border-t border-[var(--hairline)] px-2 py-1 last:border-r-0" />
+                                            ))}
+                                          </tr>
+                                        </Fragment>
                                       ))}
-                                    </tr>
-                                  </thead>
-                                  <tbody>
-                                    <tr>
-                                      {previewCompositionRows.map((row) => (
-                                        <td key={`value-${row.key}`} className="whitespace-nowrap border-r border-t border-[var(--hairline)] px-2 py-1 text-right font-semibold tabular-nums last:border-r-0">
-                                          {row.valueText}
-                                        </td>
-                                      ))}
-                                    </tr>
-                                  </tbody>
-                                </table>
+                                    </tbody>
+                                  </table>
+                                </div>
+                                <div className="rounded border border-[var(--hairline)] bg-[var(--panel)] px-2 py-1 text-[11px] tabular-nums">
+                                  <div className="mb-1 text-[10px] font-medium text-[var(--muted)]">계산 흐름</div>
+                                  <div className="space-y-0.5">
+                                    {previewCompositionFlowLines.map((line, idx) => (
+                                      <div key={`flow-${idx}`} className="leading-5">{line}</div>
+                                    ))}
+                                  </div>
+                                </div>
                               </div>
                             ) : (
                               <div className="text-[11px] text-[var(--muted)]">
-                                pinned compute_request_id 기반 스냅샷이 없습니다.
+                                V2 뷰에서 해당 상품 스냅샷을 찾지 못했습니다.
                               </div>
                             )}
-
                             {snapshotExplainRow ? (
                               <div className="mt-2 truncate text-[10px] text-[var(--muted)] tabular-nums">
                                 compute_request_id: {snapshotExplainRow.compute_request_id}
@@ -1534,10 +1618,10 @@ export default function ShoppingAutoPricePage() {
                                   <thead className="bg-[var(--panel)] text-left">
                                     <tr>
                                       <th className="px-2 py-1">일시</th>
-                                      <th className="px-2 py-1 text-right tabular-nums">기준</th>
-                                      <th className="px-2 py-1 text-right tabular-nums">바닥</th>
-                                      <th className="px-2 py-1 text-right tabular-nums">선택</th>
-                                      <th className="px-2 py-1 text-center">근거</th>
+                                      <th className="px-2 py-1 text-right tabular-nums">기준(스냅샷)</th>
+                                      <th className="px-2 py-1 text-right tabular-nums">Push 목표</th>
+                                      <th className="px-2 py-1 text-right tabular-nums">Push 전</th>
+                                      <th className="px-2 py-1 text-center">선택항목</th>
                                       <th className="px-2 py-1 text-right tabular-nums">옵션평균</th>
                                     </tr>
                                   </thead>
@@ -1545,10 +1629,10 @@ export default function ShoppingAutoPricePage() {
                                     {previewHistoryRows.map((row) => (
                                       <tr key={row.runId} className="border-t border-[var(--hairline)]">
                                         <td className="px-2 py-1 whitespace-nowrap tabular-nums">{fmtTsCompact(row.at)}</td>
-                                        <td className="px-2 py-1 whitespace-nowrap text-right tabular-nums">{fmtKrw(row.basePrice)}</td>
-                                        <td className="px-2 py-1 whitespace-nowrap text-right tabular-nums">{fmtKrw(row.floorPrice)}</td>
-                                        <td className="px-2 py-1 whitespace-nowrap text-right tabular-nums">{fmtKrw(row.selectedPrice)}</td>
-                                        <td className="px-2 py-1 whitespace-nowrap text-center">{row.reason}</td>
+                                        <td className="px-2 py-1 whitespace-nowrap text-right tabular-nums">{fmtKrw(row.snapshotPrice)}</td>
+                                        <td className="px-2 py-1 whitespace-nowrap text-right tabular-nums">{fmtKrw(row.pushTargetPrice)}</td>
+                                        <td className="px-2 py-1 whitespace-nowrap text-right tabular-nums">{fmtKrw(row.pushBeforePrice)}</td>
+                                        <td className="px-2 py-1 whitespace-nowrap text-center">{row.selectedItem}</td>
                                         <td className="px-2 py-1 whitespace-nowrap text-right tabular-nums">{fmtKrw(row.variantAvg)}</td>
                                       </tr>
                                     ))}
@@ -1558,41 +1642,6 @@ export default function ShoppingAutoPricePage() {
                             )}
                           </div>
 
-                          <div className="rounded border border-[var(--hairline)] bg-[var(--bg)] p-2">
-                            <div className="mb-2 text-[11px] font-semibold">추세</div>
-                            <div className="grid grid-cols-[1fr_auto] gap-x-3 gap-y-1 text-[11px]">
-                              <div className="text-[var(--muted)]">최근 변화(1회)</div>
-                              <div className="whitespace-nowrap text-right font-medium tabular-nums">
-                                {historyTrendDelta == null ? "-" : fmtSignedKrw(historyTrendDelta)}
-                              </div>
-                              <div className="text-[var(--muted)]">최근 {previewTrend.count}회 범위</div>
-                              <div className="whitespace-nowrap text-right font-medium tabular-nums">
-                                {previewTrend.count > 0 ? `${fmtKrw(previewTrend.min)} ~ ${fmtKrw(previewTrend.max)}` : "-"}
-                              </div>
-                              <div className="text-[var(--muted)]">순변화(최근 {previewTrend.count}회)</div>
-                              <div className="whitespace-nowrap text-right font-medium tabular-nums">
-                                {previewTrend.netDelta == null ? "-" : fmtSignedKrw(previewTrend.netDelta)}
-                              </div>
-                            </div>
-                          </div>
-
-                          <div className="mt-auto rounded border border-[var(--hairline)] bg-[var(--bg)] p-3">
-                            <div className="text-[10px] text-[var(--muted)]">판매가(쇼핑몰)</div>
-                            <div className="mt-1 flex items-end justify-between gap-2">
-                              <div className="text-2xl font-semibold tabular-nums">{fmtKrw(editorPreview.price)}</div>
-                              <div className="text-right text-[11px] text-[var(--muted)] tabular-nums">
-                                유효바닥가 {fmtKrw(previewEffectiveFloor)}
-                              </div>
-                            </div>
-                            <div className="mt-2 grid grid-cols-[1fr_auto] gap-x-3 gap-y-1 text-[11px]">
-                              <div className="text-[var(--muted)]">소비자가</div>
-                              <div className="whitespace-nowrap text-right tabular-nums">{fmtKrw(editorPreview.retailPrice)}</div>
-                              <div className="text-[var(--muted)]">display / selling</div>
-                              <div className="whitespace-nowrap text-right tabular-nums">{editorPreview.display ?? "-"} / {editorPreview.selling ?? "-"}</div>
-                              <div className="text-[var(--muted)]">스냅샷 최종 타겟</div>
-                              <div className="whitespace-nowrap text-right tabular-nums">{snapshotExplainRow ? fmtKrw(snapshotExplainRow.final_target_price_krw) : "-"}</div>
-                            </div>
-                          </div>
                         </div>
                       </div>
                     </div>

@@ -42,11 +42,11 @@ const resolveIntervalEarlyGraceMs = (): number => {
 };
 
 const resolveDefaultIntervalMinutes = (): number => {
-  return toPositiveInt(process.env.SHOP_SYNC_DEFAULT_INTERVAL_MINUTES, 5, 24 * 60);
+  return toPositiveInt(process.env.SHOP_SYNC_DEFAULT_INTERVAL_MINUTES, 5, 60);
 };
 
 const resolveForcedIntervalMinutes = (): number => {
-  return toPositiveInt(process.env.SHOP_SYNC_FORCE_INTERVAL_MINUTES, 5, 24 * 60);
+  return 5;
 };
 
 const resolvePolicyTimezone = (): string => {
@@ -183,7 +183,7 @@ function parseInput(request: Request, bodyObj: Record<string, unknown>) {
     ?? resolveDefaultIntervalMinutes(),
   );
   const requestedIntervalMinutes = Number.isFinite(intervalRaw)
-    ? Math.max(1, Math.min(24 * 60, Math.floor(intervalRaw)))
+    ? Math.max(1, Math.min(60, Math.floor(intervalRaw)))
     : resolveDefaultIntervalMinutes();
   const intervalMinutes = resolveForcedIntervalMinutes();
 
@@ -340,7 +340,7 @@ async function runCron(request: Request) {
     );
   }
 
-  const recomputeRes = await recomputePost(mkJsonRequest("/api/pricing/recompute", { channel_id: channelId }));
+  const recomputeRes = await recomputePost(mkJsonRequest("/api/pricing/recompute", { channel_id: channelId, pricing_algo_version: "REVERSE_FEE_V2" }));
   const recomputeJson = await recomputeRes.json().catch(() => ({}));
   if (!recomputeRes.ok) {
     return NextResponse.json(

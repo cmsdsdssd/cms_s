@@ -105,7 +105,7 @@ export async function GET(_request: Request, { params }: Params) {
 
     return {
       ...row,
-      desired_price_krw: effectiveDesiredPrice,
+      desired_price_krw: snapshotDesiredPrice,
       snapshot_desired_price_krw: snapshotDesiredPrice,
       effective_desired_price_krw: effectiveDesiredPrice,
       reason_code: reasonCode,
