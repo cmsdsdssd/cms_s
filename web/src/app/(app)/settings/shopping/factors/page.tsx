@@ -16,9 +16,12 @@ type Policy = {
   channel_id: string;
   policy_name: string;
   margin_multiplier: number;
+  gm_material?: number | null;
+  gm_labor?: number | null;
+  gm_fixed?: number | null;
+  fixed_cost_krw?: number | null;
   rounding_unit: number;
   rounding_mode: "CEIL" | "ROUND" | "FLOOR";
-  option_18k_weight_multiplier: number;
   material_factor_set_id: string | null;
   fee_rate?: number | null;
   min_margin_rate_total?: number | null;
@@ -97,23 +100,32 @@ export default function ShoppingFactorsPage() {
   );
 
   const [marginRatePercent, setMarginRatePercent] = useState("0");
+  const [materialMarginRatePercent, setMaterialMarginRatePercent] = useState("0");
+  const [laborMarginRatePercent, setLaborMarginRatePercent] = useState("0");
+  const [fixedMarginRatePercent, setFixedMarginRatePercent] = useState("0");
   const [feeRatePercent, setFeeRatePercent] = useState("0");
   const [minMarginRatePercent, setMinMarginRatePercent] = useState("0");
+  const [fixedCostKrw, setFixedCostKrw] = useState("0");
   const [roundingUnit, setRoundingUnit] = useState("1000");
   const [roundingMode, setRoundingMode] = useState<"CEIL" | "ROUND" | "FLOOR">("CEIL");
-  const [option18kWeightMultiplier, setOption18kWeightMultiplier] = useState("1.2");
   const [policyFactorSetId, setPolicyFactorSetId] = useState("");
 
   useEffect(() => {
     const marginRate = (Number(activePolicy?.margin_multiplier ?? 1) - 1) * 100;
+    const materialMarginRate = Number(activePolicy?.gm_material ?? 0) * 100;
+    const laborMarginRate = Number(activePolicy?.gm_labor ?? 0) * 100;
+    const fixedMarginRate = Number(activePolicy?.gm_fixed ?? 0) * 100;
     const feeRate = Number(activePolicy?.fee_rate ?? 0) * 100;
     const minMarginRate = Number(activePolicy?.min_margin_rate_total ?? 0) * 100;
     setMarginRatePercent(Number.isFinite(marginRate) ? String(marginRate) : "0");
+    setMaterialMarginRatePercent(Number.isFinite(materialMarginRate) ? String(materialMarginRate) : "0");
+    setLaborMarginRatePercent(Number.isFinite(laborMarginRate) ? String(laborMarginRate) : "0");
+    setFixedMarginRatePercent(Number.isFinite(fixedMarginRate) ? String(fixedMarginRate) : "0");
     setFeeRatePercent(Number.isFinite(feeRate) ? String(feeRate) : "0");
     setMinMarginRatePercent(Number.isFinite(minMarginRate) ? String(minMarginRate) : "0");
+    setFixedCostKrw(String(Math.max(0, Math.round(Number(activePolicy?.fixed_cost_krw ?? 0)))));
     setRoundingUnit(String(activePolicy?.rounding_unit ?? 1000));
     setRoundingMode((activePolicy?.rounding_mode ?? "CEIL") as "CEIL" | "ROUND" | "FLOOR");
-    setOption18kWeightMultiplier(String(activePolicy?.option_18k_weight_multiplier ?? 1.2));
     setPolicyFactorSetId(activePolicy?.material_factor_set_id ?? "");
   }, [activePolicy?.policy_id]);
 
@@ -155,25 +167,34 @@ export default function ShoppingFactorsPage() {
   const upsertPolicy = useMutation({
     mutationFn: async () => {
       const marginRate = parseNumericInput(marginRatePercent);
+      const materialMarginRate = parseNumericInput(materialMarginRatePercent);
+      const laborMarginRate = parseNumericInput(laborMarginRatePercent);
+      const fixedMarginRate = parseNumericInput(fixedMarginRatePercent);
       const feeRate = parseNumericInput(feeRatePercent);
       const minMarginRate = parseNumericInput(minMarginRatePercent);
+      const fixedCost = parseNumericInput(fixedCostKrw);
       const unit = parseNumericInput(roundingUnit);
-      const option18k = parseNumericInput(option18kWeightMultiplier);
 
       if (marginRate == null || marginRate < 0) throw new Error("마진율(%)은 0 이상 숫자여야 합니다");
+      if (materialMarginRate == null || materialMarginRate < 0) throw new Error("소재마진율(%)은 0 이상 숫자여야 합니다");
+      if (laborMarginRate == null || laborMarginRate < 0) throw new Error("공임마진율(%)은 0 이상 숫자여야 합니다");
+      if (fixedMarginRate == null || fixedMarginRate < 0) throw new Error("고정마진율(%)은 0 이상 숫자여야 합니다");
       if (feeRate == null || feeRate < 0) throw new Error("수수료율(%)은 0 이상 숫자여야 합니다");
       if (minMarginRate == null || minMarginRate < 0) throw new Error("최소마진율(%)은 0 이상 숫자여야 합니다");
+      if (fixedCost == null || fixedCost < 0) throw new Error("고정가격(원)은 0 이상 숫자여야 합니다");
       if (unit == null || unit <= 0) throw new Error("반올림 단위는 1 이상 숫자여야 합니다");
-      if (option18k == null || option18k <= 0) throw new Error("18K 배수는 0보다 커야 합니다");
 
       const payload = {
         margin_multiplier: 1 + (marginRate / 100),
+        gm_material: materialMarginRate / 100,
+        gm_labor: laborMarginRate / 100,
+        gm_fixed: fixedMarginRate / 100,
         fee_rate: feeRate / 100,
         min_margin_rate_total: minMarginRate / 100,
+        fixed_cost_krw: Math.max(0, Math.round(fixedCost)),
         rounding_unit: Math.max(1, Math.round(unit)),
         rounding_mode: roundingMode,
         material_factor_set_id: policyFactorSetId || null,
-        option_18k_weight_multiplier: option18k,
         is_active: true,
       };
 
@@ -379,7 +400,7 @@ export default function ShoppingFactorsPage() {
       <Card>
         <CardHeader title="채널 정책" description="마진/수수료/최소마진/반올림/팩터 세트 연결" />
         <CardBody className="space-y-3">
-          <div className="grid grid-cols-1 gap-2 md:grid-cols-8">
+          <div className="grid grid-cols-1 gap-2 md:grid-cols-12">
             <div className="space-y-1">
               <div className="text-xs text-[var(--muted)]">채널(channel_id)</div>
               <Select value={channelId} onChange={(e) => setChannelId(e.target.value)}>
@@ -394,6 +415,22 @@ export default function ShoppingFactorsPage() {
             <div className="space-y-1">
               <div className="text-xs text-[var(--muted)]">마진율(%)</div>
               <Input value={marginRatePercent} onChange={(e) => setMarginRatePercent(e.target.value)} placeholder="예: 10" />
+            </div>
+            <div className="space-y-1">
+              <div className="text-xs text-[var(--muted)]">소재마진율(gm_material, %)</div>
+              <Input value={materialMarginRatePercent} onChange={(e) => setMaterialMarginRatePercent(e.target.value)} placeholder="예: 10" />
+            </div>
+            <div className="space-y-1">
+              <div className="text-xs text-[var(--muted)]">공임마진율(gm_labor, %)</div>
+              <Input value={laborMarginRatePercent} onChange={(e) => setLaborMarginRatePercent(e.target.value)} placeholder="예: 10" />
+            </div>
+            <div className="space-y-1">
+              <div className="text-xs text-[var(--muted)]">고정마진율(gm_fixed, %)</div>
+              <Input value={fixedMarginRatePercent} onChange={(e) => setFixedMarginRatePercent(e.target.value)} placeholder="예: 10" />
+            </div>
+            <div className="space-y-1">
+              <div className="text-xs text-[var(--muted)]">고정가격(fixed_cost_krw, KRW)</div>
+              <Input value={fixedCostKrw} onChange={(e) => setFixedCostKrw(e.target.value)} placeholder="예: 5000" />
             </div>
             <div className="space-y-1">
               <div className="text-xs text-[var(--muted)]">수수료율(%)</div>
@@ -426,10 +463,6 @@ export default function ShoppingFactorsPage() {
                 ))}
               </Select>
             </div>
-            <div className="space-y-1">
-              <div className="text-xs text-[var(--muted)]">18K 옵션 중량배수(option_18k_weight_multiplier)</div>
-              <Input value={option18kWeightMultiplier} onChange={(e) => setOption18kWeightMultiplier(e.target.value)} placeholder="예: 1.2" />
-            </div>
           </div>
           <Button onClick={() => upsertPolicy.mutate()} disabled={upsertPolicy.isPending || !channelId}>
             {upsertPolicy.isPending ? "저장 중..." : "정책 저장"}
@@ -438,7 +471,7 @@ export default function ShoppingFactorsPage() {
       </Card>
 
       <Card>
-        <CardHeader title="소재 함량/보정계수" description="소재별 함량은 settings 값을 따르고, 보정계수(multiplier)는 여기서 저장합니다. 18K 옵션 중량배수는 채널 정책에서 조정합니다." />
+          <CardHeader title="소재 함량/보정계수" description="소재별 함량은 settings 값을 따르고, 보정계수(multiplier)는 여기서 저장합니다." />
         <CardBody className="grid grid-cols-1 gap-3 xl:grid-cols-3">
           {renderMaterialGroup("금 소재", groupedCodes.gold)}
           {renderMaterialGroup("은 소재", groupedCodes.silver)}

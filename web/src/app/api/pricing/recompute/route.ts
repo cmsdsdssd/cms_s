@@ -26,6 +26,113 @@ const normalizeOptionalMaterialCode = (value: unknown): string => {
   return normalizeMaterialCode(raw);
 };
 
+type ShopAdminClient = NonNullable<ReturnType<typeof getShopAdminClient>>;
+
+const errorMessageOf = (value: unknown): string => {
+  if (!value || typeof value !== "object") return "";
+  const message = (value as { message?: unknown }).message;
+  return typeof message === "string" ? message : "";
+};
+
+const isMissingSchemaObjectError = (value: unknown): boolean => {
+  const msg = errorMessageOf(value).toLowerCase();
+  if (!msg) return false;
+  return (
+    (msg.includes("could not find the table") && msg.includes("schema cache"))
+    || (msg.includes("relation") && msg.includes("does not exist"))
+  );
+};
+
+const toPositiveTick = (value: unknown): number => {
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? n : Number.NaN;
+};
+
+const readTickFromSymbol = async (
+  sb: ShopAdminClient,
+  symbol: string,
+): Promise<{ tick: number; source: string } | null> => {
+  const symbolText = String(symbol ?? "").trim();
+  if (!symbolText) return null;
+  const tickRes = await sb
+    .from("cms_v_market_tick_latest_by_symbol_ops_v1")
+    .select("price_krw_per_g")
+    .eq("symbol", symbolText)
+    .limit(1)
+    .maybeSingle();
+  if (tickRes.error) {
+    if (isMissingSchemaObjectError(tickRes.error)) return null;
+    throw new Error(errorMessageOf(tickRes.error) || "tick by symbol query failed");
+  }
+  const tick = toPositiveTick((tickRes.data as { price_krw_per_g?: unknown } | null)?.price_krw_per_g);
+  if (!Number.isFinite(tick)) return null;
+  return { tick, source: `cms_v_market_tick_latest_by_symbol_ops_v1:${symbolText}` };
+};
+
+const resolveMarketTicks = async (
+  sb: ShopAdminClient,
+): Promise<{ goldTick: number; silverTick: number; tickSource: string }> => {
+  const [cmsViewRes, roleRes, krxGoldRes] = await Promise.all([
+    sb
+      .from("cms_v_market_tick_latest_gold_silver_ops_v1")
+      .select("gold_price_krw_per_g, silver_price_krw_per_g")
+      .maybeSingle(),
+    sb
+      .from("cms_v_market_symbol_role_v1")
+      .select("role_code, symbol, is_active")
+      .in("role_code", ["GOLD", "SILVER"]),
+    readTickFromSymbol(sb, "KRX_GOLD_TICK"),
+  ]);
+
+  if (cmsViewRes.error && !isMissingSchemaObjectError(cmsViewRes.error)) {
+    throw new Error(errorMessageOf(cmsViewRes.error) || "cms tick view query failed");
+  }
+  if (roleRes.error && !isMissingSchemaObjectError(roleRes.error)) {
+    throw new Error(errorMessageOf(roleRes.error) || "market role mapping query failed");
+  }
+
+  const cmsGoldTick = toPositiveTick((cmsViewRes.data as { gold_price_krw_per_g?: unknown } | null)?.gold_price_krw_per_g);
+  const cmsSilverTick = toPositiveTick((cmsViewRes.data as { silver_price_krw_per_g?: unknown } | null)?.silver_price_krw_per_g);
+
+  const roleRows = (roleRes.data ?? []) as Array<{ role_code?: string | null; symbol?: string | null; is_active?: boolean | null }>;
+  const goldRoleSymbol = String(
+    roleRows.find((row) => String(row.role_code ?? "").toUpperCase() === "GOLD" && row.is_active !== false)?.symbol ?? "",
+  ).trim();
+  const silverRoleSymbol = String(
+    roleRows.find((row) => String(row.role_code ?? "").toUpperCase() === "SILVER" && row.is_active !== false)?.symbol ?? "",
+  ).trim();
+
+  const [goldRoleTickRes, silverRoleTickRes] = await Promise.all([
+    readTickFromSymbol(sb, goldRoleSymbol),
+    readTickFromSymbol(sb, silverRoleSymbol),
+  ]);
+
+  const roleGoldTick = goldRoleTickRes?.tick ?? Number.NaN;
+  const roleSilverTick = silverRoleTickRes?.tick ?? Number.NaN;
+  const krxGoldTick = krxGoldRes?.tick ?? Number.NaN;
+
+  const fallbackGoldTick = Number.isFinite(roleGoldTick) ? roleGoldTick : cmsGoldTick;
+  const goldTick = Number.isFinite(krxGoldTick) ? krxGoldTick : fallbackGoldTick;
+  const silverTick = Number.isFinite(roleSilverTick) ? roleSilverTick : cmsSilverTick;
+
+  if (!Number.isFinite(goldTick) || !Number.isFinite(silverTick)) {
+    throw new Error("unable to resolve valid gold/silver ticks");
+  }
+
+  const tickSourceParts = [
+    Number.isFinite(krxGoldTick)
+      ? (krxGoldRes?.source ?? "cms_v_market_tick_latest_by_symbol_ops_v1:KRX_GOLD_TICK")
+      : (goldRoleTickRes?.source ?? "cms_v_market_tick_latest_gold_silver_ops_v1"),
+    silverRoleTickRes?.source ?? "cms_v_market_tick_latest_gold_silver_ops_v1",
+  ];
+
+  return {
+    goldTick,
+    silverTick,
+    tickSource: `gold=${tickSourceParts[0]};silver=${tickSourceParts[1]}`,
+  };
+};
+
 type MasterRow = {
   master_item_id: string;
   material_code_default: string | null;
@@ -809,13 +916,17 @@ export async function POST(request: Request) {
     );
   }
 
-  const tickRes = await sb
-    .from("shop_v_market_tick_latest_gold_silver_ops_v1")
-    .select("gold_price_krw_per_g, silver_price_krw_per_g")
-    .maybeSingle();
-  if (tickRes.error) return jsonError(tickRes.error.message ?? "시세 조회 실패", 500);
-  const goldTick = toNum(tickRes.data?.gold_price_krw_per_g, 0);
-  const silverTick = toNum(tickRes.data?.silver_price_krw_per_g, 0);
+  let goldTick = Number.NaN;
+  let silverTick = Number.NaN;
+  let tickSource = "UNKNOWN";
+  try {
+    const resolvedTick = await resolveMarketTicks(sb);
+    goldTick = resolvedTick.goldTick;
+    silverTick = resolvedTick.silverTick;
+    tickSource = resolvedTick.tickSource;
+  } catch (error) {
+    return jsonError(errorMessageOf(error) || "시세 조회 실패", 500);
+  }
 
   let factorMap = new Map<string, number>();
   if (selectedFactorSetId) {
@@ -1500,7 +1611,7 @@ export async function POST(request: Request) {
       channel_product_id: m.channel_product_id,
       computed_at: recomputeAt,
       tick_as_of: recomputeAt,
-      tick_source: "shop_v_market_tick_latest_gold_silver_ops_v1",
+      tick_source: tickSource,
       tick_gold_krw_g: goldTick,
       tick_silver_krw_g: silverTick,
       net_weight_g: netWeight,

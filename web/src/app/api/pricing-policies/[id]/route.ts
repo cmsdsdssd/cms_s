@@ -40,6 +40,26 @@ export async function PUT(request: Request, { params }: Params) {
     if (!Number.isFinite(option18k) || option18k <= 0) return jsonError("option_18k_weight_multiplier must be > 0", 400);
     patch.option_18k_weight_multiplier = option18k;
   }
+  if (body.gm_material !== undefined) {
+    const gmMaterial = Number(body.gm_material);
+    if (!Number.isFinite(gmMaterial) || gmMaterial < 0) return jsonError("gm_material must be >= 0", 400);
+    patch.gm_material = gmMaterial;
+  }
+  if (body.gm_labor !== undefined) {
+    const gmLabor = Number(body.gm_labor);
+    if (!Number.isFinite(gmLabor) || gmLabor < 0) return jsonError("gm_labor must be >= 0", 400);
+    patch.gm_labor = gmLabor;
+  }
+  if (body.gm_fixed !== undefined) {
+    const gmFixed = Number(body.gm_fixed);
+    if (!Number.isFinite(gmFixed) || gmFixed < 0) return jsonError("gm_fixed must be >= 0", 400);
+    patch.gm_fixed = gmFixed;
+  }
+  if (body.fixed_cost_krw !== undefined) {
+    const fixedCostKrw = Number(body.fixed_cost_krw);
+    if (!Number.isFinite(fixedCostKrw) || fixedCostKrw < 0) return jsonError("fixed_cost_krw must be >= 0", 400);
+    patch.fixed_cost_krw = Math.max(0, Math.round(fixedCostKrw));
+  }
   if (body.fee_rate !== undefined) {
     const feeRate = Number(body.fee_rate);
     if (!Number.isFinite(feeRate) || feeRate < 0) return jsonError("fee_rate must be >= 0", 400);
@@ -57,7 +77,7 @@ export async function PUT(request: Request, { params }: Params) {
     .from("pricing_policy")
     .update(patch)
     .eq("policy_id", policyId)
-    .select("policy_id, channel_id, policy_name, margin_multiplier, rounding_unit, rounding_mode, option_18k_weight_multiplier, material_factor_set_id, fee_rate, min_margin_rate_total, is_active, created_at, updated_at")
+    .select("policy_id, channel_id, policy_name, margin_multiplier, gm_material, gm_labor, gm_fixed, fixed_cost_krw, rounding_unit, rounding_mode, option_18k_weight_multiplier, material_factor_set_id, fee_rate, min_margin_rate_total, is_active, created_at, updated_at")
     .single();
   if (error) return jsonError(error.message ?? "정책 수정 실패", 400);
 

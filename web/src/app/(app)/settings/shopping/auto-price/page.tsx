@@ -510,7 +510,7 @@ export default function ShoppingAutoPricePage() {
   }, [recentRunDetailQueries]);
 
   const snapshotExplainQuery = useQuery({
-    queryKey: ["pricing-snapshot-explain", effectiveChannelId, editorMasterItemId, resolvedPreviewProductNo],
+    queryKey: ["pricing-snapshot-explain", effectiveChannelId, editorMasterItemId, resolvedPreviewProductNo, latestComputeRequestIdForPreview],
     enabled: Boolean(effectiveChannelId && editorMasterItemId),
     queryFn: () =>
       shopApiGet<PricingSnapshotExplainResponse>(
@@ -518,6 +518,9 @@ export default function ShoppingAutoPricePage() {
           + encodeURIComponent(effectiveChannelId)
           + "&master_item_id="
           + encodeURIComponent(editorMasterItemId)
+          + (latestComputeRequestIdForPreview
+            ? `&compute_request_id=${encodeURIComponent(latestComputeRequestIdForPreview)}`
+            : "")
           + (resolvedPreviewProductNo
             ? `&external_product_no=${encodeURIComponent(resolvedPreviewProductNo)}`
             : ""),
@@ -1820,15 +1823,15 @@ export default function ShoppingAutoPricePage() {
 
                       <div className="rounded border border-[var(--hairline)] bg-[var(--bg)] p-3">
                         <div className="text-[10px] text-[var(--muted)]">판매가(쇼핑몰)</div>
-                        <div className="mt-1 flex items-end justify-between gap-2">
-                          <div className="text-2xl font-semibold tabular-nums">{fmtKrw(editorPreview.price)}</div>
-                          <div className="grid justify-end gap-y-0.5 text-right text-[11px] text-[var(--muted)] tabular-nums">
-                            <div className="grid grid-cols-[auto_auto] justify-end gap-x-2">
-                              <div className="text-[var(--muted)]">최근 후보가격 #1</div>
+                        <div className="mt-1">
+                          <div className="whitespace-nowrap text-2xl font-semibold leading-none tabular-nums">{fmtKrw(editorPreview.price)}</div>
+                          <div className="mt-1 grid grid-cols-1 gap-1 text-[11px] text-[var(--muted)] tabular-nums sm:grid-cols-2">
+                            <div className="rounded border border-[var(--hairline)] px-2 py-1">
+                              <div className="text-[10px] text-[var(--muted)]">최근 후보가격 #1</div>
                               <div className="whitespace-nowrap text-right font-medium">{fmtKrw(latestHistory?.candidatePrice)}</div>
                             </div>
-                            <div className="grid grid-cols-[auto_auto] justify-end gap-x-2">
-                              <div className="text-[var(--muted)]">최근 후보가격 #2</div>
+                            <div className="rounded border border-[var(--hairline)] px-2 py-1">
+                              <div className="text-[10px] text-[var(--muted)]">최근 후보가격 #2</div>
                               <div className="whitespace-nowrap text-right font-medium">{fmtKrw(previousHistory?.candidatePrice)}</div>
                             </div>
                           </div>

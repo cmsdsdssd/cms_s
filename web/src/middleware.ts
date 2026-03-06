@@ -17,6 +17,7 @@ function shouldBypassMobileRedirect(pathname: string) {
     if (pathname.startsWith("/api")) return true;
     if (pathname.startsWith("/_next")) return true;
     if (pathname === "/login" || pathname === "/logout") return true;
+    if (pathname.startsWith("/settings/shopping")) return true;
     return false;
 }
 

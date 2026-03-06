@@ -203,7 +203,7 @@ export async function PUT(request: Request, { params }: Params) {
     const master = masterRes.data;
     if (!master) return jsonError("master item not found", 404);
 
-    const [policyRes, materialCfgRes, tickRes] = await Promise.all([
+    const [policyRes, materialCfgRes, tickRes, krxGoldTickRes] = await Promise.all([
       sb
         .from("pricing_policy")
         .select("option_18k_weight_multiplier")
@@ -216,8 +216,14 @@ export async function PUT(request: Request, { params }: Params) {
         .from("cms_material_factor_config")
         .select("material_code, purity_rate, material_adjust_factor, price_basis"),
       sb
-        .from("shop_v_market_tick_latest_gold_silver_ops_v1")
+        .from("cms_v_market_tick_latest_gold_silver_ops_v1")
         .select("gold_price_krw_per_g, silver_price_krw_per_g")
+        .maybeSingle(),
+      sb
+        .from("cms_v_market_tick_latest_by_symbol_ops_v1")
+        .select("price_krw_per_g")
+        .eq("symbol", "KRX_GOLD_TICK")
+        .limit(1)
         .maybeSingle(),
     ]);
     if (policyRes.error) return jsonError(policyRes.error.message ?? "정책 조회 실패", 500);
@@ -243,8 +249,10 @@ export async function PUT(request: Request, { params }: Params) {
       const basis = basisRaw === "SILVER" ? "SILVER" : basisRaw === "NONE" ? "NONE" : "GOLD";
       materialBasisMap.set(code, basis);
     }
-    const goldTick = toNum(tickRes.data?.gold_price_krw_per_g, 0);
+    const defaultGoldTick = toNum(tickRes.data?.gold_price_krw_per_g, 0);
     const silverTick = toNum(tickRes.data?.silver_price_krw_per_g, 0);
+    const krxGoldTick = !krxGoldTickRes.error ? toNum(krxGoldTickRes.data?.price_krw_per_g, Number.NaN) : Number.NaN;
+    const goldTick = Number.isFinite(krxGoldTick) && krxGoldTick > 0 ? krxGoldTick : defaultGoldTick;
     const tickByMaterialCode = (materialCodeRaw: string) => {
       const code = normalizeMaterialCode(materialCodeRaw);
       const basis = materialBasisMap.get(code);

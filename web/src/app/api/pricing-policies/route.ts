@@ -13,7 +13,7 @@ export async function GET(request: Request) {
 
   let q = sb
     .from("pricing_policy")
-    .select("policy_id, channel_id, policy_name, margin_multiplier, rounding_unit, rounding_mode, option_18k_weight_multiplier, material_factor_set_id, fee_rate, min_margin_rate_total, is_active, created_at, updated_at")
+    .select("policy_id, channel_id, policy_name, margin_multiplier, gm_material, gm_labor, gm_fixed, fixed_cost_krw, rounding_unit, rounding_mode, option_18k_weight_multiplier, material_factor_set_id, fee_rate, min_margin_rate_total, is_active, created_at, updated_at")
     .order("updated_at", { ascending: false });
   if (channelId) q = q.eq("channel_id", channelId);
 
@@ -37,6 +37,10 @@ export async function POST(request: Request) {
   const hasOption18k = Object.prototype.hasOwnProperty.call(body, "option_18k_weight_multiplier");
   const hasFeeRate = Object.prototype.hasOwnProperty.call(body, "fee_rate");
   const hasMinMarginRateTotal = Object.prototype.hasOwnProperty.call(body, "min_margin_rate_total");
+  const hasGmMaterial = Object.prototype.hasOwnProperty.call(body, "gm_material");
+  const hasGmLabor = Object.prototype.hasOwnProperty.call(body, "gm_labor");
+  const hasGmFixed = Object.prototype.hasOwnProperty.call(body, "gm_fixed");
+  const hasFixedCostKrw = Object.prototype.hasOwnProperty.call(body, "fixed_cost_krw");
 
   const marginMultiplier = hasMargin ? Number(body.margin_multiplier) : 1;
   const roundingUnit = hasRoundingUnit ? Number(body.rounding_unit) : 1000;
@@ -44,6 +48,10 @@ export async function POST(request: Request) {
   const option18kWeightMultiplier = hasOption18k ? Number(body.option_18k_weight_multiplier) : 1.2;
   const feeRate = hasFeeRate ? Number(body.fee_rate) : 0;
   const minMarginRateTotal = hasMinMarginRateTotal ? Number(body.min_margin_rate_total) : 0;
+  const gmMaterial = hasGmMaterial ? Number(body.gm_material) : 0;
+  const gmLabor = hasGmLabor ? Number(body.gm_labor) : 0;
+  const gmFixed = hasGmFixed ? Number(body.gm_fixed) : 0;
+  const fixedCostKrw = hasFixedCostKrw ? Number(body.fixed_cost_krw) : 0;
 
   const basePayload = {
     channel_id: String(body.channel_id ?? "").trim(),
@@ -52,6 +60,10 @@ export async function POST(request: Request) {
     rounding_unit: roundingUnit,
     rounding_mode: roundingMode,
     option_18k_weight_multiplier: option18kWeightMultiplier,
+    gm_material: gmMaterial,
+    gm_labor: gmLabor,
+    gm_fixed: gmFixed,
+    fixed_cost_krw: Math.max(0, Math.round(fixedCostKrw)),
     material_factor_set_id: typeof body.material_factor_set_id === "string" ? body.material_factor_set_id : null,
     fee_rate: feeRate,
     min_margin_rate_total: minMarginRateTotal,
@@ -63,11 +75,15 @@ export async function POST(request: Request) {
   if (!Number.isFinite(basePayload.margin_multiplier) || basePayload.margin_multiplier < 0) return jsonError("margin_multiplier must be >= 0", 400);
   if (!Number.isFinite(basePayload.rounding_unit) || basePayload.rounding_unit <= 0) return jsonError("rounding_unit must be > 0", 400);
   if (!Number.isFinite(basePayload.option_18k_weight_multiplier) || basePayload.option_18k_weight_multiplier <= 0) return jsonError("option_18k_weight_multiplier must be > 0", 400);
+  if (!Number.isFinite(basePayload.gm_material) || basePayload.gm_material < 0) return jsonError("gm_material must be >= 0", 400);
+  if (!Number.isFinite(basePayload.gm_labor) || basePayload.gm_labor < 0) return jsonError("gm_labor must be >= 0", 400);
+  if (!Number.isFinite(basePayload.gm_fixed) || basePayload.gm_fixed < 0) return jsonError("gm_fixed must be >= 0", 400);
+  if (!Number.isFinite(basePayload.fixed_cost_krw) || basePayload.fixed_cost_krw < 0) return jsonError("fixed_cost_krw must be >= 0", 400);
   if (!Number.isFinite(basePayload.fee_rate) || basePayload.fee_rate < 0) return jsonError("fee_rate must be >= 0", 400);
   if (!Number.isFinite(basePayload.min_margin_rate_total) || basePayload.min_margin_rate_total < 0) return jsonError("min_margin_rate_total must be >= 0", 400);
   if (!["CEIL", "ROUND", "FLOOR"].includes(basePayload.rounding_mode)) return jsonError("rounding_mode must be CEIL/ROUND/FLOOR", 400);
 
-  const selectCols = "policy_id, channel_id, policy_name, margin_multiplier, rounding_unit, rounding_mode, option_18k_weight_multiplier, material_factor_set_id, fee_rate, min_margin_rate_total, is_active, created_at, updated_at";
+  const selectCols = "policy_id, channel_id, policy_name, margin_multiplier, gm_material, gm_labor, gm_fixed, fixed_cost_krw, rounding_unit, rounding_mode, option_18k_weight_multiplier, material_factor_set_id, fee_rate, min_margin_rate_total, is_active, created_at, updated_at";
 
   const deactivateOtherPolicies = async (savedPolicyId: string) => {
     if (!basePayload.is_active) return;

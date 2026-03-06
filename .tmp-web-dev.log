@@ -11,3 +11,29 @@
 ⚠ Turbopack's filesystem cache has been deleted because we previously detected an internal error in Turbopack. Builds or page loads may be slower as a result.
 ⚠ The "middleware" file convention is deprecated. Please use "proxy" instead. Learn more: https://nextjs.org/docs/messages/middleware-to-proxy
 ✓ Ready in 2.7s
+ POST /api/price-sync-runs-v2 500 in 1207ms (compile: 289ms, proxy.ts: 51ms, render: 867ms)
+ POST /api/price-sync-runs-v2 200 in 676ms (compile: 58ms, proxy.ts: 9ms, render: 609ms)
+ POST /api/price-sync-runs-v2 200 in 69ms (compile: 2ms, proxy.ts: 4ms, render: 62ms)
+ POST /api/price-sync-runs-v2/1fc3db10-3dfa-48e1-9246-9d2d184ee6de/execute 200 in 11.2s (compile: 650ms, proxy.ts: 3ms, render: 10.6s)
+ POST /api/price-sync-runs-v2 200 in 589ms (compile: 3ms, proxy.ts: 4ms, render: 583ms)
+ POST /api/price-sync-runs-v2/50e041fb-1d3f-466e-b3e9-cf276f15ad9a/execute 200 in 6.6s (compile: 12ms, proxy.ts: 4ms, render: 6.5s)
+ POST /api/price-sync-runs-v2 422 in 190ms (compile: 3ms, proxy.ts: 3ms, render: 184ms)
+ POST /api/price-sync-runs-v2 200 in 744ms (compile: 1858µs, proxy.ts: 3ms, render: 740ms)
+ POST /api/price-sync-runs-v2/c9de26c5-9aaa-40cd-81fc-f24f1d94cadf/execute 200 in 8.2s (compile: 10ms, proxy.ts: 3ms, render: 8.2s)
+ POST /api/price-sync-runs-v2 200 in 573ms (compile: 3ms, proxy.ts: 4ms, render: 566ms)
+ POST /api/price-sync-runs-v2/12d83c79-ef7b-46a7-ab44-5298ed02f37b/execute 200 in 12.1s (compile: 10ms, proxy.ts: 4ms, render: 12.1s)
+ POST /api/price-sync-runs-v2 200 in 643ms (compile: 1868µs, proxy.ts: 3ms, render: 638ms)
+ POST /api/price-sync-runs-v2/f328815d-4148-4cb5-9520-42add701965c/execute 200 in 8.9s (compile: 10ms, proxy.ts: 3ms, render: 8.9s)
+ POST /api/price-sync-runs-v2 200 in 1209ms (compile: 2ms, proxy.ts: 3ms, render: 1204ms)
+ POST /api/price-sync-runs-v2/abf043fb-bd31-4bd8-94ce-d0387b7adf33/execute 200 in 10.1s (compile: 9ms, proxy.ts: 3ms, render: 10.1s)
+○ Compiling /settings/shopping/auto-price ...
+ HEAD /settings/shopping/auto-price 200 in 3.8s (compile: 3.5s, proxy.ts: 5ms, render: 253ms)
+ HEAD /m/settings/advanced/shopping/auto-price 404 in 329ms (compile: 293ms, proxy.ts: 2ms, render: 34ms)
+✓ Compiled in 327ms
+✓ Compiled in 958ms
+✓ Compiled in 263ms
+ POST /api/cron/shop-sync-v2 500 in 153ms (compile: 115ms, proxy.ts: 32ms, render: 6ms)
+ GET /api/public/storefront-option-breakdown?mall_id=minddd&product_no=12 200 in 230ms (compile: 80ms, proxy.ts: 3ms, render: 147ms)
+ POST /api/price-sync-runs-v2 200 in 838ms (compile: 1735µs, proxy.ts: 2ms, render: 834ms)
+ POST /api/price-sync-runs-v2/c12d0b3a-e685-4c01-ba58-154dbe39482a/execute 200 in 9.5s (compile: 12ms, proxy.ts: 2ms, render: 9.5s)
+ GET /api/public/storefront-option-breakdown?mall_id=minddd&product_no=12 200 in 126ms (compile: 2ms, proxy.ts: 2ms, render: 121ms)

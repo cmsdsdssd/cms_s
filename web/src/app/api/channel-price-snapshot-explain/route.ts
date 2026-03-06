@@ -25,6 +25,10 @@ const toTextOrNull = (value: unknown): string | null => {
   return v || null;
 };
 
+const uniqueTextList = (values: Array<unknown>): string[] => {
+  return Array.from(new Set(values.map((value) => String(value ?? "").trim()).filter(Boolean)));
+};
+
 export async function GET(request: Request) {
   const sb = getShopAdminClient();
   if (!sb) return jsonError("Supabase server env missing", 500);
@@ -42,41 +46,68 @@ export async function GET(request: Request) {
   const selectColumns =
     "channel_id, master_item_id, channel_product_id, external_product_no, external_variant_code, compute_request_id, computed_at, pricing_algo_version, calc_version, material_code_effective, material_basis_resolved, material_purity_rate_resolved, material_adjust_factor_resolved, effective_tick_krw_g, net_weight_g, material_raw_krw, material_final_krw, labor_component_json, absorb_total_applied_krw, absorb_total_raw_krw, labor_cost_applied_krw_components, labor_sell_total_plus_absorb_krw_components, cost_sum_krw, material_pre_fee_krw, labor_pre_fee_krw, fixed_pre_fee_krw, candidate_pre_fee_krw, candidate_price_krw, min_margin_price_krw, guardrail_price_krw, guardrail_reason_code, final_target_price_v2_krw, current_channel_price_krw, diff_krw, diff_pct";
 
-  let query = sb
-    .from("v_price_composition_flat_v2")
-    .select(selectColumns)
-    .eq("channel_id", channelId)
-    .eq("master_item_id", masterItemId)
-    .order("computed_at", { ascending: false })
-    .limit(50);
-
-  if (channelProductId) {
-    query = query.eq("channel_product_id", channelProductId);
-  }
-  if (externalProductNo) {
-    query = query.eq("external_product_no", externalProductNo);
-  }
-  if (computeRequestId) {
-    query = query.eq("compute_request_id", computeRequestId);
-  }
-
-  const snapshotRes = await query;
-  if (snapshotRes.error) return jsonError(snapshotRes.error.message ?? "Failed to read V2 snapshot view", 500);
-
-  let rows = (snapshotRes.data ?? []) as Record<string, unknown>[];
-  if (rows.length === 0 && computeRequestId) {
-    let fallbackQuery = sb
+  const fetchRows = async (args: {
+    computeRequestId?: string;
+    externalProductNos?: string[];
+  }): Promise<Record<string, unknown>[]> => {
+    let query = sb
       .from("v_price_composition_flat_v2")
       .select(selectColumns)
       .eq("channel_id", channelId)
       .eq("master_item_id", masterItemId)
       .order("computed_at", { ascending: false })
       .limit(50);
-    if (channelProductId) fallbackQuery = fallbackQuery.eq("channel_product_id", channelProductId);
-    if (externalProductNo) fallbackQuery = fallbackQuery.eq("external_product_no", externalProductNo);
-    const fallbackRes = await fallbackQuery;
-    if (fallbackRes.error) return jsonError(fallbackRes.error.message ?? "Failed to read V2 snapshot fallback view", 500);
-    rows = (fallbackRes.data ?? []) as Record<string, unknown>[];
+
+    if (channelProductId) query = query.eq("channel_product_id", channelProductId);
+    const productNos = uniqueTextList(args.externalProductNos ?? []);
+    if (productNos.length === 1) {
+      query = query.eq("external_product_no", productNos[0]);
+    } else if (productNos.length > 1) {
+      query = query.in("external_product_no", productNos);
+    }
+    if (args.computeRequestId) query = query.eq("compute_request_id", args.computeRequestId);
+
+    const res = await query;
+    if (res.error) throw new Error(res.error.message ?? "Failed to read V2 snapshot view");
+    return (res.data ?? []) as Record<string, unknown>[];
+  };
+
+  let rows: Record<string, unknown>[] = [];
+  const requestedProductNos = uniqueTextList([externalProductNo]);
+  try {
+    rows = await fetchRows({ computeRequestId, externalProductNos: requestedProductNos });
+    if (rows.length === 0 && computeRequestId) {
+      rows = await fetchRows({ externalProductNos: requestedProductNos });
+    }
+
+    if (rows.length === 0 && externalProductNo) {
+      const aliasRes = await sb
+        .from("sales_channel_product")
+        .select("external_product_no")
+        .eq("channel_id", channelId)
+        .eq("master_item_id", masterItemId)
+        .eq("is_active", true);
+      if (aliasRes.error) {
+        return jsonError(aliasRes.error.message ?? "Failed to read product aliases", 500);
+      }
+      const aliasProductNos = uniqueTextList([
+        externalProductNo,
+        ...(aliasRes.data ?? []).map((row) => (row as { external_product_no?: string | null }).external_product_no ?? ""),
+      ]);
+      rows = await fetchRows({ computeRequestId, externalProductNos: aliasProductNos });
+      if (rows.length === 0 && computeRequestId) {
+        rows = await fetchRows({ externalProductNos: aliasProductNos });
+      }
+    }
+
+    if (rows.length === 0 && externalProductNo) {
+      rows = await fetchRows({ computeRequestId });
+      if (rows.length === 0 && computeRequestId) {
+        rows = await fetchRows({});
+      }
+    }
+  } catch (error) {
+    return jsonError(error instanceof Error ? error.message : "Failed to read V2 snapshot view", 500);
   }
 
   const source = (

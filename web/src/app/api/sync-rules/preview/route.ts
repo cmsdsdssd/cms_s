@@ -92,10 +92,11 @@ export async function POST(request: Request) {
     mappingQuery.eq("sync_rule_set_id", ruleSetId);
   }
 
-  const [mapRes, masterRes, tickRes, policyRes, purityRes, r1Res, r2Res, r3Res, r4Res] = await Promise.all([
+  const [mapRes, masterRes, tickRes, krxGoldTickRes, policyRes, purityRes, r1Res, r2Res, r3Res, r4Res] = await Promise.all([
     mappingQuery,
     sb.from("cms_master_item").select("master_item_id, material_code_default, category_code, weight_default_g, deduction_weight_default_g"),
-    sb.from("shop_v_market_tick_latest_gold_silver_ops_v1").select("gold_price_krw_per_g, silver_price_krw_per_g").maybeSingle(),
+    sb.from("cms_v_market_tick_latest_gold_silver_ops_v1").select("gold_price_krw_per_g, silver_price_krw_per_g").maybeSingle(),
+    sb.from("cms_v_market_tick_latest_by_symbol_ops_v1").select("price_krw_per_g").eq("symbol", "KRX_GOLD_TICK").limit(1).maybeSingle(),
     sb.from("pricing_policy").select("option_18k_weight_multiplier").eq("channel_id", channelId).eq("is_active", true).order("updated_at", { ascending: false }).limit(1).maybeSingle(),
     sb.from("cms_material_factor_config").select("material_code, purity_rate, material_adjust_factor, gold_adjust_factor, price_basis"),
     sb.from("sync_rule_r1_material_delta").select("rule_id, rule_set_id, source_material_code, target_material_code, match_category_code, weight_min_g, weight_max_g, option_weight_multiplier, rounding_unit, rounding_mode, priority, is_active").eq("rule_set_id", ruleSetId).eq("is_active", true).order("priority", { ascending: true }),
@@ -157,8 +158,10 @@ export async function POST(request: Request) {
     return isSilverMaterial(code) ? silverTick : goldTick;
   };
 
-  const goldTick = toNum(tickRes.data?.gold_price_krw_per_g, 0);
+  const defaultGoldTick = toNum(tickRes.data?.gold_price_krw_per_g, 0);
   const silverTick = toNum(tickRes.data?.silver_price_krw_per_g, 0);
+  const krxGoldTick = !krxGoldTickRes.error ? toNum(krxGoldTickRes.data?.price_krw_per_g, Number.NaN) : Number.NaN;
+  const goldTick = Number.isFinite(krxGoldTick) && krxGoldTick > 0 ? krxGoldTick : defaultGoldTick;
   const default18kMul = Math.max(toNum(policyRes.data?.option_18k_weight_multiplier, 1.2), 0.000001);
 
   const r1Rules = (r1Res.data ?? []) as SyncRuleR1Row[];
