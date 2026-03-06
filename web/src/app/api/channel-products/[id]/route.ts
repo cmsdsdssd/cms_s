@@ -216,7 +216,7 @@ export async function PUT(request: Request, { params }: Params) {
         .from("cms_material_factor_config")
         .select("material_code, purity_rate, material_adjust_factor, price_basis"),
       sb
-        .from("cms_v_market_tick_latest_gold_silver_ops_v1")
+        .from("shop_v_market_tick_latest_gold_silver_ops_v1")
         .select("gold_price_krw_per_g, silver_price_krw_per_g")
         .maybeSingle(),
     ]);

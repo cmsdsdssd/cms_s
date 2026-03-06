@@ -23,6 +23,10 @@ type PricingPolicy = {
   channel_id: string;
   policy_name: string;
   margin_multiplier: number;
+  gm_material?: number | null;
+  gm_labor?: number | null;
+  gm_fixed?: number | null;
+  fixed_cost_krw?: number | null;
   rounding_unit: number;
   rounding_mode: "CEIL" | "ROUND" | "FLOOR";
   option_18k_weight_multiplier: number;
@@ -93,6 +97,7 @@ type SyncIntent = {
 type SyncRunDetail = {
   run: {
     run_id: string;
+    status?: string | null;
     pinned_compute_request_id?: string | null;
     started_at?: string | null;
     request_payload?: {
@@ -225,6 +230,14 @@ const guessCategoryByOptionName = (name: string): OptionCategoryRow["category_ke
 const fmt = (v: number | null | undefined) => (typeof v === "number" && Number.isFinite(v) ? v.toLocaleString() : "-");
 const fmtKrw = (v: number | null | undefined) =>
   typeof v === "number" && Number.isFinite(v) ? Math.round(v).toLocaleString() + "원" : "-";
+const toDisplayKo = (value: string | null | undefined) => {
+  const normalized = String(value ?? "").trim().toUpperCase();
+  return normalized === "T" ? "진열" : normalized === "F" ? "미진열" : "-";
+};
+const toSellingKo = (value: string | null | undefined) => {
+  const normalized = String(value ?? "").trim().toUpperCase();
+  return normalized === "T" ? "판매" : normalized === "F" ? "미판매" : "-";
+};
 const fmtSignedKrw = (v: number | null | undefined) => {
   if (typeof v !== "number" || !Number.isFinite(v)) return "-";
   const rounded = Math.round(v);
@@ -271,6 +284,17 @@ const fmtTsCompact = (v: string | null | undefined) => {
   return `${yy}.${mm}.${dd}-${hh}:${mi}:${ss}`;
 };
 
+const SNAPSHOT_BLUE_KEYS = new Set([
+  "material-total",
+  "labor-total",
+  "final-price",
+]);
+
+const snapshotCellToneClass = (key: string) => {
+  if (SNAPSHOT_BLUE_KEYS.has(key)) return "bg-sky-100";
+  return "bg-white";
+};
+
 const parseCronTickReason = (errorMessage: string | null | undefined): string | null => {
   const raw = String(errorMessage ?? "").trim();
   if (!raw.toUpperCase().startsWith("CRON_TICK:")) return null;
@@ -294,7 +318,6 @@ export default function ShoppingAutoPricePage() {
   const [marginMultiplier, setMarginMultiplier] = useState("1");
   const [roundingUnit, setRoundingUnit] = useState("1000");
   const [roundingMode, setRoundingMode] = useState<"CEIL" | "ROUND" | "FLOOR">("CEIL");
-  const [option18kWeightMultiplier, setOption18kWeightMultiplier] = useState("1.2");
   const [policyFactorSetId, setPolicyFactorSetId] = useState("");
   const [policySaveError, setPolicySaveError] = useState<string | null>(null);
   const [intervalMinutes, setIntervalMinutes] = useState("5");
@@ -351,7 +374,6 @@ export default function ShoppingAutoPricePage() {
     setMarginMultiplier(String(activePolicy?.margin_multiplier ?? 1));
     setRoundingUnit(String(activePolicy?.rounding_unit ?? 1000));
     setRoundingMode((activePolicy?.rounding_mode ?? "CEIL") as "CEIL" | "ROUND" | "FLOOR");
-    setOption18kWeightMultiplier(String(activePolicy?.option_18k_weight_multiplier ?? 1.2));
     setPolicyFactorSetId(activePolicy?.material_factor_set_id ?? "");
   }, [activePolicy?.policy_id]);
 
@@ -467,7 +489,17 @@ export default function ShoppingAutoPricePage() {
     })),
   });
 
-  const resolvedPreviewProductNo = String(editorPreview?.productNo ?? editorProductNo ?? "").trim();
+  const resolvedPreviewProductNo = useMemo(() => {
+    const candidates = Array.from(
+      new Set([
+        String(editorProductNo ?? "").trim(),
+        String(editorPreview?.productNo ?? "").trim(),
+      ].filter(Boolean)),
+    );
+    if (candidates.length === 0) return "";
+    const canonical = candidates.find((value) => /^P/i.test(value));
+    return canonical ?? candidates[0] ?? "";
+  }, [editorProductNo, editorPreview?.productNo]);
 
   const latestComputeRequestIdForPreview = useMemo(() => {
     for (const query of recentRunDetailQueries) {
@@ -478,7 +510,7 @@ export default function ShoppingAutoPricePage() {
   }, [recentRunDetailQueries]);
 
   const snapshotExplainQuery = useQuery({
-    queryKey: ["pricing-snapshot-explain", effectiveChannelId, editorMasterItemId, resolvedPreviewProductNo, latestComputeRequestIdForPreview],
+    queryKey: ["pricing-snapshot-explain", effectiveChannelId, editorMasterItemId, resolvedPreviewProductNo],
     enabled: Boolean(effectiveChannelId && editorMasterItemId),
     queryFn: () =>
       shopApiGet<PricingSnapshotExplainResponse>(
@@ -488,9 +520,6 @@ export default function ShoppingAutoPricePage() {
           + encodeURIComponent(editorMasterItemId)
           + (resolvedPreviewProductNo
             ? `&external_product_no=${encodeURIComponent(resolvedPreviewProductNo)}`
-            : "")
-          + (latestComputeRequestIdForPreview
-            ? `&compute_request_id=${encodeURIComponent(latestComputeRequestIdForPreview)}`
             : ""),
       ),
     staleTime: 30_000,
@@ -536,6 +565,36 @@ export default function ShoppingAutoPricePage() {
     const policyMinMarginRate = Number(activePolicy?.min_margin_rate_total ?? Number.NaN);
     const policyMinMarginRateText = Number.isFinite(policyMinMarginRate)
       ? `${(policyMinMarginRate * 100).toFixed(2)}%`
+      : "-";
+    const gmMaterialRate = Number(activePolicy?.gm_material ?? Number.NaN);
+    const gmMaterialRateText = Number.isFinite(gmMaterialRate) ? `${(gmMaterialRate * 100).toFixed(2)}%` : "-";
+    const gmLaborRate = Number(activePolicy?.gm_labor ?? Number.NaN);
+    const gmLaborRateText = Number.isFinite(gmLaborRate) ? `${(gmLaborRate * 100).toFixed(2)}%` : "-";
+    const gmFixedRate = Number(activePolicy?.gm_fixed ?? Number.NaN);
+    const gmFixedRateText = Number.isFinite(gmFixedRate) ? `${(gmFixedRate * 100).toFixed(2)}%` : "-";
+    const materialPreFee = toRoundedNumber(snapshotExplainRow.material_pre_fee_krw);
+    const laborPreFee = toRoundedNumber(snapshotExplainRow.labor_pre_fee_krw);
+    const fixedPreFee = toRoundedNumber(snapshotExplainRow.fixed_pre_fee_krw);
+    const materialLaborCombinedPreFee = materialPreFee != null && laborPreFee != null
+      ? materialPreFee + laborPreFee
+      : null;
+    const totalPreFee = toRoundedNumber(snapshotExplainRow.candidate_pre_fee_krw);
+    const fixedCostSetting = toRoundedNumber(activePolicy?.fixed_cost_krw ?? null);
+    const toPctText = (ratio: number | null | undefined): string | null => {
+      const n = Number(ratio);
+      if (!Number.isFinite(n)) return null;
+      if (Math.abs(n) < 1e-12) return "0%";
+      return `${(n * 100).toFixed(2)}%`;
+    };
+    const minMarginPct = toPctText(policyMinMarginRate);
+    const feePct = toPctText(policyFeeRate);
+    const guardrailPct = toPctText(
+      Number.isFinite(policyMinMarginRate) && Number.isFinite(policyFeeRate)
+        ? policyMinMarginRate + policyFeeRate
+        : Number.NaN,
+    );
+    const guardrailRateText = guardrailPct != null && minMarginPct != null && feePct != null
+      ? `${guardrailPct}(${minMarginPct}+${feePct})`
       : "-";
 
     const selectedLabel = snapshotExplainRow.guardrail_reason_code === "MIN_MARGIN_WIN"
@@ -594,12 +653,19 @@ export default function ShoppingAutoPricePage() {
       { key: "total-plating", label: "총도금공임(원가)", valueText: fmtKrw(componentAmount("PLATING", "labor_cost_plus_absorb_krw")) },
       { key: "total-decor", label: "총장식공임(원가)", valueText: fmtKrw(componentAmount("DECOR", "labor_cost_plus_absorb_krw")) },
 
-      { key: "labor-total", label: "총공임", valueText: fmtKrw(snapshotExplainRow.labor_pre_fee_krw) },
-      { key: "material-total", label: "총소재가격(환산)", valueText: fmtKrw(snapshotExplainRow.material_pre_fee_krw) },
-      { key: "target-margin-rate", label: "목표마진율", valueText: policyMarginRateText },
-      { key: "min-margin-rate", label: "최소마진율", valueText: policyMinMarginRateText },
-      { key: "fee-rate", label: "수수료율", valueText: policyFeeRateText },
-      { key: "fee-detail", label: "수수료율 상세", valueText: "- (추후 컬럼 예정)" },
+      { key: "labor-total", label: "총공임", valueText: fmtKrw(snapshotExplainRow.labor_cost_applied_krw) },
+      { key: "material-total", label: "총소재가격", valueText: fmtKrw(snapshotExplainRow.material_final_krw) },
+      { key: "pre-fee-total", label: "총합계", valueText: fmtKrw(totalPreFee) },
+      { key: "material-margin-rate", label: "소재마진율", valueText: gmMaterialRateText },
+      { key: "labor-margin-rate", label: "공임마진율", valueText: gmLaborRateText },
+      { key: "fixed-margin-rate", label: "고정마진율", valueText: gmFixedRateText },
+
+      { key: "labor-reverse-gm", label: "공임 역산(gm)", valueText: `${fmtKrw(laborPreFee)} (${gmLaborRateText})` },
+      { key: "material-reverse-gm", label: "소재 역산(gm)", valueText: `${fmtKrw(materialPreFee)} (${gmMaterialRateText})` },
+      { key: "total-reverse-gm", label: "총합계역산(gm)", valueText: fmtKrw(totalPreFee) },
+      { key: "target-margin-rate", label: "목표마진율", valueText: `${policyMarginRateText} (${policyMarginMultiplierText})` },
+      { key: "guardrail-rate", label: "가드레일율(최소마진+수수료)", valueText: guardrailRateText },
+      { key: "fixed-cost-setting", label: "고정가격 설정", valueText: fmtKrw(fixedCostSetting) },
 
       { key: "final-price", label: "최종가격", valueText: fmtKrw(finalTarget) },
       { key: "selected-item", label: "선택항목", valueText: selectedLabel },
@@ -614,7 +680,7 @@ export default function ShoppingAutoPricePage() {
       groups.push(detailRows.slice(i, i + 6));
     }
     return groups;
-  }, [activePolicy?.margin_multiplier, activePolicy?.fee_rate, activePolicy?.min_margin_rate_total, snapshotExplainRow]);
+  }, [activePolicy?.margin_multiplier, activePolicy?.fee_rate, activePolicy?.min_margin_rate_total, activePolicy?.gm_material, activePolicy?.gm_labor, activePolicy?.gm_fixed, activePolicy?.fixed_cost_krw, snapshotExplainRow]);
 
   const previewCompositionFlowLines = useMemo(() => {
     if (!snapshotExplainRow) return [] as string[];
@@ -630,7 +696,7 @@ export default function ShoppingAutoPricePage() {
 
     const line1 = `소재가격: ${fmtKrw(snapshotExplainRow.material_final_krw)} (유효틱 ${fmt(snapshotExplainRow.effective_tick_krw_g)}원/g × 순중량 ${fmt(snapshotExplainRow.net_weight_g)} × 함량*보정계수 ${purityAdjusted == null ? "-" : purityAdjusted.toFixed(4)} -> 소재원가 ${fmtKrw(snapshotExplainRow.material_raw_krw)} -> 환산 ${fmtKrw(snapshotExplainRow.material_final_krw)})`;
 
-    const line2 = `총공임: ${fmtKrw(snapshotExplainRow.labor_pre_fee_krw)} (공임원가(흡수반영) ${fmtKrw(snapshotExplainRow.labor_cost_applied_krw)} + 흡수공임(적용) ${fmtKrw(snapshotExplainRow.absorb_total_applied_krw)} -> 공임판매합(흡수포함) ${fmtKrw(snapshotExplainRow.labor_sell_total_plus_absorb_krw)} -> 수수료반영전 공임 ${fmtKrw(snapshotExplainRow.labor_pre_fee_krw)})`;
+    const line2 = `총공임: ${fmtKrw(snapshotExplainRow.labor_cost_applied_krw)} (공임원가(흡수반영) ${fmtKrw(snapshotExplainRow.labor_cost_applied_krw)} + 흡수공임(적용) ${fmtKrw(snapshotExplainRow.absorb_total_applied_krw)} -> 공임판매합(흡수포함) ${fmtKrw(snapshotExplainRow.labor_sell_total_plus_absorb_krw)} -> GM 역산(수수료전) ${fmtKrw(snapshotExplainRow.labor_pre_fee_krw)})`;
 
     const line3 = `총가격 후보(목표가격): ${fmtKrw(snapshotExplainRow.candidate_price_krw)} (수수료반영전 후보합 ${fmtKrw(snapshotExplainRow.candidate_pre_fee_krw)} = 소재 ${fmtKrw(snapshotExplainRow.material_pre_fee_krw)} + 공임 ${fmtKrw(snapshotExplainRow.labor_pre_fee_krw)} + 고정 ${fmtKrw(snapshotExplainRow.fixed_pre_fee_krw)}, 수수료율 ${policyFeeRateText} 역산 반영)`;
 
@@ -648,6 +714,7 @@ export default function ShoppingAutoPricePage() {
       snapshotPrice: number | null;
       pushTargetPrice: number | null;
       pushBeforePrice: number | null;
+      candidatePrice: number | null;
       selectedItem: "목표가격" | "최소마진가격";
       selectedPrice: number | null;
       variantAvg: number | null;
@@ -714,7 +781,8 @@ export default function ShoppingAutoPricePage() {
         const pushTargetPrice = toRoundedNumber(baseIntent.applied_target_price_krw);
         const pushBeforePrice = toRoundedNumber(baseIntent.applied_before_price_krw);
         const pushAfterPrice = toRoundedNumber(baseIntent.applied_after_price_krw);
-        const selectedPrice = pushAfterPrice ?? pushTargetPrice ?? snapshotPrice;
+        const candidatePrice = pushTargetPrice ?? pushAfterPrice ?? snapshotPrice;
+        const selectedPrice = pushAfterPrice ?? candidatePrice;
         const selectedItem: "목표가격" | "최소마진가격" = baseIntent.floor_applied ? "최소마진가격" : "목표가격";
 
         const variantPrices = intents
@@ -731,6 +799,7 @@ export default function ShoppingAutoPricePage() {
           snapshotPrice,
           pushTargetPrice,
           pushBeforePrice,
+          candidatePrice,
           selectedItem,
           selectedPrice,
           variantAvg,
@@ -742,25 +811,26 @@ export default function ShoppingAutoPricePage() {
         snapshotPrice: number | null;
         pushTargetPrice: number | null;
         pushBeforePrice: number | null;
+        candidatePrice: number | null;
         selectedItem: "목표가격" | "최소마진가격";
         selectedPrice: number | null;
         variantAvg: number | null;
       } => Boolean(row))
       .sort((a, b) => b.at.localeCompare(a.at));
 
-    return rows.slice(0, 8);
+    return rows.slice(0, 20);
   }, [editorPreview, editorMasterItemId, editorProductNo, recentRunDetailQueries]);
 
   const latestHistory = previewHistoryRows[0] ?? null;
   const previousHistory = previewHistoryRows[1] ?? null;
   const historyTrendDelta =
-    latestHistory?.selectedPrice != null && previousHistory?.selectedPrice != null
-      ? latestHistory.selectedPrice - previousHistory.selectedPrice
+    latestHistory?.candidatePrice != null && previousHistory?.candidatePrice != null
+      ? latestHistory.candidatePrice - previousHistory.candidatePrice
       : null;
 
   const previewTrend = useMemo(() => {
     const prices = previewHistoryRows
-      .map((row) => row.selectedPrice)
+      .map((row) => row.candidatePrice)
       .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
 
     const latest = prices[0] ?? null;
@@ -769,6 +839,97 @@ export default function ShoppingAutoPricePage() {
     const min = prices.length > 0 ? Math.min(...prices) : null;
     const max = prices.length > 0 ? Math.max(...prices) : null;
     return { count: prices.length, latest, oldest, netDelta, min, max };
+  }, [previewHistoryRows]);
+
+  const previewTrendChart = useMemo(() => {
+    const rows = [...previewHistoryRows].reverse();
+    const points = rows
+      .map((row) => ({
+        runId: row.runId,
+        at: row.at,
+        value: row.candidatePrice,
+      }))
+      .filter((row): row is { runId: string; at: string; value: number } => typeof row.value === "number" && Number.isFinite(row.value));
+
+    const width = 560;
+    const height = 72;
+
+    if (points.length === 0) {
+      return {
+        width,
+        height,
+        points: [] as Array<{ runId: string; at: string; value: number; x: number; y: number; turning: boolean }>,
+        polyline: "",
+        min: null as number | null,
+        max: null as number | null,
+        turningCount: 0,
+        firstTurning: null as { at: string; value: number } | null,
+      };
+    }
+    const padLeft = 10;
+    const padRight = 10;
+    const padTop = 8;
+    const padBottom = 8;
+    const innerWidth = Math.max(1, width - padLeft - padRight);
+    const innerHeight = Math.max(1, height - padTop - padBottom);
+
+    const min = Math.min(...points.map((p) => p.value));
+    const max = Math.max(...points.map((p) => p.value));
+    const span = Math.max(1, max - min);
+
+    const normalized = points.map((point, index) => {
+      const x = points.length <= 1
+        ? padLeft + innerWidth / 2
+        : padLeft + (innerWidth * index) / (points.length - 1);
+      const y = padTop + ((max - point.value) / span) * innerHeight;
+      return { ...point, x, y, turning: false };
+    });
+
+    const sign = (v: number) => (v > 0 ? 1 : v < 0 ? -1 : 0);
+
+    for (let i = 1; i < normalized.length - 1; i += 1) {
+      let prevSign = 0;
+      for (let left = i - 1; left >= 0; left -= 1) {
+        const delta = normalized[left + 1].value - normalized[left].value;
+        const s = sign(delta);
+        if (s !== 0) {
+          prevSign = s;
+          break;
+        }
+      }
+
+      let nextSign = 0;
+      for (let right = i; right < normalized.length - 1; right += 1) {
+        const delta = normalized[right + 1].value - normalized[right].value;
+        const s = sign(delta);
+        if (s !== 0) {
+          nextSign = s;
+          break;
+        }
+      }
+
+      if (prevSign !== 0 && nextSign !== 0 && prevSign !== nextSign) {
+        normalized[i].turning = true;
+      }
+    }
+
+    const turningPoints = normalized.filter((point) => point.turning);
+
+    return {
+      width,
+      height,
+      points: normalized,
+      polyline: normalized.map((point) => `${point.x},${point.y}`).join(" "),
+      min,
+      max,
+      turningCount: turningPoints.length,
+      firstTurning: turningPoints.length > 0
+        ? {
+          at: turningPoints[0].at,
+          value: turningPoints[0].value,
+        }
+        : null,
+    };
   }, [previewHistoryRows]);
 
   const dashboardGalleryQuery = useQuery({
@@ -987,7 +1148,6 @@ export default function ShoppingAutoPricePage() {
         margin_multiplier: parseNumericInput(marginMultiplier) ?? 1,
         rounding_unit: Math.max(1, Math.round(parseNumericInput(roundingUnit) ?? 1000)),
         rounding_mode: roundingMode,
-        option_18k_weight_multiplier: parseNumericInput(option18kWeightMultiplier) ?? 1.2,
         material_factor_set_id: policyFactorSetId || null,
         is_active: true,
       };
@@ -1257,6 +1417,91 @@ export default function ShoppingAutoPricePage() {
         setEditorPreview(context.previousPreview);
       }
       setApplyError(e instanceof Error ? e.message : "상세수정 반영 실패");
+    },
+  });
+
+  const togglePlatingLaborMutation = useMutation({
+    mutationFn: async (includeMasterPlatingLabor: boolean) => {
+      const resolvedMasterItemId = String(editorMasterItemId ?? "").trim();
+      if (!effectiveChannelId) throw new Error("channel_id가 필요합니다");
+      if (!resolvedMasterItemId) throw new Error("master_item_id가 없어 도금공임 설정을 저장할 수 없습니다");
+
+      await shopApiSend<{ ok: boolean; updated?: number }>(
+        "/api/channel-products/master-toggle",
+        "POST",
+        {
+          channel_id: effectiveChannelId,
+          master_item_id: resolvedMasterItemId,
+          include_master_plating_labor: includeMasterPlatingLabor,
+        },
+      );
+
+      const recompute = await shopApiSend<{ ok: boolean; inserted: number; compute_request_id?: string }>(
+        "/api/pricing/recompute",
+        "POST",
+        {
+          channel_id: effectiveChannelId,
+          master_item_ids: [resolvedMasterItemId],
+        },
+      );
+
+      const runCreatePayload: {
+        channel_id: string;
+        interval_minutes: number;
+        trigger_type: "MANUAL";
+        master_item_ids: string[];
+        compute_request_id?: string;
+        force_full_sync: true;
+      } = {
+        channel_id: effectiveChannelId,
+        interval_minutes: 5,
+        trigger_type: "MANUAL",
+        master_item_ids: [resolvedMasterItemId],
+        force_full_sync: true,
+      };
+      if (recompute.compute_request_id) {
+        runCreatePayload.compute_request_id = recompute.compute_request_id;
+      }
+
+      const run = await shopApiSend<SyncRunCreateResponse>("/api/price-sync-runs-v2", "POST", runCreatePayload);
+      const runId = String(run.run_id ?? "").trim();
+      if (!runId) {
+        throw new Error("Run 생성 응답에 run_id가 없습니다. 잠시 후 다시 시도해주세요");
+      }
+
+      const terminalIntentStates = new Set(["SUCCESS", "FAILED", "SKIPPED", "CANCELLED", "PARTIAL"]);
+      for (let round = 0; round < 6; round += 1) {
+        await shopApiSend<{ ok: boolean }>(`/api/price-sync-runs-v2/${encodeURIComponent(runId)}/execute`, "POST");
+        const detail = await shopApiGet<{ data: SyncRunDetail }>(`/api/price-sync-runs-v2/${encodeURIComponent(runId)}`);
+        const runStatus = String(detail.data?.run?.status ?? "").trim().toUpperCase();
+        const pendingCount = (detail.data?.intents ?? []).reduce((count, intent) => {
+          const state = String(intent.state ?? "").trim().toUpperCase();
+          return terminalIntentStates.has(state) ? count : count + 1;
+        }, 0);
+        if ((runStatus && runStatus !== "RUNNING") || pendingCount <= 0) break;
+      }
+
+      return { includeMasterPlatingLabor, runId };
+    },
+    onSuccess: async ({ includeMasterPlatingLabor, runId }) => {
+      const excludePlatingLabor = !includeMasterPlatingLabor;
+      setEditorExcludePlatingLabor(excludePlatingLabor);
+      setEditorPreview((prev) => (prev ? { ...prev, exclude_plating_labor: excludePlatingLabor } : prev));
+      if (runId) {
+        setSelectedRunId(runId);
+      }
+      setApplyError(null);
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: ["pricing-snapshot-explain", effectiveChannelId, editorMasterItemId] }),
+        qc.invalidateQueries({ queryKey: ["price-sync-runs-v2", effectiveChannelId] }),
+        qc.invalidateQueries({ queryKey: ["price-sync-run-v2"] }),
+        qc.invalidateQueries({ queryKey: ["shop-dashboard-gallery", effectiveChannelId] }),
+        qc.invalidateQueries({ queryKey: ["shop-summary", effectiveChannelId] }),
+      ]);
+    },
+    onError: (e) => {
+      const reason = e instanceof Error ? e.message : "알 수 없는 오류";
+      setApplyError(`도금공임 포함 설정 반영 중 실패했습니다. ${reason}. 잠시 후 다시 시도하거나 Run 목록에서 상태를 확인해주세요.`);
     },
   });
 
@@ -1577,18 +1822,81 @@ export default function ShoppingAutoPricePage() {
                         <div className="text-[10px] text-[var(--muted)]">판매가(쇼핑몰)</div>
                         <div className="mt-1 flex items-end justify-between gap-2">
                           <div className="text-2xl font-semibold tabular-nums">{fmtKrw(editorPreview.price)}</div>
-                          <div className="text-right text-[11px] text-[var(--muted)] tabular-nums">
-                            유효바닥가 {fmtKrw(previewEffectiveFloor)}
+                          <div className="grid justify-end gap-y-0.5 text-right text-[11px] text-[var(--muted)] tabular-nums">
+                            <div className="grid grid-cols-[auto_auto] justify-end gap-x-2">
+                              <div className="text-[var(--muted)]">최근 후보가격 #1</div>
+                              <div className="whitespace-nowrap text-right font-medium">{fmtKrw(latestHistory?.candidatePrice)}</div>
+                            </div>
+                            <div className="grid grid-cols-[auto_auto] justify-end gap-x-2">
+                              <div className="text-[var(--muted)]">최근 후보가격 #2</div>
+                              <div className="whitespace-nowrap text-right font-medium">{fmtKrw(previousHistory?.candidatePrice)}</div>
+                            </div>
                           </div>
                         </div>
                         <div className="mt-2 grid grid-cols-[1fr_auto] gap-x-3 gap-y-1 text-[11px]">
                           <div className="text-[var(--muted)]">소비자가</div>
                           <div className="whitespace-nowrap text-right tabular-nums">{fmtKrw(editorPreview.retailPrice)}</div>
-                          <div className="text-[var(--muted)]">display / selling</div>
-                          <div className="whitespace-nowrap text-right tabular-nums">{editorPreview.display ?? "-"} / {editorPreview.selling ?? "-"}</div>
+                          <div className="text-[var(--muted)]">상태</div>
+                          <div className="whitespace-nowrap text-right">{`${toDisplayKo(editorPreview.display)} / ${toSellingKo(editorPreview.selling)}`}</div>
                           <div className="text-[var(--muted)]">스냅샷 최종 타겟</div>
                           <div className="whitespace-nowrap text-right tabular-nums">{snapshotExplainRow ? fmtKrw(snapshotExplainRow.final_target_price_v2_krw ?? snapshotExplainRow.final_target_price_krw) : "-"}</div>
                         </div>
+                      </div>
+
+                      <div className="rounded border border-[var(--hairline)] bg-[var(--bg)] p-2">
+                        <div className="h-[72px] w-full">
+                          {previewTrendChart.points.length === 0 ? (
+                            <div className="grid h-full place-items-center text-[11px] text-[var(--muted)]">히스토리 없음</div>
+                          ) : (
+                            <svg
+                              viewBox={`0 0 ${previewTrendChart.width} ${previewTrendChart.height}`}
+                              className="h-full w-full"
+                              role="img"
+                              aria-label="가격 추이"
+                            >
+                              <polyline
+                                points={previewTrendChart.polyline}
+                                fill="none"
+                                stroke="var(--primary)"
+                                strokeWidth="2"
+                                strokeLinejoin="round"
+                                strokeLinecap="round"
+                              />
+                              {previewTrendChart.points.map((point) => (
+                                <circle
+                                  key={point.runId}
+                                  cx={point.x}
+                                  cy={point.y}
+                                  r={2}
+                                  fill="var(--bg)"
+                                  stroke="var(--primary)"
+                                  strokeWidth={1}
+                                />
+                              ))}
+                              {previewTrendChart.points.filter((point) => point.turning).map((point) => (
+                                <circle
+                                  key={`${point.runId}::turning`}
+                                  cx={point.x}
+                                  cy={point.y}
+                                  r={3.5}
+                                  fill="var(--primary)"
+                                  stroke="white"
+                                  strokeWidth={1}
+                                />
+                              ))}
+                            </svg>
+                          )}
+                        </div>
+                        <div className="mt-1 whitespace-nowrap text-[10px] text-[var(--muted)] tabular-nums">
+                          {previewTrendChart.points.length === 0
+                            ? "최저 - · 최고 -"
+                            : `최저 ${fmtKrw(previewTrendChart.min)} · 최고 ${fmtKrw(previewTrendChart.max)}`}
+                        </div>
+                        {previewTrendChart.firstTurning ? (
+                          <div className="mt-1 whitespace-nowrap text-[10px] text-[var(--muted)] tabular-nums">
+                            {`첫 변곡점 ${fmtTsCompact(previewTrendChart.firstTurning.at)} · ${fmtKrw(previewTrendChart.firstTurning.value)}`}
+                          </div>
+                        ) : null}
                       </div>
                     </div>
 
@@ -1607,43 +1915,55 @@ export default function ShoppingAutoPricePage() {
                         </div>
 
                         <div className="flex flex-1 flex-col gap-3 p-3">
-                          <div className="rounded border border-[var(--hairline)] bg-[var(--bg)] p-2">
-                            <div className="mb-2 flex items-baseline justify-between gap-2">
-                              <div className="text-[11px] font-semibold">구성(스냅샷)</div>
-                              <div className="text-[10px] text-[var(--muted)] tabular-nums">
+                            <div className="rounded border border-[var(--hairline)] bg-[var(--bg)] p-2">
+                              <div className="mb-2 flex items-baseline justify-between gap-2">
+                              <div className="flex items-center gap-2">
+                                <div className="text-[11px] font-semibold">구성(스냅샷)</div>
+                                <label className="flex items-center gap-1 text-[10px] font-medium text-[var(--muted)]">
+                                  <input
+                                    type="checkbox"
+                                    className="h-3 w-3 accent-[var(--primary)]"
+                                    checked={!editorExcludePlatingLabor}
+                                    onChange={(e) => togglePlatingLaborMutation.mutate(e.target.checked)}
+                                    disabled={!effectiveChannelId || !editorMasterItemId || togglePlatingLaborMutation.isPending}
+                                  />
+                                  <span className="select-none">도금공임 포함</span>
+                                </label>
+                              </div>
+                              <div className="text-[10px] text-black tabular-nums">
                                 {snapshotExplainRow
                                   ? `유효틱 ${fmt(snapshotExplainRow.effective_tick_krw_g)}원/g · ${fmtTsCompact(snapshotExplainRow.computed_at)}`
                                   : snapshotExplainQuery.isFetching
                                     ? "불러오는 중"
                                     : "-"}
                               </div>
-                            </div>
+                              </div>
 
                             {snapshotExplainRow ? (
                               <div className="space-y-2 rounded border border-[var(--hairline)] bg-[var(--bg)] p-2">
-                                <div className="overflow-hidden rounded border border-[var(--hairline)]">
+                                <div className="overflow-hidden rounded border-2 border-black">
                                   <table className="w-full table-fixed text-[11px]">
                                     <tbody>
                                       {previewCompositionRowGroups.map((group, groupIndex) => (
                                         <Fragment key={`group-${groupIndex}`}>
-                                          <tr key={`head-${groupIndex}`} className={`bg-[var(--panel)] ${group[0]?.key === "final-price" ? "border-t-[3px]" : (group[0]?.key === "labor-cost-total" || group[0]?.key === "labor-total") ? "border-t-2" : "border-t"} border-[var(--hairline)]`}>
+                                          <tr key={`head-${groupIndex}`} className={`${group[0]?.key === "final-price" ? "border-t-4" : (group[0]?.key === "labor-cost-total" || group[0]?.key === "labor-total") ? "border-t-4" : "border-t-2"} border-black`}>
                                             {group.map((row) => (
-                                              <th key={`head-${groupIndex}-${row.key}`} className="border-r border-[var(--hairline)] px-2 py-1 text-left font-medium text-[var(--muted)] last:border-r-0">
+                                              <th key={`head-${groupIndex}-${row.key}`} className={`${snapshotCellToneClass(row.key)} border-r border-black px-2 py-1 text-left font-medium text-slate-900 last:border-r-0`}>
                                                 {row.label}
                                               </th>
                                             ))}
                                             {Array.from({ length: Math.max(0, 6 - group.length) }).map((_, emptyIdx) => (
-                                              <th key={`head-${groupIndex}-empty-${emptyIdx}`} className="border-r border-[var(--hairline)] px-2 py-1 last:border-r-0" />
+                                              <th key={`head-${groupIndex}-empty-${emptyIdx}`} className="border-r border-black bg-white px-2 py-1 last:border-r-0" />
                                             ))}
                                           </tr>
                                           <tr key={`value-${groupIndex}`}>
                                             {group.map((row) => (
-                                              <td key={`value-${groupIndex}-${row.key}`} className="border-r border-t border-[var(--hairline)] px-2 py-1 text-right font-semibold tabular-nums last:border-r-0">
+                                              <td key={`value-${groupIndex}-${row.key}`} className={`${snapshotCellToneClass(row.key)} border-r border-t-2 border-black px-2 py-1 text-right font-semibold tabular-nums text-slate-900 last:border-r-0`}>
                                                 {row.valueText}
                                               </td>
                                             ))}
                                             {Array.from({ length: Math.max(0, 6 - group.length) }).map((_, emptyIdx) => (
-                                              <td key={`value-${groupIndex}-empty-${emptyIdx}`} className="border-r border-t border-[var(--hairline)] px-2 py-1 last:border-r-0" />
+                                              <td key={`value-${groupIndex}-empty-${emptyIdx}`} className="border-r border-t-2 border-black bg-white px-2 py-1 last:border-r-0" />
                                             ))}
                                           </tr>
                                         </Fragment>
@@ -1676,7 +1996,7 @@ export default function ShoppingAutoPricePage() {
                             <div className="mb-2 flex items-baseline justify-between gap-2">
                               <div className="text-[11px] font-semibold">히스토리(최근 run)</div>
                               <div className="flex flex-wrap justify-end gap-x-2 gap-y-0.5 text-right text-[10px] text-[var(--muted)]">
-                                <div>최대 8건</div>
+                                <div>최대 20건</div>
                                 {latestCronTick ? (
                                   <div className="tabular-nums">최근 크론체크: {fmtTsCompact(latestCronTick.at)} ({latestCronTick.reason})</div>
                                 ) : null}
@@ -2039,7 +2359,7 @@ export default function ShoppingAutoPricePage() {
       <Card>
         <CardHeader title="가격 정책(마진/반올림)" description="재계산(recompute) 시 적용되는 기준값" />
         <CardBody className="space-y-3">
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-6">
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-5">
             <Input value={marginMultiplier} onChange={(e) => setMarginMultiplier(e.target.value)} type="number" placeholder="margin_multiplier" />
             <Input value={roundingUnit} onChange={(e) => setRoundingUnit(e.target.value)} type="number" placeholder="rounding_unit" />
             <Select value={roundingMode} onChange={(e) => setRoundingMode(e.target.value as "CEIL" | "ROUND" | "FLOOR")}>
@@ -2047,12 +2367,6 @@ export default function ShoppingAutoPricePage() {
               <option value="ROUND">반올림(ROUND)</option>
               <option value="FLOOR">내림(FLOOR)</option>
             </Select>
-            <Input
-              value={option18kWeightMultiplier}
-              onChange={(e) => setOption18kWeightMultiplier(e.target.value)}
-              type="number"
-              placeholder="option_18k_weight_multiplier"
-            />
             <Select value={policyFactorSetId} onChange={(e) => setPolicyFactorSetId(e.target.value)}>
               <option value="">팩터 세트 선택</option>
               {(factorSetsQuery.data ?? []).map((fs) => (

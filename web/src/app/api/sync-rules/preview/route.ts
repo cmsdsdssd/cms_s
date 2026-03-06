@@ -95,7 +95,7 @@ export async function POST(request: Request) {
   const [mapRes, masterRes, tickRes, policyRes, purityRes, r1Res, r2Res, r3Res, r4Res] = await Promise.all([
     mappingQuery,
     sb.from("cms_master_item").select("master_item_id, material_code_default, category_code, weight_default_g, deduction_weight_default_g"),
-    sb.from("cms_v_market_tick_latest_gold_silver_ops_v1").select("gold_price_krw_per_g, silver_price_krw_per_g").maybeSingle(),
+    sb.from("shop_v_market_tick_latest_gold_silver_ops_v1").select("gold_price_krw_per_g, silver_price_krw_per_g").maybeSingle(),
     sb.from("pricing_policy").select("option_18k_weight_multiplier").eq("channel_id", channelId).eq("is_active", true).order("updated_at", { ascending: false }).limit(1).maybeSingle(),
     sb.from("cms_material_factor_config").select("material_code, purity_rate, material_adjust_factor, gold_adjust_factor, price_basis"),
     sb.from("sync_rule_r1_material_delta").select("rule_id, rule_set_id, source_material_code, target_material_code, match_category_code, weight_min_g, weight_max_g, option_weight_multiplier, rounding_unit, rounding_mode, priority, is_active").eq("rule_set_id", ruleSetId).eq("is_active", true).order("priority", { ascending: true }),

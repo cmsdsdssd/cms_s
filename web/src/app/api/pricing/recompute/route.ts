@@ -810,7 +810,7 @@ export async function POST(request: Request) {
   }
 
   const tickRes = await sb
-    .from("cms_v_market_tick_latest_gold_silver_ops_v1")
+    .from("shop_v_market_tick_latest_gold_silver_ops_v1")
     .select("gold_price_krw_per_g, silver_price_krw_per_g")
     .maybeSingle();
   if (tickRes.error) return jsonError(tickRes.error.message ?? "시세 조회 실패", 500);
@@ -1500,7 +1500,7 @@ export async function POST(request: Request) {
       channel_product_id: m.channel_product_id,
       computed_at: recomputeAt,
       tick_as_of: recomputeAt,
-      tick_source: "cms_v_market_tick_latest_gold_silver_ops_v1",
+      tick_source: "shop_v_market_tick_latest_gold_silver_ops_v1",
       tick_gold_krw_g: goldTick,
       tick_silver_krw_g: silverTick,
       net_weight_g: netWeight,
