@@ -33,6 +33,9 @@ type PricingPolicy = {
   material_factor_set_id: string | null;
   fee_rate?: number | null;
   min_margin_rate_total?: number | null;
+  auto_sync_force_full?: boolean;
+  auto_sync_min_change_krw?: number | null;
+  auto_sync_min_change_rate?: number | null;
   is_active: boolean;
 };
 type FactorSet = {
@@ -64,16 +67,25 @@ type MissingMappingSummary = {
     compute_request_id: string | null;
   }>;
 };
+type PreviewCompositionRow = { key: string; label: string; valueText: string };
 type SyncRunCreateResponse = {
   run_id: string;
   total_count?: number;
   reason?: string;
   threshold_min_change_krw?: number;
+  threshold_min_change_rate?: number;
+  sync_policy_mode?: "RULE_BASED" | "ALWAYS";
   threshold_evaluated_count?: number;
   threshold_filtered_count?: number;
   market_gap_forced_count?: number;
   downsync_suppressed_count?: number;
+  pressure_downsync_release_count?: number;
+  large_downsync_release_count?: number;
+  cooldown_block_count?: number;
+  staleness_release_count?: number;
+  pressure_decay_count?: number;
   force_full_sync?: boolean;
+  force_full_sync_source?: string | null;
 } & MissingMappingSummary;
 type SyncIntent = {
   intent_id: string;
@@ -103,11 +115,19 @@ type SyncRunDetail = {
     request_payload?: {
       summary?: MissingMappingSummary & {
         threshold_min_change_krw?: number;
+        threshold_min_change_rate?: number;
+        sync_policy_mode?: "RULE_BASED" | "ALWAYS";
         threshold_evaluated_count?: number;
         threshold_filtered_count?: number;
         market_gap_forced_count?: number;
         downsync_suppressed_count?: number;
+        pressure_downsync_release_count?: number;
+        large_downsync_release_count?: number;
+        cooldown_block_count?: number;
+        staleness_release_count?: number;
+        pressure_decay_count?: number;
         force_full_sync?: boolean;
+        force_full_sync_source?: string | null;
       };
     } | null;
   };
@@ -284,14 +304,26 @@ const fmtTsCompact = (v: string | null | undefined) => {
   return `${yy}.${mm}.${dd}-${hh}:${mi}:${ss}`;
 };
 
-const SNAPSHOT_BLUE_KEYS = new Set([
-  "material-total",
-  "labor-total",
-  "final-price",
+const SNAPSHOT_BLUE_KEYS = new Set(["selected-item", "selected-value"]);
+
+const SNAPSHOT_GREEN_KEYS = new Set([
+  "labor-reverse-gm",
+  "material-reverse-gm",
+  "total-reverse-gm",
 ]);
 
-const snapshotCellToneClass = (key: string) => {
+const SNAPSHOT_YELLOW_KEYS = new Set([
+  "labor-total",
+  "material-total",
+  "fixed-total-gm",
+]);
+
+const snapshotCellToneClass = (key: string, groupIndex: number) => {
+  if (groupIndex === 0) return "bg-orange-100";
+  if (key === "final-price") return "bg-violet-100";
   if (SNAPSHOT_BLUE_KEYS.has(key)) return "bg-sky-100";
+  if (SNAPSHOT_GREEN_KEYS.has(key)) return "bg-green-100";
+  if (SNAPSHOT_YELLOW_KEYS.has(key)) return "bg-yellow-100";
   return "bg-white";
 };
 
@@ -319,7 +351,11 @@ export default function ShoppingAutoPricePage() {
   const [roundingUnit, setRoundingUnit] = useState("1000");
   const [roundingMode, setRoundingMode] = useState<"CEIL" | "ROUND" | "FLOOR">("CEIL");
   const [policyFactorSetId, setPolicyFactorSetId] = useState("");
+  const [autoSyncForceFull, setAutoSyncForceFull] = useState(false);
+  const [autoSyncMinChangeKrw, setAutoSyncMinChangeKrw] = useState("5000");
+  const [autoSyncMinChangeRatePct, setAutoSyncMinChangeRatePct] = useState("2");
   const [policySaveError, setPolicySaveError] = useState<string | null>(null);
+  const [previewForceFullSyncByProductNo, setPreviewForceFullSyncByProductNo] = useState<Record<string, boolean>>({});
   const [intervalMinutes, setIntervalMinutes] = useState("5");
   const [selectedRunId, setSelectedRunId] = useState("");
   const [runMasterIds, setRunMasterIds] = useState("");
@@ -375,6 +411,9 @@ export default function ShoppingAutoPricePage() {
     setRoundingUnit(String(activePolicy?.rounding_unit ?? 1000));
     setRoundingMode((activePolicy?.rounding_mode ?? "CEIL") as "CEIL" | "ROUND" | "FLOOR");
     setPolicyFactorSetId(activePolicy?.material_factor_set_id ?? "");
+    setAutoSyncForceFull(activePolicy?.auto_sync_force_full === true);
+    setAutoSyncMinChangeKrw(String(Math.max(0, Math.round(Number(activePolicy?.auto_sync_min_change_krw ?? 5000)))));
+    setAutoSyncMinChangeRatePct(String((Number(activePolicy?.auto_sync_min_change_rate ?? 0.02) * 100).toFixed(2).replace(/\.00$/u, "").replace(/(\.\d*[1-9])0+$/u, "$1")));
   }, [activePolicy?.policy_id]);
 
   const summaryQuery = useQuery({
@@ -422,6 +461,21 @@ export default function ShoppingAutoPricePage() {
     Math.round(Number(activeRunMissingMappingSummary?.snapshot_rows_with_channel_product_count ?? 0)),
   );
   const activeRunMissingSamples = (activeRunMissingMappingSummary?.missing_active_mapping_samples ?? []).slice(0, 10);
+  const activeRunSyncPolicyMode = activeRunMissingMappingSummary?.sync_policy_mode ?? "RULE_BASED";
+  const activeRunThresholdMinChangeKrw = Math.max(0, Math.round(Number(activeRunMissingMappingSummary?.threshold_min_change_krw ?? 0)));
+  const activeRunThresholdMinChangeRatePct = Number.isFinite(Number(activeRunMissingMappingSummary?.threshold_min_change_rate ?? Number.NaN))
+    ? `${(Number(activeRunMissingMappingSummary?.threshold_min_change_rate) * 100).toFixed(2).replace(/\.00$/u, "").replace(/(\.\d*[1-9])0+$/u, "$1")}%`
+    : "-";
+  const activeRunForceFullSyncSource = String(activeRunMissingMappingSummary?.force_full_sync_source ?? "").trim() || "-";
+  const activeRunThresholdEvaluatedCount = Math.max(0, Math.round(Number(activeRunMissingMappingSummary?.threshold_evaluated_count ?? 0)));
+  const activeRunThresholdFilteredCount = Math.max(0, Math.round(Number(activeRunMissingMappingSummary?.threshold_filtered_count ?? 0)));
+  const activeRunMarketGapForcedCount = Math.max(0, Math.round(Number(activeRunMissingMappingSummary?.market_gap_forced_count ?? 0)));
+  const activeRunDownsyncSuppressedCount = Math.max(0, Math.round(Number(activeRunMissingMappingSummary?.downsync_suppressed_count ?? 0)));
+  const activeRunPressureDownsyncReleaseCount = Math.max(0, Math.round(Number(activeRunMissingMappingSummary?.pressure_downsync_release_count ?? 0)));
+  const activeRunLargeDownsyncReleaseCount = Math.max(0, Math.round(Number(activeRunMissingMappingSummary?.large_downsync_release_count ?? 0)));
+  const activeRunCooldownBlockCount = Math.max(0, Math.round(Number(activeRunMissingMappingSummary?.cooldown_block_count ?? 0)));
+  const activeRunStalenessReleaseCount = Math.max(0, Math.round(Number(activeRunMissingMappingSummary?.staleness_release_count ?? 0)));
+  const activeRunPressureDecayCount = Math.max(0, Math.round(Number(activeRunMissingMappingSummary?.pressure_decay_count ?? 0)));
 
   const masterIdByProductNo = useMemo(() => {
     const map = new Map<string, string>();
@@ -531,6 +585,12 @@ export default function ShoppingAutoPricePage() {
 
   const snapshotExplainRow = snapshotExplainQuery.data?.data ?? null;
 
+  const previewProductNoKey = useMemo(() => {
+    return String(editorPreview?.productNo ?? editorProductNo).trim();
+  }, [editorPreview?.productNo, editorProductNo]);
+
+  const previewForceFullSync = previewProductNoKey ? previewForceFullSyncByProductNo[previewProductNoKey] === true : false;
+
   const previewEffectiveFloor = useMemo(() => {
     const floorRaw = Math.max(0, Math.round(Number(editorPreview?.floor_price_krw ?? 0)));
     const margin = Number(activePolicy?.margin_multiplier ?? 1);
@@ -544,7 +604,7 @@ export default function ShoppingAutoPricePage() {
 
   const previewCompositionRowGroups = useMemo(() => {
     if (!snapshotExplainRow) return [] as Array<Array<{ key: string; label: string; valueText: string }>>;
-
+  
     const finalTarget = toRoundedNumber(snapshotExplainRow.final_target_price_v2_krw ?? snapshotExplainRow.final_target_price_krw);
     const currentPrice = toRoundedNumber(snapshotExplainRow.current_channel_price_krw);
     const diffKrw = toRoundedNumber(
@@ -553,7 +613,7 @@ export default function ShoppingAutoPricePage() {
     );
     const diffPctRatio = Number(snapshotExplainRow.diff_pct ?? Number.NaN);
     const diffPctText = Number.isFinite(diffPctRatio) ? `${(diffPctRatio * 100).toFixed(2)}%` : "-";
-
+  
     const policyMarginMultiplier = Number(activePolicy?.margin_multiplier ?? Number.NaN);
     const policyMarginMultiplierText = Number.isFinite(policyMarginMultiplier)
       ? `x${policyMarginMultiplier.toFixed(3).replace(/\.0+$/u, "").replace(/(\.\d*?)0+$/u, "$1")}`
@@ -599,7 +659,7 @@ export default function ShoppingAutoPricePage() {
     const guardrailRateText = guardrailPct != null && minMarginPct != null && feePct != null
       ? `${guardrailPct}(${minMarginPct}+${feePct})`
       : "-";
-
+  
     const selectedLabel = snapshotExplainRow.guardrail_reason_code === "MIN_MARGIN_WIN"
       ? "최소마진가격"
       : snapshotExplainRow.guardrail_reason_code === "COMPONENT_CANDIDATE_WIN"
@@ -620,8 +680,40 @@ export default function ShoppingAutoPricePage() {
       componentKey: string,
       field: "labor_cost_krw" | "labor_absorb_applied_krw" | "labor_cost_plus_absorb_krw",
     ): number | null => toRoundedNumber(snapshotExplainRow.labor_component_json?.[componentKey]?.[field] ?? null);
-
-    const topRow = [
+    const laborCostAppliedDisplayRaw = [
+      componentAmount("BASE_LABOR", "labor_cost_krw"),
+      componentAmount("STONE_LABOR", "labor_cost_krw"),
+      componentAmount("ETC", "labor_cost_krw"),
+      componentAmount("PLATING", "labor_cost_krw"),
+      componentAmount("DECOR", "labor_cost_krw"),
+    ].reduce<number>((sum, value) => sum + (value ?? 0), 0);
+    const laborCostAppliedDisplay = laborCostAppliedDisplayRaw > 0
+      ? laborCostAppliedDisplayRaw
+      : toRoundedNumber(snapshotExplainRow.labor_cost_applied_krw);
+    const laborCostPlusAbsorbDisplayRaw = [
+      componentAmount("BASE_LABOR", "labor_cost_plus_absorb_krw"),
+      componentAmount("STONE_LABOR", "labor_cost_plus_absorb_krw"),
+      componentAmount("ETC", "labor_cost_plus_absorb_krw"),
+      componentAmount("PLATING", "labor_cost_plus_absorb_krw"),
+      componentAmount("DECOR", "labor_cost_plus_absorb_krw"),
+    ].reduce<number>((sum, value) => sum + (value ?? 0), 0);
+    const laborCostPlusAbsorbDisplay = laborCostPlusAbsorbDisplayRaw > 0
+      ? laborCostPlusAbsorbDisplayRaw
+      : toRoundedNumber(snapshotExplainRow.labor_cost_applied_krw) != null && toRoundedNumber(snapshotExplainRow.absorb_total_applied_krw) != null
+        ? (toRoundedNumber(snapshotExplainRow.labor_cost_applied_krw) ?? 0) + (toRoundedNumber(snapshotExplainRow.absorb_total_applied_krw) ?? 0)
+        : null;
+    const laborSellPlusAbsorbDisplayRaw = [
+      toRoundedNumber(snapshotExplainRow.labor_component_json?.BASE_LABOR?.labor_sell_plus_absorb_krw),
+      toRoundedNumber(snapshotExplainRow.labor_component_json?.STONE_LABOR?.labor_sell_plus_absorb_krw),
+      toRoundedNumber(snapshotExplainRow.labor_component_json?.ETC?.labor_sell_plus_absorb_krw),
+      toRoundedNumber(snapshotExplainRow.labor_component_json?.PLATING?.labor_sell_plus_absorb_krw),
+      toRoundedNumber(snapshotExplainRow.labor_component_json?.DECOR?.labor_sell_plus_absorb_krw),
+    ].reduce<number>((sum, value) => sum + (value ?? 0), 0);
+    const laborSellPlusAbsorbDisplay = laborSellPlusAbsorbDisplayRaw > 0
+      ? laborSellPlusAbsorbDisplayRaw
+      : toRoundedNumber(snapshotExplainRow.labor_sell_total_plus_absorb_krw);
+  
+    const topRow: PreviewCompositionRow[] = [
       { key: "material-code", label: "소재코드", valueText: String(snapshotExplainRow.material_code_effective ?? "-") },
       { key: "weight", label: "순중량", valueText: fmt(snapshotExplainRow.net_weight_g) },
       { key: "material-basis", label: "소재기준", valueText: String(snapshotExplainRow.material_basis_resolved ?? "-") },
@@ -629,17 +721,17 @@ export default function ShoppingAutoPricePage() {
       { key: "purity", label: "함량", valueText: snapshotExplainRow.material_purity_rate_resolved == null ? "-" : snapshotExplainRow.material_purity_rate_resolved.toFixed(4) },
       { key: "adjust", label: "보정계수", valueText: snapshotExplainRow.material_adjust_factor_resolved == null ? "-" : snapshotExplainRow.material_adjust_factor_resolved.toFixed(4) },
     ];
-
-    const priceRow = [
-      { key: "labor-cost-total", label: "공임합(원가)", valueText: fmtKrw(snapshotExplainRow.labor_cost_applied_krw) },
+  
+    const priceRow: PreviewCompositionRow[] = [
+      { key: "labor-cost-total", label: "공임합(원가)", valueText: fmtKrw(laborCostPlusAbsorbDisplay) },
       { key: "labor-cost-base", label: "기본공임(원가)", valueText: fmtKrw(componentAmount("BASE_LABOR", "labor_cost_krw")) },
       { key: "labor-cost-stone", label: "알공임(원가)", valueText: fmtKrw(componentAmount("STONE_LABOR", "labor_cost_krw")) },
       { key: "labor-cost-etc", label: "기타공임(원가)", valueText: fmtKrw(componentAmount("ETC", "labor_cost_krw")) },
       { key: "labor-cost-plating", label: "도금공임(원가)", valueText: fmtKrw(componentAmount("PLATING", "labor_cost_krw")) },
       { key: "labor-cost-decor", label: "장식공임(원가)", valueText: fmtKrw(componentAmount("DECOR", "labor_cost_krw")) },
     ];
-
-    const policyRow = [
+  
+    const policyRow: PreviewCompositionRow[] = [
       { key: "absorb-total", label: "흡수공임합(원가)", valueText: fmtKrw(snapshotExplainRow.absorb_total_applied_krw) },
       { key: "absorb-base", label: "기본공임(흡수공임)", valueText: fmtKrw(componentAmount("BASE_LABOR", "labor_absorb_applied_krw")) },
       { key: "absorb-stone", label: "알공임(흡수공임)", valueText: fmtKrw(componentAmount("STONE_LABOR", "labor_absorb_applied_krw")) },
@@ -647,47 +739,50 @@ export default function ShoppingAutoPricePage() {
       { key: "absorb-plating", label: "도금공임(흡수공임)", valueText: fmtKrw(componentAmount("PLATING", "labor_absorb_applied_krw")) },
       { key: "absorb-decor", label: "장식공임(흡수공임)", valueText: fmtKrw(componentAmount("DECOR", "labor_absorb_applied_krw")) },
     ];
-
-    const detailRows = [
-      { key: "total-labor-cost", label: "총공임합(원가)", valueText: fmtKrw(snapshotExplainRow.labor_cost_applied_krw) },
+  
+    const detailRows: PreviewCompositionRow[] = [
+      { key: "total-labor-cost", label: "총공임합(원가)", valueText: fmtKrw(laborCostPlusAbsorbDisplay) },
       { key: "total-base", label: "총기본공임(원가)", valueText: fmtKrw(componentAmount("BASE_LABOR", "labor_cost_plus_absorb_krw")) },
       { key: "total-stone", label: "총알공임(원가)", valueText: fmtKrw(componentAmount("STONE_LABOR", "labor_cost_plus_absorb_krw")) },
       { key: "total-etc", label: "총기타공임(원가)", valueText: fmtKrw(componentAmount("ETC", "labor_cost_plus_absorb_krw")) },
       { key: "total-plating", label: "총도금공임(원가)", valueText: fmtKrw(componentAmount("PLATING", "labor_cost_plus_absorb_krw")) },
       { key: "total-decor", label: "총장식공임(원가)", valueText: fmtKrw(componentAmount("DECOR", "labor_cost_plus_absorb_krw")) },
-
-      { key: "labor-total", label: "총공임", valueText: fmtKrw(snapshotExplainRow.labor_cost_applied_krw) },
+      { key: "labor-total", label: "총공임", valueText: fmtKrw(laborSellPlusAbsorbDisplay) },
       { key: "material-total", label: "총소재가격", valueText: fmtKrw(snapshotExplainRow.material_final_krw) },
-      { key: "pre-fee-total", label: "총합계", valueText: fmtKrw(totalPreFee) },
+      { key: "fixed-total-gm", label: "총고정금액(gm)", valueText: fmtKrw(fixedPreFee) },
       { key: "material-margin-rate", label: "소재마진율", valueText: gmMaterialRateText },
       { key: "labor-margin-rate", label: "공임마진율", valueText: gmLaborRateText },
       { key: "fixed-margin-rate", label: "고정마진율", valueText: gmFixedRateText },
-
-      { key: "labor-reverse-gm", label: "공임 역산(gm)", valueText: `${fmtKrw(laborPreFee)} (${gmLaborRateText})` },
-      { key: "material-reverse-gm", label: "소재 역산(gm)", valueText: `${fmtKrw(materialPreFee)} (${gmMaterialRateText})` },
-      { key: "total-reverse-gm", label: "총합계역산(gm)", valueText: fmtKrw(totalPreFee) },
+      { key: "labor-reverse-gm", label: "공임역산", valueText: `${fmtKrw(laborPreFee)} (${gmLaborRateText})` },
+      { key: "material-reverse-gm", label: "소재역산", valueText: `${fmtKrw(materialPreFee)} (${gmMaterialRateText})` },
+      { key: "total-reverse-gm", label: "총합계역산", valueText: fmtKrw(totalPreFee) },
       { key: "target-margin-rate", label: "목표마진율", valueText: `${policyMarginRateText} (${policyMarginMultiplierText})` },
       { key: "guardrail-rate", label: "가드레일율(최소마진+수수료)", valueText: guardrailRateText },
       { key: "fixed-cost-setting", label: "고정가격 설정", valueText: fmtKrw(fixedCostSetting) },
-
       { key: "final-price", label: "최종가격", valueText: fmtKrw(finalTarget) },
       { key: "selected-item", label: "선택항목", valueText: selectedLabel },
+      { key: "selected-value", label: "선택항목 선택값", valueText: fmtKrw(selectedBase) },
       { key: "target-price", label: "목표가격", valueText: fmtKrw(snapshotExplainRow.candidate_price_krw) },
       { key: "min-margin-price", label: "최소마진가격", valueText: fmtKrw(snapshotExplainRow.min_margin_price_krw) },
       { key: "margin-no-fee", label: "마진(수수료 제외)", valueText: marginWithoutFee == null ? "-" : fmtSignedKrw(marginWithoutFee) },
       { key: "fee-amount", label: "수수료", valueText: feeAmount == null ? "-" : fmtKrw(feeAmount) },
+      { key: "current-price", label: "현재 채널가", valueText: fmtKrw(currentPrice) },
+      { key: "price-diff-krw", label: "가격차이", valueText: diffKrw == null ? "-" : fmtSignedKrw(diffKrw) },
+      { key: "price-diff-pct", label: "가격차이율", valueText: diffPctText },
+      { key: "pre-fee-material-labor", label: "소재+공임 역산합", valueText: fmtKrw(materialLaborCombinedPreFee) },
+      { key: "policy-fee-rate", label: "수수료율", valueText: policyFeeRateText },
     ];
-
-    const groups = [topRow, priceRow, policyRow] as Array<Array<{ key: string; label: string; valueText: string }>>;
+  
+    const groups: PreviewCompositionRow[][] = [topRow, priceRow, policyRow];
     for (let i = 0; i < detailRows.length; i += 6) {
       groups.push(detailRows.slice(i, i + 6));
     }
     return groups;
   }, [activePolicy?.margin_multiplier, activePolicy?.fee_rate, activePolicy?.min_margin_rate_total, activePolicy?.gm_material, activePolicy?.gm_labor, activePolicy?.gm_fixed, activePolicy?.fixed_cost_krw, snapshotExplainRow]);
-
+  
   const previewCompositionFlowLines = useMemo(() => {
     if (!snapshotExplainRow) return [] as string[];
-
+  
     const finalTarget = toRoundedNumber(snapshotExplainRow.final_target_price_v2_krw ?? snapshotExplainRow.final_target_price_krw);
     const policyFeeRate = Number(activePolicy?.fee_rate ?? Number.NaN);
     const policyFeeRateText = Number.isFinite(policyFeeRate) ? `${(policyFeeRate * 100).toFixed(2)}%` : "-";
@@ -696,17 +791,35 @@ export default function ShoppingAutoPricePage() {
     const purityAdjusted = snapshotExplainRow.material_purity_rate_resolved != null && snapshotExplainRow.material_adjust_factor_resolved != null
       ? snapshotExplainRow.material_purity_rate_resolved * snapshotExplainRow.material_adjust_factor_resolved
       : null;
-
+    const laborCostAppliedDisplayRaw = [
+      snapshotExplainRow.labor_component_json?.BASE_LABOR?.labor_cost_krw,
+      snapshotExplainRow.labor_component_json?.STONE_LABOR?.labor_cost_krw,
+      snapshotExplainRow.labor_component_json?.ETC?.labor_cost_krw,
+      snapshotExplainRow.labor_component_json?.PLATING?.labor_cost_krw,
+      snapshotExplainRow.labor_component_json?.DECOR?.labor_cost_krw,
+    ].reduce<number>((sum, value) => sum + (toRoundedNumber(value) ?? 0), 0);
+    const laborCostAppliedDisplay = laborCostAppliedDisplayRaw > 0
+      ? laborCostAppliedDisplayRaw
+      : toRoundedNumber(snapshotExplainRow.labor_cost_applied_krw);
+    const laborCostPlusAbsorbDisplayRaw = [
+      snapshotExplainRow.labor_component_json?.BASE_LABOR?.labor_cost_plus_absorb_krw,
+      snapshotExplainRow.labor_component_json?.STONE_LABOR?.labor_cost_plus_absorb_krw,
+      snapshotExplainRow.labor_component_json?.ETC?.labor_cost_plus_absorb_krw,
+      snapshotExplainRow.labor_component_json?.PLATING?.labor_cost_plus_absorb_krw,
+      snapshotExplainRow.labor_component_json?.DECOR?.labor_cost_plus_absorb_krw,
+    ].reduce<number>((sum, value) => sum + (toRoundedNumber(value) ?? 0), 0);
+    const laborCostPlusAbsorbDisplay = laborCostPlusAbsorbDisplayRaw > 0
+      ? laborCostPlusAbsorbDisplayRaw
+      : toRoundedNumber(snapshotExplainRow.labor_cost_applied_krw) != null && toRoundedNumber(snapshotExplainRow.absorb_total_applied_krw) != null
+        ? (toRoundedNumber(snapshotExplainRow.labor_cost_applied_krw) ?? 0) + (toRoundedNumber(snapshotExplainRow.absorb_total_applied_krw) ?? 0)
+        : null;
+  
     const line1 = `소재가격: ${fmtKrw(snapshotExplainRow.material_final_krw)} (유효틱 ${fmt(snapshotExplainRow.effective_tick_krw_g)}원/g × 순중량 ${fmt(snapshotExplainRow.net_weight_g)} × 함량*보정계수 ${purityAdjusted == null ? "-" : purityAdjusted.toFixed(4)} -> 소재원가 ${fmtKrw(snapshotExplainRow.material_raw_krw)} -> 환산 ${fmtKrw(snapshotExplainRow.material_final_krw)})`;
-
-    const line2 = `총공임: ${fmtKrw(snapshotExplainRow.labor_cost_applied_krw)} (공임원가(흡수반영) ${fmtKrw(snapshotExplainRow.labor_cost_applied_krw)} + 흡수공임(적용) ${fmtKrw(snapshotExplainRow.absorb_total_applied_krw)} -> 공임판매합(흡수포함) ${fmtKrw(snapshotExplainRow.labor_sell_total_plus_absorb_krw)} -> GM 역산(수수료전) ${fmtKrw(snapshotExplainRow.labor_pre_fee_krw)})`;
-
+    const line2 = `총공임: ${fmtKrw(snapshotExplainRow.labor_sell_total_plus_absorb_krw)} (공임합(원가, 흡수공임 제외) ${fmtKrw(laborCostAppliedDisplay)} / 총공임합(원가, 흡수공임 포함) ${fmtKrw(laborCostPlusAbsorbDisplay)} / 공임판매합(흡수포함) ${fmtKrw(snapshotExplainRow.labor_sell_total_plus_absorb_krw)} / 공임역산 ${fmtKrw(snapshotExplainRow.labor_pre_fee_krw)})`;
     const line3 = `총가격 후보(목표가격): ${fmtKrw(snapshotExplainRow.candidate_price_krw)} (수수료반영전 후보합 ${fmtKrw(snapshotExplainRow.candidate_pre_fee_krw)} = 소재 ${fmtKrw(snapshotExplainRow.material_pre_fee_krw)} + 공임 ${fmtKrw(snapshotExplainRow.labor_pre_fee_krw)} + 고정 ${fmtKrw(snapshotExplainRow.fixed_pre_fee_krw)}, 수수료율 ${policyFeeRateText} 역산 반영)`;
-
     const line4 = `총가격 후보(최소마진): ${fmtKrw(snapshotExplainRow.min_margin_price_krw)} (원가합계 ${fmtKrw(snapshotExplainRow.cost_sum_krw)}와 정책최소마진율 ${policyMinMarginRateText} 기준)`;
-
     const line5 = `선택된 가격: max(목표가격 ${fmtKrw(snapshotExplainRow.candidate_price_krw)}, 최소마진가격 ${fmtKrw(snapshotExplainRow.min_margin_price_krw)}) = ${fmtKrw(snapshotExplainRow.guardrail_price_krw)} -> 최종가격 ${fmtKrw(finalTarget)}`;
-
+  
     return [line1, line2, line3, line4, line5];
   }, [activePolicy?.fee_rate, activePolicy?.min_margin_rate_total, snapshotExplainRow]);
 
@@ -1152,6 +1265,9 @@ export default function ShoppingAutoPricePage() {
         rounding_unit: Math.max(1, Math.round(parseNumericInput(roundingUnit) ?? 1000)),
         rounding_mode: roundingMode,
         material_factor_set_id: policyFactorSetId || null,
+        auto_sync_force_full: autoSyncForceFull,
+        auto_sync_min_change_krw: Math.max(0, Math.round(parseNumericInput(autoSyncMinChangeKrw) ?? 5000)),
+        auto_sync_min_change_rate: Math.max(0, Math.min(1, (parseNumericInput(autoSyncMinChangeRatePct) ?? 2) / 100)),
         is_active: true,
       };
 
@@ -1176,6 +1292,7 @@ export default function ShoppingAutoPricePage() {
       setPolicySaveError(err.message);
     },
   });
+
 
   const createRunMutation = useMutation({
     mutationFn: () => {
@@ -1920,7 +2037,7 @@ export default function ShoppingAutoPricePage() {
                         <div className="flex flex-1 flex-col gap-3 p-3">
                             <div className="rounded border border-[var(--hairline)] bg-[var(--bg)] p-2">
                               <div className="mb-2 flex items-baseline justify-between gap-2">
-                              <div className="flex items-center gap-2">
+                              <div className="flex items-center gap-3">
                                 <div className="text-[11px] font-semibold">구성(스냅샷)</div>
                                 <label className="flex items-center gap-1 text-[10px] font-medium text-[var(--muted)]">
                                   <input
@@ -1931,6 +2048,23 @@ export default function ShoppingAutoPricePage() {
                                     disabled={!effectiveChannelId || !editorMasterItemId || togglePlatingLaborMutation.isPending}
                                   />
                                   <span className="select-none">도금공임 포함</span>
+                                </label>
+                                <label className="flex items-center gap-1 text-[10px] font-medium text-[var(--muted)]">
+                                  <input
+                                    type="checkbox"
+                                    className="h-3 w-3 accent-[var(--primary)]"
+                                    checked={previewForceFullSync}
+                                    onChange={(e) => {
+                                      const nextForceFullSync = e.target.checked;
+                                      if (!previewProductNoKey) return;
+                                      setPreviewForceFullSyncByProductNo((prev) => ({
+                                        ...prev,
+                                        [previewProductNoKey]: nextForceFullSync,
+                                      }));
+                                    }}
+                                    disabled={!previewProductNoKey}
+                                  />
+                                  <span className="select-none">무조건 동기화(현재 상품)</span>
                                 </label>
                               </div>
                               <div className="text-[10px] text-black tabular-nums">
@@ -1947,11 +2081,18 @@ export default function ShoppingAutoPricePage() {
                                 <div className="overflow-hidden rounded border-2 border-black">
                                   <table className="w-full table-fixed text-[11px]">
                                     <tbody>
-                                      {previewCompositionRowGroups.map((group, groupIndex) => (
+                                      {previewCompositionRowGroups.map((group, groupIndex) => {
+                                        const firstKey = group[0]?.key;
+                                        const topBorderClass = firstKey === "final-price"
+                                          ? "border-t-4"
+                                          : (firstKey === "labor-cost-total" || firstKey === "labor-total")
+                                            ? "border-t-4"
+                                            : "border-t-2";
+                                        return (
                                         <Fragment key={`group-${groupIndex}`}>
-                                          <tr key={`head-${groupIndex}`} className={`${group[0]?.key === "final-price" ? "border-t-4" : (group[0]?.key === "labor-cost-total" || group[0]?.key === "labor-total") ? "border-t-4" : "border-t-2"} border-black`}>
+                                          <tr key={`head-${groupIndex}`} className={`${topBorderClass} border-black`}>
                                             {group.map((row) => (
-                                              <th key={`head-${groupIndex}-${row.key}`} className={`${snapshotCellToneClass(row.key)} border-r border-black px-2 py-1 text-left font-medium text-slate-900 last:border-r-0`}>
+                                              <th key={`head-${groupIndex}-${row.key}`} className={`${snapshotCellToneClass(row.key, groupIndex)} border-r border-black px-2 py-1 text-left font-medium text-slate-900 last:border-r-0`}>
                                                 {row.label}
                                               </th>
                                             ))}
@@ -1961,7 +2102,7 @@ export default function ShoppingAutoPricePage() {
                                           </tr>
                                           <tr key={`value-${groupIndex}`}>
                                             {group.map((row) => (
-                                              <td key={`value-${groupIndex}-${row.key}`} className={`${snapshotCellToneClass(row.key)} border-r border-t-2 border-black px-2 py-1 text-right font-semibold tabular-nums text-slate-900 last:border-r-0`}>
+                                              <td key={`value-${groupIndex}-${row.key}`} className={`${snapshotCellToneClass(row.key, groupIndex)} border-r border-t-2 border-black px-2 py-1 text-right font-semibold tabular-nums text-slate-900 last:border-r-0`}>
                                                 {row.valueText}
                                               </td>
                                             ))}
@@ -1970,7 +2111,8 @@ export default function ShoppingAutoPricePage() {
                                             ))}
                                           </tr>
                                         </Fragment>
-                                      ))}
+                                        );
+                                      })}
                                     </tbody>
                                   </table>
                                 </div>
@@ -2362,7 +2504,7 @@ export default function ShoppingAutoPricePage() {
       <Card>
         <CardHeader title="가격 정책(마진/반올림)" description="재계산(recompute) 시 적용되는 기준값" />
         <CardBody className="space-y-3">
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-5">
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-8">
             <Input value={marginMultiplier} onChange={(e) => setMarginMultiplier(e.target.value)} type="number" placeholder="margin_multiplier" />
             <Input value={roundingUnit} onChange={(e) => setRoundingUnit(e.target.value)} type="number" placeholder="rounding_unit" />
             <Select value={roundingMode} onChange={(e) => setRoundingMode(e.target.value as "CEIL" | "ROUND" | "FLOOR")}>
@@ -2376,12 +2518,22 @@ export default function ShoppingAutoPricePage() {
                 <option key={fs.factor_set_id} value={fs.factor_set_id}>{fs.name}</option>
               ))}
             </Select>
+            <Input value={autoSyncMinChangeKrw} onChange={(e) => setAutoSyncMinChangeKrw(e.target.value)} type="number" min={0} placeholder="최소 변동금액(원)" />
+            <Input value={autoSyncMinChangeRatePct} onChange={(e) => setAutoSyncMinChangeRatePct(e.target.value)} type="number" min={0} step="0.01" placeholder="최소 변동률(%)" />
+            <label className="flex h-10 items-center gap-2 rounded border border-[var(--hairline)] px-3 text-xs text-[var(--muted)]">
+              <input
+                type="checkbox"
+                checked={autoSyncForceFull}
+                onChange={(e) => setAutoSyncForceFull(e.target.checked)}
+              />
+              <span>전체 자동동기화 무조건 실행</span>
+            </label>
             <Button onClick={() => savePolicyMutation.mutate()} disabled={!effectiveChannelId || savePolicyMutation.isPending}>
               정책 저장
             </Button>
           </div>
           <p className="text-xs text-[var(--muted)]">
-            상세수정 반영은 즉시값을 직접 반영하고, 여기 값은 재계산/동기화 파이프라인에서 적용됩니다.
+            상세수정 반영은 즉시값을 직접 반영하고, 여기 값은 재계산/동기화 파이프라인에서 적용됩니다. 룰 기반 자동동기화는 기본적으로 재계산으로 확정된 최종 목표가격(`max(목표가격, 최소마진가격)` 이후 값)과 현재 쇼핑몰 판매가를 비교해 `max(최소 변동금액, 현재가 x 최소 변동률)` 이상 차이날 때만 즉시 push 대상을 생성합니다. AUTO 실행에서 시장가 보정값이 더 크면 그 보정값까지 포함한 상향 목표가격을 기준으로 비교할 수 있습니다. 하향은 같은 기준을 threshold 단위로 누적해 압력이 충분히 쌓였을 때만 반영하며, 큰 하락은 즉시 반영될 수 있고 반영 후에는 일정 시간 추가 하향을 제한합니다.
           </p>
           {policySaveError ? <p className="text-xs text-red-500">{policySaveError}</p> : null}
         </CardBody>
@@ -2508,6 +2660,22 @@ export default function ShoppingAutoPricePage() {
                 ) : null}
               </div>
             ) : null}
+            <div className="mb-3 rounded-[var(--radius)] border border-[var(--hairline)] p-3 text-xs text-[var(--muted)]">
+              <div>현재 run 정책: {activeRunSyncPolicyMode === "ALWAYS" ? "무조건 동기화" : "룰 기반 동기화"} · 최소 변동금액 {fmtKrw(activeRunThresholdMinChangeKrw)} · 최소 변동률 {activeRunThresholdMinChangeRatePct} · 강제 동기화 소스 {activeRunForceFullSyncSource}</div>
+              <div className="mt-2 grid grid-cols-1 gap-2 text-[11px] text-[var(--muted)] md:grid-cols-5">
+                <div>threshold 평가 {activeRunThresholdEvaluatedCount}건</div>
+                <div>threshold 제외 {activeRunThresholdFilteredCount}건</div>
+                <div>시장가 보정 {activeRunMarketGapForcedCount}건</div>
+                <div>하향 억제 {activeRunDownsyncSuppressedCount}건</div>
+                <div>압력 감쇠 {activeRunPressureDecayCount}건</div>
+              </div>
+              <div className="mt-2 grid grid-cols-1 gap-2 text-[11px] text-[var(--muted)] md:grid-cols-4">
+                <div>압력 해제 {activeRunPressureDownsyncReleaseCount}건</div>
+                <div>대형 하락 즉시반영 {activeRunLargeDownsyncReleaseCount}건</div>
+                <div>쿨다운 차단 {activeRunCooldownBlockCount}건</div>
+                <div>정체 해제 {activeRunStalenessReleaseCount}건</div>
+              </div>
+            </div>
             <div className="mb-3 grid grid-cols-1 gap-3 md:grid-cols-2">
               <div className="rounded-[var(--radius)] border border-[var(--hairline)] p-3">
                 <div className="mb-2 text-sm font-medium">건너뜀 사유</div>

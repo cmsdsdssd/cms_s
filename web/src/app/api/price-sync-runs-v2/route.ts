@@ -1,6 +1,13 @@
 import { NextResponse } from "next/server";
 import { getShopAdminClient, jsonError, parseJsonObject, parseUuidArray } from "@/lib/shop/admin";
 import { buildMissingActiveMappingSummary, resolveNoIntentsReason } from "@/lib/shop/price-sync-run-summary";
+import {
+  buildAutoSyncPressureStateRow,
+  evaluateAutoSyncPressurePolicy,
+  normalizeAutoSyncPressureState,
+  resolveAutoSyncPressurePolicyConfig,
+} from "@/lib/shop/price-sync-pressure-policy";
+import { normalizePriceSyncPolicy, resolveRateDerivedThresholdKrw, shouldSyncPriceChange } from "@/lib/shop/price-sync-policy";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -75,6 +82,110 @@ const resolveMinChangeThresholdKrw = (): number => {
   return toPositiveInt(process.env.SHOP_SYNC_MIN_CHANGE_KRW, 5000, 10_000_000);
 };
 
+const normalizeAutoSyncPolicy = (policy: {
+  auto_sync_force_full?: unknown;
+  auto_sync_min_change_krw?: unknown;
+  auto_sync_min_change_rate?: unknown;
+}) => {
+  const normalized = normalizePriceSyncPolicy(
+    {
+      always_sync: policy.auto_sync_force_full,
+      min_change_krw: policy.auto_sync_min_change_krw,
+      min_change_rate: policy.auto_sync_min_change_rate,
+    },
+    {
+      always_sync: false,
+      min_change_krw: resolveMinChangeThresholdKrw(),
+      min_change_rate: 0.02,
+    },
+  );
+
+  return {
+    forceFullSync: normalized.always_sync,
+    minChangeKrw: normalized.min_change_krw,
+    minChangeRate: normalized.min_change_rate,
+  };
+};
+
+const normalizeRequestedAutoSyncOverrides = (overrides: {
+  min_change_krw?: unknown;
+  min_change_rate?: unknown;
+}) => {
+  const hasRequestedMinChangeKrw = overrides.min_change_krw !== undefined;
+  const requestedMinChangeKrwNumber = hasRequestedMinChangeKrw ? Number(overrides.min_change_krw) : undefined;
+  if (
+    hasRequestedMinChangeKrw
+    && (requestedMinChangeKrwNumber === undefined || !Number.isFinite(requestedMinChangeKrwNumber) || requestedMinChangeKrwNumber < 0)
+  ) {
+    return { error: "min_change_krw must be >= 0" } as const;
+  }
+
+  const hasRequestedMinChangeRate = overrides.min_change_rate !== undefined;
+  const requestedMinChangeRateNumber = hasRequestedMinChangeRate ? Number(overrides.min_change_rate) : undefined;
+  if (
+    hasRequestedMinChangeRate
+    && (
+      requestedMinChangeRateNumber === undefined
+      || !Number.isFinite(requestedMinChangeRateNumber)
+      || requestedMinChangeRateNumber < 0
+      || requestedMinChangeRateNumber > 1
+    )
+  ) {
+    return { error: "min_change_rate must be between 0 and 1" } as const;
+  }
+
+  const normalizedOverrides = normalizePriceSyncPolicy(
+    {
+      min_change_krw: hasRequestedMinChangeKrw ? requestedMinChangeKrwNumber : undefined,
+      min_change_rate: hasRequestedMinChangeRate ? requestedMinChangeRateNumber : undefined,
+    },
+    {
+      min_change_krw: resolveMinChangeThresholdKrw(),
+      min_change_rate: 0.02,
+    },
+  );
+
+  return {
+    minChangeKrw: hasRequestedMinChangeKrw ? normalizedOverrides.min_change_krw : undefined,
+    minChangeRate: hasRequestedMinChangeRate ? normalizedOverrides.min_change_rate : undefined,
+  } as const;
+};
+
+const evaluateAutoSyncThreshold = ({
+  currentPriceKrw,
+  desiredPriceKrw,
+  policy,
+}: {
+  currentPriceKrw: number;
+  desiredPriceKrw: number;
+  policy: { auto_sync_force_full?: unknown; auto_sync_min_change_krw?: unknown; auto_sync_min_change_rate?: unknown };
+}) => {
+  const normalizedPolicy = normalizeAutoSyncPolicy(policy);
+  const result = shouldSyncPriceChange({
+    currentPriceKrw,
+    nextPriceKrw: desiredPriceKrw,
+    policy: {
+      always_sync: normalizedPolicy.forceFullSync,
+      min_change_krw: normalizedPolicy.minChangeKrw,
+      min_change_rate: normalizedPolicy.minChangeRate,
+    },
+  });
+  const rateThresholdKrw = resolveRateDerivedThresholdKrw({
+    currentPriceKrw,
+    policy: { min_change_rate: normalizedPolicy.minChangeRate },
+  });
+
+  return {
+    forceFullSync: normalizedPolicy.forceFullSync,
+    minChangeKrw: normalizedPolicy.minChangeKrw,
+    minChangeRate: normalizedPolicy.minChangeRate,
+    diffKrw: result.price_delta_krw,
+    rateThresholdKrw,
+    effectiveThresholdKrw: result.effective_min_change_krw,
+    bypassedByAlwaysSync: result.threshold_bypassed,
+    passesThreshold: result.should_sync,
+  };
+};
 
 const chunkArray = <T,>(items: T[], chunkSize: number): T[][] => {
   if (items.length === 0) return [];
@@ -134,13 +245,20 @@ export async function POST(request: Request) {
   const intervalMinutes = Number.isFinite(intervalRaw)
     ? Math.max(1, Math.min(60, Math.floor(intervalRaw)))
     : resolveDefaultIntervalMinutes();
-  const minChangeRaw = Number(body.min_change_krw ?? resolveMinChangeThresholdKrw());
-  const minChangeKrw = Number.isFinite(minChangeRaw)
-    ? Math.max(0, Math.min(10_000_000, Math.round(minChangeRaw)))
-    : resolveMinChangeThresholdKrw();
-  const forceFullSync = toBool(body.force_full_sync ?? false);
+  const normalizedRequestedOverrides = normalizeRequestedAutoSyncOverrides({
+    min_change_krw: body.min_change_krw,
+    min_change_rate: body.min_change_rate,
+  });
+  if ("error" in normalizedRequestedOverrides && typeof normalizedRequestedOverrides.error === "string") {
+    return jsonError(normalizedRequestedOverrides.error, 400);
+  }
+  const requestedMinChangeKrwValue = normalizedRequestedOverrides.minChangeKrw;
+  const requestedMinChangeRateValue = normalizedRequestedOverrides.minChangeRate;
+  const requestedForceFullSync = toBool(body.force_full_sync ?? false);
+  const requestedForceFullSyncSource = String(body.force_full_sync_source ?? "").trim().toUpperCase();
   const runningStaleWindowMs = resolveRunningStaleWindowMs();
   const triggerType = String(body.trigger_type ?? "AUTO").trim().toUpperCase() === "MANUAL" ? "MANUAL" : "AUTO";
+  const pressurePolicyConfig = resolveAutoSyncPressurePolicyConfig();
   const masterItemIds = parseUuidArray(body.master_item_ids);
   const pinnedComputeRequestId = String(body.compute_request_id ?? "").trim();
 
@@ -192,7 +310,7 @@ export async function POST(request: Request) {
         resolveIntervalEarlyGraceMs(),
         Math.max(0, Math.floor(intervalWindowMs * 0.1)),
       );
-      if (!forceFullSync && elapsedMs >= 0 && (elapsedMs + intervalEarlyGraceMs) < intervalWindowMs) {
+      if (!requestedForceFullSync && elapsedMs >= 0 && (elapsedMs + intervalEarlyGraceMs) < intervalWindowMs) {
         return NextResponse.json(
           {
             ok: true,
@@ -226,7 +344,9 @@ export async function POST(request: Request) {
   const runRequestPayload: Record<string, unknown> = {
     ...body,
     interval_minutes: intervalMinutes,
-    min_change_krw: minChangeKrw,
+    ...(requestedMinChangeKrwValue !== undefined ? { min_change_krw: requestedMinChangeKrwValue } : {}),
+    ...(requestedMinChangeRateValue !== undefined ? { min_change_rate: requestedMinChangeRateValue } : {}),
+    ...(triggerType === "AUTO" ? { auto_downsync_pressure_policy: pressurePolicyConfig } : {}),
   };
 
   const runInsertRes = await sb
@@ -250,7 +370,7 @@ export async function POST(request: Request) {
   const masterIds = Array.from(new Set(cursors.map((r) => String(r.master_item_id ?? "").trim()).filter(Boolean)));
   const policyRes = await sb
     .from("pricing_policy")
-    .select("rounding_unit, rounding_mode, updated_at")
+    .select("rounding_unit, rounding_mode, auto_sync_force_full, auto_sync_min_change_krw, auto_sync_min_change_rate, updated_at")
     .eq("channel_id", channelId)
     .eq("is_active", true)
     .order("updated_at", { ascending: false })
@@ -264,6 +384,23 @@ export async function POST(request: Request) {
     : roundingModeRaw === "ROUND"
       ? "ROUND"
       : "CEIL";
+  const autoSyncPolicy = normalizeAutoSyncPolicy({
+    auto_sync_force_full: triggerType === "AUTO" ? (requestedForceFullSync || policyRes.data?.auto_sync_force_full === true) : requestedForceFullSync,
+    auto_sync_min_change_krw: requestedMinChangeKrwValue ?? policyRes.data?.auto_sync_min_change_krw ?? resolveMinChangeThresholdKrw(),
+    auto_sync_min_change_rate: requestedMinChangeRateValue ?? policyRes.data?.auto_sync_min_change_rate,
+  });
+  const forceFullSync = autoSyncPolicy.forceFullSync;
+  const minChangeKrw = autoSyncPolicy.minChangeKrw;
+  const minChangeRate = autoSyncPolicy.minChangeRate;
+  const thresholdPolicyInput = {
+    auto_sync_force_full: false,
+    auto_sync_min_change_krw: minChangeKrw,
+    auto_sync_min_change_rate: minChangeRate,
+  };
+  const syncPolicyMode = forceFullSync ? "ALWAYS" : "RULE_BASED";
+  const forceFullSyncSource = forceFullSync
+    ? (requestedForceFullSyncSource || (requestedForceFullSync ? "REQUEST" : triggerType === "AUTO" && policyRes.data?.auto_sync_force_full === true ? "POLICY" : "REQUEST"))
+    : null;
 
   const computeIds = Array.from(new Set(cursors.map((r) => String(r.compute_request_id ?? "").trim()).filter(Boolean)));
   if (pinnedComputeRequestId && !computeIds.includes(pinnedComputeRequestId)) {
@@ -383,6 +520,38 @@ export async function POST(request: Request) {
     if (Number.isFinite(current)) currentByChannelProduct.set(key, Math.round(current));
   }
 
+  const pressureStateRows: Array<{
+    channel_product_id: string | null;
+    pressure_units?: number | null;
+    last_gap_units?: number | null;
+    last_seen_target_krw?: number | null;
+    last_seen_current_krw?: number | null;
+    last_auto_sync_at?: string | null;
+    last_upsync_at?: string | null;
+    last_downsync_at?: string | null;
+    cooldown_until?: string | null;
+  }> = [];
+  for (const idChunk of chunkArray(snapshotChannelProductIds, IN_QUERY_CHUNK_SIZE)) {
+    if (idChunk.length === 0) continue;
+    const pressureStateRes = await sb
+      .from("price_sync_auto_state_v1")
+      .select("channel_product_id, pressure_units, last_gap_units, last_seen_target_krw, last_seen_current_krw, last_auto_sync_at, last_upsync_at, last_downsync_at, cooldown_until")
+      .eq("channel_id", channelId)
+      .in("channel_product_id", idChunk);
+    if (pressureStateRes.error) return jsonError(pressureStateRes.error.message ?? "AUTO pressure state 조회 실패", 500);
+    pressureStateRows.push(...(pressureStateRes.data ?? []));
+  }
+  const pressureStateByChannelProduct = new Map(pressureStateRows.map((row) => [
+    String(row.channel_product_id ?? "").trim(),
+    normalizeAutoSyncPressureState(row),
+  ]));
+  const nextPressureStateByChannelProduct = new Map<string, ReturnType<typeof normalizeAutoSyncPressureState>>();
+  const pressureStateMetadataByChannelProduct = new Map<string, {
+    masterItemId: string;
+    externalProductNo: string;
+    externalVariantCode: string;
+  }>();
+
   const baseSnapshotTargetByMaster = new Map<string, number>();
   const forcedBaseTargetByMaster = new Map<string, number>();
   for (const row of snapshotRows) {
@@ -407,14 +576,20 @@ export async function POST(request: Request) {
 
     if (triggerType !== "AUTO") continue;
     const current = currentByChannelProduct.get(channelProductId);
-    if (!Number.isFinite(Number(current ?? Number.NaN))) continue;
+    if (typeof current !== "number" || !Number.isFinite(current)) continue;
+    const currentRounded = Math.round(current);
 
     const marketBasePrice = Math.round(Number(row.base_total_pre_margin_krw ?? Number.NaN));
     const marketAfterMarginRaw = Number(row.total_after_margin_krw ?? Number.NaN);
     const marketAfterMargin = roundByMode(marketAfterMarginRaw, roundingUnit, roundingMode);
     if (!Number.isFinite(marketBasePrice) || !Number.isFinite(marketAfterMargin) || marketAfterMargin <= 0) continue;
 
-    if ((marketAfterMargin - Math.round(Number(current))) < minChangeKrw) continue;
+    const marketForceDecision = evaluateAutoSyncThreshold({
+      desiredPriceKrw: marketAfterMargin,
+      currentPriceKrw: currentRounded,
+      policy: thresholdPolicyInput,
+    });
+    if (!marketForceDecision.passesThreshold) continue;
     const forcedTarget = Math.max(baseTarget, marketAfterMargin);
     const prevForcedTarget = forcedBaseTargetByMaster.get(masterItemId);
     if (!Number.isFinite(Number(prevForcedTarget ?? Number.NaN))) {
@@ -430,6 +605,12 @@ export async function POST(request: Request) {
   let thresholdEvaluatedCount = 0;
   let marketGapForcedCount = 0;
   let downsyncSuppressedCount = 0;
+  let pressureDownsyncReleaseCount = 0;
+  let largeDownsyncReleaseCount = 0;
+  let cooldownBlockCount = 0;
+  let stalenessReleaseCount = 0;
+  let pressureDecayCount = 0;
+  const runNowIso = new Date().toISOString();
   const marketGapForcedMasterKeys = new Set<string>();
   const dedupeByLogicalTarget = new Map<
     string,
@@ -466,12 +647,18 @@ export async function POST(request: Request) {
       : null;
     const rowMarketAfterMarginRaw = Number(row.total_after_margin_krw ?? Number.NaN);
     const rowMarketAfterMargin = roundByMode(rowMarketAfterMarginRaw, roundingUnit, roundingMode);
-    const rowHasDirectMarketForce = triggerType === "AUTO"
+    const rowMarketForceDecision = triggerType === "AUTO"
       && variantCode.length === 0
       && rowCurrentRounded !== null
       && Number.isFinite(rowMarketAfterMargin)
       && rowMarketAfterMargin > 0
-      && ((rowMarketAfterMargin - rowCurrentRounded) >= minChangeKrw);
+      ? evaluateAutoSyncThreshold({
+        desiredPriceKrw: rowMarketAfterMargin,
+        currentPriceKrw: rowCurrentRounded,
+        policy: thresholdPolicyInput,
+      })
+      : null;
+    const rowHasDirectMarketForce = Boolean(rowMarketForceDecision?.passesThreshold);
 
     if (variantCode.length === 0 && (rowHasDirectMarketForce || masterHasForcedMarketSync)) {
       if (rowHasDirectMarketForce) desired = Math.max(desired, rowMarketAfterMargin);
@@ -484,15 +671,44 @@ export async function POST(request: Request) {
 
     if (triggerType === "AUTO" && Number.isFinite(Number(currentPrice ?? Number.NaN))) {
       const currentRounded = Math.round(Number(currentPrice));
+      const thresholdDecision = evaluateAutoSyncThreshold({
+        desiredPriceKrw: desired,
+        currentPriceKrw: currentRounded,
+        policy: thresholdPolicyInput,
+      });
       const isForcedBaseUplift = variantCode.length === 0 && (rowHasDirectMarketForce || masterHasForcedMarketSync);
-      if (!forceFullSync && !isForcedBaseUplift && desired <= currentRounded) {
+      const pressureDecision = evaluateAutoSyncPressurePolicy({
+        currentPriceKrw: currentRounded,
+        desiredPriceKrw: desired,
+        state: nextPressureStateByChannelProduct.get(channelProductId) ?? pressureStateByChannelProduct.get(channelProductId),
+        minChangeKrw,
+        minChangeRate,
+        now: runNowIso,
+        config: pressurePolicyConfig,
+      });
+      nextPressureStateByChannelProduct.set(channelProductId, pressureDecision.nextState);
+      pressureStateMetadataByChannelProduct.set(channelProductId, {
+        masterItemId,
+        externalProductNo: mapping.external_product_no,
+        externalVariantCode: variantCode,
+      });
+
+      if (!forceFullSync && !isForcedBaseUplift) {
+        if (pressureDecision.pressureDecayApplied) pressureDecayCount += 1;
+        if (pressureDecision.cooldownBlocked) cooldownBlockCount += 1;
+        if (pressureDecision.pressureReleaseTriggered) pressureDownsyncReleaseCount += 1;
+        if (pressureDecision.largeDownsyncTriggered) largeDownsyncReleaseCount += 1;
+        if (pressureDecision.stalenessReleaseTriggered) stalenessReleaseCount += 1;
+      }
+
+      if (!forceFullSync && !isForcedBaseUplift && desired <= currentRounded && !pressureDecision.shouldCreateDownsyncIntent) {
         downsyncSuppressedCount += 1;
         continue;
       }
 
       if (!forceFullSync) {
         thresholdEvaluatedCount += 1;
-        if (!masterHasForcedMarketSync && Math.abs(desired - currentRounded) < minChangeKrw) {
+        if (!masterHasForcedMarketSync && !pressureDecision.shouldCreateDownsyncIntent && !thresholdDecision.passesThreshold) {
           thresholdFilteredCount += 1;
           continue;
         }
@@ -586,6 +802,54 @@ export async function POST(request: Request) {
     });
   }
 
+  const runSummary = {
+    threshold_min_change_krw: minChangeKrw,
+    threshold_min_change_rate: minChangeRate,
+    sync_policy_mode: syncPolicyMode,
+    auto_downsync_policy_mode: pressurePolicyConfig.mode,
+    threshold_evaluated_count: thresholdEvaluatedCount,
+    threshold_filtered_count: thresholdFilteredCount,
+    market_gap_forced_count: marketGapForcedCount,
+    downsync_suppressed_count: downsyncSuppressedCount,
+    pressure_downsync_release_count: pressureDownsyncReleaseCount,
+    large_downsync_release_count: largeDownsyncReleaseCount,
+    cooldown_block_count: cooldownBlockCount,
+    staleness_release_count: stalenessReleaseCount,
+    pressure_decay_count: pressureDecayCount,
+    force_full_sync: forceFullSync,
+    force_full_sync_source: forceFullSyncSource,
+    ...missingMappingSummary,
+  };
+
+  if (triggerType === "AUTO" && nextPressureStateByChannelProduct.size > 0) {
+    const pressureStateUpserts = Array.from(nextPressureStateByChannelProduct.entries()).map(([channelProductId, nextState]) => {
+      const metadata = pressureStateMetadataByChannelProduct.get(channelProductId);
+      return buildAutoSyncPressureStateRow({
+        channelId,
+        channelProductId,
+        masterItemId: metadata?.masterItemId ?? "",
+        externalProductNo: metadata?.externalProductNo ?? "",
+        externalVariantCode: metadata?.externalVariantCode ?? "",
+        nextState,
+        now: runNowIso,
+      });
+    });
+
+    for (const chunk of chunkArray(pressureStateUpserts, INSERT_CHUNK_SIZE)) {
+      if (chunk.length === 0) continue;
+      const pressureStateUpsertRes = await sb
+        .from("price_sync_auto_state_v1")
+        .upsert(chunk, { onConflict: "channel_id,channel_product_id" });
+      if (pressureStateUpsertRes.error) {
+        await sb
+          .from("price_sync_run_v2")
+          .update({ status: "FAILED", error_message: pressureStateUpsertRes.error.message ?? "AUTO_PRESSURE_STATE_UPSERT_FAILED", finished_at: new Date().toISOString() })
+          .eq("run_id", runId);
+        return jsonError(pressureStateUpsertRes.error.message ?? "AUTO pressure state 저장 실패", 500);
+      }
+    }
+  }
+
   if (intentRows.length === 0) {
     const reason = resolveNoIntentsReason({
       thresholdFilteredCount,
@@ -599,15 +863,7 @@ export async function POST(request: Request) {
         finished_at: new Date().toISOString(),
         request_payload: {
           ...runRequestPayload,
-          summary: {
-            threshold_min_change_krw: minChangeKrw,
-            threshold_evaluated_count: thresholdEvaluatedCount,
-            threshold_filtered_count: thresholdFilteredCount,
-            market_gap_forced_count: marketGapForcedCount,
-            downsync_suppressed_count: downsyncSuppressedCount,
-            force_full_sync: forceFullSync,
-            ...missingMappingSummary,
-          },
+          summary: runSummary,
         },
       })
       .eq("run_id", runId);
@@ -616,13 +872,7 @@ export async function POST(request: Request) {
       run_id: runId,
       total_count: 0,
       reason,
-      threshold_min_change_krw: minChangeKrw,
-      threshold_evaluated_count: thresholdEvaluatedCount,
-      threshold_filtered_count: thresholdFilteredCount,
-      market_gap_forced_count: marketGapForcedCount,
-      downsync_suppressed_count: downsyncSuppressedCount,
-      force_full_sync: forceFullSync,
-      ...missingMappingSummary,
+      ...runSummary,
     }, { headers: { "Cache-Control": "no-store" } });
   }
 
@@ -657,15 +907,7 @@ export async function POST(request: Request) {
       updated_at: new Date().toISOString(),
       request_payload: {
         ...runRequestPayload,
-        summary: {
-          threshold_min_change_krw: minChangeKrw,
-          threshold_evaluated_count: thresholdEvaluatedCount,
-          threshold_filtered_count: thresholdFilteredCount,
-          market_gap_forced_count: marketGapForcedCount,
-          downsync_suppressed_count: downsyncSuppressedCount,
-          force_full_sync: forceFullSync,
-          ...missingMappingSummary,
-        },
+        summary: runSummary,
       },
     })
     .eq("run_id", runId);
@@ -677,13 +919,7 @@ export async function POST(request: Request) {
       total_count: intentRows.length,
       floor_applied_count: intentRows.filter((row) => row.floor_applied === true).length,
       compute_request_ids: computeIds,
-      threshold_min_change_krw: minChangeKrw,
-      threshold_evaluated_count: thresholdEvaluatedCount,
-      threshold_filtered_count: thresholdFilteredCount,
-      market_gap_forced_count: marketGapForcedCount,
-      downsync_suppressed_count: downsyncSuppressedCount,
-      force_full_sync: forceFullSync,
-      ...missingMappingSummary,
+      ...runSummary,
     },
     { headers: { "Cache-Control": "no-store" } },
   );
