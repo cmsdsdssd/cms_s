@@ -1,819 +1,1175 @@
-"use client";
+'use client';
 
-import { useEffect, useMemo, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { toast } from "sonner";
-import { ActionBar } from "@/components/layout/action-bar";
-import { ShoppingPageHeader } from "@/components/layout/shopping-page-header";
-import { Card, CardBody, CardHeader } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { Input, Select } from "@/components/ui/field";
-import { shopApiGet, shopApiSend } from "@/lib/shop/http";
+import { useEffect, useMemo, useState } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { toast } from 'sonner';
+import { ActionBar } from '@/components/layout/action-bar';
+import { ShoppingPageHeader } from '@/components/layout/shopping-page-header';
+import { Card, CardBody, CardHeader } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Input, Select } from '@/components/ui/field';
+import { shopApiGet, shopApiSend } from '@/lib/shop/http';
 
-type Channel = { channel_id: string; channel_name: string; channel_code: string };
-type RuleSet = { rule_set_id: string; channel_id: string; name: string; description: string | null; is_active: boolean };
-type RuleSection = "MATERIAL" | "SIZE" | "PLATING" | "DECORATION";
-type PlatingOption = { color_code: string; display_name: string };
+type NumberLike = number | string | null | undefined;
+type Category = 'MATERIAL' | 'SIZE' | 'COLOR_PLATING' | 'DECOR' | 'OTHER';
 
-type RulePoolMaster = {
+type Channel = {
+  channel_id: string;
+  channel_name: string;
+  channel_code: string;
+};
+
+type ContextRow = {
+  master_item_id: string;
+  external_product_no: string;
+  model_name: string | null;
+  material_code_default: string | null;
+};
+
+type PoolMaster = {
   master_item_id: string;
   model_name: string | null;
-  category_code: string | null;
-  material_code_default: string;
-  total_labor_sell_krw: number;
+  total_labor_cost_krw?: NumberLike;
+  total_labor_sell_krw?: NumberLike;
 };
 
-type RulePools = {
-  categories: string[];
-  materials: string[];
-  colors: string[];
-  decoration_names: string[];
-  masters: RulePoolMaster[];
-};
-
-type R1Rule = {
-  rule_id: string;
-  source_material_code: string | null;
-  target_material_code: string;
-  match_category_code: string | null;
-  option_weight_multiplier: number;
-  rounding_unit: number;
-  rounding_mode: "CEIL" | "ROUND" | "FLOOR";
-};
-
-type R2Rule = {
-  rule_id: string;
-  linked_r1_rule_id: string | null;
-  match_material_code: string | null;
-  match_category_code: string | null;
-  margin_min_krw: number | null;
-  margin_max_krw: number | null;
-  delta_krw: number;
-  rounding_unit: number;
-  rounding_mode: "CEIL" | "ROUND" | "FLOOR";
-};
-
-type R3Rule = {
-  rule_id: string;
+type ColorOption = {
   color_code: string;
-  margin_min_krw: number;
-  margin_max_krw: number;
-  delta_krw: number;
-  rounding_unit: number;
-  rounding_mode: "CEIL" | "ROUND" | "FLOOR";
+  display_name: string;
 };
 
-type R4Rule = {
+type PoolsData = {
+  contexts?: ContextRow[];
+  materials?: string[];
+  colors?: ColorOption[];
+  decoration_masters?: PoolMaster[];
+  master_options?: PoolMaster[];
+  masters?: PoolMaster[];
+};
+
+type Rule = {
   rule_id: string;
-  linked_r1_rule_id: string | null;
-  match_decoration_code: string;
-  match_material_code: string | null;
-  match_color_code: string | null;
-  match_category_code: string | null;
-  delta_krw: number;
-  rounding_unit: number;
-  rounding_mode: "CEIL" | "ROUND" | "FLOOR";
+  category_key: Category;
+  scope_material_code: string | null;
+  additional_weight_g: NumberLike;
+  plating_enabled: boolean | null;
+  color_code: string | null;
+  decoration_master_id: string | null;
+  decoration_model_name: string | null;
+  base_labor_cost_krw: NumberLike;
+  additive_delta_krw: NumberLike;
+  updated_at: string | null;
+  created_at: string | null;
+};
+
+type RulePayload = {
+  rule_id?: string;
+  channel_id: string;
+  master_item_id: string;
+  external_product_no: string;
+  category_key: Category;
+  scope_material_code?: string | null;
+  additional_weight_g?: number | null;
+  plating_enabled?: boolean | null;
+  color_code?: string | null;
+  decoration_master_id?: string | null;
+  decoration_model_name?: string | null;
+  base_labor_cost_krw?: number;
+  additive_delta_krw: number;
+  is_active: boolean;
 };
 
 type LaborLog = {
   adjustment_log_id: string;
-  master_item_id: string;
-  delta_krw: number;
+  delta_krw: NumberLike;
   reason: string;
   created_at: string;
 };
 
-const parseN = (value: string, fallback = 0) => {
-  const normalized = String(value ?? "").replace(/,/g, "").trim();
-  const n = Number(normalized);
-  return Number.isFinite(n) ? n : fallback;
+type SizeDraft = {
+  ruleId: string;
+  materialCode: string;
+  weightG: string;
+  additiveKrw: string;
 };
 
-const ROUNDING_UNIT_OPTIONS = Array.from({ length: 100 }, (_, idx) => String((idx + 1) * 100));
-const ROUNDING_MODE_OPTIONS: Array<{ value: "CEIL" | "ROUND" | "FLOOR"; label: string }> = [
-  { value: "CEIL", label: "올림" },
-  { value: "ROUND", label: "반올림" },
-  { value: "FLOOR", label: "내림" },
-];
-const ROUNDING_MODE_LABEL: Record<"CEIL" | "ROUND" | "FLOOR", string> = {
-  CEIL: "올림",
-  ROUND: "반올림",
-  FLOOR: "내림",
-};
-const MAJOR_AMOUNT_OPTIONS = Array.from({ length: 1001 }, (_, idx) => String(idx));
-const MINOR_AMOUNT_OPTIONS = Array.from({ length: 100 }, (_, idx) => String(idx * 100));
-
-const toAmountKrw = (majorRaw: string, minorRaw: string): number => {
-  const major = Math.max(0, parseN(majorRaw, 0));
-  const minor = Math.max(0, parseN(minorRaw, 0));
-  return major * 10000 + minor;
+type ColorDraft = {
+  ruleId: string;
+  platingEnabled: string;
+  colorCode: string;
+  additiveKrw: string;
 };
 
-const splitAmountKrw = (amountRaw: number | null | undefined): { major: string; minor: string } => {
-  const amount = Math.max(0, Math.round(Number(amountRaw ?? 0)));
-  const major = Math.floor(amount / 10000);
-  const minor = amount % 10000;
-  return { major: String(major), minor: String(minor) };
+type DecorDraft = {
+  ruleId: string;
+  decorationMasterId: string;
+  additiveKrw: string;
 };
 
-const DEFAULT_RULESET_NAME = "DEFAULT";
-
-const CATEGORY_LABEL_KO: Record<string, string> = {
-  BRACELET: "팔찌",
-  ANKLET: "발찌",
-  NECKLACE: "목걸이",
-  EARRING: "귀걸이",
-  RING: "반지",
-  PIERCING: "피어싱",
-  PENDANT: "팬던트",
-  WATCH: "시계",
-  KEYRING: "키링",
-  SYMBOL: "심볼",
-  ACCESSORY: "부속",
-  ETC: "기타",
-  CHAIN: "체인",
-  BANGLE: "뱅글",
-  COUPLING: "커플링",
-  SET: "세트",
+type SaveRuleInput = {
+  label: string;
+  payload: RulePayload;
 };
 
-const categoryLabel = (code: string): string => CATEGORY_LABEL_KO[code] ?? code;
+type DeleteRuleInput = {
+  label: string;
+  ruleId: string;
+};
+
+const WEIGHT_OPTIONS = Array.from({ length: 10_000 }, (_, index) => ((index + 1) / 100).toFixed(2));
+
+const toNumber = (value: NumberLike): number => {
+  const parsed = Number(value ?? 0);
+  return Number.isFinite(parsed) ? parsed : 0;
+};
+
+const parseAmount = (value: string): number => {
+  const parsed = Number(String(value ?? '').replace(/,/g, '').trim());
+  return Number.isFinite(parsed) ? Math.round(parsed) : 0;
+};
+
+const formatWon = (value: NumberLike): string => {
+  if (value === null || value === undefined || value === '') return '-';
+  return `${Math.round(toNumber(value)).toLocaleString()}원`;
+};
+
+const formatWhen = (value: string | null | undefined): string => {
+  if (!value) return '-';
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? new Date(parsed).toLocaleString() : '-';
+};
+
+const laborOf = (master: PoolMaster | null | undefined): number => {
+  if (!master) return 0;
+  const cost = master.total_labor_cost_krw;
+  const sell = master.total_labor_sell_krw;
+  return toNumber(cost ?? sell ?? 0);
+};
+
+const contextKeyOf = (row: ContextRow): string => `${row.master_item_id}::${row.external_product_no}`;
+
+const describeError = (error: unknown): string => {
+  if (error instanceof Error && error.message) return error.message;
+  return '요청 처리 중 오류가 발생했습니다.';
+};
+
+const createEmptySizeDraft = (materials: string[]): SizeDraft => ({
+  ruleId: '',
+  materialCode: materials[0] ?? '',
+  weightG: WEIGHT_OPTIONS[0] ?? '0.01',
+  additiveKrw: '0',
+});
+
+const createEmptyColorDraft = (colors: ColorOption[]): ColorDraft => ({
+  ruleId: '',
+  platingEnabled: 'true',
+  colorCode: colors[0]?.color_code ?? '',
+  additiveKrw: '0',
+});
+
+const createEmptyDecorDraft = (masters: PoolMaster[]): DecorDraft => ({
+  ruleId: '',
+  decorationMasterId: masters[0]?.master_item_id ?? '',
+  additiveKrw: '0',
+});
 
 export default function ShoppingRulesPage() {
-  const qc = useQueryClient();
+  const queryClient = useQueryClient();
 
   const channelsQuery = useQuery({
-    queryKey: ["shop-channels"],
-    queryFn: () => shopApiGet<{ data: Channel[] }>("/api/channels"),
+    queryKey: ['shop-channels'],
+    queryFn: () => shopApiGet<{ data: Channel[] }>('/api/channels'),
   });
   const channels = channelsQuery.data?.data ?? [];
 
-  const [channelId, setChannelId] = useState("");
+  const [channelId, setChannelId] = useState('');
   useEffect(() => {
-    if (!channelId && channels.length > 0) setChannelId(channels[0].channel_id);
+    if (!channels.length) {
+      if (channelId) setChannelId('');
+      return;
+    }
+    if (!channels.some((channel) => channel.channel_id === channelId)) {
+      setChannelId(channels[0]?.channel_id ?? '');
+    }
   }, [channelId, channels]);
 
-  const ruleSetsQuery = useQuery({
-    queryKey: ["sync-rule-sets", channelId],
-    enabled: Boolean(channelId),
-    queryFn: () => shopApiGet<{ data: RuleSet[] }>(`/api/sync-rule-sets?channel_id=${encodeURIComponent(channelId)}&only_active=false`),
-  });
-  const ruleSets = ruleSetsQuery.data?.data ?? [];
-
-  const categoryPoolQuery = useQuery({
-    queryKey: ["master-category-pool"],
-    queryFn: () => shopApiGet<{ data: string[] }>("/api/master-categories"),
-  });
-  const categoryPool = categoryPoolQuery.data?.data ?? [];
-
-  const [selectedRuleSetId, setSelectedRuleSetId] = useState("");
-  useEffect(() => {
-    if (!selectedRuleSetId && ruleSets.length > 0) {
-      setSelectedRuleSetId(ruleSets[0].rule_set_id);
-      return;
-    }
-    if (selectedRuleSetId && !ruleSets.some((r) => r.rule_set_id === selectedRuleSetId)) {
-      setSelectedRuleSetId(ruleSets[0]?.rule_set_id ?? "");
-    }
-  }, [selectedRuleSetId, ruleSets]);
-
-  const createRuleSet = useMutation({
-    mutationFn: (name: string) =>
-      shopApiSend<{ data: RuleSet }>("/api/sync-rule-sets", "POST", {
-        channel_id: channelId,
-        name,
-        description: name === DEFAULT_RULESET_NAME ? "채널 기본 룰셋(자동 생성)" : "수동 생성 룰셋",
-        is_active: true,
-      }),
-    onSuccess: async (res) => {
-      setSelectedRuleSetId(res.data.rule_set_id);
-      await qc.invalidateQueries({ queryKey: ["sync-rule-sets", channelId] });
-    },
-    onError: async (e: Error) => {
-      if (!String(e.message ?? "").toLowerCase().includes("duplicate")) {
-        toast.error(e.message);
-      }
-      await qc.invalidateQueries({ queryKey: ["sync-rule-sets", channelId] });
-    },
-  });
-
-  useEffect(() => {
-    if (!channelId) return;
-    if (selectedRuleSetId) return;
-    if (ruleSetsQuery.isLoading || ruleSetsQuery.isFetching) return;
-    if (ruleSets.length > 0) {
-      setSelectedRuleSetId(ruleSets[0].rule_set_id);
-      return;
-    }
-    if (createRuleSet.isPending) return;
-    createRuleSet.mutate(DEFAULT_RULESET_NAME);
-  }, [channelId, selectedRuleSetId, ruleSets, ruleSetsQuery.isLoading, ruleSetsQuery.isFetching, createRuleSet.isPending]);
-
-  const [includeAllDecorationMaster, setIncludeAllDecorationMaster] = useState(false);
   const poolsQuery = useQuery({
-    queryKey: ["master-rule-pools", includeAllDecorationMaster],
+    queryKey: ['option-labor-rule-pools', channelId],
+    enabled: Boolean(channelId),
+    queryFn: () => shopApiGet<{ data: PoolsData }>(`/api/option-labor-rule-pools?channel_id=${encodeURIComponent(channelId)}`),
+  });
+
+  const pools = poolsQuery.data?.data ?? {};
+  const contexts = pools.contexts ?? [];
+  const materials = pools.materials ?? [];
+  const colors = pools.colors ?? [];
+  const decorationMasters = pools.decoration_masters ?? [];
+  const masterSource = pools.master_options?.length ? pools.master_options : (pools.masters ?? []);
+
+  const laborMasters = useMemo(() => {
+    const entries = [...masterSource, ...decorationMasters];
+    const map = new Map<string, PoolMaster>();
+    for (const entry of entries) {
+      if (!entry.master_item_id || map.has(entry.master_item_id)) continue;
+      map.set(entry.master_item_id, entry);
+    }
+    return Array.from(map.values()).sort((left, right) => {
+      const leftName = left.model_name ?? left.master_item_id;
+      const rightName = right.model_name ?? right.master_item_id;
+      return leftName.localeCompare(rightName) || left.master_item_id.localeCompare(right.master_item_id);
+    });
+  }, [decorationMasters, masterSource]);
+
+  const [contextKey, setContextKey] = useState('');
+  useEffect(() => {
+    if (!contexts.length) {
+      if (contextKey) setContextKey('');
+      return;
+    }
+    if (!contexts.some((row) => contextKeyOf(row) === contextKey)) {
+      setContextKey(contextKeyOf(contexts[0]));
+    }
+  }, [contextKey, contexts]);
+
+  const selectedContext = useMemo(
+    () => contexts.find((row) => contextKeyOf(row) === contextKey) ?? null,
+    [contextKey, contexts],
+  );
+
+  const rulesQuery = useQuery({
+    queryKey: [
+      'option-labor-rules',
+      channelId,
+      selectedContext?.master_item_id ?? '',
+      selectedContext?.external_product_no ?? '',
+    ],
+    enabled: Boolean(channelId && selectedContext),
+    queryFn: () => {
+      const params = new URLSearchParams();
+      params.set('channel_id', channelId);
+      params.set('master_item_id', selectedContext?.master_item_id ?? '');
+      params.set('external_product_no', selectedContext?.external_product_no ?? '');
+      return shopApiGet<{ data: Rule[] }>(`/api/option-labor-rules?${params.toString()}`);
+    },
+  });
+
+  const rules = rulesQuery.data?.data ?? [];
+  const materialRule = rules.find((rule) => rule.category_key === 'MATERIAL') ?? null;
+  const sizeRules = rules
+    .filter((rule) => rule.category_key === 'SIZE')
+    .sort((left, right) => {
+      const materialCompare = (left.scope_material_code ?? '').localeCompare(right.scope_material_code ?? '');
+      if (materialCompare !== 0) return materialCompare;
+      return toNumber(left.additional_weight_g) - toNumber(right.additional_weight_g);
+    });
+  const colorRules = rules
+    .filter((rule) => rule.category_key === 'COLOR_PLATING')
+    .sort((left, right) => {
+      const platingCompare = Number(left.plating_enabled === true) - Number(right.plating_enabled === true);
+      if (platingCompare !== 0) return platingCompare;
+      return (left.color_code ?? '').localeCompare(right.color_code ?? '');
+    });
+  const decorRules = rules
+    .filter((rule) => rule.category_key === 'DECOR')
+    .sort((left, right) => {
+      const leftName = left.decoration_model_name ?? left.decoration_master_id ?? '';
+      const rightName = right.decoration_model_name ?? right.decoration_master_id ?? '';
+      return leftName.localeCompare(rightName);
+    });
+  const otherRule = rules.find((rule) => rule.category_key === 'OTHER') ?? null;
+
+  const basePayload = selectedContext
+    ? {
+        channel_id: channelId,
+        master_item_id: selectedContext.master_item_id,
+        external_product_no: selectedContext.external_product_no,
+        is_active: true,
+      }
+    : null;
+
+  const [sizeDraft, setSizeDraft] = useState<SizeDraft>(() => createEmptySizeDraft([]));
+  const [colorDraft, setColorDraft] = useState<ColorDraft>(() => createEmptyColorDraft([]));
+  const [decorDraft, setDecorDraft] = useState<DecorDraft>(() => createEmptyDecorDraft([]));
+  const [otherAdditive, setOtherAdditive] = useState('0');
+
+  useEffect(() => {
+    setSizeDraft(createEmptySizeDraft(materials));
+  }, [selectedContext?.master_item_id, selectedContext?.external_product_no, materials]);
+
+  useEffect(() => {
+    setColorDraft(createEmptyColorDraft(colors));
+  }, [selectedContext?.master_item_id, selectedContext?.external_product_no, colors]);
+
+  useEffect(() => {
+    setDecorDraft(createEmptyDecorDraft(decorationMasters));
+  }, [decorationMasters, selectedContext?.master_item_id, selectedContext?.external_product_no]);
+
+  useEffect(() => {
+    setOtherAdditive(String(toNumber(otherRule?.additive_delta_krw)));
+  }, [otherRule?.additive_delta_krw, selectedContext?.master_item_id, selectedContext?.external_product_no]);
+
+  const [laborMasterId, setLaborMasterId] = useState('');
+  useEffect(() => {
+    if (!laborMasters.length) {
+      if (laborMasterId) setLaborMasterId('');
+      return;
+    }
+    const preferred = selectedContext?.master_item_id;
+    const preferredExists = preferred ? laborMasters.some((row) => row.master_item_id === preferred) : false;
+    if (!laborMasters.some((row) => row.master_item_id === laborMasterId)) {
+      setLaborMasterId(preferredExists ? preferred ?? '' : laborMasters[0]?.master_item_id ?? '');
+    }
+  }, [laborMasterId, laborMasters, selectedContext?.master_item_id]);
+
+  const currentLaborMaster = laborMasters.find((row) => row.master_item_id === laborMasterId) ?? null;
+  const selectedDecorMaster = decorationMasters.find((row) => row.master_item_id === decorDraft.decorationMasterId) ?? null;
+
+  const [laborDelta, setLaborDelta] = useState('0');
+  const [laborReason, setLaborReason] = useState('');
+
+  const laborLogQuery = useQuery({
+    queryKey: ['channel-labor-price-adjustments', channelId, laborMasterId],
+    enabled: Boolean(channelId && laborMasterId),
     queryFn: () =>
-      shopApiGet<{ data: RulePools }>(
-        `/api/master-rule-pools?include_all_decoration_master=${includeAllDecorationMaster ? "true" : "false"}`,
+      shopApiGet<{ data: LaborLog[] }>(
+        `/api/channel-labor-price-adjustments?channel_id=${encodeURIComponent(channelId)}&master_item_id=${encodeURIComponent(laborMasterId)}&limit=30`,
       ),
   });
 
-  const pools = poolsQuery.data?.data;
-  const materials = pools?.materials ?? [];
-  const decorationNames = pools?.decoration_names ?? [];
-  const masters = pools?.masters ?? [];
-  const platingOptionsQuery = useQuery({
-    queryKey: ["plating-options"],
-    queryFn: () => shopApiGet<PlatingOption[]>("/api/plating-options"),
-  });
-  const platingColorOptions = useMemo(
-    () => Array.from(new Map((platingOptionsQuery.data ?? []).map((opt) => [String(opt.color_code ?? "").trim().toUpperCase(), opt])).entries())
-      .map(([code, opt]) => ({
-        color_code: code,
-        display_name: String(opt.display_name ?? "").trim() || code,
-      }))
-      .filter((opt) => Boolean(opt.color_code))
-      .sort((a, b) => a.display_name.localeCompare(b.display_name)),
-    [platingOptionsQuery.data],
-  );
-  const platingLabelByCode = useMemo(
-    () => new Map(platingColorOptions.map((opt) => [opt.color_code, `${opt.display_name} (${opt.color_code})`])),
-    [platingColorOptions],
-  );
-
-  const [activeSection, setActiveSection] = useState<RuleSection>("MATERIAL");
-
-  const r1Query = useQuery({
-    queryKey: ["sync-r1", selectedRuleSetId],
-    enabled: Boolean(selectedRuleSetId),
-    queryFn: () => shopApiGet<{ data: R1Rule[] }>(`/api/sync-rules/r1?rule_set_id=${encodeURIComponent(selectedRuleSetId)}`),
-  });
-  const r2Query = useQuery({
-    queryKey: ["sync-r2", selectedRuleSetId],
-    enabled: Boolean(selectedRuleSetId),
-    queryFn: () => shopApiGet<{ data: R2Rule[] }>(`/api/sync-rules/r2?rule_set_id=${encodeURIComponent(selectedRuleSetId)}`),
-  });
-  const r3Query = useQuery({
-    queryKey: ["sync-r3", selectedRuleSetId],
-    enabled: Boolean(selectedRuleSetId),
-    queryFn: () => shopApiGet<{ data: R3Rule[] }>(`/api/sync-rules/r3?rule_set_id=${encodeURIComponent(selectedRuleSetId)}`),
-  });
-  const r4Query = useQuery({
-    queryKey: ["sync-r4", selectedRuleSetId],
-    enabled: Boolean(selectedRuleSetId),
-    queryFn: () => shopApiGet<{ data: R4Rule[] }>(`/api/sync-rules/r4?rule_set_id=${encodeURIComponent(selectedRuleSetId)}`),
-  });
-
-  const [sourceTabCode, setSourceTabCode] = useState("");
-  useEffect(() => {
-    if (!sourceTabCode && materials.length > 0) setSourceTabCode(materials[0]);
-    if (sourceTabCode && !materials.includes(sourceTabCode)) setSourceTabCode(materials[0] ?? "");
-  }, [sourceTabCode, materials]);
-  const r1TargetOptions = materials.filter((m) => m !== sourceTabCode);
-
-  const [r1Target, setR1Target] = useState("");
-  useEffect(() => {
-    if (r1TargetOptions.length === 0) {
-      setR1Target("");
-      return;
-    }
-    if (!r1Target || !r1TargetOptions.includes(r1Target)) {
-      setR1Target(r1TargetOptions[0]);
-    }
-  }, [r1Target, r1TargetOptions]);
-  const [r1Mul, setR1Mul] = useState("1");
-  const [r1RoundUnit, setR1RoundUnit] = useState("100");
-  const [r1RoundMode, setR1RoundMode] = useState<"CEIL" | "ROUND" | "FLOOR">("CEIL");
-  const [editingR1RuleId, setEditingR1RuleId] = useState("");
-
-  const createR1 = useMutation({
-    mutationFn: () =>
-      shopApiSend("/api/sync-rules/r1", "POST", {
-        rule_set_id: selectedRuleSetId,
-        source_material_code: sourceTabCode,
-        target_material_code: r1Target,
-        match_category_code: null,
-        weight_min_g: null,
-        weight_max_g: null,
-        option_weight_multiplier: parseN(r1Mul, 1),
-        rounding_unit: parseN(r1RoundUnit, 100),
-        rounding_mode: r1RoundMode,
-        is_active: true,
+  const refreshRules = async (): Promise<void> => {
+    await Promise.all([
+      queryClient.invalidateQueries({
+        queryKey: [
+          'option-labor-rules',
+          channelId,
+          selectedContext?.master_item_id ?? '',
+          selectedContext?.external_product_no ?? '',
+        ],
       }),
-    onSuccess: async () => {
-      toast.success("R1 룰 추가 완료");
-      await qc.invalidateQueries({ queryKey: ["sync-r1", selectedRuleSetId] });
-    },
-    onError: (e: Error) => toast.error(e.message),
-  });
-
-  const updateR1 = useMutation({
-    mutationFn: () =>
-      shopApiSend("/api/sync-rules/r1", "PUT", {
-        rule_id: editingR1RuleId,
-        source_material_code: sourceTabCode,
-        target_material_code: r1Target,
-        match_category_code: null,
-        weight_min_g: null,
-        weight_max_g: null,
-        option_weight_multiplier: parseN(r1Mul, 1),
-        rounding_unit: parseN(r1RoundUnit, 100),
-        rounding_mode: r1RoundMode,
-        is_active: true,
-      }),
-    onSuccess: async () => {
-      toast.success("R1 룰 수정 완료");
-      setEditingR1RuleId("");
-      await qc.invalidateQueries({ queryKey: ["sync-r1", selectedRuleSetId] });
-    },
-    onError: (e: Error) => toast.error(e.message),
-  });
-
-  const deleteR1 = useMutation({
-    mutationFn: (ruleId: string) => shopApiSend("/api/sync-rules/r1", "DELETE", { rule_id: ruleId }),
-    onSuccess: async () => {
-      toast.success("R1 룰 삭제 완료");
-      setEditingR1RuleId("");
-      await qc.invalidateQueries({ queryKey: ["sync-r1", selectedRuleSetId] });
-    },
-    onError: (e: Error) => toast.error(e.message),
-  });
-
-  const startEditR1 = (rule: R1Rule) => {
-    setEditingR1RuleId(rule.rule_id);
-    setSourceTabCode(rule.source_material_code ?? materials[0] ?? "");
-    setR1Target(rule.target_material_code);
-    setR1Mul(String(Number(rule.option_weight_multiplier ?? 1)));
-    setR1RoundUnit(String(Number(rule.rounding_unit ?? 100)));
-    setR1RoundMode(rule.rounding_mode ?? "CEIL");
+      queryClient.invalidateQueries({ queryKey: ['option-labor-rule-pools', channelId] }),
+    ]);
   };
 
-  const cancelEditR1 = () => {
-    setEditingR1RuleId("");
-  };
+  const saveRuleMutation = useMutation({
+    mutationFn: ({ payload }: SaveRuleInput) =>
+      shopApiSend('/api/option-labor-rules', payload.rule_id ? 'PUT' : 'POST', payload),
+  });
 
-  const [r2SourceMaterial, setR2SourceMaterial] = useState("");
-  useEffect(() => {
-    if (!r2SourceMaterial && materials.length > 0) setR2SourceMaterial(materials[0]);
-    if (r2SourceMaterial && !materials.includes(r2SourceMaterial)) setR2SourceMaterial(materials[0] ?? "");
-  }, [r2SourceMaterial, materials]);
-  const [r2Category, setR2Category] = useState("");
-  useEffect(() => {
-    if (!r2Category && categoryPool.length > 0) setR2Category(categoryPool[0]);
-    if (r2Category && !categoryPool.includes(r2Category)) setR2Category(categoryPool[0] ?? "");
-  }, [r2Category, categoryPool]);
-  const [r2MarginMajor, setR2MarginMajor] = useState("0");
-  const [r2MarginMinor, setR2MarginMinor] = useState("0");
-  const [r2RoundUnit, setR2RoundUnit] = useState("100");
-  const [r2RoundMode, setR2RoundMode] = useState<"CEIL" | "ROUND" | "FLOOR">("CEIL");
-  const [editingR2RuleId, setEditingR2RuleId] = useState("");
+  const deleteRuleMutation = useMutation({
+    mutationFn: ({ ruleId }: DeleteRuleInput) =>
+      shopApiSend('/api/option-labor-rules', 'DELETE', { rule_id: ruleId }),
+  });
 
-  const createR2 = useMutation({
+  const laborLogMutation = useMutation({
     mutationFn: () =>
-      shopApiSend("/api/sync-rules/r2", "POST", {
-        rule_set_id: selectedRuleSetId,
-        linked_r1_rule_id: null,
-        match_material_code: r2SourceMaterial || null,
-        match_category_code: r2Category || null,
-        margin_min_krw: toAmountKrw(r2MarginMajor, r2MarginMinor),
-        margin_max_krw: toAmountKrw(r2MarginMajor, r2MarginMinor),
-        delta_krw: 0,
-        rounding_unit: parseN(r2RoundUnit, 100),
-        rounding_mode: r2RoundMode,
-        is_active: true,
-      }),
-    onSuccess: async () => {
-      toast.success("R2 룰 추가 완료");
-      await qc.invalidateQueries({ queryKey: ["sync-r2", selectedRuleSetId] });
-    },
-    onError: (e: Error) => toast.error(e.message),
-  });
-
-  const updateR2 = useMutation({
-    mutationFn: () =>
-      shopApiSend("/api/sync-rules/r2", "PUT", {
-        rule_id: editingR2RuleId,
-        linked_r1_rule_id: null,
-        match_material_code: r2SourceMaterial || null,
-        match_category_code: r2Category || null,
-        margin_min_krw: toAmountKrw(r2MarginMajor, r2MarginMinor),
-        margin_max_krw: toAmountKrw(r2MarginMajor, r2MarginMinor),
-        delta_krw: 0,
-        rounding_unit: parseN(r2RoundUnit, 100),
-        rounding_mode: r2RoundMode,
-        is_active: true,
-      }),
-    onSuccess: async () => {
-      toast.success("R2 룰 수정 완료");
-      setEditingR2RuleId("");
-      await qc.invalidateQueries({ queryKey: ["sync-r2", selectedRuleSetId] });
-    },
-    onError: (e: Error) => toast.error(e.message),
-  });
-
-  const deleteR2 = useMutation({
-    mutationFn: (ruleId: string) => shopApiSend("/api/sync-rules/r2", "DELETE", { rule_id: ruleId }),
-    onSuccess: async () => {
-      toast.success("R2 룰 삭제 완료");
-      setEditingR2RuleId("");
-      await qc.invalidateQueries({ queryKey: ["sync-r2", selectedRuleSetId] });
-    },
-    onError: (e: Error) => toast.error(e.message),
-  });
-
-  const startEditR2 = (rule: R2Rule) => {
-    const split = splitAmountKrw(rule.margin_min_krw ?? rule.margin_max_krw ?? 0);
-    setEditingR2RuleId(rule.rule_id);
-    setR2SourceMaterial(rule.match_material_code ?? materials[0] ?? "");
-    setR2Category(rule.match_category_code ?? categoryPool[0] ?? "");
-    setR2MarginMajor(split.major);
-    setR2MarginMinor(split.minor);
-    setR2RoundUnit(String(Number(rule.rounding_unit ?? 100)));
-    setR2RoundMode(rule.rounding_mode ?? "CEIL");
-  };
-
-  const cancelEditR2 = () => setEditingR2RuleId("");
-
-  const [r3Color, setR3Color] = useState("");
-  const [editingR3RuleId, setEditingR3RuleId] = useState("");
-  useEffect(() => {
-    const codes = platingColorOptions.map((opt) => opt.color_code);
-    if (!r3Color && codes.length > 0) setR3Color(codes[0]);
-    if (r3Color && !codes.includes(r3Color)) setR3Color(codes[0] ?? "");
-  }, [r3Color, platingColorOptions]);
-  const [r3MarginMajor, setR3MarginMajor] = useState("0");
-  const [r3MarginMinor, setR3MarginMinor] = useState("0");
-  const [r3RoundUnit, setR3RoundUnit] = useState("100");
-  const [r3RoundMode, setR3RoundMode] = useState<"CEIL" | "ROUND" | "FLOOR">("CEIL");
-
-  const createR3 = useMutation({
-    mutationFn: () =>
-      shopApiSend("/api/sync-rules/r3", "POST", {
-        rule_set_id: selectedRuleSetId,
-        color_code: r3Color,
-        margin_min_krw: toAmountKrw(r3MarginMajor, r3MarginMinor),
-        margin_max_krw: toAmountKrw(r3MarginMajor, r3MarginMinor),
-        delta_krw: 0,
-        rounding_unit: parseN(r3RoundUnit, 100),
-        rounding_mode: r3RoundMode,
-        is_active: true,
-      }),
-    onSuccess: async () => {
-      toast.success("R3 룰 추가 완료");
-      await qc.invalidateQueries({ queryKey: ["sync-r3", selectedRuleSetId] });
-    },
-    onError: (e: Error) => toast.error(e.message),
-  });
-
-  const updateR3 = useMutation({
-    mutationFn: () =>
-      shopApiSend("/api/sync-rules/r3", "PUT", {
-        rule_id: editingR3RuleId,
-        color_code: r3Color,
-        margin_min_krw: toAmountKrw(r3MarginMajor, r3MarginMinor),
-        margin_max_krw: toAmountKrw(r3MarginMajor, r3MarginMinor),
-        delta_krw: 0,
-        rounding_unit: parseN(r3RoundUnit, 100),
-        rounding_mode: r3RoundMode,
-        is_active: true,
-      }),
-    onSuccess: async () => {
-      toast.success("R3 룰 수정 완료");
-      setEditingR3RuleId("");
-      await qc.invalidateQueries({ queryKey: ["sync-r3", selectedRuleSetId] });
-    },
-    onError: (e: Error) => toast.error(e.message),
-  });
-
-  const deleteR3 = useMutation({
-    mutationFn: (ruleId: string) => shopApiSend("/api/sync-rules/r3", "DELETE", { rule_id: ruleId }),
-    onSuccess: async () => {
-      toast.success("R3 룰 삭제 완료");
-      setEditingR3RuleId("");
-      await qc.invalidateQueries({ queryKey: ["sync-r3", selectedRuleSetId] });
-    },
-    onError: (e: Error) => toast.error(e.message),
-  });
-
-  const startEditR3 = (rule: R3Rule) => {
-    const split = splitAmountKrw(rule.margin_min_krw ?? rule.margin_max_krw);
-    setEditingR3RuleId(rule.rule_id);
-    setR3Color(rule.color_code);
-    setR3MarginMajor(split.major);
-    setR3MarginMinor(split.minor);
-    setR3RoundUnit(String(Number(rule.rounding_unit ?? 100)));
-    setR3RoundMode(rule.rounding_mode ?? "CEIL");
-  };
-
-  const cancelEditR3 = () => setEditingR3RuleId("");
-
-  const [r4Decoration, setR4Decoration] = useState("");
-  const decorationOptions = useMemo(() => {
-    return decorationNames.map((name) => {
-      const matchedMaster = masters.find((m) => (m.model_name ?? "").trim() === name) ?? null;
-      return {
-        name,
-        totalLaborSellKrw: matchedMaster?.total_labor_sell_krw ?? null,
-      };
-    });
-  }, [decorationNames, masters]);
-  const selectedDecorationOption = decorationOptions.find((opt) => opt.name === r4Decoration) ?? null;
-  useEffect(() => {
-    if (!r4Decoration && decorationOptions.length > 0) setR4Decoration(decorationOptions[0].name);
-    if (r4Decoration && !decorationOptions.some((opt) => opt.name === r4Decoration)) setR4Decoration(decorationOptions[0]?.name ?? "");
-  }, [r4Decoration, decorationOptions]);
-  const [r4Delta, setR4Delta] = useState("0");
-  const [r4Multiplier, setR4Multiplier] = useState("0");
-  const [r4AdjustMode, setR4AdjustMode] = useState<"DELTA" | "MULTIPLIER">("DELTA");
-  const [r4RoundUnit, setR4RoundUnit] = useState("100");
-  const [r4RoundMode, setR4RoundMode] = useState<"CEIL" | "ROUND" | "FLOOR">("CEIL");
-  const [editingR4RuleId, setEditingR4RuleId] = useState("");
-
-  const r4ComputedDelta = useMemo(() => {
-    if (r4AdjustMode === "DELTA") return parseN(r4Delta, 0);
-    const labor = selectedDecorationOption?.totalLaborSellKrw ?? 0;
-    const ratio = parseN(r4Multiplier, 0) / 100;
-    const raw = labor * ratio;
-    return Math.round(raw / 100) * 100;
-  }, [r4AdjustMode, r4Delta, r4Multiplier, selectedDecorationOption]);
-
-  const createR4 = useMutation({
-    mutationFn: () =>
-      shopApiSend("/api/sync-rules/r4", "POST", {
-        rule_set_id: selectedRuleSetId,
-        linked_r1_rule_id: null,
-        match_material_code: null,
-        match_color_code: null,
-        match_decoration_code: r4Decoration,
-        match_category_code: null,
-        delta_krw: r4ComputedDelta,
-        rounding_unit: parseN(r4RoundUnit, 100),
-        rounding_mode: r4RoundMode,
-        is_active: true,
-      }),
-    onSuccess: async () => {
-      toast.success("R4 룰 추가 완료");
-      await qc.invalidateQueries({ queryKey: ["sync-r4", selectedRuleSetId] });
-    },
-    onError: (e: Error) => toast.error(e.message),
-  });
-
-  const updateR4 = useMutation({
-    mutationFn: () =>
-      shopApiSend("/api/sync-rules/r4", "PUT", {
-        rule_id: editingR4RuleId,
-        linked_r1_rule_id: null,
-        match_material_code: null,
-        match_color_code: null,
-        match_decoration_code: r4Decoration,
-        match_category_code: null,
-        delta_krw: r4ComputedDelta,
-        rounding_unit: parseN(r4RoundUnit, 100),
-        rounding_mode: r4RoundMode,
-        is_active: true,
-      }),
-    onSuccess: async () => {
-      toast.success("R4 룰 수정 완료");
-      setEditingR4RuleId("");
-      await qc.invalidateQueries({ queryKey: ["sync-r4", selectedRuleSetId] });
-    },
-    onError: (e: Error) => toast.error(e.message),
-  });
-
-  const deleteR4 = useMutation({
-    mutationFn: (ruleId: string) => shopApiSend("/api/sync-rules/r4", "DELETE", { rule_id: ruleId }),
-    onSuccess: async () => {
-      toast.success("R4 룰 삭제 완료");
-      setEditingR4RuleId("");
-      await qc.invalidateQueries({ queryKey: ["sync-r4", selectedRuleSetId] });
-    },
-    onError: (e: Error) => toast.error(e.message),
-  });
-
-  const startEditR4 = (rule: R4Rule) => {
-    setEditingR4RuleId(rule.rule_id);
-    setR4Decoration(rule.match_decoration_code);
-    setR4AdjustMode("DELTA");
-    setR4Delta(String(Number(rule.delta_krw ?? 0)));
-    setR4Multiplier("0");
-    setR4RoundUnit(String(Number(rule.rounding_unit ?? 100)));
-    setR4RoundMode(rule.rounding_mode ?? "CEIL");
-  };
-
-  const cancelEditR4 = () => setEditingR4RuleId("");
-
-  const [laborMasterId, setLaborMasterId] = useState("");
-  const [laborDelta, setLaborDelta] = useState("0");
-  const [laborReason, setLaborReason] = useState("");
-  useEffect(() => {
-    if (!laborMasterId && masters.length > 0) setLaborMasterId(masters[0].master_item_id);
-    if (laborMasterId && !masters.some((m) => m.master_item_id === laborMasterId)) setLaborMasterId(masters[0]?.master_item_id ?? "");
-  }, [laborMasterId, masters]);
-  const selectedLaborMaster = masters.find((m) => m.master_item_id === laborMasterId) ?? null;
-
-  const laborLogQuery = useQuery({
-    queryKey: ["channel-labor-price-adjustments", channelId, laborMasterId],
-    enabled: Boolean(channelId),
-    queryFn: () => shopApiGet<{ data: LaborLog[] }>(`/api/channel-labor-price-adjustments?channel_id=${encodeURIComponent(channelId)}&master_item_id=${encodeURIComponent(laborMasterId)}&limit=30`),
-  });
-
-  const addLaborAdjustment = useMutation({
-    mutationFn: () =>
-      shopApiSend("/api/channel-labor-price-adjustments", "POST", {
+      shopApiSend('/api/channel-labor-price-adjustments', 'POST', {
         channel_id: channelId,
         master_item_id: laborMasterId,
-        delta_krw: parseN(laborDelta, 0),
+        delta_krw: parseAmount(laborDelta),
         reason: laborReason.trim(),
       }),
-    onSuccess: async () => {
-      toast.success("총공임 조정 로그 저장 완료");
-      setLaborReason("");
-      await qc.invalidateQueries({ queryKey: ["channel-labor-price-adjustments", channelId, laborMasterId] });
-    },
-    onError: (e: Error) => toast.error(e.message),
   });
 
-  const coreDisabledReason = !channelId
-    ? "채널을 선택하세요"
-    : !selectedRuleSetId
-      ? "기본 룰셋 자동 생성 중입니다"
-      : "";
+  const handleSaveRule = (label: string, payload: RulePayload, afterSuccess?: () => void) => {
+    saveRuleMutation.mutate(
+      { label, payload },
+      {
+        onSuccess: async () => {
+          toast.success(`${label} 저장 완료`);
+          afterSuccess?.();
+          await refreshRules();
+        },
+        onError: (error) => {
+          toast.error(describeError(error));
+        },
+      },
+    );
+  };
+
+  const handleDeleteRule = (label: string, ruleId: string) => {
+    deleteRuleMutation.mutate(
+      { label, ruleId },
+      {
+        onSuccess: async () => {
+          toast.success(`${label} 삭제 완료`);
+          await refreshRules();
+        },
+        onError: (error) => {
+          toast.error(describeError(error));
+        },
+      },
+    );
+  };
+
+  const handleSaveMaterial = () => {
+    if (!basePayload) return;
+    handleSaveRule('소재 분류 기준', {
+      ...basePayload,
+      rule_id: materialRule?.rule_id,
+      category_key: 'MATERIAL',
+      scope_material_code: null,
+      additional_weight_g: null,
+      plating_enabled: null,
+      color_code: null,
+      decoration_master_id: null,
+      decoration_model_name: null,
+      base_labor_cost_krw: 0,
+      additive_delta_krw: 0,
+    });
+  };
+
+  const handleSaveSize = () => {
+    if (!basePayload) return;
+    handleSaveRule(
+      sizeDraft.ruleId ? '사이즈 룰 수정' : '사이즈 룰',
+      {
+        ...basePayload,
+        rule_id: sizeDraft.ruleId || undefined,
+        category_key: 'SIZE',
+        scope_material_code: sizeDraft.materialCode || null,
+        additional_weight_g: Number(sizeDraft.weightG),
+        plating_enabled: null,
+        color_code: null,
+        decoration_master_id: null,
+        decoration_model_name: null,
+        base_labor_cost_krw: 0,
+        additive_delta_krw: parseAmount(sizeDraft.additiveKrw),
+      },
+      () => setSizeDraft(createEmptySizeDraft(materials)),
+    );
+  };
+
+  const handleSaveColor = () => {
+    if (!basePayload) return;
+    handleSaveRule(
+      colorDraft.ruleId ? '색상/도금 룰 수정' : '색상/도금 룰',
+      {
+        ...basePayload,
+        rule_id: colorDraft.ruleId || undefined,
+        category_key: 'COLOR_PLATING',
+        scope_material_code: null,
+        additional_weight_g: null,
+        plating_enabled: colorDraft.platingEnabled === 'true',
+        color_code: colorDraft.colorCode || null,
+        decoration_master_id: null,
+        decoration_model_name: null,
+        base_labor_cost_krw: 0,
+        additive_delta_krw: parseAmount(colorDraft.additiveKrw),
+      },
+      () => setColorDraft(createEmptyColorDraft(colors)),
+    );
+  };
+
+  const handleSaveDecor = () => {
+    if (!basePayload || !selectedDecorMaster) return;
+    handleSaveRule(
+      decorDraft.ruleId ? '장식 룰 수정' : '장식 룰',
+      {
+        ...basePayload,
+        rule_id: decorDraft.ruleId || undefined,
+        category_key: 'DECOR',
+        scope_material_code: null,
+        additional_weight_g: null,
+        plating_enabled: null,
+        color_code: null,
+        decoration_master_id: selectedDecorMaster.master_item_id,
+        decoration_model_name: selectedDecorMaster.model_name,
+        base_labor_cost_krw: laborOf(selectedDecorMaster),
+        additive_delta_krw: parseAmount(decorDraft.additiveKrw),
+      },
+      () => setDecorDraft(createEmptyDecorDraft(decorationMasters)),
+    );
+  };
+
+  const handleSaveOther = () => {
+    if (!basePayload) return;
+    handleSaveRule('기타 추가 공임', {
+      ...basePayload,
+      rule_id: otherRule?.rule_id,
+      category_key: 'OTHER',
+      scope_material_code: null,
+      additional_weight_g: null,
+      plating_enabled: null,
+      color_code: null,
+      decoration_master_id: null,
+      decoration_model_name: null,
+      base_labor_cost_krw: 0,
+      additive_delta_krw: parseAmount(otherAdditive),
+    });
+  };
+
+  const handleSaveLaborLog = () => {
+    laborLogMutation.mutate(undefined, {
+      onSuccess: async () => {
+        toast.success('총공임 조정 로그 저장 완료');
+        setLaborDelta('0');
+        setLaborReason('');
+        await Promise.all([
+          queryClient.invalidateQueries({ queryKey: ['channel-labor-price-adjustments', channelId, laborMasterId] }),
+          queryClient.invalidateQueries({ queryKey: ['option-labor-rule-pools', channelId] }),
+        ]);
+      },
+      onError: (error) => {
+        toast.error(describeError(error));
+      },
+    });
+  };
+
+  const colorNameMap = useMemo(() => {
+    return new Map(colors.map((row) => [row.color_code, `${row.display_name} (${row.color_code})`]));
+  }, [colors]);
+
+  const decorationNameMap = useMemo(() => {
+    return new Map(
+      decorationMasters.map((row) => [row.master_item_id, row.model_name ?? row.master_item_id]),
+    );
+  }, [decorationMasters]);
+
+  const disabledReason = !channelId ? '채널을 선택하세요.' : !selectedContext ? '매핑 컨텍스트를 선택하세요.' : '';
+  const pageError = channelsQuery.error
+    ? describeError(channelsQuery.error)
+    : poolsQuery.error
+      ? describeError(poolsQuery.error)
+      : rulesQuery.error
+        ? describeError(rulesQuery.error)
+        : laborLogQuery.error
+          ? describeError(laborLogQuery.error)
+          : '';
+  const hasPageError = Boolean(channelsQuery.error || poolsQuery.error || rulesQuery.error || laborLogQuery.error);
+  const isRuleMutating = saveRuleMutation.isPending || deleteRuleMutation.isPending;
+  const isSizeEditing = Boolean(sizeDraft.ruleId);
+  const isColorEditing = Boolean(colorDraft.ruleId);
+  const isDecorEditing = Boolean(decorDraft.ruleId);
 
   return (
     <div className="space-y-4">
-      <ActionBar title="옵션 룰 설정" subtitle="채널 기본 룰셋 자동 생성 + 마스터 풀 선택 운영" />
+      <ActionBar
+        title="옵션 공임 룰 매니저"
+        subtitle="채널과 상품 컨텍스트 기준으로 옵션 공임 룰, 장식 기준 공임, 총공임 조정 로그를 운영합니다."
+        actions={
+          <Button
+            variant="secondary"
+            onClick={() => {
+              void Promise.all([
+                queryClient.invalidateQueries({ queryKey: ['shop-channels'] }),
+                queryClient.invalidateQueries({ queryKey: ['option-labor-rule-pools', channelId] }),
+                queryClient.invalidateQueries({
+                  queryKey: [
+                    'option-labor-rules',
+                    channelId,
+                    selectedContext?.master_item_id ?? '',
+                    selectedContext?.external_product_no ?? '',
+                  ],
+                }),
+                queryClient.invalidateQueries({ queryKey: ['channel-labor-price-adjustments', channelId, laborMasterId] }),
+              ]);
+            }}
+          >
+            새로고침
+          </Button>
+        }
+      />
 
       <ShoppingPageHeader
-        purpose="옵션 룰(R1~R4)과 총공임 조정을 통해 옵션 가격 계산 규칙을 명확하게 운영합니다."
+        purpose="MATERIAL 분류 기준, SIZE 소재+중량, COLOR_PLATING 도금+색상, DECOR 장식 총공임+추가 공임, OTHER 공통 추가 공임을 한 화면에서 관리합니다."
         status={[
-          { label: "룰셋", value: `${ruleSets.length}개` },
-          { label: "선택 룰셋", value: selectedRuleSetId ? "선택됨" : "자동생성 대기", tone: selectedRuleSetId ? "good" : "warn" },
-          { label: "작업 가능", value: coreDisabledReason ? "대기" : "가능", tone: coreDisabledReason ? "warn" : "good" },
+          { label: '컨텍스트', value: `${contexts.length}개` },
+          { label: '선택 상태', value: selectedContext ? '선택됨' : '대기', tone: selectedContext ? 'good' : 'warn' },
+          { label: '저장 룰', value: `${rules.length}건`, tone: rules.length > 0 ? 'good' : 'neutral' },
         ]}
         nextActions={[
-          { label: "자동 가격으로", href: "/settings/shopping/auto-price" },
-          { label: "정책/팩터로", href: "/settings/shopping/factors" },
+          { label: '상품 매핑으로', href: '/settings/shopping/mappings' },
+          { label: '운영 워크플로우로', href: '/settings/shopping/workflow' },
         ]}
       />
 
+      {hasPageError ? (
+        <Card>
+          <CardBody>
+            <div className="rounded border border-red-300/50 bg-red-500/5 px-3 py-3 text-sm text-red-700">
+              {pageError}
+            </div>
+          </CardBody>
+        </Card>
+      ) : null}
+
       <Card>
-        <CardHeader title="채널" description="룰셋은 채널별 기본값으로 자동 생성됩니다" />
+        <CardHeader
+          title="채널 / 적용 컨텍스트"
+          description="채널과 특정 매핑 상품 컨텍스트를 선택하면 해당 상품의 옵션 공임 룰만 조회하고 수정합니다."
+        />
         <CardBody className="space-y-3">
-          <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
             <div>
               <div className="mb-1 text-xs text-[var(--muted)]">채널</div>
-              <Select value={channelId} onChange={(e) => setChannelId(e.target.value)}>
+              <Select value={channelId} onChange={(event) => setChannelId(event.target.value)}>
                 <option value="">채널 선택</option>
-                {channels.map((c) => <option key={c.channel_id} value={c.channel_id}>{c.channel_name}</option>)}
+                {channels.map((channel) => (
+                  <option key={channel.channel_id} value={channel.channel_id}>
+                    {`${channel.channel_name} (${channel.channel_code})`}
+                  </option>
+                ))}
               </Select>
             </div>
             <div>
-              <div className="mb-1 text-xs text-[var(--muted)]">적용 룰셋</div>
-              <Input value={(ruleSets.find((r) => r.rule_set_id === selectedRuleSetId)?.name ?? "") || "자동 생성 중"} disabled />
+              <div className="mb-1 text-xs text-[var(--muted)]">매핑 컨텍스트</div>
+              <Select
+                value={contextKey}
+                onChange={(event) => setContextKey(event.target.value)}
+                disabled={!channelId || contexts.length === 0}
+              >
+                <option value="">매핑 컨텍스트 선택</option>
+                {contexts.map((row) => (
+                  <option key={contextKeyOf(row)} value={contextKeyOf(row)}>
+                    {`${row.model_name ?? row.master_item_id} / ${row.external_product_no}`}
+                  </option>
+                ))}
+              </Select>
+            </div>
+            <div>
+              <div className="mb-1 text-xs text-[var(--muted)]">마스터</div>
+              <Input value={selectedContext?.model_name ?? selectedContext?.master_item_id ?? '-'} disabled />
+            </div>
+            <div>
+              <div className="mb-1 text-xs text-[var(--muted)]">쇼핑몰 상품번호</div>
+              <Input value={selectedContext?.external_product_no ?? '-'} disabled />
             </div>
           </div>
-          {coreDisabledReason ? <div className="text-xs text-[var(--muted)]">{coreDisabledReason}</div> : null}
+
+          {selectedContext ? (
+            <div className="grid grid-cols-1 gap-2 rounded border border-[var(--hairline)] bg-[var(--background)] px-3 py-2 text-xs text-[var(--muted)] md:grid-cols-3">
+              <div>기본 소재: {selectedContext.material_code_default ?? '-'}</div>
+              <div>불러온 룰: {rules.length}건</div>
+              <div>
+                조회 상태: {channelsQuery.isFetching || poolsQuery.isFetching || rulesQuery.isFetching ? '갱신 중' : '준비됨'}
+              </div>
+            </div>
+          ) : null}
+
+          {disabledReason ? <div className="text-xs text-[var(--muted)]">{disabledReason}</div> : null}
+        </CardBody>
+      </Card>
+
+      {laborMasters.length > 0 ? (
+        <Card>
+          <CardHeader
+            title="총공임 기준 조정 로그"
+            description="선택한 마스터의 총공임 기준값을 확인하고, 로그 기반으로 증감 이력을 남깁니다."
+          />
+          <CardBody className="space-y-3">
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
+              <div>
+                <div className="mb-1 text-xs text-[var(--muted)]">마스터</div>
+                <Select value={laborMasterId} onChange={(event) => setLaborMasterId(event.target.value)}>
+                  <option value="">마스터 선택</option>
+                  {laborMasters.map((master) => (
+                    <option key={master.master_item_id} value={master.master_item_id}>
+                      {master.model_name ?? master.master_item_id}
+                    </option>
+                  ))}
+                </Select>
+              </div>
+              <div>
+                <div className="mb-1 text-xs text-[var(--muted)]">총공임 기준값</div>
+                <Input value={formatWon(laborOf(currentLaborMaster))} disabled />
+              </div>
+              <div>
+                <div className="mb-1 text-xs text-[var(--muted)]">조정 금액(+/-)</div>
+                <Input
+                  type="number"
+                  autoFormat={false}
+                  step={100}
+                  value={laborDelta}
+                  onChange={(event) => setLaborDelta(event.target.value)}
+                  placeholder="예: 5000 또는 -3000"
+                />
+              </div>
+              <div>
+                <div className="mb-1 text-xs text-[var(--muted)]">사유</div>
+                <Input
+                  value={laborReason}
+                  onChange={(event) => setLaborReason(event.target.value)}
+                  placeholder="사유 필수"
+                />
+              </div>
+            </div>
+
+            <Button
+              onClick={handleSaveLaborLog}
+              disabled={
+                !channelId
+                || !laborMasterId
+                || !laborReason.trim()
+                || parseAmount(laborDelta) === 0
+                || laborLogMutation.isPending
+              }
+            >
+              총공임 조정 로그 저장
+            </Button>
+
+            <div className="max-h-[220px] overflow-auto rounded border border-[var(--hairline)]">
+              <table className="w-full text-sm">
+                <thead className="bg-[var(--panel)] text-left">
+                  <tr>
+                    <th className="px-3 py-2">시각</th>
+                    <th className="px-3 py-2">조정</th>
+                    <th className="px-3 py-2">사유</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(laborLogQuery.data?.data ?? []).map((log) => (
+                    <tr key={log.adjustment_log_id} className="border-t border-[var(--hairline)]">
+                      <td className="px-3 py-2">{formatWhen(log.created_at)}</td>
+                      <td className="px-3 py-2">{formatWon(log.delta_krw)}</td>
+                      <td className="px-3 py-2">{log.reason}</td>
+                    </tr>
+                  ))}
+                  {!laborLogQuery.isFetching && (laborLogQuery.data?.data ?? []).length === 0 ? (
+                    <tr>
+                      <td colSpan={3} className="px-3 py-8 text-center text-[var(--muted)]">
+                        저장된 총공임 조정 로그가 없습니다.
+                      </td>
+                    </tr>
+                  ) : null}
+                </tbody>
+              </table>
+            </div>
+          </CardBody>
+        </Card>
+      ) : null}
+
+      <Card>
+        <CardHeader title="1. 소재" description="MATERIAL은 분류 기준만 저장하는 classification-only 섹션입니다." />
+        <CardBody className="space-y-3">
+          <div className="rounded border border-[var(--hairline)] bg-[var(--background)] px-3 py-2 text-xs text-[var(--muted)]">
+            소재 룰은 가격 데이터를 갖지 않습니다. 현재 컨텍스트의 기본 소재를 기준으로 MATERIAL 행만 유지합니다.
+          </div>
+
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
+            <div>
+              <div className="mb-1 text-xs text-[var(--muted)]">기준 소재</div>
+              <Input value={selectedContext?.material_code_default ?? '-'} disabled />
+            </div>
+            <div>
+              <div className="mb-1 text-xs text-[var(--muted)]">등록 상태</div>
+              <Input value={materialRule ? '등록됨' : '미등록'} disabled />
+            </div>
+            <div>
+              <div className="mb-1 text-xs text-[var(--muted)]">최종 갱신</div>
+              <Input value={formatWhen(materialRule?.updated_at ?? materialRule?.created_at)} disabled />
+            </div>
+            <div className="space-y-2">
+              <div className="mb-1 text-xs text-[var(--muted)]">관리</div>
+              <Button onClick={handleSaveMaterial} disabled={Boolean(disabledReason) || isRuleMutating}>
+                {materialRule ? '분류 기준 재저장' : '분류 기준 등록'}
+              </Button>
+              {materialRule ? (
+                <Button
+                  variant="ghost"
+                  onClick={() => handleDeleteRule('소재 분류 기준', materialRule.rule_id)}
+                  disabled={deleteRuleMutation.isPending}
+                >
+                  분류 기준 제거
+                </Button>
+              ) : null}
+            </div>
+          </div>
         </CardBody>
       </Card>
 
       <Card>
-        <CardHeader title="총공임 기준 조정" description="마스터 총공임 판매값 기준으로 + / - 조정, 사유 로그 필수" />
-        <CardBody className="space-y-2">
-          <div className="grid grid-cols-1 gap-2 md:grid-cols-4">
+        <CardHeader title="2. 사이즈" description="SIZE는 소재 + 추가 중량 조합별 추가 공임을 저장합니다." />
+        <CardBody className="space-y-3">
+          <div className="rounded border border-[var(--hairline)] bg-[var(--background)] px-3 py-2 text-xs text-[var(--muted)]">
+            자동 소재 분류기와 추가 중량(0.01g ~ 100.00g) 조합으로 SIZE 룰을 단건 저장합니다.
+          </div>
+
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
             <div>
-              <div className="mb-1 text-xs text-[var(--muted)]">마스터</div>
-              <Select value={laborMasterId} onChange={(e) => setLaborMasterId(e.target.value)}>
-                <option value="">마스터 선택</option>
-                {masters.map((m) => <option key={m.master_item_id} value={m.master_item_id}>{m.model_name ?? m.master_item_id}</option>)}
+              <div className="mb-1 text-xs text-[var(--muted)]">자동 소재 분류기</div>
+              <Select
+                value={sizeDraft.materialCode}
+                onChange={(event) => setSizeDraft((current) => ({ ...current, materialCode: event.target.value }))}
+                disabled={materials.length === 0}
+              >
+                <option value="">소재 선택</option>
+                {materials.map((materialCode) => (
+                  <option key={materialCode} value={materialCode}>
+                    {materialCode}
+                  </option>
+                ))}
               </Select>
             </div>
             <div>
-              <div className="mb-1 text-xs text-[var(--muted)]">총공임 판매값(기준)</div>
-              <Input value={selectedLaborMaster ? selectedLaborMaster.total_labor_sell_krw.toLocaleString() : "-"} disabled />
+              <div className="mb-1 text-xs text-[var(--muted)]">추가 중량</div>
+              <Select
+                value={sizeDraft.weightG}
+                onChange={(event) => setSizeDraft((current) => ({ ...current, weightG: event.target.value }))}
+              >
+                {WEIGHT_OPTIONS.map((weight) => (
+                  <option key={weight} value={weight}>
+                    {weight}g
+                  </option>
+                ))}
+              </Select>
             </div>
             <div>
-              <div className="mb-1 text-xs text-[var(--muted)]">조정 금액(+/-)</div>
-              <Input type="number" step={100} value={laborDelta} onChange={(e) => setLaborDelta(e.target.value)} placeholder="예: 5000 / -3000" />
+              <div className="mb-1 text-xs text-[var(--muted)]">추가 공임</div>
+              <Input
+                type="number"
+                autoFormat={false}
+                step={100}
+                value={sizeDraft.additiveKrw}
+                onChange={(event) => setSizeDraft((current) => ({ ...current, additiveKrw: event.target.value }))}
+                placeholder="예: 3000"
+              />
             </div>
-            <div>
-              <div className="mb-1 text-xs text-[var(--muted)]">사유</div>
-              <Input value={laborReason} onChange={(e) => setLaborReason(e.target.value)} placeholder="사유 필수" />
+            <div className="space-y-2">
+              <div className="mb-1 text-xs text-[var(--muted)]">저장</div>
+              <Button onClick={handleSaveSize} disabled={Boolean(disabledReason) || !sizeDraft.materialCode || isRuleMutating}>
+                {isSizeEditing ? '사이즈 룰 수정 저장' : '사이즈 룰 추가'}
+              </Button>
+              {isSizeEditing ? (
+                <Button variant="ghost" onClick={() => setSizeDraft(createEmptySizeDraft(materials))}>
+                  수정 취소
+                </Button>
+              ) : null}
             </div>
           </div>
-          <Button onClick={() => addLaborAdjustment.mutate()} disabled={!channelId || !laborMasterId || !laborReason.trim() || parseN(laborDelta, 0) === 0 || addLaborAdjustment.isPending}>총공임 조정 로그 저장</Button>
-          <div className="max-h-[160px] overflow-auto rounded border border-[var(--hairline)]">
+
+          <div className="max-h-[260px] overflow-auto rounded border border-[var(--hairline)]">
             <table className="w-full text-sm">
-              <thead className="bg-[var(--panel)] text-left"><tr><th className="px-3 py-2">시각</th><th className="px-3 py-2">조정</th><th className="px-3 py-2">사유</th></tr></thead>
-              <tbody>{(laborLogQuery.data?.data ?? []).map((row) => <tr key={row.adjustment_log_id} className="border-t border-[var(--hairline)]"><td className="px-3 py-2">{new Date(row.created_at).toLocaleString()}</td><td className="px-3 py-2">{Number(row.delta_krw).toLocaleString()}</td><td className="px-3 py-2">{row.reason}</td></tr>)}</tbody>
+              <thead className="bg-[var(--panel)] text-left">
+                <tr>
+                  <th className="px-3 py-2">소재</th>
+                  <th className="px-3 py-2">추가 중량</th>
+                  <th className="px-3 py-2">추가 공임</th>
+                  <th className="px-3 py-2">관리</th>
+                </tr>
+              </thead>
+              <tbody>
+                {sizeRules.map((rule) => (
+                  <tr key={rule.rule_id} className="border-t border-[var(--hairline)]">
+                    <td className="px-3 py-2">{rule.scope_material_code ?? '-'}</td>
+                    <td className="px-3 py-2">{`${toNumber(rule.additional_weight_g).toFixed(2)}g`}</td>
+                    <td className="px-3 py-2">{formatWon(rule.additive_delta_krw)}</td>
+                    <td className="px-3 py-2">
+                      <div className="flex gap-1">
+                        <Button
+                          variant="secondary"
+                          onClick={() => {
+                            setSizeDraft({
+                              ruleId: rule.rule_id,
+                              materialCode: rule.scope_material_code ?? materials[0] ?? '',
+                              weightG: toNumber(rule.additional_weight_g).toFixed(2),
+                              additiveKrw: String(toNumber(rule.additive_delta_krw)),
+                            });
+                          }}
+                        >
+                          수정
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          onClick={() => handleDeleteRule('사이즈 룰', rule.rule_id)}
+                          disabled={deleteRuleMutation.isPending}
+                        >
+                          삭제
+                        </Button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+                {sizeRules.length === 0 ? (
+                  <tr>
+                    <td colSpan={4} className="px-3 py-8 text-center text-[var(--muted)]">
+                      등록된 사이즈 룰이 없습니다.
+                    </td>
+                  </tr>
+                ) : null}
+              </tbody>
             </table>
           </div>
         </CardBody>
       </Card>
 
-      <div className="flex min-h-[620px] overflow-hidden rounded border border-[var(--hairline)] bg-[var(--panel)]">
-        <div className="w-60 border-r border-[var(--hairline)] p-2">
-          {([
-            { key: "MATERIAL", label: "소재룰", desc: "R1 소재 전환" },
-            { key: "SIZE", label: "사이즈룰", desc: "R2 단일 마진" },
-            { key: "PLATING", label: "도금룰", desc: "R3 색상+마진" },
-            { key: "DECORATION", label: "장식룰", desc: "R4 소재/색상/장식" },
-          ] as Array<{ key: RuleSection; label: string; desc: string }>).map((item) => (
-            <button key={item.key} onClick={() => setActiveSection(item.key)} className={`mb-2 w-full rounded border p-3 text-left ${activeSection === item.key ? "border-[var(--primary)] bg-[var(--chip)]" : "border-[var(--hairline)]"}`}>
-              <div className="text-sm font-semibold">{item.label}</div>
-              <div className="text-xs text-[var(--muted)]">{item.desc}</div>
-            </button>
-          ))}
-        </div>
+      <Card>
+        <CardHeader title="3. 색상 / 도금" description="COLOR_PLATING은 도금 여부 + 색상 조합별 추가 공임을 저장합니다." />
+        <CardBody className="space-y-3">
+          <div className="rounded border border-[var(--hairline)] bg-[var(--background)] px-3 py-2 text-xs text-[var(--muted)]">
+            도금 여부를 필수로 선택하고, 색상은 전체 또는 특정 색상으로 세분화해 저장합니다.
+          </div>
 
-        <div className="flex-1 overflow-auto p-4">
-          {activeSection === "MATERIAL" ? (
-            <Card>
-              <CardHeader title="소재룰 (R1)" description="Source/Target은 마스터/시세 소재 전체 풀" />
-              <CardBody className="space-y-3">
-                <div className="rounded border border-[var(--hairline)] bg-[var(--background)] px-3 py-2 text-xs text-[var(--muted)]">
-                  등록 {r1Query.data?.data?.length ?? 0}건 · Source→Target 전환만 관리합니다.
-                </div>
-                <div className="flex flex-wrap gap-2">{materials.map((code) => <Button key={code} variant="secondary" onClick={() => setSourceTabCode(code)} className={sourceTabCode === code ? "ring-2 ring-[var(--primary)]" : ""}>Source {code}</Button>)}</div>
-                <div className="grid grid-cols-1 gap-2 md:grid-cols-6">
-                  <div><div className="mb-1 text-xs text-[var(--muted)]">Source</div><Input value={sourceTabCode} disabled /></div>
-                  <div><div className="mb-1 text-xs text-[var(--muted)]">Target</div><Select value={r1Target} onChange={(e) => setR1Target(e.target.value)}>{r1TargetOptions.map((code) => <option key={code} value={code}>{code}</option>)}</Select></div>
-                  <div><div className="mb-1 text-xs text-[var(--muted)]">중량보정계수</div><Input value={r1Mul} onChange={(e) => setR1Mul(e.target.value)} /></div>
-                  <div><div className="mb-1 text-xs text-[var(--muted)]">라운딩 단위(100원 단위)</div><Select value={r1RoundUnit} onChange={(e) => setR1RoundUnit(e.target.value)}>{ROUNDING_UNIT_OPTIONS.map((u) => <option key={u} value={u}>{u}</option>)}</Select></div>
-                  <div className="space-y-1"><div className="mb-1 text-xs text-[var(--muted)]">저장</div><Button onClick={() => (editingR1RuleId ? updateR1.mutate() : createR1.mutate())} disabled={Boolean(coreDisabledReason) || !sourceTabCode || !r1Target || createR1.isPending || updateR1.isPending}>{editingR1RuleId ? "R1 수정 저장" : "R1 추가"}</Button>{editingR1RuleId ? <Button variant="ghost" onClick={cancelEditR1}>수정 취소</Button> : null}</div>
-                </div>
-                <Select value={r1RoundMode} onChange={(e) => setR1RoundMode(e.target.value as "CEIL" | "ROUND" | "FLOOR") }>{ROUNDING_MODE_OPTIONS.map((opt) => <option key={opt.value} value={opt.value}>{opt.label}</option>)}</Select>
-                <div className="max-h-[240px] overflow-auto rounded border border-[var(--hairline)]"><table className="w-full text-sm"><thead className="bg-[var(--panel)] text-left"><tr><th className="px-3 py-2">Source</th><th className="px-3 py-2">Target</th><th className="px-3 py-2">중량보정</th><th className="px-3 py-2">라운딩</th><th className="px-3 py-2">관리</th></tr></thead><tbody>{(r1Query.data?.data ?? []).map((r) => <tr key={r.rule_id} className="border-t border-[var(--hairline)]"><td className="px-3 py-2">{r.source_material_code ?? "*"}</td><td className="px-3 py-2">{r.target_material_code}</td><td className="px-3 py-2">{r.option_weight_multiplier}</td><td className="px-3 py-2">{r.rounding_unit}/{ROUNDING_MODE_LABEL[r.rounding_mode]}</td><td className="px-3 py-2"><div className="flex gap-1"><Button variant="secondary" onClick={() => startEditR1(r)}>수정</Button><Button variant="ghost" onClick={() => deleteR1.mutate(r.rule_id)} disabled={deleteR1.isPending}>삭제</Button></div></td></tr>)}</tbody></table></div>
-              </CardBody>
-            </Card>
-          ) : null}
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
+            <div>
+              <div className="mb-1 text-xs text-[var(--muted)]">도금 여부</div>
+              <Select
+                value={colorDraft.platingEnabled}
+                onChange={(event) => setColorDraft((current) => ({ ...current, platingEnabled: event.target.value }))}
+              >
+                <option value="true">도금 있음</option>
+                <option value="false">도금 없음</option>
+              </Select>
+            </div>
+            <div>
+              <div className="mb-1 text-xs text-[var(--muted)]">색상</div>
+              <Select
+                value={colorDraft.colorCode}
+                onChange={(event) => setColorDraft((current) => ({ ...current, colorCode: event.target.value }))}
+              >
+                <option value="">전체 색상</option>
+                {colors.map((color) => (
+                  <option key={color.color_code} value={color.color_code}>
+                    {`${color.display_name} (${color.color_code})`}
+                  </option>
+                ))}
+              </Select>
+            </div>
+            <div>
+              <div className="mb-1 text-xs text-[var(--muted)]">추가 공임</div>
+              <Input
+                type="number"
+                autoFormat={false}
+                step={100}
+                value={colorDraft.additiveKrw}
+                onChange={(event) => setColorDraft((current) => ({ ...current, additiveKrw: event.target.value }))}
+                placeholder="예: 2000"
+              />
+            </div>
+            <div className="space-y-2">
+              <div className="mb-1 text-xs text-[var(--muted)]">저장</div>
+              <Button onClick={handleSaveColor} disabled={Boolean(disabledReason) || isRuleMutating}>
+                {isColorEditing ? '색상/도금 룰 수정 저장' : '색상/도금 룰 추가'}
+              </Button>
+              {isColorEditing ? (
+                <Button variant="ghost" onClick={() => setColorDraft(createEmptyColorDraft(colors))}>
+                  수정 취소
+                </Button>
+              ) : null}
+            </div>
+          </div>
 
-          {activeSection === "SIZE" ? (
-            <Card>
-              <CardHeader title="사이즈룰 (R2)" description="Source 소재 + 카테고리 기준, 단일 마진과 추가금 운영" />
-              <CardBody className="space-y-2">
-                <div className="rounded border border-[var(--hairline)] bg-[var(--background)] px-3 py-2 text-xs text-[var(--muted)]">
-                  등록 {r2Query.data?.data?.length ?? 0}건 · 소재+카테고리 단일 마진 규칙입니다.
-                </div>
-                <div className="flex flex-wrap gap-2">{materials.map((code) => <Button key={code} variant="secondary" onClick={() => setR2SourceMaterial(code)} className={r2SourceMaterial === code ? "ring-2 ring-[var(--primary)]" : ""}>Source {code}</Button>)}</div>
-                <div className="grid grid-cols-1 gap-2 md:grid-cols-7">
-                  <div><div className="mb-1 text-xs text-[var(--muted)]">Source</div><Input value={r2SourceMaterial} disabled /></div>
-                  <div><div className="mb-1 text-xs text-[var(--muted)]">카테고리</div><Select value={r2Category} onChange={(e) => setR2Category(e.target.value)}>{categoryPool.map((c) => <option key={c} value={c}>{categoryLabel(c)}</option>)}</Select></div>
-                  <div><div className="mb-1 text-xs text-[var(--muted)]">단일 마진 (만원/원)</div><div className="flex gap-1"><Select value={r2MarginMajor} onChange={(e) => setR2MarginMajor(e.target.value)}>{MAJOR_AMOUNT_OPTIONS.map((v) => <option key={`r2-margin-major-${v}`} value={v}>{v}만원</option>)}</Select><Select value={r2MarginMinor} onChange={(e) => setR2MarginMinor(e.target.value)}>{MINOR_AMOUNT_OPTIONS.map((v) => <option key={`r2-margin-minor-${v}`} value={v}>{v}원</option>)}</Select></div></div>
-                  <div><div className="mb-1 text-xs text-[var(--muted)]">라운딩 단위(100원 단위)</div><Select value={r2RoundUnit} onChange={(e) => setR2RoundUnit(e.target.value)}>{ROUNDING_UNIT_OPTIONS.map((u) => <option key={u} value={u}>{u}</option>)}</Select></div>
-                  <div className="space-y-1"><div className="mb-1 text-xs text-[var(--muted)]">저장</div><Button onClick={() => (editingR2RuleId ? updateR2.mutate() : createR2.mutate())} disabled={Boolean(coreDisabledReason) || createR2.isPending || updateR2.isPending}>{editingR2RuleId ? "R2 수정 저장" : "R2 추가"}</Button>{editingR2RuleId ? <Button variant="ghost" onClick={cancelEditR2}>수정 취소</Button> : null}</div>
-                </div>
-                <Select value={r2RoundMode} onChange={(e) => setR2RoundMode(e.target.value as "CEIL" | "ROUND" | "FLOOR") }>{ROUNDING_MODE_OPTIONS.map((opt) => <option key={opt.value} value={opt.value}>{opt.label}</option>)}</Select>
-                <div className="max-h-[240px] overflow-auto rounded border border-[var(--hairline)]"><table className="w-full text-sm"><thead className="bg-[var(--panel)] text-left"><tr><th className="px-3 py-2">Source</th><th className="px-3 py-2">카테고리</th><th className="px-3 py-2">단일 마진</th><th className="px-3 py-2">라운딩</th><th className="px-3 py-2">관리</th></tr></thead><tbody>{(r2Query.data?.data ?? []).map((r) => <tr key={r.rule_id} className="border-t border-[var(--hairline)]"><td className="px-3 py-2">{r.match_material_code ?? "*"}</td><td className="px-3 py-2">{r.match_category_code ? categoryLabel(r.match_category_code) : "*"}</td><td className="px-3 py-2">{(r.margin_min_krw ?? r.margin_max_krw ?? 0).toLocaleString()}</td><td className="px-3 py-2">{r.rounding_unit}/{ROUNDING_MODE_LABEL[r.rounding_mode]}</td><td className="px-3 py-2"><div className="flex gap-1"><Button variant="secondary" onClick={() => startEditR2(r)}>수정</Button><Button variant="ghost" onClick={() => deleteR2.mutate(r.rule_id)} disabled={deleteR2.isPending}>삭제</Button></div></td></tr>)}</tbody></table></div>
-              </CardBody>
-            </Card>
-          ) : null}
+          <div className="max-h-[260px] overflow-auto rounded border border-[var(--hairline)]">
+            <table className="w-full text-sm">
+              <thead className="bg-[var(--panel)] text-left">
+                <tr>
+                  <th className="px-3 py-2">도금 여부</th>
+                  <th className="px-3 py-2">색상</th>
+                  <th className="px-3 py-2">추가 공임</th>
+                  <th className="px-3 py-2">관리</th>
+                </tr>
+              </thead>
+              <tbody>
+                {colorRules.map((rule) => (
+                  <tr key={rule.rule_id} className="border-t border-[var(--hairline)]">
+                    <td className="px-3 py-2">{rule.plating_enabled === false ? '도금 없음' : '도금 있음'}</td>
+                    <td className="px-3 py-2">{rule.color_code ? (colorNameMap.get(rule.color_code) ?? rule.color_code) : '전체 색상'}</td>
+                    <td className="px-3 py-2">{formatWon(rule.additive_delta_krw)}</td>
+                    <td className="px-3 py-2">
+                      <div className="flex gap-1">
+                        <Button
+                          variant="secondary"
+                          onClick={() => {
+                            setColorDraft({
+                              ruleId: rule.rule_id,
+                              platingEnabled: rule.plating_enabled === false ? 'false' : 'true',
+                              colorCode: rule.color_code ?? '',
+                              additiveKrw: String(toNumber(rule.additive_delta_krw)),
+                            });
+                          }}
+                        >
+                          수정
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          onClick={() => handleDeleteRule('색상/도금 룰', rule.rule_id)}
+                          disabled={deleteRuleMutation.isPending}
+                        >
+                          삭제
+                        </Button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+                {colorRules.length === 0 ? (
+                  <tr>
+                    <td colSpan={4} className="px-3 py-8 text-center text-[var(--muted)]">
+                      등록된 색상/도금 룰이 없습니다.
+                    </td>
+                  </tr>
+                ) : null}
+              </tbody>
+            </table>
+          </div>
+        </CardBody>
+      </Card>
 
-          {activeSection === "PLATING" ? (
-            <Card>
-              <CardHeader title="도금룰 (R3)" description="활성 도금코드별 단일 마진 운영" />
-              <CardBody className="space-y-2">
-                <div className="rounded border border-[var(--hairline)] bg-[var(--background)] px-3 py-2 text-xs text-[var(--muted)]">
-                  등록 {r3Query.data?.data?.length ?? 0}건 · 현재 등록 가능한 도금코드: {platingColorOptions.map((opt) => opt.color_code).join(", ") || "없음"}
-                </div>
-                <div className="grid grid-cols-1 gap-2 md:grid-cols-7">
-                  <div><div className="mb-1 text-xs text-[var(--muted)]">도금 코드</div><Select value={r3Color} onChange={(e) => setR3Color(e.target.value)}>{platingColorOptions.map((opt) => <option key={opt.color_code} value={opt.color_code}>{opt.display_name} ({opt.color_code})</option>)}</Select></div>
-                  <div><div className="mb-1 text-xs text-[var(--muted)]">단일 마진 (만원/원)</div><div className="flex gap-1"><Select value={r3MarginMajor} onChange={(e) => setR3MarginMajor(e.target.value)}>{MAJOR_AMOUNT_OPTIONS.map((v) => <option key={`r3-margin-major-${v}`} value={v}>{v}만원</option>)}</Select><Select value={r3MarginMinor} onChange={(e) => setR3MarginMinor(e.target.value)}>{MINOR_AMOUNT_OPTIONS.map((v) => <option key={`r3-margin-minor-${v}`} value={v}>{v}원</option>)}</Select></div></div>
-                  <div><div className="mb-1 text-xs text-[var(--muted)]">라운딩 단위(100원 단위)</div><Select value={r3RoundUnit} onChange={(e) => setR3RoundUnit(e.target.value)}>{ROUNDING_UNIT_OPTIONS.map((u) => <option key={u} value={u}>{u}</option>)}</Select></div>
-                  <div><div className="mb-1 text-xs text-[var(--muted)]">라운딩 모드</div><Select value={r3RoundMode} onChange={(e) => setR3RoundMode(e.target.value as "CEIL" | "ROUND" | "FLOOR") }>{ROUNDING_MODE_OPTIONS.map((opt) => <option key={opt.value} value={opt.value}>{opt.label}</option>)}</Select></div>
-                  <div className="space-y-1"><div className="mb-1 text-xs text-[var(--muted)]">저장</div><Button onClick={() => (editingR3RuleId ? updateR3.mutate() : createR3.mutate())} disabled={Boolean(coreDisabledReason) || !r3Color || createR3.isPending || updateR3.isPending}>{editingR3RuleId ? "R3 수정 저장" : "R3 추가"}</Button>{editingR3RuleId ? <Button variant="ghost" onClick={cancelEditR3}>수정 취소</Button> : null}</div>
-                </div>
-                <div className="max-h-[240px] overflow-auto rounded border border-[var(--hairline)]"><table className="w-full text-sm"><thead className="bg-[var(--panel)] text-left"><tr><th className="px-3 py-2">도금 코드</th><th className="px-3 py-2">단일 마진</th><th className="px-3 py-2">라운딩</th><th className="px-3 py-2">관리</th></tr></thead><tbody>{(r3Query.data?.data ?? []).map((r) => <tr key={r.rule_id} className="border-t border-[var(--hairline)]"><td className="px-3 py-2">{platingLabelByCode.get(r.color_code) ?? r.color_code}</td><td className="px-3 py-2">{(r.margin_min_krw ?? r.margin_max_krw).toLocaleString()}</td><td className="px-3 py-2">{r.rounding_unit}/{ROUNDING_MODE_LABEL[r.rounding_mode]}</td><td className="px-3 py-2"><div className="flex gap-1"><Button variant="secondary" onClick={() => startEditR3(r)}>수정</Button><Button variant="ghost" onClick={() => deleteR3.mutate(r.rule_id)} disabled={deleteR3.isPending}>삭제</Button></div></td></tr>)}</tbody></table></div>
-              </CardBody>
-            </Card>
-          ) : null}
+      <Card>
+        <CardHeader title="4. 장식" description="DECOR는 선택한 장식 마스터의 총공임 + 추가 공임 합산값을 관리합니다." />
+        <CardBody className="space-y-3">
+          <div className="rounded border border-[var(--hairline)] bg-[var(--background)] px-3 py-2 text-xs text-[var(--muted)]">
+            장식 마스터의 총공임은 읽기 전용이며, 저장 시 해당 총공임과 additive 값이 함께 보존됩니다.
+          </div>
 
-          {activeSection === "DECORATION" ? (
-            <Card>
-              <CardHeader title="장식룰 (R4)" description="장식 선택 후 총공임(판매) 기준으로 +/- 또는 마진 배율 적용" />
-              <CardBody className="space-y-2">
-                <div className="rounded border border-[var(--hairline)] bg-[var(--background)] px-3 py-2 text-xs text-[var(--muted)]">
-                  등록 {r4Query.data?.data?.length ?? 0}건 · 장식별 추가금 규칙입니다.
-                </div>
-                <div className="flex items-center gap-2 text-xs text-[var(--muted)]">
-                  <input id="all-master-toggle" type="checkbox" checked={includeAllDecorationMaster} onChange={(e) => setIncludeAllDecorationMaster(e.target.checked)} />
-                  <label htmlFor="all-master-toggle">전체 마스터에서 장식이름 찾기 (기본: ACCESSORY만)</label>
-                </div>
-                <div className="grid grid-cols-1 gap-2 md:grid-cols-8">
-                  <div className="md:col-span-2"><div className="mb-1 text-xs text-[var(--muted)]">장식이름</div><Select value={r4Decoration} onChange={(e) => setR4Decoration(e.target.value)}>{decorationOptions.map((d) => <option key={d.name} value={d.name}>{d.totalLaborSellKrw == null ? d.name : `${d.name} / 총공임 ${d.totalLaborSellKrw.toLocaleString()}원`}</option>)}</Select></div>
-                  <div><div className="mb-1 text-xs text-[var(--muted)]">적용 방식</div><Select value={r4AdjustMode} onChange={(e) => setR4AdjustMode(e.target.value as "DELTA" | "MULTIPLIER") }><option value="DELTA">고정 추가금(+/-)</option><option value="MULTIPLIER">마진 배율(%)</option></Select></div>
-                  {r4AdjustMode === "DELTA" ? <div><div className="mb-1 text-xs text-[var(--muted)]">추가금(100원 단위)</div><Input type="number" step={100} value={r4Delta} onChange={(e) => setR4Delta(e.target.value)} /></div> : <div><div className="mb-1 text-xs text-[var(--muted)]">마진 배율(%)</div><Input type="number" step={0.1} value={r4Multiplier} onChange={(e) => setR4Multiplier(e.target.value)} placeholder="예: 10 / -5" /></div>}
-                  <div><div className="mb-1 text-xs text-[var(--muted)]">라운딩 단위(100원 단위)</div><Select value={r4RoundUnit} onChange={(e) => setR4RoundUnit(e.target.value)}>{ROUNDING_UNIT_OPTIONS.map((u) => <option key={u} value={u}>{u}</option>)}</Select></div>
-                  <div className="space-y-1"><div className="mb-1 text-xs text-[var(--muted)]">저장</div><Button onClick={() => (editingR4RuleId ? updateR4.mutate() : createR4.mutate())} disabled={Boolean(coreDisabledReason) || !r4Decoration || createR4.isPending || updateR4.isPending}>{editingR4RuleId ? "R4 수정 저장" : "R4 추가"}</Button>{editingR4RuleId ? <Button variant="ghost" onClick={cancelEditR4}>수정 취소</Button> : null}</div>
-                </div>
-                <div className="text-xs text-[var(--muted)]">선택 장식 총공임 판매값: {selectedDecorationOption?.totalLaborSellKrw == null ? "-" : `${selectedDecorationOption.totalLaborSellKrw.toLocaleString()}원`}</div>
-                <div className="text-xs text-[var(--muted)]">계산된 추가금: {r4ComputedDelta.toLocaleString()}원</div>
-                <Select value={r4RoundMode} onChange={(e) => setR4RoundMode(e.target.value as "CEIL" | "ROUND" | "FLOOR") }>{ROUNDING_MODE_OPTIONS.map((opt) => <option key={opt.value} value={opt.value}>{opt.label}</option>)}</Select>
-                <div className="max-h-[240px] overflow-auto rounded border border-[var(--hairline)]"><table className="w-full text-sm"><thead className="bg-[var(--panel)] text-left"><tr><th className="px-3 py-2">장식이름</th><th className="px-3 py-2">추가금</th><th className="px-3 py-2">라운딩</th><th className="px-3 py-2">관리</th></tr></thead><tbody>{(r4Query.data?.data ?? []).map((r) => <tr key={r.rule_id} className="border-t border-[var(--hairline)]"><td className="px-3 py-2">{r.match_decoration_code}</td><td className="px-3 py-2">{r.delta_krw.toLocaleString()}</td><td className="px-3 py-2">{r.rounding_unit}/{ROUNDING_MODE_LABEL[r.rounding_mode]}</td><td className="px-3 py-2"><div className="flex gap-1"><Button variant="secondary" onClick={() => startEditR4(r)}>수정</Button><Button variant="ghost" onClick={() => deleteR4.mutate(r.rule_id)} disabled={deleteR4.isPending}>삭제</Button></div></td></tr>)}</tbody></table></div>
-              </CardBody>
-            </Card>
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-5">
+            <div>
+              <div className="mb-1 text-xs text-[var(--muted)]">장식 마스터</div>
+              <Select
+                value={decorDraft.decorationMasterId}
+                onChange={(event) => setDecorDraft((current) => ({ ...current, decorationMasterId: event.target.value }))}
+                disabled={decorationMasters.length === 0}
+              >
+                <option value="">장식 마스터 선택</option>
+                {decorationMasters.map((master) => (
+                  <option key={master.master_item_id} value={master.master_item_id}>
+                    {master.model_name ?? master.master_item_id}
+                  </option>
+                ))}
+              </Select>
+            </div>
+            <div>
+              <div className="mb-1 text-xs text-[var(--muted)]">총공임 기준</div>
+              <Input value={formatWon(laborOf(selectedDecorMaster))} disabled />
+            </div>
+            <div>
+              <div className="mb-1 text-xs text-[var(--muted)]">추가 공임</div>
+              <Input
+                type="number"
+                autoFormat={false}
+                step={100}
+                value={decorDraft.additiveKrw}
+                onChange={(event) => setDecorDraft((current) => ({ ...current, additiveKrw: event.target.value }))}
+                placeholder="예: 1500"
+              />
+            </div>
+            <div>
+              <div className="mb-1 text-xs text-[var(--muted)]">적용 총액</div>
+              <Input value={formatWon(laborOf(selectedDecorMaster) + parseAmount(decorDraft.additiveKrw))} disabled />
+            </div>
+            <div className="space-y-2">
+              <div className="mb-1 text-xs text-[var(--muted)]">저장</div>
+              <Button onClick={handleSaveDecor} disabled={Boolean(disabledReason) || !selectedDecorMaster || isRuleMutating}>
+                {isDecorEditing ? '장식 룰 수정 저장' : '장식 룰 추가'}
+              </Button>
+              {isDecorEditing ? (
+                <Button variant="ghost" onClick={() => setDecorDraft(createEmptyDecorDraft(decorationMasters))}>
+                  수정 취소
+                </Button>
+              ) : null}
+            </div>
+          </div>
+
+          <div className="max-h-[260px] overflow-auto rounded border border-[var(--hairline)]">
+            <table className="w-full text-sm">
+              <thead className="bg-[var(--panel)] text-left">
+                <tr>
+                  <th className="px-3 py-2">장식 마스터</th>
+                  <th className="px-3 py-2">총공임</th>
+                  <th className="px-3 py-2">추가 공임</th>
+                  <th className="px-3 py-2">적용 총액</th>
+                  <th className="px-3 py-2">관리</th>
+                </tr>
+              </thead>
+              <tbody>
+                {decorRules.map((rule) => (
+                  <tr key={rule.rule_id} className="border-t border-[var(--hairline)]">
+                    <td className="px-3 py-2">
+                      {decorationNameMap.get(rule.decoration_master_id ?? '')
+                        ?? rule.decoration_model_name
+                        ?? rule.decoration_master_id
+                        ?? '-'}
+                    </td>
+                    <td className="px-3 py-2">{formatWon(rule.base_labor_cost_krw)}</td>
+                    <td className="px-3 py-2">{formatWon(rule.additive_delta_krw)}</td>
+                    <td className="px-3 py-2">{formatWon(toNumber(rule.base_labor_cost_krw) + toNumber(rule.additive_delta_krw))}</td>
+                    <td className="px-3 py-2">
+                      <div className="flex gap-1">
+                        <Button
+                          variant="secondary"
+                          onClick={() => {
+                            setDecorDraft({
+                              ruleId: rule.rule_id,
+                              decorationMasterId: rule.decoration_master_id ?? '',
+                              additiveKrw: String(toNumber(rule.additive_delta_krw)),
+                            });
+                          }}
+                        >
+                          수정
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          onClick={() => handleDeleteRule('장식 룰', rule.rule_id)}
+                          disabled={deleteRuleMutation.isPending}
+                        >
+                          삭제
+                        </Button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+                {decorRules.length === 0 ? (
+                  <tr>
+                    <td colSpan={5} className="px-3 py-8 text-center text-[var(--muted)]">
+                      등록된 장식 룰이 없습니다.
+                    </td>
+                  </tr>
+                ) : null}
+              </tbody>
+            </table>
+          </div>
+        </CardBody>
+      </Card>
+
+      <Card>
+        <CardHeader title="5. 기타" description="OTHER는 컨텍스트 단위의 공통 additive 공임만 저장합니다." />
+        <CardBody className="space-y-3">
+          <div className="rounded border border-[var(--hairline)] bg-[var(--background)] px-3 py-2 text-xs text-[var(--muted)]">
+            다른 섹션에 속하지 않는 공통 추가 공임을 OTHER 단일 행으로 관리합니다.
+          </div>
+
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
+            <div>
+              <div className="mb-1 text-xs text-[var(--muted)]">기타 추가 공임</div>
+              <Input
+                type="number"
+                autoFormat={false}
+                step={100}
+                value={otherAdditive}
+                onChange={(event) => setOtherAdditive(event.target.value)}
+                placeholder="예: 1000"
+              />
+            </div>
+            <div>
+              <div className="mb-1 text-xs text-[var(--muted)]">등록 상태</div>
+              <Input value={otherRule ? '등록됨' : '미등록'} disabled />
+            </div>
+            <div>
+              <div className="mb-1 text-xs text-[var(--muted)]">최종 갱신</div>
+              <Input value={formatWhen(otherRule?.updated_at ?? otherRule?.created_at)} disabled />
+            </div>
+            <div className="space-y-2">
+              <div className="mb-1 text-xs text-[var(--muted)]">저장</div>
+              <Button onClick={handleSaveOther} disabled={Boolean(disabledReason) || isRuleMutating}>
+                {otherRule ? '기타 공임 수정 저장' : '기타 공임 등록'}
+              </Button>
+              {otherRule ? (
+                <Button
+                  variant="ghost"
+                  onClick={() => handleDeleteRule('기타 추가 공임', otherRule.rule_id)}
+                  disabled={deleteRuleMutation.isPending}
+                >
+                  삭제
+                </Button>
+              ) : null}
+            </div>
+          </div>
+
+          {otherRule ? (
+            <div className="rounded border border-[var(--hairline)] px-3 py-3 text-sm">
+              현재 저장값: {formatWon(otherRule.additive_delta_krw)}
+            </div>
           ) : null}
-        </div>
-      </div>
+        </CardBody>
+      </Card>
     </div>
   );
 }
