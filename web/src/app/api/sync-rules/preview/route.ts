@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+﻿import { NextResponse } from "next/server";
 import { getShopAdminClient, jsonError, parseJsonObject } from "@/lib/shop/admin";
 import {
   buildMaterialPurityMap,
@@ -15,6 +15,7 @@ import {
   type SyncRuleR4Row,
 } from "@/lib/shop/sync-rules";
 import { normalizeMaterialCode } from "@/lib/material-factors";
+import { computeOptionLaborRuleBuckets, hasAnyActiveOptionLaborRule } from "@/lib/shop/option-labor-rules";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -25,35 +26,72 @@ const normalizeOptionalMaterialCode = (value: unknown): string => {
   return normalizeMaterialCode(raw);
 };
 
+const errorMessageOf = (value: unknown): string => {
+  if (!value || typeof value !== "object") return "";
+  const message = (value as { message?: unknown }).message;
+  return typeof message === "string" ? message : "";
+};
+
+const isMissingSchemaObjectError = (value: unknown): boolean => {
+  const msg = errorMessageOf(value).toLowerCase();
+  if (!msg) return false;
+  return ((msg.includes("could not find the table") && msg.includes("schema cache")) || (msg.includes("relation") && msg.includes("does not exist")));
+};
+
+
 type MappingRow = {
   channel_product_id: string;
   master_item_id: string;
   sync_rule_set_id: string | null;
+  external_product_no: string | null;
   external_variant_code?: string | null;
   option_material_code: string | null;
   option_color_code: string | null;
   option_decoration_code: string | null;
   option_size_value: number | null;
+  size_weight_delta_g?: number | null;
   sync_rule_material_enabled?: boolean | null;
 };
+
+type OptionLaborRuleRow = {
+  rule_id: string;
+  channel_id: string;
+  master_item_id: string;
+  external_product_no: string;
+  category_key: "MATERIAL" | "SIZE" | "COLOR_PLATING" | "DECOR" | "OTHER";
+  scope_material_code: string | null;
+  additional_weight_g: number | null;
+  plating_enabled: boolean | null;
+  color_code: string | null;
+  decoration_master_id: string | null;
+  decoration_model_name: string | null;
+  base_labor_cost_krw: number;
+  additive_delta_krw: number;
+  is_active: boolean;
+};
+
 
 type CandidatePreview = {
   channel_product_id: string;
   master_item_id: string;
+  external_product_no: string | null;
   option_material_code: string;
   effective_material_code: string;
   option_color_code: string | null;
   option_decoration_code: string | null;
   option_size_value: number | null;
+  size_weight_delta_g?: number | null;
   r1_delta_krw: number;
   r2_delta_krw: number;
   r3_delta_krw: number;
   r4_delta_krw: number;
+  other_delta_krw: number;
   total_delta_krw: number;
   hit_r1_rule_id: string | null;
   hit_r2_rule_id: string | null;
   hit_r3_rule_id: string | null;
   hit_r4_rule_id: string | null;
+  bucket_source: "LEGACY_SYNC_RULES" | "OPTION_LABOR_RULES";
   missing_rules: string[];
 };
 
@@ -83,7 +121,7 @@ export async function POST(request: Request) {
 
   const mappingQuery = sb
     .from("sales_channel_product")
-    .select("channel_product_id, master_item_id, sync_rule_set_id, external_variant_code, option_material_code, option_color_code, option_decoration_code, option_size_value, sync_rule_material_enabled")
+    .select("channel_product_id, master_item_id, sync_rule_set_id, external_product_no, external_variant_code, option_material_code, option_color_code, option_decoration_code, option_size_value, size_weight_delta_g, sync_rule_material_enabled")
     .eq("channel_id", channelId)
     .eq("is_active", true);
   if (channelProductId) {
@@ -92,7 +130,7 @@ export async function POST(request: Request) {
     mappingQuery.eq("sync_rule_set_id", ruleSetId);
   }
 
-  const [mapRes, masterRes, tickRes, krxGoldTickRes, policyRes, purityRes, r1Res, r2Res, r3Res, r4Res] = await Promise.all([
+  const [mapRes, masterRes, tickRes, krxGoldTickRes, policyRes, purityRes, r1Res, r2Res, r3Res, r4Res, optionLaborRuleRes] = await Promise.all([
     mappingQuery,
     sb.from("cms_master_item").select("master_item_id, material_code_default, category_code, weight_default_g, deduction_weight_default_g"),
     sb.from("cms_v_market_tick_latest_gold_silver_ops_v1").select("gold_price_krw_per_g, silver_price_krw_per_g").maybeSingle(),
@@ -103,10 +141,14 @@ export async function POST(request: Request) {
     sb.from("sync_rule_r2_size_weight").select("rule_id, rule_set_id, linked_r1_rule_id, match_material_code, match_category_code, weight_min_g, weight_max_g, option_range_expr, margin_min_krw, margin_max_krw, delta_krw, rounding_unit, rounding_mode, priority, is_active").eq("rule_set_id", ruleSetId).eq("is_active", true).order("priority", { ascending: true }),
     sb.from("sync_rule_r3_color_margin").select("rule_id, rule_set_id, color_code, margin_min_krw, margin_max_krw, delta_krw, rounding_unit, rounding_mode, priority, is_active").eq("rule_set_id", ruleSetId).eq("is_active", true).order("priority", { ascending: true }),
     sb.from("sync_rule_r4_decoration").select("rule_id, rule_set_id, linked_r1_rule_id, match_decoration_code, match_material_code, match_color_code, match_category_code, delta_krw, rounding_unit, rounding_mode, priority, is_active").eq("rule_set_id", ruleSetId).eq("is_active", true).order("priority", { ascending: true }),
+    sb.from("channel_option_labor_rule_v1").select("master_item_id, external_product_no, category_key, scope_material_code, additional_weight_g, plating_enabled, color_code, decoration_model_name, base_labor_cost_krw, additive_delta_krw, is_active").eq("channel_id", channelId),
   ]);
 
   for (const r of [mapRes, masterRes, tickRes, policyRes, purityRes, r1Res, r2Res, r3Res, r4Res]) {
-    if (r.error) return jsonError(r.error.message ?? "preview 조회 실패", 500);
+    if (r.error) return jsonError(r.error.message ?? "preview 議고쉶 ?ㅽ뙣", 500);
+  }
+  if (optionLaborRuleRes.error && !isMissingSchemaObjectError(optionLaborRuleRes.error)) {
+    return jsonError(optionLaborRuleRes.error.message ?? "?듭뀡 怨듭엫 洹쒖튃 議고쉶 ?ㅽ뙣", 500);
   }
 
   const mappings = (mapRes.data ?? []) as MappingRow[];
@@ -168,6 +210,17 @@ export async function POST(request: Request) {
   const r2Rules = (r2Res.data ?? []) as SyncRuleR2Row[];
   const r3Rules = (r3Res.data ?? []) as SyncRuleR3Row[];
   const r4Rules = (r4Res.data ?? []) as SyncRuleR4Row[];
+  const optionLaborRules = (optionLaborRuleRes.data ?? []) as OptionLaborRuleRow[];
+  const optionLaborRulesByContext = new Map<string, OptionLaborRuleRow[]>();
+  for (const row of optionLaborRules) {
+    const masterId = String(row.master_item_id ?? "").trim();
+    const productNo = String(row.external_product_no ?? "").trim();
+    if (!masterId || !productNo) continue;
+    const key = `${masterId}::${productNo}`;
+    const prev = optionLaborRulesByContext.get(key) ?? [];
+    prev.push(row);
+    optionLaborRulesByContext.set(key, prev);
+  }
 
   const matchedSamples: CandidatePreview[] = [];
   const unmatchedSamples: CandidatePreview[] = [];
@@ -183,7 +236,9 @@ export async function POST(request: Request) {
       ?? normalizeMaterialCode(String(master.material_code_default ?? ""));
     const targetMaterial = normalizeMaterialCode(String(m.option_material_code ?? master.material_code_default ?? ""));
     const categoryCode = String(master.category_code ?? "").trim();
-    const netWeight = Math.max(toNum(master.weight_default_g, 0) - toNum(master.deduction_weight_default_g, 0), 0);
+    const externalProductNo = String(m.external_product_no ?? "").trim() || null;
+    const sizeWeightDelta = toNum(m.size_weight_delta_g, 0);
+    const netWeight = Math.max(toNum(master.weight_default_g, 0) - toNum(master.deduction_weight_default_g, 0) + sizeWeightDelta, 0);
     const sizeValue = m.option_size_value == null ? null : Number(m.option_size_value);
     const colorCode = normalizePlatingComboCode(String(m.option_color_code ?? ""));
     const decorationCode = String(m.option_decoration_code ?? "").trim().toUpperCase();
@@ -197,13 +252,31 @@ export async function POST(request: Request) {
     let r2Delta = 0;
     let r3Delta = 0;
     let r4Delta = 0;
+    let otherDelta = 0;
     let effectiveMaterialCode = targetMaterial || baseMaterial;
     let hitR1: string | null = null;
     let hitR2: string | null = null;
     let hitR3: string | null = null;
     let hitR4: string | null = null;
+    let bucketSource: CandidatePreview["bucket_source"] = "LEGACY_SYNC_RULES";
+    const optionLaborRows = externalProductNo ? (optionLaborRulesByContext.get(`${m.master_item_id}::${externalProductNo}`) ?? []) : [];
+    const usesOptionLaborRules = hasAnyActiveOptionLaborRule(optionLaborRows);
 
-    for (const rule of r1Rules) {
+    if (usesOptionLaborRules) {
+      const buckets = computeOptionLaborRuleBuckets(optionLaborRows, {
+        materialCode: targetMaterial,
+        additionalWeightG: sizeWeightDelta,
+        platingEnabled: colorCode.length > 0,
+        colorCode: colorCode || null,
+        decorationCode: decorationCode || null,
+      });
+      r1Delta = Math.round(buckets.material);
+      r2Delta = Math.round(buckets.size);
+      r3Delta = Math.round(buckets.colorPlating);
+      r4Delta = Math.round(buckets.decor);
+      otherDelta = Math.round(buckets.other);
+      bucketSource = "OPTION_LABOR_RULES";
+    } else for (const rule of r1Rules) {
       const src = normalizeOptionalMaterialCode(rule.source_material_code);
       const tgt = normalizeOptionalMaterialCode(rule.target_material_code);
       const cat = String(rule.match_category_code ?? "").trim();
@@ -283,30 +356,36 @@ export async function POST(request: Request) {
       break;
     }
 
-    const total = r1Delta + r2Delta + r3Delta + r4Delta;
+    const total = r1Delta + r2Delta + r3Delta + r4Delta + otherDelta;
     const missingRules: string[] = [];
-    if (!hitR1) missingRules.push("R1");
-    if (!hitR2) missingRules.push("R2");
-    if (!hitR3) missingRules.push("R3");
-    if (!hitR4) missingRules.push("R4");
+    if (!usesOptionLaborRules) {
+      if (!hitR1) missingRules.push("R1");
+      if (!hitR2) missingRules.push("R2");
+      if (!hitR3) missingRules.push("R3");
+      if (!hitR4) missingRules.push("R4");
+    }
 
     const candidate: CandidatePreview = {
       channel_product_id: m.channel_product_id,
       master_item_id: m.master_item_id,
+      external_product_no: externalProductNo,
       option_material_code: targetMaterial,
       effective_material_code: effectiveMaterialCode,
       option_color_code: colorCode || null,
       option_decoration_code: decorationCode || null,
       option_size_value: sizeValue,
+      size_weight_delta_g: sizeWeightDelta,
       r1_delta_krw: r1Delta,
       r2_delta_krw: r2Delta,
       r3_delta_krw: r3Delta,
       r4_delta_krw: r4Delta,
+      other_delta_krw: otherDelta,
       total_delta_krw: total,
       hit_r1_rule_id: hitR1,
       hit_r2_rule_id: hitR2,
       hit_r3_rule_id: hitR3,
       hit_r4_rule_id: hitR4,
+      bucket_source: bucketSource,
       missing_rules: missingRules,
     };
 
@@ -333,3 +412,4 @@ export async function POST(request: Request) {
     },
   }, { headers: { "Cache-Control": "no-store" } });
 }
+

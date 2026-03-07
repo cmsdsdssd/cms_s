@@ -15,6 +15,10 @@ import {
   type SyncRuleR4Row,
 } from "@/lib/shop/sync-rules";
 import { normalizeMaterialCode } from "@/lib/material-factors";
+import {
+  computeOptionLaborRuleBuckets,
+  hasAnyActiveOptionLaborRule,
+} from "@/lib/shop/option-labor-rules";
 import { CONTRACTS } from "@/lib/contracts";
 
 export const dynamic = "force-dynamic";
@@ -192,6 +196,23 @@ type OptionCategoryScopedDeltaRow = {
   category_key: "MATERIAL" | "SIZE" | "COLOR_PLATING" | "DECOR" | "OTHER";
   scope_material_code: string | null;
   sync_delta_krw: number;
+};
+
+type OptionLaborRuleRow = {
+  rule_id: string;
+  channel_id: string;
+  master_item_id: string;
+  external_product_no: string;
+  category_key: "MATERIAL" | "SIZE" | "COLOR_PLATING" | "DECOR" | "OTHER";
+  scope_material_code: string | null;
+  additional_weight_g: number | null;
+  plating_enabled: boolean | null;
+  color_code: string | null;
+  decoration_master_id: string | null;
+  decoration_model_name: string | null;
+  base_labor_cost_krw: number;
+  additive_delta_krw: number;
+  is_active: boolean;
 };
 
 type AbsorbBucket = "BASE_LABOR" | "STONE_LABOR" | "PLATING" | "ETC";
@@ -693,6 +714,23 @@ export async function POST(request: Request) {
     for (const productNo of externalProductNosByMaster.get(masterId) ?? []) push(productNo);
     return out;
   };
+
+  const optionLaborRuleRes = uniqueMasterIds.length > 0 && uniqueExternalProductNos.length > 0
+    ? await sb.from('channel_option_labor_rule_v1').select('rule_id, channel_id, master_item_id, external_product_no, category_key, scope_material_code, additional_weight_g, plating_enabled, color_code, decoration_master_id, decoration_model_name, base_labor_cost_krw, additive_delta_krw, is_active').eq('channel_id', channelId).in('master_item_id', uniqueMasterIds).in('external_product_no', uniqueExternalProductNos)
+    : { data: [], error: null };
+  if (optionLaborRuleRes.error && !isMissingSchemaObjectError(optionLaborRuleRes.error)) return jsonError(optionLaborRuleRes.error.message ?? '옵션 공임 규칙 조회 실패', 500);
+  const optionLaborRules = (optionLaborRuleRes.data ?? []) as OptionLaborRuleRow[];
+  const optionLaborRulesByContext = new Map<string, OptionLaborRuleRow[]>();
+  for (const row of optionLaborRules) {
+    const masterId = String(row.master_item_id ?? "").trim();
+    const productNo = String(row.external_product_no ?? "").trim();
+    if (!masterId || !productNo) continue;
+    const key = `${masterId}::${productNo}`;
+    const prev = optionLaborRulesByContext.get(key) ?? [];
+    prev.push(row);
+    optionLaborRulesByContext.set(key, prev);
+  }
+  const resolveOptionLaborRulesForContext = (masterId: string, productNo: string): OptionLaborRuleRow[] => { for (const candidateProductNo of buildProductNoCandidates(masterId, productNo)) { const rows = optionLaborRulesByContext.get(`${masterId}::${candidateProductNo}`) ?? []; if (hasAnyActiveOptionLaborRule(rows)) return rows; } return []; };
 
   const [optionCategoryRes, scopedOptionDeltaRes] = await Promise.all([
     sb
@@ -1488,19 +1526,42 @@ export async function POST(request: Request) {
       };
     })();
 
+    const contextOptionLaborRules = resolveOptionLaborRulesForContext(m.master_item_id, mappingProductNo);
+    const useOptionLaborRuleEngine = optionMode === "SYNC" && hasAnyActiveOptionLaborRule(contextOptionLaborRules);
+    const optionLaborRuleResult = useOptionLaborRuleEngine
+      ? computeOptionLaborRuleBuckets(contextOptionLaborRules, {
+        materialCode: optionMaterialCode,
+        additionalWeightG: sizeWeightDeltaApplied,
+        platingEnabled: optionColorCode.length > 0,
+        colorCode: optionColorCode || null,
+        decorationCode: optionDecorationCode || null,
+        decorationMasterId: /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(optionDecorationCode) ? optionDecorationCode : null,
+      })
+      : null;
+
     const ruleMaterialDelta = applyRuleSetPricing ? r1Delta : 0;
     const ruleSizeDelta = applyRuleSetPricing && applyRule2 ? r2Delta : 0;
     const ruleColorDelta = applyRuleSetPricing && applyRule3 ? r3Delta : 0;
     const ruleDecorDelta = applyRuleSetPricing && applyRuleDecor ? r4Delta : 0;
     const baseOptionDelta = toNum(m.option_price_delta_krw, 0);
 
-    let deltaMaterialBucket = Math.round(ruleMaterialDelta + categoryScopedDeltaBuckets.material);
-    let deltaSizeBucket = Math.round(ruleSizeDelta + categoryScopedDeltaBuckets.size);
-    let deltaColorBucket = Math.round(ruleColorDelta + categoryScopedDeltaBuckets.colorPlating);
-    let deltaDecorBucket = Math.round(ruleDecorDelta + categoryScopedDeltaBuckets.decor);
-    let deltaOtherBucket = Math.round(baseOptionDelta + categoryScopedDeltaBuckets.other);
+    let deltaMaterialBucket = useOptionLaborRuleEngine
+      ? Math.round(optionLaborRuleResult?.material ?? 0)
+      : Math.round(ruleMaterialDelta + categoryScopedDeltaBuckets.material);
+    let deltaSizeBucket = useOptionLaborRuleEngine
+      ? Math.round(optionLaborRuleResult?.size ?? 0)
+      : Math.round(ruleSizeDelta + categoryScopedDeltaBuckets.size);
+    let deltaColorBucket = useOptionLaborRuleEngine
+      ? Math.round(optionLaborRuleResult?.colorPlating ?? 0)
+      : Math.round(ruleColorDelta + categoryScopedDeltaBuckets.colorPlating);
+    let deltaDecorBucket = useOptionLaborRuleEngine
+      ? Math.round(optionLaborRuleResult?.decor ?? 0)
+      : Math.round(ruleDecorDelta + categoryScopedDeltaBuckets.decor);
+    let deltaOtherBucket = useOptionLaborRuleEngine
+      ? Math.round(optionLaborRuleResult?.other ?? 0)
+      : Math.round(baseOptionDelta + categoryScopedDeltaBuckets.other);
     let optionPriceDelta = deltaMaterialBucket + deltaSizeBucket + deltaColorBucket + deltaDecorBucket + deltaOtherBucket;
-    let optionPriceDeltaSource: "COMPUTED" | "STATE_FALLBACK" = "COMPUTED";
+    let optionPriceDeltaSource: "COMPUTED" | "STATE_FALLBACK" | "OPTION_LABOR_RULE_ENGINE" = useOptionLaborRuleEngine ? "OPTION_LABOR_RULE_ENGINE" : "COMPUTED";
 
     if (hasVariant && optionStateDelta && Number.isFinite(optionStateDelta.additionalKrw)) {
       deltaMaterialBucket = 0;
@@ -1681,6 +1742,9 @@ export async function POST(request: Request) {
         sync_rule_set_id: effectiveRuleSetId || null,
         use_rule_set_engine: useRuleSetEngine,
         rule_set_engine_applied: applyRuleSetPricing,
+        use_option_labor_rule_engine: useOptionLaborRuleEngine,
+        option_labor_rule_context_count: contextOptionLaborRules.length,
+        option_labor_rule_matched_rule_ids: useOptionLaborRuleEngine ? Object.values(optionLaborRuleResult?.matched ?? {}).map((row) => row?.rule_id).filter((value): value is string => Boolean(value)) : [],
         rule_hit_trace: ruleHitTrace,
         missing_rules: missingRules,
         channel_product_id: m.channel_product_id,
