@@ -1,6 +1,12 @@
 import { NextResponse } from "next/server";
 import { getShopAdminClient, jsonError, parseJsonObject } from "@/lib/shop/admin";
 import { POST as pushPost } from "@/app/api/channel-prices/push/route";
+import {
+  buildAutoSyncPressureStateRow,
+  buildAutoSyncPressureSuccessPatch,
+  normalizeAutoSyncPressurePolicyConfig,
+  resolveAutoSyncPressurePolicyConfig,
+} from "@/lib/shop/price-sync-pressure-policy";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -41,6 +47,37 @@ type IntentRow = {
   state: string;
 };
 
+type SuccessfulPushItem = {
+  channelProductId: string;
+  masterItemId: string;
+  externalVariantCode: string;
+  beforePriceKrw: number;
+  targetPriceKrw: number;
+};
+
+type ChangeEventType = "PRICE_CHANGED" | "PUSH_FAILED" | "FORCE_SYNC_APPLIED";
+
+type ChangeEventRow = {
+  channel_id: string;
+  run_id: string;
+  job_id?: string | null;
+  job_item_id?: string | null;
+  channel_product_id: string;
+  master_item_id?: string | null;
+  external_product_no?: string | null;
+  external_variant_code?: string | null;
+  compute_request_id?: string | null;
+  trigger_type?: string | null;
+  event_type: ChangeEventType;
+  before_price_krw?: number | null;
+  target_price_krw?: number | null;
+  after_price_krw?: number | null;
+  diff_krw?: number | null;
+  http_status?: number | null;
+  reason_code?: string | null;
+  reason_detail: Record<string, unknown>;
+};
+
 const logicalTargetKey = (computeRequestId: string, masterItemId: string, externalVariantCode: string) =>
   `${computeRequestId}:${masterItemId}:${externalVariantCode || "BASE"}`;
 
@@ -73,7 +110,7 @@ export async function POST(_request: Request, { params }: Params) {
 
   const runRes = await sb
     .from("price_sync_run_v2")
-    .select("run_id, channel_id, status")
+    .select("run_id, channel_id, status, trigger_type, request_payload")
     .eq("run_id", runId)
     .maybeSingle();
   if (runRes.error) return jsonError(runRes.error.message ?? "run 조회 실패", 500);
@@ -81,6 +118,11 @@ export async function POST(_request: Request, { params }: Params) {
 
   const channelId = String(runRes.data.channel_id ?? "").trim();
   if (!channelId) return jsonError("run.channel_id is missing", 500);
+
+  const triggerType = String(runRes.data.trigger_type ?? "AUTO").trim().toUpperCase() === "AUTO" ? "AUTO" : "MANUAL";
+  const runTriggerType = triggerType;
+  const runRequestPayload = parseJsonObject(runRes.data.request_payload) ?? {};
+  const forceFullSync = runRequestPayload.force_full_sync === true;
 
   const intentRes = await sb
     .from("price_sync_intent_v2")
@@ -102,6 +144,8 @@ export async function POST(_request: Request, { params }: Params) {
     .filter((row) => row.intent_id && row.channel_product_id && row.master_item_id && row.compute_request_id);
 
   const pendingIntents = intents.slice(0, executeIntentBatchSize);
+  const changeEventRows: ChangeEventRow[] = [];
+  const CHANGE_EVENT_INSERT_CHUNK_SIZE = 500;
 
   const pendingIntentIds = pendingIntents.map((row) => row.intent_id);
   const taskAttemptByIntent = new Map<string, number>();
@@ -132,6 +176,7 @@ export async function POST(_request: Request, { params }: Params) {
   }
 
   const intentIdsByLogical = new Map<string, string[]>();
+  const intentMetaByLogical = new Map<string, IntentRow>();
   const logicalByComputeAndChannelProduct = new Map<string, string>();
   const logicalKeysByCompute = new Map<string, Set<string>>();
   for (const row of pendingIntents) {
@@ -139,6 +184,7 @@ export async function POST(_request: Request, { params }: Params) {
     const prev = intentIdsByLogical.get(logical) ?? [];
     prev.push(row.intent_id);
     intentIdsByLogical.set(logical, prev);
+    if (!intentMetaByLogical.has(logical)) intentMetaByLogical.set(logical, row);
     logicalByComputeAndChannelProduct.set(`${row.compute_request_id}:${row.channel_product_id}`, logical);
     const logicalSet = logicalKeysByCompute.get(row.compute_request_id) ?? new Set<string>();
     logicalSet.add(logical);
@@ -152,10 +198,18 @@ export async function POST(_request: Request, { params }: Params) {
     byCompute.set(row.compute_request_id, prev);
   }
 
-  let success = 0;
-  let failed = 0;
-  let skipped = 0;
   const jobIds: string[] = [];
+  const successfulPushItemsByChannelProduct = new Map<string, SuccessfulPushItem>();
+
+  const persistChangeEvents = async (): Promise<string | null> => {
+    if (changeEventRows.length === 0) return null;
+    for (const chunk of chunkArray(changeEventRows, CHANGE_EVENT_INSERT_CHUNK_SIZE)) {
+      if (chunk.length === 0) continue;
+      const insertRes = await sb.from("price_sync_change_event").insert(chunk);
+      if (insertRes.error) return insertRes.error.message ?? "CHANGE_EVENT_INSERT_FAILED";
+    }
+    return null;
+  };
 
   const updateIntentAndTask = async (
     intentIds: string[],
@@ -229,8 +283,34 @@ export async function POST(_request: Request, { params }: Params) {
         for (const logical of chunkLogicalTargets) {
           const intentIds = intentIdsByLogical.get(logical) ?? [];
           if (intentIds.length === 0) continue;
-          failed += intentIds.length;
-          await updateIntentAndTask(intentIds, "FAILED", null, pushError, pushJson ?? null);
+          const meta = intentMetaByLogical.get(logical);
+          if (meta) {
+            changeEventRows.push({
+              channel_id: channelId,
+              run_id: runId,
+              job_id: null,
+              job_item_id: null,
+              channel_product_id: meta.channel_product_id,
+              master_item_id: meta.master_item_id || null,
+              external_product_no: null,
+              external_variant_code: meta.external_variant_code || null,
+              compute_request_id: meta.compute_request_id || null,
+              trigger_type: runTriggerType,
+              event_type: "PUSH_FAILED",
+              before_price_krw: null,
+              target_price_krw: meta.desired_price_krw,
+              after_price_krw: null,
+              diff_krw: null,
+              http_status: pushRes.status || null,
+              reason_code: "PUSH_REQUEST_FAILED",
+              reason_detail: {
+                force_full_sync: forceFullSync,
+                push_error: pushError,
+                response: pushJson ?? null,
+              },
+            });
+          }
+              await updateIntentAndTask(intentIds, "FAILED", null, pushError, pushJson ?? null);
           seenLogicalTargets.add(logical);
         }
         continue;
@@ -238,7 +318,7 @@ export async function POST(_request: Request, { params }: Params) {
 
       const itemRes = await sb
         .from("price_sync_job_item")
-        .select("channel_product_id, master_item_id, external_variant_code, before_price_krw, target_price_krw, after_price_krw, status, http_status, error_code, error_message, raw_response_json")
+        .select("job_item_id, channel_product_id, master_item_id, external_product_no, external_variant_code, before_price_krw, target_price_krw, after_price_krw, status, http_status, error_code, error_message, raw_response_json")
         .eq("job_id", jobId);
       if (itemRes.error) return jsonError(itemRes.error.message ?? "push item 조회 실패", 500);
 
@@ -288,8 +368,71 @@ export async function POST(_request: Request, { params }: Params) {
         const itemErrorMessage = String(item.error_message ?? "").trim();
         const itemReason = itemErrorCode || itemErrorMessage || null;
         const nextState = status === "SUCCESS" ? "SUCCEEDED" : "FAILED";
-        if (nextState === "SUCCEEDED") success += intentIds.length;
-        else failed += intentIds.length;
+        const externalProductNo = String(item.external_product_no ?? "").trim() || null;
+        const beforePriceKrw = Math.round(Number(item.before_price_krw ?? 0));
+        const targetPriceKrw = Math.round(Number(item.target_price_krw ?? 0));
+        const afterPriceRaw = Number(item.after_price_krw ?? Number.NaN);
+        const afterPriceKrw = Number.isFinite(afterPriceRaw) ? Math.round(afterPriceRaw) : null;
+        if (nextState === "SUCCEEDED") {
+          successfulPushItemsByChannelProduct.set(channelProductId, {
+            channelProductId,
+            masterItemId: itemMasterId,
+            externalVariantCode: itemVariantCode,
+            beforePriceKrw,
+            targetPriceKrw,
+          });
+        }
+
+        if (nextState === "FAILED") {
+          changeEventRows.push({
+            channel_id: channelId,
+            run_id: runId,
+            job_id: jobId,
+            job_item_id: String(item.job_item_id ?? "").trim() || null,
+            channel_product_id: channelProductId,
+            master_item_id: itemMasterId || null,
+            external_product_no: externalProductNo,
+            external_variant_code: itemVariantCode || null,
+            compute_request_id: computeRequestId,
+            trigger_type: runTriggerType,
+            event_type: "PUSH_FAILED",
+            before_price_krw: beforePriceKrw,
+            target_price_krw: targetPriceKrw,
+            after_price_krw: afterPriceKrw,
+            diff_krw: afterPriceKrw === null ? null : afterPriceKrw - beforePriceKrw,
+            http_status: item.http_status == null ? null : Number(item.http_status),
+            reason_code: itemErrorCode || null,
+            reason_detail: {
+              force_full_sync: forceFullSync,
+              error_message: itemErrorMessage || null,
+              raw_response_json: item.raw_response_json ?? null,
+            },
+          });
+        } else if (afterPriceKrw !== null && afterPriceKrw !== beforePriceKrw) {
+          changeEventRows.push({
+            channel_id: channelId,
+            run_id: runId,
+            job_id: jobId,
+            job_item_id: String(item.job_item_id ?? "").trim() || null,
+            channel_product_id: channelProductId,
+            master_item_id: itemMasterId || null,
+            external_product_no: externalProductNo,
+            external_variant_code: itemVariantCode || null,
+            compute_request_id: computeRequestId,
+            trigger_type: runTriggerType,
+            event_type: forceFullSync ? "FORCE_SYNC_APPLIED" : "PRICE_CHANGED",
+            before_price_krw: beforePriceKrw,
+            target_price_krw: targetPriceKrw,
+            after_price_krw: afterPriceKrw,
+            diff_krw: afterPriceKrw - beforePriceKrw,
+            http_status: item.http_status == null ? null : Number(item.http_status),
+            reason_code: null,
+            reason_detail: {
+              force_full_sync: forceFullSync,
+              raw_response_json: item.raw_response_json ?? null,
+            },
+          });
+        }
 
         await updateIntentAndTask(
           intentIds,
@@ -300,8 +443,8 @@ export async function POST(_request: Request, { params }: Params) {
             ...(item.raw_response_json && typeof item.raw_response_json === "object" ? (item.raw_response_json as Record<string, unknown>) : { raw: item.raw_response_json ?? null }),
             ...(itemErrorCode ? { error_code: itemErrorCode } : {}),
             sync_job_id: jobId,
-            applied_before_price_krw: item.before_price_krw,
-            applied_target_price_krw: item.target_price_krw,
+            applied_before_price_krw: beforePriceKrw,
+            applied_target_price_krw: targetPriceKrw,
             applied_after_price_krw: item.after_price_krw,
           },
         );
@@ -312,10 +455,108 @@ export async function POST(_request: Request, { params }: Params) {
       if (seenLogicalTargets.has(logical)) continue;
       const intentIds = intentIdsByLogical.get(logical) ?? [];
       if (intentIds.length === 0) continue;
+      const meta = intentMetaByLogical.get(logical);
+      if (meta) {
+        changeEventRows.push({
+          channel_id: channelId,
+          run_id: runId,
+          job_id: null,
+          job_item_id: null,
+          channel_product_id: meta.channel_product_id,
+          master_item_id: meta.master_item_id || null,
+          external_product_no: null,
+          external_variant_code: meta.external_variant_code || null,
+          compute_request_id: meta.compute_request_id || null,
+          trigger_type: runTriggerType,
+          event_type: "PUSH_FAILED",
+          before_price_krw: null,
+          target_price_krw: meta.desired_price_krw,
+          after_price_krw: null,
+          diff_krw: null,
+          http_status: null,
+          reason_code: "PUSH_RESULT_FILTERED_OR_MISSING",
+          reason_detail: {
+            force_full_sync: forceFullSync,
+          },
+        });
+      }
       await updateIntentAndTask(intentIds, "FAILED", null, "PUSH_RESULT_FILTERED_OR_MISSING", null);
-      failed += intentIds.length;
     }
   }
+
+  const successfulPushItems = Array.from(successfulPushItemsByChannelProduct.values());
+  if (runTriggerType === "AUTO" && successfulPushItems.length > 0) {
+    const successfulChannelProductIds = successfulPushItems.map((item) => item.channelProductId);
+    const previousStateByChannelProduct = new Map<string, Record<string, unknown>>();
+    const productMetaByChannelProduct = new Map<string, { masterItemId: string; externalProductNo: string | null; externalVariantCode: string }>();
+    const nowIso = new Date().toISOString();
+    const pressurePolicyConfig = runRequestPayload.auto_downsync_pressure_policy
+      ? normalizeAutoSyncPressurePolicyConfig(runRequestPayload.auto_downsync_pressure_policy)
+      : resolveAutoSyncPressurePolicyConfig();
+
+    for (const channelProductChunk of chunkArray(successfulChannelProductIds, 500)) {
+      const [stateRes, productRes] = await Promise.all([
+        sb
+          .from("price_sync_auto_state_v1")
+          .select("channel_product_id, pressure_units, last_gap_units, last_seen_target_krw, last_seen_current_krw, last_auto_sync_at, last_upsync_at, last_downsync_at, cooldown_until")
+          .eq("channel_id", channelId)
+          .in("channel_product_id", channelProductChunk),
+        sb
+          .from("sales_channel_product")
+          .select("channel_product_id, master_item_id, external_product_no, external_variant_code")
+          .in("channel_product_id", channelProductChunk),
+      ]);
+      if (stateRes.error) return jsonError(stateRes.error.message ?? "auto state 조회 실패", 500);
+      if (productRes.error) return jsonError(productRes.error.message ?? "channel product 조회 실패", 500);
+
+      for (const row of stateRes.data ?? []) {
+        const channelProductId = String(row.channel_product_id ?? "").trim();
+        if (!channelProductId) continue;
+        previousStateByChannelProduct.set(channelProductId, row as Record<string, unknown>);
+      }
+
+      for (const row of productRes.data ?? []) {
+        const channelProductId = String(row.channel_product_id ?? "").trim();
+        if (!channelProductId) continue;
+        productMetaByChannelProduct.set(channelProductId, {
+          masterItemId: String(row.master_item_id ?? "").trim(),
+          externalProductNo: row.external_product_no == null ? null : String(row.external_product_no ?? "").trim() || null,
+          externalVariantCode: String(row.external_variant_code ?? "").trim(),
+        });
+      }
+    }
+
+    const autoStateRows = successfulPushItems.map((item) => {
+      const previousState = previousStateByChannelProduct.get(item.channelProductId);
+      const productMeta = productMetaByChannelProduct.get(item.channelProductId);
+      const nextState = buildAutoSyncPressureSuccessPatch({
+        previousState,
+        beforePriceKrw: item.beforePriceKrw,
+        targetPriceKrw: item.targetPriceKrw,
+        now: nowIso,
+        config: pressurePolicyConfig,
+      });
+
+      return buildAutoSyncPressureStateRow({
+        channelId,
+        channelProductId: item.channelProductId,
+        masterItemId: item.masterItemId || productMeta?.masterItemId || null,
+        externalProductNo: productMeta?.externalProductNo ?? "",
+        externalVariantCode: item.externalVariantCode || productMeta?.externalVariantCode || null,
+        nextState,
+        now: nowIso,
+      });
+    });
+
+    for (const rowChunk of chunkArray(autoStateRows, 500)) {
+      const upsertRes = await sb
+        .from("price_sync_auto_state_v1")
+        .upsert(rowChunk, { onConflict: "channel_id,channel_product_id" });
+      if (upsertRes.error) return jsonError(upsertRes.error.message ?? "auto state 저장 실패", 500);
+    }
+  }
+
+  const changeEventPersistError = await persistChangeEvents();
 
   const finalIntentRes = await sb
     .from("price_sync_intent_v2")
@@ -353,6 +594,8 @@ export async function POST(_request: Request, { params }: Params) {
         execute_intent_batch_size: executeIntentBatchSize,
         push_chunk_size: pushChunkSize,
         job_ids: jobIds,
+        change_event_logged: changeEventRows.length,
+        change_event_error: changeEventPersistError,
       },
       { headers: { "Cache-Control": "no-store" } },
     );
@@ -382,6 +625,8 @@ export async function POST(_request: Request, { params }: Params) {
       execute_intent_batch_size: executeIntentBatchSize,
       push_chunk_size: pushChunkSize,
       job_ids: jobIds,
+      change_event_logged: changeEventRows.length,
+      change_event_error: changeEventPersistError,
     },
     { headers: { "Cache-Control": "no-store" } },
   );
