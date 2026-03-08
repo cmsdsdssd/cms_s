@@ -955,16 +955,10 @@ export default function ShoppingAutoPricePage() {
   });
 
   const resolvedPreviewProductNo = useMemo(() => {
-    const candidates = Array.from(
-      new Set([
-        String(editorProductNo ?? "").trim(),
-        String(editorPreview?.productNo ?? "").trim(),
-      ].filter(Boolean)),
-    );
-    if (candidates.length === 0) return "";
-    const canonical = candidates.find((value) => /^P/i.test(value));
-    return canonical ?? candidates[0] ?? "";
-  }, [editorProductNo, editorPreview?.productNo]);
+    const previewProductNo = String(editorPreview?.productNo ?? "").trim();
+    if (previewProductNo) return previewProductNo;
+    return String(editorProductNo ?? "").trim();
+  }, [editorPreview?.productNo, editorProductNo]);
 
   const latestComputeRequestIdForPreview = useMemo(() => {
     for (const query of recentRunDetailQueries) {
@@ -1362,10 +1356,17 @@ export default function ShoppingAutoPricePage() {
 
         if (!runId || intents.length === 0) return null;
 
-        const baseIntent = intents.find((intent) => !String(intent.external_variant_code ?? "").trim()) ?? intents[0];
+        const preferredProductNo = resolvedPreviewProductNo;
+        const primaryIntents = preferredProductNo
+          ? intents.filter((intent) => String(intent.external_product_no ?? "").trim() === preferredProductNo)
+          : [];
+        const primaryPool = primaryIntents.length > 0 ? primaryIntents : intents;
+        const baseIntent = primaryPool.find((intent) => !String(intent.external_variant_code ?? "").trim()) ?? primaryPool[0] ?? intents[0];
         const pickBaseThenAnyIntentValue = (picker: (intent: SyncIntent) => number | null): number | null => {
           const baseValue = picker(baseIntent);
-          return baseValue != null ? baseValue : pickFirstIntentValue(intents, picker);
+          if (baseValue != null) return baseValue;
+          const primaryValue = pickFirstIntentValue(primaryPool, picker);
+          return primaryValue != null ? primaryValue : pickFirstIntentValue(intents, picker);
         };
         const snapshotPrice = pickBaseThenAnyIntentValue(pickSnapshotPrice);
         const pushTargetPrice = pickBaseThenAnyIntentValue((intent) => toRoundedNumber(intent.applied_target_price_krw))
@@ -1413,7 +1414,7 @@ export default function ShoppingAutoPricePage() {
       .sort((a, b) => b.at.localeCompare(a.at));
 
     return rows.slice(0, 20);
-  }, [editorPreview, editorMasterItemId, editorProductNo, recentRunDetailQueries]);
+  }, [editorPreview, editorMasterItemId, editorProductNo, recentRunDetailQueries, resolvedPreviewProductNo]);
 
   const latestHistory = previewHistoryRows[0] ?? null;
   const previousHistory = previewHistoryRows[1] ?? null;

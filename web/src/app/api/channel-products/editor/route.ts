@@ -329,7 +329,7 @@ async function loadEditorMeta(
   const hasSingleRelevantStateRow = relevantStateRows.length === 1;
   const state = hasSingleRelevantStateRow ? (relevantStateRows[0] ?? null) : null;
   const master = (masterRes.data as Partial<MasterMeta> | null) ?? null;
-  const platingSell = toIntCeilNonNegative(state?.plating_labor_sell_krw ?? master?.plating_price_sell_default ?? 0);
+  const rawPlatingSell = toIntCeilNonNegative(state?.plating_labor_sell_krw ?? master?.plating_price_sell_default ?? 0);
   const laborFromSnapshot = toIntCeil((latestSnapshotRes.data as { labor_raw_krw?: number } | null)?.labor_raw_krw ?? Number.NaN, Number.NaN);
   const laborFallback = toIntCeilNonNegative(
     Number(master?.labor_base_sell ?? 0)
@@ -342,6 +342,10 @@ async function loadEditorMeta(
 
   const excludePlatingLabor = relevantStateRows.length > 0
     && relevantStateRows.every((row) => row.exclude_plating_labor === true);
+  const platingSell = excludePlatingLabor ? 0 : rawPlatingSell;
+  const resolvedTotalLaborSell = excludePlatingLabor
+    ? (Number.isFinite(laborFromSnapshot) ? laborFromSnapshot : Math.max(0, laborFallback - rawPlatingSell))
+    : toIntCeil(state?.total_labor_sell_krw ?? totalLabor);
 
   return {
     floor_price_krw: Math.max(
@@ -350,10 +354,7 @@ async function loadEditorMeta(
     ),
     exclude_plating_labor: excludePlatingLabor,
     plating_labor_sell_krw: platingSell,
-    total_labor_sell_krw: Math.max(
-      0,
-      toIntCeil(state?.total_labor_sell_krw ?? totalLabor - (excludePlatingLabor ? platingSell : 0)),
-    ),
+    total_labor_sell_krw: Math.max(0, resolvedTotalLaborSell),
     tick_gold_krw_per_g: toIntCeilNonNegative((tickRes.data as { gold_price_krw_per_g?: number } | null)?.gold_price_krw_per_g ?? 0),
     tick_silver_krw_per_g: toIntCeilNonNegative((tickRes.data as { silver_price_krw_per_g?: number } | null)?.silver_price_krw_per_g ?? 0),
     current_product_sync_profile: resolveCurrentProductSyncProfile(mappingProfileRows),

@@ -919,29 +919,25 @@ export async function POST(request: Request) {
     const existing = dedupeByLogicalTarget.get(logicalTargetKey);
 
     if (existing) {
-      const nextDesired = Math.max(existing.desired, desired);
-      const nextFloorApplied = existing.floorApplied || floorApplied;
-      const nextFloorPriceKrw = Math.max(existing.floorPriceKrw, floorPriceKrw);
-      const nextDecisionContext = nextDesired > existing.desired
-        || (nextDesired === existing.desired && floorApplied && !existing.floorApplied)
-        || (nextDesired === existing.desired && floorPriceKrw > existing.floorPriceKrw)
-        ? decisionContext
-        : existing.decisionContext;
       const intentIdx = existing.idx;
       const shouldReplaceMapping = shouldPreferMappingProductNo(existing.externalProductNo, mapping.external_product_no);
       const selectedChannelProductId = shouldReplaceMapping ? channelProductId : existing.channelProductId;
       const selectedProductNo = shouldReplaceMapping ? mapping.external_product_no : existing.externalProductNo;
       const selectedVariantCode = shouldReplaceMapping ? variantCode : existing.externalVariantCode;
+      const selectedDesired = shouldReplaceMapping ? desired : existing.desired;
+      const selectedFloorApplied = shouldReplaceMapping ? floorApplied : existing.floorApplied;
+      const selectedFloorPriceKrw = shouldReplaceMapping ? floorPriceKrw : existing.floorPriceKrw;
+      const selectedDecisionContext = shouldReplaceMapping ? decisionContext : existing.decisionContext;
       intentRows[intentIdx] = {
         ...intentRows[intentIdx],
         channel_product_id: selectedChannelProductId,
         external_product_no: selectedProductNo,
         external_variant_code: selectedVariantCode || null,
-        desired_price_krw: nextDesired,
-        floor_price_krw: nextFloorPriceKrw,
-        floor_applied: nextFloorApplied,
-        decision_context_json: nextDecisionContext,
-        inputs_hash: makeIdempotencyKey([channelId, selectedChannelProductId, computeRequestId, nextDesired, nextFloorPriceKrw]),
+        desired_price_krw: selectedDesired,
+        floor_price_krw: selectedFloorPriceKrw,
+        floor_applied: selectedFloorApplied,
+        decision_context_json: selectedDecisionContext,
+        inputs_hash: makeIdempotencyKey([channelId, selectedChannelProductId, computeRequestId, selectedDesired, selectedFloorPriceKrw]),
       };
       const existingTask = taskRows[intentIdx] ?? {};
       const existingIntentId = String((intentRows[intentIdx] as { intent_id?: unknown } | undefined)?.intent_id ?? "").trim();
@@ -953,16 +949,16 @@ export async function POST(request: Request) {
           selectedChannelProductId,
           selectedVariantCode || "BASE",
           computeRequestId,
-          nextDesired,
-          nextFloorPriceKrw,
+          selectedDesired,
+          selectedFloorPriceKrw,
         ]),
       };
       dedupeByLogicalTarget.set(logicalTargetKey, {
         idx: intentIdx,
-        desired: nextDesired,
-        floorApplied: nextFloorApplied,
-        floorPriceKrw: nextFloorPriceKrw,
-        decisionContext: nextDecisionContext,
+        desired: selectedDesired,
+        floorApplied: selectedFloorApplied,
+        floorPriceKrw: selectedFloorPriceKrw,
+        decisionContext: selectedDecisionContext,
         channelProductId: selectedChannelProductId,
         externalProductNo: selectedProductNo,
         externalVariantCode: selectedVariantCode,

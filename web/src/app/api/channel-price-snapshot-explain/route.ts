@@ -139,10 +139,11 @@ export async function GET(request: Request) {
   }
 
   let preferredVariantCodes: string[] = [];
+  let currentStateRows: Array<{ external_variant_code?: string | null; exclude_plating_labor?: boolean | null }> = [];
   if (!channelProductId && requestedProductNos.length > 0) {
     const currentStatePickRes = await sb
       .from("channel_option_current_state_v1")
-      .select("external_variant_code, updated_at")
+      .select("external_variant_code, exclude_plating_labor, updated_at")
       .eq("channel_id", channelId)
       .eq("master_item_id", masterItemId)
       .in("external_product_no", requestedProductNos)
@@ -151,8 +152,9 @@ export async function GET(request: Request) {
     if (currentStatePickRes.error) {
       return jsonError(currentStatePickRes.error.message ?? "Failed to read current-state variant selection", 500);
     }
+    currentStateRows = (currentStatePickRes.data ?? []) as Array<{ external_variant_code?: string | null; exclude_plating_labor?: boolean | null }>;
     preferredVariantCodes = uniqueTextList(
-      (currentStatePickRes.data ?? []).map((row) => (row as { external_variant_code?: string | null }).external_variant_code ?? ""),
+      currentStateRows.map((row) => row.external_variant_code ?? ""),
     );
   }
 
@@ -170,6 +172,15 @@ export async function GET(request: Request) {
       ?? null;
   })() as Record<string, unknown> | null;
   if (!source) return jsonError("No V2 snapshot row found in view", 404);
+
+  const sourceVariantCode = String(source.external_variant_code ?? "").trim();
+  const excludePlatingLabor = (() => {
+    if (sourceVariantCode) {
+      const matched = currentStateRows.find((row) => String(row.external_variant_code ?? "").trim() === sourceVariantCode);
+      if (matched) return matched.exclude_plating_labor === true;
+    }
+    return currentStateRows.length > 0 && currentStateRows.every((row) => row.exclude_plating_labor === true);
+  })();
 
   const nowMs = Date.now();
   const [overrideRes, floorRes, masterPlatingRes] = await Promise.all([
@@ -256,7 +267,7 @@ export async function GET(request: Request) {
     labor_sell_total_plus_absorb_krw: number | null;
   } | null = null;
 
-  let fallbackQuery = sb
+  const fallbackQuery = sb
     .from("pricing_snapshot")
     .select("snapshot_id, labor_cost_applied_krw, labor_sell_total_plus_absorb_krw")
     .eq("channel_id", channelId)
@@ -320,8 +331,8 @@ const laborComponentJson = (() => {
   const absorbApplied = Math.max(0, Math.round(Number(sourceAbsorbApplied ?? 0)));
   const absorbRaw = Math.max(0, Math.round(Number(sourceAbsorbRaw ?? absorbApplied)));
   const sellPlusAbsorb = Math.max(0, Math.round(Number(resolvedLaborSellPlusAbsorb ?? totalCostApplied)));
-  const platingCost = Math.max(0, toInt(masterPlatingRow?.plating_price_cost_default));
-  const platingSell = Math.max(0, toInt(masterPlatingRow?.plating_price_sell_default));
+  const platingCost = excludePlatingLabor ? 0 : Math.max(0, toInt(masterPlatingRow?.plating_price_cost_default));
+  const platingSell = excludePlatingLabor ? 0 : Math.max(0, toInt(masterPlatingRow?.plating_price_sell_default));
   const platingAbsorbApplied = Math.max(0, toInt(source.absorb_plating_krw));
   const platingAbsorbRaw = Math.min(absorbRaw, platingAbsorbApplied);
   const platingCostPlusAbsorb = platingCost + platingAbsorbApplied;
