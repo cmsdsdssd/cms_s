@@ -110,8 +110,7 @@ async function verifyAppliedVariantPrice(
 
   const matchedByPrice = verifyMatched(last.currentPriceKrw);
   const matchedByAdditional = additionalMatched(last.additionalAmount);
-  const hasExpectedAdditional = typeof expectedAdditionalAmount === "number" && Number.isFinite(expectedAdditionalAmount);
-  const verificationAccepted = hasExpectedAdditional ? matchedByAdditional : (matchedByPrice && matchedByAdditional);
+  const verificationAccepted = matchedByPrice && matchedByAdditional;
   return {
     ok: verificationAccepted,
     current: last.currentPriceKrw,
@@ -212,21 +211,29 @@ export async function POST(request: Request) {
   );
 
   const logicalTargetKey = (masterItemId: string, externalVariantCode: string) => `${masterItemId}::${externalVariantCode || "BASE"}`;
+  const baseTargetKey = (masterItemId: string, externalProductNo: string) => `${masterItemId}::${externalProductNo || "BASE"}`;
   const allowVariantAdditionalOverride = pinnedComputeRequestId.length === 0;
   let pinnedTargetByChannelProduct = new Map<string, number>();
   let pinnedTargetByLogical = new Map<string, number>();
+  let pinnedRawByChannelProduct = new Map<string, number>();
+  let pinnedRawByLogical = new Map<string, number>();
+  const pinnedBaseTargetByMaster = new Map<string, number>();
+  const pinnedBaseTargetByProduct = new Map<string, number>();
+  const pinnedBaseRawTargetByMaster = new Map<string, number>();
+  const pinnedBaseRawTargetByProduct = new Map<string, number>();
   if (pinnedComputeRequestId) {
     const pinnedRows: Array<{
       channel_product_id: string | null;
       master_item_id: string | null;
       final_target_price_krw: number | null;
+      target_price_raw_krw: number | null;
     }> = [];
     if (channelProductIds && channelProductIds.length > 0) {
       for (const idChunk of chunkArray(channelProductIds, IN_QUERY_CHUNK_SIZE)) {
         if (idChunk.length === 0) continue;
         const pinnedRes = await sb
           .from("pricing_snapshot")
-          .select("channel_product_id, master_item_id, final_target_price_krw")
+          .select("channel_product_id, master_item_id, final_target_price_krw, target_price_raw_krw")
           .eq("channel_id", channelId)
           .eq("compute_request_id", pinnedComputeRequestId)
           .in("channel_product_id", idChunk);
@@ -236,7 +243,7 @@ export async function POST(request: Request) {
     } else {
       const pinnedRes = await sb
         .from("pricing_snapshot")
-        .select("channel_product_id, master_item_id, final_target_price_krw")
+        .select("channel_product_id, master_item_id, final_target_price_krw, target_price_raw_krw")
         .eq("channel_id", channelId)
         .eq("compute_request_id", pinnedComputeRequestId);
       if (pinnedRes.error) return jsonError(pinnedRes.error.message ?? "고정 스냅샷 조회 실패", 500);
@@ -247,6 +254,10 @@ export async function POST(request: Request) {
       .filter(([id, target]) => id.length > 0 && Number.isFinite(target))
       .map(([id, target]) => [id, Math.round(target)] as [string, number]);
     pinnedTargetByChannelProduct = new Map<string, number>(pinnedPairs);
+    const pinnedRawPairs: Array<[string, number]> = pinnedRows
+      .map((r) => [String(r.channel_product_id ?? "").trim(), Number(r.target_price_raw_krw)] as [string, number])
+      .filter(([id, targetRaw]) => id.length > 0 && Number.isFinite(targetRaw));
+    pinnedRawByChannelProduct = new Map<string, number>(pinnedRawPairs);
 
     const pinnedChannelProductIds = Array.from(
       new Set(
@@ -260,7 +271,7 @@ export async function POST(request: Request) {
       if (idChunk.length === 0) continue;
       const mapRes = await sb
         .from("sales_channel_product")
-        .select("channel_product_id, external_variant_code")
+        .select("channel_product_id, external_variant_code, external_product_no")
         .in("channel_product_id", idChunk);
       if (mapRes.error) return jsonError(mapRes.error.message ?? "고정 스냅샷 매핑 조회 실패", 500);
       for (const row of mapRes.data ?? []) {
@@ -281,6 +292,82 @@ export async function POST(request: Request) {
       })
       .filter((pair): pair is [string, number] => pair !== null);
     pinnedTargetByLogical = new Map<string, number>(pinnedLogicalPairs);
+    const pinnedLogicalRawPairs: Array<[string, number]> = pinnedRows
+      .map((r) => {
+        const masterId = String(r.master_item_id ?? "").trim();
+        const channelProductId = String(r.channel_product_id ?? "").trim();
+        const variantCode = variantCodeByChannelProduct.get(channelProductId) ?? "";
+        const targetRaw = Number(r.target_price_raw_krw);
+        if (!masterId || !Number.isFinite(targetRaw)) return null;
+        return [logicalTargetKey(masterId, variantCode), targetRaw] as [string, number];
+      })
+      .filter((pair): pair is [string, number] => pair !== null);
+    pinnedRawByLogical = new Map<string, number>(pinnedLogicalRawPairs);
+    const pinnedMasterIds = Array.from(new Set(
+      pinnedRows
+        .map((r) => String(r.master_item_id ?? "").trim())
+        .filter(Boolean),
+    ));
+    const pinnedBaseRows: Array<{
+      channel_product_id: string | null;
+      master_item_id: string | null;
+      final_target_price_krw: number | null;
+      target_price_raw_krw: number | null;
+    }> = [];
+    for (const masterChunk of chunkArray(pinnedMasterIds, IN_QUERY_CHUNK_SIZE)) {
+      if (masterChunk.length === 0) continue;
+      const pinnedBaseRes = await sb
+        .from("pricing_snapshot")
+        .select("channel_product_id, master_item_id, final_target_price_krw, target_price_raw_krw")
+        .eq("channel_id", channelId)
+        .eq("compute_request_id", pinnedComputeRequestId)
+        .in("master_item_id", masterChunk);
+      if (pinnedBaseRes.error) return jsonError(pinnedBaseRes.error.message ?? "고정 기준 스냅샷 조회 실패", 500);
+      pinnedBaseRows.push(...(pinnedBaseRes.data ?? []));
+    }
+    const pinnedBaseChannelProductIds = Array.from(new Set(
+      pinnedBaseRows
+        .map((r) => String(r.channel_product_id ?? "").trim())
+        .filter(Boolean),
+    ));
+    const pinnedBaseVariantCodeByChannelProduct = new Map<string, string>();
+    const pinnedBaseProductNoByChannelProduct = new Map<string, string>();
+    for (const idChunk of chunkArray(pinnedBaseChannelProductIds, IN_QUERY_CHUNK_SIZE)) {
+      if (idChunk.length === 0) continue;
+      const mapRes = await sb
+        .from("sales_channel_product")
+        .select("channel_product_id, external_variant_code, external_product_no")
+        .in("channel_product_id", idChunk);
+      if (mapRes.error) return jsonError(mapRes.error.message ?? "고정 기준 스냅샷 매핑 조회 실패", 500);
+      for (const row of mapRes.data ?? []) {
+        const channelProductId = String(row.channel_product_id ?? "").trim();
+        if (!channelProductId) continue;
+        pinnedBaseVariantCodeByChannelProduct.set(channelProductId, String(row.external_variant_code ?? "").trim());
+        pinnedBaseProductNoByChannelProduct.set(channelProductId, String(row.external_product_no ?? "").trim());
+      }
+    }
+    for (const row of pinnedBaseRows) {
+      const masterId = String(row.master_item_id ?? "").trim();
+      const channelProductId = String(row.channel_product_id ?? "").trim();
+      const target = Number(row.final_target_price_krw);
+      const targetRaw = Number(row.target_price_raw_krw);
+      if (!masterId) continue;
+      const variantCode = pinnedBaseVariantCodeByChannelProduct.get(channelProductId) ?? "";
+      const productNo = pinnedBaseProductNoByChannelProduct.get(channelProductId) ?? "";
+      if (variantCode) continue;
+      if (Number.isFinite(target) && !pinnedBaseTargetByMaster.has(masterId)) {
+        pinnedBaseTargetByMaster.set(masterId, Math.round(target));
+      }
+      if (productNo && Number.isFinite(target) && !pinnedBaseTargetByProduct.has(baseTargetKey(masterId, productNo))) {
+        pinnedBaseTargetByProduct.set(baseTargetKey(masterId, productNo), Math.round(target));
+      }
+      if (Number.isFinite(targetRaw) && !pinnedBaseRawTargetByMaster.has(masterId)) {
+        pinnedBaseRawTargetByMaster.set(masterId, targetRaw);
+      }
+      if (productNo && Number.isFinite(targetRaw) && !pinnedBaseRawTargetByProduct.has(baseTargetKey(masterId, productNo))) {
+        pinnedBaseRawTargetByProduct.set(baseTargetKey(masterId, productNo), targetRaw);
+      }
+    }
     if (pinnedTargetByChannelProduct.size === 0) {
       return jsonError("해당 compute_request_id로 사용할 대상 스냅샷이 없습니다", 422);
     }
@@ -341,7 +428,7 @@ export async function POST(request: Request) {
         .map((row) => String(row.master_item_id ?? "").trim())
         .filter(Boolean),
     ));
-    let siblingRuleSetRows: Array<{
+    const siblingRuleSetRows: Array<{
       master_item_id: string | null;
       option_price_mode: string | null;
       sync_rule_set_id: string | null;
@@ -650,13 +737,17 @@ export async function POST(request: Request) {
         const id = String(row.channel_product_id ?? "").trim();
         const master = String(row.master_item_id ?? "").trim();
         const variant = String(row.external_variant_code ?? "").trim();
+        const logicalKey = master ? logicalTargetKey(master, variant) : "";
         const pinned = pinnedTargetByChannelProduct.get(id)
-          ?? (master ? pinnedTargetByLogical.get(logicalTargetKey(master, variant)) : undefined);
+          ?? (logicalKey ? pinnedTargetByLogical.get(logicalKey) : undefined);
         if (!id || pinned == null || !Number.isFinite(pinned)) return null;
+        const pinnedRaw = pinnedRawByChannelProduct.get(id)
+          ?? (logicalKey ? pinnedRawByLogical.get(logicalKey) : undefined);
         const normalizedPinned = Math.round(pinned);
         return {
           ...row,
           final_target_price_krw: normalizedPinned,
+          target_price_raw_krw: Number.isFinite(Number(pinnedRaw ?? Number.NaN)) ? Number(pinnedRaw) : row.target_price_raw_krw,
         };
       })
       .filter((row): row is NonNullable<typeof row> => row !== null);
@@ -680,22 +771,49 @@ export async function POST(request: Request) {
     return av.localeCompare(bv);
   });
 
-  const mastersWithExplicitBaseRows = new Set<string>();
   const masterBaseRawTarget = new Map<string, number>();
+  const productBaseRawTarget = new Map<string, number>();
 
   const masterFallbackTarget = new Map<string, number>();
+  const productFallbackTarget = new Map<string, number>();
   for (const row of sortedCandidates) {
     const masterKey = String(row.master_item_id ?? "").trim();
     const variantCode = String(row.external_variant_code ?? "").trim();
     const target = Number(row.final_target_price_krw);
     const targetRaw = Number(row.target_price_raw_krw);
+    const productNo = String(row.external_product_no ?? "").trim();
     if (!masterKey || variantCode) continue;
-    mastersWithExplicitBaseRows.add(masterKey);
     if (Number.isFinite(target) && !masterFallbackTarget.has(masterKey)) {
       masterFallbackTarget.set(masterKey, Math.round(target));
     }
+    if (productNo && Number.isFinite(target) && !productFallbackTarget.has(baseTargetKey(masterKey, productNo))) {
+      productFallbackTarget.set(baseTargetKey(masterKey, productNo), Math.round(target));
+    }
     if (Number.isFinite(targetRaw) && !masterBaseRawTarget.has(masterKey)) {
       masterBaseRawTarget.set(masterKey, targetRaw);
+    }
+    if (productNo && Number.isFinite(targetRaw) && !productBaseRawTarget.has(baseTargetKey(masterKey, productNo))) {
+      productBaseRawTarget.set(baseTargetKey(masterKey, productNo), targetRaw);
+    }
+  }
+  for (const [masterKey, target] of pinnedBaseTargetByMaster.entries()) {
+    if (!masterFallbackTarget.has(masterKey)) {
+      masterFallbackTarget.set(masterKey, target);
+    }
+  }
+  for (const [productKey, target] of pinnedBaseTargetByProduct.entries()) {
+    if (!productFallbackTarget.has(productKey)) {
+      productFallbackTarget.set(productKey, target);
+    }
+  }
+  for (const [masterKey, targetRaw] of pinnedBaseRawTargetByMaster.entries()) {
+    if (!masterBaseRawTarget.has(masterKey)) {
+      masterBaseRawTarget.set(masterKey, targetRaw);
+    }
+  }
+  for (const [productKey, targetRaw] of pinnedBaseRawTargetByProduct.entries()) {
+    if (!productBaseRawTarget.has(productKey)) {
+      productBaseRawTarget.set(productKey, targetRaw);
     }
   }
 
@@ -924,7 +1042,7 @@ export async function POST(request: Request) {
     return String(product?.option_type ?? "").trim().toUpperCase();
   }
 
-  async function resolveBasePriceForVariantAdditional(externalProductNo: string, masterKey: string): Promise<{ ok: true; basePrice: number; optionType: string } | { ok: false; status: number; raw: unknown; error: string; optionType: string }> {
+  async function resolveBasePriceForVariantAdditional(externalProductNo: string): Promise<{ ok: true; basePrice: number; optionType: string } | { ok: false; status: number; raw: unknown; error: string; optionType: string }> {
     const base = await getBaseSnapshot(externalProductNo);
     const optionType = base.ok ? getOptionType(base.raw) : "";
     if (!base.ok || base.currentPriceKrw === null) {
@@ -979,7 +1097,8 @@ export async function POST(request: Request) {
     const externalProductNo = String(c.external_product_no ?? "");
 
     const rawTarget = Number(c.final_target_price_krw);
-    const fallbackTarget = masterFallbackTarget.get(masterKey);
+    const productBaseKey = baseTargetKey(masterKey, externalProductNo);
+    const fallbackTarget = productFallbackTarget.get(productBaseKey) ?? masterFallbackTarget.get(masterKey);
     const hasFiniteRawTarget = Number.isFinite(rawTarget);
     const shouldUseFallbackForVariant = Boolean(variantCode)
       && fallbackTarget !== undefined
@@ -994,8 +1113,8 @@ export async function POST(request: Request) {
     }
 
     if (variantCode) {
-      const baseFinalTarget = masterFallbackTarget.get(masterKey);
-      const baseRawTarget = masterBaseRawTarget.get(masterKey);
+      const baseFinalTarget = productFallbackTarget.get(productBaseKey) ?? masterFallbackTarget.get(masterKey);
+      const baseRawTarget = productBaseRawTarget.get(productBaseKey) ?? masterBaseRawTarget.get(masterKey);
       const variantRawTarget = Number(c.target_price_raw_krw);
       const hasBaseFinal = Number.isFinite(Number(baseFinalTarget ?? Number.NaN));
       const hasBaseRaw = Number.isFinite(Number(baseRawTarget ?? Number.NaN));
@@ -1064,7 +1183,7 @@ export async function POST(request: Request) {
 
     let pushRes = variantCode
       ? await (async () => {
-        const baseResolved = await resolveBasePriceForVariantAdditional(externalProductNo, masterKey);
+        const baseResolved = await resolveBasePriceForVariantAdditional(externalProductNo);
         if (!baseResolved.ok) {
           return {
             ok: false,
@@ -1075,8 +1194,8 @@ export async function POST(request: Request) {
           };
         }
 
-        const preferredBaseForDelta = Number(masterFallbackTarget.get(masterKey));
-        const usePreferredBase = mastersWithExplicitBaseRows.has(masterKey) && Number.isFinite(preferredBaseForDelta);
+        const preferredBaseForDelta = Number(productFallbackTarget.get(productBaseKey) ?? masterFallbackTarget.get(masterKey));
+        const usePreferredBase = Number.isFinite(preferredBaseForDelta);
         const baseForDelta = usePreferredBase ? Math.round(preferredBaseForDelta) : baseResolved.basePrice;
         const additionalAmount = Number.isFinite(Number(overrideAdditionalAmount ?? Number.NaN)) ? Math.round(Number(overrideAdditionalAmount)) : (targetPrice - baseForDelta);
         targetPriceForPush = baseForDelta + additionalAmount;
@@ -1096,7 +1215,7 @@ export async function POST(request: Request) {
         accessToken = await ensureValidCafe24AccessToken(sb, account);
         pushRes = variantCode
           ? await (async () => {
-            const baseResolved = await resolveBasePriceForVariantAdditional(externalProductNo, masterKey);
+            const baseResolved = await resolveBasePriceForVariantAdditional(externalProductNo);
             if (!baseResolved.ok) {
               return {
                 ok: false,
@@ -1107,8 +1226,8 @@ export async function POST(request: Request) {
               };
             }
 
-            const preferredBaseForDelta = Number(masterFallbackTarget.get(masterKey));
-            const usePreferredBase = mastersWithExplicitBaseRows.has(masterKey) && Number.isFinite(preferredBaseForDelta);
+            const preferredBaseForDelta = Number(productFallbackTarget.get(productBaseKey) ?? masterFallbackTarget.get(masterKey));
+            const usePreferredBase = Number.isFinite(preferredBaseForDelta);
             const baseForDelta = usePreferredBase ? Math.round(preferredBaseForDelta) : baseResolved.basePrice;
             const additionalAmount = Number.isFinite(Number(overrideAdditionalAmount ?? Number.NaN)) ? Math.round(Number(overrideAdditionalAmount)) : (targetPrice - baseForDelta);
             targetPriceForPush = baseForDelta + additionalAmount;
@@ -1143,7 +1262,7 @@ export async function POST(request: Request) {
       if (verify.ok || verifyPendingAccepted) {
         successCount += 1;
         if (variantCode) {
-          const masterBaseTarget = masterFallbackTarget.get(masterKey);
+          const masterBaseTarget = productFallbackTarget.get(productBaseKey) ?? masterFallbackTarget.get(masterKey);
           let basePriceForDelta: number | null = Number.isFinite(Number(masterBaseTarget ?? Number.NaN))
             ? Math.round(Number(masterBaseTarget))
             : null;
@@ -1183,7 +1302,7 @@ export async function POST(request: Request) {
       } else {
         let retryRecorded = false;
         if (variantCode) {
-          const retryBase = await resolveBasePriceForVariantAdditional(externalProductNo, masterKey);
+          const retryBase = await resolveBasePriceForVariantAdditional(externalProductNo);
           if (retryBase.ok) {
             expectedAdditionalAmount = Number.isFinite(Number(overrideAdditionalAmount ?? Number.NaN)) ? Math.round(Number(overrideAdditionalAmount)) : (targetPrice - retryBase.basePrice);
             targetPriceForPush = retryBase.basePrice + expectedAdditionalAmount;
@@ -1342,7 +1461,8 @@ export async function POST(request: Request) {
       }
 
       const rawTarget = Number(c.final_target_price_krw);
-      const fallbackTarget = masterFallbackTarget.get(masterKey);
+      const productBaseKey = baseTargetKey(masterKey, externalProductNo);
+      const fallbackTarget = productFallbackTarget.get(productBaseKey) ?? masterFallbackTarget.get(masterKey);
       const hasFiniteRawTarget = Number.isFinite(rawTarget);
       const shouldUseFallbackForVariant = Boolean(variantCode)
         && fallbackTarget !== undefined
@@ -1355,8 +1475,8 @@ export async function POST(request: Request) {
         targetPrice = Math.round(Number(forcedDesiredTarget));
       }
       if (variantCode) {
-        const baseFinalTarget = masterFallbackTarget.get(masterKey);
-        const baseRawTarget = masterBaseRawTarget.get(masterKey);
+        const baseFinalTarget = productFallbackTarget.get(productBaseKey) ?? masterFallbackTarget.get(masterKey);
+        const baseRawTarget = productBaseRawTarget.get(productBaseKey) ?? masterBaseRawTarget.get(masterKey);
         const variantRawTarget = Number(c.target_price_raw_krw);
         const hasBaseFinal = Number.isFinite(Number(baseFinalTarget ?? Number.NaN));
         const hasBaseRaw = Number.isFinite(Number(baseRawTarget ?? Number.NaN));
@@ -1372,8 +1492,9 @@ export async function POST(request: Request) {
       }
       if (!Number.isFinite(targetPrice) || targetPrice <= 0) continue;
 
-      let basePriceForDelta: number | null = Number.isFinite(Number(masterFallbackTarget.get(masterKey) ?? Number.NaN))
-        ? Math.round(Number(masterFallbackTarget.get(masterKey)))
+      const preferredBaseForDelta = productFallbackTarget.get(productBaseKey) ?? masterFallbackTarget.get(masterKey);
+      let basePriceForDelta: number | null = Number.isFinite(Number(preferredBaseForDelta ?? Number.NaN))
+        ? Math.round(Number(preferredBaseForDelta))
         : null;
       if (basePriceForDelta === null) {
         const base = await getBaseSnapshot(externalProductNo);

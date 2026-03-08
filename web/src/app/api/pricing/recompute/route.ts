@@ -1169,17 +1169,17 @@ export async function POST(request: Request) {
     .order("state_id", { ascending: false });
   if (optionStateRes.error) return jsonError(optionStateRes.error.message ?? "옵션 현재상태 조회 실패", 500);
 
-  const optionStateDeltaByMasterVariant = new Map<string, { additionalKrw: number; productNo: string }>();
+  const optionStateDeltaByProductVariant = new Map<string, { additionalKrw: number; productNo: string }>();
   for (const row of optionStateRes.data ?? []) {
     const masterId = String((row as { master_item_id?: string | null }).master_item_id ?? "").trim();
+    const productNo = String((row as { external_product_no?: string | null }).external_product_no ?? "").trim();
     const variantCode = String((row as { external_variant_code?: string | null }).external_variant_code ?? "").trim();
-    if (!masterId || !variantCode) continue;
+    if (!masterId || !productNo || !variantCode) continue;
     const additional = Math.round(Number((row as { final_target_additional_amount_krw?: unknown }).final_target_additional_amount_krw ?? Number.NaN));
     if (!Number.isFinite(additional)) continue;
-    const key = `${masterId}::${variantCode}`;
-    if (optionStateDeltaByMasterVariant.has(key)) continue;
-    const productNo = String((row as { external_product_no?: string | null }).external_product_no ?? "").trim();
-    optionStateDeltaByMasterVariant.set(key, { additionalKrw: additional, productNo });
+    const key = `${masterId}::${productNo}::${variantCode}`;
+    if (optionStateDeltaByProductVariant.has(key)) continue;
+    optionStateDeltaByProductVariant.set(key, { additionalKrw: additional, productNo });
   }
 
   const blockedByMissingRules: Array<{ channel_product_id: string; missing_rules: string[] }> = [];
@@ -1225,8 +1225,8 @@ export async function POST(request: Request) {
       || optionDecorationCode
       || (optionSizeValue !== null && Number.isFinite(optionSizeValue)),
     );
-    const optionStateDelta = hasVariant
-      ? optionStateDeltaByMasterVariant.get(`${m.master_item_id}::${variantCode}`)
+    const optionStateDelta = hasVariant && mappingProductNo
+      ? optionStateDeltaByProductVariant.get(`${m.master_item_id}::${mappingProductNo}::${variantCode}`)
       : undefined;
     const needsR1 = false;
     const needsR2 = applyRule2 && hasVariant && optionSizeValue !== null && Number.isFinite(optionSizeValue);
@@ -1570,10 +1570,13 @@ export async function POST(request: Request) {
     const useOptionLaborRuleEngine = optionMode === "SYNC" && hasAnyActiveOptionLaborRule(contextOptionLaborRules);
     const resolvedDecorationMasterId = decorationMasterIdByCode.get(optionDecorationCode)
       ?? (/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(optionDecorationCode) ? optionDecorationCode : null);
+    const optionLaborAdditionalWeightG = optionSizeValue !== null && Number.isFinite(optionSizeValue)
+      ? optionSizeValue
+      : sizeWeightDeltaApplied;
     const optionLaborRuleResult = useOptionLaborRuleEngine
       ? computeOptionLaborRuleBuckets(contextOptionLaborRules, {
         materialCode: optionMaterialCode,
-        additionalWeightG: sizeWeightDeltaApplied,
+        additionalWeightG: optionLaborAdditionalWeightG,
         platingEnabled: optionColorCode.length > 0,
         colorCode: optionColorCode || null,
         decorationCode: optionDecorationCode || null,
@@ -1605,7 +1608,13 @@ export async function POST(request: Request) {
     let optionPriceDelta = deltaMaterialBucket + deltaSizeBucket + deltaColorBucket + deltaDecorBucket + deltaOtherBucket;
     let optionPriceDeltaSource: "COMPUTED" | "STATE_FALLBACK" | "OPTION_LABOR_RULE_ENGINE" = useOptionLaborRuleEngine ? "OPTION_LABOR_RULE_ENGINE" : "COMPUTED";
 
-    if (hasVariant && optionStateDelta && Number.isFinite(optionStateDelta.additionalKrw)) {
+    if (
+      hasVariant
+      && optionStateDelta
+      && Number.isFinite(optionStateDelta.additionalKrw)
+      && !useOptionLaborRuleEngine
+      && !hasStructuredOptionSignal
+    ) {
       deltaMaterialBucket = 0;
       deltaSizeBucket = 0;
       deltaColorBucket = 0;

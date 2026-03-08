@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { ActionBar } from '@/components/layout/action-bar';
@@ -307,6 +307,17 @@ export default function ShoppingRulesPage() {
       || String(row.base_channel_product_id ?? row.channel_product_id ?? "").toLowerCase().includes(q),
     );
   }, [contextSearch, contexts]);
+  const contextSelectRows = useMemo(() => {
+    const next = new Map<string, ContextRow>();
+    if (selectedContext) {
+      next.set(contextKeyOf(selectedContext), selectedContext);
+    }
+    for (const row of filteredContexts) {
+      next.set(contextKeyOf(row), row);
+      if (next.size >= 200) break;
+    }
+    return Array.from(next.values());
+  }, [filteredContexts, selectedContext]);
 
   const rulesQuery = useQuery({
     queryKey: [
@@ -325,35 +336,52 @@ export default function ShoppingRulesPage() {
     },
   });
 
-  const rules = rulesQuery.data?.data ?? [];
-  const materialRule = rules.find((rule) => rule.category_key === 'MATERIAL') ?? null;
-  const sizeRules = rules
-    .filter((rule) => rule.category_key === 'SIZE')
-    .sort((left, right) => {
-      const materialCompare = (left.scope_material_code ?? '').localeCompare(right.scope_material_code ?? '');
-      if (materialCompare !== 0) return materialCompare;
-      const leftMin = toNumber(left.additional_weight_min_g ?? left.additional_weight_g);
-      const rightMin = toNumber(right.additional_weight_min_g ?? right.additional_weight_g);
-      if (leftMin !== rightMin) return leftMin - rightMin;
-      return toNumber(left.additional_weight_max_g ?? left.additional_weight_g) - toNumber(right.additional_weight_max_g ?? right.additional_weight_g);
-    });
-  const colorRules = rules
-    .filter((rule) => rule.category_key === 'COLOR_PLATING')
-    .sort((left, right) => {
-      const platingCompare = Number(left.plating_enabled === true) - Number(right.plating_enabled === true);
-      if (platingCompare !== 0) return platingCompare;
-      return (left.color_code ?? '').localeCompare(right.color_code ?? '');
-    });
-  const decorRules = rules
-    .filter((rule) => rule.category_key === 'DECOR')
-    .sort((left, right) => {
-      const leftName = left.decoration_model_name ?? left.decoration_master_id ?? '';
-      const rightName = right.decoration_model_name ?? right.decoration_master_id ?? '';
-      return leftName.localeCompare(rightName);
-    });
-  const otherRules = rules
-    .filter((rule) => rule.category_key === 'OTHER')
-    .sort((left, right) => (left.note ?? '').localeCompare(right.note ?? ''));
+  const rules = useMemo(() => rulesQuery.data?.data ?? [], [rulesQuery.data?.data]);
+  const materialRule = useMemo(() => rules.find((rule) => rule.category_key === 'MATERIAL') ?? null, [rules]);
+  const sizeRules = useMemo(
+    () =>
+      [...rules]
+        .filter((rule) => rule.category_key === 'SIZE')
+        .sort((left, right) => {
+          const materialCompare = (left.scope_material_code ?? '').localeCompare(right.scope_material_code ?? '');
+          if (materialCompare !== 0) return materialCompare;
+          const leftMin = toNumber(left.additional_weight_min_g ?? left.additional_weight_g);
+          const rightMin = toNumber(right.additional_weight_min_g ?? right.additional_weight_g);
+          if (leftMin !== rightMin) return leftMin - rightMin;
+          return toNumber(left.additional_weight_max_g ?? left.additional_weight_g) - toNumber(right.additional_weight_max_g ?? right.additional_weight_g);
+        }),
+    [rules],
+  );
+  const colorRules = useMemo(
+    () =>
+      [...rules]
+        .filter((rule) => rule.category_key === 'COLOR_PLATING')
+        .sort((left, right) => {
+          const platingCompare = Number(left.plating_enabled === true) - Number(right.plating_enabled === true);
+          if (platingCompare !== 0) return platingCompare;
+          return (left.color_code ?? '').localeCompare(right.color_code ?? '');
+        }),
+    [rules],
+  );
+  const decorRules = useMemo(
+    () =>
+      [...rules]
+        .filter((rule) => rule.category_key === 'DECOR')
+        .sort((left, right) => {
+          const leftName = left.decoration_model_name ?? left.decoration_master_id ?? '';
+          const rightName = right.decoration_model_name ?? right.decoration_master_id ?? '';
+          return leftName.localeCompare(rightName);
+        }),
+    [rules],
+  );
+  const otherRules = useMemo(
+    () =>
+      [...rules]
+        .filter((rule) => rule.category_key === 'OTHER')
+        .sort((left, right) => (left.note ?? '').localeCompare(right.note ?? '')),
+    [rules],
+  );
+
 
   const basePayload = selectedContext
     ? {
@@ -839,12 +867,17 @@ export default function ShoppingRulesPage() {
                 disabled={!effectiveChannelId || contexts.length === 0}
               >
                 <option value=''>상품 컨텍스트 선택</option>
-                {contexts.map((row) => (
+                {contextSelectRows.map((row) => (
                   <option key={contextKeyOf(row)} value={contextKeyOf(row)}>
                     {(row.model_name ?? row.master_item_id) + ' / ' + row.external_product_no}
                   </option>
                 ))}
               </Select>
+              {contexts.length > contextSelectRows.length ? (
+                <div className="mt-1 text-[11px] text-[var(--muted)]">
+                  드롭다운은 검색 결과 기준 {contextSelectRows.length}개만 표시합니다. 아래 검색/목록에서 바로 선택할 수 있습니다.
+                </div>
+              ) : null}
             </div>
             <div>
  <div className={'mb-1 text-xs text-[var(--muted)]'}>모델명</div>
