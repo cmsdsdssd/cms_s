@@ -320,124 +320,6 @@ type RuleDedupRow = {
   [key: string]: unknown;
 };
 
-const isSizeZeroBaselineRow = (row: Record<string, unknown>): boolean => {
-  const minValue = normalizeAdditionalWeightValue(row.additional_weight_min_g ?? row.additional_weight_g);
-  const maxValue = normalizeAdditionalWeightValue(row.additional_weight_max_g ?? row.additional_weight_g);
-  const baseLaborCost = normalizeKrwInteger(row.base_labor_cost_krw, 0);
-  const additiveDelta = normalizeKrwInteger(row.additive_delta_krw, 0);
-  return minValue === "0.00" && maxValue === "0.00" && baseLaborCost === 0 && additiveDelta === 0;
-};
-
-const buildSizeZeroBaselineRow = (template: RuleDedupRow): RuleDedupRow => ({
-  ...template,
-  additional_weight_g: "0.00",
-  additional_weight_min_g: "0.00",
-  additional_weight_max_g: "0.00",
-  base_labor_cost_krw: 0,
-  additive_delta_krw: 0,
-  note: null,
-});
-
-const ensureSizeZeroBaselinesInDedup = (dedup: Map<string, RuleDedupRow>): void => {
-  const templateByMaterial = new Map<string, RuleDedupRow>();
-  const hasZeroByMaterial = new Set<string>();
-
-  for (const row of dedup.values()) {
-    if (row.category_key !== "SIZE") continue;
-    const materialCode = normalizeMaterialScopeCode(row.scope_material_code);
-    if (!materialCode) continue;
-    if (!templateByMaterial.has(materialCode)) templateByMaterial.set(materialCode, row);
-    if (isSizeZeroBaselineRow(row)) hasZeroByMaterial.add(materialCode);
-  }
-
-  for (const [materialCode, template] of templateByMaterial.entries()) {
-    if (hasZeroByMaterial.has(materialCode)) continue;
-
-    const baselineRow = buildSizeZeroBaselineRow(template);
-
-    dedup.set(buildRuleDedupKey(baselineRow), baselineRow);
-  }
-};
-
-const ensurePersistedSizeZeroBaseline = async (
-  sb: NonNullable<ReturnType<typeof getShopAdminClient>>,
-  args: {
-    channelId: string;
-    masterItemId: string;
-    externalProductNo: string;
-    materialCode: string;
-    actor: string;
-  },
-): Promise<Response | null> => {
-  const existingRes = await sb
-    .from("channel_option_labor_rule_v1")
-    .select("rule_id")
-    .eq("channel_id", args.channelId)
-    .eq("master_item_id", args.masterItemId)
-    .eq("external_product_no", args.externalProductNo)
-    .eq("category_key", "SIZE")
-    .eq("scope_material_code", args.materialCode)
-    .eq("additional_weight_g", "0.00")
-    .eq("additional_weight_min_g", "0.00")
-    .eq("additional_weight_max_g", "0.00")
-    .eq("base_labor_cost_krw", 0)
-    .eq("additive_delta_krw", 0)
-    .limit(1)
-    .maybeSingle();
-
-  if (existingRes.error) return jsonError(existingRes.error.message ?? "failed to check 0g SIZE baseline", 500);
-  if (existingRes.data?.rule_id) return null;
-
-  const insertRes = await sb
-    .from("channel_option_labor_rule_v1")
-    .insert({
-      channel_id: args.channelId,
-      master_item_id: args.masterItemId,
-      external_product_no: args.externalProductNo,
-      category_key: "SIZE",
-      scope_material_code: args.materialCode,
-      additional_weight_g: "0.00",
-      additional_weight_min_g: "0.00",
-      additional_weight_max_g: "0.00",
-      plating_enabled: null,
-      color_code: null,
-      decoration_master_id: null,
-      decoration_model_name: null,
-      base_labor_cost_krw: 0,
-      additive_delta_krw: 0,
-      is_active: true,
-      note: null,
-      created_by: args.actor,
-      updated_by: args.actor,
-    })
-    .select("rule_id")
-    .maybeSingle();
-
-  if (insertRes.error) return jsonError(insertRes.error.message ?? "failed to create 0g SIZE baseline", 500);
-  return null;
-};
-
-const ensureSizeZeroBaselineForRuleSave = async (
-  sb: NonNullable<ReturnType<typeof getShopAdminClient>>,
-  row: Record<string, unknown>,
-  args: {
-    channelId: string;
-    masterItemId: string;
-    externalProductNo: string;
-    actor: string;
-  },
-): Promise<Response | null> => {
-  if (row.category_key !== "SIZE") return null;
-
-  const materialCode = normalizeMaterialScopeCode(row.scope_material_code);
-  if (!materialCode) return null;
-
-  return ensurePersistedSizeZeroBaseline(sb, {
-    ...args,
-    materialCode,
-  });
-};
-
 const validateAndNormalizeRuleRow = (
   input: Record<string, unknown>,
   rowIndex: number,
@@ -475,6 +357,9 @@ const validateAndNormalizeRuleRow = (
     const effectiveMax = additionalWeightMaxValue ?? additionalWeightValue;
     if (!effectiveMin || !effectiveMax) {
       return jsonError(`rows[${rowIndex}].additional_weight_min_g/additional_weight_max_g is invalid`, 400);
+    }
+    if (Number(effectiveMin) < 0.01 || Number(effectiveMax) < 0.01) {
+      return jsonError(`rows[${rowIndex}] SIZE range must be 0.01g or greater`, 400);
     }
     if (Number(effectiveMin) > Number(effectiveMax)) {
       return jsonError(`rows[${rowIndex}] has invalid SIZE range`, 400);
@@ -562,10 +447,18 @@ export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const channelId = String(searchParams.get("channel_id") ?? "").trim();
   const masterItemId = String(searchParams.get("master_item_id") ?? "").trim();
-  const externalProductNo = String(searchParams.get("external_product_no") ?? "").trim();
+  let externalProductNo = String(searchParams.get("external_product_no") ?? "").trim();
 
   if (!channelId) return jsonError("channel_id is required", 400);
   if (!externalProductNo) return jsonError("external_product_no is required", 400);
+
+  if (masterItemId && externalProductNo) {
+    try {
+      externalProductNo = await resolveCanonicalExternalProductNo(sb, channelId, masterItemId, externalProductNo);
+    } catch (error) {
+      return jsonError(error instanceof Error ? error.message : "활성 별칭 매핑 조회 실패", 500);
+    }
+  }
 
   let query = sb
     .from("channel_option_labor_rule_v1")
@@ -632,14 +525,6 @@ export async function POST(request: Request) {
       .maybeSingle();
     if (insertRes.error) return jsonError(insertRes.error.message ?? "옵션 공임 규칙 생성 실패", 400);
 
-    const baselineError = await ensureSizeZeroBaselineForRuleSave(sb, serverManaged, {
-          channelId,
-          masterItemId,
-          externalProductNo: resolvedExternalProductNo,
-          actor,
-        });
-        if (baselineError) return baselineError;
-
     return NextResponse.json({ data: insertRes.data }, { headers: { "Cache-Control": "no-store" } });
   }
 
@@ -699,8 +584,6 @@ export async function POST(request: Request) {
 
     dedup.set(buildRuleDedupKey(insertRow), insertRow);
   }
-
-  ensureSizeZeroBaselinesInDedup(dedup);
 
   const deleteRes = await sb
     .from("channel_option_labor_rule_v1")
@@ -766,14 +649,6 @@ export async function PUT(request: Request) {
     .select(RULE_SELECT)
     .maybeSingle();
   if (updateRes.error) return jsonError(updateRes.error.message ?? "옵션 공임 규칙 수정 실패", 400);
-
-  const baselineError = await ensureSizeZeroBaselineForRuleSave(sb, serverManaged, {
-      channelId: String(merged.channel_id ?? "").trim(),
-      masterItemId: String(merged.master_item_id ?? "").trim(),
-      externalProductNo: resolvedExternalProductNo,
-      actor,
-    });
-    if (baselineError) return baselineError;
 
   return NextResponse.json({ data: updateRes.data }, { headers: { "Cache-Control": "no-store" } });
 }

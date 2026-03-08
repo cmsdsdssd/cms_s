@@ -450,6 +450,15 @@ const guessCategoryByOptionName = (value: unknown): OptionCategoryKey => {
   if (/(공지|notice|안내|배송|유의)/u.test(normalized)) return "NOTICE";
   return "OTHER";
 };
+const resolvePreferredCategoryForOptionName = (
+  optionName: unknown,
+  ...candidates: Array<OptionCategoryKey | null | undefined>
+): OptionCategoryKey => {
+  for (const candidate of candidates) {
+    if (candidate) return candidate;
+  }
+  return guessCategoryByOptionName(optionName);
+};
 const normalizeOptionValue = (value: unknown): string =>
   String(value ?? "").replace(/\s*\([+-][\d,]+원\)\s*$/u, "").trim();
 const optionEntryKey = (optionName: unknown, optionValue: unknown): string => {
@@ -538,10 +547,16 @@ const toVariantOptionDraft = (selection: Partial<MappingOptionSelection> | null 
   option_size_value: selection?.option_size_value == null ? null : Number(selection.option_size_value),
   option_size_value_text: formatOptionSizeValue(selection?.option_size_value),
 });
-const withLegacyChoice = <T extends { value: string; label: string }>(choices: T[], legacyValue: string | null | undefined): T[] => {
-  const value = String(legacyValue ?? "").trim();
+const withResolvedChoice = <T extends { value: string; label: string }>(
+  choices: T[],
+  valueLike: string | null | undefined,
+  isLegacy: boolean,
+  labelOverride?: string | null | undefined,
+): T[] => {
+  const value = String(valueLike ?? "").trim();
   if (!value || choices.some((choice) => choice.value === value)) return choices;
-  return [{ ...(choices[0] ?? { value, label: value }), value, label: `${value} (legacy)` } as T, ...choices];
+  const label = String(labelOverride ?? value).trim() || value;
+  return [{ ...(choices[0] ?? { value, label }), value, label: isLegacy ? `${label} (legacy)` : label } as T, ...choices];
 };
 const optionDraftWithLegacy = (
   draft: VariantOptionDraft,
@@ -713,6 +728,7 @@ export default function ShoppingAutoPricePage() {
   const [selectedRunId, setSelectedRunId] = useState("");
   const [runMasterIds, setRunMasterIds] = useState("");
   const [editorProductNo, setEditorProductNo] = useState("");
+  const [editorReloadNonce, setEditorReloadNonce] = useState(0);
   const [gallerySearch, setGallerySearch] = useState("");
   const [editorPreview, setEditorPreview] = useState<ProductEditorPreview | null>(null);
   const [editorMasterItemIdHint, setEditorMasterItemIdHint] = useState("");
@@ -1673,9 +1689,9 @@ export default function ShoppingAutoPricePage() {
         if (masterItemId) item.primaryMasterId = masterItemId;
       }
       item.productNos.add(productNo);
-      const isCurrentPCode = /^P/i.test(item.productNo);
-      const isIncomingPCode = /^P/i.test(productNo);
-      if (!isCurrentPCode && isIncomingPCode) {
+      const currentIsNumeric = /^\d+$/u.test(item.productNo);
+      const incomingIsNumeric = /^\d+$/u.test(productNo);
+      if ((!currentIsNumeric && incomingIsNumeric) || (!item.productNo && productNo)) {
         item.productNo = productNo;
       }
       const modelName = String(row.model_name ?? "").trim();
@@ -1728,11 +1744,11 @@ export default function ShoppingAutoPricePage() {
 
 
   const variantLookupQuery = useQuery({
-    queryKey: ["auto-price-variant-lookup", effectiveChannelId, editorMasterItemId, editorPreview?.productNo ?? ""],
-    enabled: Boolean(effectiveChannelId && editorMasterItemId && editorPreview?.productNo),
+    queryKey: ["auto-price-variant-lookup", effectiveChannelId, editorMasterItemId, editorProductNo || editorPreview?.productNo || "", editorReloadNonce],
+    enabled: Boolean(effectiveChannelId && editorMasterItemId && (editorProductNo || editorPreview?.productNo)),
     queryFn: () =>
       shopApiGet<VariantLookupResponse>(
-        `/api/channel-products/variants?channel_id=${encodeURIComponent(effectiveChannelId)}&master_item_id=${encodeURIComponent(editorMasterItemId)}&external_product_no=${encodeURIComponent(String(editorPreview?.productNo ?? ""))}`,
+        `/api/channel-products/variants?channel_id=${encodeURIComponent(effectiveChannelId)}&master_item_id=${encodeURIComponent(editorMasterItemId)}&external_product_no=${encodeURIComponent(String(editorProductNo || editorPreview?.productNo || ""))}&_ts=${encodeURIComponent(String(editorReloadNonce))}`,
       ),
   });
   const loadedVariants = useMemo(() => variantLookupQuery.data?.data.variants ?? [], [variantLookupQuery.data?.data.variants]);
@@ -1766,13 +1782,15 @@ export default function ShoppingAutoPricePage() {
       ?? null,
     [canonicalOptionRows],
   );
-  const resolvedEditorProductNo = String(variantLookupQuery.data?.data.resolved_product_no ?? editorPreview?.productNo ?? "").trim();
+  const requestedEditorProductNo = String(editorProductNo || editorPreview?.productNo || "").trim();
+  const resolvedEditorProductNo = String(variantLookupQuery.data?.data.resolved_product_no ?? requestedEditorProductNo).trim();
   const canonicalEditorProductNo = String(
     variantLookupQuery.data?.data.canonical_external_product_no
       ?? variantLookupQuery.data?.data.resolved_product_no
-      ?? editorPreview?.productNo
+      ?? requestedEditorProductNo
       ?? "",
   ).trim();
+  const optionLaborRuleProductNo = String(requestedEditorProductNo || resolvedEditorProductNo || canonicalEditorProductNo || "").trim();
   const optionEntries = useMemo(() => {
     return buildMappingOptionEntries({
       productOptions: (editorPreview?.options ?? []).map((option) => ({
@@ -1818,8 +1836,8 @@ export default function ShoppingAutoPricePage() {
   });
   const siblingMappings = useMemo(() => editorMappingsQuery.data?.data ?? [], [editorMappingsQuery.data?.data]);
   const editorProductNos = useMemo(
-    () => Array.from(new Set([String(editorPreview?.productNo ?? "").trim(), resolvedEditorProductNo, canonicalEditorProductNo].filter(Boolean))),
-    [canonicalEditorProductNo, editorPreview?.productNo, resolvedEditorProductNo],
+    () => Array.from(new Set([requestedEditorProductNo, String(editorPreview?.productNo ?? "").trim(), resolvedEditorProductNo, canonicalEditorProductNo].filter(Boolean))),
+    [canonicalEditorProductNo, editorPreview?.productNo, requestedEditorProductNo, resolvedEditorProductNo],
   );
   const editorMappings = useMemo(() => {
     if (editorProductNos.length === 0) return siblingMappings;
@@ -1846,11 +1864,11 @@ export default function ShoppingAutoPricePage() {
   }, [siblingMappings]);
 
   const optionLaborRulesQuery = useQuery({
-    queryKey: ["auto-price-option-labor-rules", effectiveChannelId, editorMasterItemId, canonicalEditorProductNo],
-    enabled: Boolean(effectiveChannelId && editorMasterItemId && canonicalEditorProductNo),
+    queryKey: ["auto-price-option-labor-rules", effectiveChannelId, editorMasterItemId, optionLaborRuleProductNo, editorReloadNonce],
+    enabled: Boolean(effectiveChannelId && editorMasterItemId && optionLaborRuleProductNo),
     queryFn: () =>
       shopApiGet<{ data: OptionLaborRuleRow[] }>(
-        `/api/option-labor-rules?channel_id=${encodeURIComponent(effectiveChannelId)}&master_item_id=${encodeURIComponent(editorMasterItemId)}&external_product_no=${encodeURIComponent(canonicalEditorProductNo)}`,
+        `/api/option-labor-rules?channel_id=${encodeURIComponent(effectiveChannelId)}&master_item_id=${encodeURIComponent(editorMasterItemId)}&external_product_no=${encodeURIComponent(optionLaborRuleProductNo)}&_ts=${encodeURIComponent(String(editorReloadNonce))}`,
       ),
   });
   const optionLaborRuleRows = useMemo(
@@ -1920,6 +1938,11 @@ export default function ShoppingAutoPricePage() {
     }
     return Array.from(next.values()).sort((left, right) => left.value.localeCompare(right.value));
   }, [loadedOptionAllowlist.materials, optionLaborRuleRows]);
+  const hasChoiceValue = (choices: Array<{ value: string }>, value: string | null | undefined): boolean => {
+    const normalized = String(value ?? '').trim();
+    if (!normalized) return false;
+    return choices.some((choice) => String(choice.value ?? '').trim() === normalized);
+  };
   const decorRuleByMasterId = useMemo(() => {
     const next = new Map<string, OptionLaborRuleRow>();
     for (const row of optionLaborRuleRows) {
@@ -1969,16 +1992,18 @@ export default function ShoppingAutoPricePage() {
   }, [loadedVariants]);
 
   const variantDraftResetKey = useMemo(
-    () => [effectiveChannelId, editorMasterItemId, canonicalEditorProductNo || resolvedEditorProductNo || String(editorPreview?.productNo ?? "").trim()].join("|"),
-    [canonicalEditorProductNo, editorMasterItemId, editorPreview?.productNo, effectiveChannelId, resolvedEditorProductNo],
+    () => [effectiveChannelId, editorMasterItemId, optionLaborRuleProductNo || canonicalEditorProductNo || resolvedEditorProductNo || String(editorPreview?.productNo ?? "").trim()].join("|"),
+    [canonicalEditorProductNo, editorMasterItemId, editorPreview?.productNo, effectiveChannelId, optionLaborRuleProductNo, resolvedEditorProductNo],
   );
   const defaultOptionCategoryDrafts = useMemo(() => {
     const next: StringMap = {};
     for (const entry of optionEntries) {
       if (!next[entry.optionName]) {
-        next[entry.optionName] = canonicalOptionRowByEntryKey.get(entry.entryKey)?.category_key
-          ?? savedOptionCategoryByName.get(entry.optionName)
-          ?? guessCategoryByOptionName(entry.optionName);
+        next[entry.optionName] = resolvePreferredCategoryForOptionName(
+          entry.optionName,
+          canonicalOptionRowByEntryKey.get(entry.entryKey)?.category_key,
+          savedOptionCategoryByName.get(entry.optionName),
+        );
       }
     }
     return next;
@@ -2080,19 +2105,18 @@ export default function ShoppingAutoPricePage() {
     const next: StringMap = {};
     for (const entry of optionEntries) {
       const canonicalRow = canonicalOptionRowByEntryKey.get(entry.entryKey);
-      const categoryKey = canonicalRow?.category_key ?? guessCategoryByOptionName(entry.optionName);
-      if (categoryKey === "SIZE" || categoryKey === "COLOR_PLATING") {
-        next[entry.entryKey] = String(canonicalRow?.material_code_resolved ?? "").trim();
+      const categoryKey = resolvePreferredCategoryForOptionName(entry.optionName, canonicalRow?.category_key);
+      const resolvedMaterialCode = String(canonicalRow?.material_code_resolved ?? "").trim();
+      if (categoryKey === "SIZE" || categoryKey === "COLOR_PLATING" || categoryKey === "OTHER") {
+        next[entry.entryKey] = hasChoiceValue(materialChoicePool, resolvedMaterialCode) ? resolvedMaterialCode : "";
       } else if (categoryKey === "DECOR") {
         next[entry.entryKey] = String(canonicalRow?.decor_material_code_snapshot ?? "").trim();
-      } else if (categoryKey === "OTHER") {
-        next[entry.entryKey] = String(canonicalRow?.material_code_resolved ?? "").trim();
       } else {
         next[entry.entryKey] = "";
       }
     }
     return next;
-  }, [canonicalOptionRowByEntryKey, optionEntries]);
+  }, [canonicalOptionRowByEntryKey, materialChoicePool, optionEntries]);
   const optionAxis1Drafts =
     optionAxis1DraftSlot.resetKey === variantDraftResetKey ? optionAxis1DraftSlot.value : defaultOptionAxis1Drafts;
   const setOptionAxis1Drafts = (next: StringMap | ((current: StringMap) => StringMap)) => {
@@ -2104,11 +2128,16 @@ export default function ShoppingAutoPricePage() {
     const next: StringMap = {};
     for (const entry of optionEntries) {
       const canonicalRow = canonicalOptionRowByEntryKey.get(entry.entryKey);
-      const categoryKey = canonicalRow?.category_key ?? guessCategoryByOptionName(entry.optionName);
+      const categoryKey = resolvePreferredCategoryForOptionName(entry.optionName, canonicalRow?.category_key);
+      const resolvedMaterialCode = String(canonicalRow?.material_code_resolved ?? "").trim();
       if (categoryKey === "SIZE") {
-        next[entry.entryKey] = canonicalRow?.size_weight_g_selected == null ? "" : formatOptionSizeValue(canonicalRow.size_weight_g_selected);
+        const sizeValue = canonicalRow?.size_weight_g_selected == null ? "" : formatOptionSizeValue(canonicalRow.size_weight_g_selected);
+        const sizeChoices = loadedOptionAllowlist.sizes_by_material[resolvedMaterialCode] ?? [];
+        next[entry.entryKey] = hasChoiceValue(sizeChoices, sizeValue) ? sizeValue : "";
       } else if (categoryKey === "COLOR_PLATING") {
-        next[entry.entryKey] = String(canonicalRow?.color_code_selected ?? "").trim();
+        const colorValue = String(canonicalRow?.color_code_selected ?? "").trim();
+        const colorChoices = (colorCodesByMaterial.get(resolvedMaterialCode) ?? []).map((value) => ({ value }));
+        next[entry.entryKey] = hasChoiceValue(colorChoices, colorValue) ? colorValue : "";
       } else if (categoryKey === "DECOR") {
         next[entry.entryKey] = String(canonicalRow?.decor_model_name_selected ?? "").trim();
       } else if (categoryKey === "OTHER") {
@@ -2118,7 +2147,7 @@ export default function ShoppingAutoPricePage() {
       }
     }
     return next;
-  }, [canonicalOptionRowByEntryKey, optionEntries]);
+  }, [canonicalOptionRowByEntryKey, colorCodesByMaterial, loadedOptionAllowlist.sizes_by_material, optionEntries]);
   const optionAxis2Drafts =
     optionAxis2DraftSlot.resetKey === variantDraftResetKey ? optionAxis2DraftSlot.value : defaultOptionAxis2Drafts;
   const setOptionAxis2Drafts = (next: StringMap | ((current: StringMap) => StringMap)) => {
@@ -2130,7 +2159,7 @@ export default function ShoppingAutoPricePage() {
     const next: StringMap = {};
     for (const entry of optionEntries) {
       const canonicalRow = canonicalOptionRowByEntryKey.get(entry.entryKey);
-      const categoryKey = canonicalRow?.category_key ?? guessCategoryByOptionName(entry.optionName);
+      const categoryKey = resolvePreferredCategoryForOptionName(entry.optionName, canonicalRow?.category_key);
       if (categoryKey === "DECOR") {
         next[entry.entryKey] = String(Math.round(Number(canonicalRow?.decor_final_amount_krw ?? 0)));
       } else if (categoryKey === "COLOR_PLATING" || categoryKey === "SIZE") {
@@ -2176,7 +2205,12 @@ export default function ShoppingAutoPricePage() {
     const next = new Map<string, OptionCategoryKey>();
     for (const entry of optionEntries) {
       const draftValue = String(optionCategoryDrafts[entry.optionName] ?? "").trim() as OptionCategoryKey;
-      next.set(entry.optionName, CATEGORY_OPTIONS.some((option) => option.key === draftValue) ? draftValue : (savedOptionCategoryByName.get(entry.optionName) ?? guessCategoryByOptionName(entry.optionName)));
+      next.set(
+        entry.optionName,
+        CATEGORY_OPTIONS.some((option) => option.key === draftValue)
+          ? draftValue
+          : resolvePreferredCategoryForOptionName(entry.optionName, savedOptionCategoryByName.get(entry.optionName)),
+      );
     }
     return next;
   }, [optionCategoryDrafts, optionEntries, savedOptionCategoryByName]);
@@ -2442,7 +2476,7 @@ export default function ShoppingAutoPricePage() {
     const next = new Map<string, Array<{ value: string; label: string }>>();
     for (const row of compactOptionRows) {
       if (row.categoryKey !== "SIZE" && row.categoryKey !== "COLOR_PLATING" && row.categoryKey !== "OTHER") continue;
-      next.set(row.entryKey, withLegacyChoice(materialChoicePool, row.selectedMaterialCode));
+      next.set(row.entryKey, withResolvedChoice(materialChoicePool, row.selectedMaterialCode, row.legacyStatus !== "VALID", row.selectedMaterialCode));
     }
     return next;
   }, [compactOptionRows, materialChoicePool]);
@@ -2451,7 +2485,7 @@ export default function ShoppingAutoPricePage() {
     for (const row of compactOptionRows) {
       if (row.categoryKey !== "SIZE") continue;
       const base = loadedOptionAllowlist.sizes_by_material[row.selectedMaterialCode ?? ""] ?? [];
-      next.set(row.entryKey, withLegacyChoice(base, row.selectedSizeWeightText));
+      next.set(row.entryKey, withResolvedChoice(base, row.selectedSizeWeightText, row.legacyStatus !== "VALID", row.selectedSizeWeightText ? `${row.selectedSizeWeightText}g` : row.selectedSizeWeightText));
     }
     return next;
   }, [compactOptionRows, loadedOptionAllowlist.sizes_by_material]);
@@ -2461,7 +2495,7 @@ export default function ShoppingAutoPricePage() {
       if (row.categoryKey !== "COLOR_PLATING") continue;
       const colorCodes = colorCodesByMaterial.get(row.selectedMaterialCode) ?? [];
       const base = colorCodes.map((code) => ({ value: code, label: colorLabelByCode.get(code) ?? code }));
-      next.set(row.entryKey, withLegacyChoice(base, row.selectedColorCode));
+      next.set(row.entryKey, withResolvedChoice(base, row.selectedColorCode, row.legacyStatus !== "VALID", colorLabelByCode.get(row.selectedColorCode) ?? row.selectedColorCode));
     }
     return next;
   }, [colorCodesByMaterial, colorLabelByCode, compactOptionRows]);
@@ -2577,19 +2611,22 @@ export default function ShoppingAutoPricePage() {
     [editorPreview, focusedVariantCode],
   );
   const focusedDraft = focusedVariantCode ? (variantOptionDraftsByCode[focusedVariantCode] ?? defaultVariantOptionDrafts[focusedVariantCode] ?? toVariantOptionDraft(null)) : null;
+  const shouldMarkFocusedChoiceAsLegacy = !loadedOptionAllowlist.is_empty;
   const focusedMaterialChoices = focusedDraft
-    ? withLegacyChoice(loadedOptionAllowlist.materials, focusedDraft.option_material_code)
+    ? withResolvedChoice(loadedOptionAllowlist.materials, focusedDraft.option_material_code, shouldMarkFocusedChoiceAsLegacy, focusedDraft.option_material_code)
     : [];
   const focusedColorChoices = focusedDraft
-    ? withLegacyChoice(loadedOptionAllowlist.colors, focusedDraft.option_color_code)
+    ? withResolvedChoice(loadedOptionAllowlist.colors, focusedDraft.option_color_code, shouldMarkFocusedChoiceAsLegacy, focusedDraft.option_color_code)
     : [];
   const focusedDecorChoices = focusedDraft
-    ? withLegacyChoice(loadedOptionAllowlist.decors, focusedDraft.option_decoration_code)
+    ? withResolvedChoice(loadedOptionAllowlist.decors, focusedDraft.option_decoration_code, shouldMarkFocusedChoiceAsLegacy, focusedDraft.option_decoration_code)
     : [];
   const focusedSizeChoices = focusedDraft
-    ? withLegacyChoice(
+    ? withResolvedChoice(
         loadedOptionAllowlist.sizes_by_material[focusedDraft.option_material_code ?? ""] ?? [],
         focusedDraft.option_size_value_text,
+        shouldMarkFocusedChoiceAsLegacy,
+        focusedDraft.option_size_value_text ? `${focusedDraft.option_size_value_text}g` : focusedDraft.option_size_value_text,
       )
     : [];
   const variantAxisCount = useMemo(
@@ -2703,7 +2740,7 @@ export default function ShoppingAutoPricePage() {
       : baseDraft;
     const optionPriceMode: "SYNC" | "MANUAL" = existing?.option_price_mode === "MANUAL" ? "MANUAL" : "SYNC";
     const syncRuleSetId = optionPriceMode === "SYNC" ? (siblingSyncRuleSetId || String(existing?.sync_rule_set_id ?? "").trim()) : "";
-    const externalProductNo = canonicalEditorProductNo || resolvedEditorProductNo || String(editorPreview?.productNo ?? "").trim();
+    const externalProductNo = requestedEditorProductNo || canonicalEditorProductNo || resolvedEditorProductNo || String(editorPreview?.productNo ?? "").trim();
     const allowedMaterialCodes = new Set(loadedOptionAllowlist.materials.map((choice) => choice.value));
     const resolvedMaterialCode = draft.option_material_code && allowedMaterialCodes.has(draft.option_material_code)
       ? draft.option_material_code
@@ -2774,7 +2811,7 @@ export default function ShoppingAutoPricePage() {
     mutationFn: async (_args?: { skipApply?: boolean }) => {
       if (!effectiveChannelId) throw new Error("channel_id가 필요합니다");
       if (!editorMasterItemId) throw new Error("master_item_id가 필요합니다");
-      const externalProductNo = canonicalEditorProductNo || resolvedEditorProductNo || String(editorPreview?.productNo ?? "").trim();
+      const externalProductNo = requestedEditorProductNo || canonicalEditorProductNo || resolvedEditorProductNo || String(editorPreview?.productNo ?? "").trim();
       if (!externalProductNo) throw new Error("external_product_no가 필요합니다");
       if (optionEntries.length === 0) return { ok: true, data: [] as OptionCategoryRow[] };
       if (blockingOptionRows.length > 0) {
@@ -2992,7 +3029,7 @@ export default function ShoppingAutoPricePage() {
         qc.invalidateQueries({ queryKey: ["auto-price-editor-mappings", effectiveChannelId, editorMasterItemId] }),
         qc.invalidateQueries({ queryKey: ["auto-price-gallery-mappings", effectiveChannelId] }),
         qc.invalidateQueries({ queryKey: ["auto-price-variant-lookup", effectiveChannelId, editorMasterItemId, editorPreview?.productNo ?? ""] }),
-        qc.invalidateQueries({ queryKey: ["auto-price-option-labor-rules", effectiveChannelId, editorMasterItemId, canonicalEditorProductNo] }),
+        qc.invalidateQueries({ queryKey: ["auto-price-option-labor-rules", effectiveChannelId, editorMasterItemId, optionLaborRuleProductNo] }),
       ]);
     },
     onError: (error) => {
@@ -3118,10 +3155,30 @@ export default function ShoppingAutoPricePage() {
   });
 
   const loadPreviewMutation = useMutation({
+    onMutate: async (productNo?: string) => {
+      const resolvedProductNo = String(productNo ?? editorProductNo).trim();
+      setEditorPreview(null);
+      setVariantOptionDraftSlot({ resetKey: '', value: {} });
+      setOptionCategoryDraftSlot({ resetKey: '', value: {} });
+      setOptionSyncDeltaDraftSlot({ resetKey: '', value: {} });
+      setOptionOtherReasonDraftSlot({ resetKey: '', value: {} });
+      setOptionDecorSelectionDraftSlot({ resetKey: '', value: {} });
+      setOptionNoticeSelectionDraftSlot({ resetKey: '', value: {} });
+      setOptionAxis1DraftSlot({ resetKey: '', value: {} });
+      setOptionAxis2DraftSlot({ resetKey: '', value: {} });
+      setOptionAxis3DraftSlot({ resetKey: '', value: {} });
+      if (!resolvedProductNo) return;
+      await Promise.all([
+        qc.cancelQueries({ queryKey: ['auto-price-variant-lookup', effectiveChannelId, editorMasterItemId, resolvedProductNo] }),
+        qc.cancelQueries({ queryKey: ['auto-price-option-labor-rules', effectiveChannelId, editorMasterItemId, resolvedProductNo] }),
+      ]);
+      qc.removeQueries({ queryKey: ['auto-price-variant-lookup', effectiveChannelId, editorMasterItemId, resolvedProductNo] });
+      qc.removeQueries({ queryKey: ['auto-price-option-labor-rules', effectiveChannelId, editorMasterItemId, resolvedProductNo] });
+    },
     mutationFn: (productNo?: string) => {
       const resolvedProductNo = String(productNo ?? editorProductNo).trim();
       return shopApiGet<{ data: ProductEditorPreview }>(
-        `/api/channel-products/editor?channel_id=${encodeURIComponent(effectiveChannelId)}&external_product_no=${encodeURIComponent(resolvedProductNo)}`,
+        `/api/channel-products/editor?channel_id=${encodeURIComponent(effectiveChannelId)}&external_product_no=${encodeURIComponent(resolvedProductNo)}&_ts=${encodeURIComponent(String(editorReloadNonce || Date.now()))}`,
       );
     },
     onSuccess: (res) => {
@@ -3563,7 +3620,7 @@ export default function ShoppingAutoPricePage() {
         <CardBody className="space-y-3">
           <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
             <Input value={editorProductNo} onChange={(e) => { const next = e.target.value; setEditorProductNo(next); setEditorMasterItemIdHint(masterIdByProductNo.get(next.trim()) ?? ""); }} placeholder="product_no 또는 product_code" />
-            <Button onClick={() => { const productNo = editorProductNo.trim(); setEditorMasterItemIdHint(masterIdByProductNo.get(productNo) ?? ""); loadPreviewMutation.mutate(productNo); }} disabled={!effectiveChannelId || !editorProductNo.trim() || loadPreviewMutation.isPending}>
+            <Button onClick={() => { const productNo = editorProductNo.trim(); setEditorReloadNonce(Date.now()); setEditorMasterItemIdHint(masterIdByProductNo.get(productNo) ?? ""); loadPreviewMutation.mutate(productNo); }} disabled={!effectiveChannelId || !editorProductNo.trim() || loadPreviewMutation.isPending}>
               상품 미리보기 불러오기
             </Button>
             <div className="text-xs text-[var(--muted)] md:col-span-2">불러오면 우측 드로어에서 쇼핑몰형 미리보기/상세수정을 진행합니다.</div>
@@ -3589,6 +3646,7 @@ export default function ShoppingAutoPricePage() {
                   type='button'
                   className={`rounded border p-2 text-left transition-colors ${currentProductSyncProfileCardClassOf(item.currentProductSyncProfile)}`}
                   onClick={() => {
+                    setEditorReloadNonce(Date.now());
                     setEditorProductNo(item.productNo);
                     setEditorMasterItemIdHint(String(item.primaryMasterId ?? "").trim() || masterIdByProductNo.get(String(item.productNo ?? "").trim()) || "");
                     setApplyError(null);
@@ -3605,13 +3663,13 @@ export default function ShoppingAutoPricePage() {
                     )}
                   </div>
                   <div className='flex items-start justify-between gap-2'>
-                    <div className='text-xs font-semibold'>{item.productNo}</div>
+                    <div className='text-xs font-semibold'>{item.modelNameText || item.productNo}</div>
                     {item.currentProductSyncProfile === 'MARKET_LINKED' ? (
                       <span className={currentProductSyncProfileBadgeClassOf(item.currentProductSyncProfile)}>시장연동</span>
                     ) : null}
                   </div>
-                  <div className="mt-1 line-clamp-1 text-[10px] text-[var(--muted)]">{item.productAliasText}</div>
-                  <div className="mt-1 line-clamp-2 text-[11px] text-[var(--muted)]">{item.modelNameText || "-"}</div>
+                  <div className="mt-1 line-clamp-1 text-[10px] text-[var(--muted)]">{item.productNo}</div>
+                  <div className="mt-1 line-clamp-2 text-[11px] text-[var(--muted)]">{item.productAliasText}</div>
                   <div className="mt-2 flex items-center gap-1 text-[11px] text-[var(--muted)]">
                     <span>옵션 {item.variantCount}개</span>
                     <span>불일치 {item.outOfSyncCount}개</span>

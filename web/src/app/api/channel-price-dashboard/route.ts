@@ -105,6 +105,14 @@ type CurrentPriceRow = {
   error_message: string | null;
 };
 
+type LatestPushItemRow = {
+  channel_product_id: string | null;
+  target_price_krw: number | null;
+  after_price_krw: number | null;
+  status: string | null;
+  created_at: string | null;
+};
+
 const toKeyPart = (value: string | null | undefined) => String(value ?? '').trim();
 const normalizeCurrentProductSyncProfile = (value: unknown): 'GENERAL' | 'MARKET_LINKED' => {
   return String(value == null ? 'GENERAL' : value).trim().toUpperCase() === 'MARKET_LINKED' ? 'MARKET_LINKED' : 'GENERAL';
@@ -119,6 +127,34 @@ const isFetchFailure = (fetchStatus: string | null | undefined) => {
   const normalized = fetchStatus.trim().toUpperCase();
   if (!normalized) return false;
   return !["SUCCESS", "SUCCEEDED", "OK"].includes(normalized);
+};
+
+const isNumericProductNo = (value: string | null | undefined) => /^\d+$/u.test(toKeyPart(value));
+const looksCanonicalProductCode = (value: string | null | undefined) => /^P/i.test(toKeyPart(value));
+const shouldPreferMappingProductNo = (currentProductNo: string | null | undefined, nextProductNo: string | null | undefined) => {
+  const current = toKeyPart(currentProductNo);
+  const next = toKeyPart(nextProductNo);
+  if (!current && next) return true;
+  if (!next) return false;
+  const currentNumeric = isNumericProductNo(current);
+  const nextNumeric = isNumericProductNo(next);
+  if (nextNumeric !== currentNumeric) return nextNumeric;
+  const currentCanonical = looksCanonicalProductCode(current);
+  const nextCanonical = looksCanonicalProductCode(next);
+  if (nextCanonical !== currentCanonical) return !nextCanonical;
+  return next.localeCompare(current) < 0;
+};
+
+const dedupeMappings = (rows: MappingRow[]) => {
+  const next = new Map<string, MappingRow>();
+  for (const row of rows) {
+    const key = `${toKeyPart(row.master_item_id)}::${toKeyPart(row.external_variant_code)}`;
+    const existing = next.get(key);
+    if (!existing || shouldPreferMappingProductNo(existing.external_product_no, row.external_product_no)) {
+      next.set(key, row);
+    }
+  }
+  return Array.from(next.values());
 };
 
 const derivePriceState = (
@@ -178,8 +214,9 @@ export async function GET(request: Request) {
         ? row.current_product_sync_profile
         : null,
   })) as MappingRow[];
-  const channelProductIds = Array.from(new Set(mappings.map((row) => toKeyPart(row.channel_product_id)).filter(Boolean)));
-  const masterIds = Array.from(new Set(mappings.map((row) => toKeyPart(row.master_item_id)).filter(Boolean)));
+  const effectiveMappings = dedupeMappings(mappings);
+  const channelProductIds = Array.from(new Set(effectiveMappings.map((row) => toKeyPart(row.channel_product_id)).filter(Boolean)));
+  const masterIds = Array.from(new Set(effectiveMappings.map((row) => toKeyPart(row.master_item_id)).filter(Boolean)));
 
   const v2RowsRes = channelProductIds.length > 0
     ? await sb
@@ -224,6 +261,15 @@ export async function GET(request: Request) {
     .eq("channel_id", channelId);
   if (currentPriceRes.error) return jsonError(currentPriceRes.error.message ?? "현재 채널가 조회 실패", 500);
 
+  const latestPushItemRes = channelProductIds.length > 0
+    ? await sb
+      .from("price_sync_job_item")
+      .select("channel_product_id,target_price_krw,after_price_krw,status,created_at")
+      .in("channel_product_id", channelProductIds)
+      .order("created_at", { ascending: false })
+    : { data: [], error: null };
+  if (latestPushItemRes.error) return jsonError(latestPushItemRes.error.message ?? "최신 push item 조회 실패", 500);
+
   const latestV2ByProduct = new Map<string, V2Row>();
   const pinnedV2ByProduct = new Map<string, V2Row>();
   for (const row of sourceRows) {
@@ -233,6 +279,13 @@ export async function GET(request: Request) {
     if (computeRequestId && toKeyPart(row.compute_request_id) === computeRequestId && !pinnedV2ByProduct.has(productKey)) {
       pinnedV2ByProduct.set(productKey, row);
     }
+  }
+  const latestSuccessfulPushByProduct = new Map<string, LatestPushItemRow>();
+  for (const row of (latestPushItemRes.data ?? []) as LatestPushItemRow[]) {
+    const productKey = toKeyPart(row.channel_product_id);
+    if (!productKey || latestSuccessfulPushByProduct.has(productKey)) continue;
+    if (String(row.status ?? "").trim().toUpperCase() !== "SUCCESS") continue;
+    latestSuccessfulPushByProduct.set(productKey, row);
   }
 
   const currentPriceByExternal = new Map<string, CurrentPriceRow>();
@@ -278,15 +331,16 @@ export async function GET(request: Request) {
     }
   }
 
-  let mappedRows: DashboardRow[] = mappings.map((mapping) => {
+  let mappedRows: DashboardRow[] = effectiveMappings.map((mapping) => {
     const normalizedChannelId = toKeyPart(mapping.channel_id);
     const normalizedMasterId = toKeyPart(mapping.master_item_id);
     const normalizedChannelProductId = toKeyPart(mapping.channel_product_id);
     const sourceRow = (computeRequestId ? pinnedV2ByProduct.get(normalizedChannelProductId) : null)
       ?? latestV2ByProduct.get(normalizedChannelProductId)
       ?? null;
+    const latestPushItem = latestSuccessfulPushByProduct.get(normalizedChannelProductId) ?? null;
     const masterMeta = masterMetaById.get(normalizedMasterId) ?? null;
-    const finalTarget = sourceRow?.final_target_price_v2_krw ?? null;
+    const finalTarget = latestPushItem?.after_price_krw ?? latestPushItem?.target_price_krw ?? sourceRow?.final_target_price_v2_krw ?? null;
 
     const externalProductNo = toKeyPart(mapping.external_product_no) || toKeyPart(sourceRow?.external_product_no) || "-";
     const externalVariantCode = toKeyPart(mapping.external_variant_code) || toKeyPart(sourceRow?.external_variant_code) || null;

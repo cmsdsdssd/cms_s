@@ -1,8 +1,9 @@
-import { NextResponse } from "next/server";
+﻿import { NextResponse } from "next/server";
 import { getShopAdminClient, jsonError } from "@/lib/shop/admin";
 import {
   buildCanonicalOptionRows,
   buildMappingOptionAllowlist,
+  mappingOptionEntryKey,
   resolveCanonicalExternalProductNo,
   type SavedOptionCategoryRowWithDelta,
   type MappingOptionAllowlist,
@@ -162,6 +163,9 @@ export async function GET(request: Request) {
       decor_extra_delta_krw?: number | null;
       decor_final_amount_krw?: number | null;
     }> = {};
+    const otherReasonRankByEntryKey: Record<string, number> = {};
+    const categoryOverrideRankByEntryKey: Record<string, number> = {};
+    const axisSelectionRankByEntryKey: Record<string, number> = {};
     const axisPrefixes = Array.from(
       new Set([
         canonicalExternalProductNo,
@@ -170,28 +174,39 @@ export async function GET(request: Request) {
         ...(activeProductRes.data ?? []).map((row) => String(row.external_product_no ?? "").trim()),
       ].filter(Boolean)),
     ).map((productNo) => `${productNo}::`);
+    const axisPrefixRank = new Map(axisPrefixes.map((prefix, index) => [prefix, index]));
     for (const row of (otherReasonLogRes.data ?? []) as Array<{ axis_key?: string | null; axis_value: string | null; new_row: unknown }>) {
       const axisValue = String(row.axis_value ?? "").trim();
       const matchedPrefix = axisPrefixes.find((prefix) => axisValue.startsWith(prefix));
       if (!matchedPrefix) continue;
+      const prefixRank = axisPrefixRank.get(matchedPrefix) ?? Number.MAX_SAFE_INTEGER;
       const entryKey = axisValue.slice(matchedPrefix.length).trim();
       if (!entryKey) continue;
       const axisKey = String(row.axis_key ?? "").trim().toUpperCase();
       const nextRow = row.new_row && typeof row.new_row === "object" ? (row.new_row as Record<string, unknown>) : null;
       if (axisKey === "OTHER_REASON") {
-        if (otherReasonByEntryKey[entryKey]) continue;
+        const currentRank = otherReasonRankByEntryKey[entryKey];
+        if (currentRank != null && currentRank <= prefixRank) continue;
         const reason = String(nextRow?.other_reason ?? "").trim();
-        if (reason) otherReasonByEntryKey[entryKey] = reason;
+        if (reason) {
+          otherReasonByEntryKey[entryKey] = reason;
+          otherReasonRankByEntryKey[entryKey] = prefixRank;
+        }
         continue;
       }
       if (axisKey === "OPTION_CATEGORY") {
-        if (categoryOverrideByEntryKey[entryKey]) continue;
+        const currentRank = categoryOverrideRankByEntryKey[entryKey];
+        if (currentRank != null && currentRank <= prefixRank) continue;
         const categoryKey = parseSavedCategoryKey(nextRow?.category_key);
-        if (categoryKey) categoryOverrideByEntryKey[entryKey] = categoryKey;
+        if (categoryKey) {
+          categoryOverrideByEntryKey[entryKey] = categoryKey;
+          categoryOverrideRankByEntryKey[entryKey] = prefixRank;
+        }
         continue;
       }
       if (axisKey === "OPTION_AXIS_SELECTION") {
-        if (axisSelectionByEntryKey[entryKey]) continue;
+        const currentRank = axisSelectionRankByEntryKey[entryKey];
+        if (currentRank != null && currentRank <= prefixRank) continue;
         axisSelectionByEntryKey[entryKey] = {
           axis1_value: String(nextRow?.axis1_value ?? "").trim() || null,
           axis2_value: String(nextRow?.axis2_value ?? "").trim() || null,
@@ -200,6 +215,55 @@ export async function GET(request: Request) {
           decor_extra_delta_krw: toRoundedOrNull(nextRow?.decor_extra_delta_krw),
           decor_final_amount_krw: toRoundedOrNull(nextRow?.decor_final_amount_krw),
         };
+        axisSelectionRankByEntryKey[entryKey] = prefixRank;
+      }
+    }
+    const savedCategoryByEntryKey = new Map(
+      filteredSavedOptionCategories
+        .map((row) => [mappingOptionEntryKey(row.option_name, row.option_value), row.category_key] as const)
+        .filter(([entryKey]) => entryKey.length > 0),
+    );
+    const fallbackMaterialCode = String(masterRes.data?.material_code_default ?? "").trim();
+    const allowedMaterialCodes = new Set(
+      optionDetailAllowlist.materials
+        .map((choice) => String(choice.value ?? "").trim())
+        .filter(Boolean),
+    );
+    const allowedColorCodesByMaterial = new Map<string, Set<string>>();
+    for (const row of filteredRuleRows) {
+      if (String(row.category_key ?? "").trim().toUpperCase() !== "COLOR_PLATING") continue;
+      const materialCode = String(row.scope_material_code ?? "").trim();
+      const colorCode = String(row.color_code ?? "").trim();
+      if (!materialCode || !colorCode) continue;
+      const bucket = allowedColorCodesByMaterial.get(materialCode) ?? new Set<string>();
+      bucket.add(colorCode);
+      allowedColorCodesByMaterial.set(materialCode, bucket);
+    }
+    for (const [entryKey, selection] of Object.entries(axisSelectionByEntryKey)) {
+      const categoryKey = categoryOverrideByEntryKey[entryKey] ?? savedCategoryByEntryKey.get(entryKey) ?? null;
+      const selectedMaterialCode = String(selection.axis1_value ?? "").trim();
+      if ((categoryKey === "SIZE" || categoryKey === "COLOR_PLATING" || categoryKey === "OTHER") && selectedMaterialCode && !allowedMaterialCodes.has(selectedMaterialCode)) {
+        selection.axis1_value = null;
+      }
+      const effectiveMaterialCode = String(selection.axis1_value ?? fallbackMaterialCode).trim();
+      const selectedAxis2Value = String(selection.axis2_value ?? "").trim();
+      if (categoryKey === "SIZE" && selectedAxis2Value) {
+        const allowedSizeValues = new Set(
+          (optionDetailAllowlist.sizes_by_material[effectiveMaterialCode] ?? [])
+            .map((choice) => String(choice.value ?? "").trim())
+            .filter(Boolean),
+        );
+        if (effectiveMaterialCode && !allowedSizeValues.has(selectedAxis2Value)) {
+          selection.axis2_value = null;
+          selection.axis3_value = null;
+        }
+      }
+      if (categoryKey === "COLOR_PLATING" && selectedAxis2Value) {
+        const allowedColors = allowedColorCodesByMaterial.get(effectiveMaterialCode) ?? null;
+        if (effectiveMaterialCode && (!allowedColors || !allowedColors.has(selectedAxis2Value))) {
+          selection.axis2_value = null;
+          selection.axis3_value = null;
+        }
       }
     }
     savedOptionCategories = filteredSavedOptionCategories;

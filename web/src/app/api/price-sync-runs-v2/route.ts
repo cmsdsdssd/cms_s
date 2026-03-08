@@ -98,6 +98,11 @@ type ActiveMappingRow = {
   current_product_sync_profile: string | null;
 };
 
+type PreferredMasterTarget = {
+  productNo: string;
+  target: number;
+};
+
 type IntentDecisionContext = {
   threshold_profile: string;
   current_price_krw: number | null;
@@ -715,8 +720,8 @@ export async function POST(request: Request) {
     externalVariantCode: string;
   }>();
 
-  const baseSnapshotTargetByMaster = new Map<string, number>();
-  const forcedBaseTargetByMaster = new Map<string, number>();
+  const baseSnapshotTargetByMaster = new Map<string, PreferredMasterTarget>();
+  const forcedBaseTargetByMaster = new Map<string, PreferredMasterTarget>();
   for (const row of snapshotRows) {
     const channelProductId = String(row.channel_product_id ?? "").trim();
     const mapping = activeByChannelProduct.get(channelProductId);
@@ -730,11 +735,9 @@ export async function POST(request: Request) {
     const targetRaw = row.final_target_price_v2_krw ?? row.final_target_price_krw;
     const baseTarget = Math.round(Number(targetRaw ?? Number.NaN));
     if (!Number.isFinite(baseTarget)) continue;
-    const prevBaseTarget = baseSnapshotTargetByMaster.get(masterItemId);
-    if (!Number.isFinite(Number(prevBaseTarget ?? Number.NaN))) {
-      baseSnapshotTargetByMaster.set(masterItemId, baseTarget);
-    } else {
-      baseSnapshotTargetByMaster.set(masterItemId, Math.max(Math.round(Number(prevBaseTarget)), baseTarget));
+    const prevBaseTarget = baseSnapshotTargetByMaster.get(masterItemId) ?? null;
+    if (!prevBaseTarget || shouldPreferMappingProductNo(prevBaseTarget.productNo, mapping.external_product_no)) {
+      baseSnapshotTargetByMaster.set(masterItemId, { productNo: mapping.external_product_no, target: baseTarget });
     }
 
     if (triggerType !== "AUTO") continue;
@@ -754,11 +757,9 @@ export async function POST(request: Request) {
     });
     if (!marketForceDecision.passesThreshold) continue;
     const forcedTarget = Math.max(baseTarget, marketAfterMargin);
-    const prevForcedTarget = forcedBaseTargetByMaster.get(masterItemId);
-    if (!Number.isFinite(Number(prevForcedTarget ?? Number.NaN))) {
-      forcedBaseTargetByMaster.set(masterItemId, forcedTarget);
-    } else {
-      forcedBaseTargetByMaster.set(masterItemId, Math.max(Math.round(Number(prevForcedTarget)), forcedTarget));
+    const prevForcedTarget = forcedBaseTargetByMaster.get(masterItemId) ?? null;
+    if (!prevForcedTarget || shouldPreferMappingProductNo(prevForcedTarget.productNo, mapping.external_product_no)) {
+      forcedBaseTargetByMaster.set(masterItemId, { productNo: mapping.external_product_no, target: forcedTarget });
     }
   }
 
@@ -801,8 +802,8 @@ export async function POST(request: Request) {
     if (!(desired > 0)) continue;
     const masterThresholdPolicy = resolveThresholdPolicyForProfile(currentProductSyncProfileByMaster.get(masterItemId) ?? null);
 
-    const forcedBaseTarget = forcedBaseTargetByMaster.get(masterItemId);
-    const baseSnapshotTarget = baseSnapshotTargetByMaster.get(masterItemId);
+    const forcedBaseTarget = forcedBaseTargetByMaster.get(masterItemId)?.target;
+    const baseSnapshotTarget = baseSnapshotTargetByMaster.get(masterItemId)?.target;
     const masterHasForcedMarketSync = Number.isFinite(Number(forcedBaseTarget ?? Number.NaN))
       && Number.isFinite(Number(baseSnapshotTarget ?? Number.NaN))
       && Number(forcedBaseTarget) > Number(baseSnapshotTarget);

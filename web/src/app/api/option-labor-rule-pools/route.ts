@@ -85,6 +85,21 @@ const ABSORB_AUTO_EXCLUDED_REASONS = new Set([LEGACY_BOM_AUTO_REASON, ACCESSORY_
 
 const toTrimmed = (value: unknown): string => String(value ?? "").trim();
 const toUpper = (value: unknown): string => toTrimmed(value).toUpperCase();
+const isNumericProductNo = (value: string | null | undefined): boolean => /^\d+$/u.test(toTrimmed(value));
+const looksCanonicalProductCode = (value: string | null | undefined): boolean => /^P/i.test(toTrimmed(value));
+const shouldPreferProductNo = (currentProductNo: string | null | undefined, nextProductNo: string | null | undefined): boolean => {
+  const current = toTrimmed(currentProductNo);
+  const next = toTrimmed(nextProductNo);
+  if (!current && next) return true;
+  if (!next) return false;
+  const currentNumeric = isNumericProductNo(current);
+  const nextNumeric = isNumericProductNo(next);
+  if (nextNumeric !== currentNumeric) return nextNumeric;
+  const currentCanonical = looksCanonicalProductCode(current);
+  const nextCanonical = looksCanonicalProductCode(next);
+  if (nextCanonical !== currentCanonical) return !nextCanonical;
+  return next.localeCompare(current) < 0;
+};
 const toNum = (value: unknown): number => {
   const n = Number(value);
   return Number.isFinite(n) ? n : 0;
@@ -332,50 +347,68 @@ export async function GET(request: Request) {
     ruleCountByContext.set(key, (ruleCountByContext.get(key) ?? 0) + 1);
   }
 
-  const productContexts = Array.from(
-    new Map(
-      mappings
-        .filter((row) => toTrimmed(row.master_item_id) && toTrimmed(row.external_product_no))
-        .map((row) => {
-          const normalizedMasterId = toTrimmed(row.master_item_id);
-          const normalizedExternalProductNo = toTrimmed(row.external_product_no);
-          const key = `${normalizedMasterId}::${normalizedExternalProductNo}`;
-          const variantCode = toTrimmed(row.external_variant_code);
-          const master = masterMap.get(normalizedMasterId) ?? null;
-          return [
-            key,
-            {
-              channel_product_id: toTrimmed(row.channel_product_id),
-              master_item_id: normalizedMasterId,
-              external_product_no: normalizedExternalProductNo,
-              model_name: toTrimmed(master?.model_name) || null,
-              category_code: toUpper(master?.category_code) || null,
-              material_code_default: normalizeMaterialCode(toTrimmed(master?.material_code_default)),
-              has_variants: Boolean(variantCode),
-              row_count: 0,
-              variant_count: 0,
-              base_channel_product_id: "",
-              material_option_count: 0,
-              size_option_count: 0,
-              color_option_count: 0,
-              decor_option_count: 0,
-              rule_count: ruleCountByContext.get(key) ?? 0,
-              _material_values: new Set<string>(),
-              _size_values: new Set<string>(),
-              _color_values: new Set<string>(),
-              _decor_values: new Set<string>(),
-            },
-          ];
-        }),
-    ).values(),
-  );
+  const productContextMap = new Map<string, {
+    channel_product_id: string;
+    master_item_id: string;
+    external_product_no: string;
+    model_name: string | null;
+    category_code: string | null;
+    material_code_default: string | null;
+    has_variants: boolean;
+    row_count: number;
+    variant_count: number;
+    base_channel_product_id: string;
+    material_option_count: number;
+    size_option_count: number;
+    color_option_count: number;
+    decor_option_count: number;
+    rule_count: number;
+    _material_values: Set<string>;
+    _size_values: Set<string>;
+    _color_values: Set<string>;
+    _decor_values: Set<string>;
+  }>();
+  for (const row of mappings.filter((entry) => toTrimmed(entry.master_item_id) && toTrimmed(entry.external_product_no))) {
+    const normalizedMasterId = toTrimmed(row.master_item_id);
+    const normalizedExternalProductNo = toTrimmed(row.external_product_no);
+    const key = normalizedMasterId;
+    const variantCode = toTrimmed(row.external_variant_code);
+    const master = masterMap.get(normalizedMasterId) ?? null;
+    const existing = productContextMap.get(key);
+    if (!existing || shouldPreferProductNo(existing.external_product_no, normalizedExternalProductNo)) {
+      productContextMap.set(key, {
+        channel_product_id: toTrimmed(row.channel_product_id),
+        master_item_id: normalizedMasterId,
+        external_product_no: normalizedExternalProductNo,
+        model_name: toTrimmed(master?.model_name) || null,
+        category_code: toUpper(master?.category_code) || null,
+        material_code_default: normalizeMaterialCode(toTrimmed(master?.material_code_default)),
+        has_variants: Boolean(variantCode),
+        row_count: existing?.row_count ?? 0,
+        variant_count: existing?.variant_count ?? 0,
+        base_channel_product_id: existing?.base_channel_product_id ?? "",
+        material_option_count: 0,
+        size_option_count: 0,
+        color_option_count: 0,
+        decor_option_count: 0,
+        rule_count: ruleCountByContext.get(`${normalizedMasterId}::${normalizedExternalProductNo}`) ?? existing?.rule_count ?? 0,
+        _material_values: existing?._material_values ?? new Set<string>(),
+        _size_values: existing?._size_values ?? new Set<string>(),
+        _color_values: existing?._color_values ?? new Set<string>(),
+        _decor_values: existing?._decor_values ?? new Set<string>(),
+      });
+      continue;
+    }
+    existing.has_variants = existing.has_variants || Boolean(variantCode);
+  }
+  const productContexts = Array.from(productContextMap.values());
 
-  const contextByKey = new Map(productContexts.map((row) => [`${row.master_item_id}::${row.external_product_no}`, row]));
+  const contextByMasterId = new Map(productContexts.map((row) => [row.master_item_id, row]));
   for (const row of mappings) {
     const masterId = toTrimmed(row.master_item_id);
     const productNo = toTrimmed(row.external_product_no);
     if (!masterId || !productNo) continue;
-    const context = contextByKey.get(`${masterId}::${productNo}`);
+    const context = contextByMasterId.get(masterId);
     if (!context) continue;
     context.row_count += 1;
     if (toTrimmed(row.external_variant_code)) context.variant_count += 1;

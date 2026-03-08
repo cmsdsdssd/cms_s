@@ -145,7 +145,8 @@ type DeleteRuleInput = {
   ruleId: string;
 };
 
-const WEIGHT_OPTIONS = Array.from({ length: 10_001 }, (_, index) => (index / 100).toFixed(2));
+const RULE_WEIGHT_OPTIONS = Array.from({ length: 10_000 }, (_, index) => ((index + 1) / 100).toFixed(2));
+const BULK_WEIGHT_OPTIONS = Array.from({ length: 10_001 }, (_, index) => (index / 100).toFixed(2));
 const LABOR_AMOUNT_OPTIONS = Array.from({ length: 10_001 }, (_, index) => String(index * 100));
 
 const toNumber = (value: NumberLike): number => {
@@ -216,8 +217,8 @@ const describeError = (error: unknown): string => {
 const createEmptySizeDraft = (materials: string[]): SizeDraft => ({
   ruleId: '',
   materialCode: materials[0] ?? '',
-  weightMinG: WEIGHT_OPTIONS[0] ?? '0.00',
-  weightMaxG: WEIGHT_OPTIONS[0] ?? '0.00',
+  weightMinG: RULE_WEIGHT_OPTIONS[0] ?? '0.01',
+  weightMaxG: RULE_WEIGHT_OPTIONS[0] ?? '0.01',
   additiveKrw: '0',
 });
 
@@ -969,7 +970,7 @@ export default function ShoppingRulesPage() {
                 <div>
                   <div className='mb-1 text-xs text-[var(--muted)]'>중량 최소</div>
                   <Select value={bulkSizeMinG} onChange={(event) => setBulkSizeMinG(event.target.value)}>
-                    {WEIGHT_OPTIONS.map((weight) => (
+                    {BULK_WEIGHT_OPTIONS.map((weight) => (
                       <option key={'bulk-min-' + weight} value={weight}>{weight}g</option>
                     ))}
                   </Select>
@@ -977,7 +978,7 @@ export default function ShoppingRulesPage() {
                 <div>
                   <div className='mb-1 text-xs text-[var(--muted)]'>중량 최대</div>
                   <Select value={bulkSizeMaxG} onChange={(event) => setBulkSizeMaxG(event.target.value)}>
-                    {WEIGHT_OPTIONS.map((weight) => (
+                    {BULK_WEIGHT_OPTIONS.map((weight) => (
                       <option key={'bulk-max-' + weight} value={weight}>{weight}g</option>
                     ))}
                   </Select>
@@ -1172,7 +1173,7 @@ export default function ShoppingRulesPage() {
                 value={sizeDraft.weightMinG}
                 onChange={(event) => setSizeDraft((current) => ({ ...current, weightMinG: event.target.value }))}
               >
-                {WEIGHT_OPTIONS.map((weight) => (
+                {RULE_WEIGHT_OPTIONS.map((weight) => (
                   <option key={weight} value={weight}>
                     {weight}g
                   </option>
@@ -1185,7 +1186,7 @@ export default function ShoppingRulesPage() {
                 value={sizeDraft.weightMaxG}
                 onChange={(event) => setSizeDraft((current) => ({ ...current, weightMaxG: event.target.value }))}
               >
-                {WEIGHT_OPTIONS.map((weight) => (
+                {RULE_WEIGHT_OPTIONS.map((weight) => (
                   <option key={weight} value={weight}>
                     {weight}g
                   </option>
@@ -1207,7 +1208,7 @@ export default function ShoppingRulesPage() {
             </div>
             <div className="space-y-2">
  <div className='mb-1 text-xs text-[var(--muted)]'>작업</div>
-              <Button onClick={handleSaveSize} disabled={Boolean(disabledReason) || !sizeDraft.materialCode || Number(sizeDraft.weightMinG) > Number(sizeDraft.weightMaxG) || isRuleMutating}>
+              <Button onClick={handleSaveSize} disabled={Boolean(disabledReason) || !sizeDraft.materialCode || Number(sizeDraft.weightMinG) < 0.01 || Number(sizeDraft.weightMaxG) < 0.01 || Number(sizeDraft.weightMinG) > Number(sizeDraft.weightMaxG) || isRuleMutating}>
  {isSizeEditing ? '중량 규칙 저장' : '중량 규칙 추가'}
               </Button>
               {isSizeEditing ? (

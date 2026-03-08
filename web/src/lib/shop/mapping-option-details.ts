@@ -607,6 +607,16 @@ export const inferMappingOptionSelection = (args: {
   const axes = (args.axes ?? []).map((axis) => ({ name: toTrimmed(axis.name), value: toTrimmed(axis.value) }));
   const existing = normalizeSelection(args.existing);
   const categoryMap = buildCategoryMap(args.categoryRows ?? []);
+  const allowedMaterials = new Set(allowlist.materials.map((row) => row.value));
+  const allowedColors = new Set(allowlist.colors.map((row) => row.value));
+  const allowedDecors = new Set(allowlist.decors.map((row) => row.value));
+  const allowedSizes = buildSizeSetByMaterial(allowlist);
+  const classifiedMaterial = maybePickMaterialFromAxes(axes, allowlist, categoryMap, true);
+  const classifiedColor = maybePickColorFromAxes(axes, allowlist, categoryMap, true);
+  const classifiedDecor = maybePickDecorFromAxes(axes, allowlist, categoryMap, true);
+  const heuristicMaterial = maybePickMaterialFromAxes(axes, allowlist, categoryMap, false);
+  const heuristicColor = maybePickColorFromAxes(axes, allowlist, categoryMap, false);
+  const heuristicDecor = maybePickDecorFromAxes(axes, allowlist, categoryMap, false);
 
   let material = existing.option_material_code;
   let color = existing.option_color_code;
@@ -619,24 +629,73 @@ export const inferMappingOptionSelection = (args: {
     option_size_value: size ? "existing" : "empty",
   };
 
+  const sizeAllowedForMaterial = (materialCode: string | null, sizeValue: string | null): boolean => {
+    if (!materialCode || !sizeValue) return false;
+    return allowedSizes.get(materialCode)?.has(sizeValue) ?? false;
+  };
+
+  const replaceSelection = (
+    currentValue: string | null,
+    nextValue: string | null,
+    source: keyof MappingOptionPrefillResult["sources"],
+    nextSource: "classified" | "heuristic",
+  ): string | null => {
+    if (!nextValue || nextValue === currentValue) return currentValue;
+    sources[source] = nextSource;
+    return nextValue;
+  };
+
+  if (material && !allowedMaterials.has(material)) {
+    material = replaceSelection(material, classifiedMaterial, "option_material_code", "classified");
+    material = replaceSelection(material, heuristicMaterial, "option_material_code", "heuristic");
+  }
+  if (color && !allowedColors.has(color)) {
+    color = replaceSelection(color, classifiedColor, "option_color_code", "classified");
+    color = replaceSelection(color, heuristicColor, "option_color_code", "heuristic");
+  }
+  if (decor && !allowedDecors.has(decor)) {
+    decor = replaceSelection(decor, classifiedDecor, "option_decoration_code", "classified");
+    decor = replaceSelection(decor, heuristicDecor, "option_decoration_code", "heuristic");
+  }
+
+  if (size && !sizeAllowedForMaterial(material, size)) {
+    const classifiedSize = maybePickSizeFromAxes(axes, allowlist, categoryMap, true, classifiedMaterial ?? material);
+    const heuristicSize = maybePickSizeFromAxes(
+      axes,
+      allowlist,
+      categoryMap,
+      false,
+      classifiedSize.material ?? heuristicMaterial ?? material,
+    );
+
+    if (classifiedSize.size) {
+      if (classifiedSize.material && classifiedSize.material !== material) {
+        material = replaceSelection(material, classifiedSize.material, "option_material_code", "classified");
+      }
+      size = replaceSelection(size, classifiedSize.size, "option_size_value", "classified");
+    } else if (heuristicSize.size) {
+      if (heuristicSize.material && heuristicSize.material !== material) {
+        material = replaceSelection(material, heuristicSize.material, "option_material_code", "heuristic");
+      }
+      size = replaceSelection(size, heuristicSize.size, "option_size_value", "heuristic");
+    }
+  }
+
   if (!material) {
-    const classified = maybePickMaterialFromAxes(axes, allowlist, categoryMap, true);
-    if (classified) {
-      material = classified;
+    if (classifiedMaterial) {
+      material = classifiedMaterial;
       sources.option_material_code = "classified";
     }
   }
   if (!color) {
-    const classified = maybePickColorFromAxes(axes, allowlist, categoryMap, true);
-    if (classified) {
-      color = classified;
+    if (classifiedColor) {
+      color = classifiedColor;
       sources.option_color_code = "classified";
     }
   }
   if (!decor) {
-    const classified = maybePickDecorFromAxes(axes, allowlist, categoryMap, true);
-    if (classified) {
-      decor = classified;
+    if (classifiedDecor) {
+      decor = classifiedDecor;
       sources.option_decoration_code = "classified";
     }
   }
@@ -653,23 +712,20 @@ export const inferMappingOptionSelection = (args: {
   }
 
   if (!material) {
-    const heuristic = maybePickMaterialFromAxes(axes, allowlist, categoryMap, false);
-    if (heuristic) {
-      material = heuristic;
+    if (heuristicMaterial) {
+      material = heuristicMaterial;
       sources.option_material_code = "heuristic";
     }
   }
   if (!color) {
-    const heuristic = maybePickColorFromAxes(axes, allowlist, categoryMap, false);
-    if (heuristic) {
-      color = heuristic;
+    if (heuristicColor) {
+      color = heuristicColor;
       sources.option_color_code = "heuristic";
     }
   }
   if (!decor) {
-    const heuristic = maybePickDecorFromAxes(axes, allowlist, categoryMap, false);
-    if (heuristic) {
-      decor = heuristic;
+    if (heuristicDecor) {
+      decor = heuristicDecor;
       sources.option_decoration_code = "heuristic";
     }
   }

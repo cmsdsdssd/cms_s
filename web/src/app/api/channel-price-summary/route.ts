@@ -44,6 +44,14 @@ type CurrentPriceRow = {
   fetch_status: string | null;
 };
 
+type LatestPushItemRow = {
+  channel_product_id: string | null;
+  target_price_krw: number | null;
+  after_price_krw: number | null;
+  status: string | null;
+  created_at: string | null;
+};
+
 type LatestSnapshotRow = {
   computed_at: string | null;
   tick_gold_krw_g: number | null;
@@ -76,6 +84,40 @@ function isFetchFailure(fetchStatus: string | null | undefined) {
   return !["SUCCESS", "SUCCEEDED", "OK"].includes(normalized);
 }
 
+function isNumericProductNo(value: string | null | undefined) {
+  return /^\d+$/u.test(toKeyPart(value));
+}
+
+function looksCanonicalProductCode(value: string | null | undefined) {
+  return /^P/i.test(toKeyPart(value));
+}
+
+function shouldPreferMappingProductNo(currentProductNo: string | null | undefined, nextProductNo: string | null | undefined) {
+  const current = toKeyPart(currentProductNo);
+  const next = toKeyPart(nextProductNo);
+  if (!current && next) return true;
+  if (!next) return false;
+  const currentNumeric = isNumericProductNo(current);
+  const nextNumeric = isNumericProductNo(next);
+  if (nextNumeric !== currentNumeric) return nextNumeric;
+  const currentCanonical = looksCanonicalProductCode(current);
+  const nextCanonical = looksCanonicalProductCode(next);
+  if (nextCanonical !== currentCanonical) return !nextCanonical;
+  return next.localeCompare(current) < 0;
+}
+
+function dedupeMappings(rows: MappingRow[]) {
+  const next = new Map<string, MappingRow>();
+  for (const row of rows) {
+    const key = `${toKeyPart(row.master_item_id)}::${toKeyPart(row.external_variant_code)}`;
+    const existing = next.get(key);
+    if (!existing || shouldPreferMappingProductNo(existing.external_product_no, row.external_product_no)) {
+      next.set(key, row);
+    }
+  }
+  return Array.from(next.values());
+}
+
 function derivePriceState(
   currentPrice: number | null,
   finalTargetPrice: number | null,
@@ -102,14 +144,16 @@ export async function GET(request: Request) {
   if (mappingRes.error) return jsonError(mappingRes.error.message ?? "활성 매핑 조회 실패", 500);
 
   const mappings = (mappingRes.data ?? []) as MappingRow[];
-  const channelProductIds = Array.from(new Set(mappings.map((row) => toKeyPart(row.channel_product_id)).filter(Boolean)));
-  const masterIds = Array.from(new Set(mappings.map((row) => toKeyPart(row.master_item_id)).filter(Boolean)));
+  const effectiveMappings = dedupeMappings(mappings);
+  const channelProductIds = Array.from(new Set(effectiveMappings.map((row) => toKeyPart(row.channel_product_id)).filter(Boolean)));
+  const masterIds = Array.from(new Set(effectiveMappings.map((row) => toKeyPart(row.master_item_id)).filter(Boolean)));
 
   const [
     latestV2RowsRes,
     currentPriceRes,
     latestSnapshotRes,
     latestPushRes,
+    latestPushItemRes,
     activeOverrideRes,
     activeAdjustmentRes,
     activePolicyRes,
@@ -141,6 +185,13 @@ export async function GET(request: Request) {
       .order("started_at", { ascending: false })
       .limit(1)
       .maybeSingle<{ finished_at: string | null; started_at: string | null }>(),
+    channelProductIds.length > 0
+      ? sb
+          .from("price_sync_job_item")
+          .select("channel_product_id,target_price_krw,after_price_krw,status,created_at")
+          .in("channel_product_id", channelProductIds)
+          .order("created_at", { ascending: false })
+      : Promise.resolve({ data: [], error: null }),
     masterIds.length > 0
       ? sb
           .from("pricing_override")
@@ -175,6 +226,7 @@ export async function GET(request: Request) {
   if (currentPriceRes.error) return jsonError(currentPriceRes.error.message ?? "현재 채널가 조회 실패", 500);
   if (latestSnapshotRes.error) return jsonError(latestSnapshotRes.error.message ?? "최신 시각 조회 실패", 500);
   if (latestPushRes.error) return jsonError(latestPushRes.error.message ?? "최신 push 조회 실패", 500);
+  if (latestPushItemRes.error) return jsonError(latestPushItemRes.error.message ?? "최신 push item 조회 실패", 500);
   if (activeOverrideRes.error) return jsonError(activeOverrideRes.error.message ?? "활성 오버라이드 조회 실패", 500);
   if (activeAdjustmentRes.error) return jsonError(activeAdjustmentRes.error.message ?? "활성 조정 조회 실패", 500);
   if (activePolicyRes.error) return jsonError(activePolicyRes.error.message ?? "활성 정책 조회 실패", 500);
@@ -186,6 +238,13 @@ export async function GET(request: Request) {
     const productKey = toKeyPart(row.channel_product_id);
     if (!productKey) continue;
     if (!latestV2ByProduct.has(productKey)) latestV2ByProduct.set(productKey, row);
+  }
+  const latestSuccessfulPushByProduct = new Map<string, LatestPushItemRow>();
+  for (const row of (latestPushItemRes.data ?? []) as LatestPushItemRow[]) {
+    const productKey = toKeyPart(row.channel_product_id);
+    if (!productKey || latestSuccessfulPushByProduct.has(productKey)) continue;
+    if (String(row.status ?? "").trim().toUpperCase() !== "SUCCESS") continue;
+    latestSuccessfulPushByProduct.set(productKey, row);
   }
 
   const currentPriceByExternal = new Map<string, CurrentPriceRow>();
@@ -218,13 +277,14 @@ export async function GET(request: Request) {
   let overrideCount = 0;
   let adjustmentCount = 0;
 
-  for (const mapping of mappings) {
+  for (const mapping of effectiveMappings) {
     const normalizedChannelId = toKeyPart(mapping.channel_id);
     const normalizedChannelProductId = toKeyPart(mapping.channel_product_id);
     const normalizedMasterId = toKeyPart(mapping.master_item_id);
 
     const sourceRow = latestV2ByProduct.get(normalizedChannelProductId) ?? null;
-    const finalTargetPrice = sourceRow?.final_target_price_v2_krw ?? null;
+    const latestPushItem = latestSuccessfulPushByProduct.get(normalizedChannelProductId) ?? null;
+    const finalTargetPrice = latestPushItem?.after_price_krw ?? latestPushItem?.target_price_krw ?? sourceRow?.final_target_price_v2_krw ?? null;
 
     const externalProductNo = toKeyPart(mapping.external_product_no) || toKeyPart(sourceRow?.external_product_no) || "-";
     const externalVariantCode = toKeyPart(mapping.external_variant_code) || toKeyPart(sourceRow?.external_variant_code) || null;
@@ -278,7 +338,7 @@ export async function GET(request: Request) {
       data: {
         channel_id: channelId,
         counts: {
-          total: mappings.length,
+          total: effectiveMappings.length,
           ok: okCount,
           out_of_sync: outOfSyncCount,
           error: errorCount,
