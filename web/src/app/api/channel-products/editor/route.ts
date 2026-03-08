@@ -1,4 +1,4 @@
-﻿import { NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 import { getShopAdminClient, isMissingColumnError, jsonError, parseJsonObject } from "@/lib/shop/admin";
 import {
   type Cafe24ProductDetailSummary,
@@ -232,6 +232,7 @@ async function loadEditorMeta(
   channelId: string,
   externalProductNos: string[],
   masterItemId: string,
+  preferredExternalProductNo?: string,
 ): Promise<EditorMeta> {
   const tickRes = await sb
     .from("cms_v_market_tick_latest_gold_silver_ops_v1")
@@ -242,17 +243,16 @@ async function loadEditorMeta(
   const productNos = normalizeProductNoCandidates(externalProductNos);
   let stateLatestQuery = sb
     .from("channel_option_current_state_v1")
-    .select("exclude_plating_labor, plating_labor_sell_krw, total_labor_sell_krw, floor_price_krw")
+    .select("external_product_no, exclude_plating_labor, plating_labor_sell_krw, total_labor_sell_krw, floor_price_krw")
     .eq("channel_id", channelId)
     .order("updated_at", { ascending: false })
-    .order("state_id", { ascending: false })
-    .limit(1);
+    .order("state_id", { ascending: false });
   if (productNos.length === 1) {
     stateLatestQuery = stateLatestQuery.eq("external_product_no", productNos[0]);
   } else if (productNos.length > 1) {
     stateLatestQuery = stateLatestQuery.in("external_product_no", productNos);
   }
-  const stateLatestRes = await stateLatestQuery.maybeSingle();
+  const stateLatestRes = await stateLatestQuery;
   if (stateLatestRes.error) throw new Error(stateLatestRes.error.message ?? 'current_state 조회 실패');
 
   const buildMappingProfileQuery = () => {
@@ -313,12 +313,21 @@ async function loadEditorMeta(
     : { data: null, error: null };
   if (latestSnapshotRes.error) throw new Error(latestSnapshotRes.error.message ?? "최근 스냅샷 조회 실패");
 
-  const state = (stateLatestRes.data as {
+  const stateRows = ((stateLatestRes.data ?? []) as Array<{
     exclude_plating_labor?: boolean;
     plating_labor_sell_krw?: number;
     total_labor_sell_krw?: number;
     floor_price_krw?: number;
-  } | null) ?? null;
+    external_product_no?: string | null;
+  }>).filter((row) => Boolean(row) && typeof row === "object");
+  const preferredProductNo = String(preferredExternalProductNo ?? "").trim();
+  const relevantStateRows = (() => {
+    if (!preferredProductNo) return stateRows;
+    const exactRows = stateRows.filter((row) => String(row.external_product_no ?? "").trim() === preferredProductNo);
+    return exactRows.length > 0 ? exactRows : stateRows;
+  })();
+  const hasSingleRelevantStateRow = relevantStateRows.length === 1;
+  const state = hasSingleRelevantStateRow ? (relevantStateRows[0] ?? null) : null;
   const master = (masterRes.data as Partial<MasterMeta> | null) ?? null;
   const platingSell = toIntCeilNonNegative(state?.plating_labor_sell_krw ?? master?.plating_price_sell_default ?? 0);
   const laborFromSnapshot = toIntCeil((latestSnapshotRes.data as { labor_raw_krw?: number } | null)?.labor_raw_krw ?? Number.NaN, Number.NaN);
@@ -331,16 +340,19 @@ async function loadEditorMeta(
   );
   const totalLabor = Number.isFinite(laborFromSnapshot) ? laborFromSnapshot : laborFallback;
 
+  const excludePlatingLabor = relevantStateRows.length > 0
+    && relevantStateRows.every((row) => row.exclude_plating_labor === true);
+
   return {
     floor_price_krw: Math.max(
       0,
       toIntCeil((floorRes.data as { floor_price_krw?: number } | null)?.floor_price_krw ?? state?.floor_price_krw ?? 0),
     ),
-    exclude_plating_labor: Boolean(state?.exclude_plating_labor ?? false),
+    exclude_plating_labor: excludePlatingLabor,
     plating_labor_sell_krw: platingSell,
     total_labor_sell_krw: Math.max(
       0,
-      toIntCeil(state?.total_labor_sell_krw ?? totalLabor - (Boolean(state?.exclude_plating_labor) ? platingSell : 0)),
+      toIntCeil(state?.total_labor_sell_krw ?? totalLabor - (excludePlatingLabor ? platingSell : 0)),
     ),
     tick_gold_krw_per_g: toIntCeilNonNegative((tickRes.data as { gold_price_krw_per_g?: number } | null)?.gold_price_krw_per_g ?? 0),
     tick_silver_krw_per_g: toIntCeilNonNegative((tickRes.data as { silver_price_krw_per_g?: number } | null)?.silver_price_krw_per_g ?? 0),
@@ -425,7 +437,23 @@ export async function GET(request: Request) {
   }
   const mappingRes = await mappingQuery.maybeSingle();
   if (mappingRes.error) return jsonError(mappingRes.error.message ?? "매핑 조회 실패", 500);
-  const resolvedMasterItemId = String(mappingRes.data?.master_item_id ?? "").trim();
+  let resolvedMasterItemId = String(mappingRes.data?.master_item_id ?? "").trim();
+  let aliasCanonicalProductNo = "";
+
+  if (!resolvedMasterItemId) {
+    const aliasHistoryRes = await sb
+      .from("sales_channel_product_alias_history")
+      .select("master_item_id, canonical_external_product_no")
+      .eq("channel_id", channelId)
+      .in("alias_external_product_no", productNoCandidates)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (aliasHistoryRes.error) return jsonError(aliasHistoryRes.error.message ?? "별칭 이력 조회 실패", 500);
+    resolvedMasterItemId = String(aliasHistoryRes.data?.master_item_id ?? "").trim();
+    aliasCanonicalProductNo = String(aliasHistoryRes.data?.canonical_external_product_no ?? "").trim();
+    if (aliasCanonicalProductNo) productNoCandidates.push(aliasCanonicalProductNo);
+  }
 
   if (resolvedMasterItemId) {
     const aliasRes = await sb
@@ -444,7 +472,7 @@ export async function GET(request: Request) {
 
   let meta: EditorMeta;
   try {
-    meta = await loadEditorMeta(sb, channelId, normalizedCandidates, resolvedMasterItemId);
+    meta = await loadEditorMeta(sb, channelId, normalizedCandidates, resolvedMasterItemId, detail.data.productNo);
   } catch (e) {
     return jsonError(e instanceof Error ? e.message : "에디터 메타 조회 실패", 500);
   }
@@ -549,6 +577,21 @@ export async function POST(request: Request) {
     option_decoration_code: string | null;
   }>;
   const masterIds = Array.from(new Set(mappings.map((m) => String(m.master_item_id ?? "").trim()).filter(Boolean)));
+  let aliasCanonicalProductNo = "";
+  if (masterIds.length === 0 && !requestedMasterItemId) {
+    const aliasHistoryRes = await sb
+      .from("sales_channel_product_alias_history")
+      .select("master_item_id, canonical_external_product_no")
+      .eq("channel_id", channelId)
+      .eq("alias_external_product_no", externalProductNo)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (aliasHistoryRes.error) return jsonError(aliasHistoryRes.error.message ?? "별칭 이력 조회 실패", 500);
+    const aliasMasterItemId = String(aliasHistoryRes.data?.master_item_id ?? "").trim();
+    aliasCanonicalProductNo = String(aliasHistoryRes.data?.canonical_external_product_no ?? "").trim();
+    if (aliasMasterItemId) masterIds.push(aliasMasterItemId);
+  }
   if (masterIds.length > 1) {
     return jsonError("1 마스터 = 1 상품 제약 위반: 동일 product_no에 복수 master 매핑", 422, {
       channel_id: channelId,
@@ -586,7 +629,7 @@ export async function POST(request: Request) {
   }
 
   const detailProductNo = String(detailBeforeData.productNo ?? "").trim();
-  const productNoCandidates = normalizeProductNoCandidates([externalProductNo, detailProductNo]);
+  const productNoCandidates = normalizeProductNoCandidates([externalProductNo, detailProductNo, aliasCanonicalProductNo]);
   let resolvedExternalProductNo = externalProductNo;
 
   if (resolvedMasterItemId) {
@@ -673,6 +716,19 @@ export async function POST(request: Request) {
     }
   }
 
+  if (resolvedMasterItemId) {
+    const includeMasterPlatingLabor = !excludePlatingLabor;
+    const platingMappingUpdateRes = await sb
+      .from("sales_channel_product")
+      .update({ include_master_plating_labor: includeMasterPlatingLabor })
+      .eq("channel_id", channelId)
+      .eq("master_item_id", resolvedMasterItemId)
+      .eq("is_active", true);
+    if (platingMappingUpdateRes.error) {
+      return jsonError(platingMappingUpdateRes.error.message ?? "도금공임 포함 여부 저장 실패", 500);
+    }
+  }
+
   if (hasCurrentProductSyncProfile && resolvedMasterItemId) {
     const mappingProfileUpdateRes = await sb
       .from("sales_channel_product")
@@ -704,7 +760,7 @@ export async function POST(request: Request) {
   if (isProfileOnlyUpdate) {
     let profileOnlyMeta: EditorMeta;
     try {
-      profileOnlyMeta = await loadEditorMeta(sb, channelId, [resolvedExternalProductNo, externalProductNo, detailProductNo], resolvedMasterItemId);
+      profileOnlyMeta = await loadEditorMeta(sb, channelId, [resolvedExternalProductNo, externalProductNo, detailProductNo], resolvedMasterItemId, resolvedExternalProductNo);
     } catch (e) {
       return jsonError(e instanceof Error ? e.message : "에디터 메타 조회 실패", 500);
     }
@@ -842,7 +898,7 @@ export async function POST(request: Request) {
 
   let editorMetaBefore: EditorMeta;
   try {
-    editorMetaBefore = await loadEditorMeta(sb, channelId, [resolvedExternalProductNo, externalProductNo], resolvedMasterItemId);
+    editorMetaBefore = await loadEditorMeta(sb, channelId, [resolvedExternalProductNo, externalProductNo], resolvedMasterItemId, resolvedExternalProductNo);
   } catch (e) {
     return jsonError(e instanceof Error ? e.message : "에디터 메타 조회 실패", 500);
   }
@@ -1353,7 +1409,7 @@ export async function POST(request: Request) {
     if (detailAfter.ok && detailAfter.data) {
       detailAfterWithMeta = { ...detailAfter.data, ...fallbackMeta };
       try {
-        const metaAfter = await loadEditorMeta(sb, channelId, [resolvedExternalProductNo, externalProductNo], resolvedMasterItemId);
+    const metaAfter = await loadEditorMeta(sb, channelId, [resolvedExternalProductNo, externalProductNo], resolvedMasterItemId, resolvedExternalProductNo);
         detailAfterWithMeta = { ...detailAfter.data, ...metaAfter };
       } catch {
         // keep original detailAfter.data
@@ -1388,7 +1444,7 @@ export async function POST(request: Request) {
   if (detailAfter.ok && detailAfter.data) {
     finalData = { ...detailAfter.data, ...fallbackMeta };
     try {
-      const metaAfter = await loadEditorMeta(sb, channelId, [resolvedExternalProductNo, externalProductNo], resolvedMasterItemId);
+    const metaAfter = await loadEditorMeta(sb, channelId, [resolvedExternalProductNo, externalProductNo], resolvedMasterItemId, resolvedExternalProductNo);
       finalData = { ...detailAfter.data, ...metaAfter };
     } catch {
       // keep detailAfter.data

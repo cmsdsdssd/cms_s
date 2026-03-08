@@ -13,7 +13,7 @@ export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
 const CHANNEL_PRODUCT_SELECT_BASE = "channel_product_id, channel_id, master_item_id, external_product_no, external_variant_code, sync_rule_set_id, option_material_code, option_color_code, option_decoration_code, option_size_value, material_multiplier_override, size_weight_delta_g, option_price_delta_krw, option_price_mode, option_manual_target_krw, include_master_plating_labor, sync_rule_material_enabled, sync_rule_weight_enabled, sync_rule_plating_enabled, sync_rule_decoration_enabled, sync_rule_margin_rounding_enabled, mapping_source, is_active, created_at, updated_at";
-const CHANNEL_PRODUCT_SELECT_WITH_PROFILE = `${CHANNEL_PRODUCT_SELECT_BASE}, current_product_sync_profile`;
+const CHANNEL_PRODUCT_SELECT_WITH_PROFILE = `${CHANNEL_PRODUCT_SELECT_BASE},current_product_sync_profile`;
 
 const isThousandStep = (value: number): boolean => Number.isInteger(value) && value % 1000 === 0;
 const toTrimmed = (value: unknown): string => String(value ?? "").trim();
@@ -307,18 +307,39 @@ export async function POST(request: Request) {
     current_product_sync_profile: resolvedCurrentProductSyncProfile,
   };
 
-  const executeUpsert = (payload: typeof payloadBase | typeof payloadWithProfile, includeCurrentProductSyncProfile: boolean) => sb
+  const executeUpsert = (payload: typeof payloadBase | typeof payloadWithProfile) => sb
     .from("sales_channel_product")
     .upsert(payload, { onConflict: "channel_id,external_product_no,external_variant_code" })
-    .select(includeCurrentProductSyncProfile ? CHANNEL_PRODUCT_SELECT_WITH_PROFILE : CHANNEL_PRODUCT_SELECT_BASE)
+    .select(CHANNEL_PRODUCT_SELECT_BASE)
     .single();
 
-  let { data, error } = await executeUpsert(payloadWithProfile, true);
+  let { data, error } = await executeUpsert(payloadWithProfile);
   if (error && isMissingColumnError(error, "sales_channel_product.current_product_sync_profile")) {
-    ({ data, error } = await executeUpsert(payloadBase, false));
+    ({ data, error } = await executeUpsert(payloadBase));
   }
 
   if (error) return jsonError(error.message ?? "매핑 저장 실패", 400);
+  const responseData = data
+    ? {
+        ...data,
+        current_product_sync_profile: resolvedCurrentProductSyncProfile,
+      }
+    : data;
+
+  if (canonicalExternalProductNo !== externalProductNo) {
+    const aliasHistoryRes = await sb
+      .from("sales_channel_product_alias_history")
+      .insert([{
+        channel_id: channelId,
+        canonical_channel_product_id: String(data?.channel_product_id ?? "").trim() || null,
+        master_item_id: masterItemId,
+        canonical_external_product_no: canonicalExternalProductNo,
+        alias_external_product_no: externalProductNo,
+        external_variant_code: externalVariantCode,
+        reason: "SINGLE_MAPPING_CANONICALIZED",
+      }]);
+    if (aliasHistoryRes.error) return jsonError(aliasHistoryRes.error.message ?? "별칭 이력 저장 실패", 500);
+  }
 
   const traceLogRes = await sb
     .from("channel_option_value_policy_log")
@@ -350,5 +371,5 @@ export async function POST(request: Request) {
     }]);
   if (traceLogRes.error) return jsonError(traceLogRes.error.message ?? "옵션 매핑 trace 로그 저장 실패", 500);
 
-  return NextResponse.json({ data }, { headers: { "Cache-Control": "no-store" } });
+  return NextResponse.json({ data: responseData }, { headers: { "Cache-Control": "no-store" } });
 }

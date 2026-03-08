@@ -1,4 +1,4 @@
-import * as impl from "./option-labor-rules.js";
+import * as impl from "./option-labor-rules-impl.js";
 
 export type OptionLaborRuleCategory = "MATERIAL" | "SIZE" | "COLOR_PLATING" | "DECOR" | "OTHER";
 

@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+﻿import { NextResponse } from "next/server";
 import { getShopAdminClient, jsonError, parseJsonObject, parseUuidArray } from "@/lib/shop/admin";
 import {
   cafe24ListProductVariants,
@@ -10,6 +10,7 @@ import {
   ensureValidCafe24AccessToken,
   loadCafe24Account,
 } from "@/lib/shop/cafe24";
+import { buildCanonicalBaseProductByMaster } from "@/lib/shop/canonical-mapping";
 import { restoreVariantTargetFromRawDelta } from "@/lib/shop/price-sync-guards";
 
 export const dynamic = "force-dynamic";
@@ -24,23 +25,6 @@ const chunkArray = <T,>(items: T[], chunkSize: number): T[][] => {
   const chunks: T[][] = [];
   for (let i = 0; i < items.length; i += chunkSize) chunks.push(items.slice(i, i + chunkSize));
   return chunks;
-};
-
-const isNumericProductNo = (productNo: string): boolean => /^[0-9]+$/u.test(String(productNo ?? "").trim());
-const looksCanonicalProductCode = (productNo: string): boolean => /^P/i.test(String(productNo ?? "").trim());
-
-const shouldPreferProductNo = (currentProductNo: string, nextProductNo: string): boolean => {
-  const current = String(currentProductNo ?? "").trim();
-  const next = String(nextProductNo ?? "").trim();
-  if (!current && next) return true;
-  if (!next) return false;
-  const currentNumeric = isNumericProductNo(current);
-  const nextNumeric = isNumericProductNo(next);
-  if (nextNumeric !== currentNumeric) return nextNumeric;
-  const currentCanonical = looksCanonicalProductCode(current);
-  const nextCanonical = looksCanonicalProductCode(next);
-  if (nextCanonical !== currentCanonical) return nextCanonical;
-  return next.localeCompare(current) < 0;
 };
 
 const isProductWriteAcceptedButVerifyPending = (raw: unknown, expectedPrice: number): boolean => {
@@ -391,18 +375,7 @@ export async function POST(request: Request) {
       baseDetailRows.map((r) => [String(r.channel_product_id), r]),
     );
 
-    const canonicalBaseProductByMaster = new Map<string, string>();
-    for (const row of baseRows) {
-      const channelProductId = String(row.channel_product_id ?? "").trim();
-      const productNo = String(row.external_product_no ?? "").trim();
-      const detail = baseDetailByChannelProduct.get(channelProductId);
-      const masterId = String(detail?.master_item_id ?? "").trim();
-      if (!masterId || !productNo) continue;
-      const current = canonicalBaseProductByMaster.get(masterId) ?? "";
-      if (shouldPreferProductNo(current, productNo)) {
-        canonicalBaseProductByMaster.set(masterId, productNo);
-      }
-    }
+    const canonicalBaseProductByMaster = buildCanonicalBaseProductByMaster(baseRows);
 
     const syncRuleSetCandidatesByMaster = new Map<string, Set<string>>();
     for (const row of siblingRuleSetRows) {
@@ -475,63 +448,19 @@ export async function POST(request: Request) {
       ));
 
       if (conflictingProductNos.length > 0) {
-        const activeBaseRes = await sb
-          .from("sales_channel_product")
-          .select("external_product_no, external_variant_code")
-          .eq("channel_id", channelId)
-          .eq("master_item_id", masterId)
-          .eq("is_active", true)
-          .in("external_product_no", conflictingProductNos);
-        if (activeBaseRes.error) {
-          return jsonError(activeBaseRes.error.message ?? "레거시 상품 기준행 조회 실패", 500);
-        }
-
-        const hasActiveBaseByProductNo = new Set(
-          (activeBaseRes.data ?? [])
-            .filter((row) => String(row.external_variant_code ?? "").trim().length === 0)
-            .map((row) => String(row.external_product_no ?? "").trim())
-            .filter(Boolean),
-        );
-
-        const keepAliveBaseRows = conflictingProductNos
-          .filter((productNo) => !hasActiveBaseByProductNo.has(productNo))
-          .map((productNo) => ({
+        const aliasHistoryRes = await sb
+          .from("sales_channel_product_alias_history")
+          .insert(conflictingProductNos.map((productNo) => ({
             channel_id: channelId,
+            canonical_channel_product_id: String(baseRow.channel_product_id ?? "").trim() || null,
             master_item_id: masterId,
-            external_product_no: productNo,
+            canonical_external_product_no: externalProductNo,
+            alias_external_product_no: productNo,
             external_variant_code: "",
-            sync_rule_set_id: resolvedRuleSetId || null,
-            option_material_code: baseDetail.option_material_code ?? null,
-            option_color_code: baseDetail.option_color_code ?? null,
-            option_decoration_code: baseDetail.option_decoration_code ?? null,
-            option_size_value: baseDetail.option_size_value ?? null,
-            material_multiplier_override: baseDetail.material_multiplier_override ?? null,
-            size_weight_delta_g: baseDetail.size_weight_delta_g ?? null,
-            option_price_delta_krw: baseDetail.option_price_delta_krw ?? null,
-            option_price_mode: baseOptionMode,
-            option_manual_target_krw: baseDetail.option_manual_target_krw ?? null,
-            include_master_plating_labor: baseDetail.include_master_plating_labor ?? true,
-            sync_rule_material_enabled: baseDetail.sync_rule_material_enabled ?? true,
-            sync_rule_weight_enabled: baseDetail.sync_rule_weight_enabled ?? true,
-            sync_rule_plating_enabled: baseDetail.sync_rule_plating_enabled ?? true,
-            sync_rule_decoration_enabled: baseDetail.sync_rule_decoration_enabled ?? true,
-            sync_rule_margin_rounding_enabled: baseDetail.sync_rule_margin_rounding_enabled ?? true,
-            mapping_source: "AUTO",
-            is_active: true,
-          }));
-
-        if (keepAliveBaseRows.length > 0) {
-          const keepAliveUpsertRes = await sb
-            .from("sales_channel_product")
-            .upsert(keepAliveBaseRows, { onConflict: "channel_id,external_product_no,external_variant_code" });
-          if (keepAliveUpsertRes.error) {
-            return jsonError(keepAliveUpsertRes.error.message ?? "레거시 상품 기준행 보정 실패", 500, {
-              code: "ENSURE_LEGACY_PRODUCT_BASE_MAPPING_FAILED",
-              channel_id: channelId,
-              master_item_id: masterId,
-              conflicting_external_product_nos: conflictingProductNos,
-            });
-          }
+            reason: "AUTO_PUSH_CANONICALIZATION",
+          })));
+        if (aliasHistoryRes.error) {
+          return jsonError(aliasHistoryRes.error.message ?? "별칭 이력 저장 실패", 500);
         }
       }
 
@@ -662,17 +591,7 @@ export async function POST(request: Request) {
     finalRows.filter((r) => r.channel_product_id && r.external_product_no),
   );
 
-  const canonicalProductByMaster = new Map<string, string>();
-  for (const row of candidates) {
-    const master = String(row.master_item_id ?? "").trim();
-    const variant = String(row.external_variant_code ?? "").trim();
-    const productNo = String(row.external_product_no ?? "").trim();
-    if (!master || !productNo || variant) continue;
-    const current = canonicalProductByMaster.get(master) ?? "";
-    if (shouldPreferProductNo(current, productNo)) {
-      canonicalProductByMaster.set(master, productNo);
-    }
-  }
+  const canonicalProductByMaster = buildCanonicalBaseProductByMaster(candidates);
 
   const dedupedMap = new Map<string, (typeof candidates)[number]>();
   const scoreCandidateRow = (row: (typeof candidates)[number], canonicalProductNo: string): number => {

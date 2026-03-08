@@ -183,6 +183,14 @@ type MappingRow = {
   sync_rule_margin_rounding_enabled: boolean | null;
 };
 
+type CurrentStateRow = {
+  channel_product_id: string | null;
+  master_item_id: string | null;
+  external_product_no: string | null;
+  external_variant_code: string | null;
+  exclude_plating_labor: boolean | null;
+};
+
 type OptionCategoryDeltaRow = {
   master_item_id: string;
   external_product_no: string;
@@ -609,6 +617,47 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: true, inserted: 0, skipped: 0, reason: "NO_MAPPINGS" }, { headers: { "Cache-Control": "no-store" } });
   }
 
+  const mappingChannelProductIds = Array.from(new Set(mappings.map((row) => String(row.channel_product_id ?? "").trim()).filter(Boolean)));
+  const currentStateRes = mappingChannelProductIds.length > 0
+    ? await sb
+      .from("channel_option_current_state_v1")
+      .select("channel_product_id, master_item_id, external_product_no, external_variant_code, exclude_plating_labor, updated_at")
+      .eq("channel_id", channelId)
+      .in("master_item_id", Array.from(new Set(mappings.map((row) => String(row.master_item_id ?? "").trim()).filter(Boolean))))
+      .order("updated_at", { ascending: false })
+    : { data: [], error: null };
+  if (currentStateRes.error) return jsonError(currentStateRes.error.message ?? "current_state 조회 실패", 500);
+  const currentStateRows = (currentStateRes.data ?? []) as Array<CurrentStateRow & { updated_at?: string | null }>;
+  const currentStateByChannelProductId = new Map<string, CurrentStateRow>();
+  const currentStateByVariantKey = new Map<string, CurrentStateRow>();
+  const currentStateByProductNo = new Map<string, CurrentStateRow>();
+  for (const row of currentStateRows) {
+    const channelProductId = String(row.channel_product_id ?? "").trim();
+    const masterItemId = String(row.master_item_id ?? "").trim();
+    const externalProductNo = String(row.external_product_no ?? "").trim();
+    const externalVariantCode = String(row.external_variant_code ?? "").trim();
+    const normalizedRow: CurrentStateRow = {
+      channel_product_id: channelProductId || null,
+      master_item_id: masterItemId || null,
+      external_product_no: externalProductNo || null,
+      external_variant_code: externalVariantCode || null,
+      exclude_plating_labor: row.exclude_plating_labor,
+    };
+    if (channelProductId && !currentStateByChannelProductId.has(channelProductId)) {
+      currentStateByChannelProductId.set(channelProductId, normalizedRow);
+    }
+    if (masterItemId && externalProductNo && externalVariantCode) {
+      const variantKey = `${masterItemId}::${externalProductNo}::${externalVariantCode}`;
+      if (!currentStateByVariantKey.has(variantKey)) {
+        currentStateByVariantKey.set(variantKey, normalizedRow);
+      }
+      const productKey = `${masterItemId}::${externalProductNo}`;
+      if (!currentStateByProductNo.has(productKey)) {
+        currentStateByProductNo.set(productKey, normalizedRow);
+      }
+    }
+  }
+
   const syncRuleSetByMaster = new Map<string, string>();
   const syncRowsMissingRuleSet: Array<{ channel_product_id: string; master_item_id: string }> = [];
   const inconsistentRuleSetRows: Array<{ channel_product_id: string; master_item_id: string; expected_rule_set_id: string; actual_rule_set_id: string }> = [];
@@ -685,42 +734,6 @@ export async function POST(request: Request) {
     mappings.map((m) => String(m.option_decoration_code ?? "").trim()).filter(Boolean),
   )];
 
-  const externalProductNosByMaster = new Map<string, string[]>();
-  for (const m of mappings) {
-    const masterId = String(m.master_item_id ?? "").trim();
-    const productNo = String(m.external_product_no ?? "").trim();
-    if (!masterId || !productNo) continue;
-    const prev = externalProductNosByMaster.get(masterId) ?? [];
-    if (!prev.includes(productNo)) prev.push(productNo);
-    externalProductNosByMaster.set(masterId, prev);
-  }
-
-  const productNoPriority = (value: string): number => (/^P/i.test(value) ? 0 : 1);
-  for (const [masterId, values] of externalProductNosByMaster.entries()) {
-    const sorted = [...values].sort((a, b) => {
-      const pa = productNoPriority(a);
-      const pb = productNoPriority(b);
-      if (pa !== pb) return pa - pb;
-      return a.localeCompare(b);
-    });
-    externalProductNosByMaster.set(masterId, sorted);
-  }
-
-  const buildProductNoCandidates = (masterId: string, requestedProductNo: string): string[] => {
-    const out: string[] = [];
-    const seen = new Set<string>();
-    const push = (value: string) => {
-      const trimmed = String(value ?? "").trim();
-      if (!trimmed || seen.has(trimmed)) return;
-      seen.add(trimmed);
-      out.push(trimmed);
-    };
-
-    push(requestedProductNo);
-    for (const productNo of externalProductNosByMaster.get(masterId) ?? []) push(productNo);
-    return out;
-  };
-
   const optionLaborRuleRes = uniqueMasterIds.length > 0 && uniqueExternalProductNos.length > 0
     ? await sb.from('channel_option_labor_rule_v1').select('rule_id, channel_id, master_item_id, external_product_no, category_key, scope_material_code, additional_weight_g, additional_weight_min_g, additional_weight_max_g, plating_enabled, color_code, decoration_master_id, decoration_model_name, base_labor_cost_krw, additive_delta_krw, is_active, note').eq('channel_id', channelId).in('master_item_id', uniqueMasterIds).in('external_product_no', uniqueExternalProductNos)
     : { data: [], error: null };
@@ -736,7 +749,10 @@ export async function POST(request: Request) {
     prev.push(row);
     optionLaborRulesByContext.set(key, prev);
   }
-  const resolveOptionLaborRulesForContext = (masterId: string, productNo: string): OptionLaborRuleRow[] => { for (const candidateProductNo of buildProductNoCandidates(masterId, productNo)) { const rows = optionLaborRulesByContext.get(`${masterId}::${candidateProductNo}`) ?? []; if (hasAnyActiveOptionLaborRule(rows)) return rows; } return []; };
+  const resolveOptionLaborRulesForContext = (masterId: string, productNo: string): OptionLaborRuleRow[] => {
+    const rows = optionLaborRulesByContext.get(`${masterId}::${productNo}`) ?? [];
+    return hasAnyActiveOptionLaborRule(rows) ? rows : [];
+  };
 
   const [optionCategoryRes, scopedOptionDeltaRes] = await Promise.all([
     sb
@@ -801,24 +817,16 @@ export async function POST(request: Request) {
   ): number => {
     const normalizedMaterial = normalizeOptionalMaterialCode(optionMaterialCode);
     const scopedMaterial = normalizedMaterial === "00" ? "" : normalizedMaterial;
-    const productNoCandidates = buildProductNoCandidates(masterId, productNo);
-
     if (scopedMaterial) {
-      for (const candidateProductNo of productNoCandidates) {
-        const exactScoped = scopedCategoryDeltaMap.get(`${masterId}::${candidateProductNo}::${categoryKey}::${scopedMaterial}`);
-        if (exactScoped != null) return exactScoped;
-      }
+      const exactScoped = scopedCategoryDeltaMap.get(`${masterId}::${productNo}::${categoryKey}::${scopedMaterial}`);
+      if (exactScoped != null) return exactScoped;
     }
 
-    for (const candidateProductNo of productNoCandidates) {
-      const defaultScoped = scopedCategoryDeltaMap.get(`${masterId}::${candidateProductNo}::${categoryKey}::`);
-      if (defaultScoped != null) return defaultScoped;
-    }
+    const defaultScoped = scopedCategoryDeltaMap.get(`${masterId}::${productNo}::${categoryKey}::`);
+    if (defaultScoped != null) return defaultScoped;
 
-    for (const candidateProductNo of productNoCandidates) {
-      const legacy = categoryDeltaByScope.get(`${masterId}::${candidateProductNo}::${categoryKey}`);
-      if (legacy != null) return legacy;
-    }
+    const legacy = categoryDeltaByScope.get(`${masterId}::${productNo}::${categoryKey}`);
+    if (legacy != null) return legacy;
 
     return 0;
   };
@@ -1378,7 +1386,17 @@ export async function POST(request: Request) {
       ? baseMaterialPrice
       : (applyRule1 ? materialRaw * factor * optionMaterialMultiplier : 0);
 
-    const includePlating = m.include_master_plating_labor !== false;
+    const mappingChannelProductId = String(m.channel_product_id ?? "").trim();
+    const mappingVariantCode = String(m.external_variant_code ?? "").trim();
+    const currentState = currentStateByChannelProductId.get(mappingChannelProductId)
+      ?? (mappingVariantCode
+        ? currentStateByVariantKey.get(`${m.master_item_id}::${mappingProductNo}::${mappingVariantCode}`)
+        : null)
+      ?? (!mappingVariantCode && mappingProductNo
+        ? currentStateByProductNo.get(`${m.master_item_id}::${mappingProductNo}`)
+        : null)
+      ?? null;
+    const includePlating = currentState ? currentState.exclude_plating_labor !== true : m.include_master_plating_labor !== false;
     const masterAbsorbItems = absorbByMasterId.get(m.master_item_id) ?? [];
     const masterLaborSell = computeMasterLaborSellPerUnit(master, masterAbsorbItems, includePlating);
     const masterLaborProfile = computeMasterLaborProfileWithoutAbsorb(master, includePlating);

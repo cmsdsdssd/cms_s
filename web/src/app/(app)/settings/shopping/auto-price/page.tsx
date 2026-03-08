@@ -84,7 +84,7 @@ type MissingMappingSummary = {
   }>;
 };
 type PreviewCompositionRow = { key: string; label: string; valueText: string };
-type PreviewCompositionSection = { key: string; title: string; summary: string; groups: PreviewCompositionRow[][]; defaultOpen?: boolean };
+type PreviewCompositionSection = { key: string; title: string; summary: string; groups: PreviewCompositionRow[][]; defaultOpen?: boolean; layout?: "full" | "third" };
 type SyncRunCreateResponse = {
   run_id: string;
   total_count?: number;
@@ -663,23 +663,14 @@ const SNAPSHOT_POST_RATE_PRICE_KEYS = new Set([
   "target-price-compare",
 ]);
 
-const SNAPSHOT_RAINBOW_STAGE_KEYS: Record<string, string> = {
-  "min-margin-price": "bg-lime-100",
-  "selected-item": "bg-sky-100",
-  "selected-value": "bg-cyan-100",
-  "selected-value-compare": "bg-cyan-100",
-  "selected-value-final": "bg-cyan-100",
-  "selected-item-compare": "bg-sky-100",
-  "selected-item-final": "bg-sky-100",
-};
+const SNAPSHOT_RAINBOW_STAGE_KEYS: Record<string, string> = {};
 
 const snapshotCellToneClass = (key: string, groupIndex: number) => {
-  if (groupIndex === 0) return "bg-orange-100";
   if (key === "final-price") return "bg-violet-100";
-  if (SNAPSHOT_RAINBOW_STAGE_KEYS[key]) return SNAPSHOT_RAINBOW_STAGE_KEYS[key];
-  if (SNAPSHOT_RATE_KEYS.has(key)) return "bg-orange-100";
-  if (SNAPSHOT_PRE_RATE_PRICE_KEYS.has(key)) return "bg-rose-100";
-  if (SNAPSHOT_POST_RATE_PRICE_KEYS.has(key)) return "bg-amber-200";
+  if (SNAPSHOT_RATE_KEYS.has(key)) return "bg-violet-100";
+  if (SNAPSHOT_POST_RATE_PRICE_KEYS.has(key)) return "bg-rose-100";
+  if (SNAPSHOT_PRE_RATE_PRICE_KEYS.has(key)) return "bg-white";
+  if (groupIndex === 0) return "bg-white";
   return "bg-white";
 };
 
@@ -688,6 +679,16 @@ const parseCronTickReason = (errorMessage: string | null | undefined): string | 
   if (!raw.toUpperCase().startsWith("CRON_TICK:")) return null;
   const reason = raw.slice("CRON_TICK:".length).trim();
   return reason || null;
+};
+const cronTickReasonLabelOf = (reason: string | null | undefined): string => {
+  const key = String(reason ?? "").trim().toUpperCase();
+  if (key === "CREATE_RUN_FAILED") return "RUN 생성 실패";
+  if (key === "EXECUTE_RUN_FAILED") return "RUN 실행 실패";
+  if (key === "RECOMPUTE_FAILED") return "재계산 실패";
+  if (key === "PULL_FAILED") return "가격 수집 실패";
+  if (key === "INTERVAL_NOT_ELAPSED") return "실행 간격 미도달";
+  if (key === "OVERLAP_RUNNING") return "기존 RUN 진행중";
+  return key || "-";
 };
 
 const toRunKo = (value: string) => {
@@ -1061,6 +1062,9 @@ export default function ShoppingAutoPricePage() {
     const guardrailRateText = guardrailPct != null && minMarginPct != null && feePct != null
       ? `${guardrailPct}(${minMarginPct}+${feePct})`
       : "-";
+    const guardrailRateValueText = Number.isFinite(policyMinMarginRate) && Number.isFinite(policyFeeRate)
+      ? `${policyMinMarginRate.toFixed(2)}+${policyFeeRate.toFixed(2)}`
+      : "-";
   
     const selectedLabel = snapshotExplainRow.guardrail_reason_code === "MIN_MARGIN_WIN"
       ? "최소마진가격"
@@ -1119,93 +1123,84 @@ export default function ShoppingAutoPricePage() {
       { key: "material-code", label: "소재코드", valueText: String(snapshotExplainRow.material_code_effective ?? "-") },
       { key: "weight", label: "순중량", valueText: fmt(snapshotExplainRow.net_weight_g) },
       { key: "material-basis", label: "소재기준", valueText: String(snapshotExplainRow.material_basis_resolved ?? "-") },
-      { key: "purity-adjust", label: "함량*보정계수", valueText: purityAdjusted == null ? "-" : purityAdjusted.toFixed(4) },
+      { key: "purity-adjust", label: "함량x보정", valueText: purityAdjusted == null ? "-" : purityAdjusted.toFixed(4) },
       { key: "purity", label: "함량", valueText: snapshotExplainRow.material_purity_rate_resolved == null ? "-" : snapshotExplainRow.material_purity_rate_resolved.toFixed(4) },
       { key: "adjust", label: "보정계수", valueText: snapshotExplainRow.material_adjust_factor_resolved == null ? "-" : snapshotExplainRow.material_adjust_factor_resolved.toFixed(4) },
     ];
   
     const priceRow: PreviewCompositionRow[] = [
       { key: "labor-cost-total", label: "공임합(원가)", valueText: fmtKrw(laborCostAppliedDisplay) },
-      { key: "labor-cost-base", label: "기본공임(원가)", valueText: fmtKrw(componentAmount("BASE_LABOR", "labor_cost_krw")) },
-      { key: "labor-cost-stone", label: "알공임(원가)", valueText: fmtKrw(componentAmount("STONE_LABOR", "labor_cost_krw")) },
-      { key: "labor-cost-etc", label: "기타공임(원가)", valueText: fmtKrw(componentAmount("ETC", "labor_cost_krw")) },
-      { key: "labor-cost-plating", label: "도금공임(원가)", valueText: fmtKrw(componentAmount("PLATING", "labor_cost_krw")) },
-      { key: "labor-cost-decor", label: "장식공임(원가)", valueText: fmtKrw(componentAmount("DECOR", "labor_cost_krw")) },
+      { key: "labor-cost-base", label: "기본(원가)", valueText: fmtKrw(componentAmount("BASE_LABOR", "labor_cost_krw")) },
+      { key: "labor-cost-stone", label: "알(원가)", valueText: fmtKrw(componentAmount("STONE_LABOR", "labor_cost_krw")) },
+      { key: "labor-cost-etc", label: "기타(원가)", valueText: fmtKrw(componentAmount("ETC", "labor_cost_krw")) },
+      { key: "labor-cost-plating", label: "도금(원가)", valueText: fmtKrw(componentAmount("PLATING", "labor_cost_krw")) },
+      { key: "labor-cost-decor", label: "장식(원가)", valueText: fmtKrw(componentAmount("DECOR", "labor_cost_krw")) },
     ];
   
     const policyRow: PreviewCompositionRow[] = [
       { key: "absorb-total", label: "흡수공임합(원가)", valueText: fmtKrw(snapshotExplainRow.absorb_total_applied_krw) },
-      { key: "absorb-base", label: "기본공임(흡수공임)", valueText: fmtKrw(componentAmount("BASE_LABOR", "labor_absorb_applied_krw")) },
-      { key: "absorb-stone", label: "알공임(흡수공임)", valueText: fmtKrw(componentAmount("STONE_LABOR", "labor_absorb_applied_krw")) },
-      { key: "absorb-etc", label: "기타공임(흡수공임)", valueText: fmtKrw(componentAmount("ETC", "labor_absorb_applied_krw")) },
-      { key: "absorb-plating", label: "도금공임(흡수공임)", valueText: fmtKrw(componentAmount("PLATING", "labor_absorb_applied_krw")) },
-      { key: "absorb-decor", label: "장식공임(흡수공임)", valueText: fmtKrw(componentAmount("DECOR", "labor_absorb_applied_krw")) },
+      { key: "absorb-base", label: "기본(흡수)", valueText: fmtKrw(componentAmount("BASE_LABOR", "labor_absorb_applied_krw")) },
+      { key: "absorb-stone", label: "알(흡수)", valueText: fmtKrw(componentAmount("STONE_LABOR", "labor_absorb_applied_krw")) },
+      { key: "absorb-etc", label: "기타(흡수)", valueText: fmtKrw(componentAmount("ETC", "labor_absorb_applied_krw")) },
+      { key: "absorb-plating", label: "도금(흡수)", valueText: fmtKrw(componentAmount("PLATING", "labor_absorb_applied_krw")) },
+      { key: "absorb-decor", label: "장식(흡수)", valueText: fmtKrw(componentAmount("DECOR", "labor_absorb_applied_krw")) },
     ];
   
     const laborRollupRow: PreviewCompositionRow[] = [
       { key: "total-labor-cost", label: "총공임합(원가)", valueText: fmtKrw(laborCostPlusAbsorbDisplay) },
-      { key: "total-base", label: "총기본공임(원가)", valueText: fmtKrw(componentAmount("BASE_LABOR", "labor_cost_plus_absorb_krw")) },
-      { key: "total-stone", label: "총알공임(원가)", valueText: fmtKrw(componentAmount("STONE_LABOR", "labor_cost_plus_absorb_krw")) },
-      { key: "total-etc", label: "총기타공임(원가)", valueText: fmtKrw(componentAmount("ETC", "labor_cost_plus_absorb_krw")) },
-      { key: "total-plating", label: "총도금공임(원가)", valueText: fmtKrw(componentAmount("PLATING", "labor_cost_plus_absorb_krw")) },
-      { key: "total-decor", label: "총장식공임(원가)", valueText: fmtKrw(componentAmount("DECOR", "labor_cost_plus_absorb_krw")) },
+      { key: "total-base", label: "총기본", valueText: fmtKrw(componentAmount("BASE_LABOR", "labor_cost_plus_absorb_krw")) },
+      { key: "total-stone", label: "총알", valueText: fmtKrw(componentAmount("STONE_LABOR", "labor_cost_plus_absorb_krw")) },
+      { key: "total-etc", label: "총기타", valueText: fmtKrw(componentAmount("ETC", "labor_cost_plus_absorb_krw")) },
+      { key: "total-plating", label: "총도금", valueText: fmtKrw(componentAmount("PLATING", "labor_cost_plus_absorb_krw")) },
+      { key: "total-decor", label: "총장식", valueText: fmtKrw(componentAmount("DECOR", "labor_cost_plus_absorb_krw")) },
     ];
 
     const laborReverseRow: PreviewCompositionRow[] = [
       { key: "labor-cost-basis", label: "총공임합(원가)", valueText: fmtKrw(laborCostPlusAbsorbDisplay) },
-      { key: "labor-margin-rate", label: `공임마진율 적용 (${gmLaborRateText})`, valueText: gmLaborRateText },
-      { key: "labor-pre-fee", label: "공임 역산(수수료 전)", valueText: fmtKrw(laborPreFee) },
+      { key: "labor-margin-rate", label: `공임 GM (${gmLaborRateText})`, valueText: gmLaborRateText },
+      { key: "labor-pre-fee", label: "공임 역산", valueText: fmtKrw(laborPreFee) },
     ];
 
     const materialReverseRow: PreviewCompositionRow[] = [
       { key: "material-total", label: "총소재가격", valueText: fmtKrw(snapshotExplainRow.material_final_krw) },
-      { key: "material-margin-rate", label: `소재마진율 적용 (${gmMaterialRateText})`, valueText: gmMaterialRateText },
-      { key: "material-pre-fee", label: "소재 역산(수수료 전)", valueText: fmtKrw(materialPreFee) },
+      { key: "material-margin-rate", label: `소재 GM (${gmMaterialRateText})`, valueText: gmMaterialRateText },
+      { key: "material-pre-fee", label: "소재 역산", valueText: fmtKrw(materialPreFee) },
     ];
 
     const fixedReverseRow: PreviewCompositionRow[] = [
-      { key: "fixed-cost-setting", label: "고정가격 설정", valueText: fmtKrw(fixedCostSetting) },
-      { key: "fixed-margin-rate", label: `고정마진율 적용 (${gmFixedRateText})`, valueText: gmFixedRateText },
-      { key: "fixed-pre-fee", label: "고정 역산(수수료 전)", valueText: fmtKrw(fixedPreFee) },
+      { key: "fixed-cost-setting", label: "고정 설정", valueText: fmtKrw(fixedCostSetting) },
+      { key: "fixed-margin-rate", label: `고정 GM (${gmFixedRateText})`, valueText: gmFixedRateText },
+      { key: "fixed-pre-fee", label: "고정 역산", valueText: fmtKrw(fixedPreFee) },
     ];
 
     const candidateSumRow: PreviewCompositionRow[] = [
-      { key: "material-labor-pre-fee", label: `공임 역산 + 소재 역산 = 소재+공임 역산합`, valueText: fmtKrw(materialLaborCombinedPreFee) },
-      { key: "total-pre-fee-input", label: `+ 고정 역산 반영`, valueText: fmtKrw(fixedPreFee) },
-      { key: "total-pre-fee", label: "후보합(수수료 전)", valueText: fmtKrw(totalPreFee) },
+      { key: "material-labor-pre-fee", label: `공임+소재 합`, valueText: fmtKrw(materialLaborCombinedPreFee) },
+      { key: "total-pre-fee-input", label: `+ 고정 역산`, valueText: fmtKrw(fixedPreFee) },
+      { key: "total-pre-fee", label: "후보합", valueText: fmtKrw(totalPreFee) },
     ];
 
     const candidatePriceRow: PreviewCompositionRow[] = [
-      { key: "total-pre-fee", label: "후보합(수수료 전)", valueText: fmtKrw(totalPreFee) },
-      { key: "policy-fee-rate", label: `수수료율 적용 (${policyFeeRateText})`, valueText: policyFeeRateText },
-      { key: "target-price", label: "후보가격(수수료 반영 후)", valueText: fmtKrw(snapshotExplainRow.candidate_price_krw) },
+      { key: "total-pre-fee", label: "후보합", valueText: fmtKrw(totalPreFee) },
+      { key: "policy-fee-rate", label: `수수료 (${policyFeeRateText})`, valueText: policyFeeRateText },
+      { key: "target-price", label: "후보가격", valueText: fmtKrw(snapshotExplainRow.candidate_price_krw) },
     ];
 
     const minMarginRow: PreviewCompositionRow[] = [
-      { key: "cost-sum-basis", label: "총원가합(소재+공임+고정)", valueText: fmtKrw(snapshotExplainRow.cost_sum_krw) },
-      { key: "guardrail-rate", label: `가드레일율 적용 (${guardrailRateText})`, valueText: guardrailRateText },
-      { key: "min-margin-price-compare", label: "최소마진 후보가격", valueText: fmtKrw(snapshotExplainRow.min_margin_price_krw) },
+      { key: "cost-sum-basis", label: "총원가합", valueText: fmtKrw(snapshotExplainRow.cost_sum_krw) },
+      { key: "guardrail-rate", label: "가드레일", valueText: guardrailRateValueText },
+      { key: "min-margin-price-compare", label: "최소마진가", valueText: fmtKrw(snapshotExplainRow.min_margin_price_krw) },
     ];
 
-    const finalDecisionRow: PreviewCompositionRow[] = [
+    const resultTopRow: PreviewCompositionRow[] = [
       { key: "final-price", label: "최종가격", valueText: fmtKrw(finalTarget) },
-      { key: "selected-item-compare", label: "채택항목", valueText: selectedLabel },
-      { key: "selected-value-compare", label: "채택 기준값", valueText: fmtKrw(selectedBase) },
+      { key: "selected-item-final", label: "채택항목", valueText: selectedLabel },
+      { key: "selected-value-compare", label: "채택값", valueText: fmtKrw(selectedBase) },
     ];
 
-    const compareBasisRow: PreviewCompositionRow[] = [
-      { key: "target-price-compare", label: "후보가격", valueText: fmtKrw(snapshotExplainRow.candidate_price_krw) },
-      { key: "min-margin-price", label: "최소마진 후보가격", valueText: fmtKrw(snapshotExplainRow.min_margin_price_krw) },
-      { key: "selected-item-final", label: "선정 로직", valueText: `${fmtKrw(snapshotExplainRow.candidate_price_krw)} vs ${fmtKrw(snapshotExplainRow.min_margin_price_krw)}` },
-    ];
-
-    const outcomeRow: PreviewCompositionRow[] = [
-      { key: "labor-total", label: "기존 판매공임(참고)", valueText: fmtKrw(laborSellPlusAbsorbDisplay) },
-      { key: "margin-no-fee", label: "마진(수수료 제외)", valueText: marginWithoutFee == null ? "-" : fmtSignedKrw(marginWithoutFee) },
-      { key: "fee-amount", label: "수수료", valueText: feeAmount == null ? "-" : fmtKrw(feeAmount) },
-      { key: "current-price", label: "현재 채널가", valueText: fmtKrw(currentPrice) },
-      { key: "price-diff-krw", label: "가격차이", valueText: diffKrw == null ? "-" : fmtSignedKrw(diffKrw) },
-      { key: "price-diff-pct", label: "가격차이율", valueText: diffPctText },
+    const resultBottomRow: PreviewCompositionRow[] = [
+      { key: "current-price", label: "현재가", valueText: fmtKrw(currentPrice) },
+      { key: "price-diff-krw", label: "가격차", valueText: diffKrw == null ? "-" : fmtSignedKrw(diffKrw) },
+      { key: "price-diff-pct", label: "차이율", valueText: diffPctText },
     ];
 
     return [
@@ -1219,30 +1214,30 @@ export default function ShoppingAutoPricePage() {
       candidateSumRow,
       candidatePriceRow,
       minMarginRow,
-      compareBasisRow,
-      finalDecisionRow,
-      outcomeRow,
+      resultTopRow,
+      resultBottomRow,
     ];
   }, [activePolicy?.margin_multiplier, activePolicy?.fee_rate, activePolicy?.min_margin_rate_total, activePolicy?.gm_material, activePolicy?.gm_labor, activePolicy?.gm_fixed, activePolicy?.fixed_cost_krw, snapshotExplainRow]);
   
   const previewCompositionSections = useMemo(() => {
     if (!previewCompositionRowGroups.length) return [] as PreviewCompositionSection[];
-    const section = (key: string, title: string, summary: string, indexes: number[], defaultOpen = false): PreviewCompositionSection => ({
+    const section = (key: string, title: string, summary: string, indexes: number[], defaultOpen = false, layout: "full" | "third" = "full"): PreviewCompositionSection => ({
       key,
       title,
       summary,
       groups: indexes.map((index) => previewCompositionRowGroups[index]).filter((group): group is PreviewCompositionRow[] => Array.isArray(group) && group.length > 0),
       defaultOpen,
+      layout,
     });
 
     return [
-      section("cost-rollup", "원가 합산", previewCompositionRowGroups[3]?.[0]?.valueText ?? "-", [1, 2, 3], true),
-      section("labor-reverse", "공임 역산", previewCompositionRowGroups[4]?.[2]?.valueText ?? "-", [4]),
-      section("material-reverse", "소재 역산", previewCompositionRowGroups[5]?.[2]?.valueText ?? "-", [5]),
-      section("fixed-reverse", "고정 역산", previewCompositionRowGroups[6]?.[2]?.valueText ?? "-", [6]),
-      section("candidate-price", "후보가격 계산", previewCompositionRowGroups[8]?.[2]?.valueText ?? "-", [7, 8]),
-      section("guardrail", "최소마진 비교", previewCompositionRowGroups[11]?.[0]?.valueText ?? "-", [9, 10, 11]),
-      section("result", "결과 비교", previewCompositionRowGroups[12]?.[0]?.valueText ?? "-", [12]),
+      section("cost-rollup", "원가 합산", previewCompositionRowGroups[3]?.[0]?.valueText ?? "-", [0, 1, 2, 3], true),
+      section("labor-reverse", "공임 역산", previewCompositionRowGroups[4]?.[2]?.valueText ?? "-", [4], false, "third"),
+      section("material-reverse", "소재 역산", previewCompositionRowGroups[5]?.[2]?.valueText ?? "-", [5], false, "third"),
+      section("fixed-reverse", "고정 역산", previewCompositionRowGroups[6]?.[2]?.valueText ?? "-", [6], false, "third"),
+      section("candidate-price", "후보가격 계산", previewCompositionRowGroups[8]?.[2]?.valueText ?? "-", [7, 8], false, "third"),
+      section("guardrail", "최소마진 비교", previewCompositionRowGroups[9]?.[2]?.valueText ?? "-", [9], false, "third"),
+      section("result", "결과 비교", previewCompositionRowGroups[10]?.[0]?.valueText ?? "-", [10, 11], false, "third"),
     ];
   }, [previewCompositionRowGroups]);
 
@@ -1342,6 +1337,14 @@ export default function ShoppingAutoPricePage() {
       return null;
     };
 
+    const pickFirstIntentValue = (intents: SyncIntent[], picker: (intent: SyncIntent) => number | null): number | null => {
+      for (const intent of intents) {
+        const value = picker(intent);
+        if (value != null) return value;
+      }
+      return null;
+    };
+
     const rows = recentRunDetailQueries
       .map((query) => query.data?.data)
       .filter((data): data is SyncRunDetail => Boolean(data))
@@ -1360,16 +1363,21 @@ export default function ShoppingAutoPricePage() {
         if (!runId || intents.length === 0) return null;
 
         const baseIntent = intents.find((intent) => !String(intent.external_variant_code ?? "").trim()) ?? intents[0];
-        const snapshotPrice = pickSnapshotPrice(baseIntent);
-        const pushTargetPrice = toRoundedNumber(baseIntent.applied_target_price_krw);
-        const pushBeforePrice = toRoundedNumber(baseIntent.applied_before_price_krw);
-        const pushAfterPrice = toRoundedNumber(baseIntent.applied_after_price_krw);
-        const overridePrice = toRoundedNumber(baseIntent.pricing_override_price_krw);
+        const pickBaseThenAnyIntentValue = (picker: (intent: SyncIntent) => number | null): number | null => {
+          const baseValue = picker(baseIntent);
+          return baseValue != null ? baseValue : pickFirstIntentValue(intents, picker);
+        };
+        const snapshotPrice = pickBaseThenAnyIntentValue(pickSnapshotPrice);
+        const pushTargetPrice = pickBaseThenAnyIntentValue((intent) => toRoundedNumber(intent.applied_target_price_krw))
+          ?? pickBaseThenAnyIntentValue(pickSelectedPrice);
+        const pushBeforePrice = pickBaseThenAnyIntentValue((intent) => toRoundedNumber(intent.applied_before_price_krw));
+        const pushAfterPrice = pickBaseThenAnyIntentValue((intent) => toRoundedNumber(intent.applied_after_price_krw));
+        const overridePrice = pickBaseThenAnyIntentValue((intent) => toRoundedNumber(intent.pricing_override_price_krw));
         const candidatePrice = pushTargetPrice ?? pushAfterPrice ?? snapshotPrice;
         const selectedItem = resolveHistorySelectedItem(baseIntent);
         const selectedPrice = selectedItem === "가격덮어쓰기"
-          ? overridePrice ?? pushAfterPrice ?? candidatePrice
-          : pushAfterPrice ?? candidatePrice;
+          ? overridePrice ?? pushAfterPrice ?? pushTargetPrice ?? candidatePrice
+          : pushAfterPrice ?? pushTargetPrice ?? candidatePrice;
 
         const variantPrices = intents
           .filter((intent) => String(intent.external_variant_code ?? "").trim())
@@ -1450,6 +1458,8 @@ export default function ShoppingAutoPricePage() {
         max: null as number | null,
         turningCount: 0,
         firstTurning: null as { at: string; value: number } | null,
+        firstAt: null as string | null,
+        lastAt: null as string | null,
       };
     }
     const padLeft = 10;
@@ -1500,12 +1510,15 @@ export default function ShoppingAutoPricePage() {
     }
 
     const turningPoints = normalized.filter((point) => point.turning);
+    const displayPoints = normalized.filter((point, index) => (
+      index === 0 || index === normalized.length - 1 || point.turning
+    ));
 
     return {
       width,
       height,
-      points: normalized,
-      polyline: normalized.map((point) => `${point.x},${point.y}`).join(" "),
+      points: displayPoints,
+      polyline: displayPoints.map((point) => `${point.x},${point.y}`).join(" "),
       min,
       max,
       turningCount: turningPoints.length,
@@ -1515,6 +1528,8 @@ export default function ShoppingAutoPricePage() {
           value: turningPoints[0].value,
         }
         : null,
+      firstAt: points[0]?.at ?? null,
+      lastAt: points[points.length - 1]?.at ?? null,
     };
   }, [previewHistoryRows]);
 
@@ -2688,6 +2703,19 @@ export default function ShoppingAutoPricePage() {
     const optionPriceMode: "SYNC" | "MANUAL" = existing?.option_price_mode === "MANUAL" ? "MANUAL" : "SYNC";
     const syncRuleSetId = optionPriceMode === "SYNC" ? (siblingSyncRuleSetId || String(existing?.sync_rule_set_id ?? "").trim()) : "";
     const externalProductNo = canonicalEditorProductNo || resolvedEditorProductNo || String(editorPreview?.productNo ?? "").trim();
+    const allowedMaterialCodes = new Set(loadedOptionAllowlist.materials.map((choice) => choice.value));
+    const resolvedMaterialCode = draft.option_material_code && allowedMaterialCodes.has(draft.option_material_code)
+      ? draft.option_material_code
+      : (existing?.option_material_code ?? null);
+    const allowedSizeValues = new Set(
+      (loadedOptionAllowlist.sizes_by_material[resolvedMaterialCode ?? ""] ?? [])
+        .map((choice) => parseNumericInput(choice.value))
+        .filter((value): value is number => value != null),
+    );
+    const draftSizeValue = parseNumericInput(draft.option_size_value_text);
+    const resolvedSizeValue = draftSizeValue != null && allowedSizeValues.has(draftSizeValue)
+      ? draftSizeValue
+      : (existing?.option_size_value ?? null);
     if (!effectiveChannelId) throw new Error("channel_id가 필요합니다");
     if (!editorMasterItemId) throw new Error("master_item_id가 필요합니다");
     if (!externalProductNo) throw new Error("external_product_no가 필요합니다");
@@ -2699,16 +2727,16 @@ export default function ShoppingAutoPricePage() {
       external_product_no: externalProductNo,
       external_variant_code: variantCode,
       sync_rule_set_id: syncRuleSetId || null,
-      option_material_code: draft.option_material_code,
+      option_material_code: resolvedMaterialCode,
       option_color_code: draft.option_color_code,
       option_decoration_code: draft.option_decoration_code,
-      option_size_value: parseNumericInput(draft.option_size_value_text),
+      option_size_value: resolvedSizeValue,
       material_multiplier_override: existing?.material_multiplier_override ?? null,
       size_weight_delta_g: existing?.size_weight_delta_g ?? null,
       option_price_delta_krw: existing?.option_price_delta_krw ?? null,
       option_price_mode: optionPriceMode,
       option_manual_target_krw: optionPriceMode === "MANUAL" ? existing?.option_manual_target_krw ?? null : null,
-      include_master_plating_labor: existing?.include_master_plating_labor !== false,
+      include_master_plating_labor: !editorExcludePlatingLabor,
       sync_rule_material_enabled: existing?.sync_rule_material_enabled !== false,
       sync_rule_weight_enabled: existing?.sync_rule_weight_enabled !== false,
       sync_rule_plating_enabled: existing?.sync_rule_plating_enabled !== false,
@@ -3691,6 +3719,69 @@ export default function ShoppingAutoPricePage() {
                               role="img"
                               aria-label="가격 추이"
                             >
+                              <line
+                                x1={previewTrendChart.points[0]?.x ?? 0}
+                                y1={previewTrendChart.points[0]?.y ?? 0}
+                                x2={previewTrendChart.points[0]?.x ?? 0}
+                                y2={previewTrendChart.height - 4}
+                                stroke="var(--hairline)"
+                                strokeWidth="1"
+                              />
+                              <line
+                                x1={previewTrendChart.points[0]?.x ?? 0}
+                                y1={previewTrendChart.height - 4}
+                                x2={previewTrendChart.points[previewTrendChart.points.length - 1]?.x ?? previewTrendChart.width}
+                                y2={previewTrendChart.height - 4}
+                                stroke="var(--hairline)"
+                                strokeWidth="1"
+                              />
+                              <line
+                                x1={previewTrendChart.points[0]?.x ?? 0}
+                                y1={8}
+                                x2={previewTrendChart.points[previewTrendChart.points.length - 1]?.x ?? previewTrendChart.width}
+                                y2={8}
+                                stroke="var(--hairline)"
+                                strokeWidth="1"
+                                strokeDasharray="2 3"
+                              />
+                              <line
+                                x1={previewTrendChart.points[0]?.x ?? 0}
+                                y1={previewTrendChart.height - 12}
+                                x2={previewTrendChart.points[previewTrendChart.points.length - 1]?.x ?? previewTrendChart.width}
+                                y2={previewTrendChart.height - 12}
+                                stroke="var(--hairline)"
+                                strokeWidth="1"
+                                strokeDasharray="2 3"
+                              />
+                              {previewTrendChart.points.filter((point) => point.turning).map((point) => (
+                                <line
+                                  key={`${point.runId}::guide`}
+                                  x1={point.x}
+                                  y1={8}
+                                  x2={point.x}
+                                  y2={previewTrendChart.height - 4}
+                                  stroke="var(--primary)"
+                                  strokeOpacity={0.18}
+                                  strokeWidth="1"
+                                  strokeDasharray="2 3"
+                                />
+                              ))}
+                              <text
+                                x={2}
+                                y={11}
+                                fontSize="8"
+                                fill="var(--muted)"
+                              >
+                                {fmtKrw(previewTrendChart.max)}
+                              </text>
+                              <text
+                                x={2}
+                                y={previewTrendChart.height - 14}
+                                fontSize="8"
+                                fill="var(--muted)"
+                              >
+                                {fmtKrw(previewTrendChart.min)}
+                              </text>
                               <polyline
                                 points={previewTrendChart.polyline}
                                 fill="none"
@@ -3727,8 +3818,21 @@ export default function ShoppingAutoPricePage() {
                         <div className="mt-1 whitespace-nowrap text-[10px] text-[var(--muted)] tabular-nums">
                           {previewTrendChart.points.length === 0
                             ? "최저 - · 최고 -"
-                            : `최저 ${fmtKrw(previewTrendChart.min)} · 최고 ${fmtKrw(previewTrendChart.max)}`}
+                            : `변곡점 기준 · 최저 ${fmtKrw(previewTrendChart.min)} · 최고 ${fmtKrw(previewTrendChart.max)}`}
                         </div>
+                        {previewTrendChart.firstAt || previewTrendChart.firstTurning || previewTrendChart.lastAt ? (
+                          <div className="mt-1 grid grid-cols-3 gap-2 text-[10px] text-[var(--muted)] tabular-nums">
+                            <div className="truncate">
+                              {previewTrendChart.firstAt ? `시작 ${fmtTsCompact(previewTrendChart.firstAt)}` : ""}
+                            </div>
+                            <div className="truncate text-center">
+                              {previewTrendChart.firstTurning ? `첫 변곡 ${fmtTsCompact(previewTrendChart.firstTurning.at)}` : "변곡 없음"}
+                            </div>
+                            <div className="truncate text-right">
+                              {previewTrendChart.lastAt ? `최근 ${fmtTsCompact(previewTrendChart.lastAt)}` : ""}
+                            </div>
+                          </div>
+                        ) : null}
                         {previewTrendChart.firstTurning ? (
                           <div className="mt-1 whitespace-nowrap text-[10px] text-[var(--muted)] tabular-nums">
                             {`첫 변곡점 ${fmtTsCompact(previewTrendChart.firstTurning.at)} · ${fmtKrw(previewTrendChart.firstTurning.value)}`}
@@ -3756,31 +3860,20 @@ export default function ShoppingAutoPricePage() {
                             <div className="mb-2 flex items-baseline justify-between gap-2">
                               <div className="flex items-center gap-3">
                                 <div className="text-[11px] font-semibold">구성(스냅샷)</div>
-                                <label className="flex items-center gap-1 text-[10px] font-medium text-[var(--muted)]">
-                                  <input
-                                    type="checkbox"
-                                    className="h-3 w-3 accent-[var(--primary)]"
-                                    checked={!editorExcludePlatingLabor}
-                                    onChange={(e) => togglePlatingLaborMutation.mutate(e.target.checked)}
-                                    disabled={!effectiveChannelId || !editorMasterItemId || togglePlatingLaborMutation.isPending}
-                                  />
-                                  <span className="select-none">도금공임 포함</span>
-                                </label>
+                                <div className={`flex items-center gap-2 rounded border px-2 py-1.5 ${editorExcludePlatingLabor ? "border-slate-300 bg-slate-50" : "border-emerald-300 bg-emerald-50"}`}>
+                                  <div className={`text-[10px] font-semibold ${editorExcludePlatingLabor ? "text-slate-700" : "text-emerald-900"}`}>도금공임(판매)</div>
+                                  <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-medium ${editorExcludePlatingLabor ? "bg-slate-200 text-slate-700" : "bg-emerald-200 text-emerald-900"}`}>
+                                    {editorExcludePlatingLabor ? "제외" : "포함"}
+                                  </span>
+                                  <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-medium ${editorExcludePlatingLabor ? "bg-white text-slate-700" : "bg-white text-emerald-900"}`}>
+                                    {fmtKrw(Math.max(0, Math.round(Number(snapshotExplainRow?.master_plating_sell_krw ?? editorPreview?.plating_labor_sell_krw ?? 0))))}
+                                  </span>
+                                </div>
                                 <div className={`flex items-center gap-2 rounded border px-2 py-1.5 ${currentProductSyncProfilePanelClassOf(editorCurrentProductSyncProfile)}`}>
                                   <div className="text-[10px] font-semibold text-amber-950">현재 상품 프로필</div>
-                                  <Select
-                                    value={editorCurrentProductSyncProfile}
-                                    onChange={(e) => saveCurrentProductSyncProfileMutation.mutate(e.target.value as CurrentProductSyncProfile)}
-                                    disabled={!effectiveChannelId || !editorMasterItemId || saveCurrentProductSyncProfileMutation.isPending}
-                                    className="h-7 min-w-[112px] border-amber-400/70 bg-white/90 text-[11px] font-medium text-amber-950"
-                                  >
-                                    {AUTO_SYNC_THRESHOLD_PROFILE_OPTIONS.map((option) => (
-                                      <option key={`preview-sync-profile-${option.value}`} value={option.value}>{option.label}</option>
-                                    ))}
-                                  </Select>
-                                  {editorCurrentProductSyncProfile === "MARKET_LINKED" ? (
-                                    <span className={currentProductSyncProfileBadgeClassOf(editorCurrentProductSyncProfile)}>시장연동</span>
-                                  ) : null}
+                                  <span className={currentProductSyncProfileBadgeClassOf(editorCurrentProductSyncProfile)}>
+                                    {currentProductSyncProfileLabelOf(editorCurrentProductSyncProfile)}
+                                  </span>
                                 </div>
                               </div>
                               <div className="text-[10px] text-black tabular-nums">
@@ -3804,9 +3897,9 @@ export default function ShoppingAutoPricePage() {
                                 <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
                                   {[
                                     { key: "summary-final", label: "최종가격", value: fmtKrw(snapshotExplainRow.final_target_price_v2_krw ?? snapshotExplainRow.final_target_price_krw), tone: "bg-violet-100" },
-                                    { key: "summary-candidate", label: "후보가격", value: fmtKrw(snapshotExplainRow.candidate_price_krw), tone: "bg-amber-200" },
-                                    { key: "summary-min-margin", label: "최소마진 후보가격", value: fmtKrw(snapshotExplainRow.min_margin_price_krw), tone: "bg-lime-100" },
-                                    { key: "summary-selected", label: "채택항목", value: selectedLabel, tone: "bg-sky-100" },
+                                    { key: "summary-candidate", label: "후보가격", value: fmtKrw(snapshotExplainRow.candidate_price_krw), tone: "bg-rose-100" },
+                                    { key: "summary-min-margin", label: "최소마진가", value: fmtKrw(snapshotExplainRow.min_margin_price_krw), tone: "bg-white" },
+                                    { key: "summary-selected", label: "채택항목", value: snapshotExplainRow.guardrail_reason_code === "MIN_MARGIN_WIN" ? "최소마진가격" : snapshotExplainRow.guardrail_reason_code === "COMPONENT_CANDIDATE_WIN" ? "목표가격" : String(snapshotExplainRow.guardrail_reason_code ?? "-"), tone: "bg-white" },
                                   ].map((card) => (
                                     <div key={card.key} className={`${card.tone} rounded border border-black px-2 py-2`}>
                                       <div className="text-[10px] font-medium text-slate-700">{card.label}</div>
@@ -3815,16 +3908,16 @@ export default function ShoppingAutoPricePage() {
                                   ))}
                                 </div>
                                 <div className="rounded border border-[var(--hairline)] bg-[var(--panel)] px-2 py-1 text-[11px] text-[var(--muted)]">
-                                  상단에는 핵심 결과만 모아두고, 아래 계산은 섹션별로 접어서 필요할 때만 확인할 수 있게 정리했습니다.
+                                  상단에는 핵심 결과를 모아두고, 아래 계산은 섹션 카드마다 열이 보이도록 정리해 계산 흐름이 바로 읽히게 했습니다.
                                 </div>
-                                <div className="space-y-2">
+                                <div className="grid grid-cols-1 gap-2 lg:grid-cols-3">
                                   {previewCompositionSections.map((section) => (
-                                    <details key={section.key} open={section.defaultOpen} className="rounded border border-[var(--hairline)] bg-[var(--bg)] p-2">
-                                      <summary className="flex cursor-pointer items-center justify-between gap-2 text-[11px] font-medium text-[var(--muted)]">
+                                    <details key={section.key} open={section.key !== "cost-rollup"} className={`rounded border border-[var(--hairline)] bg-[var(--bg)] p-2 ${section.layout === "third" ? "" : "lg:col-span-3"}`}>
+                                      <summary className="mb-2 flex cursor-pointer items-center justify-between gap-2 text-[11px] font-medium text-[var(--muted)]">
                                         <span>{section.title}</span>
                                         <span className="tabular-nums text-slate-900">{section.summary}</span>
                                       </summary>
-                                      <div className="mt-2 overflow-hidden rounded border-2 border-black">
+                                      <div className="overflow-hidden rounded border-2 border-black">
                                         <table className="w-full table-fixed text-[11px]">
                                           <tbody>
                                             {section.groups.map((group, groupIndex) => {
@@ -3838,11 +3931,11 @@ export default function ShoppingAutoPricePage() {
                                                 <Fragment key={`${section.key}-group-${groupIndex}`}>
                                                   <tr className={`${topBorderClass} border-black`}>
                                                     {group.map((row) => (
-                                                      <th key={`${section.key}-head-${groupIndex}-${row.key}`} className={`${snapshotCellToneClass(row.key, groupIndex)} border-r border-black px-2 py-1 text-left font-medium text-slate-900 last:border-r-0`}>
+                                                      <th key={`${section.key}-head-${groupIndex}-${row.key}`} className={`${snapshotCellToneClass(row.key, groupIndex)} whitespace-nowrap border-r border-black px-2 py-1 text-left text-[10px] font-medium text-slate-900 last:border-r-0`}>
                                                         {row.label}
                                                       </th>
                                                     ))}
-                                                    {Array.from({ length: Math.max(0, 6 - group.length) }).map((_, emptyIdx) => (
+                                                    {Array.from({ length: Math.max(0, 3 - group.length) }).map((_, emptyIdx) => (
                                                       <th key={`${section.key}-head-${groupIndex}-empty-${emptyIdx}`} className="border-r border-black bg-white px-2 py-1 last:border-r-0" />
                                                     ))}
                                                   </tr>
@@ -3852,7 +3945,7 @@ export default function ShoppingAutoPricePage() {
                                                         {row.valueText}
                                                       </td>
                                                     ))}
-                                                    {Array.from({ length: Math.max(0, 6 - group.length) }).map((_, emptyIdx) => (
+                                                    {Array.from({ length: Math.max(0, 3 - group.length) }).map((_, emptyIdx) => (
                                                       <td key={`${section.key}-value-${groupIndex}-empty-${emptyIdx}`} className="border-r border-t-2 border-black bg-white px-2 py-1 last:border-r-0" />
                                                     ))}
                                                   </tr>
@@ -3893,7 +3986,7 @@ export default function ShoppingAutoPricePage() {
                               <div className="flex flex-wrap justify-end gap-x-2 gap-y-0.5 text-right text-[10px] text-[var(--muted)]">
                                 <div>최대 20건</div>
                                 {latestCronTick ? (
-                                  <div className="tabular-nums">최근 크론체크: {fmtTsCompact(latestCronTick.at)} ({latestCronTick.reason})</div>
+                                  <div className="tabular-nums">최근 크론체크: {fmtTsCompact(latestCronTick.at)} ({cronTickReasonLabelOf(latestCronTick.reason)})</div>
                                 ) : null}
                               </div>
                             </div>
@@ -3935,29 +4028,6 @@ export default function ShoppingAutoPricePage() {
                     </div>
                   </div>
 
-                  <div className="rounded border border-[var(--hairline)] bg-[var(--panel)] px-3 py-2 text-xs text-[var(--muted)]">
-                    옵션값 기준으로만 요약해서 표시합니다. 조합별 카드는 제거했고, 상세수정에서 필요할 때만 고급 variant 보정을 엽니다.
-                  </div>
-
-                  <div className="grid grid-cols-1 gap-2 md:grid-cols-4">
-                    <div className="rounded border border-[var(--hairline)] bg-[var(--bg)] px-3 py-2 text-xs">
-                      <div className="text-[var(--muted)]">옵션 행</div>
-                      <div className="mt-1 font-medium">{compactOptionRows.length} rows</div>
-                    </div>
-                    <div className="rounded border border-[var(--hairline)] bg-[var(--bg)] px-3 py-2 text-xs">
-                      <div className="text-[var(--muted)]">allowlist</div>
-                      <div className="mt-1 font-medium">{loadedOptionAllowlist.materials.length} material / {loadedOptionAllowlist.colors.length} color / {loadedOptionAllowlist.decors.length} decor</div>
-                    </div>
-                    <div className="rounded border border-[var(--hairline)] bg-[var(--bg)] px-3 py-2 text-xs">
-                      <div className="text-[var(--muted)]">current / blocking</div>
-                      <div className="mt-1 font-medium">{compactOptionRows.length} rows / {blockingOptionRows.length} blocking</div>
-                    </div>
-                    <div className="rounded border border-[var(--hairline)] bg-[var(--bg)] px-3 py-2 text-xs">
-                      <div className="text-[var(--muted)]">rule engine / sync set</div>
-                      <div className="mt-1 font-medium">{optionLaborRuleEngineActive ? "active" : "inactive"} / {siblingSyncRuleSetId || "auto-infer"}</div>
-                    </div>
-                  </div>
-
                   <div className="overflow-auto rounded border border-[var(--hairline)]">
                     <table className="w-full text-[11px]">
                       <thead className="bg-[var(--panel)] text-left">
@@ -3974,10 +4044,11 @@ export default function ShoppingAutoPricePage() {
                         {compactOptionRows.map((row) => (
                           <tr key={`preview-compact-row-${row.entryKey}`} className="border-t border-[var(--hairline)]">
                             <td className="px-2 py-1">
-                              <div className="font-medium">{row.optionName}</div>
-                              <div className="mt-1 text-[10px] text-[var(--muted)]">{legacyStatusLabelOf(row.legacyStatus)}{row.sourceRuleEntryIds.length > 0 ? ` / rule ${row.sourceRuleEntryIds.length}` : ""}</div>
-                              {row.warnings[0] ? <div className="mt-1 text-[10px] text-amber-600">{row.warnings[0]}</div> : null}
-                              {row.categoryKey === "OTHER" && row.otherReason ? <div className="mt-1 text-[10px] text-slate-500">사유: {row.otherReason}</div> : null}
+                              <div className="flex items-center gap-2">
+                                <span className="font-medium">{row.optionName}</span>
+                                <span className="text-[10px] text-[var(--muted)]">{legacyStatusLabelOf(row.legacyStatus)}{row.sourceRuleEntryIds.length > 0 ? ` / rule ${row.sourceRuleEntryIds.length}` : ""}{row.categoryKey === "OTHER" && row.otherReason ? ` / 사유:${row.otherReason}` : ""}</span>
+                              </div>
+                              {row.warnings[0] ? <div className="text-[10px] text-amber-600">{row.warnings[0]}</div> : null}
                             </td>
                             <td className="px-2 py-1">{categoryLabelOf(row.categoryKey)}</td>
                             <td className="px-2 py-1">{row.axis1 || "-"}</td>

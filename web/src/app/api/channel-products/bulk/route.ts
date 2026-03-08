@@ -272,6 +272,7 @@ export async function POST(request: Request) {
   }
 
   const resolutionTraceLogs: Array<Record<string, unknown>> = [];
+  const aliasHistoryCandidates: Array<{ channel_id: string; master_item_id: string; alias_external_product_no: string; canonical_external_product_no: string; external_variant_code: string }> = [];
   try {
     const validatedRows = rows.map((row) => {
       const pairKey = `${row.channel_id}::${row.master_item_id}`;
@@ -297,6 +298,15 @@ export async function POST(request: Request) {
         });
       }
       const previous = existingOptionByKey.get(`${row.channel_id}::${canonicalExternalProductNo}::${row.external_variant_code}`) ?? null;
+      if (canonicalExternalProductNo !== row.external_product_no) {
+        aliasHistoryCandidates.push({
+          channel_id: row.channel_id,
+          master_item_id: row.master_item_id,
+          alias_external_product_no: row.external_product_no,
+          canonical_external_product_no: canonicalExternalProductNo,
+          external_variant_code: row.external_variant_code,
+        });
+      }
       resolutionTraceLogs.push({
         policy_id: null,
         channel_id: row.channel_id,
@@ -457,6 +467,26 @@ export async function POST(request: Request) {
     .select("channel_product_id, channel_id, master_item_id, external_product_no, external_variant_code, sync_rule_set_id, option_material_code, option_color_code, option_decoration_code, option_size_value, material_multiplier_override, size_weight_delta_g, option_price_delta_krw, option_price_mode, option_manual_target_krw, include_master_plating_labor, sync_rule_material_enabled, sync_rule_weight_enabled, sync_rule_plating_enabled, sync_rule_decoration_enabled, sync_rule_margin_rounding_enabled, mapping_source, is_active, created_at, updated_at");
 
   if (error) return jsonError(error.message ?? '일괄 매핑 저장 실패', 400);
+
+  if (aliasHistoryCandidates.length > 0 && (data ?? []).length > 0) {
+    const channelProductIdByCanonicalKey = new Map((data ?? []).map((row) => [
+      `${String(row.channel_id ?? '').trim()}::${String(row.master_item_id ?? '').trim()}::${String(row.external_product_no ?? '').trim()}::${String(row.external_variant_code ?? '').trim()}`,
+      String(row.channel_product_id ?? '').trim(),
+    ]));
+    const aliasRows = aliasHistoryCandidates.map((row) => ({
+      channel_id: row.channel_id,
+      canonical_channel_product_id: channelProductIdByCanonicalKey.get(`${row.channel_id}::${row.master_item_id}::${row.canonical_external_product_no}::${row.external_variant_code}`) || null,
+      master_item_id: row.master_item_id,
+      canonical_external_product_no: row.canonical_external_product_no,
+      alias_external_product_no: row.alias_external_product_no,
+      external_variant_code: row.external_variant_code,
+      reason: 'BULK_MAPPING_CANONICALIZED',
+    }));
+    const aliasRes = await sb.from("sales_channel_product_alias_history").insert(aliasRows);
+    if (aliasRes.error) {
+      return jsonError(aliasRes.error.message ?? '별칭 이력 저장 실패', 500);
+    }
+  }
 
   if (resolutionTraceLogs.length > 0) {
     const traceLogRes = await sb.from("channel_option_value_policy_log").insert(resolutionTraceLogs);

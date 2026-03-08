@@ -1,5 +1,6 @@
-import { NextResponse } from "next/server";
+﻿import { NextResponse } from "next/server";
 import { getShopAdminClient, jsonError } from "@/lib/shop/admin";
+import { isBaseVariantCode, shouldPreferCanonicalProductNo } from "@/lib/shop/canonical-mapping";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -9,19 +10,6 @@ type MappingRow = {
   master_item_id: string;
   external_product_no: string;
   external_variant_code: string | null;
-};
-
-const looksCanonicalProductCode = (productNo: string): boolean => /^P/i.test(String(productNo ?? "").trim());
-
-const shouldPreferBaseProductNo = (currentProductNo: string, nextProductNo: string): boolean => {
-  const current = String(currentProductNo ?? "").trim();
-  const next = String(nextProductNo ?? "").trim();
-  if (!current && next) return true;
-  if (!next) return false;
-  const currentCanonical = looksCanonicalProductCode(current);
-  const nextCanonical = looksCanonicalProductCode(next);
-  if (nextCanonical !== currentCanonical) return nextCanonical;
-  return next.localeCompare(current) < 0;
 };
 
 export async function GET(request: Request) {
@@ -71,10 +59,10 @@ export async function GET(request: Request) {
       base_product_no: "",
     };
     if (productNo) acc.product_nos.add(productNo);
-    if (variant) acc.variant_count += 1;
+    if (!isBaseVariantCode(variant)) acc.variant_count += 1;
     else {
       acc.base_row_count_raw += 1;
-      if (shouldPreferBaseProductNo(acc.base_product_no, productNo)) {
+      if (shouldPreferCanonicalProductNo(acc.base_product_no, productNo)) {
         acc.base_product_no = productNo;
       }
     }
@@ -87,7 +75,7 @@ export async function GET(request: Request) {
     product_nos: Array.from(row.product_nos.values()),
     variant_count: row.variant_count,
     base_row_count: row.base_row_count,
-    base_row_count_raw: row.base_row_count_raw,
+    base_row_count_raw: row.base_row_count,
     base_product_no: row.base_product_no || null,
   }));
 
