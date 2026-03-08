@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { isMissingColumnError } from "@/lib/shop/admin";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -39,6 +40,17 @@ function buildImageUrl(supabase: SupabaseClient<unknown>, path: string | null) {
   return appendVersion(base);
 }
 
+function normalizeMasterRow(supabase: SupabaseClient<unknown>, row: Record<string, unknown>) {
+  const resolvedMasterItemId = String(row.master_item_id ?? row.master_id ?? "").trim() || null;
+  const resolvedMasterId = String(row.master_id ?? row.master_item_id ?? "").trim() || null;
+
+  return {
+    ...row,
+    master_item_id: resolvedMasterItemId,
+    master_id: resolvedMasterId,
+    image_url: buildImageUrl(supabase, row.image_path ? String(row.image_path) : null),
+  };
+}
 
 export async function GET(request: Request) {
   const supabase = getSupabaseAdmin();
@@ -71,37 +83,55 @@ export async function GET(request: Request) {
       return NextResponse.json({ data: [] }, { headers: { "Cache-Control": "no-store" } });
     }
 
-    const { data, error } = await supabase
+    const runByMasterIds = (column: "master_item_id" | "master_id") => supabase
       .from("cms_master_item")
       .select("*")
-      .in("master_id", masterIds)
+      .in(column, masterIds)
       .limit(masterIds.length);
+
+    let { data, error } = await runByMasterIds("master_item_id");
+    if (error && isMissingColumnError(error, "cms_master_item.master_item_id")) {
+      ({ data, error } = await runByMasterIds("master_id"));
+    }
 
     if (error) {
       return NextResponse.json({ error: error.message ?? "데이터 조회 실패" }, { status: 500 });
     }
 
-    const mapped = (data ?? []).map((row: Record<string, unknown>) => ({
-      ...row,
-      image_url: buildImageUrl(supabase, row.image_path ? String(row.image_path) : null),
-    }));
+    const mapped = (data ?? []).map((row: Record<string, unknown>) => normalizeMasterRow(supabase, row));
 
     return NextResponse.json({ data: mapped }, { headers: { "Cache-Control": "no-store" } });
   }
 
   if (model) {
-    const baseQuery = supabase
+    const runByExactId = (column: "master_item_id" | "master_id") => supabase
       .from("cms_master_item")
-      .select("master_id,model_name,category_code,material_code_default");
+      .select("*")
+      .eq(column, model)
+      .limit(20);
 
-    const { data, error } = isUuidQuery
-      ? await baseQuery.eq("master_id", model).limit(20)
-      : await baseQuery.ilike("model_name", `%${model}%`).limit(120);
+    let data;
+    let error;
+    if (isUuidQuery) {
+      ({ data, error } = await runByExactId("master_item_id"));
+      if (error && isMissingColumnError(error, "cms_master_item.master_item_id")) {
+        ({ data, error } = await runByExactId("master_id"));
+      }
+    } else {
+      ({ data, error } = await supabase
+        .from("cms_master_item")
+        .select("*")
+        .ilike("model_name", `%${model}%`)
+        .limit(120));
+    }
 
     if (error) {
       return NextResponse.json({ error: error.message ?? "데이터 조회 실패" }, { status: 500 });
     }
-    return NextResponse.json({ data: data ?? [] }, { headers: { "Cache-Control": "no-store" } });
+    return NextResponse.json(
+      { data: (data ?? []).map((row: Record<string, unknown>) => normalizeMasterRow(supabase, row)) },
+      { headers: { "Cache-Control": "no-store" } },
+    );
   }
 
   const { data, error } = await supabase
@@ -113,10 +143,7 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: error.message ?? "데이터 조회 실패" }, { status: 500 });
   }
 
-  const mapped = (data ?? []).map((row: Record<string, unknown>) => ({
-    ...row,
-    image_url: buildImageUrl(supabase, row.image_path ? String(row.image_path) : null),
-  }));
+  const mapped = (data ?? []).map((row: Record<string, unknown>) => normalizeMasterRow(supabase, row));
 
   return NextResponse.json({ data: mapped }, { headers: { "Cache-Control": "no-store" } });
 }

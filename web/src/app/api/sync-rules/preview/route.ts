@@ -61,6 +61,8 @@ type OptionLaborRuleRow = {
   category_key: "MATERIAL" | "SIZE" | "COLOR_PLATING" | "DECOR" | "OTHER";
   scope_material_code: string | null;
   additional_weight_g: number | null;
+  additional_weight_min_g: number | null;
+  additional_weight_max_g: number | null;
   plating_enabled: boolean | null;
   color_code: string | null;
   decoration_master_id: string | null;
@@ -68,6 +70,7 @@ type OptionLaborRuleRow = {
   base_labor_cost_krw: number;
   additive_delta_krw: number;
   is_active: boolean;
+  note?: string | null;
 };
 
 
@@ -141,7 +144,7 @@ export async function POST(request: Request) {
     sb.from("sync_rule_r2_size_weight").select("rule_id, rule_set_id, linked_r1_rule_id, match_material_code, match_category_code, weight_min_g, weight_max_g, option_range_expr, margin_min_krw, margin_max_krw, delta_krw, rounding_unit, rounding_mode, priority, is_active").eq("rule_set_id", ruleSetId).eq("is_active", true).order("priority", { ascending: true }),
     sb.from("sync_rule_r3_color_margin").select("rule_id, rule_set_id, color_code, margin_min_krw, margin_max_krw, delta_krw, rounding_unit, rounding_mode, priority, is_active").eq("rule_set_id", ruleSetId).eq("is_active", true).order("priority", { ascending: true }),
     sb.from("sync_rule_r4_decoration").select("rule_id, rule_set_id, linked_r1_rule_id, match_decoration_code, match_material_code, match_color_code, match_category_code, delta_krw, rounding_unit, rounding_mode, priority, is_active").eq("rule_set_id", ruleSetId).eq("is_active", true).order("priority", { ascending: true }),
-    sb.from("channel_option_labor_rule_v1").select("master_item_id, external_product_no, category_key, scope_material_code, additional_weight_g, plating_enabled, color_code, decoration_model_name, base_labor_cost_krw, additive_delta_krw, is_active").eq("channel_id", channelId),
+    sb.from("channel_option_labor_rule_v1").select("master_item_id, external_product_no, category_key, scope_material_code, additional_weight_g, additional_weight_min_g, additional_weight_max_g, plating_enabled, color_code, decoration_master_id, decoration_model_name, base_labor_cost_krw, additive_delta_krw, is_active, note").eq("channel_id", channelId),
   ]);
 
   for (const r of [mapRes, masterRes, tickRes, policyRes, purityRes, r1Res, r2Res, r3Res, r4Res]) {
@@ -152,6 +155,7 @@ export async function POST(request: Request) {
   }
 
   const mappings = (mapRes.data ?? []) as MappingRow[];
+  const uniqueDecorationCodes = [...new Set(mappings.map((row) => String(row.option_decoration_code ?? "").trim()).filter(Boolean))];
   const inferredR1BaseMaterialByMaster = new Map<string, string>();
   const mappingByMaster = new Map<string, MappingRow[]>();
   for (const m of mappings) {
@@ -174,6 +178,20 @@ export async function POST(request: Request) {
     if (inferred) inferredR1BaseMaterialByMaster.set(masterId, inferred);
   }
   const masterMap = new Map((masterRes.data ?? []).map((r) => [String((r as MasterRow).master_item_id), r as MasterRow]));
+  const decorationMasterIdByCode = new Map<string, string>();
+  if (uniqueDecorationCodes.length > 0) {
+    const decorationMasterLookupRes = await sb
+      .from("cms_master_item")
+      .select("master_item_id, model_name")
+      .in("model_name", uniqueDecorationCodes);
+    if (decorationMasterLookupRes.error) return jsonError(decorationMasterLookupRes.error.message ?? "장식 마스터 코드 매핑 조회 실패", 500);
+    for (const row of decorationMasterLookupRes.data ?? []) {
+      const modelName = String((row as { model_name?: string | null }).model_name ?? "").trim().toUpperCase();
+      const masterId = String((row as { master_item_id?: string | null }).master_item_id ?? "").trim();
+      if (!modelName || !masterId || decorationMasterIdByCode.has(modelName)) continue;
+      decorationMasterIdByCode.set(modelName, masterId);
+    }
+  }
   const purityMap = buildMaterialPurityMap((purityRes.data ?? []).map((r) => ({
     material_code: normalizeMaterialCode(String(r.material_code ?? "")),
     purity_rate: Number(r.purity_rate ?? 0),
@@ -221,6 +239,35 @@ export async function POST(request: Request) {
     prev.push(row);
     optionLaborRulesByContext.set(key, prev);
   }
+  const externalProductNosByMaster = new Map<string, string[]>();
+  for (const row of mappings) {
+    const masterId = String(row.master_item_id ?? "").trim();
+    const productNo = String(row.external_product_no ?? "").trim();
+    if (!masterId || !productNo) continue;
+    const prev = externalProductNosByMaster.get(masterId) ?? [];
+    if (!prev.includes(productNo)) prev.push(productNo);
+    externalProductNosByMaster.set(masterId, prev);
+  }
+  const buildProductNoCandidates = (masterId: string, requestedProductNo: string): string[] => {
+    const out: string[] = [];
+    const seen = new Set<string>();
+    const push = (value: string) => {
+      const trimmed = String(value ?? "").trim();
+      if (!trimmed || seen.has(trimmed)) return;
+      seen.add(trimmed);
+      out.push(trimmed);
+    };
+    push(requestedProductNo);
+    for (const productNo of externalProductNosByMaster.get(masterId) ?? []) push(productNo);
+    return out;
+  };
+  const resolveOptionLaborRulesForContext = (masterId: string, productNo: string): OptionLaborRuleRow[] => {
+    for (const candidateProductNo of buildProductNoCandidates(masterId, productNo)) {
+      const rows = optionLaborRulesByContext.get(`${masterId}::${candidateProductNo}`) ?? [];
+      if (hasAnyActiveOptionLaborRule(rows)) return rows;
+    }
+    return [];
+  };
 
   const matchedSamples: CandidatePreview[] = [];
   const unmatchedSamples: CandidatePreview[] = [];
@@ -259,8 +306,10 @@ export async function POST(request: Request) {
     let hitR3: string | null = null;
     let hitR4: string | null = null;
     let bucketSource: CandidatePreview["bucket_source"] = "LEGACY_SYNC_RULES";
-    const optionLaborRows = externalProductNo ? (optionLaborRulesByContext.get(`${m.master_item_id}::${externalProductNo}`) ?? []) : [];
+    const optionLaborRows = externalProductNo ? resolveOptionLaborRulesForContext(m.master_item_id, externalProductNo) : [];
     const usesOptionLaborRules = hasAnyActiveOptionLaborRule(optionLaborRows);
+    const resolvedDecorationMasterId = decorationMasterIdByCode.get(decorationCode)
+      ?? (/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(decorationCode) ? decorationCode : null);
 
     if (usesOptionLaborRules) {
       const buckets = computeOptionLaborRuleBuckets(optionLaborRows, {
@@ -269,6 +318,7 @@ export async function POST(request: Request) {
         platingEnabled: colorCode.length > 0,
         colorCode: colorCode || null,
         decorationCode: decorationCode || null,
+        decorationMasterId: resolvedDecorationMasterId,
       });
       r1Delta = Math.round(buckets.material);
       r2Delta = Math.round(buckets.size);

@@ -206,6 +206,8 @@ type OptionLaborRuleRow = {
   category_key: "MATERIAL" | "SIZE" | "COLOR_PLATING" | "DECOR" | "OTHER";
   scope_material_code: string | null;
   additional_weight_g: number | null;
+  additional_weight_min_g: number | null;
+  additional_weight_max_g: number | null;
   plating_enabled: boolean | null;
   color_code: string | null;
   decoration_master_id: string | null;
@@ -213,6 +215,7 @@ type OptionLaborRuleRow = {
   base_labor_cost_krw: number;
   additive_delta_krw: number;
   is_active: boolean;
+  note?: string | null;
 };
 
 type AbsorbBucket = "BASE_LABOR" | "STONE_LABOR" | "PLATING" | "ETC";
@@ -678,6 +681,9 @@ export async function POST(request: Request) {
   const uniqueExternalProductNos = [...new Set(
     mappings.map((m) => String(m.external_product_no ?? "").trim()).filter(Boolean),
   )];
+  const uniqueDecorationCodes = [...new Set(
+    mappings.map((m) => String(m.option_decoration_code ?? "").trim()).filter(Boolean),
+  )];
 
   const externalProductNosByMaster = new Map<string, string[]>();
   for (const m of mappings) {
@@ -716,7 +722,7 @@ export async function POST(request: Request) {
   };
 
   const optionLaborRuleRes = uniqueMasterIds.length > 0 && uniqueExternalProductNos.length > 0
-    ? await sb.from('channel_option_labor_rule_v1').select('rule_id, channel_id, master_item_id, external_product_no, category_key, scope_material_code, additional_weight_g, plating_enabled, color_code, decoration_master_id, decoration_model_name, base_labor_cost_krw, additive_delta_krw, is_active').eq('channel_id', channelId).in('master_item_id', uniqueMasterIds).in('external_product_no', uniqueExternalProductNos)
+    ? await sb.from('channel_option_labor_rule_v1').select('rule_id, channel_id, master_item_id, external_product_no, category_key, scope_material_code, additional_weight_g, additional_weight_min_g, additional_weight_max_g, plating_enabled, color_code, decoration_master_id, decoration_model_name, base_labor_cost_krw, additive_delta_krw, is_active, note').eq('channel_id', channelId).in('master_item_id', uniqueMasterIds).in('external_product_no', uniqueExternalProductNos)
     : { data: [], error: null };
   if (optionLaborRuleRes.error && !isMissingSchemaObjectError(optionLaborRuleRes.error)) return jsonError(optionLaborRuleRes.error.message ?? '옵션 공임 규칙 조회 실패', 500);
   const optionLaborRules = (optionLaborRuleRes.data ?? []) as OptionLaborRuleRow[];
@@ -859,6 +865,22 @@ export async function POST(request: Request) {
     .in("master_item_id", uniqueMasterIds);
   if (masterRes.error) return jsonError(masterRes.error.message ?? "마스터 조회 실패", 500);
   const masterMap = new Map((masterRes.data ?? []).map((row) => [String((row as MasterRow).master_item_id), row as MasterRow]));
+  const decorationMasterIdByCode = new Map<string, string>();
+  if (uniqueDecorationCodes.length > 0) {
+    const decorationMasterLookupRes = await sb
+      .from("cms_master_item")
+      .select("master_item_id, model_name")
+      .in("model_name", uniqueDecorationCodes);
+    if (decorationMasterLookupRes.error) {
+      return jsonError(decorationMasterLookupRes.error.message ?? "장식 마스터 코드 매핑 조회 실패", 500);
+    }
+    for (const row of decorationMasterLookupRes.data ?? []) {
+      const modelName = String((row as { model_name?: string | null }).model_name ?? "").trim().toUpperCase();
+      const masterId = String((row as { master_item_id?: string | null }).master_item_id ?? "").trim();
+      if (!modelName || !masterId || decorationMasterIdByCode.has(modelName)) continue;
+      decorationMasterIdByCode.set(modelName, masterId);
+    }
+  }
 
   const recipeRes = await sb
     .from(CONTRACTS.views.bomRecipeWorklist)
@@ -1528,6 +1550,8 @@ export async function POST(request: Request) {
 
     const contextOptionLaborRules = resolveOptionLaborRulesForContext(m.master_item_id, mappingProductNo);
     const useOptionLaborRuleEngine = optionMode === "SYNC" && hasAnyActiveOptionLaborRule(contextOptionLaborRules);
+    const resolvedDecorationMasterId = decorationMasterIdByCode.get(optionDecorationCode)
+      ?? (/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(optionDecorationCode) ? optionDecorationCode : null);
     const optionLaborRuleResult = useOptionLaborRuleEngine
       ? computeOptionLaborRuleBuckets(contextOptionLaborRules, {
         materialCode: optionMaterialCode,
@@ -1535,7 +1559,7 @@ export async function POST(request: Request) {
         platingEnabled: optionColorCode.length > 0,
         colorCode: optionColorCode || null,
         decorationCode: optionDecorationCode || null,
-        decorationMasterId: /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(optionDecorationCode) ? optionDecorationCode : null,
+        decorationMasterId: resolvedDecorationMasterId,
       })
       : null;
 

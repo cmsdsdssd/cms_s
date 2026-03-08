@@ -1,0 +1,49 @@
++ Service cms-web in region asia-northeast3
+ 
+URL:     https://cms-web-361953669170.asia-northeast3.run.app
+Ingress: all
+Traffic:
+  100% LATEST (currently cms-web-00103-4jr)
+ 
+Scaling: Auto (Min: 0, Max: 20)
+ 
+Last updated on 2026-03-07T02:30:27.979660Z by github-deployer@cms-web-488112.iam.gserviceaccount.com:
+  Revision cms-web-00103-4jr
+  Container cms-web-1
+    Image:           asia-northeast3-docker.pkg.dev/cms-web-488112/cms-web/cms-web:70be047b00b5cb135e231fc0f80e842dc96a99d0
+    Port:            8080
+    Memory:          1Gi
+    CPU:             1
+    Env vars:
+      CAFE24_OAUTH_REDIRECT_URI https://cms-web-361953669170.asia-northeast3.run.app/api/shop-oauth/cafe24/callback
+      CAFE24_OAUTH_SCOPE mall.read_application,mall.write_application,mall.read_product,mall.write_product,mall.read_category,mall.write_category,mall.read_collection,mall.write_collection
+      CLOUDFLARE_ACCOUNT_ID b45e306ed422414c0f6adb3cbade2296
+      NANOBANANA_MODEL gemini-2.5-flash-image
+      NEXT_PUBLIC_CMS_ACTOR_ID 7088db6c-1ebb-4466-9b72-8a29fa008ebb
+      NEXT_PUBLIC_CMS_ACTOR_TYPE staff
+      NEXT_PUBLIC_CMS_CORRELATION_ID 7088db6c-1ebb-4466-9b72-8a29fa008ebb
+      NEXT_PUBLIC_SUPABASE_ANON_KEY eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InB0eG15cHpycW9ub2t1aWtwcXpyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njg3NDQ0NzEsImV4cCI6MjA4NDMyMDQ3MX0.EiCkAgaNwmuOhqwu1sEAHMv7sN0_WBlblpXERKfxZlE
+      NEXT_PUBLIC_SUPABASE_URL https://ptxmypzrqonokuikpqzr.supabase.co
+      SHOP_SYNC_BATCH_LIMIT 20
+      SHOP_SYNC_CHANNEL_ID 9d7c22c7-8cf5-46e7-950b-59eced8b316e
+      SHOP_SYNC_DEFAULT_INTERVAL_MINUTES 5
+      SHOP_SYNC_FORCE_INTERVAL_MINUTES 5
+      SUPABASE_URL   https://ptxmypzrqonokuikpqzr.supabase.co
+      TZ             Asia/Seoul
+    Secrets:
+      CAFE24_OAUTH_STATE_SECRET CAFE24_OAUTH_STATE_SECRET:latest
+      CLOUDFLARE_API_TOKEN CLOUDFLARE_API_TOKEN:latest
+      GEMINI_API_KEY GEMINI_API_KEY:latest
+      SHOP_SYNC_CRON_SECRET SHOP_SYNC_CRON_SECRET:latest
+      SUPABASE_SERVICE_ROLE_KEY SUPABASE_SERVICE_ROLE_KEY:latest
+    Startup Probe:
+      TCP every 240s
+      Port:          8080
+      Initial delay: 0s
+      Timeout:       240s
+      Failure threshold: 1
+      Type:          Default
+  Service account:   cms-web-sa@cms-web-488112.iam.gserviceaccount.com
+  Concurrency:       40
+  Max instances:     20
+  Timeout:           600s

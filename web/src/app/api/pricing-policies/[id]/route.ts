@@ -6,6 +6,15 @@ export const revalidate = 0;
 
 type Params = { params: Promise<{ id: string }> };
 
+const PRICING_POLICY_SELECT_COLS =
+  "policy_id, channel_id, policy_name, margin_multiplier, gm_material, gm_labor, gm_fixed, fixed_cost_krw, rounding_unit, rounding_mode, option_18k_weight_multiplier, material_factor_set_id, fee_rate, min_margin_rate_total, auto_sync_force_full, auto_sync_min_change_krw, auto_sync_min_change_rate, auto_sync_threshold_profile, is_active, created_at, updated_at";
+
+function parseAutoSyncThresholdProfile(value: unknown): "GENERAL" | "MARKET_LINKED" {
+  const profile = String(value ?? "GENERAL").trim().toUpperCase();
+  if (profile === "GENERAL" || profile === "MARKET_LINKED") return profile;
+  throw new Error("auto_sync_threshold_profile must be GENERAL/MARKET_LINKED");
+}
+
 export async function PUT(request: Request, { params }: Params) {
   const sb = getShopAdminClient();
   if (!sb) return jsonError("Supabase server env missing", 500);
@@ -70,6 +79,26 @@ export async function PUT(request: Request, { params }: Params) {
     if (!Number.isFinite(minMarginRateTotal) || minMarginRateTotal < 0) return jsonError("min_margin_rate_total must be >= 0", 400);
     patch.min_margin_rate_total = minMarginRateTotal;
   }
+  if (body.auto_sync_force_full !== undefined) patch.auto_sync_force_full = body.auto_sync_force_full === true;
+  if (body.auto_sync_min_change_krw !== undefined) {
+    const autoSyncMinChangeKrw = Number(body.auto_sync_min_change_krw);
+    if (!Number.isFinite(autoSyncMinChangeKrw) || autoSyncMinChangeKrw < 0) return jsonError("auto_sync_min_change_krw must be >= 0", 400);
+    patch.auto_sync_min_change_krw = Math.max(0, Math.round(autoSyncMinChangeKrw));
+  }
+  if (body.auto_sync_min_change_rate !== undefined) {
+    const autoSyncMinChangeRate = Number(body.auto_sync_min_change_rate);
+    if (!Number.isFinite(autoSyncMinChangeRate) || autoSyncMinChangeRate < 0 || autoSyncMinChangeRate > 1) {
+      return jsonError("auto_sync_min_change_rate must be between 0 and 1", 400);
+    }
+    patch.auto_sync_min_change_rate = autoSyncMinChangeRate;
+  }
+  if (body.auto_sync_threshold_profile !== undefined) {
+    try {
+      patch.auto_sync_threshold_profile = parseAutoSyncThresholdProfile(body.auto_sync_threshold_profile);
+    } catch (error) {
+      return jsonError(error instanceof Error ? error.message : "Invalid auto_sync_threshold_profile", 400);
+    }
+  }
   if (body.material_factor_set_id !== undefined) patch.material_factor_set_id = body.material_factor_set_id || null;
   if (body.is_active !== undefined) patch.is_active = body.is_active === true;
 
@@ -77,7 +106,7 @@ export async function PUT(request: Request, { params }: Params) {
     .from("pricing_policy")
     .update(patch)
     .eq("policy_id", policyId)
-    .select("policy_id, channel_id, policy_name, margin_multiplier, gm_material, gm_labor, gm_fixed, fixed_cost_krw, rounding_unit, rounding_mode, option_18k_weight_multiplier, material_factor_set_id, fee_rate, min_margin_rate_total, is_active, created_at, updated_at")
+    .select(PRICING_POLICY_SELECT_COLS)
     .single();
   if (error) return jsonError(error.message ?? "정책 수정 실패", 400);
 

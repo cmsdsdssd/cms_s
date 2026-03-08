@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getShopAdminClient, jsonError } from "@/lib/shop/admin";
+import { getShopAdminClient, isMissingColumnError, jsonError } from "@/lib/shop/admin";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -41,6 +41,7 @@ type DashboardRow = {
   http_status: number | null;
   error_code: string | null;
   error_message: string | null;
+  current_product_sync_profile: 'GENERAL' | 'MARKET_LINKED' | null;
 };
 
 type MappingRow = {
@@ -50,6 +51,7 @@ type MappingRow = {
   external_product_no: string;
   external_variant_code: string | null;
   option_price_delta_krw: number | null;
+  current_product_sync_profile: 'GENERAL' | 'MARKET_LINKED' | null;
 };
 
 type V2Row = {
@@ -103,7 +105,10 @@ type CurrentPriceRow = {
   error_message: string | null;
 };
 
-const toKeyPart = (value: string | null | undefined) => String(value ?? "").trim();
+const toKeyPart = (value: string | null | undefined) => String(value ?? '').trim();
+const normalizeCurrentProductSyncProfile = (value: unknown): 'GENERAL' | 'MARKET_LINKED' => {
+  return String(value == null ? 'GENERAL' : value).trim().toUpperCase() === 'MARKET_LINKED' ? 'MARKET_LINKED' : 'GENERAL';
+};
 
 const toExternalKey = (externalProductNo: string | null | undefined, externalVariantCode: string | null | undefined) => {
   return `${toKeyPart(externalProductNo)}::${toKeyPart(externalVariantCode)}`;
@@ -144,17 +149,35 @@ export async function GET(request: Request) {
   const limitRaw = Number(searchParams.get("limit") ?? 200);
   const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(1000, Math.floor(limitRaw))) : 200;
 
-  let mappingQuery = sb
-    .from("sales_channel_product")
-    .select("channel_product_id, channel_id, master_item_id, external_product_no, external_variant_code, option_price_delta_krw")
-    .eq("channel_id", channelId)
-    .eq("is_active", true);
-  if (masterItemId) mappingQuery = mappingQuery.eq("master_item_id", masterItemId);
+  const mappingSelectBase = "channel_product_id, channel_id, master_item_id, external_product_no, external_variant_code, option_price_delta_krw";
+  const runMappingQuery = (includeCurrentProductSyncProfile: boolean) => {
+    let query = sb
+      .from("sales_channel_product")
+      .select(includeCurrentProductSyncProfile ? `${mappingSelectBase}, current_product_sync_profile` : mappingSelectBase)
+      .eq("channel_id", channelId)
+      .eq("is_active", true);
+    if (masterItemId) query = query.eq("master_item_id", masterItemId);
+    return query;
+  };
 
-  const mappingRes = await mappingQuery;
+  let mappingRes = await runMappingQuery(true);
+  if (mappingRes.error && isMissingColumnError(mappingRes.error, "sales_channel_product.current_product_sync_profile")) {
+    mappingRes = await runMappingQuery(false);
+  }
   if (mappingRes.error) return jsonError(mappingRes.error.message ?? "활성 매핑 조회 실패", 500);
 
-  const mappings = (mappingRes.data ?? []) as MappingRow[];
+  const mappings = ((mappingRes.data ?? []) as Array<Partial<MappingRow>>).map((row) => ({
+    channel_product_id: String(row.channel_product_id ?? "").trim(),
+    channel_id: String(row.channel_id ?? "").trim(),
+    master_item_id: String(row.master_item_id ?? "").trim(),
+    external_product_no: String(row.external_product_no ?? "").trim(),
+    external_variant_code: typeof row.external_variant_code === "string" ? row.external_variant_code : null,
+    option_price_delta_krw: row.option_price_delta_krw == null ? null : Number(row.option_price_delta_krw),
+    current_product_sync_profile:
+      row.current_product_sync_profile === "GENERAL" || row.current_product_sync_profile === "MARKET_LINKED"
+        ? row.current_product_sync_profile
+        : null,
+  })) as MappingRow[];
   const channelProductIds = Array.from(new Set(mappings.map((row) => toKeyPart(row.channel_product_id)).filter(Boolean)));
   const masterIds = Array.from(new Set(mappings.map((row) => toKeyPart(row.master_item_id)).filter(Boolean)));
 
@@ -285,6 +308,7 @@ export async function GET(request: Request) {
       external_variant_code: externalVariantCode,
       category_code: masterMeta?.category_code ?? null,
       option_price_delta_krw: mapping.option_price_delta_krw,
+      current_product_sync_profile: normalizeCurrentProductSyncProfile(mapping.current_product_sync_profile),
       material_code: toKeyPart(sourceRow?.material_code_effective) || (masterMeta?.material_code_default ?? null),
       net_weight_g: sourceRow?.net_weight_g ?? null,
       as_of_at: null,
@@ -414,6 +438,7 @@ export async function GET(request: Request) {
         http_status: null,
         error_code: null,
         error_message: null,
+        current_product_sync_profile: null,
       };
     });
 

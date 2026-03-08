@@ -1,0 +1,82 @@
+
+> web@0.1.0 build
+> next build
+
+▲ Next.js 16.1.4 (Turbopack)
+- Environments: .env.local, .env
+
+⚠ The "middleware" file convention is deprecated. Please use "proxy" instead. Learn more: https://nextjs.org/docs/messages/middleware-to-proxy
+  Creating an optimized production build ...
+
+> Build error occurred
+Error: Turbopack build failed with 5 errors:
+./src/app/api/pricing/recompute/route.ts:682:9
+Ecmascript file had an error
+[0m [90m 680 |[39m   [36mconst[39m uniqueExternalProductNos [33m=[39m [[33m...[39m[36mnew[39m [33mSet[39m(mappings[33m.[39mmap((m) [33m=>[39m [33mString[39m(m[33m.[39mexternal_product_no [33m?[39m[33m?[39m [32m""[39m)[33m.[39mtrim())[33m.[39mfilter([33mBoolean[39m))][33m;[39m
+ [90m 681 |[39m   [36mconst[39m uniqueDecorationCodes [33m=[39m [[33m...[39m[36mnew[39m [33mSet[39m(mappings[33m.[39mmap((m) [33m=>[39m [33mString[39m(m[33m.[39moption_decoration_code [33m?[39m[33m?[39m [32m""[39m)[33m.[39mtrim())[33m.[39mfilter([33mBoolean[39m))][33m;[39m
+[31m[1m>[22m[39m[90m 682 |[39m   [36mconst[39m uniqueDecorationCodes [33m=[39m [[33m...[39m[36mnew[39m [33mSet[39m(
+ [90m     |[39m         [31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m
+ [90m 683 |[39m     mappings[33m.[39mmap((m) [33m=>[39m [33mString[39m(m[33m.[39moption_decoration_code [33m?[39m[33m?[39m [32m""[39m)[33m.[39mtrim())[33m.[39mfilter([33mBoolean[39m)[33m,[39m
+ [90m 684 |[39m   )][33m;[39m
+ [90m 685 |[39m   [36mconst[39m uniqueDecorationCodes [33m=[39m [[33m...[39m[36mnew[39m [33mSet[39m([0m
+
+the name `uniqueDecorationCodes` is defined multiple times
+
+
+./src/app/api/pricing/recompute/route.ts:685:9
+Ecmascript file had an error
+[0m [90m 683 |[39m     mappings[33m.[39mmap((m) [33m=>[39m [33mString[39m(m[33m.[39moption_decoration_code [33m?[39m[33m?[39m [32m""[39m)[33m.[39mtrim())[33m.[39mfilter([33mBoolean[39m)[33m,[39m
+ [90m 684 |[39m   )][33m;[39m
+[31m[1m>[22m[39m[90m 685 |[39m   [36mconst[39m uniqueDecorationCodes [33m=[39m [[33m...[39m[36mnew[39m [33mSet[39m(
+ [90m     |[39m         [31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m
+ [90m 686 |[39m     mappings[33m.[39mmap((m) [33m=>[39m [33mString[39m(m[33m.[39moption_decoration_code [33m?[39m[33m?[39m [32m""[39m)[33m.[39mtrim())[33m.[39mfilter([33mBoolean[39m)[33m,[39m
+ [90m 687 |[39m   )][33m;[39m
+ [90m 688 |[39m   [36mconst[39m uniqueDecorationCodes [33m=[39m [[33m...[39m[36mnew[39m [33mSet[39m([0m
+
+the name `uniqueDecorationCodes` is defined multiple times
+
+
+./src/app/api/pricing/recompute/route.ts:688:9
+Ecmascript file had an error
+[0m [90m 686 |[39m     mappings[33m.[39mmap((m) [33m=>[39m [33mString[39m(m[33m.[39moption_decoration_code [33m?[39m[33m?[39m [32m""[39m)[33m.[39mtrim())[33m.[39mfilter([33mBoolean[39m)[33m,[39m
+ [90m 687 |[39m   )][33m;[39m
+[31m[1m>[22m[39m[90m 688 |[39m   [36mconst[39m uniqueDecorationCodes [33m=[39m [[33m...[39m[36mnew[39m [33mSet[39m(
+ [90m     |[39m         [31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m
+ [90m 689 |[39m     mappings[33m.[39mmap((m) [33m=>[39m [33mString[39m(m[33m.[39moption_decoration_code [33m?[39m[33m?[39m [32m""[39m)[33m.[39mtrim())[33m.[39mfilter([33mBoolean[39m)[33m,[39m
+ [90m 690 |[39m   )][33m;[39m
+ [90m 691 |[39m   [36mconst[39m uniqueDecorationCodes [33m=[39m [[33m...[39m[36mnew[39m [33mSet[39m([0m
+
+the name `uniqueDecorationCodes` is defined multiple times
+
+
+./src/app/api/pricing/recompute/route.ts:691:9
+Ecmascript file had an error
+[0m [90m 689 |[39m     mappings[33m.[39mmap((m) [33m=>[39m [33mString[39m(m[33m.[39moption_decoration_code [33m?[39m[33m?[39m [32m""[39m)[33m.[39mtrim())[33m.[39mfilter([33mBoolean[39m)[33m,[39m
+ [90m 690 |[39m   )][33m;[39m
+[31m[1m>[22m[39m[90m 691 |[39m   [36mconst[39m uniqueDecorationCodes [33m=[39m [[33m...[39m[36mnew[39m [33mSet[39m(
+ [90m     |[39m         [31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m
+ [90m 692 |[39m     mappings[33m.[39mmap((m) [33m=>[39m [33mString[39m(m[33m.[39moption_decoration_code [33m?[39m[33m?[39m [32m''[39m)[33m.[39mtrim())[33m.[39mfilter([33mBoolean[39m)[33m,[39m
+ [90m 693 |[39m   )][33m;[39m
+ [90m 694 |[39m   [36mconst[39m uniqueDecorationCodes [33m=[39m [[33m...[39m[36mnew[39m [33mSet[39m([0m
+
+the name `uniqueDecorationCodes` is defined multiple times
+
+
+./src/app/api/pricing/recompute/route.ts:694:9
+Ecmascript file had an error
+[0m [90m 692 |[39m     mappings[33m.[39mmap((m) [33m=>[39m [33mString[39m(m[33m.[39moption_decoration_code [33m?[39m[33m?[39m [32m''[39m)[33m.[39mtrim())[33m.[39mfilter([33mBoolean[39m)[33m,[39m
+ [90m 693 |[39m   )][33m;[39m
+[31m[1m>[22m[39m[90m 694 |[39m   [36mconst[39m uniqueDecorationCodes [33m=[39m [[33m...[39m[36mnew[39m [33mSet[39m(
+ [90m     |[39m         [31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m
+ [90m 695 |[39m     mappings[33m.[39mmap((m) [33m=>[39m [33mString[39m(m[33m.[39moption_decoration_code [33m?[39m[33m?[39m [32m''[39m)[33m.[39mtrim())[33m.[39mfilter([33mBoolean[39m)[33m,[39m
+ [90m 696 |[39m   )][33m;[39m
+ [90m 697 |[39m[0m
+
+the name `uniqueDecorationCodes` is defined multiple times
+
+
+    at <unknown> (./src/app/api/pricing/recompute/route.ts:682:9)
+    at <unknown> (./src/app/api/pricing/recompute/route.ts:685:9)
+    at <unknown> (./src/app/api/pricing/recompute/route.ts:688:9)
+    at <unknown> (./src/app/api/pricing/recompute/route.ts:691:9)
+    at <unknown> (./src/app/api/pricing/recompute/route.ts:694:9)

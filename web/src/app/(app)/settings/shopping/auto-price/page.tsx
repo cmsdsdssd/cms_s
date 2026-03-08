@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -9,6 +9,21 @@ import { Card, CardBody, CardHeader } from "@/components/ui/card";
 import { Input, Select } from "@/components/ui/field";
 import { Sheet } from "@/components/ui/sheet";
 import { shopApiGet, shopApiSend } from "@/lib/shop/http";
+import {
+  buildCanonicalOptionRows,
+  buildMappingOptionEntries,
+  inferMappingOptionSelection,
+  mappingOptionEntryKey,
+  type MappingCanonicalOptionRow,
+  type MappingOptionAllowlist,
+  type MappingOptionSelection,
+  type SavedOptionCategoryRow as MappingSavedOptionCategoryRow,
+} from "@/lib/shop/mapping-option-details";
+import {
+  computeOptionLaborRuleBuckets,
+  hasAnyActiveOptionLaborRule,
+  type OptionLaborRuleRow,
+} from "@/lib/shop/option-labor-rules";
 import type { PricingSnapshotExplainResponse } from "@/types/pricingSnapshot";
 
 type Channel = { channel_id: string; channel_name: string; channel_code: string };
@@ -36,6 +51,7 @@ type PricingPolicy = {
   auto_sync_force_full?: boolean;
   auto_sync_min_change_krw?: number | null;
   auto_sync_min_change_rate?: number | null;
+  auto_sync_threshold_profile?: "GENERAL" | "MARKET_LINKED" | null;
   is_active: boolean;
 };
 type FactorSet = {
@@ -68,6 +84,7 @@ type MissingMappingSummary = {
   }>;
 };
 type PreviewCompositionRow = { key: string; label: string; valueText: string };
+type PreviewCompositionSection = { key: string; title: string; summary: string; groups: PreviewCompositionRow[][]; defaultOpen?: boolean };
 type SyncRunCreateResponse = {
   run_id: string;
   total_count?: number;
@@ -95,6 +112,12 @@ type SyncIntent = {
   desired_price_krw: number;
   floor_price_krw: number;
   floor_applied: boolean;
+  pricing_override_price_krw?: number | null;
+  threshold_profile?: "GENERAL" | "MARKET_LINKED" | null;
+  decision_context?: {
+    floor_applied?: boolean | null;
+    threshold_profile?: "GENERAL" | "MARKET_LINKED" | null;
+  } | null;
   state: string;
   reason_code?: string | null;
   reason_label?: string | null;
@@ -149,6 +172,7 @@ type DashboardGalleryRow = {
   current_channel_price_krw: number | null;
   price_state: "OK" | "OUT_OF_SYNC" | "ERROR" | "UNMAPPED";
   computed_at: string | null;
+  current_product_sync_profile?: CurrentProductSyncProfile | null;
 };
 type MasterMetaRow = {
   master_item_id?: string | null;
@@ -165,7 +189,6 @@ type PricingOverrideRow = {
   valid_to: string | null;
   updated_at: string;
 };
-
 type MappingSummary = {
   active_mapping_rows: number;
   mapped_master_count: number;
@@ -196,6 +219,7 @@ type ProductEditorPreview = {
   total_labor_sell_krw?: number | null;
   tick_gold_krw_per_g?: number | null;
   tick_silver_krw_per_g?: number | null;
+  current_product_sync_profile?: CurrentProductSyncProfile | null;
   options: Array<{ option_name: string; option_value: Array<{ option_text: string }> }>;
   variants: Array<{
     variantCode: string;
@@ -208,12 +232,90 @@ type ProductEditorPreview = {
   }>;
 };
 
-type OptionCategoryRow = {
-  option_name: string;
-  option_value: string;
-  category_key: "MATERIAL" | "SIZE" | "COLOR_PLATING" | "DECOR" | "OTHER";
-  sync_delta_krw?: number;
+type MappingRow = {
+  channel_product_id: string;
+  channel_id: string;
+  master_item_id: string;
+  external_product_no: string;
+  external_variant_code: string | null;
+  sync_rule_set_id?: string | null;
+  option_price_mode?: "SYNC" | "MANUAL" | null;
+  option_material_code?: string | null;
+  option_color_code?: string | null;
+  option_decoration_code?: string | null;
+  option_size_value?: number | null;
+  material_multiplier_override?: number | null;
+  size_weight_delta_g?: number | null;
+  option_price_delta_krw?: number | null;
+  option_manual_target_krw?: number | null;
+  include_master_plating_labor?: boolean | null;
+  sync_rule_material_enabled?: boolean | null;
+  sync_rule_weight_enabled?: boolean | null;
+  sync_rule_plating_enabled?: boolean | null;
+  sync_rule_decoration_enabled?: boolean | null;
+  sync_rule_margin_rounding_enabled?: boolean | null;
+  current_product_sync_profile?: CurrentProductSyncProfile | null;
+  mapping_source?: string;
+  is_active?: boolean;
 };
+
+type VariantLookupResponse = {
+  data: {
+    channel_id: string;
+    requested_product_no: string;
+    resolved_product_no: string;
+    canonical_external_product_no: string;
+    total: number;
+    variants: Array<{
+      variant_code: string;
+      custom_variant_code: string | null;
+      options: Array<{ name: string; value: string }>;
+      option_label: string;
+      additional_amount: number | null;
+    }>;
+    option_detail_allowlist: MappingOptionAllowlist;
+    saved_option_categories: MappingSavedOptionCategoryRow[];
+    canonical_option_rows: MappingCanonicalOptionRow[];
+  };
+};
+
+type VariantLookupVariant = VariantLookupResponse["data"]["variants"][number];
+
+type BulkMappingResponse = {
+  data: MappingRow[];
+  requested: number;
+  deduplicated: number;
+  saved: number;
+};
+
+type MappingWritePayload = {
+  channel_id: string;
+  master_item_id: string;
+  external_product_no: string;
+  external_variant_code: string;
+  sync_rule_set_id: string | null;
+  option_material_code: string | null;
+  option_color_code: string | null;
+  option_decoration_code: string | null;
+  option_size_value: number | null;
+  material_multiplier_override: number | null;
+  size_weight_delta_g: number | null;
+  option_price_delta_krw: number | null;
+  option_price_mode: "SYNC" | "MANUAL";
+  option_manual_target_krw: number | null;
+  include_master_plating_labor: boolean;
+  sync_rule_material_enabled: boolean;
+  sync_rule_weight_enabled: boolean;
+  sync_rule_plating_enabled: boolean;
+  sync_rule_decoration_enabled: boolean;
+  sync_rule_margin_rounding_enabled: boolean;
+  current_product_sync_profile: CurrentProductSyncProfile;
+  mapping_source: "MANUAL";
+  is_active: true;
+};
+
+type PreviewVariant = ProductEditorPreview["variants"][number];
+
 
 type EditorPostApplySync = {
   requested: boolean;
@@ -227,24 +329,148 @@ type EditorPostApplySync = {
   error?: string | null;
 };
 
-const CATEGORY_OPTIONS = [
-  { key: "MATERIAL", label: "소재" },
+type DraftSlot<T> = {
+  resetKey: string;
+  value: T;
+};
+
+type PolicyDraft = {
+  marginMultiplier: string;
+  roundingUnit: string;
+  roundingMode: "CEIL" | "ROUND" | "FLOOR";
+  policyFactorSetId: string;
+  autoSyncThresholdProfile: "GENERAL" | "MARKET_LINKED";
+  autoSyncForceFull: boolean;
+  autoSyncMinChangeKrw: string;
+  autoSyncMinChangeRatePct: string;
+};
+
+type NumberMap = Record<string, number>;
+type StringMap = Record<string, string>;
+
+type CurrentProductSyncProfile = "GENERAL" | "MARKET_LINKED";
+type VariantOptionDraft = MappingOptionSelection & {
+  option_size_value_text: string;
+};
+type OptionEntryRow = {
+  optionName: string;
+  optionValue: string;
+  axisIndex: number;
+  entryKey: string;
+};
+type CompactOptionRow = OptionEntryRow & {
+  categoryKey: OptionCategoryKey;
+  syncDeltaKrw: number;
+  resolvedDeltaKrw: number;
+  legacyStatus: "VALID" | "LEGACY_OUT_OF_RANGE" | "UNRESOLVED";
+  warnings: string[];
+  sourceRuleEntryIds: string[];
+  otherReason: string;
+  axis1: string;
+  axis2: string;
+  axis3: string;
+  selectedMaterialCode: string;
+  selectedColorCode: string;
+  selectedSizeWeightText: string;
+  selectedDecorMasterId: string;
+  decorExtraDeltaKrw: number;
+  decorFinalAmountKrw: number;
+  noticeValue: string;
+};
+
+type PreviewHistorySelectedItem = "가격덮어쓰기" | "예외바닥가" | "목표가격";
+const AUTO_SYNC_THRESHOLD_PROFILE_OPTIONS = [
+  {
+    value: 'GENERAL' as const,
+    label: '일반',
+    ruleText: 'max(5,000원, 현재 판매가의 2%)',
+  },
+  {
+    value: 'MARKET_LINKED' as const,
+    label: '시장연동',
+    ruleText: 'max(500원, 현재 판매가의 0.5%)',
+  },
+];
+
+const normalizeCurrentProductSyncProfile = (value: unknown): CurrentProductSyncProfile => {
+  return String(value == null ? 'GENERAL' : value).trim().toUpperCase() === 'MARKET_LINKED' ? 'MARKET_LINKED' : 'GENERAL';
+};
+const resolveCurrentProductSyncProfileRows = (
+  rows: Array<{ current_product_sync_profile?: string | null }>,
+  fallback: CurrentProductSyncProfile = "GENERAL",
+): CurrentProductSyncProfile => {
+  const normalizedFallback = normalizeCurrentProductSyncProfile(fallback);
+  let resolvedProfile: CurrentProductSyncProfile | null = null;
+  for (const row of rows) {
+    const rawProfile = row?.current_product_sync_profile;
+    if (rawProfile == null || String(rawProfile).trim() === "") continue;
+    const normalizedProfile = normalizeCurrentProductSyncProfile(rawProfile);
+    if (resolvedProfile === null) {
+      resolvedProfile = normalizedProfile;
+      continue;
+    }
+    if (resolvedProfile !== normalizedProfile) return normalizedFallback;
+  }
+  return resolvedProfile ?? normalizedFallback;
+};
+const currentProductSyncProfileLabelOf = (value: CurrentProductSyncProfile) => {
+  return value === 'MARKET_LINKED' ? '시장연동' : '일반';
+};
+const currentProductSyncProfileBadgeClassOf = (value: CurrentProductSyncProfile) => {
+  if (value === 'MARKET_LINKED') {
+    return 'inline-flex rounded-full border border-amber-400/80 bg-amber-300/90 px-2 py-0.5 text-[10px] font-semibold tracking-[0.08em] text-amber-950 shadow-[inset_0_1px_0_rgba(255,255,255,0.45)]';
+  }
+  return 'inline-flex rounded-full border border-[var(--hairline)] bg-[var(--panel)] px-2 py-0.5 text-[10px] font-medium text-[var(--muted)]';
+};
+const currentProductSyncProfilePanelClassOf = (value: CurrentProductSyncProfile) => {
+  if (value === 'MARKET_LINKED') {
+    return 'border-amber-400/80 bg-[linear-gradient(135deg,rgba(251,191,36,0.22),rgba(245,158,11,0.08))]';
+  }
+  return 'border-[var(--hairline)] bg-[var(--bg)]';
+};
+type OptionCategoryRow = MappingSavedOptionCategoryRow & {
+  sync_delta_krw?: number | null;
+};
+type OptionCategoryKey = OptionCategoryRow["category_key"];
+const CATEGORY_OPTIONS: Array<{ key: OptionCategoryKey; label: string }> = [
+  { key: "MATERIAL", label: "재질" },
   { key: "SIZE", label: "사이즈" },
-  { key: "COLOR_PLATING", label: "색상(도금포함)" },
+  { key: "COLOR_PLATING", label: "색상/도금" },
   { key: "DECOR", label: "장식" },
   { key: "OTHER", label: "기타" },
-] as const;
-
-const SYNC_DELTA_OPTIONS = Array.from({ length: 2001 }, (_, idx) => (idx - 1000) * 1000);
-
-const guessCategoryByOptionName = (name: string): OptionCategoryRow["category_key"] => {
-  const n = String(name ?? "").trim().toLowerCase();
-  if (!n) return "OTHER";
-  if (/(소재|material|재질|금속|14k|18k)/i.test(n)) return "MATERIAL";
-  if (/(사이즈|size|호수|치수)/i.test(n)) return "SIZE";
-  if (/(색상|도금|color|plating|칼라|옐로우|화이트|로즈)/i.test(n)) return "COLOR_PLATING";
-  if (/(장식|decor|세팅|스톤|참|펜던트)/i.test(n)) return "DECOR";
+  { key: "NOTICE", label: "공지" },
+];
+const guessCategoryByOptionName = (value: unknown): OptionCategoryKey => {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (!normalized) return "OTHER";
+  if (/(재질|소재|material|금종|함량)/u.test(normalized)) return "MATERIAL";
+  if (/(사이즈|size|호수|중량|weight|폭|길이)/u.test(normalized)) return "SIZE";
+  if (/(색상|color|컬러|도금|plating)/u.test(normalized)) return "COLOR_PLATING";
+  if (/(장식|decor|스톤|보석|팬던트|참)/u.test(normalized)) return "DECOR";
+  if (/(공지|notice|안내|배송|유의)/u.test(normalized)) return "NOTICE";
   return "OTHER";
+};
+const normalizeOptionValue = (value: unknown): string =>
+  String(value ?? "").replace(/\s*\([+-][\d,]+원\)\s*$/u, "").trim();
+const optionEntryKey = (optionName: unknown, optionValue: unknown): string => {
+  return mappingOptionEntryKey(String(optionName ?? "").trim(), normalizeOptionValue(optionValue));
+};
+const categoryLabelOf = (value: OptionCategoryKey): string => {
+  return CATEGORY_OPTIONS.find((option) => option.key === value)?.label ?? value;
+};
+const legacyStatusLabelOf = (value: "VALID" | "LEGACY_OUT_OF_RANGE" | "UNRESOLVED"): string => {
+  if (value === "LEGACY_OUT_OF_RANGE") return "legacy 유지";
+  if (value === "UNRESOLVED") return "확인 필요";
+  return "정상";
+};
+const NOTICE_VALUE_OPTIONS = ["배송안내", "주문안내", "교환반품안내", "맞춤제작안내", "기타공지"];
+
+
+const currentProductSyncProfileCardClassOf = (value: CurrentProductSyncProfile) => {
+  if (value === 'MARKET_LINKED') {
+    return 'border-amber-400/80 bg-[linear-gradient(180deg,rgba(251,191,36,0.18),rgba(245,158,11,0.08))] shadow-[0_10px_24px_rgba(217,119,6,0.12)] hover:border-amber-500';
+  }
+  return 'border-[var(--hairline)] bg-[var(--panel)] hover:border-[var(--primary)]';
 };
 
 const fmt = (v: number | null | undefined) => (typeof v === "number" && Number.isFinite(v) ? v.toLocaleString() : "-");
@@ -264,18 +490,117 @@ const fmtSignedKrw = (v: number | null | undefined) => {
   const sign = rounded > 0 ? "+" : "";
   return sign + rounded.toLocaleString() + "원";
 };
+const describeError = (error: unknown): string => {
+  if (error instanceof Error && error.message) return error.message;
+  return "요청 실패";
+};
 const toRoundedNumber = (value: unknown): number | null => {
   const n = Number(value ?? Number.NaN);
   return Number.isFinite(n) ? Math.round(n) : null;
 };
-const normalizeOptionValue = (value: string) => String(value ?? "").replace(/\s*\([+-][\d,]+원\)\s*$/u, "").trim();
-const optionEntryKey = (optionName: string, optionValue: string) => `${String(optionName ?? "").trim()}::${normalizeOptionValue(optionValue)}`;
+const EMPTY_OPTION_ALLOWLIST: MappingOptionAllowlist = {
+  materials: [],
+  colors: [],
+  decors: [],
+  sizes_by_material: {},
+  is_empty: true,
+};
+const normalizeVariantCode = (value: string | null | undefined): string => String(value ?? "").trim();
+const candidateVariantCodes = (variant: {
+  variantCode?: string | null;
+  customVariantCode?: string | null;
+  variant_code?: string | null;
+  custom_variant_code?: string | null;
+}): string[] => {
+  const codes = [
+    normalizeVariantCode(variant.variantCode),
+    normalizeVariantCode(variant.customVariantCode),
+    normalizeVariantCode(variant.variant_code),
+    normalizeVariantCode(variant.custom_variant_code),
+  ];
+  return Array.from(new Set(codes.filter(Boolean)));
+};
+const variantAxesOf = (variant: {
+  options?: Array<{ name?: string | null; value?: string | null }>;
+} | null | undefined) =>
+  (variant?.options ?? []).map((option) => ({
+    name: String(option.name ?? "").trim(),
+    value: String(option.value ?? "").trim(),
+  }));
+const formatOptionSizeValue = (value: number | null | undefined): string => {
+  if (value == null || !Number.isFinite(value)) return "";
+  return value.toFixed(2);
+};
+const toVariantOptionDraft = (selection: Partial<MappingOptionSelection> | null | undefined): VariantOptionDraft => ({
+  option_material_code: typeof selection?.option_material_code === "string" ? selection.option_material_code : null,
+  option_color_code: typeof selection?.option_color_code === "string" ? selection.option_color_code : null,
+  option_decoration_code: typeof selection?.option_decoration_code === "string" ? selection.option_decoration_code : null,
+  option_size_value: selection?.option_size_value == null ? null : Number(selection.option_size_value),
+  option_size_value_text: formatOptionSizeValue(selection?.option_size_value),
+});
+const withLegacyChoice = <T extends { value: string; label: string }>(choices: T[], legacyValue: string | null | undefined): T[] => {
+  const value = String(legacyValue ?? "").trim();
+  if (!value || choices.some((choice) => choice.value === value)) return choices;
+  return [{ ...(choices[0] ?? { value, label: value }), value, label: `${value} (legacy)` } as T, ...choices];
+};
+const optionDraftWithLegacy = (
+  draft: VariantOptionDraft,
+  existing: Partial<MappingOptionSelection> | null | undefined,
+): VariantOptionDraft => {
+  const next = { ...draft };
+  const existingSizeText = formatOptionSizeValue(existing?.option_size_value);
+  if (!next.option_material_code && existing?.option_material_code) next.option_material_code = existing.option_material_code;
+  if (!next.option_color_code && existing?.option_color_code) next.option_color_code = existing.option_color_code;
+  if (!next.option_decoration_code && existing?.option_decoration_code) next.option_decoration_code = existing.option_decoration_code;
+  if (!next.option_size_value_text && existingSizeText) {
+    next.option_size_value = Number(existingSizeText);
+    next.option_size_value_text = existingSizeText;
+  }
+  return next;
+};
+const optionSummary = (mapping: Partial<MappingOptionSelection>): string => {
+  const parts = [
+    mapping.option_material_code ? `material ${mapping.option_material_code}` : null,
+    mapping.option_size_value != null ? `size ${formatOptionSizeValue(mapping.option_size_value)}g` : null,
+    mapping.option_color_code ? `color ${mapping.option_color_code}` : null,
+    mapping.option_decoration_code ? `decor ${mapping.option_decoration_code}` : null,
+  ].filter(Boolean);
+  return parts.join(" / ") || "-";
+};
+const axisCellText = (axis: { name?: string | null; value?: string | null } | null | undefined): string => {
+  if (!axis) return "-";
+  const name = String(axis.name ?? "").trim();
+  const value = String(axis.value ?? "").trim();
+  if (!name && !value) return "-";
+  if (!name) return value || "-";
+  if (!value) return name;
+  return `${name}: ${value}`;
+};
+const DECORATION_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const formatRatePctText = (value: number | null | undefined) =>
+  String((Number(value ?? 0.02) * 100).toFixed(2).replace(/\.00$/u, "").replace(/(\.\d*[1-9])0+$/u, "$1"));
+const createPolicyDraft = (policy: PricingPolicy | null | undefined): PolicyDraft => ({
+  marginMultiplier: String(policy?.margin_multiplier ?? 1),
+  roundingUnit: String(policy?.rounding_unit ?? 1000),
+  roundingMode: (policy?.rounding_mode ?? "CEIL") as "CEIL" | "ROUND" | "FLOOR",
+  policyFactorSetId: policy?.material_factor_set_id ?? "",
+  autoSyncThresholdProfile: policy?.auto_sync_threshold_profile === "MARKET_LINKED" ? "MARKET_LINKED" : "GENERAL",
+  autoSyncForceFull: policy?.auto_sync_force_full === true,
+  autoSyncMinChangeKrw: String(Math.max(0, Math.round(Number(policy?.auto_sync_min_change_krw ?? 5000)))),
+  autoSyncMinChangeRatePct: formatRatePctText(policy?.auto_sync_min_change_rate),
+});
 const parseNumericInput = (value: unknown): number | null => {
   if (typeof value === "number") return Number.isFinite(value) ? value : null;
   const cleaned = String(value ?? "").replaceAll(",", "").trim();
   if (!cleaned) return null;
   const n = Number(cleaned);
   return Number.isFinite(n) ? n : null;
+};
+const parseOptionalNumber = (raw: string): number | null => {
+  const trimmed = raw.split(",").join("").trim();
+  if (!trimmed) return null;
+  const numeric = Number(trimmed);
+  return Number.isFinite(numeric) ? numeric : null;
 };
 const roundByMode = (value: number, unit: number, mode: "CEIL" | "ROUND" | "FLOOR") => {
   if (!Number.isFinite(value)) return 0;
@@ -304,26 +629,57 @@ const fmtTsCompact = (v: string | null | undefined) => {
   return `${yy}.${mm}.${dd}-${hh}:${mi}:${ss}`;
 };
 
-const SNAPSHOT_BLUE_KEYS = new Set(["selected-item", "selected-value"]);
+const resolveHistorySelectedItem = (intent: SyncIntent): PreviewHistorySelectedItem => {
+  if (toRoundedNumber(intent.pricing_override_price_krw) != null) return "가격덮어쓰기";
+  if (intent.decision_context?.floor_applied === true || intent.floor_applied) return "예외바닥가";
+  return "목표가격";
+};
 
-const SNAPSHOT_GREEN_KEYS = new Set([
-  "labor-reverse-gm",
-  "material-reverse-gm",
-  "total-reverse-gm",
+const SNAPSHOT_RATE_KEYS = new Set([
+  "labor-margin-rate",
+  "material-margin-rate",
+  "fixed-margin-rate",
+  "policy-fee-rate",
+  "guardrail-rate",
 ]);
 
-const SNAPSHOT_YELLOW_KEYS = new Set([
-  "labor-total",
+const SNAPSHOT_PRE_RATE_PRICE_KEYS = new Set([
+  "labor-cost-basis",
   "material-total",
-  "fixed-total-gm",
+  "fixed-cost-setting",
+  "cost-sum-basis",
+  "total-pre-fee-base",
 ]);
+
+const SNAPSHOT_POST_RATE_PRICE_KEYS = new Set([
+  "labor-pre-fee",
+  "material-pre-fee",
+  "fixed-pre-fee",
+  "total-pre-fee",
+  "target-price",
+  "labor-pre-fee-sum",
+  "material-pre-fee-sum",
+  "fixed-pre-fee-sum",
+  "target-price-compare",
+]);
+
+const SNAPSHOT_RAINBOW_STAGE_KEYS: Record<string, string> = {
+  "min-margin-price": "bg-lime-100",
+  "selected-item": "bg-sky-100",
+  "selected-value": "bg-cyan-100",
+  "selected-value-compare": "bg-cyan-100",
+  "selected-value-final": "bg-cyan-100",
+  "selected-item-compare": "bg-sky-100",
+  "selected-item-final": "bg-sky-100",
+};
 
 const snapshotCellToneClass = (key: string, groupIndex: number) => {
   if (groupIndex === 0) return "bg-orange-100";
   if (key === "final-price") return "bg-violet-100";
-  if (SNAPSHOT_BLUE_KEYS.has(key)) return "bg-sky-100";
-  if (SNAPSHOT_GREEN_KEYS.has(key)) return "bg-green-100";
-  if (SNAPSHOT_YELLOW_KEYS.has(key)) return "bg-yellow-100";
+  if (SNAPSHOT_RAINBOW_STAGE_KEYS[key]) return SNAPSHOT_RAINBOW_STAGE_KEYS[key];
+  if (SNAPSHOT_RATE_KEYS.has(key)) return "bg-orange-100";
+  if (SNAPSHOT_PRE_RATE_PRICE_KEYS.has(key)) return "bg-rose-100";
+  if (SNAPSHOT_POST_RATE_PRICE_KEYS.has(key)) return "bg-amber-200";
   return "bg-white";
 };
 
@@ -347,15 +703,11 @@ export default function ShoppingAutoPricePage() {
   const [channelId, setChannelId] = useState("");
   const [masterItemId, setMasterItemId] = useState("");
   const [floorPrice, setFloorPrice] = useState("0");
-  const [marginMultiplier, setMarginMultiplier] = useState("1");
-  const [roundingUnit, setRoundingUnit] = useState("1000");
-  const [roundingMode, setRoundingMode] = useState<"CEIL" | "ROUND" | "FLOOR">("CEIL");
-  const [policyFactorSetId, setPolicyFactorSetId] = useState("");
-  const [autoSyncForceFull, setAutoSyncForceFull] = useState(false);
-  const [autoSyncMinChangeKrw, setAutoSyncMinChangeKrw] = useState("5000");
-  const [autoSyncMinChangeRatePct, setAutoSyncMinChangeRatePct] = useState("2");
+  const [policyDraftSlot, setPolicyDraftSlot] = useState<DraftSlot<PolicyDraft>>({
+    resetKey: "",
+    value: createPolicyDraft(null),
+  });
   const [policySaveError, setPolicySaveError] = useState<string | null>(null);
-  const [previewForceFullSyncByProductNo, setPreviewForceFullSyncByProductNo] = useState<Record<string, boolean>>({});
   const [intervalMinutes, setIntervalMinutes] = useState("5");
   const [selectedRunId, setSelectedRunId] = useState("");
   const [runMasterIds, setRunMasterIds] = useState("");
@@ -367,21 +719,64 @@ export default function ShoppingAutoPricePage() {
   const [editorRetailPrice, setEditorRetailPrice] = useState("");
   const [editorSelling, setEditorSelling] = useState("T");
   const [editorDisplay, setEditorDisplay] = useState("T");
-  const [sellingPriceOverrideLocked, setSellingPriceOverrideLocked] = useState(false);
+  const [sellingPriceOverrideLockedSlot, setSellingPriceOverrideLockedSlot] = useState<DraftSlot<boolean>>({
+    resetKey: "",
+    value: false,
+  });
   const [editorFloorPrice, setEditorFloorPrice] = useState("0");
   const [editorExcludePlatingLabor, setEditorExcludePlatingLabor] = useState(false);
+  const [editorCurrentProductSyncProfile, setEditorCurrentProductSyncProfile] = useState<CurrentProductSyncProfile>('GENERAL');
+  const [currentProductSyncProfileSaveError, setCurrentProductSyncProfileSaveError] = useState<string | null>(null);
   const [applyError, setApplyError] = useState<string | null>(null);
-  const [, setVariantDrafts] = useState<Record<string, string>>({});
-  const [optionCategoryDrafts, setOptionCategoryDrafts] = useState<Record<string, OptionCategoryRow["category_key"]>>({});
-  const [optionSyncDeltaDrafts, setOptionSyncDeltaDrafts] = useState<Record<string, number>>({});
+  const [mappingSaveError, setMappingSaveError] = useState<string | null>(null);
+  const [optionCategorySaveError, setOptionCategorySaveError] = useState<string | null>(null);
+  const [variantOptionDraftSlot, setVariantOptionDraftSlot] = useState<DraftSlot<Record<string, VariantOptionDraft>>>({
+    resetKey: "",
+    value: {},
+  });
+  const [optionCategoryDraftSlot, setOptionCategoryDraftSlot] = useState<DraftSlot<StringMap>>({
+    resetKey: "",
+    value: {},
+  });
+  const [optionSyncDeltaDraftSlot, setOptionSyncDeltaDraftSlot] = useState<DraftSlot<StringMap>>({
+    resetKey: "",
+    value: {},
+  });
+  const [optionOtherReasonDraftSlot, setOptionOtherReasonDraftSlot] = useState<DraftSlot<StringMap>>({
+    resetKey: "",
+    value: {},
+  });
+  const [optionDecorSelectionDraftSlot, setOptionDecorSelectionDraftSlot] = useState<DraftSlot<StringMap>>({
+    resetKey: "",
+    value: {},
+  });
+  const [optionNoticeSelectionDraftSlot, setOptionNoticeSelectionDraftSlot] = useState<DraftSlot<StringMap>>({
+    resetKey: "",
+    value: {},
+  });
+  const [optionAxis1DraftSlot, setOptionAxis1DraftSlot] = useState<DraftSlot<StringMap>>({
+    resetKey: "",
+    value: {},
+  });
+  const [optionAxis2DraftSlot, setOptionAxis2DraftSlot] = useState<DraftSlot<StringMap>>({
+    resetKey: "",
+    value: {},
+  });
+  const [optionAxis3DraftSlot, setOptionAxis3DraftSlot] = useState<DraftSlot<StringMap>>({
+    resetKey: "",
+    value: {},
+  });
+  const [focusedVariantCode, setFocusedVariantCode] = useState("");
+  const [showAdvancedVariantMapping, setShowAdvancedVariantMapping] = useState(false);
   const [isPreviewDrawerOpen, setIsPreviewDrawerOpen] = useState(false);
   const [isEditDrawerOpen, setIsEditDrawerOpen] = useState(false);
+
 
   const channelsQuery = useQuery({
     queryKey: ["shop-channels"],
     queryFn: () => shopApiGet<{ data: Channel[] }>("/api/channels"),
   });
-  const channels = channelsQuery.data?.data ?? [];
+  const channels = useMemo(() => channelsQuery.data?.data ?? [], [channelsQuery.data?.data]);
   const effectiveChannelId = channelId || channels[0]?.channel_id || "";
 
   const policiesQuery = useQuery({
@@ -389,10 +784,34 @@ export default function ShoppingAutoPricePage() {
     enabled: Boolean(effectiveChannelId),
     queryFn: () => shopApiGet<{ data: PricingPolicy[] }>(`/api/pricing-policies?channel_id=${encodeURIComponent(effectiveChannelId)}`),
   });
-  const activePolicy = useMemo(
-    () => (policiesQuery.data?.data ?? []).find((p) => p.is_active) ?? null,
-    [policiesQuery.data?.data],
-  );
+  const policyRows = useMemo(() => policiesQuery.data?.data ?? [], [policiesQuery.data?.data]);
+  const activePolicy = useMemo(() => policyRows.find((p) => p.is_active) ?? null, [policyRows]);
+  const policyDraftResetKey = activePolicy?.policy_id ?? "__default_policy__";
+  const defaultPolicyDraft = createPolicyDraft(activePolicy);
+  const policyDraft = policyDraftSlot.resetKey === policyDraftResetKey ? policyDraftSlot.value : defaultPolicyDraft;
+  const setPolicyDraft = (next: PolicyDraft | ((current: PolicyDraft) => PolicyDraft)) => {
+    const current = policyDraftSlot.resetKey === policyDraftResetKey ? policyDraftSlot.value : defaultPolicyDraft;
+    const value = typeof next === "function" ? next(current) : next;
+    setPolicyDraftSlot({ resetKey: policyDraftResetKey, value });
+  };
+  const marginMultiplier = policyDraft.marginMultiplier;
+  const roundingUnit = policyDraft.roundingUnit;
+  const roundingMode = policyDraft.roundingMode;
+  const policyFactorSetId = policyDraft.policyFactorSetId;
+  const autoSyncThresholdProfile = policyDraft.autoSyncThresholdProfile;
+  const autoSyncForceFull = policyDraft.autoSyncForceFull;
+  const autoSyncMinChangeKrw = policyDraft.autoSyncMinChangeKrw;
+  const autoSyncMinChangeRatePct = policyDraft.autoSyncMinChangeRatePct;
+  const setMarginMultiplier = (value: string) => setPolicyDraft((current: PolicyDraft) => ({ ...current, marginMultiplier: value }));
+  const setRoundingUnit = (value: string) => setPolicyDraft((current: PolicyDraft) => ({ ...current, roundingUnit: value }));
+  const setRoundingMode = (value: "CEIL" | "ROUND" | "FLOOR") => setPolicyDraft((current: PolicyDraft) => ({ ...current, roundingMode: value }));
+  const setPolicyFactorSetId = (value: string) => setPolicyDraft((current: PolicyDraft) => ({ ...current, policyFactorSetId: value }));
+  const setAutoSyncThresholdProfile = (value: "GENERAL" | "MARKET_LINKED") => setPolicyDraft((current: PolicyDraft) => ({ ...current, autoSyncThresholdProfile: value }));
+  const setAutoSyncForceFull = (value: boolean) => setPolicyDraft((current: PolicyDraft) => ({ ...current, autoSyncForceFull: value }));
+  const setAutoSyncMinChangeKrw = (value: string) => setPolicyDraft((current: PolicyDraft) => ({ ...current, autoSyncMinChangeKrw: value }));
+  const setAutoSyncMinChangeRatePct = (value: string) => setPolicyDraft((current: PolicyDraft) => ({ ...current, autoSyncMinChangeRatePct: value }));
+  const selectedThresholdProfile = AUTO_SYNC_THRESHOLD_PROFILE_OPTIONS.find((option) => option.value === autoSyncThresholdProfile)
+    ?? AUTO_SYNC_THRESHOLD_PROFILE_OPTIONS[0];
 
   const factorSetsQuery = useQuery({
     queryKey: ["shop-factor-sets", effectiveChannelId],
@@ -405,16 +824,6 @@ export default function ShoppingAutoPricePage() {
       return [...globalRes.data, ...channelRes.data];
     },
   });
-
-  useEffect(() => {
-    setMarginMultiplier(String(activePolicy?.margin_multiplier ?? 1));
-    setRoundingUnit(String(activePolicy?.rounding_unit ?? 1000));
-    setRoundingMode((activePolicy?.rounding_mode ?? "CEIL") as "CEIL" | "ROUND" | "FLOOR");
-    setPolicyFactorSetId(activePolicy?.material_factor_set_id ?? "");
-    setAutoSyncForceFull(activePolicy?.auto_sync_force_full === true);
-    setAutoSyncMinChangeKrw(String(Math.max(0, Math.round(Number(activePolicy?.auto_sync_min_change_krw ?? 5000)))));
-    setAutoSyncMinChangeRatePct(String((Number(activePolicy?.auto_sync_min_change_rate ?? 0.02) * 100).toFixed(2).replace(/\.00$/u, "").replace(/(\.\d*[1-9])0+$/u, "$1")));
-  }, [activePolicy?.policy_id]);
 
   const summaryQuery = useQuery({
     queryKey: ["shop-summary", effectiveChannelId],
@@ -442,7 +851,8 @@ export default function ShoppingAutoPricePage() {
     queryFn: () => shopApiGet<{ data: SyncRun[] }>(`/api/price-sync-runs-v2?channel_id=${encodeURIComponent(effectiveChannelId)}&limit=100`),
     refetchInterval: 10_000,
   });
-  const effectiveRunId = selectedRunId || runsQuery.data?.data?.[0]?.run_id || "";
+  const runRows = useMemo(() => runsQuery.data?.data ?? [], [runsQuery.data?.data]);
+  const effectiveRunId = selectedRunId || runRows[0]?.run_id || "";
 
   const runDetailQuery = useQuery({
     queryKey: ["price-sync-run-v2", effectiveRunId],
@@ -477,9 +887,10 @@ export default function ShoppingAutoPricePage() {
   const activeRunStalenessReleaseCount = Math.max(0, Math.round(Number(activeRunMissingMappingSummary?.staleness_release_count ?? 0)));
   const activeRunPressureDecayCount = Math.max(0, Math.round(Number(activeRunMissingMappingSummary?.pressure_decay_count ?? 0)));
 
+  const mappedMasters = useMemo(() => mappingSummaryQuery.data?.data.mapped_masters ?? [], [mappingSummaryQuery.data?.data.mapped_masters]);
   const masterIdByProductNo = useMemo(() => {
     const map = new Map<string, string>();
-    for (const row of mappingSummaryQuery.data?.data.mapped_masters ?? []) {
+    for (const row of mappedMasters) {
       const masterId = String(row.master_item_id ?? "").trim();
       if (!masterId) continue;
       for (const productNo of row.product_nos ?? []) {
@@ -489,7 +900,7 @@ export default function ShoppingAutoPricePage() {
       }
     }
     return map;
-  }, [mappingSummaryQuery.data?.data.mapped_masters]);
+  }, [mappedMasters]);
 
   const editorMasterItemId = useMemo(() => {
     if (editorPreview) {
@@ -512,17 +923,16 @@ export default function ShoppingAutoPricePage() {
   }, [editorPreview, editorProductNo, editorMasterItemIdHint, masterIdByProductNo]);
 
   const recentRunIds = useMemo(
-    () => (runsQuery.data?.data ?? [])
+    () => runRows
       .filter((row) => !String(row.error_message ?? "").trim().toUpperCase().startsWith("CRON_TICK:"))
       .slice(0, 20)
       .map((row) => String(row.run_id ?? "").trim())
       .filter(Boolean),
-    [runsQuery.data?.data],
+    [runRows],
   );
 
-  const latestCronTick = useMemo(() => {
-    const rows = runsQuery.data?.data ?? [];
-    for (const row of rows) {
+  const latestCronTick = (() => {
+    for (const row of runRows) {
       const reason = parseCronTickReason(row.error_message ?? null);
       if (!reason) continue;
       return {
@@ -531,7 +941,7 @@ export default function ShoppingAutoPricePage() {
       };
     }
     return null;
-  }, [runsQuery.data?.data]);
+  })();
 
   const recentRunDetailQueries = useQueries({
     queries: recentRunIds.map((runId) => ({
@@ -585,11 +995,6 @@ export default function ShoppingAutoPricePage() {
 
   const snapshotExplainRow = snapshotExplainQuery.data?.data ?? null;
 
-  const previewProductNoKey = useMemo(() => {
-    return String(editorPreview?.productNo ?? editorProductNo).trim();
-  }, [editorPreview?.productNo, editorProductNo]);
-
-  const previewForceFullSync = previewProductNoKey ? previewForceFullSyncByProductNo[previewProductNoKey] === true : false;
 
   const previewEffectiveFloor = useMemo(() => {
     const floorRaw = Math.max(0, Math.round(Number(editorPreview?.floor_price_krw ?? 0)));
@@ -626,9 +1031,6 @@ export default function ShoppingAutoPricePage() {
       ? `${(policyFeeRate * 100).toFixed(2)}%`
       : "-";
     const policyMinMarginRate = Number(activePolicy?.min_margin_rate_total ?? Number.NaN);
-    const policyMinMarginRateText = Number.isFinite(policyMinMarginRate)
-      ? `${(policyMinMarginRate * 100).toFixed(2)}%`
-      : "-";
     const gmMaterialRate = Number(activePolicy?.gm_material ?? Number.NaN);
     const gmMaterialRateText = Number.isFinite(gmMaterialRate) ? `${(gmMaterialRate * 100).toFixed(2)}%` : "-";
     const gmLaborRate = Number(activePolicy?.gm_labor ?? Number.NaN);
@@ -723,7 +1125,7 @@ export default function ShoppingAutoPricePage() {
     ];
   
     const priceRow: PreviewCompositionRow[] = [
-      { key: "labor-cost-total", label: "공임합(원가)", valueText: fmtKrw(laborCostPlusAbsorbDisplay) },
+      { key: "labor-cost-total", label: "공임합(원가)", valueText: fmtKrw(laborCostAppliedDisplay) },
       { key: "labor-cost-base", label: "기본공임(원가)", valueText: fmtKrw(componentAmount("BASE_LABOR", "labor_cost_krw")) },
       { key: "labor-cost-stone", label: "알공임(원가)", valueText: fmtKrw(componentAmount("STONE_LABOR", "labor_cost_krw")) },
       { key: "labor-cost-etc", label: "기타공임(원가)", valueText: fmtKrw(componentAmount("ETC", "labor_cost_krw")) },
@@ -740,46 +1142,110 @@ export default function ShoppingAutoPricePage() {
       { key: "absorb-decor", label: "장식공임(흡수공임)", valueText: fmtKrw(componentAmount("DECOR", "labor_absorb_applied_krw")) },
     ];
   
-    const detailRows: PreviewCompositionRow[] = [
+    const laborRollupRow: PreviewCompositionRow[] = [
       { key: "total-labor-cost", label: "총공임합(원가)", valueText: fmtKrw(laborCostPlusAbsorbDisplay) },
       { key: "total-base", label: "총기본공임(원가)", valueText: fmtKrw(componentAmount("BASE_LABOR", "labor_cost_plus_absorb_krw")) },
       { key: "total-stone", label: "총알공임(원가)", valueText: fmtKrw(componentAmount("STONE_LABOR", "labor_cost_plus_absorb_krw")) },
       { key: "total-etc", label: "총기타공임(원가)", valueText: fmtKrw(componentAmount("ETC", "labor_cost_plus_absorb_krw")) },
       { key: "total-plating", label: "총도금공임(원가)", valueText: fmtKrw(componentAmount("PLATING", "labor_cost_plus_absorb_krw")) },
       { key: "total-decor", label: "총장식공임(원가)", valueText: fmtKrw(componentAmount("DECOR", "labor_cost_plus_absorb_krw")) },
-      { key: "labor-total", label: "총공임", valueText: fmtKrw(laborSellPlusAbsorbDisplay) },
+    ];
+
+    const laborReverseRow: PreviewCompositionRow[] = [
+      { key: "labor-cost-basis", label: "총공임합(원가)", valueText: fmtKrw(laborCostPlusAbsorbDisplay) },
+      { key: "labor-margin-rate", label: `공임마진율 적용 (${gmLaborRateText})`, valueText: gmLaborRateText },
+      { key: "labor-pre-fee", label: "공임 역산(수수료 전)", valueText: fmtKrw(laborPreFee) },
+    ];
+
+    const materialReverseRow: PreviewCompositionRow[] = [
       { key: "material-total", label: "총소재가격", valueText: fmtKrw(snapshotExplainRow.material_final_krw) },
-      { key: "fixed-total-gm", label: "총고정금액(gm)", valueText: fmtKrw(fixedPreFee) },
-      { key: "material-margin-rate", label: "소재마진율", valueText: gmMaterialRateText },
-      { key: "labor-margin-rate", label: "공임마진율", valueText: gmLaborRateText },
-      { key: "fixed-margin-rate", label: "고정마진율", valueText: gmFixedRateText },
-      { key: "labor-reverse-gm", label: "공임역산", valueText: `${fmtKrw(laborPreFee)} (${gmLaborRateText})` },
-      { key: "material-reverse-gm", label: "소재역산", valueText: `${fmtKrw(materialPreFee)} (${gmMaterialRateText})` },
-      { key: "total-reverse-gm", label: "총합계역산", valueText: fmtKrw(totalPreFee) },
-      { key: "target-margin-rate", label: "목표마진율", valueText: `${policyMarginRateText} (${policyMarginMultiplierText})` },
-      { key: "guardrail-rate", label: "가드레일율(최소마진+수수료)", valueText: guardrailRateText },
+      { key: "material-margin-rate", label: `소재마진율 적용 (${gmMaterialRateText})`, valueText: gmMaterialRateText },
+      { key: "material-pre-fee", label: "소재 역산(수수료 전)", valueText: fmtKrw(materialPreFee) },
+    ];
+
+    const fixedReverseRow: PreviewCompositionRow[] = [
       { key: "fixed-cost-setting", label: "고정가격 설정", valueText: fmtKrw(fixedCostSetting) },
+      { key: "fixed-margin-rate", label: `고정마진율 적용 (${gmFixedRateText})`, valueText: gmFixedRateText },
+      { key: "fixed-pre-fee", label: "고정 역산(수수료 전)", valueText: fmtKrw(fixedPreFee) },
+    ];
+
+    const candidateSumRow: PreviewCompositionRow[] = [
+      { key: "material-labor-pre-fee", label: `공임 역산 + 소재 역산 = 소재+공임 역산합`, valueText: fmtKrw(materialLaborCombinedPreFee) },
+      { key: "total-pre-fee-input", label: `+ 고정 역산 반영`, valueText: fmtKrw(fixedPreFee) },
+      { key: "total-pre-fee", label: "후보합(수수료 전)", valueText: fmtKrw(totalPreFee) },
+    ];
+
+    const candidatePriceRow: PreviewCompositionRow[] = [
+      { key: "total-pre-fee", label: "후보합(수수료 전)", valueText: fmtKrw(totalPreFee) },
+      { key: "policy-fee-rate", label: `수수료율 적용 (${policyFeeRateText})`, valueText: policyFeeRateText },
+      { key: "target-price", label: "후보가격(수수료 반영 후)", valueText: fmtKrw(snapshotExplainRow.candidate_price_krw) },
+    ];
+
+    const minMarginRow: PreviewCompositionRow[] = [
+      { key: "cost-sum-basis", label: "총원가합(소재+공임+고정)", valueText: fmtKrw(snapshotExplainRow.cost_sum_krw) },
+      { key: "guardrail-rate", label: `가드레일율 적용 (${guardrailRateText})`, valueText: guardrailRateText },
+      { key: "min-margin-price-compare", label: "최소마진 후보가격", valueText: fmtKrw(snapshotExplainRow.min_margin_price_krw) },
+    ];
+
+    const finalDecisionRow: PreviewCompositionRow[] = [
       { key: "final-price", label: "최종가격", valueText: fmtKrw(finalTarget) },
-      { key: "selected-item", label: "선택항목", valueText: selectedLabel },
-      { key: "selected-value", label: "선택항목 선택값", valueText: fmtKrw(selectedBase) },
-      { key: "target-price", label: "목표가격", valueText: fmtKrw(snapshotExplainRow.candidate_price_krw) },
-      { key: "min-margin-price", label: "최소마진가격", valueText: fmtKrw(snapshotExplainRow.min_margin_price_krw) },
+      { key: "selected-item-compare", label: "채택항목", valueText: selectedLabel },
+      { key: "selected-value-compare", label: "채택 기준값", valueText: fmtKrw(selectedBase) },
+    ];
+
+    const compareBasisRow: PreviewCompositionRow[] = [
+      { key: "target-price-compare", label: "후보가격", valueText: fmtKrw(snapshotExplainRow.candidate_price_krw) },
+      { key: "min-margin-price", label: "최소마진 후보가격", valueText: fmtKrw(snapshotExplainRow.min_margin_price_krw) },
+      { key: "selected-item-final", label: "선정 로직", valueText: `${fmtKrw(snapshotExplainRow.candidate_price_krw)} vs ${fmtKrw(snapshotExplainRow.min_margin_price_krw)}` },
+    ];
+
+    const outcomeRow: PreviewCompositionRow[] = [
+      { key: "labor-total", label: "기존 판매공임(참고)", valueText: fmtKrw(laborSellPlusAbsorbDisplay) },
       { key: "margin-no-fee", label: "마진(수수료 제외)", valueText: marginWithoutFee == null ? "-" : fmtSignedKrw(marginWithoutFee) },
       { key: "fee-amount", label: "수수료", valueText: feeAmount == null ? "-" : fmtKrw(feeAmount) },
       { key: "current-price", label: "현재 채널가", valueText: fmtKrw(currentPrice) },
       { key: "price-diff-krw", label: "가격차이", valueText: diffKrw == null ? "-" : fmtSignedKrw(diffKrw) },
       { key: "price-diff-pct", label: "가격차이율", valueText: diffPctText },
-      { key: "pre-fee-material-labor", label: "소재+공임 역산합", valueText: fmtKrw(materialLaborCombinedPreFee) },
-      { key: "policy-fee-rate", label: "수수료율", valueText: policyFeeRateText },
     ];
-  
-    const groups: PreviewCompositionRow[][] = [topRow, priceRow, policyRow];
-    for (let i = 0; i < detailRows.length; i += 6) {
-      groups.push(detailRows.slice(i, i + 6));
-    }
-    return groups;
+
+    return [
+      topRow,
+      priceRow,
+      policyRow,
+      laborRollupRow,
+      laborReverseRow,
+      materialReverseRow,
+      fixedReverseRow,
+      candidateSumRow,
+      candidatePriceRow,
+      minMarginRow,
+      compareBasisRow,
+      finalDecisionRow,
+      outcomeRow,
+    ];
   }, [activePolicy?.margin_multiplier, activePolicy?.fee_rate, activePolicy?.min_margin_rate_total, activePolicy?.gm_material, activePolicy?.gm_labor, activePolicy?.gm_fixed, activePolicy?.fixed_cost_krw, snapshotExplainRow]);
   
+  const previewCompositionSections = useMemo(() => {
+    if (!previewCompositionRowGroups.length) return [] as PreviewCompositionSection[];
+    const section = (key: string, title: string, summary: string, indexes: number[], defaultOpen = false): PreviewCompositionSection => ({
+      key,
+      title,
+      summary,
+      groups: indexes.map((index) => previewCompositionRowGroups[index]).filter((group): group is PreviewCompositionRow[] => Array.isArray(group) && group.length > 0),
+      defaultOpen,
+    });
+
+    return [
+      section("cost-rollup", "원가 합산", previewCompositionRowGroups[3]?.[0]?.valueText ?? "-", [1, 2, 3], true),
+      section("labor-reverse", "공임 역산", previewCompositionRowGroups[4]?.[2]?.valueText ?? "-", [4]),
+      section("material-reverse", "소재 역산", previewCompositionRowGroups[5]?.[2]?.valueText ?? "-", [5]),
+      section("fixed-reverse", "고정 역산", previewCompositionRowGroups[6]?.[2]?.valueText ?? "-", [6]),
+      section("candidate-price", "후보가격 계산", previewCompositionRowGroups[8]?.[2]?.valueText ?? "-", [7, 8]),
+      section("guardrail", "최소마진 비교", previewCompositionRowGroups[11]?.[0]?.valueText ?? "-", [9, 10, 11]),
+      section("result", "결과 비교", previewCompositionRowGroups[12]?.[0]?.valueText ?? "-", [12]),
+    ];
+  }, [previewCompositionRowGroups]);
+
   const previewCompositionFlowLines = useMemo(() => {
     if (!snapshotExplainRow) return [] as string[];
   
@@ -815,8 +1281,8 @@ export default function ShoppingAutoPricePage() {
         : null;
   
     const line1 = `소재가격: ${fmtKrw(snapshotExplainRow.material_final_krw)} (유효틱 ${fmt(snapshotExplainRow.effective_tick_krw_g)}원/g × 순중량 ${fmt(snapshotExplainRow.net_weight_g)} × 함량*보정계수 ${purityAdjusted == null ? "-" : purityAdjusted.toFixed(4)} -> 소재원가 ${fmtKrw(snapshotExplainRow.material_raw_krw)} -> 환산 ${fmtKrw(snapshotExplainRow.material_final_krw)})`;
-    const line2 = `총공임: ${fmtKrw(snapshotExplainRow.labor_sell_total_plus_absorb_krw)} (공임합(원가, 흡수공임 제외) ${fmtKrw(laborCostAppliedDisplay)} / 총공임합(원가, 흡수공임 포함) ${fmtKrw(laborCostPlusAbsorbDisplay)} / 공임판매합(흡수포함) ${fmtKrw(snapshotExplainRow.labor_sell_total_plus_absorb_krw)} / 공임역산 ${fmtKrw(snapshotExplainRow.labor_pre_fee_krw)})`;
-    const line3 = `총가격 후보(목표가격): ${fmtKrw(snapshotExplainRow.candidate_price_krw)} (수수료반영전 후보합 ${fmtKrw(snapshotExplainRow.candidate_pre_fee_krw)} = 소재 ${fmtKrw(snapshotExplainRow.material_pre_fee_krw)} + 공임 ${fmtKrw(snapshotExplainRow.labor_pre_fee_krw)} + 고정 ${fmtKrw(snapshotExplainRow.fixed_pre_fee_krw)}, 수수료율 ${policyFeeRateText} 역산 반영)`;
+    const line2 = `총공임(판매 기준): ${fmtKrw(snapshotExplainRow.labor_sell_total_plus_absorb_krw)} (공임합(원가, 흡수 제외) ${fmtKrw(laborCostAppliedDisplay)} + 흡수공임 ${fmtKrw(snapshotExplainRow.absorb_total_applied_krw)} = 총공임합(원가) ${fmtKrw(laborCostPlusAbsorbDisplay)} -> 판매 기준 공임 ${fmtKrw(snapshotExplainRow.labor_sell_total_plus_absorb_krw)} -> 공임 수수료 반영 전 ${fmtKrw(snapshotExplainRow.labor_pre_fee_krw)})`;
+    const line3 = `총가격 후보(목표가격): ${fmtKrw(snapshotExplainRow.candidate_price_krw)} (수수료 반영 전 후보합 ${fmtKrw(snapshotExplainRow.candidate_pre_fee_krw)} = 소재 ${fmtKrw(snapshotExplainRow.material_pre_fee_krw)} + 공임 ${fmtKrw(snapshotExplainRow.labor_pre_fee_krw)} + 고정 ${fmtKrw(snapshotExplainRow.fixed_pre_fee_krw)}, 수수료율 ${policyFeeRateText} 반영)`;
     const line4 = `총가격 후보(최소마진): ${fmtKrw(snapshotExplainRow.min_margin_price_krw)} (원가합계 ${fmtKrw(snapshotExplainRow.cost_sum_krw)}와 정책최소마진율 ${policyMinMarginRateText} 기준)`;
     const line5 = `선택된 가격: max(목표가격 ${fmtKrw(snapshotExplainRow.candidate_price_krw)}, 최소마진가격 ${fmtKrw(snapshotExplainRow.min_margin_price_krw)}) = ${fmtKrw(snapshotExplainRow.guardrail_price_krw)} -> 최종가격 ${fmtKrw(finalTarget)}`;
   
@@ -831,7 +1297,7 @@ export default function ShoppingAutoPricePage() {
       pushTargetPrice: number | null;
       pushBeforePrice: number | null;
       candidatePrice: number | null;
-      selectedItem: "목표가격" | "최소마진가격";
+      selectedItem: PreviewHistorySelectedItem;
       selectedPrice: number | null;
       variantAvg: number | null;
     }>;
@@ -863,6 +1329,7 @@ export default function ShoppingAutoPricePage() {
 
     const pickSelectedPrice = (intent: SyncIntent): number | null => {
       const candidates = [
+        intent.pricing_override_price_krw,
         intent.applied_after_price_krw,
         intent.applied_target_price_krw,
         intent.snapshot_desired_price_krw,
@@ -897,9 +1364,12 @@ export default function ShoppingAutoPricePage() {
         const pushTargetPrice = toRoundedNumber(baseIntent.applied_target_price_krw);
         const pushBeforePrice = toRoundedNumber(baseIntent.applied_before_price_krw);
         const pushAfterPrice = toRoundedNumber(baseIntent.applied_after_price_krw);
+        const overridePrice = toRoundedNumber(baseIntent.pricing_override_price_krw);
         const candidatePrice = pushTargetPrice ?? pushAfterPrice ?? snapshotPrice;
-        const selectedPrice = pushAfterPrice ?? candidatePrice;
-        const selectedItem: "목표가격" | "최소마진가격" = baseIntent.floor_applied ? "최소마진가격" : "목표가격";
+        const selectedItem = resolveHistorySelectedItem(baseIntent);
+        const selectedPrice = selectedItem === "가격덮어쓰기"
+          ? overridePrice ?? pushAfterPrice ?? candidatePrice
+          : pushAfterPrice ?? candidatePrice;
 
         const variantPrices = intents
           .filter((intent) => String(intent.external_variant_code ?? "").trim())
@@ -928,7 +1398,7 @@ export default function ShoppingAutoPricePage() {
         pushTargetPrice: number | null;
         pushBeforePrice: number | null;
         candidatePrice: number | null;
-        selectedItem: "목표가격" | "최소마진가격";
+        selectedItem: PreviewHistorySelectedItem;
         selectedPrice: number | null;
         variantAvg: number | null;
       } => Boolean(row))
@@ -1048,6 +1518,40 @@ export default function ShoppingAutoPricePage() {
     };
   }, [previewHistoryRows]);
 
+  const snapshotExplainStatusText = useMemo(() => {
+    if (!editorPreview) return "미리보기를 먼저 불러오면 구성(스냅샷)을 확인할 수 있습니다.";
+    if (!effectiveChannelId) return "channel_id가 없어 구성(스냅샷) 조회를 시작하지 못했습니다.";
+    if (!editorMasterItemId) return "이 상품의 master_item_id를 아직 찾지 못해 구성(스냅샷)이 비어 있습니다.";
+    if (snapshotExplainQuery.isFetching && !snapshotExplainRow) return "구성(스냅샷)을 불러오는 중입니다.";
+    if (snapshotExplainQuery.isError) {
+      const message = describeError(snapshotExplainQuery.error);
+      if (/No V2 snapshot row found in view/i.test(message)) {
+        return "V2 스냅샷 뷰에 이 상품 행이 없어 비어 있습니다. 배포 문제가 아니라 현재 계산 뷰 데이터가 없는 상태입니다.";
+      }
+      return `구성(스냅샷) 조회 실패: ${message}`;
+    }
+    if (!snapshotExplainRow) return "V2 스냅샷 뷰에서 이 상품 행을 찾지 못했습니다.";
+    return null;
+  }, [editorMasterItemId, editorPreview, effectiveChannelId, snapshotExplainQuery.error, snapshotExplainQuery.isError, snapshotExplainQuery.isFetching, snapshotExplainRow]);
+
+  const previewHistoryEmptyText = useMemo(() => {
+    if (!editorPreview) return "미리보기를 먼저 불러오면 최근 run 히스토리를 확인할 수 있습니다.";
+    if (recentRunIds.length === 0) {
+      return latestCronTick
+        ? "최근 일반 run이 없어 히스토리가 비어 있습니다. 현재는 크론 체크 기록만 보입니다."
+        : "최근 일반 run이 아직 없어 히스토리가 비어 있습니다.";
+    }
+    if (recentRunDetailQueries.some((query) => query.isFetching && !query.data)) {
+      return "최근 run 상세를 불러오는 중입니다.";
+    }
+    if (recentRunDetailQueries.some((query) => query.isError)) {
+      return "최근 run 상세 조회 중 일부가 실패해 히스토리를 채우지 못했습니다.";
+    }
+    if (recentRunDetailQueries.every((query) => !query.data)) {
+      return "최근 run 상세를 아직 불러오지 못했습니다.";
+    }
+    return "최근 20개 일반 run 안에 이 상품과 매칭되는 intent가 없어 히스토리가 비어 있습니다.";
+  }, [editorPreview, latestCronTick, recentRunDetailQueries, recentRunIds.length]);
   const dashboardGalleryQuery = useQuery({
     queryKey: ["shop-dashboard-gallery", effectiveChannelId],
     enabled: Boolean(effectiveChannelId),
@@ -1057,6 +1561,33 @@ export default function ShoppingAutoPricePage() {
       ),
     refetchInterval: 15_000,
   });
+
+  const galleryMappingsQuery = useQuery({
+    queryKey: ["auto-price-gallery-mappings", effectiveChannelId],
+    enabled: Boolean(effectiveChannelId),
+    queryFn: () =>
+      shopApiGet<{ data: MappingRow[] }>(
+        `/api/channel-products?channel_id=${encodeURIComponent(effectiveChannelId)}`,
+      ),
+    staleTime: 60_000,
+  });
+
+  const galleryCurrentProductSyncProfileByMaster = useMemo(() => {
+    const rowsByMaster = new Map<string, Array<{ current_product_sync_profile?: string | null }>>();
+    for (const row of galleryMappingsQuery.data?.data ?? []) {
+      if (row.is_active === false) continue;
+      const masterItemId = String(row.master_item_id ?? "").trim();
+      if (!masterItemId) continue;
+      const bucket = rowsByMaster.get(masterItemId) ?? [];
+      bucket.push({ current_product_sync_profile: row.current_product_sync_profile });
+      rowsByMaster.set(masterItemId, bucket);
+    }
+    const map = new Map<string, CurrentProductSyncProfile>();
+    for (const [masterItemId, rows] of rowsByMaster.entries()) {
+      map.set(masterItemId, resolveCurrentProductSyncProfileRows(rows));
+    }
+    return map;
+  }, [galleryMappingsQuery.data?.data]);
 
   const galleryMasterIds = useMemo(() => {
     return Array.from(
@@ -1101,6 +1632,7 @@ export default function ShoppingAutoPricePage() {
         latestComputedAt: string | null;
         sampleTargetPrice: number | null;
         primaryMasterId: string;
+        currentProductSyncProfile: CurrentProductSyncProfile;
       }
     >();
     for (const row of dashboardGalleryQuery.data?.data ?? []) {
@@ -1118,7 +1650,8 @@ export default function ShoppingAutoPricePage() {
         outOfSyncVariantCodes: new Set<string>(),
         latestComputedAt: null,
         sampleTargetPrice: null,
-        primaryMasterId: "",
+        primaryMasterId: '',
+        currentProductSyncProfile: 'GENERAL',
       };
       if (!item.primaryMasterId) {
         if (masterItemId) item.primaryMasterId = masterItemId;
@@ -1131,6 +1664,10 @@ export default function ShoppingAutoPricePage() {
       }
       const modelName = String(row.model_name ?? "").trim();
       if (modelName) item.modelNames.add(modelName);
+      const rowCurrentProductSyncProfile = normalizeCurrentProductSyncProfile(
+        (masterItemId ? galleryCurrentProductSyncProfileByMaster.get(masterItemId) : null) ?? row.current_product_sync_profile,
+      );
+      if (rowCurrentProductSyncProfile === 'MARKET_LINKED') item.currentProductSyncProfile = rowCurrentProductSyncProfile;
       const variantCode = String(row.external_variant_code ?? "").trim();
       if (variantCode) {
         item.variantCodes.add(variantCode);
@@ -1154,6 +1691,7 @@ export default function ShoppingAutoPricePage() {
         modelNameText: Array.from(item.modelNames.values()).join(" / "),
         productAliasText: Array.from(item.productNos.values()).sort((a, b) => a.localeCompare(b)).join(" / "),
         imageUrl: item.primaryMasterId ? (galleryImageByMasterId.get(item.primaryMasterId) ?? null) : null,
+        currentProductSyncProfile: item.currentProductSyncProfile,
       }))
       .filter((item) => {
         if (!q) return true;
@@ -1169,57 +1707,1268 @@ export default function ShoppingAutoPricePage() {
         if (tA !== tB) return tB.localeCompare(tA);
         return a.productNo.localeCompare(b.productNo);
       });
-  }, [dashboardGalleryQuery.data?.data, gallerySearch, galleryImageByMasterId]);
+  }, [dashboardGalleryQuery.data?.data, galleryCurrentProductSyncProfileByMaster, gallerySearch, galleryImageByMasterId]);
 
 
-  const optionEntries = useMemo(() => {
-    if (!editorPreview) return [] as Array<{ option_name: string; option_value: string }>;
-    const map = new Map<string, { option_name: string; option_value: string }>();
 
-    for (const group of editorPreview.options ?? []) {
-      const name = String(group.option_name ?? "").trim();
-      if (!name) continue;
-      for (const valueRow of group.option_value ?? []) {
-        const value = normalizeOptionValue(String(valueRow.option_text ?? "").trim());
-        if (!value) continue;
-        map.set(`${name}::${value}`, { option_name: name, option_value: value });
-      }
-    }
-
-    for (const variant of editorPreview.variants ?? []) {
-      for (const option of variant.options ?? []) {
-        const name = String(option.name ?? "").trim();
-        const value = normalizeOptionValue(String(option.value ?? "").trim());
-        if (!name || !value) continue;
-        map.set(`${name}::${value}`, { option_name: name, option_value: value });
-      }
-    }
-
-    return Array.from(map.values()).sort((a, b) => {
-      if (a.option_name !== b.option_name) return a.option_name.localeCompare(b.option_name);
-      return a.option_value.localeCompare(b.option_value);
-    });
-  }, [editorPreview]);
-
-  const variantOptionColumnNames = useMemo(() => {
-    if (!editorPreview) return [] as string[];
-    const set = new Set<string>();
-    for (const variant of editorPreview.variants ?? []) {
-      for (const option of variant.options ?? []) {
-        const name = String(option.name ?? "").trim();
-        if (name) set.add(name);
-      }
-    }
-    return Array.from(set.values());
-  }, [editorPreview]);
-
-  const optionCategoriesQuery = useQuery({
-    queryKey: ["option-categories", effectiveChannelId, editorMasterItemId, editorPreview?.productNo ?? ""],
-    enabled: Boolean(effectiveChannelId && editorPreview?.productNo),
+  const variantLookupQuery = useQuery({
+    queryKey: ["auto-price-variant-lookup", effectiveChannelId, editorMasterItemId, editorPreview?.productNo ?? ""],
+    enabled: Boolean(effectiveChannelId && editorMasterItemId && editorPreview?.productNo),
     queryFn: () =>
-      shopApiGet<{ data: OptionCategoryRow[] }>(
-        `/api/channel-option-categories?channel_id=${encodeURIComponent(effectiveChannelId)}&external_product_no=${encodeURIComponent(String(editorPreview?.productNo ?? ""))}${editorMasterItemId ? `&master_item_id=${encodeURIComponent(editorMasterItemId)}` : ""}`,
+      shopApiGet<VariantLookupResponse>(
+        `/api/channel-products/variants?channel_id=${encodeURIComponent(effectiveChannelId)}&master_item_id=${encodeURIComponent(editorMasterItemId)}&external_product_no=${encodeURIComponent(String(editorPreview?.productNo ?? ""))}`,
       ),
+  });
+  const loadedVariants = useMemo(() => variantLookupQuery.data?.data.variants ?? [], [variantLookupQuery.data?.data.variants]);
+  const loadedOptionAllowlist = useMemo(
+    () => variantLookupQuery.data?.data.option_detail_allowlist ?? EMPTY_OPTION_ALLOWLIST,
+    [variantLookupQuery.data?.data.option_detail_allowlist],
+  );
+  const savedOptionCategories = useMemo(
+    () => variantLookupQuery.data?.data.saved_option_categories ?? [],
+    [variantLookupQuery.data?.data.saved_option_categories],
+  );
+  const canonicalOptionRows = useMemo(
+    () => variantLookupQuery.data?.data.canonical_option_rows ?? [],
+    [variantLookupQuery.data?.data.canonical_option_rows],
+  );
+  const canonicalOptionRowByEntryKey = useMemo(() => {
+    const next = new Map<string, MappingCanonicalOptionRow>();
+    for (const row of canonicalOptionRows) {
+      if (!row.entry_key || next.has(row.entry_key)) continue;
+      next.set(row.entry_key, row);
+    }
+    return next;
+  }, [canonicalOptionRows]);
+  const resolvedMasterMaterialCode = useMemo(
+    () => canonicalOptionRows.find((row) => String(row.material_code_resolved ?? "").trim())?.material_code_resolved ?? null,
+    [canonicalOptionRows],
+  );
+  const resolvedMasterMaterialLabel = useMemo(
+    () => canonicalOptionRows.find((row) => String(row.material_label_resolved ?? "").trim())?.material_label_resolved
+      ?? canonicalOptionRows.find((row) => String(row.material_code_resolved ?? "").trim())?.material_code_resolved
+      ?? null,
+    [canonicalOptionRows],
+  );
+  const resolvedEditorProductNo = String(variantLookupQuery.data?.data.resolved_product_no ?? editorPreview?.productNo ?? "").trim();
+  const canonicalEditorProductNo = String(
+    variantLookupQuery.data?.data.canonical_external_product_no
+      ?? variantLookupQuery.data?.data.resolved_product_no
+      ?? editorPreview?.productNo
+      ?? "",
+  ).trim();
+  const optionEntries = useMemo(() => {
+    return buildMappingOptionEntries({
+      productOptions: (editorPreview?.options ?? []).map((option) => ({
+        option_name: option.option_name,
+        option_value: (option.option_value ?? []).map((value) => ({ option_text: value?.option_text })),
+      })),
+      variants: (editorPreview?.variants ?? []).map((variant) => ({
+        options: (variant.options ?? []).map((option) => ({ name: option.name, value: option.value })),
+      })),
+    }).map((entry) => ({
+      optionName: entry.option_name,
+      optionValue: entry.option_value,
+      axisIndex: entry.axis_index,
+      entryKey: entry.entry_key,
+    }));
+  }, [editorPreview]);
+  const savedOptionCategoryByName = useMemo(() => {
+    const next = new Map<string, OptionCategoryKey>();
+    for (const row of savedOptionCategories) {
+      const optionName = String(row.option_name ?? "").trim();
+      if (!optionName || next.has(optionName)) continue;
+      next.set(optionName, row.category_key);
+    }
+    return next;
+  }, [savedOptionCategories]);
+  const savedOptionCategoryByEntryKey = useMemo(() => {
+    const next = new Map<string, OptionCategoryRow>();
+    for (const row of savedOptionCategories) {
+      const key = optionEntryKey(row.option_name, row.option_value);
+      if (!key || next.has(key)) continue;
+      next.set(key, row);
+    }
+    return next;
+  }, [savedOptionCategories]);
+
+  const editorMappingsQuery = useQuery({
+    queryKey: ["auto-price-editor-mappings", effectiveChannelId, editorMasterItemId],
+    enabled: Boolean(effectiveChannelId && editorMasterItemId),
+    queryFn: () =>
+      shopApiGet<{ data: MappingRow[] }>(
+        `/api/channel-products?channel_id=${encodeURIComponent(effectiveChannelId)}&master_item_id=${encodeURIComponent(editorMasterItemId)}`,
+      ),
+  });
+  const siblingMappings = useMemo(() => editorMappingsQuery.data?.data ?? [], [editorMappingsQuery.data?.data]);
+  const editorProductNos = useMemo(
+    () => Array.from(new Set([String(editorPreview?.productNo ?? "").trim(), resolvedEditorProductNo, canonicalEditorProductNo].filter(Boolean))),
+    [canonicalEditorProductNo, editorPreview?.productNo, resolvedEditorProductNo],
+  );
+  const editorMappings = useMemo(() => {
+    if (editorProductNos.length === 0) return siblingMappings;
+    return siblingMappings.filter((row) => editorProductNos.includes(String(row.external_product_no ?? "").trim()));
+  }, [editorProductNos, siblingMappings]);
+  const editorMappingIndex = useMemo(() => {
+    const index = new Map<string, MappingRow>();
+    for (const row of editorMappings) {
+      const variantCode = normalizeVariantCode(row.external_variant_code);
+      if (variantCode && !index.has(variantCode)) index.set(variantCode, row);
+    }
+    return index;
+  }, [editorMappings]);
+  const siblingSyncRuleSetId = useMemo(() => {
+    const values = Array.from(
+      new Set(
+        siblingMappings
+          .filter((row) => row.is_active !== false && (row.option_price_mode ?? "SYNC") === "SYNC")
+          .map((row) => String(row.sync_rule_set_id ?? "").trim())
+          .filter(Boolean),
+      ),
+    );
+    return values.length === 1 ? (values[0] ?? "") : "";
+  }, [siblingMappings]);
+
+  const optionLaborRulesQuery = useQuery({
+    queryKey: ["auto-price-option-labor-rules", effectiveChannelId, editorMasterItemId, canonicalEditorProductNo],
+    enabled: Boolean(effectiveChannelId && editorMasterItemId && canonicalEditorProductNo),
+    queryFn: () =>
+      shopApiGet<{ data: OptionLaborRuleRow[] }>(
+        `/api/option-labor-rules?channel_id=${encodeURIComponent(effectiveChannelId)}&master_item_id=${encodeURIComponent(editorMasterItemId)}&external_product_no=${encodeURIComponent(canonicalEditorProductNo)}`,
+      ),
+  });
+  const optionLaborRuleRows = useMemo(
+    () => (optionLaborRulesQuery.data?.data ?? []).filter((row) => row.is_active !== false),
+    [optionLaborRulesQuery.data?.data],
+  );
+  const sizeRuleRows = useMemo(
+    () => optionLaborRuleRows.filter((row) => row.category_key === "SIZE"),
+    [optionLaborRuleRows],
+  );
+  const colorRuleRows = useMemo(
+    () => optionLaborRuleRows.filter((row) => row.category_key === "COLOR_PLATING"),
+    [optionLaborRuleRows],
+  );
+  const colorCodesByMaterial = useMemo(() => {
+    const next = new Map<string, string[]>();
+    for (const row of colorRuleRows) {
+      const materialCode = String(row.scope_material_code ?? "").trim();
+      const colorCode = String(row.color_code ?? "").trim();
+      if (!materialCode || !colorCode) continue;
+      const bucket = next.get(materialCode) ?? [];
+      if (!bucket.includes(colorCode)) bucket.push(colorCode);
+      next.set(materialCode, bucket);
+    }
+    for (const [materialCode, bucket] of next.entries()) {
+      next.set(materialCode, bucket.sort((a, b) => a.localeCompare(b)));
+    }
+    return next;
+  }, [colorRuleRows]);
+  const colorAmountChoicesByMaterialColor = useMemo(() => {
+    const next = new Map<string, number[]>();
+    for (const row of colorRuleRows) {
+      const materialCode = String(row.scope_material_code ?? "").trim();
+      const colorCode = String(row.color_code ?? "").trim();
+      if (!materialCode || !colorCode) continue;
+      const amount = Math.round(Number(row.additive_delta_krw ?? 0));
+      const key = `${materialCode}::${colorCode}`;
+      const bucket = next.get(key) ?? [];
+      if (!bucket.includes(amount)) bucket.push(amount);
+      next.set(key, bucket);
+    }
+    for (const [key, bucket] of next.entries()) {
+      next.set(key, bucket.sort((a, b) => a - b));
+    }
+    return next;
+  }, [colorRuleRows]);
+  const colorLabelByCode = useMemo(() => {
+    const next = new Map<string, string>();
+    for (const choice of loadedOptionAllowlist.colors) {
+      const value = String(choice.value ?? "").trim();
+      if (!value || next.has(value)) continue;
+      next.set(value, choice.label || value);
+    }
+    return next;
+  }, [loadedOptionAllowlist.colors]);
+  const materialChoicePool = useMemo(() => {
+    const next = new Map<string, { value: string; label: string }>();
+    for (const choice of loadedOptionAllowlist.materials) {
+      const value = String(choice.value ?? "").trim();
+      if (!value || next.has(value)) continue;
+      next.set(value, { value, label: choice.label || value });
+    }
+    for (const row of optionLaborRuleRows) {
+      const value = String(row.scope_material_code ?? "").trim();
+      if (!value || next.has(value)) continue;
+      next.set(value, { value, label: value });
+    }
+    return Array.from(next.values()).sort((left, right) => left.value.localeCompare(right.value));
+  }, [loadedOptionAllowlist.materials, optionLaborRuleRows]);
+  const decorRuleByMasterId = useMemo(() => {
+    const next = new Map<string, OptionLaborRuleRow>();
+    for (const row of optionLaborRuleRows) {
+      if (row.category_key !== "DECOR") continue;
+      const key = String(row.decoration_master_id ?? "").trim();
+      if (!key || next.has(key)) continue;
+      next.set(key, row);
+    }
+    return next;
+  }, [optionLaborRuleRows]);
+  const allowedDecorChoices = useMemo(
+    () => loadedOptionAllowlist.decors.filter((choice) => String(choice.decoration_master_id ?? "").trim().length > 0),
+    [loadedOptionAllowlist.decors],
+  );
+  const decorChoiceByMasterId = useMemo(() => {
+    const next = new Map<string, MappingOptionAllowlist["decors"][number]>();
+    for (const choice of allowedDecorChoices) {
+      const masterId = String(choice.decoration_master_id ?? "").trim();
+      if (!masterId || next.has(masterId)) continue;
+      next.set(masterId, choice);
+    }
+    return next;
+  }, [allowedDecorChoices]);
+  const optionLaborRuleEngineActive = hasAnyActiveOptionLaborRule(optionLaborRuleRows);
+
+  const findExistingRowForVariant = (variant: {
+    variantCode?: string | null;
+    customVariantCode?: string | null;
+    variant_code?: string | null;
+    custom_variant_code?: string | null;
+  }): MappingRow | null => {
+    for (const candidateCode of candidateVariantCodes(variant)) {
+      const existing = editorMappingIndex.get(candidateCode);
+      if (existing) return existing;
+    }
+    return null;
+  };
+
+  const variantLookupIndex = useMemo(() => {
+    const index = new Map<string, VariantLookupVariant>();
+    for (const variant of loadedVariants) {
+      for (const candidateCode of candidateVariantCodes(variant)) {
+        if (candidateCode && !index.has(candidateCode)) index.set(candidateCode, variant);
+      }
+    }
+    return index;
+  }, [loadedVariants]);
+
+  const variantDraftResetKey = useMemo(
+    () => [effectiveChannelId, editorMasterItemId, canonicalEditorProductNo || resolvedEditorProductNo || String(editorPreview?.productNo ?? "").trim()].join("|"),
+    [canonicalEditorProductNo, editorMasterItemId, editorPreview?.productNo, effectiveChannelId, resolvedEditorProductNo],
+  );
+  const defaultOptionCategoryDrafts = useMemo(() => {
+    const next: StringMap = {};
+    for (const entry of optionEntries) {
+      if (!next[entry.optionName]) {
+        next[entry.optionName] = canonicalOptionRowByEntryKey.get(entry.entryKey)?.category_key
+          ?? savedOptionCategoryByName.get(entry.optionName)
+          ?? guessCategoryByOptionName(entry.optionName);
+      }
+    }
+    return next;
+  }, [canonicalOptionRowByEntryKey, optionEntries, savedOptionCategoryByName]);
+  const optionCategoryDrafts =
+    optionCategoryDraftSlot.resetKey === variantDraftResetKey ? optionCategoryDraftSlot.value : defaultOptionCategoryDrafts;
+  const setOptionCategoryDrafts = (next: StringMap | ((current: StringMap) => StringMap)) => {
+    const current = optionCategoryDraftSlot.resetKey === variantDraftResetKey ? optionCategoryDraftSlot.value : defaultOptionCategoryDrafts;
+    const value = typeof next === "function" ? next(current) : next;
+    setOptionCategoryDraftSlot({ resetKey: variantDraftResetKey, value });
+  };
+  const defaultOptionSyncDeltaDrafts = useMemo(() => {
+    const next: StringMap = {};
+    for (const entry of optionEntries) {
+      const canonicalRow = canonicalOptionRowByEntryKey.get(entry.entryKey);
+      const savedRow = savedOptionCategoryByEntryKey.get(entry.entryKey);
+      next[entry.entryKey] = String(Math.round(Number(canonicalRow?.sync_delta_krw_legacy ?? savedRow?.sync_delta_krw ?? 0)));
+    }
+    return next;
+  }, [canonicalOptionRowByEntryKey, optionEntries, savedOptionCategoryByEntryKey]);
+  const optionSyncDeltaDrafts =
+    optionSyncDeltaDraftSlot.resetKey === variantDraftResetKey ? optionSyncDeltaDraftSlot.value : defaultOptionSyncDeltaDrafts;
+  const setOptionSyncDeltaDrafts = (next: StringMap | ((current: StringMap) => StringMap)) => {
+    const current = optionSyncDeltaDraftSlot.resetKey === variantDraftResetKey ? optionSyncDeltaDraftSlot.value : defaultOptionSyncDeltaDrafts;
+    const value = typeof next === "function" ? next(current) : next;
+    setOptionSyncDeltaDraftSlot({ resetKey: variantDraftResetKey, value });
+  };
+  const defaultOptionOtherReasonDrafts = useMemo(() => {
+    const next: StringMap = {};
+    for (const entry of optionEntries) {
+      const canonicalRow = canonicalOptionRowByEntryKey.get(entry.entryKey);
+      next[entry.entryKey] = String(canonicalRow?.other_reason ?? "").trim();
+    }
+    return next;
+  }, [canonicalOptionRowByEntryKey, optionEntries]);
+  const optionOtherReasonDrafts =
+    optionOtherReasonDraftSlot.resetKey === variantDraftResetKey ? optionOtherReasonDraftSlot.value : defaultOptionOtherReasonDrafts;
+  const setOptionOtherReasonDrafts = (next: StringMap | ((current: StringMap) => StringMap)) => {
+    const current = optionOtherReasonDraftSlot.resetKey === variantDraftResetKey ? optionOtherReasonDraftSlot.value : defaultOptionOtherReasonDrafts;
+    const value = typeof next === "function" ? next(current) : next;
+    setOptionOtherReasonDraftSlot({ resetKey: variantDraftResetKey, value });
+  };
+  const effectiveOptionOtherReasonByEntryKey = useMemo(() => {
+    const next = new Map<string, string>();
+    for (const entry of optionEntries) {
+      const raw = optionOtherReasonDrafts[entry.entryKey] ?? defaultOptionOtherReasonDrafts[entry.entryKey] ?? "";
+      next.set(entry.entryKey, String(raw).trim());
+    }
+    return next;
+  }, [defaultOptionOtherReasonDrafts, optionEntries, optionOtherReasonDrafts]);
+  const defaultOptionDecorSelectionDrafts = useMemo(() => {
+    const next: StringMap = {};
+    for (const entry of optionEntries) {
+      const canonicalRow = canonicalOptionRowByEntryKey.get(entry.entryKey);
+      next[entry.entryKey] = String(canonicalRow?.decor_master_item_id_selected ?? "").trim();
+    }
+    return next;
+  }, [canonicalOptionRowByEntryKey, optionEntries]);
+  const optionDecorSelectionDrafts =
+    optionDecorSelectionDraftSlot.resetKey === variantDraftResetKey ? optionDecorSelectionDraftSlot.value : defaultOptionDecorSelectionDrafts;
+  const setOptionDecorSelectionDrafts = (next: StringMap | ((current: StringMap) => StringMap)) => {
+    const current = optionDecorSelectionDraftSlot.resetKey === variantDraftResetKey ? optionDecorSelectionDraftSlot.value : defaultOptionDecorSelectionDrafts;
+    const value = typeof next === "function" ? next(current) : next;
+    setOptionDecorSelectionDraftSlot({ resetKey: variantDraftResetKey, value });
+  };
+  const effectiveOptionDecorSelectionByEntryKey = useMemo(() => {
+    const next = new Map<string, string>();
+    for (const entry of optionEntries) {
+      const raw = optionDecorSelectionDrafts[entry.entryKey] ?? defaultOptionDecorSelectionDrafts[entry.entryKey] ?? "";
+      next.set(entry.entryKey, String(raw).trim());
+    }
+    return next;
+  }, [defaultOptionDecorSelectionDrafts, optionDecorSelectionDrafts, optionEntries]);
+
+  const defaultOptionNoticeSelectionDrafts = useMemo(() => {
+    const next: StringMap = {};
+    for (const entry of optionEntries) {
+      const canonicalRow = canonicalOptionRowByEntryKey.get(entry.entryKey);
+      next[entry.entryKey] = String(canonicalRow?.notice_value_selected ?? entry.optionValue ?? "").trim();
+    }
+    return next;
+  }, [canonicalOptionRowByEntryKey, optionEntries]);
+  const optionNoticeSelectionDrafts =
+    optionNoticeSelectionDraftSlot.resetKey === variantDraftResetKey ? optionNoticeSelectionDraftSlot.value : defaultOptionNoticeSelectionDrafts;
+  const setOptionNoticeSelectionDrafts = (next: StringMap | ((current: StringMap) => StringMap)) => {
+    const current = optionNoticeSelectionDraftSlot.resetKey === variantDraftResetKey ? optionNoticeSelectionDraftSlot.value : defaultOptionNoticeSelectionDrafts;
+    const value = typeof next === "function" ? next(current) : next;
+    setOptionNoticeSelectionDraftSlot({ resetKey: variantDraftResetKey, value });
+  };
+  const effectiveOptionNoticeSelectionByEntryKey = useMemo(() => {
+    const next = new Map<string, string>();
+    for (const entry of optionEntries) {
+      const raw = optionNoticeSelectionDrafts[entry.entryKey] ?? defaultOptionNoticeSelectionDrafts[entry.entryKey] ?? "";
+      next.set(entry.entryKey, String(raw).trim());
+    }
+    return next;
+  }, [defaultOptionNoticeSelectionDrafts, optionEntries, optionNoticeSelectionDrafts]);
+  const defaultOptionAxis1Drafts = useMemo(() => {
+    const next: StringMap = {};
+    for (const entry of optionEntries) {
+      const canonicalRow = canonicalOptionRowByEntryKey.get(entry.entryKey);
+      const categoryKey = canonicalRow?.category_key ?? guessCategoryByOptionName(entry.optionName);
+      if (categoryKey === "SIZE" || categoryKey === "COLOR_PLATING") {
+        next[entry.entryKey] = String(canonicalRow?.material_code_resolved ?? "").trim();
+      } else if (categoryKey === "DECOR") {
+        next[entry.entryKey] = String(canonicalRow?.decor_material_code_snapshot ?? "").trim();
+      } else if (categoryKey === "OTHER") {
+        next[entry.entryKey] = String(canonicalRow?.material_code_resolved ?? "").trim();
+      } else {
+        next[entry.entryKey] = "";
+      }
+    }
+    return next;
+  }, [canonicalOptionRowByEntryKey, optionEntries]);
+  const optionAxis1Drafts =
+    optionAxis1DraftSlot.resetKey === variantDraftResetKey ? optionAxis1DraftSlot.value : defaultOptionAxis1Drafts;
+  const setOptionAxis1Drafts = (next: StringMap | ((current: StringMap) => StringMap)) => {
+    const current = optionAxis1DraftSlot.resetKey === variantDraftResetKey ? optionAxis1DraftSlot.value : defaultOptionAxis1Drafts;
+    const value = typeof next === "function" ? next(current) : next;
+    setOptionAxis1DraftSlot({ resetKey: variantDraftResetKey, value });
+  };
+  const defaultOptionAxis2Drafts = useMemo(() => {
+    const next: StringMap = {};
+    for (const entry of optionEntries) {
+      const canonicalRow = canonicalOptionRowByEntryKey.get(entry.entryKey);
+      const categoryKey = canonicalRow?.category_key ?? guessCategoryByOptionName(entry.optionName);
+      if (categoryKey === "SIZE") {
+        next[entry.entryKey] = canonicalRow?.size_weight_g_selected == null ? "" : formatOptionSizeValue(canonicalRow.size_weight_g_selected);
+      } else if (categoryKey === "COLOR_PLATING") {
+        next[entry.entryKey] = String(canonicalRow?.color_code_selected ?? "").trim();
+      } else if (categoryKey === "DECOR") {
+        next[entry.entryKey] = String(canonicalRow?.decor_model_name_selected ?? "").trim();
+      } else if (categoryKey === "OTHER") {
+        next[entry.entryKey] = String(canonicalRow?.other_reason ?? "").trim();
+      } else {
+        next[entry.entryKey] = "";
+      }
+    }
+    return next;
+  }, [canonicalOptionRowByEntryKey, optionEntries]);
+  const optionAxis2Drafts =
+    optionAxis2DraftSlot.resetKey === variantDraftResetKey ? optionAxis2DraftSlot.value : defaultOptionAxis2Drafts;
+  const setOptionAxis2Drafts = (next: StringMap | ((current: StringMap) => StringMap)) => {
+    const current = optionAxis2DraftSlot.resetKey === variantDraftResetKey ? optionAxis2DraftSlot.value : defaultOptionAxis2Drafts;
+    const value = typeof next === "function" ? next(current) : next;
+    setOptionAxis2DraftSlot({ resetKey: variantDraftResetKey, value });
+  };
+  const defaultOptionAxis3Drafts = useMemo(() => {
+    const next: StringMap = {};
+    for (const entry of optionEntries) {
+      const canonicalRow = canonicalOptionRowByEntryKey.get(entry.entryKey);
+      const categoryKey = canonicalRow?.category_key ?? guessCategoryByOptionName(entry.optionName);
+      if (categoryKey === "DECOR") {
+        next[entry.entryKey] = String(Math.round(Number(canonicalRow?.decor_final_amount_krw ?? 0)));
+      } else if (categoryKey === "COLOR_PLATING" || categoryKey === "SIZE") {
+        next[entry.entryKey] = String(Math.round(Number(canonicalRow?.resolved_delta_krw ?? canonicalRow?.sync_delta_krw_legacy ?? 0)));
+      } else {
+        next[entry.entryKey] = "";
+      }
+    }
+    return next;
+  }, [canonicalOptionRowByEntryKey, optionEntries]);
+  const optionAxis3Drafts =
+    optionAxis3DraftSlot.resetKey === variantDraftResetKey ? optionAxis3DraftSlot.value : defaultOptionAxis3Drafts;
+  const setOptionAxis3Drafts = (next: StringMap | ((current: StringMap) => StringMap)) => {
+    const current = optionAxis3DraftSlot.resetKey === variantDraftResetKey ? optionAxis3DraftSlot.value : defaultOptionAxis3Drafts;
+    const value = typeof next === "function" ? next(current) : next;
+    setOptionAxis3DraftSlot({ resetKey: variantDraftResetKey, value });
+  };
+  const effectiveOptionAxis1ByEntryKey = useMemo(() => {
+    const next = new Map<string, string>();
+    for (const entry of optionEntries) {
+      const raw = optionAxis1Drafts[entry.entryKey] ?? defaultOptionAxis1Drafts[entry.entryKey] ?? "";
+      next.set(entry.entryKey, String(raw).trim());
+    }
+    return next;
+  }, [defaultOptionAxis1Drafts, optionAxis1Drafts, optionEntries]);
+  const effectiveOptionAxis2ByEntryKey = useMemo(() => {
+    const next = new Map<string, string>();
+    for (const entry of optionEntries) {
+      const raw = optionAxis2Drafts[entry.entryKey] ?? defaultOptionAxis2Drafts[entry.entryKey] ?? "";
+      next.set(entry.entryKey, String(raw).trim());
+    }
+    return next;
+  }, [defaultOptionAxis2Drafts, optionAxis2Drafts, optionEntries]);
+  const effectiveOptionAxis3ByEntryKey = useMemo(() => {
+    const next = new Map<string, string>();
+    for (const entry of optionEntries) {
+      const raw = optionAxis3Drafts[entry.entryKey] ?? defaultOptionAxis3Drafts[entry.entryKey] ?? "";
+      next.set(entry.entryKey, String(raw).trim());
+    }
+    return next;
+  }, [defaultOptionAxis3Drafts, optionAxis3Drafts, optionEntries]);
+  const effectiveCategoryByOptionName = useMemo(() => {
+    const next = new Map<string, OptionCategoryKey>();
+    for (const entry of optionEntries) {
+      const draftValue = String(optionCategoryDrafts[entry.optionName] ?? "").trim() as OptionCategoryKey;
+      next.set(entry.optionName, CATEGORY_OPTIONS.some((option) => option.key === draftValue) ? draftValue : (savedOptionCategoryByName.get(entry.optionName) ?? guessCategoryByOptionName(entry.optionName)));
+    }
+    return next;
+  }, [optionCategoryDrafts, optionEntries, savedOptionCategoryByName]);
+  const effectiveOptionSyncDeltaByEntryKey = useMemo(() => {
+    const next = new Map<string, number>();
+    for (const entry of optionEntries) {
+      const raw = optionSyncDeltaDrafts[entry.entryKey] ?? defaultOptionSyncDeltaDrafts[entry.entryKey] ?? "0";
+      next.set(entry.entryKey, Math.round(parseNumericInput(raw) ?? 0));
+    }
+    return next;
+  }, [defaultOptionSyncDeltaDrafts, optionEntries, optionSyncDeltaDrafts]);
+  const categoryOverrideByEntryKey = useMemo(() => {
+    const next: Record<string, OptionCategoryKey> = {};
+    for (const entry of optionEntries) {
+      next[entry.entryKey] = effectiveCategoryByOptionName.get(entry.optionName)
+        ?? canonicalOptionRowByEntryKey.get(entry.entryKey)?.category_key
+        ?? guessCategoryByOptionName(entry.optionName);
+    }
+    return next;
+  }, [canonicalOptionRowByEntryKey, effectiveCategoryByOptionName, optionEntries]);
+  const axisSelectionByEntryKey = useMemo(() => {
+    const next: Record<string, {
+      axis1_value?: string | null;
+      axis2_value?: string | null;
+      axis3_value?: string | null;
+      decor_master_item_id?: string | null;
+      decor_extra_delta_krw?: number | null;
+      decor_final_amount_krw?: number | null;
+    }> = {};
+    for (const entry of optionEntries) {
+      const categoryKey = categoryOverrideByEntryKey[entry.entryKey] ?? guessCategoryByOptionName(entry.optionName);
+      const axis1Value = effectiveOptionAxis1ByEntryKey.get(entry.entryKey) ?? "";
+      const axis2Value = effectiveOptionAxis2ByEntryKey.get(entry.entryKey) ?? "";
+      const axis3Value = effectiveOptionAxis3ByEntryKey.get(entry.entryKey) ?? "";
+      const noticeValue = effectiveOptionNoticeSelectionByEntryKey.get(entry.entryKey) ?? "";
+      const otherReason = effectiveOptionOtherReasonByEntryKey.get(entry.entryKey) ?? "";
+      const decorMasterItemId = String(effectiveOptionDecorSelectionByEntryKey.get(entry.entryKey) ?? "").trim();
+
+      if (categoryKey === "SIZE") {
+        next[entry.entryKey] = {
+          axis1_value: axis1Value || null,
+          axis2_value: axis2Value || null,
+          axis3_value: axis3Value || null,
+          decor_master_item_id: null,
+          decor_extra_delta_krw: null,
+          decor_final_amount_krw: null,
+        };
+        continue;
+      }
+
+      if (categoryKey === "COLOR_PLATING") {
+        next[entry.entryKey] = {
+          axis1_value: axis1Value || null,
+          axis2_value: axis2Value || null,
+          axis3_value: axis3Value || null,
+          decor_master_item_id: null,
+          decor_extra_delta_krw: null,
+          decor_final_amount_krw: null,
+        };
+        continue;
+      }
+
+      if (categoryKey === "DECOR") {
+        next[entry.entryKey] = {
+          axis1_value: null,
+          axis2_value: axis2Value || null,
+          axis3_value: null,
+          decor_master_item_id: decorMasterItemId || null,
+          decor_extra_delta_krw: null,
+          decor_final_amount_krw: null,
+        };
+        continue;
+      }
+
+      if (categoryKey === "OTHER") {
+        next[entry.entryKey] = {
+          axis1_value: axis1Value || null,
+          axis2_value: axis2Value || otherReason || null,
+          axis3_value: axis3Value || null,
+          decor_master_item_id: null,
+          decor_extra_delta_krw: null,
+          decor_final_amount_krw: null,
+        };
+        continue;
+      }
+
+      if (categoryKey === "NOTICE") {
+        next[entry.entryKey] = {
+          axis1_value: noticeValue || null,
+          axis2_value: null,
+          axis3_value: null,
+          decor_master_item_id: null,
+          decor_extra_delta_krw: null,
+          decor_final_amount_krw: null,
+        };
+      }
+    }
+    return next;
+  }, [
+    categoryOverrideByEntryKey,
+    effectiveOptionAxis1ByEntryKey,
+    effectiveOptionAxis2ByEntryKey,
+    effectiveOptionAxis3ByEntryKey,
+    effectiveOptionDecorSelectionByEntryKey,
+    effectiveOptionNoticeSelectionByEntryKey,
+    effectiveOptionOtherReasonByEntryKey,
+    optionEntries,
+  ]);
+  const evaluatedOptionRows = useMemo(() => buildCanonicalOptionRows({
+    productOptions: (editorPreview?.options ?? []).map((option) => ({
+      option_name: option.option_name,
+      option_value: (option.option_value ?? []).map((value) => ({ option_text: value?.option_text })),
+    })),
+    variants: (editorPreview?.variants ?? []).map((variant) => ({
+      options: (variant.options ?? []).map((option) => ({ name: option.name, value: option.value })),
+    })),
+    savedOptionCategories,
+    rules: optionLaborRuleRows,
+    masterMaterialCode: resolvedMasterMaterialCode,
+    masterMaterialLabel: resolvedMasterMaterialLabel,
+    otherReasonByEntryKey: Object.fromEntries(effectiveOptionOtherReasonByEntryKey.entries()),
+    categoryOverrideByEntryKey,
+    axisSelectionByEntryKey,
+  }), [
+    axisSelectionByEntryKey,
+    categoryOverrideByEntryKey,
+    editorPreview?.options,
+    editorPreview?.variants,
+    effectiveOptionOtherReasonByEntryKey,
+    optionLaborRuleRows,
+    resolvedMasterMaterialCode,
+    resolvedMasterMaterialLabel,
+    savedOptionCategories,
+  ]);
+  const evaluatedOptionRowByEntryKey = useMemo(() => {
+    const next = new Map<string, MappingCanonicalOptionRow>();
+    for (const row of evaluatedOptionRows) {
+      if (!row.entry_key || next.has(row.entry_key)) continue;
+      next.set(row.entry_key, row);
+    }
+    return next;
+  }, [evaluatedOptionRows]);
+  const compactOptionRows = useMemo<CompactOptionRow[]>(() => {
+    return optionEntries.map((entry) => {
+      const canonicalRow = evaluatedOptionRowByEntryKey.get(entry.entryKey)
+        ?? canonicalOptionRowByEntryKey.get(entry.entryKey);
+      const draftSyncDelta = effectiveOptionSyncDeltaByEntryKey.get(entry.entryKey) ?? 0;
+      const categoryKey = categoryOverrideByEntryKey[entry.entryKey] ?? canonicalRow?.category_key ?? guessCategoryByOptionName(entry.optionName);
+      const selectedMaterialCode = String(canonicalRow?.material_code_resolved ?? "").trim();
+      const selectedColorCode = String(canonicalRow?.color_code_selected ?? "").trim();
+      const selectedSizeWeightText = canonicalRow?.size_weight_g_selected == null ? "" : formatOptionSizeValue(canonicalRow.size_weight_g_selected);
+      const selectedDecorMasterId = String(canonicalRow?.decor_master_item_id_selected ?? "").trim();
+      const decorExtraDeltaKrw = Math.round(Number(canonicalRow?.decor_extra_delta_krw ?? 0));
+      const decorFinalAmountKrw = Math.round(Number(canonicalRow?.decor_final_amount_krw ?? 0));
+      const otherReason = categoryKey === "OTHER" ? String(canonicalRow?.other_reason ?? "").trim() : "";
+      const noticeValue = String(
+        canonicalRow?.notice_value_selected
+        ?? entry.optionValue
+        ?? "",
+      ).trim();
+      const rawAxisColumns = ["", "", ""];
+      if (entry.axisIndex >= 0 && entry.axisIndex < rawAxisColumns.length) rawAxisColumns[entry.axisIndex] = entry.optionValue;
+      const axisColumns = [...rawAxisColumns];
+      const materialText = String(canonicalRow?.material_label_resolved ?? canonicalRow?.material_code_resolved ?? "").trim();
+      const colorText = selectedColorCode || String(canonicalRow?.color_code_selected ?? "").trim();
+      const decorMaterialText = String(canonicalRow?.decor_material_code_snapshot ?? "").trim();
+      const decorModelText = String(canonicalRow?.decor_model_name_selected ?? "").trim();
+      const sizeWeightText = selectedSizeWeightText ? `${selectedSizeWeightText}g` : "";
+      const decorReferenceText = [
+        canonicalRow?.decor_weight_g_snapshot == null ? "" : `중량 ${Number(canonicalRow.decor_weight_g_snapshot)}g`,
+        canonicalRow?.decor_total_labor_cost_snapshot == null
+          ? ""
+          : `공임 ${Math.round(Number(canonicalRow.decor_total_labor_cost_snapshot))}원`,
+      ].filter(Boolean).join(" | ");
+
+      if (categoryKey === "MATERIAL") {
+        axisColumns[0] = materialText || entry.optionValue;
+        axisColumns[1] = "";
+        axisColumns[2] = "";
+      } else if (categoryKey === "COLOR_PLATING") {
+        axisColumns[0] = selectedMaterialCode || materialText || axisColumns[0];
+        axisColumns[1] = colorText || entry.optionValue;
+        axisColumns[2] = fmtKrw(canonicalRow?.resolved_delta_krw ?? draftSyncDelta);
+      } else if (categoryKey === "SIZE") {
+        axisColumns[0] = selectedMaterialCode || materialText || axisColumns[0];
+        axisColumns[1] = sizeWeightText || entry.optionValue;
+        axisColumns[2] = fmtKrw(canonicalRow?.resolved_delta_krw ?? draftSyncDelta);
+      } else if (categoryKey === "DECOR") {
+        axisColumns[0] = decorMaterialText || "";
+        axisColumns[1] = decorModelText || entry.optionValue;
+        axisColumns[2] = decorReferenceText;
+      } else if (categoryKey === "NOTICE") {
+        axisColumns[0] = noticeValue || entry.optionValue;
+        axisColumns[1] = "";
+        axisColumns[2] = "";
+      } else if (categoryKey === "OTHER") {
+        axisColumns[2] = otherReason || axisColumns[2];
+      }
+
+      const resolvedDeltaKrw = categoryKey === "NOTICE"
+        ? 0
+        : Math.round(Number(canonicalRow?.resolved_delta_krw ?? draftSyncDelta));
+      const syncDeltaKrw = categoryKey === "NOTICE"
+        ? 0
+        : categoryKey === "DECOR"
+          ? decorFinalAmountKrw
+          : categoryKey === "SIZE" || categoryKey === "COLOR_PLATING"
+            ? resolvedDeltaKrw
+            : draftSyncDelta;
+
+      return {
+        ...entry,
+        categoryKey,
+        syncDeltaKrw,
+        resolvedDeltaKrw,
+        legacyStatus: canonicalRow?.legacy_status ?? "VALID",
+        warnings: canonicalRow?.warnings ?? [],
+        sourceRuleEntryIds: canonicalRow?.source_rule_entry_ids ?? [],
+        otherReason,
+        axis1: axisColumns[0] ?? "",
+        axis2: axisColumns[1] ?? "",
+        axis3: axisColumns[2] ?? "",
+        selectedMaterialCode,
+        selectedColorCode,
+        selectedSizeWeightText,
+        selectedDecorMasterId,
+        decorExtraDeltaKrw,
+        decorFinalAmountKrw,
+        noticeValue,
+      };
+    });
+  }, [
+    categoryOverrideByEntryKey,
+    canonicalOptionRowByEntryKey,
+    effectiveOptionSyncDeltaByEntryKey,
+    evaluatedOptionRowByEntryKey,
+    optionEntries,
+  ]);
+  const compactOptionRowByEntryKey = useMemo(() => {
+    const next = new Map<string, CompactOptionRow>();
+    for (const row of compactOptionRows) {
+      next.set(row.entryKey, row);
+    }
+    return next;
+  }, [compactOptionRows]);
+  const blockingOptionRows = useMemo(
+    () => compactOptionRows.filter((row) => row.legacyStatus !== "VALID" || row.warnings.length > 0),
+    [compactOptionRows],
+  );
+  const colorAmountChoicesByEntryKey = useMemo(() => {
+    const next = new Map<string, number[]>();
+    for (const row of compactOptionRows) {
+      if (row.categoryKey !== "COLOR_PLATING") continue;
+      const materialCode = String(row.selectedMaterialCode ?? "").trim();
+      const colorCode = String(row.selectedColorCode ?? "").trim();
+      const key = materialCode && colorCode ? `${materialCode}::${colorCode}` : "";
+      const choices = key ? (colorAmountChoicesByMaterialColor.get(key) ?? []) : [];
+      next.set(row.entryKey, choices);
+    }
+    return next;
+  }, [colorAmountChoicesByMaterialColor, compactOptionRows]);
+  const materialChoicesByEntryKey = useMemo(() => {
+    const next = new Map<string, Array<{ value: string; label: string }>>();
+    for (const row of compactOptionRows) {
+      if (row.categoryKey !== "SIZE" && row.categoryKey !== "COLOR_PLATING" && row.categoryKey !== "OTHER") continue;
+      next.set(row.entryKey, withLegacyChoice(materialChoicePool, row.selectedMaterialCode));
+    }
+    return next;
+  }, [compactOptionRows, materialChoicePool]);
+  const sizeChoicesByEntryKey = useMemo(() => {
+    const next = new Map<string, Array<{ value: string; label: string }>>();
+    for (const row of compactOptionRows) {
+      if (row.categoryKey !== "SIZE") continue;
+      const base = loadedOptionAllowlist.sizes_by_material[row.selectedMaterialCode ?? ""] ?? [];
+      next.set(row.entryKey, withLegacyChoice(base, row.selectedSizeWeightText));
+    }
+    return next;
+  }, [compactOptionRows, loadedOptionAllowlist.sizes_by_material]);
+  const colorChoicesByEntryKey = useMemo(() => {
+    const next = new Map<string, Array<{ value: string; label: string }>>();
+    for (const row of compactOptionRows) {
+      if (row.categoryKey !== "COLOR_PLATING") continue;
+      const colorCodes = colorCodesByMaterial.get(row.selectedMaterialCode) ?? [];
+      const base = colorCodes.map((code) => ({ value: code, label: colorLabelByCode.get(code) ?? code }));
+      next.set(row.entryKey, withLegacyChoice(base, row.selectedColorCode));
+    }
+    return next;
+  }, [colorCodesByMaterial, colorLabelByCode, compactOptionRows]);
+  const axisColumnHeaders = ["1차분류", "2차분류", "3차분류"] as const;
+  const hasUnsavedCompactOptionChanges = useMemo(() => {
+    return optionEntries.some((entry) => {
+      const savedCategory = defaultOptionCategoryDrafts[entry.optionName] ?? guessCategoryByOptionName(entry.optionName);
+      const draftCategory = optionCategoryDrafts[entry.optionName] ?? savedCategory;
+      if (draftCategory !== savedCategory) return true;
+      const savedDelta = defaultOptionSyncDeltaDrafts[entry.entryKey] ?? "0";
+      const draftDelta = optionSyncDeltaDrafts[entry.entryKey] ?? savedDelta;
+      if (String(draftDelta).trim() !== String(savedDelta).trim()) return true;
+      const savedAxis1 = defaultOptionAxis1Drafts[entry.entryKey] ?? "";
+      const draftAxis1 = optionAxis1Drafts[entry.entryKey] ?? savedAxis1;
+      if (String(draftAxis1).trim() !== String(savedAxis1).trim()) return true;
+      const savedAxis2 = defaultOptionAxis2Drafts[entry.entryKey] ?? "";
+      const draftAxis2 = optionAxis2Drafts[entry.entryKey] ?? savedAxis2;
+      if (String(draftAxis2).trim() !== String(savedAxis2).trim()) return true;
+      const savedAxis3 = defaultOptionAxis3Drafts[entry.entryKey] ?? "";
+      const draftAxis3 = optionAxis3Drafts[entry.entryKey] ?? savedAxis3;
+      if (String(draftAxis3).trim() !== String(savedAxis3).trim()) return true;
+      if (draftCategory === "OTHER") {
+        const savedReason = defaultOptionOtherReasonDrafts[entry.entryKey] ?? "";
+        const draftReason = optionOtherReasonDrafts[entry.entryKey] ?? savedReason;
+        if (String(draftReason).trim() !== String(savedReason).trim()) return true;
+      }
+      if (draftCategory === "DECOR") {
+        const savedDecor = defaultOptionDecorSelectionDrafts[entry.entryKey] ?? "";
+        const draftDecor = optionDecorSelectionDrafts[entry.entryKey] ?? savedDecor;
+        if (String(draftDecor).trim() !== String(savedDecor).trim()) return true;
+      }
+      if (draftCategory === "NOTICE") {
+        const savedNotice = defaultOptionNoticeSelectionDrafts[entry.entryKey] ?? "";
+        const draftNotice = optionNoticeSelectionDrafts[entry.entryKey] ?? savedNotice;
+        if (String(draftNotice).trim() !== String(savedNotice).trim()) return true;
+      }
+      return false;
+    });
+  }, [defaultOptionAxis1Drafts, defaultOptionAxis2Drafts, defaultOptionAxis3Drafts, defaultOptionCategoryDrafts, defaultOptionDecorSelectionDrafts, defaultOptionNoticeSelectionDrafts, defaultOptionOtherReasonDrafts, defaultOptionSyncDeltaDrafts, optionAxis1Drafts, optionAxis2Drafts, optionAxis3Drafts, optionCategoryDrafts, optionDecorSelectionDrafts, optionEntries, optionNoticeSelectionDrafts, optionOtherReasonDrafts, optionSyncDeltaDrafts]);
+  const hasCompactOptionPricingDraft = useMemo(() => {
+    if (savedOptionCategories.length > 0) return true;
+    return hasUnsavedCompactOptionChanges;
+  }, [hasUnsavedCompactOptionChanges, savedOptionCategories.length]);
+  const defaultVariantOptionDrafts = useMemo(() => {
+    if (!editorPreview) return {} as Record<string, VariantOptionDraft>;
+    const next: Record<string, VariantOptionDraft> = {};
+    for (const variant of editorPreview.variants ?? []) {
+      const variantCode = normalizeVariantCode(variant.variantCode);
+      if (!variantCode) continue;
+      const lookupVariant = candidateVariantCodes(variant)
+        .map((candidateCode) => variantLookupIndex.get(candidateCode) ?? null)
+        .find((row): row is VariantLookupVariant => row !== null) ?? null;
+      const existing = candidateVariantCodes(variant)
+        .map((candidateCode) => editorMappingIndex.get(candidateCode) ?? null)
+        .find((row): row is MappingRow => row !== null) ?? null;
+      const inferred = inferMappingOptionSelection({
+        allowlist: loadedOptionAllowlist,
+        axes: variantAxesOf(lookupVariant ?? variant),
+        existing,
+        categoryRows: savedOptionCategories,
+      });
+      next[variantCode] = optionDraftWithLegacy(toVariantOptionDraft(inferred), existing);
+    }
+    return next;
+  }, [editorMappingIndex, editorPreview, loadedOptionAllowlist, savedOptionCategories, variantLookupIndex]);
+  const variantOptionDraftsByCode =
+    variantOptionDraftSlot.resetKey === variantDraftResetKey ? variantOptionDraftSlot.value : defaultVariantOptionDrafts;
+  const setVariantOptionDraftsByCode = (
+    next:
+      | Record<string, VariantOptionDraft>
+      | ((current: Record<string, VariantOptionDraft>) => Record<string, VariantOptionDraft>),
+  ) => {
+    const current = variantOptionDraftSlot.resetKey === variantDraftResetKey ? variantOptionDraftSlot.value : defaultVariantOptionDrafts;
+    const value = typeof next === "function" ? next(current) : next;
+    setVariantOptionDraftSlot({ resetKey: variantDraftResetKey, value });
+  };
+  const updateVariantOptionDraft = (variantCode: string, updater: (draft: VariantOptionDraft) => VariantOptionDraft) => {
+    setVariantOptionDraftsByCode((prev) => {
+      const current = prev[variantCode] ?? defaultVariantOptionDrafts[variantCode] ?? toVariantOptionDraft(null);
+      return { ...prev, [variantCode]: updater(current) };
+    });
+  };
+  const applyVariantMaterialDraft = (variantCode: string, nextMaterial: string | null) => {
+    updateVariantOptionDraft(variantCode, (current) => {
+      const nextSizePool = loadedOptionAllowlist.sizes_by_material[nextMaterial ?? ""] ?? [];
+      const keepCurrentSize = current.option_size_value_text
+        ? nextSizePool.some((choice) => choice.value === current.option_size_value_text)
+        : false;
+      return {
+        ...current,
+        option_material_code: nextMaterial,
+        option_size_value: keepCurrentSize ? current.option_size_value : null,
+        option_size_value_text: keepCurrentSize ? current.option_size_value_text : "",
+      };
+    });
+  };
+  const editorVariantCodes = useMemo(
+    () => (editorPreview?.variants ?? []).map((variant) => normalizeVariantCode(variant.variantCode)).filter(Boolean),
+    [editorPreview],
+  );
+  useEffect(() => {
+    if (editorVariantCodes.length === 0) {
+      if (focusedVariantCode) setFocusedVariantCode("");
+      return;
+    }
+    if (!focusedVariantCode || !editorVariantCodes.includes(focusedVariantCode)) {
+      setFocusedVariantCode(editorVariantCodes[0] ?? "");
+    }
+  }, [editorVariantCodes, focusedVariantCode]);
+
+  const focusedVariant = useMemo(
+    () => (editorPreview?.variants ?? []).find((variant) => normalizeVariantCode(variant.variantCode) === focusedVariantCode) ?? null,
+    [editorPreview, focusedVariantCode],
+  );
+  const focusedDraft = focusedVariantCode ? (variantOptionDraftsByCode[focusedVariantCode] ?? defaultVariantOptionDrafts[focusedVariantCode] ?? toVariantOptionDraft(null)) : null;
+  const focusedMaterialChoices = focusedDraft
+    ? withLegacyChoice(loadedOptionAllowlist.materials, focusedDraft.option_material_code)
+    : [];
+  const focusedColorChoices = focusedDraft
+    ? withLegacyChoice(loadedOptionAllowlist.colors, focusedDraft.option_color_code)
+    : [];
+  const focusedDecorChoices = focusedDraft
+    ? withLegacyChoice(loadedOptionAllowlist.decors, focusedDraft.option_decoration_code)
+    : [];
+  const focusedSizeChoices = focusedDraft
+    ? withLegacyChoice(
+        loadedOptionAllowlist.sizes_by_material[focusedDraft.option_material_code ?? ""] ?? [],
+        focusedDraft.option_size_value_text,
+      )
+    : [];
+  const variantAxisCount = useMemo(
+    () => loadedVariants.reduce((max, variant) => Math.max(max, variant.options?.length ?? 0), 0),
+    [loadedVariants],
+  );
+  const decorationMasterIdByCode = useMemo(() => {
+    const next = new Map<string, string | null>();
+    for (const choice of loadedOptionAllowlist.decors) {
+      next.set(choice.value, choice.decoration_master_id ?? null);
+    }
+    return next;
+  }, [loadedOptionAllowlist.decors]);
+  const buildVariantOptionDraftFromCompactRows = (variant: PreviewVariant, baseDraft: VariantOptionDraft): VariantOptionDraft => {
+    const next: VariantOptionDraft = { ...baseDraft };
+    for (const option of variant.options ?? []) {
+      const entryKey = optionEntryKey(option.name, option.value);
+      const compactRow = compactOptionRowByEntryKey.get(entryKey);
+      if (!compactRow) continue;
+      if ((compactRow.categoryKey === "MATERIAL" || compactRow.categoryKey === "SIZE" || compactRow.categoryKey === "COLOR_PLATING" || compactRow.categoryKey === "OTHER") && compactRow.selectedMaterialCode) {
+        next.option_material_code = compactRow.selectedMaterialCode;
+      }
+      if (compactRow.categoryKey === "SIZE" && compactRow.selectedSizeWeightText) {
+        next.option_size_value = parseNumericInput(compactRow.selectedSizeWeightText);
+        next.option_size_value_text = compactRow.selectedSizeWeightText;
+      }
+      if (compactRow.categoryKey === "COLOR_PLATING" && compactRow.selectedColorCode) {
+        next.option_color_code = compactRow.selectedColorCode;
+      }
+      if (compactRow.categoryKey === "DECOR") {
+        const selectedDecorCode = compactRow.selectedDecorMasterId
+          ? decorChoiceByMasterId.get(compactRow.selectedDecorMasterId)?.value ?? null
+          : null;
+        if (selectedDecorCode) next.option_decoration_code = selectedDecorCode;
+      }
+    }
+    return next;
+  };
+  const computeDraftAdditionalAmount = (variant: PreviewVariant): number => {
+    const variantCode = normalizeVariantCode(variant.variantCode);
+    const existing = findExistingRowForVariant(variant);
+    const baseDraft = variantOptionDraftsByCode[variantCode] ?? defaultVariantOptionDrafts[variantCode] ?? toVariantOptionDraft(null);
+    const draft = hasCompactOptionPricingDraft
+      ? buildVariantOptionDraftFromCompactRows(variant, baseDraft)
+      : baseDraft;
+    if ((existing?.option_price_mode ?? "SYNC") === "MANUAL") {
+      return Math.round(Number(variant.savedTargetAdditionalAmount ?? existing?.option_manual_target_krw ?? variant.additionalAmount ?? 0));
+    }
+    const optionPriceDelta = Math.round(Number(existing?.option_price_delta_krw ?? 0));
+    if (!optionLaborRuleEngineActive) {
+      return Math.round(Number(variant.savedTargetAdditionalAmount ?? optionPriceDelta ?? variant.additionalAmount ?? 0));
+    }
+    const decorationCode = String(draft.option_decoration_code ?? "").trim();
+    const decorationMasterId = decorationMasterIdByCode.get(decorationCode)
+      ?? (DECORATION_UUID_RE.test(decorationCode) ? decorationCode : null);
+    const buckets = computeOptionLaborRuleBuckets(optionLaborRuleRows, {
+      materialCode: String(draft.option_material_code ?? "").trim() || null,
+      additionalWeightG: parseNumericInput(draft.option_size_value_text),
+      platingEnabled: String(draft.option_color_code ?? "").trim().length > 0,
+      colorCode: String(draft.option_color_code ?? "").trim() || null,
+      decorationCode: decorationCode || null,
+      decorationMasterId,
+    });
+    const total = (existing?.sync_rule_material_enabled !== false ? buckets.material : 0)
+      + (existing?.sync_rule_weight_enabled !== false ? buckets.size : 0)
+      + (existing?.sync_rule_plating_enabled !== false ? buckets.colorPlating : 0)
+      + (existing?.sync_rule_decoration_enabled !== false ? buckets.decor : 0)
+      + buckets.other
+      + optionPriceDelta;
+    return Math.round(total);
+  };
+  const computedVariantAdditionalByCode = useMemo(() => {
+    const next: NumberMap = {};
+    for (const variant of editorPreview?.variants ?? []) {
+      const existing = findExistingRowForVariant(variant);
+      if ((existing?.option_price_mode ?? "SYNC") === "MANUAL") {
+        next[variant.variantCode] = Math.round(Number(variant.savedTargetAdditionalAmount ?? existing?.option_manual_target_krw ?? variant.additionalAmount ?? 0));
+        continue;
+      }
+      const variantLevelDelta = Math.round(Number(existing?.option_price_delta_krw ?? 0));
+      if (hasCompactOptionPricingDraft) {
+        const optionValueDelta = (variant.options ?? []).reduce((sum, option) => {
+          const entryKey = optionEntryKey(option.name, option.value);
+          const compactResolvedDelta = compactOptionRowByEntryKey.get(entryKey)?.resolvedDeltaKrw;
+          return sum + Math.round(Number(compactResolvedDelta ?? 0));
+        }, 0);
+        next[variant.variantCode] = Math.round(optionValueDelta + variantLevelDelta);
+        continue;
+      }
+      next[variant.variantCode] = computeDraftAdditionalAmount(variant);
+    }
+    return next;
+  }, [
+    compactOptionRowByEntryKey,
+    decorationMasterIdByCode,
+    decorChoiceByMasterId,
+    defaultVariantOptionDrafts,
+    editorPreview,
+    effectiveOptionSyncDeltaByEntryKey,
+    hasCompactOptionPricingDraft,
+    optionLaborRuleEngineActive,
+    optionLaborRuleRows,
+    variantOptionDraftsByCode,
+  ]);
+  const buildVariantMappingPayload = (variant: PreviewVariant): MappingWritePayload => {
+    const variantCode = normalizeVariantCode(variant.variantCode);
+    const existing = findExistingRowForVariant(variant);
+    const baseDraft = variantOptionDraftsByCode[variantCode] ?? defaultVariantOptionDrafts[variantCode] ?? toVariantOptionDraft(null);
+    const draft = hasCompactOptionPricingDraft
+      ? buildVariantOptionDraftFromCompactRows(variant, baseDraft)
+      : baseDraft;
+    const optionPriceMode: "SYNC" | "MANUAL" = existing?.option_price_mode === "MANUAL" ? "MANUAL" : "SYNC";
+    const syncRuleSetId = optionPriceMode === "SYNC" ? (siblingSyncRuleSetId || String(existing?.sync_rule_set_id ?? "").trim()) : "";
+    const externalProductNo = canonicalEditorProductNo || resolvedEditorProductNo || String(editorPreview?.productNo ?? "").trim();
+    if (!effectiveChannelId) throw new Error("channel_id가 필요합니다");
+    if (!editorMasterItemId) throw new Error("master_item_id가 필요합니다");
+    if (!externalProductNo) throw new Error("external_product_no가 필요합니다");
+    if (!variantCode) throw new Error("external_variant_code가 필요합니다");
+    if (optionPriceMode === "SYNC" && !syncRuleSetId) throw new Error("sync_rule_set_id를 확인할 수 없습니다");
+    return {
+      channel_id: effectiveChannelId,
+      master_item_id: editorMasterItemId,
+      external_product_no: externalProductNo,
+      external_variant_code: variantCode,
+      sync_rule_set_id: syncRuleSetId || null,
+      option_material_code: draft.option_material_code,
+      option_color_code: draft.option_color_code,
+      option_decoration_code: draft.option_decoration_code,
+      option_size_value: parseNumericInput(draft.option_size_value_text),
+      material_multiplier_override: existing?.material_multiplier_override ?? null,
+      size_weight_delta_g: existing?.size_weight_delta_g ?? null,
+      option_price_delta_krw: existing?.option_price_delta_krw ?? null,
+      option_price_mode: optionPriceMode,
+      option_manual_target_krw: optionPriceMode === "MANUAL" ? existing?.option_manual_target_krw ?? null : null,
+      include_master_plating_labor: existing?.include_master_plating_labor !== false,
+      sync_rule_material_enabled: existing?.sync_rule_material_enabled !== false,
+      sync_rule_weight_enabled: existing?.sync_rule_weight_enabled !== false,
+      sync_rule_plating_enabled: existing?.sync_rule_plating_enabled !== false,
+      sync_rule_decoration_enabled: existing?.sync_rule_decoration_enabled !== false,
+      sync_rule_margin_rounding_enabled: existing?.sync_rule_margin_rounding_enabled !== false,
+      current_product_sync_profile: editorCurrentProductSyncProfile,
+      mapping_source: "MANUAL",
+      is_active: true,
+    };
+  };
+  const persistEditorVariantMappings = async (): Promise<BulkMappingResponse> => {
+    if (!editorPreview || !editorMasterItemId) {
+      return { data: [], requested: 0, deduplicated: 0, saved: 0 };
+    }
+    const rows = (editorPreview.variants ?? []).map((variant) => buildVariantMappingPayload(variant));
+    if (rows.length === 0) {
+      return { data: [], requested: 0, deduplicated: 0, saved: 0 };
+    }
+    return shopApiSend<BulkMappingResponse>("/api/channel-products/bulk", "POST", { rows });
+  };
+  const applyComputedMappingPreview = () => {
+    setEditorPreview((current) => {
+      if (!current) return current;
+      return {
+        ...current,
+        variants: (current.variants ?? []).map((variant) => ({
+          ...variant,
+          savedTargetAdditionalAmount: Math.round(Number(computedVariantAdditionalByCode[variant.variantCode] ?? variant.savedTargetAdditionalAmount ?? 0)),
+        })),
+      };
+    });
+  };
+  const saveCategoriesMutation = useMutation({
+    mutationFn: async (_args?: { skipApply?: boolean }) => {
+      if (!effectiveChannelId) throw new Error("channel_id가 필요합니다");
+      if (!editorMasterItemId) throw new Error("master_item_id가 필요합니다");
+      const externalProductNo = canonicalEditorProductNo || resolvedEditorProductNo || String(editorPreview?.productNo ?? "").trim();
+      if (!externalProductNo) throw new Error("external_product_no가 필요합니다");
+      if (optionEntries.length === 0) return { ok: true, data: [] as OptionCategoryRow[] };
+      if (blockingOptionRows.length > 0) {
+        throw new Error(`legacy/unresolved 옵션값 ${blockingOptionRows.length}개를 먼저 해결한 뒤 저장하세요`);
+      }
+      const rows = optionEntries.flatMap((entry) => {
+        const compactRow = compactOptionRowByEntryKey.get(entry.entryKey);
+        const categoryKey = compactRow?.categoryKey ?? effectiveCategoryByOptionName.get(entry.optionName) ?? guessCategoryByOptionName(entry.optionName);
+        if (categoryKey === "NOTICE") return [];
+        const syncDelta = categoryKey === "DECOR"
+          ? Math.round(Number(compactRow?.decorFinalAmountKrw ?? 0))
+          : categoryKey === "SIZE" || categoryKey === "COLOR_PLATING"
+            ? Math.round(Number(compactRow?.syncDeltaKrw ?? 0))
+            : Math.round(parseNumericInput(optionSyncDeltaDrafts[entry.entryKey] ?? defaultOptionSyncDeltaDrafts[entry.entryKey] ?? "0") ?? 0);
+        if (categoryKey !== "DECOR" && syncDelta % 1000 !== 0) {
+          throw new Error(`${entry.optionName} ${entry.optionValue} 가격은 1000원 단위로 입력해야 합니다`);
+        }
+        if (categoryKey === "DECOR") {
+          const selectedDecorMasterId = String(compactRow?.selectedDecorMasterId ?? "").trim();
+          if (!selectedDecorMasterId || !decorChoiceByMasterId.has(selectedDecorMasterId)) {
+            throw new Error(`${entry.optionName} ${entry.optionValue} 장식은 등록된 allowlist 항목만 선택할 수 있습니다`);
+          }
+        }
+        return [{
+          option_name: entry.optionName,
+          option_value: entry.optionValue,
+          category_key: categoryKey,
+          sync_delta_krw: syncDelta,
+        }];
+      });
+      const otherReasonRows = optionEntries
+        .map((entry) => {
+          const categoryKey = effectiveCategoryByOptionName.get(entry.optionName) ?? guessCategoryByOptionName(entry.optionName);
+          if (categoryKey !== "OTHER") return null;
+          const reason = String(optionOtherReasonDrafts[entry.entryKey] ?? defaultOptionOtherReasonDrafts[entry.entryKey] ?? "").trim();
+          if (!reason) {
+            throw new Error(`${entry.optionName} ${entry.optionValue} 기타 카테고리는 사유를 입력해야 합니다`);
+          }
+          return {
+            entry_key: entry.entryKey,
+            other_reason: reason,
+            resolved_delta_krw: Math.round(parseNumericInput(optionSyncDeltaDrafts[entry.entryKey] ?? defaultOptionSyncDeltaDrafts[entry.entryKey] ?? "0") ?? 0),
+            category_key: "OTHER",
+          };
+        })
+        .filter((row): row is { entry_key: string; other_reason: string; resolved_delta_krw: number; category_key: "OTHER" } => Boolean(row));
+
+      const noticeCategoryRows = optionEntries
+        .map((entry) => {
+          const compactRow = compactOptionRowByEntryKey.get(entry.entryKey);
+          const categoryKey = compactRow?.categoryKey ?? effectiveCategoryByOptionName.get(entry.optionName) ?? guessCategoryByOptionName(entry.optionName);
+          if (categoryKey !== "NOTICE") return null;
+          const noticeValue = String(compactRow?.noticeValue ?? "").trim();
+          if (!noticeValue) {
+            throw new Error(`${entry.optionName} ${entry.optionValue} 공지 카테고리는 1차 값을 선택해야 합니다`);
+          }
+          return {
+            axis_key: "OPTION_CATEGORY",
+            entry_key: entry.entryKey,
+            category_key: "NOTICE",
+          };
+        })
+        .filter((row): row is { axis_key: "OPTION_CATEGORY"; entry_key: string; category_key: "NOTICE" } => Boolean(row));
+      const optionAxisSelectionRows = optionEntries
+        .map((entry) => {
+          const compactRow = compactOptionRowByEntryKey.get(entry.entryKey);
+          const canonicalRow = evaluatedOptionRowByEntryKey.get(entry.entryKey)
+            ?? canonicalOptionRowByEntryKey.get(entry.entryKey);
+          const categoryKey = compactRow?.categoryKey ?? effectiveCategoryByOptionName.get(entry.optionName) ?? guessCategoryByOptionName(entry.optionName);
+          if (categoryKey === "MATERIAL") return null;
+          if (categoryKey === "DECOR") {
+            const selectedDecorMasterId = String(compactRow?.selectedDecorMasterId ?? "").trim();
+            const selectedDecorChoice = selectedDecorMasterId ? (decorChoiceByMasterId.get(selectedDecorMasterId) ?? null) : null;
+            if (!selectedDecorMasterId || !selectedDecorChoice) {
+              throw new Error(`${entry.optionName} ${entry.optionValue} 장식은 등록된 allowlist 항목만 선택할 수 있습니다`);
+            }
+            return {
+              axis_key: "OPTION_AXIS_SELECTION" as const,
+              entry_key: entry.entryKey,
+              category_key: "DECOR" as const,
+              axis1_value: String(compactRow?.axis1 ?? canonicalRow?.decor_material_code_snapshot ?? "").trim() || null,
+              axis2_value: selectedDecorChoice.label,
+              axis3_value: String(compactRow?.axis3 ?? "").trim() || null,
+              decor_master_item_id: selectedDecorMasterId,
+              decor_extra_delta_krw: Math.round(Number(compactRow?.decorExtraDeltaKrw ?? 0)),
+              decor_final_amount_krw: Math.round(Number(compactRow?.decorFinalAmountKrw ?? 0)),
+            };
+          }
+          if (categoryKey === "NOTICE") {
+            const noticeValue = String(compactRow?.noticeValue ?? "").trim();
+            if (!noticeValue) {
+              throw new Error(`${entry.optionName} ${entry.optionValue} 공지 카테고리는 1차 값을 선택해야 합니다`);
+            }
+            return {
+              axis_key: "OPTION_AXIS_SELECTION" as const,
+              entry_key: entry.entryKey,
+              category_key: "NOTICE" as const,
+              axis1_value: noticeValue,
+              axis2_value: null,
+              axis3_value: null,
+              decor_master_item_id: null,
+              decor_extra_delta_krw: null,
+              decor_final_amount_krw: null,
+            };
+          }
+          if (categoryKey === "SIZE") {
+            const materialCode = String(compactRow?.selectedMaterialCode ?? "").trim();
+            const sizeWeight = String(compactRow?.selectedSizeWeightText ?? "").trim();
+            return {
+              axis_key: "OPTION_AXIS_SELECTION" as const,
+              entry_key: entry.entryKey,
+              category_key: "SIZE" as const,
+              axis1_value: materialCode || null,
+              axis2_value: sizeWeight || null,
+              axis3_value: String(Math.round(Number(compactRow?.syncDeltaKrw ?? 0))),
+              decor_master_item_id: null,
+              decor_extra_delta_krw: null,
+              decor_final_amount_krw: null,
+            };
+          }
+          if (categoryKey === "COLOR_PLATING") {
+            const materialCode = String(compactRow?.selectedMaterialCode ?? "").trim();
+            const colorCode = String(compactRow?.selectedColorCode ?? "").trim();
+            return {
+              axis_key: "OPTION_AXIS_SELECTION" as const,
+              entry_key: entry.entryKey,
+              category_key: "COLOR_PLATING" as const,
+              axis1_value: materialCode || null,
+              axis2_value: colorCode || null,
+              axis3_value: String(Math.round(Number(compactRow?.syncDeltaKrw ?? 0))),
+              decor_master_item_id: null,
+              decor_extra_delta_krw: null,
+              decor_final_amount_krw: null,
+            };
+          }
+          if (categoryKey === "OTHER") {
+            const materialCode = String(compactRow?.selectedMaterialCode ?? "").trim();
+            const reason = String(compactRow?.otherReason ?? "").trim();
+            return {
+              axis_key: "OPTION_AXIS_SELECTION" as const,
+              entry_key: entry.entryKey,
+              category_key: "OTHER" as const,
+              axis1_value: materialCode || null,
+              axis2_value: reason || null,
+              axis3_value: String(Math.round(Number(compactRow?.syncDeltaKrw ?? 0))),
+              decor_master_item_id: null,
+              decor_extra_delta_krw: null,
+              decor_final_amount_krw: null,
+            };
+          }
+          return null;
+        })
+        .filter((row): row is NonNullable<typeof row> => Boolean(row));
+      const categorySaveRes = rows.length > 0
+        ? await shopApiSend<{ ok: boolean; data: OptionCategoryRow[] }>("/api/channel-option-categories", "POST", {
+            channel_id: effectiveChannelId,
+            master_item_id: editorMasterItemId,
+            external_product_no: externalProductNo,
+            actor: "AUTO_PRICE_PAGE",
+            rows,
+          })
+        : { ok: true, data: [] as OptionCategoryRow[] };
+
+      if (otherReasonRows.length > 0) {
+        await shopApiSend<{ data: Array<{ policy_log_id: string }>; saved: number }>("/api/channel-product-option-mappings-v2-logs", "POST", {
+          channel_id: effectiveChannelId,
+          master_item_id: editorMasterItemId,
+          external_product_no: externalProductNo,
+          change_reason: "AUTO_PRICE_OTHER_REASON_SAVE",
+          rows: otherReasonRows,
+        });
+      }
+      if (noticeCategoryRows.length > 0) {
+        await shopApiSend<{ data: Array<{ policy_log_id: string }>; saved: number }>("/api/channel-product-option-mappings-v2-logs", "POST", {
+          channel_id: effectiveChannelId,
+          master_item_id: editorMasterItemId,
+          external_product_no: externalProductNo,
+          change_reason: "AUTO_PRICE_NOTICE_CATEGORY_SAVE",
+          rows: noticeCategoryRows,
+        });
+      }
+      if (optionAxisSelectionRows.length > 0) {
+        await shopApiSend<{ data: Array<{ policy_log_id: string }>; saved: number }>("/api/channel-product-option-mappings-v2-logs", "POST", {
+          channel_id: effectiveChannelId,
+          master_item_id: editorMasterItemId,
+          external_product_no: externalProductNo,
+          change_reason: "AUTO_PRICE_OPTION_AXIS_SELECTION_SAVE",
+          rows: optionAxisSelectionRows,
+        });
+      }
+
+      return categorySaveRes;
+    },
+    onSuccess: async (_res, args) => {
+      setOptionCategorySaveError(null);
+      applyComputedMappingPreview();
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: ["auto-price-variant-lookup", effectiveChannelId, editorMasterItemId, editorPreview?.productNo ?? ""] }),
+        qc.invalidateQueries({ queryKey: ["pricing-snapshot-explain", effectiveChannelId, editorMasterItemId] }),
+      ]);
+      if (!args?.skipApply && editorPreview && !applyEditorMutation.isPending) {
+        await applyEditorMutation.mutateAsync();
+      }
+    },
+    onError: (error) => {
+      setOptionCategorySaveError(describeError(error));
+    },
+  });
+  const saveMappingsMutation = useMutation({
+    mutationFn: persistEditorVariantMappings,
+    onSuccess: async () => {
+      setMappingSaveError(null);
+      applyComputedMappingPreview();
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: ["auto-price-editor-mappings", effectiveChannelId, editorMasterItemId] }),
+        qc.invalidateQueries({ queryKey: ["auto-price-gallery-mappings", effectiveChannelId] }),
+        qc.invalidateQueries({ queryKey: ["auto-price-variant-lookup", effectiveChannelId, editorMasterItemId, editorPreview?.productNo ?? ""] }),
+        qc.invalidateQueries({ queryKey: ["auto-price-option-labor-rules", effectiveChannelId, editorMasterItemId, canonicalEditorProductNo] }),
+      ]);
+    },
+    onError: (error) => {
+      setMappingSaveError(describeError(error));
+    },
   });
 
   const pricingOverridesQuery = useQuery({
@@ -1231,18 +2980,28 @@ export default function ShoppingAutoPricePage() {
       ),
   });
 
+  const pricingOverrideRows = useMemo(() => pricingOverridesQuery.data?.data ?? [], [pricingOverridesQuery.data?.data]);
   const activePricingOverrides = useMemo(
-    () => (pricingOverridesQuery.data?.data ?? []).filter((row) => row.is_active === true),
-    [pricingOverridesQuery.data?.data],
+    () => pricingOverrideRows.filter((row) => row.is_active === true),
+    [pricingOverrideRows],
   );
-
-  useEffect(() => {
-    if (!editorMasterItemId) {
-      setSellingPriceOverrideLocked(false);
-      return;
-    }
-    setSellingPriceOverrideLocked(activePricingOverrides.length > 0);
-  }, [editorMasterItemId, activePricingOverrides.length]);
+  const sellingPriceOverrideLockResetKey = useMemo(
+    () => [editorMasterItemId, ...activePricingOverrides.map((row) => row.override_id).sort((a, b) => a.localeCompare(b))].join("|"),
+    [activePricingOverrides, editorMasterItemId],
+  );
+  const defaultSellingPriceOverrideLocked = Boolean(editorMasterItemId && activePricingOverrides.length > 0);
+  const sellingPriceOverrideLocked =
+    sellingPriceOverrideLockedSlot.resetKey === sellingPriceOverrideLockResetKey
+      ? sellingPriceOverrideLockedSlot.value
+      : defaultSellingPriceOverrideLocked;
+  const setSellingPriceOverrideLocked = (next: boolean | ((current: boolean) => boolean)) => {
+    const current =
+      sellingPriceOverrideLockedSlot.resetKey === sellingPriceOverrideLockResetKey
+        ? sellingPriceOverrideLockedSlot.value
+        : defaultSellingPriceOverrideLocked;
+    const value = typeof next === "function" ? next(current) : next;
+    setSellingPriceOverrideLockedSlot({ resetKey: sellingPriceOverrideLockResetKey, value });
+  };
 
   const saveFloorMutation = useMutation({
     mutationFn: () => shopApiSend<{ ok: boolean }>("/api/channel-floor-guards", "POST", {
@@ -1265,6 +3024,7 @@ export default function ShoppingAutoPricePage() {
         rounding_unit: Math.max(1, Math.round(parseNumericInput(roundingUnit) ?? 1000)),
         rounding_mode: roundingMode,
         material_factor_set_id: policyFactorSetId || null,
+        auto_sync_threshold_profile: autoSyncThresholdProfile,
         auto_sync_force_full: autoSyncForceFull,
         auto_sync_min_change_krw: Math.max(0, Math.round(parseNumericInput(autoSyncMinChangeKrw) ?? 5000)),
         auto_sync_min_change_rate: Math.max(0, Math.min(1, (parseNumericInput(autoSyncMinChangeRatePct) ?? 2) / 100)),
@@ -1339,24 +3099,108 @@ export default function ShoppingAutoPricePage() {
       const data = res.data;
       setEditorPreview(data);
       {
-        const previewMasterId = String(data.master_item_id ?? "").trim();
+        const previewMasterId = String(data.master_item_id ?? '').trim();
         if (previewMasterId) setEditorMasterItemIdHint(previewMasterId);
       }
-      setEditorPrice(data.price != null ? String(data.price) : "");
-      setEditorRetailPrice(data.retailPrice != null ? String(data.retailPrice) : "");
-      setEditorSelling((data.selling || "T").toUpperCase());
-      setEditorDisplay((data.display || "T").toUpperCase());
+      setEditorPrice(data.price != null ? String(data.price) : '');
+      setEditorRetailPrice(data.retailPrice != null ? String(data.retailPrice) : '');
+      setEditorSelling((data.selling || 'T').toUpperCase());
+      setEditorDisplay((data.display || 'T').toUpperCase());
       setEditorFloorPrice(String(Math.max(0, Math.round(Number(data.floor_price_krw ?? 0)))));
       setEditorExcludePlatingLabor(Boolean(data.exclude_plating_labor));
-      const nextDrafts: Record<string, string> = {};
-      for (const variant of data.variants) {
-        nextDrafts[variant.variantCode] = variant.additionalAmount != null ? String(variant.additionalAmount) : "0";
-      }
-      setVariantDrafts(nextDrafts);
-      setOptionCategoryDrafts({});
-      setOptionSyncDeltaDrafts({});
+      setEditorCurrentProductSyncProfile(normalizeCurrentProductSyncProfile(data.current_product_sync_profile));
+      setCurrentProductSyncProfileSaveError(null);
+      setVariantOptionDraftSlot({ resetKey: '', value: {} });
+      setOptionCategoryDraftSlot({ resetKey: '', value: {} });
+      setOptionSyncDeltaDraftSlot({ resetKey: '', value: {} });
+      setOptionOtherReasonDraftSlot({ resetKey: '', value: {} });
+      setOptionDecorSelectionDraftSlot({ resetKey: '', value: {} });
+      setOptionNoticeSelectionDraftSlot({ resetKey: '', value: {} });
+      setOptionAxis1DraftSlot({ resetKey: '', value: {} });
+      setOptionAxis2DraftSlot({ resetKey: '', value: {} });
+      setOptionAxis3DraftSlot({ resetKey: '', value: {} });
+      setFocusedVariantCode('');
+      setShowAdvancedVariantMapping(false);
+      setMappingSaveError(null);
+      setOptionCategorySaveError(null);
+      setApplyError(null);
       setIsEditDrawerOpen(false);
       setIsPreviewDrawerOpen(true);
+    },
+  });
+
+  const updateCurrentProductSyncProfileInGallery = (masterItemId: string, profile: CurrentProductSyncProfile) => {
+    if (!masterItemId) return;
+    qc.setQueryData<{ data: DashboardGalleryRow[] }>(['shop-dashboard-gallery', effectiveChannelId], (current) => {
+      if (!current) return current;
+      return {
+        ...current,
+        data: current.data.map((row) => (String(row.master_item_id ?? '').trim() === masterItemId
+          ? { ...row, current_product_sync_profile: profile }
+          : row)),
+      };
+    });
+    qc.setQueryData<{ data: MappingRow[] }>(['auto-price-gallery-mappings', effectiveChannelId], (current) => {
+      if (!current) return current;
+      return {
+        ...current,
+        data: current.data.map((row) => (String(row.master_item_id ?? '').trim() === masterItemId && row.is_active !== false
+          ? { ...row, current_product_sync_profile: profile }
+          : row)),
+      };
+    });
+  };
+
+  const saveCurrentProductSyncProfileMutation = useMutation({
+    mutationFn: async (profile: CurrentProductSyncProfile) => {
+      const resolvedMasterItemId = String(editorMasterItemId ?? '').trim();
+      if (!effectiveChannelId) throw new Error('channel_id가 필요합니다');
+      if (!resolvedMasterItemId) throw new Error('master_item_id가 없어 현재 상품 프로필을 저장할 수 없습니다');
+      return shopApiSend<{ ok: boolean; current_product_sync_profile?: CurrentProductSyncProfile | null }>(
+        '/api/channel-products/current-product-sync-profile',
+        'POST',
+        {
+          channel_id: effectiveChannelId,
+          master_item_id: resolvedMasterItemId,
+          current_product_sync_profile: profile,
+        },
+      );
+    },
+    onMutate: async (profile) => {
+      const resolvedMasterItemId = String(editorMasterItemId ?? '').trim();
+      const previousPreview = editorPreview;
+      const previousProfile = editorCurrentProductSyncProfile;
+      const previousGallery = qc.getQueryData<{ data: DashboardGalleryRow[] }>(['shop-dashboard-gallery', effectiveChannelId]);
+      const previousGalleryMappings = qc.getQueryData<{ data: MappingRow[] }>(['auto-price-gallery-mappings', effectiveChannelId]);
+      setCurrentProductSyncProfileSaveError(null);
+      setEditorCurrentProductSyncProfile(profile);
+      setEditorPreview((current) => (current ? { ...current, current_product_sync_profile: profile } : current));
+      updateCurrentProductSyncProfileInGallery(resolvedMasterItemId, profile);
+      return { previousPreview, previousProfile, previousGallery, previousGalleryMappings };
+    },
+    onSuccess: async (res, profile) => {
+      const savedProfile = normalizeCurrentProductSyncProfile(res.current_product_sync_profile ?? profile);
+      const resolvedMasterItemId = String(editorMasterItemId ?? '').trim();
+      setEditorCurrentProductSyncProfile(savedProfile);
+      setEditorPreview((current) => (current ? { ...current, current_product_sync_profile: savedProfile } : current));
+      updateCurrentProductSyncProfileInGallery(resolvedMasterItemId, savedProfile);
+      setCurrentProductSyncProfileSaveError(null);
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: ['shop-dashboard-gallery', effectiveChannelId] }),
+        qc.invalidateQueries({ queryKey: ['auto-price-gallery-mappings', effectiveChannelId] }),
+        qc.invalidateQueries({ queryKey: ['shop-summary', effectiveChannelId] }),
+      ]);
+    },
+    onError: (error, _profile, context) => {
+      setEditorCurrentProductSyncProfile(context?.previousProfile ?? 'GENERAL');
+      if (context?.previousPreview !== undefined) setEditorPreview(context.previousPreview ?? null);
+      if (context?.previousGallery !== undefined) {
+        qc.setQueryData(['shop-dashboard-gallery', effectiveChannelId], context.previousGallery);
+      }
+      if (context?.previousGalleryMappings !== undefined) {
+        qc.setQueryData(['auto-price-gallery-mappings', effectiveChannelId], context.previousGalleryMappings);
+      }
+      setCurrentProductSyncProfileSaveError(error instanceof Error ? error.message : '현재 상품 프로필 저장 실패');
     },
   });
 
@@ -1411,7 +3255,7 @@ export default function ShoppingAutoPricePage() {
       if (editorPreview) {
         const optimisticVariants = (editorPreview.variants ?? []).map((variant) => ({
           ...variant,
-          additionalAmount: Number(computedVariantAdditionalByCode.get(variant.variantCode) ?? variant.additionalAmount ?? 0),
+          additionalAmount: Number(computedVariantAdditionalByCode[variant.variantCode] ?? variant.additionalAmount ?? 0),
         }));
         setEditorPreview({ ...editorPreview, variants: optimisticVariants });
       }
@@ -1420,32 +3264,17 @@ export default function ShoppingAutoPricePage() {
     mutationFn: async () => {
       setApplyError(null);
       if (editorPreview && editorMasterItemId) {
-        if (optionEntries.length > 0) {
-          const rows = optionEntries.map((entry) => {
-            const categoryKey = optionCategoryDrafts[entry.option_name] ?? effectiveCategoryByKey.get(entry.option_name) ?? guessCategoryByOptionName(entry.option_name);
-            return {
-              option_name: entry.option_name,
-              option_value: entry.option_value,
-              category_key: categoryKey,
-              sync_delta_krw: Math.round(Number(effectiveOptionSyncDeltaByEntryKey.get(optionEntryKey(entry.option_name, entry.option_value)) ?? 0)),
-            };
-          });
-
-          await shopApiSend<{ ok: boolean }>("/api/channel-option-categories", "POST", {
-            channel_id: effectiveChannelId,
-            master_item_id: editorMasterItemId,
-            external_product_no: editorPreview.productNo,
-            actor: "AUTO_PRICE_PAGE_APPLY",
-            rows,
-          });
+        if (hasUnsavedCompactOptionChanges) {
+          await saveCategoriesMutation.mutateAsync({ skipApply: true });
         }
-
+        await persistEditorVariantMappings();
+        setMappingSaveError(null);
       }
 
       const variants = (editorPreview?.variants ?? [])
         .map((variant) => ({
           variant_code: variant.variantCode,
-          additional_amount: Number(computedVariantAdditionalByCode.get(variant.variantCode) ?? 0),
+          additional_amount: Number(computedVariantAdditionalByCode[variant.variantCode] ?? 0),
         }))
         .filter((row) => Number.isFinite(row.additional_amount));
 
@@ -1505,6 +3334,7 @@ export default function ShoppingAutoPricePage() {
           },
           floor_price_krw: parseNumericInput(editorFloorPrice),
           exclude_plating_labor: editorExcludePlatingLabor,
+          current_product_sync_profile: editorCurrentProductSyncProfile,
           variants,
         },
       );
@@ -1514,6 +3344,16 @@ export default function ShoppingAutoPricePage() {
         setEditorPreview(res.data);
         setEditorFloorPrice(String(Math.max(0, Math.round(Number(res.data.floor_price_krw ?? 0)))));
         setEditorExcludePlatingLabor(Boolean(res.data.exclude_plating_labor));
+        setEditorCurrentProductSyncProfile(normalizeCurrentProductSyncProfile(res.data.current_product_sync_profile));
+        {
+          const savedMasterItemId = String(res.data.master_item_id ?? editorMasterItemId).trim();
+          if (savedMasterItemId) {
+            updateCurrentProductSyncProfileInGallery(
+              savedMasterItemId,
+              normalizeCurrentProductSyncProfile(res.data.current_product_sync_profile),
+            );
+          }
+        }
       }
       const sync = res.post_apply_sync;
       if (sync?.requested && sync.ok === false) {
@@ -1525,11 +3365,18 @@ export default function ShoppingAutoPricePage() {
       } else {
         setApplyError(null);
       }
+      setCurrentProductSyncProfileSaveError(null);
+      applyComputedMappingPreview();
       setIsEditDrawerOpen(false);
       await Promise.all([
         qc.invalidateQueries({ queryKey: ["shop-summary", effectiveChannelId] }),
         qc.invalidateQueries({ queryKey: ["pricing-overrides", effectiveChannelId, editorMasterItemId] }),
+        qc.invalidateQueries({ queryKey: ["auto-price-editor-mappings", effectiveChannelId, editorMasterItemId] }),
+        qc.invalidateQueries({ queryKey: ["auto-price-variant-lookup", effectiveChannelId, editorMasterItemId, editorPreview?.productNo ?? ""] }),
+        qc.invalidateQueries({ queryKey: ["auto-price-option-labor-rules", effectiveChannelId, editorMasterItemId, canonicalEditorProductNo] }),
+        qc.invalidateQueries({ queryKey: ["pricing-snapshot-explain", effectiveChannelId, editorMasterItemId] }),
         qc.invalidateQueries({ queryKey: ["shop-dashboard-gallery", effectiveChannelId] }),
+        qc.invalidateQueries({ queryKey: ["auto-price-gallery-mappings", effectiveChannelId] }),
       ]);
     },
     onError: (e, _vars, context) => {
@@ -1625,146 +3472,6 @@ export default function ShoppingAutoPricePage() {
     },
   });
 
-  const saveCategoriesMutation = useMutation({
-    mutationFn: () => {
-      if (!editorPreview) throw new Error("상품 미리보기가 필요합니다");
-      setVariantDrafts((prev) => {
-        const next = { ...prev };
-        for (const [variantCode, amount] of computedVariantAdditionalByCode.entries()) {
-          next[variantCode] = String(amount);
-        }
-        return next;
-      });
-      const rows = optionEntries.map((entry) => ({
-        option_name: entry.option_name,
-        option_value: entry.option_value,
-        category_key: optionCategoryDrafts[entry.option_name] ?? effectiveCategoryByKey.get(entry.option_name) ?? guessCategoryByOptionName(entry.option_name),
-      })).map((row) => ({
-        ...row,
-        sync_delta_krw: Math.round(Number(effectiveOptionSyncDeltaByEntryKey.get(optionEntryKey(row.option_name, row.option_value)) ?? 0)),
-      }));
-
-      return shopApiSend<{ ok: boolean }>("/api/channel-option-categories", "POST", {
-        channel_id: effectiveChannelId,
-        master_item_id: editorMasterItemId || undefined,
-        external_product_no: editorPreview.productNo,
-        actor: "AUTO_PRICE_PAGE",
-        rows,
-      });
-    },
-    onSuccess: async () => {
-      await qc.invalidateQueries({ queryKey: ["option-categories", effectiveChannelId, editorMasterItemId, editorPreview?.productNo ?? ""] });
-      setVariantDrafts((prev) => {
-        const next = { ...prev };
-        for (const [variantCode, amount] of computedVariantAdditionalByCode.entries()) {
-          next[variantCode] = String(amount);
-        }
-        return next;
-      });
-      if (effectiveChannelId && editorMasterItemId) {
-        await shopApiSend<{ ok: boolean; inserted: number; compute_request_id?: string }>(
-          "/api/pricing/recompute",
-          "POST",
-          { channel_id: effectiveChannelId, master_item_ids: [editorMasterItemId] },
-        );
-      }
-      await Promise.all([
-        qc.invalidateQueries({ queryKey: ["shop-summary", effectiveChannelId] }),
-        qc.invalidateQueries({ queryKey: ["channel-mapping-summary", effectiveChannelId] }),
-      ]);
-    },
-  });
-
-  const effectiveCategoryByKey = useMemo(() => {
-    const map = new Map<string, OptionCategoryRow["category_key"]>();
-    const freqByName = new Map<string, Map<OptionCategoryRow["category_key"], number>>();
-    for (const row of optionCategoriesQuery.data?.data ?? []) {
-      const name = String(row.option_name ?? "").trim();
-      if (!name) continue;
-      const bucket = freqByName.get(name) ?? new Map<OptionCategoryRow["category_key"], number>();
-      bucket.set(row.category_key, (bucket.get(row.category_key) ?? 0) + 1);
-      freqByName.set(name, bucket);
-    }
-    for (const [name, freq] of freqByName.entries()) {
-      const selected = Array.from(freq.entries()).sort((a, b) => b[1] - a[1])[0]?.[0] ?? guessCategoryByOptionName(name);
-      map.set(name, selected);
-    }
-    for (const [name, value] of Object.entries(optionCategoryDrafts)) {
-      map.set(name, value);
-    }
-    return map;
-  }, [optionCategoriesQuery.data, optionCategoryDrafts]);
-
-  const persistedOptionSyncDeltaByEntryKey = useMemo(() => {
-    const map = new Map<string, number>();
-    for (const row of optionCategoriesQuery.data?.data ?? []) {
-      const entryKey = optionEntryKey(row.option_name, row.option_value);
-      if (!entryKey) continue;
-      map.set(entryKey, Math.round(Number(row.sync_delta_krw ?? 0)));
-    }
-    return map;
-  }, [optionCategoriesQuery.data?.data]);
-
-  const effectiveOptionSyncDeltaByEntryKey = useMemo(() => {
-    const map = new Map<string, number>(persistedOptionSyncDeltaByEntryKey.entries());
-    for (const [key, value] of Object.entries(optionSyncDeltaDrafts)) {
-      const rounded = Math.round(Number(value ?? 0));
-      if (Number.isFinite(rounded)) map.set(key, rounded);
-    }
-    for (const entry of optionEntries) {
-      const entryKey = optionEntryKey(entry.option_name, entry.option_value);
-      if (!map.has(entryKey)) map.set(entryKey, 0);
-    }
-    return map;
-  }, [persistedOptionSyncDeltaByEntryKey, optionSyncDeltaDrafts, optionEntries]);
-
-  const optionNames = useMemo(() => {
-    const map = new Map<string, Set<string>>();
-    for (const entry of optionEntries) {
-      const name = String(entry.option_name ?? "").trim();
-      const value = String(entry.option_value ?? "").trim();
-      if (!name || !value) continue;
-      const set = map.get(name) ?? new Set<string>();
-      set.add(value);
-      map.set(name, set);
-    }
-    return Array.from(map.entries())
-      .map(([option_name, values]) => ({ option_name, sample_values: Array.from(values.values()).slice(0, 6) }))
-      .sort((a, b) => a.option_name.localeCompare(b.option_name));
-  }, [optionEntries]);
-
-  const computedVariantAdditionalByCode = useMemo(() => {
-    const map = new Map<string, number>();
-    if (!editorPreview) return map;
-    for (const variant of editorPreview.variants ?? []) {
-      let total = 0;
-      for (const option of variant.options ?? []) {
-        const optionName = String(option.name ?? "").trim();
-        const optionValue = normalizeOptionValue(String(option.value ?? "").trim());
-        if (!optionName || !optionValue) continue;
-        total += Number(effectiveOptionSyncDeltaByEntryKey.get(optionEntryKey(optionName, optionValue)) ?? 0);
-      }
-      map.set(variant.variantCode, total);
-    }
-    return map;
-  }, [editorPreview, effectiveOptionSyncDeltaByEntryKey]);
-
-  const persistedVariantAdditionalByCode = useMemo(() => {
-    const map = new Map<string, number>();
-    if (!editorPreview) return map;
-    for (const variant of editorPreview.variants ?? []) {
-      let total = 0;
-      for (const option of variant.options ?? []) {
-        const optionName = String(option.name ?? "").trim();
-        const optionValue = normalizeOptionValue(String(option.value ?? "").trim());
-        if (!optionName || !optionValue) continue;
-        total += Number(persistedOptionSyncDeltaByEntryKey.get(optionEntryKey(optionName, optionValue)) ?? 0);
-      }
-      map.set(variant.variantCode, total);
-    }
-    return map;
-  }, [editorPreview, persistedOptionSyncDeltaByEntryKey]);
-
   const statusItems = useMemo(() => {
     const counts = summaryQuery.data?.data.counts;
     return [
@@ -1850,8 +3557,8 @@ export default function ShoppingAutoPricePage() {
               {galleryItems.map((item) => (
                 <button
                   key={item.groupKey}
-                  type="button"
-                  className="rounded border border-[var(--hairline)] bg-[var(--panel)] p-2 text-left hover:border-[var(--primary)]"
+                  type='button'
+                  className={`rounded border p-2 text-left transition-colors ${currentProductSyncProfileCardClassOf(item.currentProductSyncProfile)}`}
                   onClick={() => {
                     setEditorProductNo(item.productNo);
                     setEditorMasterItemIdHint(String(item.primaryMasterId ?? "").trim() || masterIdByProductNo.get(String(item.productNo ?? "").trim()) || "");
@@ -1860,7 +3567,7 @@ export default function ShoppingAutoPricePage() {
                   }}
                   disabled={loadPreviewMutation.isPending}
                 >
-                  <div className="mb-2 aspect-square w-full overflow-hidden rounded border border-[var(--hairline)] bg-[var(--bg)]">
+                  <div className={`mb-2 aspect-square w-full overflow-hidden rounded border ${item.currentProductSyncProfile === 'MARKET_LINKED' ? 'border-amber-400/80 bg-[linear-gradient(180deg,rgba(251,191,36,0.18),rgba(245,158,11,0.08))]' : 'border-[var(--hairline)] bg-[var(--bg)]'}`}>
                     {item.imageUrl ? (
                       // eslint-disable-next-line @next/next/no-img-element
                       <img src={item.imageUrl} alt={item.modelNameText || item.productNo} className="h-full w-full object-cover" />
@@ -1868,7 +3575,12 @@ export default function ShoppingAutoPricePage() {
                       <div className="grid h-full place-items-center text-xs text-[var(--muted)]">이미지 없음</div>
                     )}
                   </div>
-                  <div className="text-xs font-semibold">{item.productNo}</div>
+                  <div className='flex items-start justify-between gap-2'>
+                    <div className='text-xs font-semibold'>{item.productNo}</div>
+                    {item.currentProductSyncProfile === 'MARKET_LINKED' ? (
+                      <span className={currentProductSyncProfileBadgeClassOf(item.currentProductSyncProfile)}>시장연동</span>
+                    ) : null}
+                  </div>
                   <div className="mt-1 line-clamp-1 text-[10px] text-[var(--muted)]">{item.productAliasText}</div>
                   <div className="mt-1 line-clamp-2 text-[11px] text-[var(--muted)]">{item.modelNameText || "-"}</div>
                   <div className="mt-2 flex items-center gap-1 text-[11px] text-[var(--muted)]">
@@ -1910,8 +3622,13 @@ export default function ShoppingAutoPricePage() {
                   <div className="grid grid-cols-1 gap-4 lg:grid-cols-[220px_minmax(0,1fr)]">
                     <div className="space-y-2">
                       <div className="text-base font-semibold">{editorPreview.productName}</div>
-                      <div className="text-xs text-[var(--muted)]">product_no: {editorPreview.productNo}</div>
-                      <div className="aspect-square w-full overflow-hidden rounded border border-[var(--hairline)] bg-[var(--panel)]">
+                      <div className='flex items-center gap-2 text-xs text-[var(--muted)]'>
+                        <span>product_no: {editorPreview.productNo}</span>
+                        <span className={currentProductSyncProfileBadgeClassOf(editorCurrentProductSyncProfile)}>
+                          {currentProductSyncProfileLabelOf(editorCurrentProductSyncProfile)}
+                        </span>
+                      </div>
+                      <div className={`aspect-square w-full overflow-hidden rounded border ${currentProductSyncProfilePanelClassOf(editorCurrentProductSyncProfile)}`}>
                         {editorPreview.imageUrl ? (
                           // eslint-disable-next-line @next/next/no-img-element
                           <img src={editorPreview.imageUrl} alt={editorPreview.productName} className="h-full w-full object-cover" />
@@ -1920,7 +3637,7 @@ export default function ShoppingAutoPricePage() {
                         )}
                       </div>
 
-                      <div className="rounded border border-[var(--hairline)] bg-[var(--bg)] p-2">
+                      <div className={`rounded border p-2 ${currentProductSyncProfilePanelClassOf(editorCurrentProductSyncProfile)}`}>
                         <div className="mb-2 text-[11px] font-semibold">추세</div>
                         <div className="grid grid-cols-[1fr_auto] gap-x-3 gap-y-1 text-[11px]">
                           <div className="text-[var(--muted)]">최근 변화(1회)</div>
@@ -1938,7 +3655,7 @@ export default function ShoppingAutoPricePage() {
                         </div>
                       </div>
 
-                      <div className="rounded border border-[var(--hairline)] bg-[var(--bg)] p-3">
+                      <div className={`rounded border p-3 ${currentProductSyncProfilePanelClassOf(editorCurrentProductSyncProfile)}`}>
                         <div className="text-[10px] text-[var(--muted)]">판매가(쇼핑몰)</div>
                         <div className="mt-1">
                           <div className="whitespace-nowrap text-2xl font-semibold leading-none tabular-nums">{fmtKrw(editorPreview.price)}</div>
@@ -2035,8 +3752,8 @@ export default function ShoppingAutoPricePage() {
                         </div>
 
                         <div className="flex flex-1 flex-col gap-3 p-3">
-                            <div className="rounded border border-[var(--hairline)] bg-[var(--bg)] p-2">
-                              <div className="mb-2 flex items-baseline justify-between gap-2">
+                          <div className="rounded border border-[var(--hairline)] bg-[var(--bg)] p-2">
+                            <div className="mb-2 flex items-baseline justify-between gap-2">
                               <div className="flex items-center gap-3">
                                 <div className="text-[11px] font-semibold">구성(스냅샷)</div>
                                 <label className="flex items-center gap-1 text-[10px] font-medium text-[var(--muted)]">
@@ -2049,23 +3766,22 @@ export default function ShoppingAutoPricePage() {
                                   />
                                   <span className="select-none">도금공임 포함</span>
                                 </label>
-                                <label className="flex items-center gap-1 text-[10px] font-medium text-[var(--muted)]">
-                                  <input
-                                    type="checkbox"
-                                    className="h-3 w-3 accent-[var(--primary)]"
-                                    checked={previewForceFullSync}
-                                    onChange={(e) => {
-                                      const nextForceFullSync = e.target.checked;
-                                      if (!previewProductNoKey) return;
-                                      setPreviewForceFullSyncByProductNo((prev) => ({
-                                        ...prev,
-                                        [previewProductNoKey]: nextForceFullSync,
-                                      }));
-                                    }}
-                                    disabled={!previewProductNoKey}
-                                  />
-                                  <span className="select-none">무조건 동기화(현재 상품)</span>
-                                </label>
+                                <div className={`flex items-center gap-2 rounded border px-2 py-1.5 ${currentProductSyncProfilePanelClassOf(editorCurrentProductSyncProfile)}`}>
+                                  <div className="text-[10px] font-semibold text-amber-950">현재 상품 프로필</div>
+                                  <Select
+                                    value={editorCurrentProductSyncProfile}
+                                    onChange={(e) => saveCurrentProductSyncProfileMutation.mutate(e.target.value as CurrentProductSyncProfile)}
+                                    disabled={!effectiveChannelId || !editorMasterItemId || saveCurrentProductSyncProfileMutation.isPending}
+                                    className="h-7 min-w-[112px] border-amber-400/70 bg-white/90 text-[11px] font-medium text-amber-950"
+                                  >
+                                    {AUTO_SYNC_THRESHOLD_PROFILE_OPTIONS.map((option) => (
+                                      <option key={`preview-sync-profile-${option.value}`} value={option.value}>{option.label}</option>
+                                    ))}
+                                  </Select>
+                                  {editorCurrentProductSyncProfile === "MARKET_LINKED" ? (
+                                    <span className={currentProductSyncProfileBadgeClassOf(editorCurrentProductSyncProfile)}>시장연동</span>
+                                  ) : null}
+                                </div>
                               </div>
                               <div className="text-[10px] text-black tabular-nums">
                                 {snapshotExplainRow
@@ -2074,60 +3790,94 @@ export default function ShoppingAutoPricePage() {
                                     ? "불러오는 중"
                                     : "-"}
                               </div>
-                              </div>
+                            </div>
+                            {currentProductSyncProfileSaveError ? (
+                              <div className="text-[10px] text-amber-900">{currentProductSyncProfileSaveError}</div>
+                            ) : saveCurrentProductSyncProfileMutation.isPending ? (
+                              <div className="text-[10px] text-amber-900/80">현재 상품 프로필 저장중</div>
+                            ) : null}
 
                             {snapshotExplainRow ? (
-                              <div className="space-y-2 rounded border border-[var(--hairline)] bg-[var(--bg)] p-2">
-                                <div className="overflow-hidden rounded border-2 border-black">
-                                  <table className="w-full table-fixed text-[11px]">
-                                    <tbody>
-                                      {previewCompositionRowGroups.map((group, groupIndex) => {
-                                        const firstKey = group[0]?.key;
-                                        const topBorderClass = firstKey === "final-price"
-                                          ? "border-t-4"
-                                          : (firstKey === "labor-cost-total" || firstKey === "labor-total")
-                                            ? "border-t-4"
-                                            : "border-t-2";
-                                        return (
-                                        <Fragment key={`group-${groupIndex}`}>
-                                          <tr key={`head-${groupIndex}`} className={`${topBorderClass} border-black`}>
-                                            {group.map((row) => (
-                                              <th key={`head-${groupIndex}-${row.key}`} className={`${snapshotCellToneClass(row.key, groupIndex)} border-r border-black px-2 py-1 text-left font-medium text-slate-900 last:border-r-0`}>
-                                                {row.label}
-                                              </th>
-                                            ))}
-                                            {Array.from({ length: Math.max(0, 6 - group.length) }).map((_, emptyIdx) => (
-                                              <th key={`head-${groupIndex}-empty-${emptyIdx}`} className="border-r border-black bg-white px-2 py-1 last:border-r-0" />
-                                            ))}
-                                          </tr>
-                                          <tr key={`value-${groupIndex}`}>
-                                            {group.map((row) => (
-                                              <td key={`value-${groupIndex}-${row.key}`} className={`${snapshotCellToneClass(row.key, groupIndex)} border-r border-t-2 border-black px-2 py-1 text-right font-semibold tabular-nums text-slate-900 last:border-r-0`}>
-                                                {row.valueText}
-                                              </td>
-                                            ))}
-                                            {Array.from({ length: Math.max(0, 6 - group.length) }).map((_, emptyIdx) => (
-                                              <td key={`value-${groupIndex}-empty-${emptyIdx}`} className="border-r border-t-2 border-black bg-white px-2 py-1 last:border-r-0" />
-                                            ))}
-                                          </tr>
-                                        </Fragment>
-                                        );
-                                      })}
-                                    </tbody>
-                                  </table>
+                              <details open className="rounded border border-[var(--hairline)] bg-[var(--bg)] p-2">
+                                <summary className="cursor-pointer text-[11px] font-medium text-[var(--muted)]">상세 계산식 보기</summary>
+                                <div className="mt-2 space-y-2">
+                                <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+                                  {[
+                                    { key: "summary-final", label: "최종가격", value: fmtKrw(snapshotExplainRow.final_target_price_v2_krw ?? snapshotExplainRow.final_target_price_krw), tone: "bg-violet-100" },
+                                    { key: "summary-candidate", label: "후보가격", value: fmtKrw(snapshotExplainRow.candidate_price_krw), tone: "bg-amber-200" },
+                                    { key: "summary-min-margin", label: "최소마진 후보가격", value: fmtKrw(snapshotExplainRow.min_margin_price_krw), tone: "bg-lime-100" },
+                                    { key: "summary-selected", label: "채택항목", value: selectedLabel, tone: "bg-sky-100" },
+                                  ].map((card) => (
+                                    <div key={card.key} className={`${card.tone} rounded border border-black px-2 py-2`}>
+                                      <div className="text-[10px] font-medium text-slate-700">{card.label}</div>
+                                      <div className="mt-1 text-right text-[12px] font-semibold tabular-nums text-slate-950">{card.value}</div>
+                                    </div>
+                                  ))}
                                 </div>
-                                <div className="rounded border border-[var(--hairline)] bg-[var(--panel)] px-2 py-1 text-[11px] tabular-nums">
-                                  <div className="mb-1 text-[10px] font-medium text-[var(--muted)]">계산 흐름</div>
-                                  <div className="space-y-0.5">
+                                <div className="rounded border border-[var(--hairline)] bg-[var(--panel)] px-2 py-1 text-[11px] text-[var(--muted)]">
+                                  상단에는 핵심 결과만 모아두고, 아래 계산은 섹션별로 접어서 필요할 때만 확인할 수 있게 정리했습니다.
+                                </div>
+                                <div className="space-y-2">
+                                  {previewCompositionSections.map((section) => (
+                                    <details key={section.key} open={section.defaultOpen} className="rounded border border-[var(--hairline)] bg-[var(--bg)] p-2">
+                                      <summary className="flex cursor-pointer items-center justify-between gap-2 text-[11px] font-medium text-[var(--muted)]">
+                                        <span>{section.title}</span>
+                                        <span className="tabular-nums text-slate-900">{section.summary}</span>
+                                      </summary>
+                                      <div className="mt-2 overflow-hidden rounded border-2 border-black">
+                                        <table className="w-full table-fixed text-[11px]">
+                                          <tbody>
+                                            {section.groups.map((group, groupIndex) => {
+                                              const firstKey = group[0]?.key;
+                                              const topBorderClass = firstKey === "final-price"
+                                                ? "border-t-4"
+                                                : (firstKey === "labor-cost-total" || firstKey === "labor-total")
+                                                  ? "border-t-4"
+                                                  : "border-t-2";
+                                              return (
+                                                <Fragment key={`${section.key}-group-${groupIndex}`}>
+                                                  <tr className={`${topBorderClass} border-black`}>
+                                                    {group.map((row) => (
+                                                      <th key={`${section.key}-head-${groupIndex}-${row.key}`} className={`${snapshotCellToneClass(row.key, groupIndex)} border-r border-black px-2 py-1 text-left font-medium text-slate-900 last:border-r-0`}>
+                                                        {row.label}
+                                                      </th>
+                                                    ))}
+                                                    {Array.from({ length: Math.max(0, 6 - group.length) }).map((_, emptyIdx) => (
+                                                      <th key={`${section.key}-head-${groupIndex}-empty-${emptyIdx}`} className="border-r border-black bg-white px-2 py-1 last:border-r-0" />
+                                                    ))}
+                                                  </tr>
+                                                  <tr>
+                                                    {group.map((row) => (
+                                                      <td key={`${section.key}-value-${groupIndex}-${row.key}`} className={`${snapshotCellToneClass(row.key, groupIndex)} border-r border-t-2 border-black px-2 py-1 text-right font-semibold tabular-nums text-slate-900 last:border-r-0`}>
+                                                        {row.valueText}
+                                                      </td>
+                                                    ))}
+                                                    {Array.from({ length: Math.max(0, 6 - group.length) }).map((_, emptyIdx) => (
+                                                      <td key={`${section.key}-value-${groupIndex}-empty-${emptyIdx}`} className="border-r border-t-2 border-black bg-white px-2 py-1 last:border-r-0" />
+                                                    ))}
+                                                  </tr>
+                                                </Fragment>
+                                              );
+                                            })}
+                                          </tbody>
+                                        </table>
+                                      </div>
+                                    </details>
+                                  ))}
+                                </div>
+                                <details className="rounded border border-[var(--hairline)] bg-[var(--panel)] px-2 py-1 text-[11px] tabular-nums">
+                                  <summary className="cursor-pointer text-[10px] font-medium text-[var(--muted)]">계산 흐름</summary>
+                                  <div className="mt-1 space-y-0.5">
                                     {previewCompositionFlowLines.map((line, idx) => (
                                       <div key={`flow-${idx}`} className="leading-5">{line}</div>
                                     ))}
                                   </div>
+                                </details>
                                 </div>
-                              </div>
+                              </details>
                             ) : (
                               <div className="text-[11px] text-[var(--muted)]">
-                                V2 뷰에서 해당 상품 스냅샷을 찾지 못했습니다.
+                                {snapshotExplainStatusText}
                               </div>
                             )}
                             {snapshotExplainRow ? (
@@ -2149,7 +3899,7 @@ export default function ShoppingAutoPricePage() {
                             </div>
 
                             {previewHistoryRows.length === 0 ? (
-                              <div className="text-[11px] text-[var(--muted)]">최근 run에서 해당 상품 intent를 찾지 못했습니다.</div>
+                              <div className="text-[11px] text-[var(--muted)]">{previewHistoryEmptyText}</div>
                             ) : (
                               <div className="max-h-[180px] overflow-auto rounded border border-[var(--hairline)]">
                                 <table className="w-full text-[11px]">
@@ -2186,46 +3936,74 @@ export default function ShoppingAutoPricePage() {
                   </div>
 
                   <div className="rounded border border-[var(--hairline)] bg-[var(--panel)] px-3 py-2 text-xs text-[var(--muted)]">
-                    옵션표는 옵션명별 컬럼으로 표시됩니다. 각 행은 variant_code 1건입니다.
+                    옵션값 기준으로만 요약해서 표시합니다. 조합별 카드는 제거했고, 상세수정에서 필요할 때만 고급 variant 보정을 엽니다.
                   </div>
 
-                  <div className="max-h-[320px] overflow-auto rounded border border-[var(--hairline)]">
-                    <table className="w-full text-xs">
+                  <div className="grid grid-cols-1 gap-2 md:grid-cols-4">
+                    <div className="rounded border border-[var(--hairline)] bg-[var(--bg)] px-3 py-2 text-xs">
+                      <div className="text-[var(--muted)]">옵션 행</div>
+                      <div className="mt-1 font-medium">{compactOptionRows.length} rows</div>
+                    </div>
+                    <div className="rounded border border-[var(--hairline)] bg-[var(--bg)] px-3 py-2 text-xs">
+                      <div className="text-[var(--muted)]">allowlist</div>
+                      <div className="mt-1 font-medium">{loadedOptionAllowlist.materials.length} material / {loadedOptionAllowlist.colors.length} color / {loadedOptionAllowlist.decors.length} decor</div>
+                    </div>
+                    <div className="rounded border border-[var(--hairline)] bg-[var(--bg)] px-3 py-2 text-xs">
+                      <div className="text-[var(--muted)]">current / blocking</div>
+                      <div className="mt-1 font-medium">{compactOptionRows.length} rows / {blockingOptionRows.length} blocking</div>
+                    </div>
+                    <div className="rounded border border-[var(--hairline)] bg-[var(--bg)] px-3 py-2 text-xs">
+                      <div className="text-[var(--muted)]">rule engine / sync set</div>
+                      <div className="mt-1 font-medium">{optionLaborRuleEngineActive ? "active" : "inactive"} / {siblingSyncRuleSetId || "auto-infer"}</div>
+                    </div>
+                  </div>
+
+                  <div className="overflow-auto rounded border border-[var(--hairline)]">
+                    <table className="w-full text-[11px]">
                       <thead className="bg-[var(--panel)] text-left">
                         <tr>
-                          <th className="px-2 py-1">variant</th>
-                          {variantOptionColumnNames.map((name) => (
-                            <th key={name} className="px-2 py-1">{name}</th>
-                          ))}
-                          <th className="px-2 py-1 text-right tabular-nums">옵션가</th>
-                          <th className="px-2 py-1 text-right tabular-nums">최종가(max(판매가+옵션가, 유효바닥가))</th>
+                          <th className="px-2 py-1">옵션이름</th>
+                          <th className="px-2 py-1">카테고리</th>
+                          <th className="px-2 py-1">{axisColumnHeaders[0]}</th>
+                          <th className="px-2 py-1">{axisColumnHeaders[1]}</th>
+                          <th className="px-2 py-1">{axisColumnHeaders[2]}</th>
+                          <th className="px-2 py-1 text-right">가격</th>
                         </tr>
                       </thead>
                       <tbody>
-                        {editorPreview.variants.map((variant) => {
-                          const valueByName = new Map(
-                            (variant.options ?? []).map((o) => [String(o.name ?? "").trim(), String(o.value ?? "").trim()]),
-                          );
-                          return (
-                            <tr key={variant.variantCode} className="border-t border-[var(--hairline)]">
-                              <td className="px-2 py-1">{variant.variantCode}</td>
-                              {variantOptionColumnNames.map((name) => (
-                                <td key={`${variant.variantCode}::${name}`} className="px-2 py-1">{valueByName.get(name) || "-"}</td>
-                              ))}
-                              <td className="px-2 py-1 whitespace-nowrap text-right tabular-nums">{fmt(variant.additionalAmount)}</td>
-                              <td className="px-2 py-1 whitespace-nowrap text-right tabular-nums">
-                                {editorPreview.price == null || variant.additionalAmount == null
-                                  ? "-"
-                                  : fmt(Math.max(
-                                    Math.round(Number(editorPreview.price) + Number(variant.additionalAmount)),
-                                    previewEffectiveFloor,
-                                  ))}
-                              </td>
-                            </tr>
-                          );
-                        })}
+                        {compactOptionRows.map((row) => (
+                          <tr key={`preview-compact-row-${row.entryKey}`} className="border-t border-[var(--hairline)]">
+                            <td className="px-2 py-1">
+                              <div className="font-medium">{row.optionName}</div>
+                              <div className="mt-1 text-[10px] text-[var(--muted)]">{legacyStatusLabelOf(row.legacyStatus)}{row.sourceRuleEntryIds.length > 0 ? ` / rule ${row.sourceRuleEntryIds.length}` : ""}</div>
+                              {row.warnings[0] ? <div className="mt-1 text-[10px] text-amber-600">{row.warnings[0]}</div> : null}
+                              {row.categoryKey === "OTHER" && row.otherReason ? <div className="mt-1 text-[10px] text-slate-500">사유: {row.otherReason}</div> : null}
+                            </td>
+                            <td className="px-2 py-1">{categoryLabelOf(row.categoryKey)}</td>
+                            <td className="px-2 py-1">{row.axis1 || "-"}</td>
+                            <td className="px-2 py-1">{row.axis2 || "-"}</td>
+                            <td className="px-2 py-1">{row.axis3 || "-"}</td>
+                            <td className="px-2 py-1 text-right tabular-nums">{fmtKrw(row.resolvedDeltaKrw)}</td>
+                          </tr>
+                        ))}
+                        {compactOptionRows.length === 0 ? (
+                          <tr>
+                            <td className="px-2 py-2 text-[var(--muted)]" colSpan={6}>옵션값 행이 없습니다.</td>
+                          </tr>
+                        ) : null}
                       </tbody>
                     </table>
+                  </div>
+                  {blockingOptionRows.length > 0 ? (
+                    <div className="mt-2 rounded border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-100">
+                      저장/동기화 차단: legacy 또는 미해결 옵션값 {blockingOptionRows.length}개를 먼저 해결해야 합니다.
+                    </div>
+                  ) : null}
+
+                  <div className="flex justify-end">
+                    <Button size="sm" variant="secondary" onClick={() => setIsEditDrawerOpen(true)}>
+                      상세수정 열기
+                    </Button>
                   </div>
                 </div>
               </div>
@@ -2244,103 +4022,412 @@ export default function ShoppingAutoPricePage() {
         <div className="flex h-full flex-col">
           <div className="border-b border-[var(--hairline)] px-4 py-3">
             <div className="text-sm font-semibold">상세수정</div>
-            <div className="text-xs text-[var(--muted)]">소비자가/판매가/옵션가 및 카테고리/옵션값 금액 수정</div>
+            <div className="text-xs text-[var(--muted)]">소비자가/판매가/옵션가와 variant 매핑을 함께 수정합니다.</div>
           </div>
           <div className="flex-1 overflow-auto p-4 space-y-3">
             {!editorPreview ? (
               <div className="text-sm text-[var(--muted)]">먼저 상품 미리보기를 불러오세요.</div>
             ) : (
               <>
-                <div className="rounded border border-[var(--hairline)] p-2">
-                  <div className="mb-2 text-xs text-[var(--muted)]">옵션명은 카테고리를 1개만 가지며, 옵션값별 금액을 직접 설정합니다.</div>
-                  <div className="mb-2 rounded border border-[var(--hairline)] bg-[var(--panel)] px-2 py-2 text-xs text-[var(--muted)]">
-                    예: 카테고리 A 옵션값 2개 + 카테고리 B 옵션값 3개면 총 5개 금액만 설정하고, 조합 옵션가는 선택된 값들의 합으로 계산됩니다.
+                <div className="rounded border border-[var(--hairline)] p-3">
+                  <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                    <div className="space-y-1">
+                      <div className="text-xs font-semibold">옵션값 빠른 편집</div>
+                      <div className="text-xs text-[var(--muted)]">2x3 옵션이면 조합 6개 대신 고유 옵션값 5행만 수정하면 모든 variant 가격에 자동 합산됩니다.</div>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <Button size="sm" variant="secondary" onClick={() => saveCategoriesMutation.mutate(undefined)} disabled={saveCategoriesMutation.isPending || compactOptionRows.length === 0 || blockingOptionRows.length > 0}>
+                        옵션값 저장
+                      </Button>
+                      <Button size="sm" variant="ghost" onClick={() => setShowAdvancedVariantMapping((current) => !current)}>{showAdvancedVariantMapping ? "고급 variant 접기" : "고급 variant 열기"}</Button>
+                    </div>
                   </div>
-                  <div className="max-h-[260px] overflow-auto rounded border border-[var(--hairline)]">
-                    <table className="w-full text-sm">
-                      <thead className="bg-[var(--panel)] text-left">
-                        <tr>
-                          <th className="px-2 py-1">옵션명</th>
-                          <th className="px-2 py-1">대표 옵션값</th>
-                          <th className="px-2 py-1">카테고리</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {optionNames.map((entry) => {
-                          const key = entry.option_name;
-                          const selectedCategory = effectiveCategoryByKey.get(key) ?? guessCategoryByOptionName(entry.option_name);
-                          return (
-                            <tr key={key} className="border-t border-[var(--hairline)]">
-                              <td className="px-2 py-1">{entry.option_name}</td>
-                              <td className="px-2 py-1">{entry.sample_values.join(" / ") || "-"}</td>
+                  <div className="mt-2 text-[11px] text-[var(--muted)]">현재 편집 행 {compactOptionRows.length}개 · 가격은 1000원 단위로 저장됩니다. legacy/unresolved 행이 남아 있으면 저장과 sync가 차단됩니다.</div>
+                  {blockingOptionRows.length > 0 ? (
+                    <div className="mt-2 rounded border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-100">
+                      현재 편집 기준으로 legacy 또는 미해결 옵션값 {blockingOptionRows.length}개가 있어 저장할 수 없습니다.
+                    </div>
+                  ) : null}
+                  {compactOptionRows.length === 0 ? (
+                    <div className="mt-3 text-[11px] text-[var(--muted)]">이 상품에서 읽어온 옵션값이 없습니다.</div>
+                  ) : (
+                    <div className="mt-3 overflow-auto rounded border border-[var(--hairline)]">
+                      <table className="w-full text-[11px]">
+                        <thead className="bg-[var(--panel)] text-left">
+                          <tr>
+                            <th className="px-2 py-1">옵션이름</th>
+                            <th className="px-2 py-1">카테고리</th>
+                            <th className="px-2 py-1">{axisColumnHeaders[0]}</th>
+                            <th className="px-2 py-1">{axisColumnHeaders[1]}</th>
+                            <th className="px-2 py-1">{axisColumnHeaders[2]}</th>
+                            <th className="px-2 py-1 text-right">가격</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {compactOptionRows.map((row) => (
+                            <tr key={row.entryKey} className="border-t border-[var(--hairline)]">
+                              <td className="px-2 py-1">
+                                <div className="font-medium">{row.optionName}</div>
+                                <div className="mt-1 text-[10px] text-[var(--muted)]">{legacyStatusLabelOf(row.legacyStatus)}{row.sourceRuleEntryIds.length > 0 ? ` / rule ${row.sourceRuleEntryIds.length}` : ""}</div>
+                                {row.warnings[0] ? <div className="mt-1 text-[10px] text-amber-600">{row.warnings[0]}</div> : null}
+                              </td>
                               <td className="px-2 py-1">
                                 <Select
-                                  value={selectedCategory}
-                                  onChange={(e) =>
-                                    setOptionCategoryDrafts((prev) => ({
-                                      ...prev,
-                                      [key]: e.target.value as OptionCategoryRow["category_key"],
-                                    }))
-                                  }
+                                  value={row.categoryKey}
+                                  onChange={(e) => setOptionCategoryDrafts((prev) => ({ ...prev, [row.optionName]: e.target.value }))}
+                                  disabled={saveCategoriesMutation.isPending}
+                                  className="h-8 min-w-[120px] border-slate-300 bg-white pr-8 text-[11px] font-medium text-slate-900 focus:border-blue-600 focus:ring-2 focus:ring-blue-600/20"
                                 >
-                                  {CATEGORY_OPTIONS.map((opt) => (
-                                    <option key={opt.key} value={opt.key}>{opt.label}</option>
+                                  {CATEGORY_OPTIONS.map((option) => (
+                                    <option key={option.key} value={option.key}>{option.label}</option>
                                   ))}
                                 </Select>
                               </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                  <div className="mt-2 max-h-[260px] overflow-auto rounded border border-[var(--hairline)]">
-                    <table className="w-full text-sm">
-                      <thead className="bg-[var(--panel)] text-left">
-                        <tr>
-                          <th className="px-2 py-1">옵션명</th>
-                          <th className="px-2 py-1">옵션값</th>
-                          <th className="px-2 py-1">카테고리</th>
-                          <th className="px-2 py-1">동기화 금액</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {optionEntries.map((entry) => {
-                          const key = optionEntryKey(entry.option_name, entry.option_value);
-                          const selectedCategory = effectiveCategoryByKey.get(entry.option_name) ?? guessCategoryByOptionName(entry.option_name);
-                          const selectedSyncDelta = effectiveOptionSyncDeltaByEntryKey.get(key) ?? 0;
-                          return (
-                            <tr key={key} className="border-t border-[var(--hairline)]">
-                              <td className="px-2 py-1">{entry.option_name}</td>
-                              <td className="px-2 py-1">{entry.option_value}</td>
-                              <td className="px-2 py-1">{CATEGORY_OPTIONS.find((c) => c.key === selectedCategory)?.label ?? selectedCategory}</td>
                               <td className="px-2 py-1">
-                                <Select
-                                  value={String(selectedSyncDelta)}
-                                  onChange={(e) => {
-                                    const next = Math.round(Number(e.target.value ?? 0));
-                                    setOptionSyncDeltaDrafts((prev) => ({
-                                      ...prev,
-                                      [key]: Number.isFinite(next) ? next : 0,
-                                    }));
-                                  }}
-                                >
-                                  {SYNC_DELTA_OPTIONS.map((delta) => (
-                                    <option key={`${key}-${delta}`} value={delta}>{delta >= 0 ? "+" : ""}{delta.toLocaleString()}원</option>
-                                  ))}
-                                </Select>
+                                {row.categoryKey === 'DECOR' ? (
+                                  <Input
+                                    value={row.axis1 || ''}
+                                    disabled
+                                    readOnly
+                                    className={'h-8 min-w-[150px] cursor-not-allowed bg-slate-50 text-[11px] text-slate-500'}
+                                  />
+                                ) : row.categoryKey === 'NOTICE' ? (
+                                  <Select
+                                    value={row.noticeValue}
+                                    onChange={(e) => setOptionNoticeSelectionDrafts((prev) => ({ ...prev, [row.entryKey]: e.target.value }))}
+                                    disabled={saveCategoriesMutation.isPending}
+                                    className="h-8 min-w-[150px] border-slate-300 bg-white pr-8 text-[11px] text-slate-900 focus:border-blue-600 focus:ring-2 focus:ring-blue-600/20"
+                                  >
+                                    {Array.from(new Set([...(row.noticeValue ? [row.noticeValue] : []), ...NOTICE_VALUE_OPTIONS])).map((optionValue) => (
+                                      <option key={`quick-notice-${row.entryKey}-${optionValue}`} value={optionValue}>{optionValue}</option>
+                                    ))}
+                                  </Select>
+                                ) : row.categoryKey === "SIZE" || row.categoryKey === "COLOR_PLATING" || row.categoryKey === "OTHER" ? (
+                                  <Select
+                                    value={row.selectedMaterialCode}
+                                    onChange={(e) => setOptionAxis1Drafts((prev) => ({ ...prev, [row.entryKey]: e.target.value }))}
+                                    disabled={saveCategoriesMutation.isPending}
+                                    className="h-8 min-w-[150px] border-slate-300 bg-white pr-8 text-[11px] text-slate-900 focus:border-blue-600 focus:ring-2 focus:ring-blue-600/20"
+                                  >
+                                    {(materialChoicesByEntryKey.get(row.entryKey) ?? []).map((choice) => (
+                                      <option key={`quick-axis1-${row.entryKey}-${choice.value}`} value={choice.value}>{choice.label}</option>
+                                    ))}
+                                  </Select>
+                                ) : (
+                                  row.axis1 || "-"
+                                )}
+                              </td>
+                              <td className="px-2 py-1">
+                                {row.categoryKey === "NOTICE" ? (
+                                  <Input
+                                    value=""
+                                    placeholder="사용 안함"
+                                    disabled
+                                    readOnly
+                                    className="h-8 min-w-[120px] cursor-not-allowed bg-slate-50 text-[11px] text-slate-500"
+                                  />
+                                ) : row.categoryKey === "SIZE" ? (
+                                  <Select
+                                    value={row.selectedSizeWeightText}
+                                    onChange={(e) => setOptionAxis2Drafts((prev) => ({ ...prev, [row.entryKey]: e.target.value }))}
+                                    disabled={saveCategoriesMutation.isPending}
+                                    className="h-8 min-w-[120px] border-slate-300 bg-white pr-8 text-[11px] text-slate-900 focus:border-blue-600 focus:ring-2 focus:ring-blue-600/20"
+                                  >
+                                    {(sizeChoicesByEntryKey.get(row.entryKey) ?? []).map((choice) => (
+                                      <option key={`quick-axis2-size-${row.entryKey}-${choice.value}`} value={choice.value}>{choice.label}</option>
+                                    ))}
+                                  </Select>
+                                ) : row.categoryKey === 'DECOR' ? (
+                                  <Select
+                                    value={row.selectedDecorMasterId}
+                                    onChange={(e) => setOptionDecorSelectionDrafts((prev) => ({ ...prev, [row.entryKey]: e.target.value }))}
+                                    disabled={saveCategoriesMutation.isPending}
+                                    className={'h-8 min-w-[150px] border-slate-300 bg-white pr-8 text-[11px] text-slate-900 focus:border-blue-600 focus:ring-2 focus:ring-blue-600/20'}
+                                  >
+                                    <option value={''}>장식 선택</option>
+                                    {allowedDecorChoices.map((choice) => {
+                                      const masterId = String(choice.decoration_master_id ?? '').trim();
+                                      return <option key={`quick-decor-axis2-${row.entryKey}-${masterId}`} value={masterId}>{choice.label}</option>;
+                                    })}
+                                  </Select>
+                                ) : row.categoryKey === 'COLOR_PLATING' ? (
+                                  <Select
+                                    value={row.selectedColorCode}
+                                    onChange={(e) => setOptionAxis2Drafts((prev) => ({ ...prev, [row.entryKey]: e.target.value }))}
+                                    disabled={saveCategoriesMutation.isPending}
+                                    className={'h-8 min-w-[140px] border-slate-300 bg-white pr-8 text-[11px] text-slate-900 focus:border-blue-600 focus:ring-2 focus:ring-blue-600/20'}
+                                  >
+                                    {(colorChoicesByEntryKey.get(row.entryKey) ?? []).map((choice) => (
+                                      <option key={`quick-axis2-color-${row.entryKey}-${choice.value}`} value={choice.value}>{choice.label}</option>
+                                    ))}
+                                  </Select>
+                                ) : (
+                                  row.axis2 || "-"
+                                )}
+                              </td>
+                              <td className="px-2 py-1">
+                                {row.categoryKey === "NOTICE" ? (
+                                  <Input
+                                    value=""
+                                    placeholder="사용 안함"
+                                    disabled
+                                    readOnly
+                                    className="h-8 min-w-[120px] cursor-not-allowed bg-slate-50 text-[11px] text-slate-500"
+                                  />
+                                ) : row.categoryKey === 'DECOR' ? (
+                                  <Input
+                                    value={row.axis3 || ''}
+                                    disabled
+                                    readOnly
+                                    className={'h-8 min-w-[160px] cursor-not-allowed bg-slate-50 text-[11px] text-slate-500'}
+                                  />
+                                ) : row.categoryKey === 'COLOR_PLATING' ? (
+                                  (colorAmountChoicesByEntryKey.get(row.entryKey) ?? []).length > 0 ? (
+                                    <Select
+                                      value={String(row.syncDeltaKrw)}
+                                      onChange={(e) => {
+                                        setOptionAxis3Drafts((prev) => ({ ...prev, [row.entryKey]: e.target.value }));
+                                        setOptionSyncDeltaDrafts((prev) => ({ ...prev, [row.entryKey]: e.target.value }));
+                                      }}
+                                      disabled={saveCategoriesMutation.isPending}
+                                      className={'h-8 min-w-[120px] border-slate-300 bg-white pr-8 text-right text-[11px] text-slate-900 focus:border-blue-600 focus:ring-2 focus:ring-blue-600/20'}
+                                    >
+                                      {(colorAmountChoicesByEntryKey.get(row.entryKey) ?? []).map((amount) => (
+                                        <option key={`quick-axis3-color-${row.entryKey}-${amount}`} value={String(amount)}>{fmtKrw(amount)}</option>
+                                      ))}
+                                    </Select>
+                                  ) : (
+                                    <Input
+                                      value={''}
+                                      placeholder={'룰 금액 없음'}
+                                      disabled
+                                      readOnly
+                                      className={'h-8 min-w-[120px] cursor-not-allowed bg-slate-50 text-[11px] text-slate-500'}
+                                    />
+                                  )
+                                ) : (
+                                  row.axis3 || "-"
+                                )}
+                              </td>
+                              <td className="px-2 py-1">
+                                {row.categoryKey === "DECOR" ? (
+                                  <Input
+                                    value={String(row.decorFinalAmountKrw)}
+                                    type="number"
+                                    disabled
+                                    readOnly
+                                    className="h-8 min-w-[92px] cursor-not-allowed bg-slate-50 text-right text-[11px] text-slate-500"
+                                  />
+                                ) : row.categoryKey === "NOTICE" ? (
+                                  <Input
+                                    value="0"
+                                    type="number"
+                                    disabled
+                                    readOnly
+                                    className="h-8 min-w-[92px] cursor-not-allowed bg-slate-50 text-right text-[11px] text-slate-500"
+                                  />
+                                ) : row.categoryKey === "COLOR_PLATING" ? (
+                                  <Input
+                                    value={String(row.syncDeltaKrw)}
+                                    type="number"
+                                    disabled
+                                    readOnly
+                                    className="h-8 min-w-[92px] cursor-not-allowed bg-slate-50 text-right text-[11px] text-slate-500"
+                                  />
+                                ) : row.categoryKey === "SIZE" ? (
+                                  <Input
+                                    value={String(row.syncDeltaKrw)}
+                                    type="number"
+                                    disabled
+                                    readOnly
+                                    className="h-8 min-w-[92px] cursor-not-allowed bg-slate-50 text-right text-[11px] text-slate-500"
+                                  />
+                                ) : (
+                                  <Input
+                                    value={String(row.syncDeltaKrw)}
+                                    onChange={(e) => setOptionSyncDeltaDrafts((prev) => ({ ...prev, [row.entryKey]: e.target.value }))}
+                                    type="number"
+                                    className="h-8 min-w-[92px] text-right text-[11px]"
+                                  />
+                                )}
+                                {row.categoryKey === "OTHER" ? (
+                                  <Input
+                                    value={String(optionOtherReasonDrafts[row.entryKey] ?? row.otherReason ?? "")}
+                                    onChange={(e) => setOptionOtherReasonDrafts((prev) => ({ ...prev, [row.entryKey]: e.target.value }))}
+                                    placeholder="기타 사유 필수"
+                                    className="mt-1 h-8 min-w-[160px] text-[11px]"
+                                  />
+                                ) : null}
                               </td>
                             </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                  {optionCategorySaveError ? <div className="mt-2 text-xs text-red-500">{optionCategorySaveError}</div> : null}
+                </div>
+
+                <div className="rounded border border-[var(--hairline)] p-3">
+                  <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                    <div className="space-y-1">
+                      <div className="text-xs font-semibold">고급 variant 보정</div>
+                      <div className="text-xs text-[var(--muted)]">보통은 위 옵션값 표만 수정하면 충분하고, variant별 예외 보정이 필요할 때만 사용합니다.</div>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <Button size="sm" variant="secondary" onClick={() => saveMappingsMutation.mutate()} disabled={saveMappingsMutation.isPending || !editorPreview || !showAdvancedVariantMapping}>
+                        고급 매핑 저장
+                      </Button>
+                      <Button size="sm" variant="ghost" onClick={() => setShowAdvancedVariantMapping((current) => !current)}>
+                        {showAdvancedVariantMapping ? "고급 variant 접기" : "고급 variant 펼치기"}
+                      </Button>
+                    </div>
                   </div>
-                  <div className="mt-2 flex justify-end">
-                    <Button size="sm" variant="secondary" onClick={() => saveCategoriesMutation.mutate()} disabled={saveCategoriesMutation.isPending || !editorPreview}>
-                      옵션 카테고리/금액 저장
-                    </Button>
+                  {showAdvancedVariantMapping ? (
+                    <div className="mt-3 grid grid-cols-1 gap-3 xl:grid-cols-[220px_minmax(0,1fr)]">
+                    <div className="rounded border border-[var(--hairline)] bg-[var(--bg)] p-2">
+                      <div className="mb-2 text-[11px] font-medium text-[var(--muted)]">편집 대상 variant</div>
+                      <div className="space-y-2">
+                        <Select value={focusedVariantCode} onChange={(e) => setFocusedVariantCode(e.target.value)} disabled={editorVariantCodes.length === 0} className="bg-white pr-8 text-slate-900 focus:border-blue-600 focus:ring-2 focus:ring-blue-600/20">
+                          {editorVariantCodes.length === 0 ? <option value="">variant 없음</option> : null}
+                          {editorVariantCodes.map((variantCode) => (
+                            <option key={`focused-variant-${variantCode}`} value={variantCode}>{variantCode}</option>
+                          ))}
+                        </Select>
+                        <div className="max-h-[220px] space-y-1 overflow-auto">
+                          {editorPreview.variants.map((variant) => {
+                            const variantCode = normalizeVariantCode(variant.variantCode);
+                            const isFocused = variantCode === focusedVariantCode;
+                            const draft = variantOptionDraftsByCode[variantCode] ?? defaultVariantOptionDrafts[variantCode] ?? toVariantOptionDraft(null);
+                            return (
+                              <button
+                                key={`variant-focus-${variantCode}`}
+                                type="button"
+                                className={`w-full rounded border px-2 py-2 text-left text-xs transition-colors ${isFocused ? "border-[var(--primary)] bg-[var(--panel)]" : "border-[var(--hairline)] bg-transparent hover:border-[var(--primary)]"}`}
+                                onClick={() => setFocusedVariantCode(variantCode)}
+                              >
+                                <div className="font-medium">{variantCode || "-"}</div>
+                                <div className="mt-1 text-[10px] text-[var(--muted)]">{loadedOptionAllowlist.is_empty ? "매핑 미확정(allowlist 없음)" : optionSummary(draft)}</div>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="rounded border border-[var(--hairline)] bg-[var(--bg)] p-3">
+                      {!focusedVariant || !focusedDraft ? (
+                        <div className="text-sm text-[var(--muted)]">편집할 variant를 선택하세요.</div>
+                      ) : (
+                        <div className="space-y-3">
+                          <div className="grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-4">
+                            <div className="rounded border border-[var(--hairline)] bg-[var(--panel)] px-3 py-2 text-xs">
+                              <div className="text-[var(--muted)]">variant_code</div>
+                              <div className="mt-1 font-medium">{focusedVariantCode}</div>
+                            </div>
+                            <div className="rounded border border-[var(--hairline)] bg-[var(--panel)] px-3 py-2 text-xs">
+                              <div className="text-[var(--muted)]">현재 매핑</div>
+                              <div className="mt-1 font-medium">{loadedOptionAllowlist.is_empty ? "매핑 미확정(allowlist 없음)" : optionSummary(focusedDraft)}</div>
+                            </div>
+                            <div className="rounded border border-[var(--hairline)] bg-[var(--panel)] px-3 py-2 text-xs">
+                              <div className="text-[var(--muted)]">계산 옵션가</div>
+                              <div className="mt-1 font-medium tabular-nums">{fmt(computedVariantAdditionalByCode[focusedVariantCode] ?? 0)}</div>
+                            </div>
+                            <div className="rounded border border-[var(--hairline)] bg-[var(--panel)] px-3 py-2 text-xs">
+                              <div className="text-[var(--muted)]">allowlist</div>
+                              <div className="mt-1 font-medium">{loadedOptionAllowlist.is_empty ? "empty" : `${focusedMaterialChoices.length} material / ${focusedSizeChoices.length} size / ${focusedColorChoices.length} color / ${focusedDecorChoices.length} decor`}</div>
+                            </div>
+                          </div>
+                          <div className="rounded border border-[var(--hairline)] p-3">
+                            <div className="mb-2 text-xs font-medium text-[var(--muted)]">원본 옵션 축</div>
+                            <div className="flex flex-wrap gap-2 text-xs">
+                              {(focusedVariant.options ?? []).map((option, index) => (
+                                <span key={`focused-axis-${focusedVariantCode}-${index}`} className="rounded-full border border-[var(--hairline)] bg-[var(--panel)] px-2 py-1">{axisCellText(option)}</span>
+                              ))}
+                              {(focusedVariant.options ?? []).length === 0 ? <span className="text-[var(--muted)]">옵션 축 없음</span> : null}
+                            </div>
+                          </div>
+                          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                            <div className="space-y-1">
+                              <div className="text-xs text-[var(--muted)]">material</div>
+                              <Select
+                                value={focusedDraft.option_material_code ?? ""}
+                                className="bg-white pr-8 text-slate-900 focus:border-blue-600 focus:ring-2 focus:ring-blue-600/20"
+                                onChange={(e) => {
+                                  const nextMaterialCode = e.target.value || null;
+                                  applyVariantMaterialDraft(focusedVariantCode, nextMaterialCode);
+                                }}
+                              >
+                                <option value="">선택 안함</option>
+                                {focusedMaterialChoices.map((choice) => (
+                                  <option key={`focused-material-${choice.value}`} value={choice.value}>{choice.label}</option>
+                                ))}
+                              </Select>
+                            </div>
+                            <div className="space-y-1">
+                              <div className="text-xs text-[var(--muted)]">size</div>
+                              <Select
+                                value={focusedDraft.option_size_value_text}
+                                className="bg-white pr-8 text-slate-900 focus:border-blue-600 focus:ring-2 focus:ring-blue-600/20"
+                                onChange={(e) => {
+                                  const nextText = e.target.value;
+                                  updateVariantOptionDraft(focusedVariantCode, (draft) => ({
+                                    ...draft,
+                                    option_size_value_text: nextText,
+                                    option_size_value: parseNumericInput(nextText),
+                                  }));
+                                }}
+                              >
+                                <option value="">선택 안함</option>
+                                {focusedSizeChoices.map((choice) => (
+                                  <option key={`focused-size-${choice.value}`} value={choice.value}>{choice.label}</option>
+                                ))}
+                              </Select>
+                            </div>
+                            <div className="space-y-1">
+                              <div className="text-xs text-[var(--muted)]">color / plating</div>
+                              <Select className="bg-white pr-8 text-slate-900 focus:border-blue-600 focus:ring-2 focus:ring-blue-600/20" value={focusedDraft.option_color_code ?? ""} onChange={(e) => updateVariantOptionDraft(focusedVariantCode, (draft) => ({ ...draft, option_color_code: e.target.value || null }))}>
+                                <option value="">선택 안함</option>
+                                {focusedColorChoices.map((choice) => (
+                                  <option key={`focused-color-${choice.value}`} value={choice.value}>{choice.label}</option>
+                                ))}
+                              </Select>
+                            </div>
+                            <div className="space-y-1">
+                              <div className="text-xs text-[var(--muted)]">decor</div>
+                              <Select className="bg-white pr-8 text-slate-900 focus:border-blue-600 focus:ring-2 focus:ring-blue-600/20" value={focusedDraft.option_decoration_code ?? ""} onChange={(e) => updateVariantOptionDraft(focusedVariantCode, (draft) => ({ ...draft, option_decoration_code: e.target.value || null }))}>
+                                <option value="">선택 안함</option>
+                                {focusedDecorChoices.map((choice) => (
+                                  <option key={`focused-decor-${choice.value}`} value={choice.value}>{choice.label}</option>
+                                ))}
+                              </Select>
+                            </div>
+                          </div>
+                          <div className="grid grid-cols-1 gap-2 md:grid-cols-4">
+                            <div className="rounded border border-[var(--hairline)] px-3 py-2 text-xs">
+                              <div className="text-[var(--muted)]">저장값</div>
+                              <div className="mt-1 font-medium tabular-nums">{fmt(focusedVariant.savedTargetAdditionalAmount)}</div>
+                            </div>
+                            <div className="rounded border border-[var(--hairline)] px-3 py-2 text-xs">
+                              <div className="text-[var(--muted)]">스토어 옵션가</div>
+                              <div className="mt-1 font-medium tabular-nums">{fmt(focusedVariant.additionalAmount)}</div>
+                            </div>
+                            <div className="rounded border border-[var(--hairline)] px-3 py-2 text-xs">
+                              <div className="text-[var(--muted)]">base 판매가</div>
+                              <div className="mt-1 font-medium tabular-nums">{fmt(editorPreview.price)}</div>
+                            </div>
+                            <div className="rounded border border-[var(--hairline)] px-3 py-2 text-xs">
+                              <div className="text-[var(--muted)]">최종 판매가 미리보기</div>
+                              <div className="mt-1 font-medium tabular-nums">{editorPreview.price == null ? "-" : fmt(Math.max(Math.round(Number(editorPreview.price) + Number(computedVariantAdditionalByCode[focusedVariantCode] ?? 0)), previewEffectiveFloor))}</div>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
                   </div>
+                  ) : (
+                    <div className="mt-3 text-[11px] text-[var(--muted)]">고유 옵션값 표만으로 대부분 수정할 수 있습니다. variant별 수동 보정이 필요할 때만 펼치세요.</div>
+                  )}
+                  {showAdvancedVariantMapping && mappingSaveError ? <div className="mt-2 text-xs text-red-500">{mappingSaveError}</div> : null}
                 </div>
 
                 <div className="grid grid-cols-1 gap-2 md:grid-cols-6">
@@ -2364,6 +4451,7 @@ export default function ShoppingAutoPricePage() {
                   <div className="space-y-1">
                     <div className="text-xs text-[var(--muted)]">바닥가</div>
                     <Input value={editorFloorPrice} onChange={(e) => setEditorFloorPrice(e.target.value)} type="number" placeholder="floor_price_krw" min={0} />
+                    <div className="text-[11px] text-[var(--muted)]">최종 판매가 KRW 기준 하한입니다.</div>
                   </div>
                   <div className="space-y-1">
                     <div className="text-xs text-[var(--muted)]">진열상태</div>
@@ -2392,6 +4480,34 @@ export default function ShoppingAutoPricePage() {
                   </div>
                 </div>
 
+                <div className={`rounded border p-3 ${currentProductSyncProfilePanelClassOf(editorCurrentProductSyncProfile)}`}>
+                  <div className='flex flex-col gap-2 md:flex-row md:items-center md:justify-between'>
+                    <div>
+                      <div className='text-xs font-semibold text-amber-950'>현재 상품 프로필</div>
+                      <div className='text-[11px] text-amber-950/80'>상세수정 반영 시 함께 저장됩니다.</div>
+                    </div>
+                    <div className='flex items-center gap-2'>
+                      <Select
+                        value={editorCurrentProductSyncProfile}
+                        onChange={(e) => {
+                          const nextProfile = e.target.value as CurrentProductSyncProfile;
+                          setEditorCurrentProductSyncProfile(nextProfile);
+                          setEditorPreview((current) => (current ? { ...current, current_product_sync_profile: nextProfile } : current));
+                        }}
+                        disabled={!editorMasterItemId}
+                        className='min-w-[132px] border-amber-400/70 bg-white/90 text-sm font-medium text-amber-950'
+                      >
+                        {AUTO_SYNC_THRESHOLD_PROFILE_OPTIONS.map((option) => (
+                          <option key={`detail-sync-profile-${option.value}`} value={option.value}>{option.label}</option>
+                        ))}
+                      </Select>
+                      <span className={currentProductSyncProfileBadgeClassOf(editorCurrentProductSyncProfile)}>
+                        {currentProductSyncProfileLabelOf(editorCurrentProductSyncProfile)}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
                 <div className="text-xs text-[var(--muted)]">
                   {sellingPriceOverrideLocked
                     ? "덮어쓰기 고정 ON: 재계산/자동동기화에서도 이 판매가를 우선 적용합니다."
@@ -2409,67 +4525,66 @@ export default function ShoppingAutoPricePage() {
                   </Button>
                 </div>
 
-                <div className="max-h-[320px] overflow-auto rounded border border-[var(--hairline)]">
+                {showAdvancedVariantMapping ? (
+                  <div className="max-h-[320px] overflow-auto rounded border border-[var(--hairline)]">
                   <table className="w-full text-sm">
                     <thead className="bg-[var(--panel)] text-left">
                       <tr>
                         <th className="px-2 py-1">variant_code</th>
-                        {variantOptionColumnNames.map((name) => (
-                          <th key={name} className="px-2 py-1">{name}</th>
+                        {Array.from({ length: variantAxisCount }).map((_, index) => (
+                          <th key={`detail-axis-${index + 1}`} className="px-2 py-1">{`axis ${index + 1}`}</th>
                         ))}
+                        <th className="px-2 py-1">매핑</th>
                         <th className="px-2 py-1">저장기반 옵션가</th>
                         <th className="px-2 py-1">동기화 계산 옵션가</th>
                         <th className="px-2 py-1">쇼핑몰 옵션가</th>
                         <th className="px-2 py-1">base 판매가</th>
-                        <th className="px-2 py-1">옵션가격(additional)</th>
-                        <th className="px-2 py-1">쇼핑몰반영</th>
+                        <th className="px-2 py-1">최종 판매가 미리보기</th>
+                        <th className="px-2 py-1">상태</th>
+                        <th className="px-2 py-1">작업</th>
                       </tr>
                     </thead>
                     <tbody>
                       {editorPreview.variants.map((variant) => {
-                        const valueByName = new Map(
-                          (variant.options ?? []).map((o) => [String(o.name ?? "").trim(), String(o.value ?? "").trim()]),
-                        );
-                        const savedTargetAdditionalAmount = variant.savedTargetAdditionalAmount == null
-                          ? null
-                          : Math.round(Number(variant.savedTargetAdditionalAmount));
-                        const storefrontAdditionalAmount = variant.additionalAmount == null
-                          ? null
-                          : Math.round(Number(variant.additionalAmount));
-                        const computedAdditionalAmount = Math.round(Number(computedVariantAdditionalByCode.get(variant.variantCode) ?? 0));
-
+                        const variantCode = normalizeVariantCode(variant.variantCode);
+                        const draft = variantOptionDraftsByCode[variantCode] ?? defaultVariantOptionDrafts[variantCode] ?? toVariantOptionDraft(null);
+                        const savedTargetAdditionalAmount = variant.savedTargetAdditionalAmount == null ? null : Math.round(Number(variant.savedTargetAdditionalAmount));
+                        const storefrontAdditionalAmount = variant.additionalAmount == null ? null : Math.round(Number(variant.additionalAmount));
+                        const computedAdditionalAmount = Math.round(Number(computedVariantAdditionalByCode[variantCode] ?? 0));
                         let syncState = "확인필요";
-                        if (savedTargetAdditionalAmount == null) {
-                          syncState = "저장값없음";
-                        } else if (storefrontAdditionalAmount == null) {
-                          syncState = "확인필요";
-                        } else if (storefrontAdditionalAmount === savedTargetAdditionalAmount) {
-                          syncState = "일치";
-                        } else {
-                          syncState = "불일치";
-                        }
-
+                        if (savedTargetAdditionalAmount == null) syncState = "저장값없음";
+                        else if (storefrontAdditionalAmount === savedTargetAdditionalAmount) syncState = "일치";
+                        else if (storefrontAdditionalAmount != null) syncState = "불일치";
                         return (
-                          <tr key={variant.variantCode} className="border-t border-[var(--hairline)]">
-                            <td className="px-2 py-1">{variant.variantCode}</td>
-                            {variantOptionColumnNames.map((name) => (
-                              <td key={`${variant.variantCode}::${name}`} className="px-2 py-1">{valueByName.get(name) || "-"}</td>
+                          <tr key={variant.variantCode} className={`border-t border-[var(--hairline)] ${variantCode === focusedVariantCode ? "bg-[var(--panel)]" : ""}`}>
+                            <td className="px-2 py-1">
+                              <div className="font-medium">{variant.variantCode}</div>
+                              {variant.customVariantCode ? <div className="text-[11px] text-[var(--muted)]">custom {variant.customVariantCode}</div> : null}
+                            </td>
+                            {Array.from({ length: variantAxisCount }).map((_, index) => (
+                              <td key={`${variantCode}-axis-${index + 1}`} className="px-2 py-1">{axisCellText(variant.options[index])}</td>
                             ))}
+                            <td className="px-2 py-1">{optionSummary(draft)}</td>
                             <td className="px-2 py-1">{fmt(savedTargetAdditionalAmount)}</td>
                             <td className="px-2 py-1">{fmt(computedAdditionalAmount)}</td>
                             <td className="px-2 py-1">{fmt(variant.additionalAmount)}</td>
                             <td className="px-2 py-1">{fmt(editorPreview.price)}</td>
-                            <td className="px-2 py-1">
-                              <Input value={String(savedTargetAdditionalAmount ?? computedAdditionalAmount)} type="number" readOnly />
-                            </td>
+                            <td className="px-2 py-1">{editorPreview.price == null ? "-" : fmt(Math.max(Math.round(Number(editorPreview.price) + computedAdditionalAmount), previewEffectiveFloor))}</td>
                             <td className="px-2 py-1">{syncState}</td>
+                            <td className="px-2 py-1">
+                              <Button size="sm" variant={variantCode === focusedVariantCode ? "secondary" : "ghost"} onClick={() => setFocusedVariantCode(variantCode)}>
+                                Focus
+                              </Button>
+                            </td>
                           </tr>
                         );
                       })}
                     </tbody>
                   </table>
-                </div>
-
+                  </div>
+                ) : (
+                  <div className="rounded border border-dashed border-[var(--hairline)] px-3 py-2 text-[11px] text-[var(--muted)]">고급 variant 비교표는 접혀 있습니다. 위에서 고급 variant 펼치기를 누르면 variant별 매핑과 계산 결과를 볼 수 있습니다.</div>
+                )}
                 <div className="flex justify-end">
                   <Button onClick={() => applyEditorMutation.mutate()} disabled={applyEditorMutation.isPending || !editorPreview}>
                     상세수정 반영
@@ -2499,6 +4614,7 @@ export default function ShoppingAutoPricePage() {
             바닥가격 저장
           </Button>
         </CardBody>
+        <div className="px-6 pb-6 text-xs text-[var(--muted)]">바닥가격은 최종 판매가 KRW 기준으로 적용됩니다.</div>
       </Card>
 
       <Card>
@@ -2518,6 +4634,11 @@ export default function ShoppingAutoPricePage() {
                 <option key={fs.factor_set_id} value={fs.factor_set_id}>{fs.name}</option>
               ))}
             </Select>
+            <Select value={autoSyncThresholdProfile} onChange={(e) => setAutoSyncThresholdProfile(e.target.value as "GENERAL" | "MARKET_LINKED")}>
+              {AUTO_SYNC_THRESHOLD_PROFILE_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>{option.label}</option>
+              ))}
+            </Select>
             <Input value={autoSyncMinChangeKrw} onChange={(e) => setAutoSyncMinChangeKrw(e.target.value)} type="number" min={0} placeholder="최소 변동금액(원)" />
             <Input value={autoSyncMinChangeRatePct} onChange={(e) => setAutoSyncMinChangeRatePct(e.target.value)} type="number" min={0} step="0.01" placeholder="최소 변동률(%)" />
             <label className="flex h-10 items-center gap-2 rounded border border-[var(--hairline)] px-3 text-xs text-[var(--muted)]">
@@ -2531,6 +4652,9 @@ export default function ShoppingAutoPricePage() {
             <Button onClick={() => savePolicyMutation.mutate()} disabled={!effectiveChannelId || savePolicyMutation.isPending}>
               정책 저장
             </Button>
+          </div>
+          <div className="rounded border border-[var(--hairline)] bg-[var(--panel)] px-3 py-2 text-xs text-[var(--muted)]">
+            선택 프로필: <span className="font-medium text-[var(--fg)]">{selectedThresholdProfile.label}</span> · 적용 룰: <span className="font-medium text-[var(--fg)]">{selectedThresholdProfile.ruleText}</span>
           </div>
           <p className="text-xs text-[var(--muted)]">
             상세수정 반영은 즉시값을 직접 반영하고, 여기 값은 재계산/동기화 파이프라인에서 적용됩니다. 룰 기반 자동동기화는 기본적으로 재계산으로 확정된 최종 목표가격(`max(목표가격, 최소마진가격)` 이후 값)과 현재 쇼핑몰 판매가를 비교해 `max(최소 변동금액, 현재가 x 최소 변동률)` 이상 차이날 때만 즉시 push 대상을 생성합니다. AUTO 실행에서 시장가 보정값이 더 크면 그 보정값까지 포함한 상향 목표가격을 기준으로 비교할 수 있습니다. 하향은 같은 기준을 threshold 단위로 누적해 압력이 충분히 쌓였을 때만 반영하며, 큰 하락은 즉시 반영될 수 있고 반영 후에는 일정 시간 추가 하향을 제한합니다.
@@ -2742,3 +4866,5 @@ export default function ShoppingAutoPricePage() {
     </div>
   );
 }
+
+

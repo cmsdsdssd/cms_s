@@ -10,8 +10,9 @@ export const OPTION_LABOR_RULE_CATEGORY_LABELS = {
   OTHER: "기타",
 };
 
-const WEIGHT_MIN_CENTIGRAM = 1;
+const WEIGHT_MIN_CENTIGRAM = 0;
 const WEIGHT_MAX_CENTIGRAM = 10000;
+const LABOR_AMOUNT_STEP_KRW = 100;
 
 let additionalWeightOptionsCache = null;
 
@@ -66,9 +67,10 @@ export const normalizeAdditionalWeightValue = (value) => {
 
 export const buildAdditionalWeightOptions = () => {
   if (additionalWeightOptionsCache) return additionalWeightOptionsCache;
-  additionalWeightOptionsCache = Array.from({ length: WEIGHT_MAX_CENTIGRAM }, (_, index) => {
-    const centigram = index + 1;
-    const value = centigramToWeightString(centigram);
+  const optionCount = WEIGHT_MAX_CENTIGRAM - WEIGHT_MIN_CENTIGRAM + 1;
+  additionalWeightOptionsCache = Array.from({ length: optionCount }, (_, index) => {
+    const centigram = WEIGHT_MIN_CENTIGRAM + index;
+    const value = centigramToWeightString(centigram) ?? '0.00';
     return {
       centigram,
       value,
@@ -81,7 +83,13 @@ export const buildAdditionalWeightOptions = () => {
 const normalizeRuleRow = (row) => {
   const categoryKey = normalizeOptionLaborRuleCategory(row?.category_key);
   if (!categoryKey) return null;
-  const additionalWeightValue = normalizeAdditionalWeightValue(row?.additional_weight_g);
+  const exactWeightValue = normalizeAdditionalWeightValue(row?.additional_weight_g);
+  const minWeightValue = normalizeAdditionalWeightValue(row?.additional_weight_min_g);
+  const maxWeightValue = normalizeAdditionalWeightValue(row?.additional_weight_max_g);
+  const effectiveMinWeightValue = minWeightValue ?? exactWeightValue;
+  const effectiveMaxWeightValue = maxWeightValue ?? exactWeightValue;
+  const effectiveMinCentigram = normalizeAdditionalWeightCentigram(effectiveMinWeightValue);
+  const effectiveMaxCentigram = normalizeAdditionalWeightCentigram(effectiveMaxWeightValue);
   return {
     ...row,
     category_key: categoryKey,
@@ -89,10 +97,18 @@ const normalizeRuleRow = (row) => {
     color_code: normalizeOptionLaborColorCode(row?.color_code),
     decoration_model_name: String(row?.decoration_model_name ?? "").trim() || null,
     decoration_code: normalizeDecorationCode(row?.decoration_model_name),
-    additional_weight_value: additionalWeightValue,
+    additional_weight_value: exactWeightValue,
+    additional_weight_min_value: effectiveMinWeightValue,
+    additional_weight_max_value: effectiveMaxWeightValue,
+    additional_weight_min_centigram: effectiveMinCentigram,
+    additional_weight_max_centigram: effectiveMaxCentigram,
     base_labor_cost_krw: normalizeKrwInteger(row?.base_labor_cost_krw, 0),
-    additive_delta_krw: normalizeKrwInteger(row?.additive_delta_krw, 0),
+    additive_delta_krw: normalizeKrwInteger(
+      Math.round(normalizeKrwInteger(row?.additive_delta_krw, 0) / LABOR_AMOUNT_STEP_KRW) * LABOR_AMOUNT_STEP_KRW,
+      0,
+    ),
     is_active: row?.is_active !== false,
+    note: String(row?.note ?? "").trim() || null,
   };
 };
 
@@ -108,10 +124,29 @@ const findRule = (rows, matcher) => {
   return null;
 };
 
+const findRules = (rows, matcher) => {
+  const matches = [];
+  for (const raw of rows) {
+    const row = normalizeRuleRow(raw);
+    if (!row || !row.is_active) continue;
+    if (matcher(row)) matches.push(row);
+  }
+  return matches;
+};
+
+const isSizeRangeMatched = (row, additionalWeightCentigram) => {
+  if (!Number.isFinite(additionalWeightCentigram)) return false;
+  const min = Number(row.additional_weight_min_centigram);
+  const max = Number(row.additional_weight_max_centigram);
+  if (!Number.isFinite(min) || !Number.isFinite(max)) return false;
+  return additionalWeightCentigram >= min && additionalWeightCentigram <= max;
+};
+
 export const resolveOptionLaborRuleMatches = (rows, context) => {
   const sourceRows = Array.isArray(rows) ? rows : [];
   const materialCode = normalizeMaterialScopeCode(context?.materialCode);
   const additionalWeightValue = normalizeAdditionalWeightValue(context?.additionalWeightG);
+  const additionalWeightCentigram = normalizeAdditionalWeightCentigram(context?.additionalWeightG);
   const platingEnabled = context?.platingEnabled === true;
   const colorCode = normalizeOptionLaborColorCode(context?.colorCode);
   const decorationCode = normalizeDecorationCode(context?.decorationCode);
@@ -119,23 +154,36 @@ export const resolveOptionLaborRuleMatches = (rows, context) => {
 
   const material = findRule(sourceRows, (row) => row.category_key === "MATERIAL");
 
-  const size = additionalWeightValue
-    ? findRule(
+  const sizeRules = additionalWeightValue
+    ? findRules(
       sourceRows,
       (row) => row.category_key === "SIZE"
         && row.scope_material_code === materialCode
-        && row.additional_weight_value === additionalWeightValue,
+        && isSizeRangeMatched(row, additionalWeightCentigram),
     )
-    : null;
+    : [];
+  const size = sizeRules[0] ?? null;
 
-  const colorPlating = findRule(
+  const colorPlatingExactRules = colorCode
+    ? findRules(
+      sourceRows,
+      (row) => row.category_key === "COLOR_PLATING"
+        && row.scope_material_code === materialCode
+        && Boolean(row.plating_enabled) === platingEnabled
+        && row.color_code === colorCode,
+    )
+    : [];
+  const colorPlatingFallbackRules = findRules(
     sourceRows,
     (row) => row.category_key === "COLOR_PLATING"
+      && row.scope_material_code === materialCode
       && Boolean(row.plating_enabled) === platingEnabled
-      && (!row.color_code || row.color_code === colorCode),
+      && !row.color_code,
   );
+  const colorPlatingRules = colorPlatingExactRules.length > 0 ? colorPlatingExactRules : colorPlatingFallbackRules;
+  const colorPlating = colorPlatingRules[0] ?? null;
 
-  const decor = findRule(
+  const decorRules = findRules(
     sourceRows,
     (row) => row.category_key === "DECOR"
       && (
@@ -143,21 +191,30 @@ export const resolveOptionLaborRuleMatches = (rows, context) => {
         || (decorationCode && row.decoration_code === decorationCode)
       ),
   );
+  const decor = decorRules[0] ?? null;
 
-  const other = findRule(sourceRows, (row) => row.category_key === "OTHER");
+  const otherRows = findRules(sourceRows, (row) => row.category_key === "OTHER");
+  const other = otherRows[0] ?? null;
 
-  return { material, size, colorPlating, decor, other };
+  return { material, size, sizeRules, colorPlating, colorPlatingRules, decor, decorRules, other, otherRows };
 };
 
 export const computeOptionLaborBuckets = (rows, context) => {
   const matched = resolveOptionLaborRuleMatches(rows, context);
+  const sizeRules = Array.isArray(matched.sizeRules) ? matched.sizeRules : (matched.size ? [matched.size] : []);
+  const colorPlatingRules = Array.isArray(matched.colorPlatingRules)
+    ? matched.colorPlatingRules
+    : (matched.colorPlating ? [matched.colorPlating] : []);
+  const decorRules = Array.isArray(matched.decorRules) ? matched.decorRules : (matched.decor ? [matched.decor] : []);
   const material = 0;
-  const size = matched.size ? normalizeKrwInteger(matched.size.additive_delta_krw, 0) : 0;
-  const colorPlating = matched.colorPlating ? normalizeKrwInteger(matched.colorPlating.additive_delta_krw, 0) : 0;
-  const decor = matched.decor
-    ? normalizeKrwInteger(matched.decor.base_labor_cost_krw, 0) + normalizeKrwInteger(matched.decor.additive_delta_krw, 0)
-    : 0;
-  const other = matched.other ? normalizeKrwInteger(matched.other.additive_delta_krw, 0) : 0;
+  const size = sizeRules.reduce((sum, row) => sum + normalizeKrwInteger(row.additive_delta_krw, 0), 0);
+  const colorPlating = colorPlatingRules.reduce((sum, row) => sum + normalizeKrwInteger(row.additive_delta_krw, 0), 0);
+  const decor = decorRules.reduce((sum, row) => {
+    return sum + normalizeKrwInteger(row.base_labor_cost_krw, 0) + normalizeKrwInteger(row.additive_delta_krw, 0);
+  }, 0);
+  const other = Array.isArray(matched.otherRows)
+    ? matched.otherRows.reduce((sum, row) => sum + normalizeKrwInteger(row.additive_delta_krw, 0), 0)
+    : (matched.other ? normalizeKrwInteger(matched.other.additive_delta_krw, 0) : 0);
   return {
     material,
     size,

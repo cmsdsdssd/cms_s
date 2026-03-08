@@ -1,0 +1,12 @@
+ docs/runbooks/auto-price-v2-history-retention.md   | 102 +++++++
+ ...1124_auto_sync_default_rate_to_2pct_addonly.sql |   8 +
+ ...0_cms_1125_price_sync_auto_state_v1_addonly.sql |  26 ++
+ ...6_price_sync_change_event_retention_addonly.sql | 180 +++++++++++
+ .../(app)/settings/shopping/auto-price/page.tsx    | 256 +++++++++++++---
+ .../price-sync-runs-v2/[run_id]/execute/route.ts   | 269 ++++++++++++++++-
+ web/src/app/api/price-sync-runs-v2/route.ts        | 328 ++++++++++++++++++---
+ web/src/lib/shop/price-sync-policy.js              | 124 ++++++++
+ web/src/lib/shop/price-sync-pressure-policy.js     | 216 ++++++++++++++
+ web/tests/price-sync-policy.test.mjs               | 139 +++++++++
+ web/tests/price-sync-pressure-policy.test.mjs      | 234 +++++++++++++++
+ 11 files changed, 1780 insertions(+), 102 deletions(-)

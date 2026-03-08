@@ -19,6 +19,27 @@ export const DEFAULT_PRICE_SYNC_POLICY = Object.freeze({
   min_change_rate: 0.02,
 });
 
+export const PRICE_SYNC_THRESHOLD_PROFILE = Object.freeze({
+  GENERAL: "GENERAL",
+  MARKET_LINKED: "MARKET_LINKED",
+});
+
+export const DEFAULT_PRICE_SYNC_THRESHOLD_PROFILE = PRICE_SYNC_THRESHOLD_PROFILE.GENERAL;
+
+/** @type {Readonly<Record<string, Readonly<PriceSyncPolicy>>>} */
+export const PRICE_SYNC_THRESHOLD_PROFILE_PRESETS = Object.freeze({
+  [PRICE_SYNC_THRESHOLD_PROFILE.GENERAL]: Object.freeze({
+    always_sync: false,
+    min_change_krw: 5000,
+    min_change_rate: 0.02,
+  }),
+  [PRICE_SYNC_THRESHOLD_PROFILE.MARKET_LINKED]: Object.freeze({
+    always_sync: false,
+    min_change_krw: 500,
+    min_change_rate: 0.005,
+  }),
+});
+
 const toBoolean = (value, fallback) => {
   if (typeof value === "boolean") return value;
   const normalized = String(value ?? "").trim().toLowerCase();
@@ -40,6 +61,25 @@ const toNonNegativeRate = (value, fallback) => {
 };
 
 export const normalizeCurrentPriceKrw = (value) => toNonNegativeInt(value, 0);
+
+export const normalizePriceSyncThresholdProfile = (
+  value,
+  fallback = DEFAULT_PRICE_SYNC_THRESHOLD_PROFILE,
+) => {
+  const normalized = String(value ?? "").trim().toUpperCase();
+  if (normalized === PRICE_SYNC_THRESHOLD_PROFILE.MARKET_LINKED) {
+    return PRICE_SYNC_THRESHOLD_PROFILE.MARKET_LINKED;
+  }
+  if (normalized === PRICE_SYNC_THRESHOLD_PROFILE.GENERAL) {
+    return PRICE_SYNC_THRESHOLD_PROFILE.GENERAL;
+  }
+  return normalizePriceSyncThresholdProfile(fallback, DEFAULT_PRICE_SYNC_THRESHOLD_PROFILE);
+};
+
+export const resolvePriceSyncThresholdProfilePolicy = (profile) => {
+  const normalizedProfile = normalizePriceSyncThresholdProfile(profile);
+  return PRICE_SYNC_THRESHOLD_PROFILE_PRESETS[normalizedProfile] ?? DEFAULT_PRICE_SYNC_POLICY;
+};
 
 /**
  * @param {PriceSyncPolicyInput | undefined} policy

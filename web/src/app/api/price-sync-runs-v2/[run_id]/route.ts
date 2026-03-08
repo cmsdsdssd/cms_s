@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getShopAdminClient, jsonError } from "@/lib/shop/admin";
+import { getShopAdminClient, isMissingColumnError, jsonError } from "@/lib/shop/admin";
 import { buildSyncReasonSummary, inferSyncReasonCode, syncReasonMeta } from "@/lib/shop/sync-reasons";
 
 export const dynamic = "force-dynamic";
@@ -7,10 +7,40 @@ export const revalidate = 0;
 
 type Params = { params: Promise<{ run_id: string }> };
 
+type IntentDecisionContext = {
+  threshold_profile: string | null;
+  current_price_krw: number | null;
+  base_target_price_krw: number | null;
+  market_uplift_price_krw: number | null;
+  pricing_override_id: string | null;
+  pricing_override_price_krw: number | null;
+  floor_guard_id: string | null;
+  floor_price_krw: number | null;
+  final_desired_price_krw: number | null;
+  floor_applied: boolean | null;
+};
+
 const toNullableNumber = (value: unknown): number | null => {
   if (value == null) return null;
   const n = Number(value);
   return Number.isFinite(n) ? n : null;
+};
+
+const toDecisionContext = (value: unknown): IntentDecisionContext | null => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const raw = value as Record<string, unknown>;
+  return {
+    threshold_profile: typeof raw.threshold_profile === "string" ? raw.threshold_profile : null,
+    current_price_krw: toNullableNumber(raw.current_price_krw),
+    base_target_price_krw: toNullableNumber(raw.base_target_price_krw),
+    market_uplift_price_krw: toNullableNumber(raw.market_uplift_price_krw),
+    pricing_override_id: typeof raw.pricing_override_id === "string" ? raw.pricing_override_id : null,
+    pricing_override_price_krw: toNullableNumber(raw.pricing_override_price_krw),
+    floor_guard_id: typeof raw.floor_guard_id === "string" ? raw.floor_guard_id : null,
+    floor_price_krw: toNullableNumber(raw.floor_price_krw),
+    final_desired_price_krw: toNullableNumber(raw.final_desired_price_krw),
+    floor_applied: typeof raw.floor_applied === "boolean" ? raw.floor_applied : null,
+  };
 };
 
 export async function GET(_request: Request, { params }: Params) {
@@ -21,24 +51,31 @@ export async function GET(_request: Request, { params }: Params) {
   const runId = String(run_id ?? "").trim();
   if (!runId) return jsonError("run_id is required", 400);
 
-  const [runRes, intentRes] = await Promise.all([
-    sb
-      .from("price_sync_run_v2")
-      .select("run_id, channel_id, pinned_compute_request_id, interval_minutes, trigger_type, status, total_count, success_count, failed_count, skipped_count, started_at, finished_at, error_message, request_payload, created_at")
-      .eq("run_id", runId)
-      .maybeSingle(),
-    sb
-      .from("price_sync_intent_v2")
-      .select("intent_id, run_id, channel_product_id, master_item_id, external_product_no, external_variant_code, compute_request_id, desired_price_krw, floor_price_krw, floor_applied, state, updated_at, created_at")
-      .eq("run_id", runId)
-      .order("created_at", { ascending: true }),
-  ]);
+  const runRes = await sb
+    .from("price_sync_run_v2")
+    .select("run_id, channel_id, pinned_compute_request_id, interval_minutes, trigger_type, status, total_count, success_count, failed_count, skipped_count, started_at, finished_at, error_message, request_payload, created_at")
+    .eq("run_id", runId)
+    .maybeSingle();
+
+  const buildIntentQuery = (includeDecisionContext: boolean) => sb
+    .from("price_sync_intent_v2")
+    .select(includeDecisionContext
+      ? "intent_id, run_id, channel_product_id, master_item_id, external_product_no, external_variant_code, compute_request_id, desired_price_krw, floor_price_krw, floor_applied, decision_context_json, state, updated_at, created_at"
+      : "intent_id, run_id, channel_product_id, master_item_id, external_product_no, external_variant_code, compute_request_id, desired_price_krw, floor_price_krw, floor_applied, state, updated_at, created_at")
+    .eq("run_id", runId)
+    .order("created_at", { ascending: true });
+
+  let intentRes = await buildIntentQuery(true);
+  if (intentRes.error && isMissingColumnError(intentRes.error, "price_sync_intent_v2.decision_context_json")) {
+    intentRes = await buildIntentQuery(false);
+  }
 
   if (runRes.error) return jsonError(runRes.error.message ?? "run 조회 실패", 500);
   if (!runRes.data) return jsonError("run not found", 404);
   if (intentRes.error) return jsonError(intentRes.error.message ?? "intent 조회 실패", 500);
 
-  const intents = intentRes.data ?? [];
+  const intentRows = intentRes.data ?? [];
+  const intents = intentRows as unknown as Array<Record<string, unknown>>;
   const intentIds = intents
     .map((row) => String(row.intent_id ?? "").trim())
     .filter(Boolean);
@@ -99,15 +136,36 @@ export async function GET(_request: Request, { params }: Params) {
       : null;
     const reasonMeta = reasonCode ? syncReasonMeta(reasonCode) : null;
 
+    const decisionContext = toDecisionContext(row.decision_context_json ?? null);
     const snapshotDesiredPrice = toNullableNumber(row.desired_price_krw);
+    const snapshotFloorPrice = toNullableNumber(row.floor_price_krw);
     const appliedTargetPrice = task?.applied_target_price_krw ?? null;
     const effectiveDesiredPrice = appliedTargetPrice ?? snapshotDesiredPrice;
 
     return {
-      ...row,
+      intent_id: row.intent_id,
+      run_id: row.run_id,
+      channel_product_id: row.channel_product_id,
+      master_item_id: row.master_item_id,
+      external_product_no: row.external_product_no,
+      external_variant_code: row.external_variant_code,
+      compute_request_id: row.compute_request_id,
+      state: row.state,
+      created_at: row.created_at,
+      updated_at: row.updated_at,
       desired_price_krw: snapshotDesiredPrice,
       snapshot_desired_price_krw: snapshotDesiredPrice,
       effective_desired_price_krw: effectiveDesiredPrice,
+      floor_price_krw: snapshotFloorPrice,
+      floor_applied: row.floor_applied === true,
+      decision_context: decisionContext,
+      threshold_profile: decisionContext?.threshold_profile ?? null,
+      current_price_krw: decisionContext?.current_price_krw ?? null,
+      base_target_price_krw: decisionContext?.base_target_price_krw ?? null,
+      market_uplift_price_krw: decisionContext?.market_uplift_price_krw ?? null,
+      pricing_override_id: decisionContext?.pricing_override_id ?? null,
+      pricing_override_price_krw: decisionContext?.pricing_override_price_krw ?? null,
+      floor_guard_id: decisionContext?.floor_guard_id ?? null,
       reason_code: reasonCode,
       reason_label: reasonMeta?.label ?? null,
       reason_category: reasonMeta?.category ?? null,

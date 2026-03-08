@@ -2,9 +2,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  DEFAULT_PRICE_SYNC_THRESHOLD_PROFILE,
   DEFAULT_PRICE_SYNC_POLICY,
+  PRICE_SYNC_THRESHOLD_PROFILE,
+  PRICE_SYNC_THRESHOLD_PROFILE_PRESETS,
   normalizePriceSyncPolicy,
+  normalizePriceSyncThresholdProfile,
   resolveEffectiveMinChangeKrw,
+  resolvePriceSyncThresholdProfilePolicy,
   resolveRateDerivedThresholdKrw,
   shouldSyncPriceChange,
 } from '../src/lib/shop/price-sync-policy.js';
@@ -18,6 +23,60 @@ test('normalizePriceSyncPolicy applies stable defaults', () => {
       always_sync: true,
       min_change_krw: 4200,
       min_change_rate: 0.025,
+    },
+  );
+});
+
+test('threshold profile presets expose the expected general and market-linked defaults', () => {
+  assert.equal(DEFAULT_PRICE_SYNC_THRESHOLD_PROFILE, PRICE_SYNC_THRESHOLD_PROFILE.GENERAL);
+  assert.deepEqual(
+    PRICE_SYNC_THRESHOLD_PROFILE_PRESETS[PRICE_SYNC_THRESHOLD_PROFILE.GENERAL],
+    DEFAULT_PRICE_SYNC_POLICY,
+  );
+  assert.deepEqual(
+    resolvePriceSyncThresholdProfilePolicy(PRICE_SYNC_THRESHOLD_PROFILE.MARKET_LINKED),
+    {
+      always_sync: false,
+      min_change_krw: 500,
+      min_change_rate: 0.005,
+    },
+  );
+});
+
+test('normalizePriceSyncThresholdProfile falls back to the configured default profile', () => {
+  assert.equal(
+    normalizePriceSyncThresholdProfile('market_linked'),
+    PRICE_SYNC_THRESHOLD_PROFILE.MARKET_LINKED,
+  );
+  assert.equal(
+    normalizePriceSyncThresholdProfile('not-a-profile'),
+    DEFAULT_PRICE_SYNC_THRESHOLD_PROFILE,
+  );
+  assert.equal(
+    normalizePriceSyncThresholdProfile('still-not-valid', PRICE_SYNC_THRESHOLD_PROFILE.MARKET_LINKED),
+    PRICE_SYNC_THRESHOLD_PROFILE.MARKET_LINKED,
+  );
+});
+
+test('selected threshold profile presets act as defaults while explicit overrides still win', () => {
+  const selectedProfilePolicy = resolvePriceSyncThresholdProfilePolicy(PRICE_SYNC_THRESHOLD_PROFILE.MARKET_LINKED);
+
+  assert.deepEqual(
+    normalizePriceSyncPolicy(undefined, selectedProfilePolicy),
+    selectedProfilePolicy,
+  );
+  assert.deepEqual(
+    normalizePriceSyncPolicy(
+      {
+        min_change_krw: 750,
+        always_sync: true,
+      },
+      selectedProfilePolicy,
+    ),
+    {
+      always_sync: true,
+      min_change_krw: 750,
+      min_change_rate: 0.005,
     },
   );
 });

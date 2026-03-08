@@ -12,6 +12,7 @@ type MarketTickerProps = {
 
 export function MarketTicker({ variant = "full" }: MarketTickerProps) {
     const [kg, setKg] = useState<number | null>(null);
+    const [goldDo, setGoldDo] = useState<number | null>(null);
     const [ks, setKs] = useState<number | null>(null);
     const [ksOriginal, setKsOriginal] = useState<number | null>(null);
     const [cs, setCs] = useState<number | null>(null);
@@ -43,6 +44,7 @@ export function MarketTicker({ variant = "full" }: MarketTickerProps) {
                         gold?: number;
                         silverOriginal?: number;
                         // new
+                        krxGoldVat?: number | null;
                         kg?: number;
                         ks?: number;
                         ksOriginal?: number;
@@ -56,7 +58,8 @@ export function MarketTicker({ variant = "full" }: MarketTickerProps) {
                 };
                 if (result.data) {
                     if (!disposed) {
-                        setKg(result.data.kg ?? result.data.gold ?? null);
+                        setKg(result.data.krxGoldVat ?? result.data.kg ?? result.data.gold ?? null);
+                        setGoldDo(result.data.gold ?? null);
                         setKs(result.data.ks ?? null);
                         setKsOriginal(result.data.ksOriginal ?? result.data.silverOriginal ?? null);
                         setCs(result.data.cs ?? null);
@@ -99,15 +102,22 @@ export function MarketTicker({ variant = "full" }: MarketTickerProps) {
 
     const labels = useMemo(() => {
         const kgValue = formatPrice(kg);
+        const goldDoValue = formatPrice(goldDo);
         const ksDisplay = formatPrice(ksOriginal ?? ks);
         const csDisplay = formatPrice(csTick ?? csOriginalStrict ?? csOriginal ?? cs);
 
         return {
             kg: {
-                label: "한국금시세",
+                label: "한국 금시세(KRX)",
                 value: `${kgValue}`,
                 unit: "원/g",
                 color: "text-amber-600 dark:text-amber-400",
+            },
+            goldDo: {
+                label: "한국 금시세(도)",
+                value: `${goldDoValue}`,
+                unit: "원/g",
+                color: "text-orange-600 dark:text-orange-400",
             },
             ks: {
                 label: "한국은시세",
@@ -128,7 +138,7 @@ export function MarketTicker({ variant = "full" }: MarketTickerProps) {
                 color: "text-rose-600 dark:text-rose-400",
             },
         };
-    }, [kg, ks, ksOriginal, cs, csTick, csOriginal, csOriginalStrict, cnyAd]);
+    }, [kg, goldDo, ks, ksOriginal, cs, csTick, csOriginal, csOriginalStrict, cnyAd]);
 
     const offlineBadge = isOffline ? (
         <span className="flex items-center gap-1.5 rounded-full bg-red-500/10 px-2 py-0.5 text-[10px] font-medium text-red-600 dark:text-red-400">
@@ -151,6 +161,19 @@ export function MarketTicker({ variant = "full" }: MarketTickerProps) {
                     <span className={cn("text-sm font-bold tabular-nums tracking-tight", labels.kg.color)}>
                         {labels.kg.value}
                         <span className="text-[10px] font-normal text-[var(--muted-weak)] ml-0.5">{labels.kg.unit}</span>
+                    </span>
+                </div>
+
+                <div className="h-3 w-px bg-[var(--hairline)]" />
+
+                {/* GOLD DO */}
+                <div className="flex items-baseline gap-2">
+                    <span className="text-xs font-medium text-[var(--muted)] tracking-tight">
+                        {labels.goldDo.label}
+                    </span>
+                    <span className={cn("text-sm font-bold tabular-nums tracking-tight", labels.goldDo.color)}>
+                        {labels.goldDo.value}
+                        <span className="text-[10px] font-normal text-[var(--muted-weak)] ml-0.5">{labels.goldDo.unit}</span>
                     </span>
                 </div>
 

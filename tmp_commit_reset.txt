@@ -1,0 +1,7 @@
+Unstaged changes after reset:
+M	web/src/app/(app)/settings/shopping/auto-price/page.tsx
+M	web/src/app/api/option-labor-rules/route.ts
+M	web/src/app/api/price-sync-runs-v2/[run_id]/execute/route.ts
+M	web/src/app/api/price-sync-runs-v2/route.ts
+M	web/src/lib/shop/option-labor-rules.js
+M	web/src/lib/shop/option-labor-rules.ts

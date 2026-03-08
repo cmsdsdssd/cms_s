@@ -3,6 +3,7 @@ export type PricingSnapshotExplainRow = {
   master_item_id: string;
   channel_product_id: string;
   external_variant_code: string | null;
+  current_product_sync_profile?: string | null;
   master_base_price_krw: number;
   shop_margin_multiplier: number;
   material_raw_krw: number;

@@ -1,0 +1,30 @@
+shopping navigation
+option labor rules ui
+option labor integration
+option labor api
+option labor schema
+ff
+fix auto-price trend detection and KRX gold tick source
+shopv2
+fix auto-price history log semantics and 5m cron deploy defaults
+hhjj
+cron
+fff
+push
+mmm
+sshop
+fix(catalog): show newest masters first in list API
+fix(deploy): inject supabase env and secret in manual cloud run script
+master
+push
+fdf
+fix(shop-sync): stabilize recompute/push baseline and scheduler reliability
+shoppingmallPriceChain
+feat(shop-sync): add secured 10-minute cron automation pipeline
+fix(oauth): add robust Cafe24 token exchange fallback strategies
+fix(oauth): preserve raw code/state query values for Cafe24 callback
+fix(shopping): reduce secret autofill and show account oauth errors
+fix(deploy): support comma-separated CAFE24_OAUTH_SCOPE in set-env-vars
+ff
+fix
+fff

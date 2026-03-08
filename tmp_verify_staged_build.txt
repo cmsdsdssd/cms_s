@@ -1,0 +1,222 @@
+
+> web@0.1.0 build
+> next build
+
+▲ Next.js 16.1.4 (Turbopack)
+- Environments: .env.local, .env
+
+⚠ The "middleware" file convention is deprecated. Please use "proxy" instead. Learn more: https://nextjs.org/docs/messages/middleware-to-proxy
+  Creating an optimized production build ...
+✓ Compiled successfully in 7.1s
+  Running TypeScript ...
+  Collecting page data using 15 workers ...
+  Generating static pages using 15 workers (0/94) ...
+  Generating static pages using 15 workers (23/94) 
+  Generating static pages using 15 workers (46/94) 
+[DEBUG] orderLookupQuery.data: 0 rows
+[DEBUG] order_line_ids: []
+[DEBUG] onlyReadyToShip: true
+[DEBUG] includeStorePickup: false
+[DEBUG] storePickupLookupQuery.isLoading: false
+[DEBUG] storePickupLookupIds: []
+[DEBUG] Removed order_line_ids (store pickup): []
+[DEBUG] After store pickup filter: 0 / 0
+[DEBUG] After isWorklistStatus filter: 0
+[DEBUG] PENDING_ORDER_STATUSES: [ 'SENT_TO_VENDOR', 'READY_TO_SHIP' ]
+[DEBUG] All statuses in data: []
+  Generating static pages using 15 workers (70/94) 
+✓ Generating static pages using 15 workers (94/94) in 1173.1ms
+  Finalizing page optimization ...
+
+Route (app)
+┌ ○ /
+├ ○ /_not-found
+├ ○ /2_catalog
+├ ○ /2_dashboard
+├ ○ /analysis
+├ ○ /analysis/integrity
+├ ○ /analysis/leakage
+├ ○ /analysis/market
+├ ○ /analysis/overview
+├ ○ /analysis/recommendations
+├ ○ /analysis/sales-priority
+├ ○ /analysis/shipments
+├ ○ /ap
+├ ○ /ap/reconcile
+├ ƒ /api/ar-payment-image-upload
+├ ƒ /api/bom-decor-lines
+├ ƒ /api/bom-flatten
+├ ƒ /api/bom-lines
+├ ƒ /api/bom-recipes
+├ ƒ /api/buy-margin-profiles
+├ ƒ /api/channel-base-price-adjustments
+├ ƒ /api/channel-floor-guards
+├ ƒ /api/channel-labor-price-adjustments
+├ ƒ /api/channel-mapping-summary
+├ ƒ /api/channel-option-categories
+├ ƒ /api/channel-option-category-deltas
+├ ƒ /api/channel-option-value-policies
+├ ƒ /api/channel-price-dashboard
+├ ƒ /api/channel-price-snapshot-explain
+├ ƒ /api/channel-price-summary
+├ ƒ /api/channel-prices/pull
+├ ƒ /api/channel-prices/push
+├ ƒ /api/channel-products
+├ ƒ /api/channel-products/[id]
+├ ƒ /api/channel-products/bulk
+├ ƒ /api/channel-products/editor
+├ ƒ /api/channel-products/master-toggle
+├ ƒ /api/channel-products/variants
+├ ƒ /api/channels
+├ ƒ /api/channels/[id]
+├ ƒ /api/channels/[id]/account
+├ ƒ /api/check-consistency
+├ ƒ /api/check-consistency-v2
+├ ƒ /api/check-shipment-ar-consistency
+├ ƒ /api/cron/cafe24-order-payment-sync
+├ ƒ /api/cron/shop-sync
+├ ƒ /api/cron/shop-sync-v2
+├ ƒ /api/fax-pdf
+├ ƒ /api/fax-send
+├ ƒ /api/fax-webhook/apiplex
+├ ƒ /api/market-ticks
+├ ƒ /api/master-absorb-labor-items
+├ ƒ /api/master-categories
+├ ƒ /api/master-effective-price
+├ ƒ /api/master-image
+├ ƒ /api/master-image/apply-generated
+├ ƒ /api/master-image/auto-generate
+├ ƒ /api/master-image/auto-generate/batch
+├ ƒ /api/master-item
+├ ƒ /api/master-item-cn-cost
+├ ƒ /api/master-items
+├ ƒ /api/master-pricing
+├ ƒ /api/master-rule-pools
+├ ƒ /api/material-factor-config
+├ ƒ /api/material-factor-sets
+├ ƒ /api/material-factor-sets/[id]
+├ ƒ /api/mobile-shipments-confirmed
+├ ƒ /api/new-receipt-workbench/bill-no-suggest
+├ ƒ /api/new-receipt-workbench/customer-code-suggest
+├ ƒ /api/new-receipt-workbench/factory-statement
+├ ƒ /api/new-receipt-workbench/integrity
+├ ƒ /api/new-receipt-workbench/line-items
+├ ƒ /api/new-receipt-workbench/master-pricing
+├ ƒ /api/new-receipt-workbench/match-clear
+├ ƒ /api/new-receipt-workbench/match-suggest
+├ ƒ /api/new-receipt-workbench/match-suggest-input
+├ ƒ /api/new-receipt-workbench/matches
+├ ƒ /api/new-receipt-workbench/model-name-suggest
+├ ƒ /api/new-receipt-workbench/party-by-mask
+├ ƒ /api/new-receipt-workbench/receipt
+├ ƒ /api/new-receipt-workbench/receipts
+├ ƒ /api/new-receipt-workbench/reconcile
+├ ƒ /api/new-receipt-workbench/unlinked
+├ ƒ /api/option-labor-rule-pools
+├ ƒ /api/option-labor-rules
+├ ƒ /api/order-line-memo
+├ ƒ /api/order-lookup
+├ ƒ /api/order-upsert
+├ ƒ /api/part-items
+├ ƒ /api/parties
+├ ƒ /api/plating-markup-rules
+├ ƒ /api/plating-options
+├ ƒ /api/price-sync-jobs
+├ ƒ /api/price-sync-jobs/[job_id]
+├ ƒ /api/price-sync-runs-v2
+├ ƒ /api/price-sync-runs-v2/[run_id]
+├ ƒ /api/price-sync-runs-v2/[run_id]/execute
+├ ƒ /api/pricing-adjustments
+├ ƒ /api/pricing-adjustments/[id]
+├ ƒ /api/pricing-overrides
+├ ƒ /api/pricing-overrides/[id]
+├ ƒ /api/pricing-policies
+├ ƒ /api/pricing-policies/[id]
+├ ƒ /api/pricing-rule-pick
+├ ƒ /api/pricing-rules
+├ ƒ /api/pricing/recompute
+├ ƒ /api/product-auto-generate
+├ ƒ /api/public/storefront-option-breakdown
+├ ƒ /api/purchase-cost-worklist
+├ ƒ /api/receipt-file
+├ ƒ /api/receipt-preview
+├ ƒ /api/receipt-upload
+├ ƒ /api/receipts
+├ ƒ /api/repairs-images
+├ ƒ /api/repairs-prepare-confirm
+├ ƒ /api/repairs-workbench
+├ ƒ /api/shipment-cost-candidates
+├ ƒ /api/shipment-line-policy-meta
+├ ƒ /api/shipment-override-log
+├ ƒ /api/shipment-prefill
+├ ƒ /api/shipment-receipt-prefill
+├ ƒ /api/shipments-print-ledger-statement
+├ ƒ /api/shipped-models
+├ ƒ /api/shop-oauth/cafe24/authorize
+├ ƒ /api/shop-oauth/cafe24/callback
+├ ƒ /api/sync-rule-sets
+├ ƒ /api/sync-rule-sets/[id]
+├ ƒ /api/sync-rules/bulk-adjust
+├ ƒ /api/sync-rules/preview
+├ ƒ /api/sync-rules/r1
+├ ƒ /api/sync-rules/r2
+├ ƒ /api/sync-rules/r3
+├ ƒ /api/sync-rules/r4
+├ ƒ /api/vendors
+├ ƒ /api/webhooks/cafe24/orders
+├ ○ /apple-icon.png
+├ ○ /ar
+├ ○ /ar/v2
+├ ○ /bom
+├ ○ /catalog
+├ ○ /dashboard
+├ ○ /factory_po_history
+├ ○ /icon.png
+├ ○ /inventory
+├ ○ /login
+├ ○ /logout
+├ ○ /m/catalog
+├ ○ /m/receivables/ap
+├ ○ /m/receivables/ar
+├ ○ /m/settings
+├ ○ /m/settings/advanced
+├ ○ /m/shipments
+├ ○ /m/shipments/history
+├ ○ /manifest.webmanifest
+├ ○ /market
+├ ○ /me
+├ ○ /new_receipt_line_workbench
+├ ƒ /new_receipt_line_workbench/[receiptId]
+├ ○ /orders
+├ ○ /orders_main
+├ ○ /parts
+├ ○ /party
+├ ○ /purchase_cost_worklist
+├ ○ /receipts/daily
+├ ○ /repairs
+├ ○ /settings
+├ ○ /settings/shopping
+├ ○ /settings/shopping/auto-price
+├ ○ /settings/shopping/channels
+├ ○ /settings/shopping/cron-runs
+├ ○ /settings/shopping/dashboard
+├ ○ /settings/shopping/factors
+├ ○ /settings/shopping/mappings
+├ ○ /settings/shopping/rules
+├ ○ /settings/shopping/sync-jobs
+├ ○ /settings/shopping/workflow
+├ ○ /shipments
+├ ○ /shipments_analysis
+├ ○ /shipments_history
+├ ○ /shipments_main
+├ ○ /shipments_print
+├ ○ /shipping
+├ ○ /workbench
+└ ƒ /workbench/[partyId]
+
+
+ƒ Proxy (Middleware)
+
+○  (Static)   prerendered as static content
+ƒ  (Dynamic)  server-rendered on demand
+

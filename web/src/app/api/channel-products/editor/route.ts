@@ -1,5 +1,5 @@
-import { NextResponse } from "next/server";
-import { getShopAdminClient, jsonError, parseJsonObject } from "@/lib/shop/admin";
+﻿import { NextResponse } from "next/server";
+import { getShopAdminClient, isMissingColumnError, jsonError, parseJsonObject } from "@/lib/shop/admin";
 import {
   type Cafe24ProductDetailSummary,
   type Cafe24VariantSummary,
@@ -12,6 +12,7 @@ import {
 } from "@/lib/shop/cafe24";
 import { POST as recomputePost } from "@/app/api/pricing/recompute/route";
 import { POST as pushPost } from "@/app/api/channel-prices/push/route";
+import { resolveCurrentProductSyncProfile } from "@/lib/shop/current-product-sync-profile.js";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -23,6 +24,7 @@ type EditorMeta = {
   total_labor_sell_krw: number;
   tick_gold_krw_per_g: number;
   tick_silver_krw_per_g: number;
+  current_product_sync_profile: 'GENERAL' | 'MARKET_LINKED';
 };
 
 type MasterMeta = {
@@ -80,7 +82,13 @@ const toIntCeilNonNegative = (value: unknown, fallback = 0) => Math.max(0, toInt
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const normalizeProductNoCandidates = (values: Array<unknown>): string[] => {
-  return Array.from(new Set(values.map((v) => String(v ?? "").trim()).filter(Boolean)));
+  return Array.from(new Set(values.map((v) => String(v ?? '').trim()).filter(Boolean)));
+};
+
+const parseCurrentProductSyncProfile = (value: unknown): EditorMeta["current_product_sync_profile"] => {
+  const profile = String(value ?? "").trim().toUpperCase();
+  if (profile === "GENERAL" || profile === "MARKET_LINKED") return profile;
+  throw new Error("current_product_sync_profile must be GENERAL/MARKET_LINKED");
 };
 
 function applyExpectedVariantAdditionalToPreview(
@@ -245,7 +253,31 @@ async function loadEditorMeta(
     stateLatestQuery = stateLatestQuery.in("external_product_no", productNos);
   }
   const stateLatestRes = await stateLatestQuery.maybeSingle();
-  if (stateLatestRes.error) throw new Error(stateLatestRes.error.message ?? "current_state 조회 실패");
+  if (stateLatestRes.error) throw new Error(stateLatestRes.error.message ?? 'current_state 조회 실패');
+
+  const buildMappingProfileQuery = () => {
+    let mappingProfileQuery = sb
+      .from("sales_channel_product")
+      .select("current_product_sync_profile")
+      .eq("channel_id", channelId)
+      .eq("is_active", true)
+      .order("updated_at", { ascending: false });
+    if (masterItemId) {
+      mappingProfileQuery = mappingProfileQuery.eq("master_item_id", masterItemId);
+    } else if (productNos.length === 1) {
+      mappingProfileQuery = mappingProfileQuery.eq("external_product_no", productNos[0]);
+    } else if (productNos.length > 1) {
+      mappingProfileQuery = mappingProfileQuery.in("external_product_no", productNos);
+    }
+    return mappingProfileQuery;
+  };
+  const mappingProfileRes = masterItemId || productNos.length > 0
+    ? await buildMappingProfileQuery()
+    : null;
+  if (mappingProfileRes?.error && !isMissingColumnError(mappingProfileRes.error, "sales_channel_product.current_product_sync_profile")) {
+    throw new Error(mappingProfileRes.error.message ?? "현재 상품 프로필 조회 실패");
+  }
+  const mappingProfileRows = ((mappingProfileRes && !mappingProfileRes.error) ? (mappingProfileRes.data ?? []) : []) as Array<{ current_product_sync_profile?: string | null }>;
 
   const floorRes = masterItemId
     ? await sb
@@ -312,6 +344,7 @@ async function loadEditorMeta(
     ),
     tick_gold_krw_per_g: toIntCeilNonNegative((tickRes.data as { gold_price_krw_per_g?: number } | null)?.gold_price_krw_per_g ?? 0),
     tick_silver_krw_per_g: toIntCeilNonNegative((tickRes.data as { silver_price_krw_per_g?: number } | null)?.silver_price_krw_per_g ?? 0),
+    current_product_sync_profile: resolveCurrentProductSyncProfile(mappingProfileRows),
   };
 }
 
@@ -469,10 +502,22 @@ export async function POST(request: Request) {
     selling: typeof product.selling === "string" ? product.selling : null,
     display: typeof product.display === "string" ? product.display : null,
   };
+  const hasProductFieldUpdate = ["price", "retail_price", "selling", "display"].some((key) =>
+    Object.prototype.hasOwnProperty.call(product, key),
+  );
 
   const floorPriceRaw = Number(body.floor_price_krw ?? Number.NaN);
   const hasFloorUpdate = Number.isFinite(floorPriceRaw) && floorPriceRaw >= 0;
   const excludePlatingLabor = Boolean(body.exclude_plating_labor);
+  const hasCurrentProductSyncProfile = Object.prototype.hasOwnProperty.call(body, "current_product_sync_profile");
+  let currentProductSyncProfile: EditorMeta["current_product_sync_profile"] | null = null;
+  if (hasCurrentProductSyncProfile) {
+    try {
+      currentProductSyncProfile = parseCurrentProductSyncProfile(body.current_product_sync_profile);
+    } catch (error) {
+      return jsonError(error instanceof Error ? error.message : "Invalid current_product_sync_profile", 400);
+    }
+  }
 
   const variantPatchesRaw = Array.isArray(body.variants) ? body.variants : [];
   const variantPatches = variantPatchesRaw
@@ -520,7 +565,10 @@ export async function POST(request: Request) {
     });
   }
 
-  const resolvedMasterItemId = requestedMasterItemId || masterIds[0] || "";
+  const resolvedMasterItemId = requestedMasterItemId || masterIds[0] || '';
+  if (hasCurrentProductSyncProfile && !resolvedMasterItemId) {
+    return jsonError('현재 상품 프로필을 저장할 master_item_id가 없습니다', 422);
+  }
   if (resolvedMasterItemId) {
     const masterExistsRes = await sb
       .from("cms_master_item")
@@ -623,6 +671,74 @@ export async function POST(request: Request) {
     if (canonicalDetailBefore.ok && canonicalDetailBefore.data) {
       detailBeforeData = canonicalDetailBefore.data;
     }
+  }
+
+  if (hasCurrentProductSyncProfile && resolvedMasterItemId) {
+    const mappingProfileUpdateRes = await sb
+      .from("sales_channel_product")
+      .update({ current_product_sync_profile: currentProductSyncProfile })
+      .eq("channel_id", channelId)
+      .eq("master_item_id", resolvedMasterItemId)
+      .eq("is_active", true)
+      .select("channel_product_id");
+    if (mappingProfileUpdateRes.error && !isMissingColumnError(mappingProfileUpdateRes.error, "sales_channel_product.current_product_sync_profile")) {
+      return jsonError(mappingProfileUpdateRes.error.message ?? "현재 상품 프로필 저장 실패", 500);
+    }
+    if (!mappingProfileUpdateRes.error && (mappingProfileUpdateRes.data?.length ?? 0) === 0) {
+      return jsonError("현재 상품 프로필을 저장할 활성 매핑이 없습니다", 422, {
+        channel_id: channelId,
+        master_item_id: resolvedMasterItemId,
+        external_product_no: resolvedExternalProductNo,
+        current_product_sync_profile: currentProductSyncProfile,
+        updated: 0,
+      });
+    }
+  }
+
+  const isProfileOnlyUpdate = hasCurrentProductSyncProfile
+    && !hasFloorUpdate
+    && variantPatches.length === 0
+    && !hasProductFieldUpdate
+    && !syncFullPipelineRequested;
+
+  if (isProfileOnlyUpdate) {
+    let profileOnlyMeta: EditorMeta;
+    try {
+      profileOnlyMeta = await loadEditorMeta(sb, channelId, [resolvedExternalProductNo, externalProductNo, detailProductNo], resolvedMasterItemId);
+    } catch (e) {
+      return jsonError(e instanceof Error ? e.message : "에디터 메타 조회 실패", 500);
+    }
+
+    let profileOnlyDetail = detailBeforeData;
+    try {
+      const dbAdditionalByVariant = await loadDbOptionAdditionalByVariant(
+        sb,
+        channelId,
+        normalizeProductNoCandidates([resolvedExternalProductNo, externalProductNo, detailProductNo]),
+      );
+      profileOnlyDetail = applyDbOptionAdditionalToPreview(detailBeforeData, dbAdditionalByVariant);
+    } catch {
+      // fallback to Cafe24 detail when DB overlay read fails
+    }
+
+    return NextResponse.json(
+      {
+        ok: true,
+        product_updated: false,
+        variant_patch_total: 0,
+        variant_patch_failed: 0,
+        variant_verify_failed: 0,
+        variant_results: [],
+        data: { ...profileOnlyDetail, ...profileOnlyMeta, master_item_id: resolvedMasterItemId || null },
+        post_apply_sync: {
+          requested: false,
+          ok: true,
+          stage: "skipped",
+          skipped_reason: "PROFILE_ONLY_UPDATE",
+        },
+      },
+      { headers: { "Cache-Control": "no-store" } },
+    );
   }
 
   if (hasFloorUpdate && resolvedMasterItemId) {
@@ -1065,6 +1181,7 @@ export async function POST(request: Request) {
     total_labor_sell_krw: totalLaborAdjusted,
     tick_gold_krw_per_g: toIntCeilNonNegative((tickRes.data as { gold_price_krw_per_g?: number } | null)?.gold_price_krw_per_g ?? 0),
     tick_silver_krw_per_g: toIntCeilNonNegative((tickRes.data as { silver_price_krw_per_g?: number } | null)?.silver_price_krw_per_g ?? 0),
+    current_product_sync_profile: currentProductSyncProfile ?? editorMetaBefore.current_product_sync_profile,
   };
 
   const buildFallbackPreview = () => {

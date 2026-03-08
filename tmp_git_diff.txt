@@ -1,0 +1,8 @@
+ tmp_repos/delta                        |  0
+ tmp_repos/invoiceninja                 |  0
+ tmp_repos/medusa                       |  0
+ tmp_repos/next.js                      |  0
+ tmp_repos/saleor-dashboard             |  0
+ web/src/lib/shop/option-labor-rules.js | 63 +++++++++++++++++++++++++++++-----
+ web/src/lib/shop/option-labor-rules.ts |  3 ++
+ 7 files changed, 57 insertions(+), 9 deletions(-)

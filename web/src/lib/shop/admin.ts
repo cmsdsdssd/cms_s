@@ -33,3 +33,34 @@ export function parseUuidArray(value: unknown): string[] | null {
     .filter((v) => v.length > 0);
   return out;
 }
+
+type DbErrorLike = {
+  message?: string | null;
+  details?: string | null;
+  hint?: string | null;
+  code?: string | null;
+};
+
+export function isMissingColumnError(error: unknown, columnName?: string) {
+  if (!error || typeof error !== "object") return false;
+  const err = error as DbErrorLike;
+  const haystack = [err.message, err.details, err.hint, err.code]
+    .map((value) => String(value ?? "").toLowerCase())
+    .join(" ");
+  if (!haystack) return false;
+
+  const mentionsMissingColumn =
+    haystack.includes("does not exist") ||
+    haystack.includes("could not find") ||
+    haystack.includes("schema cache") ||
+    haystack.includes("column");
+  if (!mentionsMissingColumn) return false;
+
+  if (!columnName) return true;
+
+  const normalizedColumn = columnName.toLowerCase();
+  const bareColumn = normalizedColumn.includes(".")
+    ? normalizedColumn.slice(normalizedColumn.lastIndexOf(".") + 1)
+    : normalizedColumn;
+  return haystack.includes(normalizedColumn) || haystack.includes(bareColumn);
+}

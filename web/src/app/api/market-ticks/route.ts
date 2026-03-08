@@ -82,11 +82,16 @@ export async function GET() {
         const goldSymbol = roleRows.find((r) => r.role_code === "GOLD")?.symbol ?? null;
         const silverSymbol = roleRows.find((r) => r.role_code === "SILVER")?.symbol ?? null;
 
-        const [goldResult, silverResult, csResult, cnyResult] = await Promise.all([
+        const [goldResult, krxGoldResult, silverResult, csResult, cnyResult] = await Promise.all([
             sb
                 .from("cms_v_market_tick_latest_by_symbol_ops_v1")
                 .select("symbol, price_krw_per_g, meta")
                 .eq("symbol", goldSymbol ?? "__MISSING__")
+                .maybeSingle(),
+            sb
+                .from("cms_v_market_tick_latest_by_symbol_ops_v1")
+                .select("symbol, price_krw_per_g, meta")
+                .eq("symbol", "KRX_GOLD_TICK")
                 .maybeSingle(),
             sb
                 .from("cms_v_market_tick_latest_by_symbol_ops_v1")
@@ -110,12 +115,18 @@ export async function GET() {
             return NextResponse.json({ error: "Failed to fetch gold tick" }, { status: 500 });
         }
 
+        if (krxGoldResult.error) {
+            console.error("KRX gold tick fetch error:", krxGoldResult.error);
+            return NextResponse.json({ error: "Failed to fetch KRX gold tick" }, { status: 500 });
+        }
+
         if (silverResult.error) {
             console.error("Silver tick fetch error:", silverResult.error);
             return NextResponse.json({ error: "Failed to fetch silver tick" }, { status: 500 });
         }
 
         const goldPrice = toNum((goldResult.data as LatestBySymbolRow | null)?.price_krw_per_g) ?? 0;
+        const krxGoldPrice = toNum((krxGoldResult.data as LatestBySymbolRow | null)?.price_krw_per_g);
 
         // SILVER는 “원래 은시세(보정 전)”를 복원할 수 있으면 복원(메타에 factor가 있으면 나눠서 복원)
         const silverRowData = silverResult.data as LatestBySymbolRow | null;
@@ -164,7 +175,8 @@ export async function GET() {
                 gold: goldPrice,
                 silverOriginal: silverBasePrice,
                 // new (MarketTicker에서 사용)
-                kg: goldPrice,
+                kg: krxGoldPrice ?? goldPrice,
+                krxGoldVat: krxGoldPrice,
                 ks,
                 ks925,
                 ksOriginal: silverBasePrice,

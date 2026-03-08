@@ -1,0 +1,5 @@
+[main 67318bc] price sync policy
+ 3 files changed, 271 insertions(+)
+ create mode 100644 supabase/migrations/20260307000500_cms_1124_auto_sync_default_rate_to_2pct_addonly.sql
+ create mode 100644 web/src/lib/shop/price-sync-policy.js
+ create mode 100644 web/tests/price-sync-policy.test.mjs

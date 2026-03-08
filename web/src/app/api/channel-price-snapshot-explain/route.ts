@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { getShopAdminClient, jsonError } from "@/lib/shop/admin";
+import { getShopAdminClient, isMissingColumnError, jsonError } from "@/lib/shop/admin";
+import { resolveCurrentProductSyncProfile, resolveEffectiveCurrentProductSyncProfile } from "@/lib/shop/current-product-sync-profile";
 import type { PricingSnapshotExplainResponse, PricingSnapshotExplainRow } from "@/types/pricingSnapshot";
 
 export const dynamic = "force-dynamic";
@@ -23,6 +24,14 @@ const toNullableNumber = (value: unknown): number | null => {
 const toTextOrNull = (value: unknown): string | null => {
   const v = String(value ?? "").trim();
   return v || null;
+};
+
+const isActiveInWindow = (from: unknown, to: unknown, nowMs: number): boolean => {
+  const fromMs = from ? Date.parse(String(from)) : Number.NaN;
+  const toMs = to ? Date.parse(String(to)) : Number.NaN;
+  if (Number.isFinite(fromMs) && fromMs > nowMs) return false;
+  if (Number.isFinite(toMs) && toMs < nowMs) return false;
+  return true;
 };
 
 const uniqueTextList = (values: Array<unknown>): string[] => {
@@ -116,6 +125,72 @@ export async function GET(request: Request) {
     ?? null
   ) as Record<string, unknown> | null;
   if (!source) return jsonError("No V2 snapshot row found in view", 404);
+
+  const nowMs = Date.now();
+  const [overrideRes, floorRes] = await Promise.all([
+    sb
+      .from("pricing_override")
+      .select("override_id, override_price_krw, valid_from, valid_to, is_active, updated_at")
+      .eq("channel_id", channelId)
+      .eq("master_item_id", masterItemId)
+      .eq("is_active", true)
+      .order("updated_at", { ascending: false })
+      .limit(10),
+    sb
+      .from("product_price_guard_v2")
+      .select("guard_id, floor_price_krw, effective_from, effective_to, is_active, updated_at")
+      .eq("channel_id", channelId)
+      .eq("master_item_id", masterItemId)
+      .eq("is_active", true)
+      .order("updated_at", { ascending: false })
+      .limit(10),
+  ]);
+  if (overrideRes.error) return jsonError(overrideRes.error.message ?? "Failed to read pricing override", 500);
+  if (floorRes.error) return jsonError(floorRes.error.message ?? "Failed to read product price guard", 500);
+
+  const activeOverrideRow = ((overrideRes.data ?? []) as Record<string, unknown>[]).find((row) =>
+    isActiveInWindow(row.valid_from, row.valid_to, nowMs),
+  ) ?? null;
+  const activeFloorRow = ((floorRes.data ?? []) as Record<string, unknown>[]).find((row) =>
+    isActiveInWindow(row.effective_from, row.effective_to, nowMs),
+  ) ?? null;
+
+  const currentProductSyncProfileRes = await sb
+    .from('sales_channel_product')
+    .select('current_product_sync_profile')
+    .eq('channel_id', channelId)
+    .eq('master_item_id', masterItemId)
+    .eq('is_active', true)
+    .order('updated_at', { ascending: false });
+  if (currentProductSyncProfileRes.error && !isMissingColumnError(currentProductSyncProfileRes.error, 'sales_channel_product.current_product_sync_profile')) {
+    return jsonError(currentProductSyncProfileRes.error.message ?? "Failed to read current product sync profile", 500);
+  }
+  const currentProductSyncProfileRows = (currentProductSyncProfileRes.error
+    ? []
+    : (currentProductSyncProfileRes.data ?? [])) as Array<{ current_product_sync_profile?: string | null }>;
+
+  const buildChannelPolicyQuery = (includeThresholdProfile: boolean) => sb
+    .from('pricing_policy')
+    .select(includeThresholdProfile ? 'auto_sync_threshold_profile, updated_at' : 'updated_at')
+    .eq('channel_id', channelId)
+    .eq('is_active', true)
+    .order('updated_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  let channelPolicyRes = await buildChannelPolicyQuery(true);
+  if (channelPolicyRes.error && isMissingColumnError(channelPolicyRes.error, 'pricing_policy.auto_sync_threshold_profile')) {
+    channelPolicyRes = await buildChannelPolicyQuery(false);
+  }
+  if (channelPolicyRes.error) return jsonError(channelPolicyRes.error.message ?? "Failed to read pricing policy", 500);
+  const channelPolicyRow = (channelPolicyRes.data ?? null) as { auto_sync_threshold_profile?: string | null } | null;
+
+  const currentProductSyncProfile = resolveEffectiveCurrentProductSyncProfile({
+    channelProfile: channelPolicyRow?.auto_sync_threshold_profile,
+    currentProductProfile: resolveCurrentProductSyncProfile(
+      currentProductSyncProfileRows,
+    ),
+  });
 
   const sourceLaborCostApplied = toNullableInt(source.labor_cost_applied_krw_components);
   const sourceLaborSellPlusAbsorb = toNullableInt(source.labor_sell_total_plus_absorb_krw_components);
@@ -232,12 +307,18 @@ export async function GET(request: Request) {
 
   const finalTargetV2 = toNullableInt(source.final_target_price_v2_krw);
   const finalTarget = finalTargetV2 ?? 0;
+  const overridePrice = toNullableInt(activeOverrideRow?.override_price_krw);
+  const floorPrice = Math.max(0, toInt(activeFloorRow?.floor_price_krw));
+  const finalTargetBeforeFloor = overridePrice ?? finalTarget;
+  const floorClamped = finalTargetBeforeFloor < floorPrice;
+  const finalTargetWithOverrideAndFloor = floorClamped ? floorPrice : finalTargetBeforeFloor;
 
   const data: PricingSnapshotExplainRow = {
     channel_id: String(source.channel_id ?? channelId),
     master_item_id: String(source.master_item_id ?? masterItemId),
     channel_product_id: String(source.channel_product_id ?? ""),
     external_variant_code: toTextOrNull(source.external_variant_code),
+    current_product_sync_profile: currentProductSyncProfile,
 
     master_base_price_krw: toInt(source.cost_sum_krw),
     shop_margin_multiplier: Number(source.margin_multiplier_used ?? 1) || 1,
@@ -291,11 +372,11 @@ export async function GET(request: Request) {
 
     target_price_raw_krw: finalTarget,
     rounded_target_price_krw: finalTarget,
-    override_price_krw: null,
-    floor_price_krw: 0,
-    final_target_before_floor_krw: finalTarget,
-    floor_clamped: false,
-    final_target_price_krw: finalTarget,
+    override_price_krw: overridePrice,
+    floor_price_krw: floorPrice,
+    final_target_before_floor_krw: finalTargetBeforeFloor,
+    floor_clamped: floorClamped,
+    final_target_price_krw: finalTargetWithOverrideAndFloor,
 
     tick_gold_krw_g: toInt(source.tick_gold_krw_g),
     tick_silver_krw_g: toInt(source.tick_silver_krw_g),

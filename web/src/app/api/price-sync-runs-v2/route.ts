@@ -7,7 +7,14 @@ import {
   normalizeAutoSyncPressureState,
   resolveAutoSyncPressurePolicyConfig,
 } from "@/lib/shop/price-sync-pressure-policy";
-import { normalizePriceSyncPolicy, resolveRateDerivedThresholdKrw, shouldSyncPriceChange } from "@/lib/shop/price-sync-policy";
+import {
+  normalizePriceSyncPolicy,
+  normalizePriceSyncThresholdProfile,
+  resolvePriceSyncThresholdProfilePolicy,
+  resolveRateDerivedThresholdKrw,
+  shouldSyncPriceChange,
+} from "@/lib/shop/price-sync-policy";
+import { buildCurrentProductSyncProfileByMaster } from "@/lib/shop/current-product-sync-profile";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -56,6 +63,80 @@ const toBool = (value: unknown): boolean => {
   return normalized === "1" || normalized === "true" || normalized === "y" || normalized === "yes";
 };
 
+type AutoSyncPolicyInput = {
+  auto_sync_force_full?: unknown;
+  auto_sync_min_change_krw?: unknown;
+  auto_sync_min_change_rate?: unknown;
+  auto_sync_threshold_profile?: unknown;
+};
+
+type ActivePricingOverrideRow = {
+  override_id: string | null;
+  master_item_id: string | null;
+  override_price_krw: number | null;
+  reason: string | null;
+  valid_from: string | null;
+  valid_to: string | null;
+  updated_at: string | null;
+};
+
+type ActiveFloorGuardRow = {
+  guard_id: string | null;
+  master_item_id: string | null;
+  floor_price_krw: number | null;
+  floor_source: string | null;
+  effective_from: string | null;
+  effective_to: string | null;
+  updated_at: string | null;
+};
+
+type ActiveMappingRow = {
+  channel_product_id: string | null;
+  master_item_id: string | null;
+  external_product_no: string | null;
+  external_variant_code: string | null;
+  current_product_sync_profile: string | null;
+};
+
+type IntentDecisionContext = {
+  threshold_profile: string;
+  current_price_krw: number | null;
+  base_target_price_krw: number;
+  market_uplift_price_krw: number | null;
+  pricing_override_id: string | null;
+  pricing_override_price_krw: number | null;
+  floor_guard_id: string | null;
+  floor_price_krw: number;
+  final_desired_price_krw: number;
+  floor_applied: boolean;
+};
+
+const isActiveDuringWindow = ({
+  startsAt,
+  endsAt,
+  nowMs,
+}: {
+  startsAt?: unknown;
+  endsAt?: unknown;
+  nowMs: number;
+}): boolean => {
+  const startsAtMs = toMs(startsAt);
+  if (startsAtMs !== null && startsAtMs > nowMs) return false;
+  const endsAtMs = toMs(endsAt);
+  if (endsAtMs !== null && endsAtMs < nowMs) return false;
+  return true;
+};
+
+const selectLatestByMasterItemId = <T extends { master_item_id?: unknown }>(rows: T[]): Map<string, T> => {
+  const next = new Map<string, T>();
+  for (const row of rows) {
+    const masterItemId = String(row.master_item_id ?? "").trim();
+    if (!masterItemId || next.has(masterItemId)) continue;
+    next.set(masterItemId, row);
+  }
+  return next;
+};
+
 const roundByMode = (value: number, unit: number, mode: "CEIL" | "ROUND" | "FLOOR") => {
   if (!Number.isFinite(value)) return 0;
   const safeUnit = Number.isFinite(unit) && unit > 0 ? unit : 1;
@@ -82,25 +163,20 @@ const resolveMinChangeThresholdKrw = (): number => {
   return toPositiveInt(process.env.SHOP_SYNC_MIN_CHANGE_KRW, 5000, 10_000_000);
 };
 
-const normalizeAutoSyncPolicy = (policy: {
-  auto_sync_force_full?: unknown;
-  auto_sync_min_change_krw?: unknown;
-  auto_sync_min_change_rate?: unknown;
-}) => {
+const normalizeAutoSyncPolicy = (policy: AutoSyncPolicyInput) => {
+  const thresholdProfile = normalizePriceSyncThresholdProfile(policy.auto_sync_threshold_profile);
+  const profileDefaults = resolvePriceSyncThresholdProfilePolicy(thresholdProfile);
   const normalized = normalizePriceSyncPolicy(
     {
       always_sync: policy.auto_sync_force_full,
       min_change_krw: policy.auto_sync_min_change_krw,
       min_change_rate: policy.auto_sync_min_change_rate,
     },
-    {
-      always_sync: false,
-      min_change_krw: resolveMinChangeThresholdKrw(),
-      min_change_rate: 0.02,
-    },
+    profileDefaults,
   );
 
   return {
+    thresholdProfile,
     forceFullSync: normalized.always_sync,
     minChangeKrw: normalized.min_change_krw,
     minChangeRate: normalized.min_change_rate,
@@ -158,7 +234,7 @@ const evaluateAutoSyncThreshold = ({
 }: {
   currentPriceKrw: number;
   desiredPriceKrw: number;
-  policy: { auto_sync_force_full?: unknown; auto_sync_min_change_krw?: unknown; auto_sync_min_change_rate?: unknown };
+  policy: AutoSyncPolicyInput;
 }) => {
   const normalizedPolicy = normalizeAutoSyncPolicy(policy);
   const result = shouldSyncPriceChange({
@@ -176,6 +252,7 @@ const evaluateAutoSyncThreshold = ({
   });
 
   return {
+    thresholdProfile: normalizedPolicy.thresholdProfile,
     forceFullSync: normalizedPolicy.forceFullSync,
     minChangeKrw: normalizedPolicy.minChangeKrw,
     minChangeRate: normalizedPolicy.minChangeRate,
@@ -226,7 +303,7 @@ export async function GET(request: Request) {
     .order("started_at", { ascending: false })
     .limit(limit);
 
-  if (runsRes.error) return jsonError(runsRes.error.message ?? "자동동기화 run 조회 실패", 500);
+  if (runsRes.error) return jsonError(runsRes.error.message ?? "?癒?짗??녿┛??run 鈺곌퀬????쎈솭", 500);
   return NextResponse.json({ data: runsRes.data ?? [] }, { headers: { "Cache-Control": "no-store" } });
 }
 
@@ -271,7 +348,7 @@ export async function POST(request: Request) {
     .eq("status", "RUNNING")
     .order("started_at", { ascending: false })
     .limit(10);
-  if (runningRes.error) return jsonError(runningRes.error.message ?? "running run 조회 실패", 500);
+  if (runningRes.error) return jsonError(runningRes.error.message ?? "running run 鈺곌퀬????쎈솭", 500);
 
   const activeRunning = (runningRes.data ?? []).find((row) => {
     const startedAtMs = toMs(row.started_at);
@@ -297,7 +374,7 @@ export async function POST(request: Request) {
     .in("status", [...TERMINAL_RUN_STATUSES])
     .order("started_at", { ascending: false })
     .limit(20);
-  if (recentRes.error) return jsonError(recentRes.error.message ?? "최근 run 조회 실패", 500);
+  if (recentRes.error) return jsonError(recentRes.error.message ?? "筌ㅼ뮄??run 鈺곌퀬????쎈솭", 500);
 
   const recentNonTickRows = (recentRes.data ?? []).filter((row) => !isCronTickError((row as { error_message?: unknown }).error_message));
   const latestTerminal = pickMostRecentByStartedAt(recentNonTickRows);
@@ -334,11 +411,11 @@ export async function POST(request: Request) {
   if (masterItemIds && masterItemIds.length > 0) cursorQuery = cursorQuery.in("master_item_id", masterItemIds);
   if (pinnedComputeRequestId) cursorQuery = cursorQuery.eq("compute_request_id", pinnedComputeRequestId);
   const cursorRes = await cursorQuery;
-  if (cursorRes.error) return jsonError(cursorRes.error.message ?? "compute cursor 조회 실패", 500);
+  if (cursorRes.error) return jsonError(cursorRes.error.message ?? "compute cursor 鈺곌퀬????쎈솭", 500);
 
   const cursors = (cursorRes.data ?? []).filter((row) => String(row.compute_request_id ?? "").trim().length > 0);
   if (cursors.length === 0) {
-    return jsonError("자동동기화 대상 compute_request_id가 없습니다. 먼저 재계산을 실행하세요", 422);
+    return jsonError('활성 compute_request_id를 찾지 못했습니다. 먼저 계산을 실행해주세요.', 422);
   }
 
   const runRequestPayload: Record<string, unknown> = {
@@ -362,21 +439,66 @@ export async function POST(request: Request) {
     })
     .select("run_id")
     .single();
-  if (runInsertRes.error) return jsonError(runInsertRes.error.message ?? "자동동기화 run 생성 실패", 500);
+  if (runInsertRes.error) return jsonError(runInsertRes.error.message ?? "?癒?짗??녿┛??run ??밴쉐 ??쎈솭", 500);
 
   const runId = String(runInsertRes.data.run_id ?? "").trim();
-  if (!runId) return jsonError("run_id 생성 실패", 500);
+  if (!runId) return jsonError("run_id ??밴쉐 ??쎈솭", 500);
 
   const masterIds = Array.from(new Set(cursors.map((r) => String(r.master_item_id ?? "").trim()).filter(Boolean)));
+  const evaluationNowIso = new Date().toISOString();
+  const evaluationNowMs = Date.parse(evaluationNowIso);
+
+  const activePricingOverrideRows: ActivePricingOverrideRow[] = [];
+  for (const masterChunk of chunkArray(masterIds, IN_QUERY_CHUNK_SIZE)) {
+    if (masterChunk.length === 0) continue;
+    const pricingOverrideRes = await sb
+      .from("pricing_override")
+      .select("override_id, master_item_id, override_price_krw, reason, valid_from, valid_to, updated_at")
+      .eq("channel_id", channelId)
+      .eq("is_active", true)
+      .in("master_item_id", masterChunk)
+      .order("updated_at", { ascending: false });
+    if (pricingOverrideRes.error) return jsonError(pricingOverrideRes.error.message ?? "??뽮쉐 override 鈺곌퀬????쎈솭", 500);
+    activePricingOverrideRows.push(...((pricingOverrideRes.data ?? []) as ActivePricingOverrideRow[]));
+  }
+  const activePricingOverrideByMaster = selectLatestByMasterItemId(
+    activePricingOverrideRows.filter((row) => isActiveDuringWindow({
+      startsAt: row.valid_from,
+      endsAt: row.valid_to,
+      nowMs: evaluationNowMs,
+    })),
+  );
+
+  const activeFloorGuardRows: ActiveFloorGuardRow[] = [];
+  for (const masterChunk of chunkArray(masterIds, IN_QUERY_CHUNK_SIZE)) {
+    if (masterChunk.length === 0) continue;
+    const floorGuardRes = await sb
+      .from("product_price_guard_v2")
+      .select("guard_id, master_item_id, floor_price_krw, floor_source, effective_from, effective_to, updated_at")
+      .eq("channel_id", channelId)
+      .eq("is_active", true)
+      .in("master_item_id", masterChunk)
+      .order("updated_at", { ascending: false });
+    if (floorGuardRes.error) return jsonError(floorGuardRes.error.message ?? "??뽮쉐 floor guard 鈺곌퀬????쎈솭", 500);
+    activeFloorGuardRows.push(...((floorGuardRes.data ?? []) as ActiveFloorGuardRow[]));
+  }
+  const activeFloorGuardByMaster = selectLatestByMasterItemId(
+    activeFloorGuardRows.filter((row) => isActiveDuringWindow({
+      startsAt: row.effective_from,
+      endsAt: row.effective_to,
+      nowMs: evaluationNowMs,
+    })),
+  );
+
   const policyRes = await sb
     .from("pricing_policy")
-    .select("rounding_unit, rounding_mode, auto_sync_force_full, auto_sync_min_change_krw, auto_sync_min_change_rate, updated_at")
+    .select("rounding_unit, rounding_mode, auto_sync_force_full, auto_sync_min_change_krw, auto_sync_min_change_rate, auto_sync_threshold_profile, updated_at")
     .eq("channel_id", channelId)
     .eq("is_active", true)
     .order("updated_at", { ascending: false })
     .limit(1)
     .maybeSingle();
-  if (policyRes.error) return jsonError(policyRes.error.message ?? "가격정책 조회 실패", 500);
+  if (policyRes.error) return jsonError(policyRes.error.message ?? "揶쎛野꺿뫗?숋㎖?鈺곌퀬????쎈솭", 500);
   const roundingUnit = Math.max(1, Math.round(Number(policyRes.data?.rounding_unit ?? 1000)));
   const roundingModeRaw = String(policyRes.data?.rounding_mode ?? "CEIL").trim().toUpperCase();
   const roundingMode: "CEIL" | "ROUND" | "FLOOR" = roundingModeRaw === "FLOOR"
@@ -386,16 +508,60 @@ export async function POST(request: Request) {
       : "CEIL";
   const autoSyncPolicy = normalizeAutoSyncPolicy({
     auto_sync_force_full: triggerType === "AUTO" ? (requestedForceFullSync || policyRes.data?.auto_sync_force_full === true) : requestedForceFullSync,
-    auto_sync_min_change_krw: requestedMinChangeKrwValue ?? policyRes.data?.auto_sync_min_change_krw ?? resolveMinChangeThresholdKrw(),
+    auto_sync_min_change_krw: requestedMinChangeKrwValue ?? policyRes.data?.auto_sync_min_change_krw,
     auto_sync_min_change_rate: requestedMinChangeRateValue ?? policyRes.data?.auto_sync_min_change_rate,
+    auto_sync_threshold_profile: policyRes.data?.auto_sync_threshold_profile,
   });
+  const autoSyncThresholdProfile = autoSyncPolicy.thresholdProfile;
   const forceFullSync = autoSyncPolicy.forceFullSync;
   const minChangeKrw = autoSyncPolicy.minChangeKrw;
   const minChangeRate = autoSyncPolicy.minChangeRate;
   const thresholdPolicyInput = {
     auto_sync_force_full: false,
-    auto_sync_min_change_krw: minChangeKrw,
-    auto_sync_min_change_rate: minChangeRate,
+    auto_sync_min_change_krw: requestedMinChangeKrwValue ?? policyRes.data?.auto_sync_min_change_krw,
+    auto_sync_min_change_rate: requestedMinChangeRateValue ?? policyRes.data?.auto_sync_min_change_rate,
+    auto_sync_threshold_profile: autoSyncThresholdProfile,
+  };
+  const resolveThresholdPolicyForProfile = (currentProductProfile: string | null | undefined) => {
+    if (requestedMinChangeKrwValue !== undefined || requestedMinChangeRateValue !== undefined) {
+      return {
+        thresholdProfile: autoSyncThresholdProfile,
+        minChangeKrw,
+        minChangeRate,
+        policyInput: thresholdPolicyInput,
+      };
+    }
+
+    const effectiveThresholdProfile = String(currentProductProfile ?? "").trim()
+      ? normalizePriceSyncThresholdProfile(currentProductProfile)
+      : autoSyncThresholdProfile;
+    if (effectiveThresholdProfile === autoSyncThresholdProfile) {
+      return {
+        thresholdProfile: autoSyncThresholdProfile,
+        minChangeKrw,
+        minChangeRate,
+        policyInput: thresholdPolicyInput,
+      };
+    }
+
+    const overridePolicy = normalizeAutoSyncPolicy({
+      auto_sync_force_full: false,
+      auto_sync_min_change_krw: undefined,
+      auto_sync_min_change_rate: undefined,
+      auto_sync_threshold_profile: effectiveThresholdProfile,
+    });
+
+    return {
+      thresholdProfile: overridePolicy.thresholdProfile,
+      minChangeKrw: overridePolicy.minChangeKrw,
+      minChangeRate: overridePolicy.minChangeRate,
+      policyInput: {
+        auto_sync_force_full: false,
+        auto_sync_min_change_krw: overridePolicy.minChangeKrw,
+        auto_sync_min_change_rate: overridePolicy.minChangeRate,
+        auto_sync_threshold_profile: overridePolicy.thresholdProfile,
+      },
+    };
   };
   const syncPolicyMode = forceFullSync ? "ALWAYS" : "RULE_BASED";
   const forceFullSyncSource = forceFullSync
@@ -408,7 +574,7 @@ export async function POST(request: Request) {
       .from("price_sync_run_v2")
       .update({ status: "FAILED", error_message: "PINNED_COMPUTE_REQUEST_NOT_FOUND", finished_at: new Date().toISOString() })
       .eq("run_id", runId);
-    return jsonError("요청한 compute_request_id를 찾을 수 없습니다", 422, { code: "PINNED_COMPUTE_REQUEST_NOT_FOUND" });
+    return jsonError("?遺욧퍕??compute_request_id??筌≪뼚??????곷뮸??덈뼄", 422, { code: "PINNED_COMPUTE_REQUEST_NOT_FOUND" });
   }
 
   const fullAutoScope = triggerType === "AUTO" && (!masterItemIds || masterItemIds.length === 0);
@@ -417,7 +583,7 @@ export async function POST(request: Request) {
       .from("price_sync_run_v2")
       .update({ status: "FAILED", error_message: "MIXED_COMPUTE_REQUESTS", finished_at: new Date().toISOString() })
       .eq("run_id", runId);
-    return jsonError("전체 자동동기화는 단일 compute_request_id 스냅샷이어야 합니다", 409, {
+    return jsonError("Full auto sync requires a single compute_request_id snapshot", 409, {
       code: "MIXED_COMPUTE_REQUESTS",
       compute_request_ids: computeIds,
     });
@@ -449,7 +615,7 @@ export async function POST(request: Request) {
         .select(snapshotSelect)
         .eq("channel_id", channelId)
         .in("compute_request_id", computeChunk);
-      if (snapshotRes.error) return jsonError(snapshotRes.error.message ?? "스냅샷 조회 실패", 500);
+      if (snapshotRes.error) return jsonError(snapshotRes.error.message ?? "??산퉬??鈺곌퀬????쎈솭", 500);
       snapshotRows.push(...((snapshotRes.data ?? []) as unknown as Array<typeof snapshotRows[number]>));
       continue;
     }
@@ -462,7 +628,7 @@ export async function POST(request: Request) {
         .eq("channel_id", channelId)
         .in("compute_request_id", computeChunk)
         .in("master_item_id", masterChunk);
-      if (snapshotRes.error) return jsonError(snapshotRes.error.message ?? "스냅샷 조회 실패", 500);
+      if (snapshotRes.error) return jsonError(snapshotRes.error.message ?? "??산퉬??鈺곌퀬????쎈솭", 500);
       snapshotRows.push(...((snapshotRes.data ?? []) as unknown as Array<typeof snapshotRows[number]>));
     }
   }
@@ -471,20 +637,16 @@ export async function POST(request: Request) {
     new Set(snapshotRows.map((r) => String(r.channel_product_id ?? "").trim()).filter(Boolean)),
   );
 
-  const activeMapRows: Array<{
-    channel_product_id: string | null;
-    external_product_no: string | null;
-    external_variant_code: string | null;
-  }> = [];
+  const activeMapRows: ActiveMappingRow[] = [];
   for (const idChunk of chunkArray(snapshotChannelProductIds, IN_QUERY_CHUNK_SIZE)) {
     if (idChunk.length === 0) continue;
     const activeMapRes = await sb
       .from("sales_channel_product")
-      .select("channel_product_id, external_product_no, external_variant_code")
+      .select("channel_product_id, master_item_id, external_product_no, external_variant_code, current_product_sync_profile")
       .eq("channel_id", channelId)
       .eq("is_active", true)
       .in("channel_product_id", idChunk);
-    if (activeMapRes.error) return jsonError(activeMapRes.error.message ?? "활성 매핑 조회 실패", 500);
+    if (activeMapRes.error) return jsonError(activeMapRes.error.message ?? "??뽮쉐 筌띲끋釉?鈺곌퀬????쎈솭", 500);
     activeMapRows.push(...(activeMapRes.data ?? []));
   }
 
@@ -495,6 +657,7 @@ export async function POST(request: Request) {
       external_variant_code: String(r.external_variant_code ?? "").trim(),
     },
   ]));
+  const currentProductSyncProfileByMaster = buildCurrentProductSyncProfileByMaster(activeMapRows);
 
   const { summary: missingMappingSummary } = buildMissingActiveMappingSummary({
     snapshotRows,
@@ -509,7 +672,7 @@ export async function POST(request: Request) {
       .select("channel_product_id, current_price_krw")
       .eq("channel_id", channelId)
       .in("channel_product_id", idChunk);
-    if (currentRes.error) return jsonError(currentRes.error.message ?? "현재가 스냅샷 조회 실패", 500);
+    if (currentRes.error) return jsonError(currentRes.error.message ?? "?袁⑹삺揶쎛 ??산퉬??鈺곌퀬????쎈솭", 500);
     currentRows.push(...(currentRes.data ?? []));
   }
   const currentByChannelProduct = new Map<string, number>();
@@ -538,7 +701,7 @@ export async function POST(request: Request) {
       .select("channel_product_id, pressure_units, last_gap_units, last_seen_target_krw, last_seen_current_krw, last_auto_sync_at, last_upsync_at, last_downsync_at, cooldown_until")
       .eq("channel_id", channelId)
       .in("channel_product_id", idChunk);
-    if (pressureStateRes.error) return jsonError(pressureStateRes.error.message ?? "AUTO pressure state 조회 실패", 500);
+    if (pressureStateRes.error) return jsonError(pressureStateRes.error.message ?? "AUTO pressure state 鈺곌퀬????쎈솭", 500);
     pressureStateRows.push(...(pressureStateRes.data ?? []));
   }
   const pressureStateByChannelProduct = new Map(pressureStateRows.map((row) => [
@@ -563,7 +726,7 @@ export async function POST(request: Request) {
 
     const masterItemId = String(row.master_item_id ?? "").trim();
     if (!masterItemId) continue;
-
+    const masterThresholdPolicy = resolveThresholdPolicyForProfile(currentProductSyncProfileByMaster.get(masterItemId) ?? null);
     const targetRaw = row.final_target_price_v2_krw ?? row.final_target_price_krw;
     const baseTarget = Math.round(Number(targetRaw ?? Number.NaN));
     if (!Number.isFinite(baseTarget)) continue;
@@ -587,7 +750,7 @@ export async function POST(request: Request) {
     const marketForceDecision = evaluateAutoSyncThreshold({
       desiredPriceKrw: marketAfterMargin,
       currentPriceKrw: currentRounded,
-      policy: thresholdPolicyInput,
+      policy: masterThresholdPolicy.policyInput,
     });
     if (!marketForceDecision.passesThreshold) continue;
     const forcedTarget = Math.max(baseTarget, marketAfterMargin);
@@ -610,7 +773,7 @@ export async function POST(request: Request) {
   let cooldownBlockCount = 0;
   let stalenessReleaseCount = 0;
   let pressureDecayCount = 0;
-  const runNowIso = new Date().toISOString();
+  const runNowIso = evaluationNowIso;
   const marketGapForcedMasterKeys = new Set<string>();
   const dedupeByLogicalTarget = new Map<
     string,
@@ -618,6 +781,8 @@ export async function POST(request: Request) {
       idx: number;
       desired: number;
       floorApplied: boolean;
+      floorPriceKrw: number;
+      decisionContext: IntentDecisionContext;
       channelProductId: string;
       externalProductNo: string;
       externalVariantCode: string;
@@ -634,6 +799,7 @@ export async function POST(request: Request) {
     const variantCode = String(mapping.external_variant_code ?? "").trim();
     let desired = target;
     if (!(desired > 0)) continue;
+    const masterThresholdPolicy = resolveThresholdPolicyForProfile(currentProductSyncProfileByMaster.get(masterItemId) ?? null);
 
     const forcedBaseTarget = forcedBaseTargetByMaster.get(masterItemId);
     const baseSnapshotTarget = baseSnapshotTargetByMaster.get(masterItemId);
@@ -655,7 +821,7 @@ export async function POST(request: Request) {
       ? evaluateAutoSyncThreshold({
         desiredPriceKrw: rowMarketAfterMargin,
         currentPriceKrw: rowCurrentRounded,
-        policy: thresholdPolicyInput,
+        policy: masterThresholdPolicy.policyInput,
       })
       : null;
     const rowHasDirectMarketForce = Boolean(rowMarketForceDecision?.passesThreshold);
@@ -669,20 +835,52 @@ export async function POST(request: Request) {
       }
     }
 
+    const marketUpliftPriceKrw = desired > target ? desired : null;
+    const activePricingOverride = activePricingOverrideByMaster.get(masterItemId) ?? null;
+    const pricingOverridePriceKrwRaw = Number(activePricingOverride?.override_price_krw ?? Number.NaN);
+    const pricingOverridePriceKrw = Number.isFinite(pricingOverridePriceKrwRaw)
+      ? Math.max(0, Math.round(pricingOverridePriceKrwRaw))
+      : null;
+    if (pricingOverridePriceKrw !== null) desired = pricingOverridePriceKrw;
+
+    const activeFloorGuard = activeFloorGuardByMaster.get(masterItemId) ?? null;
+    const floorPriceKrwRaw = Number(activeFloorGuard?.floor_price_krw ?? 0);
+    const floorPriceKrw = Number.isFinite(floorPriceKrwRaw)
+      ? Math.max(0, Math.round(floorPriceKrwRaw))
+      : 0;
+    const floorApplied = floorPriceKrw > desired;
+    if (floorApplied) desired = floorPriceKrw;
+
+    const decisionContext: IntentDecisionContext = {
+      threshold_profile: masterThresholdPolicy.thresholdProfile,
+      current_price_krw: rowCurrentRounded,
+      base_target_price_krw: target,
+      market_uplift_price_krw: marketUpliftPriceKrw,
+      pricing_override_id: activePricingOverride ? String(activePricingOverride.override_id ?? "").trim() || null : null,
+      pricing_override_price_krw: pricingOverridePriceKrw,
+      floor_guard_id: activeFloorGuard ? String(activeFloorGuard.guard_id ?? "").trim() || null : null,
+      floor_price_krw: floorPriceKrw,
+      final_desired_price_krw: desired,
+      floor_applied: floorApplied,
+    };
+
     if (triggerType === "AUTO" && Number.isFinite(Number(currentPrice ?? Number.NaN))) {
       const currentRounded = Math.round(Number(currentPrice));
       const thresholdDecision = evaluateAutoSyncThreshold({
         desiredPriceKrw: desired,
         currentPriceKrw: currentRounded,
-        policy: thresholdPolicyInput,
+        policy: masterThresholdPolicy.policyInput,
       });
-      const isForcedBaseUplift = variantCode.length === 0 && (rowHasDirectMarketForce || masterHasForcedMarketSync);
+      const isForcedBaseUplift = variantCode.length === 0
+        && marketUpliftPriceKrw !== null
+        && pricingOverridePriceKrw === null
+        && !floorApplied;
       const pressureDecision = evaluateAutoSyncPressurePolicy({
         currentPriceKrw: currentRounded,
         desiredPriceKrw: desired,
         state: nextPressureStateByChannelProduct.get(channelProductId) ?? pressureStateByChannelProduct.get(channelProductId),
-        minChangeKrw,
-        minChangeRate,
+        minChangeKrw: masterThresholdPolicy.minChangeKrw,
+        minChangeRate: masterThresholdPolicy.minChangeRate,
         now: runNowIso,
         config: pressurePolicyConfig,
       });
@@ -708,7 +906,7 @@ export async function POST(request: Request) {
 
       if (!forceFullSync) {
         thresholdEvaluatedCount += 1;
-        if (!masterHasForcedMarketSync && !pressureDecision.shouldCreateDownsyncIntent && !thresholdDecision.passesThreshold) {
+        if (!isForcedBaseUplift && !pressureDecision.shouldCreateDownsyncIntent && !thresholdDecision.passesThreshold) {
           thresholdFilteredCount += 1;
           continue;
         }
@@ -722,7 +920,13 @@ export async function POST(request: Request) {
 
     if (existing) {
       const nextDesired = Math.max(existing.desired, desired);
-      const nextFloorApplied = existing.floorApplied || desired > target;
+      const nextFloorApplied = existing.floorApplied || floorApplied;
+      const nextFloorPriceKrw = Math.max(existing.floorPriceKrw, floorPriceKrw);
+      const nextDecisionContext = nextDesired > existing.desired
+        || (nextDesired === existing.desired && floorApplied && !existing.floorApplied)
+        || (nextDesired === existing.desired && floorPriceKrw > existing.floorPriceKrw)
+        ? decisionContext
+        : existing.decisionContext;
       const intentIdx = existing.idx;
       const shouldReplaceMapping = shouldPreferMappingProductNo(existing.externalProductNo, mapping.external_product_no);
       const selectedChannelProductId = shouldReplaceMapping ? channelProductId : existing.channelProductId;
@@ -734,7 +938,10 @@ export async function POST(request: Request) {
         external_product_no: selectedProductNo,
         external_variant_code: selectedVariantCode || null,
         desired_price_krw: nextDesired,
+        floor_price_krw: nextFloorPriceKrw,
         floor_applied: nextFloorApplied,
+        decision_context_json: nextDecisionContext,
+        inputs_hash: makeIdempotencyKey([channelId, selectedChannelProductId, computeRequestId, nextDesired, nextFloorPriceKrw]),
       };
       const existingTask = taskRows[intentIdx] ?? {};
       const existingIntentId = String((intentRows[intentIdx] as { intent_id?: unknown } | undefined)?.intent_id ?? "").trim();
@@ -747,20 +954,21 @@ export async function POST(request: Request) {
           selectedVariantCode || "BASE",
           computeRequestId,
           nextDesired,
+          nextFloorPriceKrw,
         ]),
       };
       dedupeByLogicalTarget.set(logicalTargetKey, {
         idx: intentIdx,
         desired: nextDesired,
         floorApplied: nextFloorApplied,
+        floorPriceKrw: nextFloorPriceKrw,
+        decisionContext: nextDecisionContext,
         channelProductId: selectedChannelProductId,
         externalProductNo: selectedProductNo,
         externalVariantCode: selectedVariantCode,
       });
       continue;
     }
-
-    const floorApplied = false;
 
     intentRows.push({
       intent_id: intentId,
@@ -772,10 +980,11 @@ export async function POST(request: Request) {
       external_variant_code: variantCode || null,
       compute_request_id: computeRequestId,
       desired_price_krw: desired,
-      floor_price_krw: 0,
+      floor_price_krw: floorPriceKrw,
       floor_applied: floorApplied,
+      decision_context_json: decisionContext,
       intent_version: Date.now(),
-      inputs_hash: makeIdempotencyKey([channelId, channelProductId, computeRequestId, target, 0]),
+      inputs_hash: makeIdempotencyKey([channelId, channelProductId, computeRequestId, desired, floorPriceKrw]),
       state: "PENDING",
     });
 
@@ -788,6 +997,7 @@ export async function POST(request: Request) {
         variantCode || "BASE",
         computeRequestId,
         desired,
+        floorPriceKrw,
       ]),
       state: "PENDING",
       attempt_count: 0,
@@ -796,6 +1006,8 @@ export async function POST(request: Request) {
       idx: intentRows.length - 1,
       desired,
       floorApplied,
+      floorPriceKrw,
+      decisionContext,
       channelProductId,
       externalProductNo: mapping.external_product_no,
       externalVariantCode: variantCode,
@@ -803,6 +1015,7 @@ export async function POST(request: Request) {
   }
 
   const runSummary = {
+    threshold_profile: autoSyncThresholdProfile,
     threshold_min_change_krw: minChangeKrw,
     threshold_min_change_rate: minChangeRate,
     sync_policy_mode: syncPolicyMode,
@@ -845,7 +1058,7 @@ export async function POST(request: Request) {
           .from("price_sync_run_v2")
           .update({ status: "FAILED", error_message: pressureStateUpsertRes.error.message ?? "AUTO_PRESSURE_STATE_UPSERT_FAILED", finished_at: new Date().toISOString() })
           .eq("run_id", runId);
-        return jsonError(pressureStateUpsertRes.error.message ?? "AUTO pressure state 저장 실패", 500);
+        return jsonError(pressureStateUpsertRes.error.message ?? "AUTO pressure state ??????쎈솭", 500);
       }
     }
   }
@@ -884,7 +1097,7 @@ export async function POST(request: Request) {
         .from("price_sync_run_v2")
         .update({ status: "FAILED", error_message: intentInsertRes.error.message ?? "INTENT_INSERT_FAILED", finished_at: new Date().toISOString() })
         .eq("run_id", runId);
-      return jsonError(intentInsertRes.error.message ?? "intent 저장 실패", 500);
+      return jsonError(intentInsertRes.error.message ?? "intent ??????쎈솭", 500);
     }
   }
 
@@ -896,7 +1109,7 @@ export async function POST(request: Request) {
         .from("price_sync_run_v2")
         .update({ status: "FAILED", error_message: taskInsertRes.error.message ?? "TASK_INSERT_FAILED", finished_at: new Date().toISOString() })
         .eq("run_id", runId);
-      return jsonError(taskInsertRes.error.message ?? "push task 저장 실패", 500);
+      return jsonError(taskInsertRes.error.message ?? "push task ??????쎈솭", 500);
     }
   }
 

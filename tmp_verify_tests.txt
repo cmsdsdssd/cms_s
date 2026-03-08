@@ -1,0 +1,30 @@
+(node:36992) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///C:/Users/RICH/.gemini/antigravity/scratch/cms_s/web/src/lib/shop/price-sync-policy.js is not specified and it doesn't parse as CommonJS.
+Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+To eliminate this warning, add "type": "module" to C:\Users\RICH\.gemini\antigravity\scratch\cms_s\web\package.json.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ normalizePriceSyncPolicy applies stable defaults (1.2956ms)
+✔ resolveEffectiveMinChangeKrw uses the larger flat or rate-derived threshold (0.2989ms)
+✔ shouldSyncPriceChange bypasses threshold when always_sync is enabled (0.2367ms)
+✔ invalid values fall back to normalized defaults (0.7736ms)
+(node:46140) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///C:/Users/RICH/.gemini/antigravity/scratch/cms_s/web/src/lib/shop/price-sync-pressure-policy.js is not specified and it doesn't parse as CommonJS.
+Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+To eliminate this warning, add "type": "module" to C:\Users\RICH\.gemini\antigravity\scratch\cms_s\web\package.json.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ evaluateAutoSyncPressurePolicy triggers immediate upsync and decays downward pressure (1.442ms)
+✔ evaluateAutoSyncPressurePolicy releases immediately on a large downward move (0.191ms)
+✔ evaluateAutoSyncPressurePolicy accumulates intermittent downward pressure until release (0.2968ms)
+✔ evaluateAutoSyncPressurePolicy blocks downward release during cooldown (0.1396ms)
+✔ evaluateAutoSyncPressurePolicy allows cooldown override release (0.1681ms)
+✔ evaluateAutoSyncPressurePolicy releases stale downward gaps even before pressure threshold (0.1684ms)
+✔ evaluateAutoSyncPressurePolicy does not treat first downward gap as stale without history (0.1414ms)
+✔ evaluateAutoSyncPressurePolicy respects OFF mode for downward gaps (0.1289ms)
+✔ evaluateAutoSyncPressurePolicy respects IMMEDIATE_ONLY mode (0.1416ms)
+✔ buildAutoSyncPressureSuccessPatch resets pressure and sets cooldown after a downsync (2.1162ms)
+ℹ tests 14
+ℹ suites 0
+ℹ pass 14
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 107.0497

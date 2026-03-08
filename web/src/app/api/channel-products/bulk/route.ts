@@ -1,12 +1,18 @@
-import { NextResponse } from "next/server";
+﻿import { NextResponse } from "next/server";
 import { getShopAdminClient, jsonError, parseJsonObject } from "@/lib/shop/admin";
 import { normalizeMaterialCode } from "@/lib/material-factors";
+import {
+  buildMappingOptionAllowlist,
+  resolveCanonicalExternalProductNo,
+  validateMappingOptionSelection,
+} from "@/lib/shop/mapping-option-details";
 import { normalizePlatingComboCode } from "@/lib/shop/sync-rules";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
 const isThousandStep = (value: number): boolean => Number.isInteger(value) && value % 1000 === 0;
+const toTrimmed = (value: unknown): string => String(value ?? "").trim();
 
 type BulkRow = {
   channel_id: string;
@@ -29,6 +35,7 @@ type BulkRow = {
   sync_rule_plating_enabled: boolean;
   sync_rule_decoration_enabled: boolean;
   sync_rule_margin_rounding_enabled: boolean;
+  current_product_sync_profile: "GENERAL" | "MARKET_LINKED" | null;
   mapping_source: "MANUAL" | "CSV" | "AUTO";
   is_active: boolean;
 };
@@ -78,6 +85,12 @@ function normalizeRow(raw: unknown): { ok: true; row: BulkRow } | { ok: false; e
     || body.option_manual_target_krw === ""
       ? null
       : Number(body.option_manual_target_krw);
+  const currentProductSyncProfileRaw = String(body.current_product_sync_profile ?? "").trim().toUpperCase();
+  const currentProductSyncProfile = currentProductSyncProfileRaw === "MARKET_LINKED"
+    ? "MARKET_LINKED"
+    : currentProductSyncProfileRaw === "GENERAL"
+      ? "GENERAL"
+      : null;
 
   const mappingSourceRaw = String(body.mapping_source ?? "AUTO").trim().toUpperCase();
   const mappingSource: "MANUAL" | "CSV" | "AUTO" = ["MANUAL", "CSV", "AUTO"].includes(mappingSourceRaw)
@@ -95,7 +108,7 @@ function normalizeRow(raw: unknown): { ok: true; row: BulkRow } | { ok: false; e
   if (!masterItemId) return { ok: false, error: "master_item_id is required" };
   if (!externalProductNo) return { ok: false, error: "external_product_no is required" };
   if (!externalVariantCode) return { ok: false, error: "external_variant_code is required" };
-  if (!isActive) return { ok: false, error: "활성 매핑만 허용됩니다 (is_active must be true)" };
+  if (!isActive) return { ok: false, error: "?쒖꽦 留ㅽ븨留??덉슜?⑸땲??(is_active must be true)" };
 
   if (
     materialMultiplierOverride !== null
@@ -148,6 +161,7 @@ function normalizeRow(raw: unknown): { ok: true; row: BulkRow } | { ok: false; e
       sync_rule_plating_enabled: syncRulePlatingEnabled,
       sync_rule_decoration_enabled: syncRuleDecorationEnabled,
       sync_rule_margin_rounding_enabled: syncRuleMarginRoundingEnabled,
+      current_product_sync_profile: currentProductSyncProfile,
       mapping_source: mappingSource,
       is_active: isActive,
     },
@@ -161,6 +175,12 @@ export async function POST(request: Request) {
   const raw = await request.json().catch(() => null);
   const body = parseJsonObject(raw);
   if (!body) return jsonError("Invalid request body", 400);
+  const changeReason = typeof body.change_reason === "string" ? toTrimmed(body.change_reason) : "";
+  const changedBy =
+    toTrimmed(request.headers.get("x-user-email"))
+    || toTrimmed(request.headers.get("x-user-id"))
+    || toTrimmed(request.headers.get("x-user"))
+    || null;
 
   const inputRows = Array.isArray(body.rows) ? body.rows : [];
   if (inputRows.length === 0) return jsonError("rows is required", 400);
@@ -182,13 +202,148 @@ export async function POST(request: Request) {
   const affectedPairSet = new Set(rows.map((row) => `${row.channel_id}::${row.master_item_id}`));
   const affectedChannelIds = Array.from(new Set(rows.map((row) => row.channel_id)));
   const affectedMasterIds = Array.from(new Set(rows.map((row) => row.master_item_id)));
-  const existingRes = await sb
-    .from("sales_channel_product")
-    .select("channel_id, master_item_id, external_product_no, external_variant_code, option_price_mode, sync_rule_set_id, is_active")
-    .in("channel_id", affectedChannelIds)
-    .in("master_item_id", affectedMasterIds);
-  if (existingRes.error) return jsonError(existingRes.error.message ?? "기존 옵션 조회 실패", 500);
+  const [existingRes, activeProductRes, optionRuleRes] = await Promise.all([
+    sb
+      .from('sales_channel_product')
+      .select('channel_id, master_item_id, external_product_no, external_variant_code, option_material_code, option_color_code, option_decoration_code, option_size_value, option_price_mode, sync_rule_set_id, current_product_sync_profile, is_active')
+      .in('channel_id', affectedChannelIds)
+      .in('master_item_id', affectedMasterIds),
+    sb
+      .from('sales_channel_product')
+      .select('channel_id, master_item_id, external_product_no')
+      .in('channel_id', affectedChannelIds)
+      .in('master_item_id', affectedMasterIds)
+      .eq('is_active', true),
+    sb
+      .from('channel_option_labor_rule_v1')
+      .select('rule_id, channel_id, master_item_id, external_product_no, category_key, scope_material_code, additional_weight_g, additional_weight_min_g, additional_weight_max_g, plating_enabled, color_code, decoration_master_id, decoration_model_name, base_labor_cost_krw, additive_delta_krw, is_active, note')
+      .in('channel_id', affectedChannelIds)
+      .in('master_item_id', affectedMasterIds)
+      .eq('is_active', true),
+  ]);
+  if (existingRes.error) return jsonError(existingRes.error.message ?? '기존 옵션 조회 실패', 500);
+  if (activeProductRes.error) return jsonError(activeProductRes.error.message ?? '활성 상품번호 조회 실패', 500);
+  if (optionRuleRes.error) return jsonError(optionRuleRes.error.message ?? '옵션 상세 규칙 조회 실패', 500);
 
+  const activeProductNosByPair = new Map<string, string[]>();
+  for (const row of (activeProductRes.data ?? []) as Array<{ channel_id: string; master_item_id: string; external_product_no: string | null }>) {
+    const pairKey = `${row.channel_id}::${row.master_item_id}`;
+    const prev = activeProductNosByPair.get(pairKey) ?? [];
+    const productNo = String(row.external_product_no ?? '').trim();
+    if (!productNo || prev.includes(productNo)) continue;
+    prev.push(productNo);
+    activeProductNosByPair.set(pairKey, prev);
+  }
+
+  const existingRows = (existingRes.data ?? []) as Array<{
+    channel_id: string;
+    master_item_id: string;
+    external_product_no: string;
+    external_variant_code: string;
+    option_material_code: string | null;
+    option_color_code: string | null;
+    option_decoration_code: string | null;
+    option_size_value: number | null;
+    option_price_mode: 'SYNC' | 'MANUAL' | null;
+    sync_rule_set_id: string | null;
+    current_product_sync_profile: string | null;
+    is_active: boolean | null;
+  }>;
+  const existingOptionByKey = new Map(
+    existingRows.map((row) => {
+      const pairKey = `${row.channel_id}::${row.master_item_id}`;
+      const canonicalExternalProductNo = resolveCanonicalExternalProductNo(
+        activeProductNosByPair.get(pairKey) ?? [],
+        row.external_product_no,
+      );
+      return [
+        `${row.channel_id}::${canonicalExternalProductNo}::${row.external_variant_code}`,
+        row,
+      ];
+    }),
+  );
+
+  const ruleRowsByContext = new Map<string, Array<Record<string, unknown>>>();
+  for (const row of (optionRuleRes.data ?? []) as Array<Record<string, unknown>>) {
+    const contextKey = `${String(row.channel_id ?? '').trim()}::${String(row.master_item_id ?? '').trim()}::${String(row.external_product_no ?? '').trim()}`;
+    const prev = ruleRowsByContext.get(contextKey) ?? [];
+    prev.push(row);
+    ruleRowsByContext.set(contextKey, prev);
+  }
+
+  const resolutionTraceLogs: Array<Record<string, unknown>> = [];
+  try {
+    const validatedRows = rows.map((row) => {
+      const pairKey = `${row.channel_id}::${row.master_item_id}`;
+      const canonicalExternalProductNo = resolveCanonicalExternalProductNo(
+        activeProductNosByPair.get(pairKey) ?? [],
+        row.external_product_no,
+      );
+      const contextKey = `${pairKey}::${canonicalExternalProductNo}`;
+      const allowlist = buildMappingOptionAllowlist(ruleRowsByContext.get(contextKey) ?? []);
+      const optionValidation = validateMappingOptionSelection({
+        allowlist,
+        current: row,
+        previous: existingOptionByKey.get(`${row.channel_id}::${canonicalExternalProductNo}::${row.external_variant_code}`) ?? null,
+      });
+      if (!optionValidation.ok) {
+        return jsonError(optionValidation.errors[0] ?? '옵션 상세 값이 저장된 설정 허용값과 일치하지 않습니다', 422, {
+          code: 'OPTION_DETAIL_NOT_ALLOWED',
+          errors: optionValidation.errors,
+          channel_id: row.channel_id,
+          master_item_id: row.master_item_id,
+          external_product_no: canonicalExternalProductNo,
+          external_variant_code: row.external_variant_code,
+        });
+      }
+      const previous = existingOptionByKey.get(`${row.channel_id}::${canonicalExternalProductNo}::${row.external_variant_code}`) ?? null;
+      resolutionTraceLogs.push({
+        policy_id: null,
+        channel_id: row.channel_id,
+        master_item_id: row.master_item_id,
+        axis_key: "RESOLUTION_TRACE",
+        axis_value: `${canonicalExternalProductNo}::${row.external_variant_code}`,
+        action_type: previous ? "UPDATE" : "CREATE",
+        old_row: previous,
+        new_row: {
+          requested_external_product_no: row.external_product_no,
+          canonical_external_product_no: canonicalExternalProductNo,
+          external_variant_code: row.external_variant_code,
+          allowlist_counts: {
+            materials: allowlist.materials.length,
+            sizes_material_keys: Object.keys(allowlist.sizes_by_material ?? {}).length,
+            colors: allowlist.colors.length,
+            decors: allowlist.decors.length,
+          },
+          resolved_selection: optionValidation.value,
+          option_price_mode: row.option_price_mode,
+          sync_rule_set_id: row.sync_rule_set_id,
+        },
+        change_reason: changeReason || "BULK_MAPPING_SAVE",
+        changed_by: changedBy,
+      });
+      return {
+        ...row,
+        external_product_no: canonicalExternalProductNo,
+        current_product_sync_profile: row.current_product_sync_profile ?? (typeof previous?.current_product_sync_profile === "string" ? previous.current_product_sync_profile : null),
+        option_material_code: optionValidation.value.option_material_code,
+        option_color_code: optionValidation.value.option_color_code,
+        option_decoration_code: optionValidation.value.option_decoration_code,
+        option_size_value: optionValidation.value.option_size_value,
+      };
+    });
+
+    for (const validatedRow of validatedRows) {
+      if (validatedRow instanceof Response) return validatedRow;
+    }
+    rows = Array.from(new Map(
+      validatedRows
+        .filter((row): row is BulkRow => !(row instanceof Response))
+        .map((row) => [`${row.channel_id}::${row.external_product_no}::${row.external_variant_code}`, row]),
+    ).values());
+  } catch (error) {
+    return jsonError(error instanceof Error ? error.message : '옵션 상세 검증 실패', 500);
+  }
   const projectedByKey = new Map<string, {
     channel_id: string;
     master_item_id: string;
@@ -198,22 +353,18 @@ export async function POST(request: Request) {
     sync_rule_set_id: string | null;
     is_active: boolean;
   }>();
-  for (const row of (existingRes.data ?? []) as Array<{
-    channel_id: string;
-    master_item_id: string;
-    external_product_no: string;
-    external_variant_code: string;
-    option_price_mode: "SYNC" | "MANUAL" | null;
-    sync_rule_set_id: string | null;
-    is_active: boolean | null;
-  }>) {
+  for (const row of existingRows) {
     const pairKey = `${row.channel_id}::${row.master_item_id}`;
     if (!affectedPairSet.has(pairKey)) continue;
-    const key = `${row.channel_id}::${row.external_product_no}::${row.external_variant_code}`;
+    const canonicalExternalProductNo = resolveCanonicalExternalProductNo(
+      activeProductNosByPair.get(pairKey) ?? [],
+      row.external_product_no,
+    );
+    const key = `${row.channel_id}::${canonicalExternalProductNo}::${row.external_variant_code}`;
     projectedByKey.set(key, {
       channel_id: row.channel_id,
       master_item_id: row.master_item_id,
-      external_product_no: row.external_product_no,
+      external_product_no: canonicalExternalProductNo,
       external_variant_code: row.external_variant_code,
       option_price_mode: String(row.option_price_mode ?? "SYNC").toUpperCase() === "MANUAL" ? "MANUAL" : "SYNC",
       sync_rule_set_id: row.sync_rule_set_id,
@@ -282,7 +433,7 @@ export async function POST(request: Request) {
     );
     const missingRuleSetRows = syncRows.filter((row) => !String(row.sync_rule_set_id ?? "").trim());
     if (missingRuleSetRows.length > 0) {
-      return jsonError("SYNC 모드 매핑에 sync_rule_set_id가 필요합니다", 422, {
+      return jsonError('SYNC 모드 매핑에 sync_rule_set_id가 필요합니다', 422, {
         code: "SOT_SYNC_RULESET_REQUIRED",
         channel_id: channelId,
         master_item_id: masterItemId,
@@ -291,7 +442,7 @@ export async function POST(request: Request) {
     }
     const syncRuleSetIds = new Set(syncRows.map((row) => String(row.sync_rule_set_id ?? "").trim()).filter(Boolean));
     if (syncRuleSetIds.size > 1) {
-      return jsonError("동일 master_item_id의 SYNC 매핑은 sync_rule_set_id가 단일값이어야 합니다", 422, {
+      return jsonError('동일 master_item_id의 SYNC 매핑은 sync_rule_set_id가 단일값이어야 합니다', 422, {
         code: "SOT_RULESET_INCONSISTENT",
         channel_id: channelId,
         master_item_id: masterItemId,
@@ -305,7 +456,14 @@ export async function POST(request: Request) {
     .upsert(rows, { onConflict: "channel_id,external_product_no,external_variant_code" })
     .select("channel_product_id, channel_id, master_item_id, external_product_no, external_variant_code, sync_rule_set_id, option_material_code, option_color_code, option_decoration_code, option_size_value, material_multiplier_override, size_weight_delta_g, option_price_delta_krw, option_price_mode, option_manual_target_krw, include_master_plating_labor, sync_rule_material_enabled, sync_rule_weight_enabled, sync_rule_plating_enabled, sync_rule_decoration_enabled, sync_rule_margin_rounding_enabled, mapping_source, is_active, created_at, updated_at");
 
-  if (error) return jsonError(error.message ?? "일괄 매핑 저장 실패", 400);
+  if (error) return jsonError(error.message ?? '일괄 매핑 저장 실패', 400);
+
+  if (resolutionTraceLogs.length > 0) {
+    const traceLogRes = await sb.from("channel_option_value_policy_log").insert(resolutionTraceLogs);
+    if (traceLogRes.error) {
+      return jsonError(traceLogRes.error.message ?? "옵션 매핑 trace 로그 저장 실패", 500);
+    }
+  }
 
   return NextResponse.json(
     {
@@ -317,3 +475,6 @@ export async function POST(request: Request) {
     { headers: { "Cache-Control": "no-store" } },
   );
 }
+
+
+

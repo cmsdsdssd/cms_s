@@ -1,0 +1,9 @@
+commit 4035fc9894ba7348361dbf379f7957832cd9c1fc
+Merge: c901f93 6b10378
+Author: cms31 <cms31@users.noreply.github.com>
+Date:   Sat Mar 7 11:23:31 2026 +0900
+
+    On main: temp staged auto-price verify
+
+MM	web/src/lib/shop/option-labor-rules.js
+MM	web/src/lib/shop/option-labor-rules.ts

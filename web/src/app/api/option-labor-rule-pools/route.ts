@@ -12,7 +12,17 @@ type MappingRow = {
   master_item_id: string;
   external_product_no: string;
   external_variant_code: string | null;
+  option_material_code: string | null;
   option_color_code: string | null;
+  option_decoration_code: string | null;
+  option_size_value: number | null;
+  size_weight_delta_g?: number | null;
+};
+
+type SavedRuleRow = {
+  master_item_id: string;
+  external_product_no: string;
+  rule_id: string;
 };
 
 type MasterRow = {
@@ -259,7 +269,7 @@ export async function GET(request: Request) {
 
   let mappingQuery = sb
     .from("sales_channel_product")
-    .select("channel_product_id, master_item_id, external_product_no, external_variant_code, option_color_code")
+    .select("channel_product_id, master_item_id, external_product_no, external_variant_code, option_material_code, option_color_code, option_decoration_code, option_size_value, size_weight_delta_g")
     .eq("channel_id", channelId)
     .eq("is_active", true)
     .order("master_item_id", { ascending: true })
@@ -275,7 +285,7 @@ export async function GET(request: Request) {
   const mappings = (mappingRes.data ?? []) as MappingRow[];
   const targetMasterIds = Array.from(new Set(mappings.map((row) => toTrimmed(row.master_item_id)).filter(Boolean)));
 
-  const [masterRes, platingRes, matCfgRes] = await Promise.all([
+  const [masterRes, platingRes, matCfgRes, savedRuleColorRes, savedRuleRes] = await Promise.all([
     targetMasterIds.length > 0
       ? sb
           .from("cms_master_item")
@@ -291,9 +301,20 @@ export async function GET(request: Request) {
       .from("cms_material_factor_config")
       .select("material_code")
       .limit(5000),
+    sb
+      .from("channel_option_labor_rule_v1")
+      .select("color_code")
+      .eq("channel_id", channelId)
+      .not("color_code", "is", null)
+      .limit(5000),
+    sb
+      .from("channel_option_labor_rule_v1")
+      .select("master_item_id, external_product_no, rule_id")
+      .eq("channel_id", channelId)
+      .limit(5000),
   ]);
 
-  for (const res of [masterRes, platingRes, matCfgRes]) {
+  for (const res of [masterRes, platingRes, matCfgRes, savedRuleColorRes, savedRuleRes]) {
     if (res.error) return jsonError(res.error.message ?? "옵션 공임 풀 조회 실패", 500);
   }
 
@@ -301,6 +322,15 @@ export async function GET(request: Request) {
     .map(normalizeMaster)
     .filter((row) => row.master_item_id.length > 0);
   const masterMap = new Map(masters.map((row) => [row.master_item_id, row]));
+
+  const ruleCountByContext = new Map<string, number>();
+  for (const row of (savedRuleRes.data ?? []) as SavedRuleRow[]) {
+    const masterId = toTrimmed(row.master_item_id);
+    const productNo = toTrimmed(row.external_product_no);
+    if (!masterId || !productNo) continue;
+    const key = `${masterId}::${productNo}`;
+    ruleCountByContext.set(key, (ruleCountByContext.get(key) ?? 0) + 1);
+  }
 
   const productContexts = Array.from(
     new Map(
@@ -322,11 +352,60 @@ export async function GET(request: Request) {
               category_code: toUpper(master?.category_code) || null,
               material_code_default: normalizeMaterialCode(toTrimmed(master?.material_code_default)),
               has_variants: Boolean(variantCode),
+              row_count: 0,
+              variant_count: 0,
+              base_channel_product_id: "",
+              material_option_count: 0,
+              size_option_count: 0,
+              color_option_count: 0,
+              decor_option_count: 0,
+              rule_count: ruleCountByContext.get(key) ?? 0,
+              _material_values: new Set<string>(),
+              _size_values: new Set<string>(),
+              _color_values: new Set<string>(),
+              _decor_values: new Set<string>(),
             },
           ];
         }),
     ).values(),
   );
+
+  const contextByKey = new Map(productContexts.map((row) => [`${row.master_item_id}::${row.external_product_no}`, row]));
+  for (const row of mappings) {
+    const masterId = toTrimmed(row.master_item_id);
+    const productNo = toTrimmed(row.external_product_no);
+    if (!masterId || !productNo) continue;
+    const context = contextByKey.get(`${masterId}::${productNo}`);
+    if (!context) continue;
+    context.row_count += 1;
+    if (toTrimmed(row.external_variant_code)) context.variant_count += 1;
+    else if (!context.base_channel_product_id) context.base_channel_product_id = toTrimmed(row.channel_product_id);
+    if (!context.base_channel_product_id) context.base_channel_product_id = toTrimmed(row.channel_product_id);
+
+    const materialCode = normalizeMaterialCode(toTrimmed(row.option_material_code));
+    const sizeValue = row.option_size_value != null ? `${toNum(row.option_size_value).toFixed(2)}::${toNum(row.size_weight_delta_g).toFixed(2)}` : "";
+    const colorCode = toUpper(row.option_color_code);
+    const decorCode = toUpper(row.option_decoration_code);
+    if (materialCode) context._material_values.add(materialCode);
+    if (sizeValue) context._size_values.add(sizeValue);
+    if (colorCode) context._color_values.add(colorCode);
+    if (decorCode) context._decor_values.add(decorCode);
+  }
+
+  const normalizedProductContexts = productContexts
+    .map((row) => ({
+      ...row,
+      material_option_count: row._material_values.size,
+      size_option_count: row._size_values.size,
+      color_option_count: row._color_values.size,
+      decor_option_count: row._decor_values.size,
+    }))
+    .map(({ _material_values, _size_values, _color_values, _decor_values, ...row }) => row)
+    .sort((a, b) =>
+      (a.model_name ?? "").localeCompare(b.model_name ?? "")
+      || a.external_product_no.localeCompare(b.external_product_no)
+      || a.master_item_id.localeCompare(b.master_item_id),
+    );
 
   const recipeByProductId = new Map<string, BomRecipeWorklistRow>();
   if (targetMasterIds.length > 0) {
@@ -487,6 +566,7 @@ export async function GET(request: Request) {
       [
         ...(platingRes.data ?? []).map((row) => toUpper((row as { color_code?: string | null }).color_code)),
         ...mappings.map((row) => toUpper(row.option_color_code)),
+        ...(savedRuleColorRes.data ?? []).map((row) => toUpper((row as { color_code?: string | null }).color_code)),
       ].filter(Boolean),
     ),
   )
@@ -500,8 +580,8 @@ export async function GET(request: Request) {
       data: {
         categories: OPTION_LABOR_RULE_CATEGORIES,
         category_codes: categoryCodes,
-        contexts: productContexts,
-        product_contexts: productContexts,
+        contexts: normalizedProductContexts,
+        product_contexts: normalizedProductContexts,
         materials,
         colors,
         decoration_masters: decorationMasters,

@@ -1,8 +1,19 @@
 import { NextResponse } from "next/server";
-import { getShopAdminClient, jsonError, parseJsonObject } from "@/lib/shop/admin";
+import { getShopAdminClient, isMissingColumnError, jsonError, parseJsonObject } from "@/lib/shop/admin";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
+
+const AUTO_SYNC_THRESHOLD_PROFILES = ["GENERAL", "MARKET_LINKED"] as const;
+const PRICING_POLICY_SELECT_BASE =
+  "policy_id, channel_id, policy_name, margin_multiplier, gm_material, gm_labor, gm_fixed, fixed_cost_krw, rounding_unit, rounding_mode, option_18k_weight_multiplier, material_factor_set_id, fee_rate, min_margin_rate_total, auto_sync_force_full, auto_sync_min_change_krw, auto_sync_min_change_rate, is_active, created_at, updated_at";
+const PRICING_POLICY_SELECT_COLS = `${PRICING_POLICY_SELECT_BASE}, auto_sync_threshold_profile`;
+
+function parseAutoSyncThresholdProfile(value: unknown): (typeof AUTO_SYNC_THRESHOLD_PROFILES)[number] {
+  const profile = String(value ?? "GENERAL").trim().toUpperCase();
+  if (profile === "GENERAL" || profile === "MARKET_LINKED") return profile;
+  throw new Error("auto_sync_threshold_profile must be GENERAL/MARKET_LINKED");
+}
 
 export async function GET(request: Request) {
   const sb = getShopAdminClient();
@@ -11,13 +22,19 @@ export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const channelId = (searchParams.get("channel_id") ?? "").trim();
 
-  let q = sb
-    .from("pricing_policy")
-    .select("policy_id, channel_id, policy_name, margin_multiplier, gm_material, gm_labor, gm_fixed, fixed_cost_krw, rounding_unit, rounding_mode, option_18k_weight_multiplier, material_factor_set_id, fee_rate, min_margin_rate_total, is_active, created_at, updated_at")
-    .order("updated_at", { ascending: false });
-  if (channelId) q = q.eq("channel_id", channelId);
+  const buildQuery = (includeThresholdProfile: boolean) => {
+    let q = sb
+      .from("pricing_policy")
+      .select(includeThresholdProfile ? PRICING_POLICY_SELECT_COLS : PRICING_POLICY_SELECT_BASE)
+      .order("updated_at", { ascending: false });
+    if (channelId) q = q.eq("channel_id", channelId);
+    return q;
+  };
 
-  const { data, error } = await q;
+  let { data, error } = await buildQuery(true);
+  if (error && isMissingColumnError(error, "pricing_policy.auto_sync_threshold_profile")) {
+    ({ data, error } = await buildQuery(false));
+  }
   if (error) return jsonError(error.message ?? "정책 조회 실패", 500);
   return NextResponse.json({ data: data ?? [] }, { headers: { "Cache-Control": "no-store" } });
 }
@@ -41,6 +58,9 @@ export async function POST(request: Request) {
   const hasGmLabor = Object.prototype.hasOwnProperty.call(body, "gm_labor");
   const hasGmFixed = Object.prototype.hasOwnProperty.call(body, "gm_fixed");
   const hasFixedCostKrw = Object.prototype.hasOwnProperty.call(body, "fixed_cost_krw");
+  const hasAutoSyncForceFull = Object.prototype.hasOwnProperty.call(body, "auto_sync_force_full");
+  const hasAutoSyncMinChangeKrw = Object.prototype.hasOwnProperty.call(body, "auto_sync_min_change_krw");
+  const hasAutoSyncMinChangeRate = Object.prototype.hasOwnProperty.call(body, "auto_sync_min_change_rate");
 
   const marginMultiplier = hasMargin ? Number(body.margin_multiplier) : 1;
   const roundingUnit = hasRoundingUnit ? Number(body.rounding_unit) : 1000;
@@ -52,6 +72,15 @@ export async function POST(request: Request) {
   const gmLabor = hasGmLabor ? Number(body.gm_labor) : 0;
   const gmFixed = hasGmFixed ? Number(body.gm_fixed) : 0;
   const fixedCostKrw = hasFixedCostKrw ? Number(body.fixed_cost_krw) : 0;
+  const autoSyncForceFull = hasAutoSyncForceFull ? body.auto_sync_force_full === true : false;
+  const autoSyncMinChangeKrw = hasAutoSyncMinChangeKrw ? Number(body.auto_sync_min_change_krw) : 5000;
+  const autoSyncMinChangeRate = hasAutoSyncMinChangeRate ? Number(body.auto_sync_min_change_rate) : 0.01;
+  let autoSyncThresholdProfile: (typeof AUTO_SYNC_THRESHOLD_PROFILES)[number];
+  try {
+    autoSyncThresholdProfile = parseAutoSyncThresholdProfile(body.auto_sync_threshold_profile);
+  } catch (error) {
+    return jsonError(error instanceof Error ? error.message : "Invalid auto_sync_threshold_profile", 400);
+  }
 
   const basePayload = {
     channel_id: String(body.channel_id ?? "").trim(),
@@ -67,6 +96,10 @@ export async function POST(request: Request) {
     material_factor_set_id: typeof body.material_factor_set_id === "string" ? body.material_factor_set_id : null,
     fee_rate: feeRate,
     min_margin_rate_total: minMarginRateTotal,
+    auto_sync_force_full: autoSyncForceFull,
+    auto_sync_min_change_krw: Math.max(0, Math.round(autoSyncMinChangeKrw)),
+    auto_sync_min_change_rate: autoSyncMinChangeRate,
+    auto_sync_threshold_profile: autoSyncThresholdProfile,
     is_active: body.is_active === false ? false : true,
   };
 
@@ -81,10 +114,9 @@ export async function POST(request: Request) {
   if (!Number.isFinite(basePayload.fixed_cost_krw) || basePayload.fixed_cost_krw < 0) return jsonError("fixed_cost_krw must be >= 0", 400);
   if (!Number.isFinite(basePayload.fee_rate) || basePayload.fee_rate < 0) return jsonError("fee_rate must be >= 0", 400);
   if (!Number.isFinite(basePayload.min_margin_rate_total) || basePayload.min_margin_rate_total < 0) return jsonError("min_margin_rate_total must be >= 0", 400);
+  if (!Number.isFinite(basePayload.auto_sync_min_change_krw) || basePayload.auto_sync_min_change_krw < 0) return jsonError("auto_sync_min_change_krw must be >= 0", 400);
+  if (!Number.isFinite(basePayload.auto_sync_min_change_rate) || basePayload.auto_sync_min_change_rate < 0 || basePayload.auto_sync_min_change_rate > 1) return jsonError("auto_sync_min_change_rate must be between 0 and 1", 400);
   if (!["CEIL", "ROUND", "FLOOR"].includes(basePayload.rounding_mode)) return jsonError("rounding_mode must be CEIL/ROUND/FLOOR", 400);
-
-  const selectCols = "policy_id, channel_id, policy_name, margin_multiplier, gm_material, gm_labor, gm_fixed, fixed_cost_krw, rounding_unit, rounding_mode, option_18k_weight_multiplier, material_factor_set_id, fee_rate, min_margin_rate_total, is_active, created_at, updated_at";
-
   const deactivateOtherPolicies = async (savedPolicyId: string) => {
     if (!basePayload.is_active) return;
     await sb
@@ -95,7 +127,7 @@ export async function POST(request: Request) {
       .eq("is_active", true);
   };
 
-  const firstTry = await sb.from("pricing_policy").insert(basePayload).select(selectCols).single();
+  const firstTry = await sb.from("pricing_policy").insert(basePayload).select(PRICING_POLICY_SELECT_COLS).single();
   if (!firstTry.error) {
     await deactivateOtherPolicies(String(firstTry.data.policy_id));
     return NextResponse.json({ data: firstTry.data }, { headers: { "Cache-Control": "no-store" } });
@@ -108,7 +140,7 @@ export async function POST(request: Request) {
   const secondTry = await sb
     .from("pricing_policy")
     .insert({ ...basePayload, code: fallbackCode })
-    .select(selectCols)
+    .select(PRICING_POLICY_SELECT_COLS)
     .single();
   if (!secondTry.error) {
     await deactivateOtherPolicies(String(secondTry.data.policy_id));
@@ -121,7 +153,7 @@ export async function POST(request: Request) {
   const thirdTry = await sb
     .from("pricing_policy")
     .insert({ ...basePayload, code: fallbackCode, name: policyName })
-    .select(selectCols)
+    .select(PRICING_POLICY_SELECT_COLS)
     .single();
   if (thirdTry.error) return jsonError(thirdTry.error.message ?? "정책 생성 실패", 400);
 

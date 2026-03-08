@@ -1,0 +1,43 @@
+
+> web@0.1.0 start
+> next start --port 3010
+
+▲ Next.js 16.1.4
+- Local:         http://localhost:3010
+- Network:       http://192.168.0.69:3010
+
+✓ Starting...
+✓ Ready in 934ms
+AuthApiError: Invalid Refresh Token: Refresh Token Not Found
+    at tU (C:\Users\RICH\.gemini\antigravity\scratch\cms_s\web\.next\server\edge\chunks\[root-of-the-server]__c5caee05._.js:24:45520)
+    at async tL (C:\Users\RICH\.gemini\antigravity\scratch\cms_s\web\.next\server\edge\chunks\[root-of-the-server]__c5caee05._.js:24:46464)
+    at async tD (C:\Users\RICH\.gemini\antigravity\scratch\cms_s\web\.next\server\edge\chunks\[root-of-the-server]__c5caee05._.js:24:45904)
+    at async r (C:\Users\RICH\.gemini\antigravity\scratch\cms_s\web\.next\server\edge\chunks\[root-of-the-server]__c5caee05._.js:37:22349)
+    at async (C:\Users\RICH\.gemini\antigravity\scratch\cms_s\web\.next\server\edge\chunks\[root-of-the-server]__c5caee05._.js:37:22612) {
+  __isAuthError: true,
+  status: 400,
+  code: 'refresh_token_not_found'
+}
+AuthApiError: Invalid Refresh Token: Refresh Token Not Found
+    at tU (C:\Users\RICH\.gemini\antigravity\scratch\cms_s\web\.next\server\edge\chunks\[root-of-the-server]__c5caee05._.js:24:45520)
+    at async tL (C:\Users\RICH\.gemini\antigravity\scratch\cms_s\web\.next\server\edge\chunks\[root-of-the-server]__c5caee05._.js:24:46464)
+    at async tD (C:\Users\RICH\.gemini\antigravity\scratch\cms_s\web\.next\server\edge\chunks\[root-of-the-server]__c5caee05._.js:24:45904)
+    at async r (C:\Users\RICH\.gemini\antigravity\scratch\cms_s\web\.next\server\edge\chunks\[root-of-the-server]__c5caee05._.js:37:22349)
+    at async (C:\Users\RICH\.gemini\antigravity\scratch\cms_s\web\.next\server\edge\chunks\[root-of-the-server]__c5caee05._.js:37:22612) {
+  __isAuthError: true,
+  status: 400,
+  code: 'refresh_token_not_found'
+}
+Error: fetch failed
+    at context.fetch (C:\Users\RICH\.gemini\antigravity\scratch\cms_s\web\node_modules\next\dist\server\web\sandbox\context.js:321:60)
+    at C:\Users\RICH\.gemini\antigravity\scratch\cms_s\web\.next\server\edge\chunks\[root-of-the-server]__c5caee05._.js:24:41442
+    at tL (C:\Users\RICH\.gemini\antigravity\scratch\cms_s\web\.next\server\edge\chunks\[root-of-the-server]__c5caee05._.js:24:46382)
+    at tD (C:\Users\RICH\.gemini\antigravity\scratch\cms_s\web\.next\server\edge\chunks\[root-of-the-server]__c5caee05._.js:24:45910)
+    at C:\Users\RICH\.gemini\antigravity\scratch\cms_s\web\.next\server\edge\chunks\[root-of-the-server]__c5caee05._.js:37:14228
+    at ru._useSession (C:\Users\RICH\.gemini\antigravity\scratch\cms_s\web\.next\server\edge\chunks\[root-of-the-server]__c5caee05._.js:37:11746)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async ru._getUser (C:\Users\RICH\.gemini\antigravity\scratch\cms_s\web\.next\server\edge\chunks\[root-of-the-server]__c5caee05._.js:37:14059)
+    at async C:\Users\RICH\.gemini\antigravity\scratch\cms_s\web\.next\server\edge\chunks\[root-of-the-server]__c5caee05._.js:37:13853
+    at async C:\Users\RICH\.gemini\antigravity\scratch\cms_s\web\.next\server\edge\chunks\[root-of-the-server]__c5caee05._.js:37:11020 {
+  
+}

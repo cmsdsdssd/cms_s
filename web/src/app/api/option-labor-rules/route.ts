@@ -59,6 +59,8 @@ const RULE_SELECT = [
   "category_key",
   "scope_material_code",
   "additional_weight_g",
+  "additional_weight_min_g",
+  "additional_weight_max_g",
   "plating_enabled",
   "color_code",
   "decoration_master_id",
@@ -267,25 +269,173 @@ const buildRuleDedupKey = (row: {
   category_key: CategoryKey;
   scope_material_code: string | null;
   additional_weight_g: string | null;
+  additional_weight_min_g?: string | null;
+  additional_weight_max_g?: string | null;
   plating_enabled: boolean | null;
   color_code: string | null;
   decoration_master_id: string | null;
   decoration_model_name: string | null;
+  note?: string | null;
 }): string => {
   switch (row.category_key) {
     case "MATERIAL":
-    case "OTHER":
       return row.category_key;
     case "SIZE":
-      return [row.category_key, row.scope_material_code ?? "", row.additional_weight_g ?? ""].join("::");
+      return [
+        row.category_key,
+        row.scope_material_code ?? "",
+        row.additional_weight_min_g ?? row.additional_weight_g ?? "",
+        row.additional_weight_max_g ?? row.additional_weight_g ?? "",
+      ].join("::");
     case "COLOR_PLATING":
-      return [row.category_key, row.plating_enabled === true ? "1" : "0", row.color_code ?? ""].join("::");
+      return [
+        row.category_key,
+        row.scope_material_code ?? "",
+        row.plating_enabled === true ? "1" : "0",
+        row.color_code ?? "",
+      ].join("::");
     case "DECOR":
       return [
         row.category_key,
         row.decoration_master_id ? `id:${row.decoration_master_id}` : `name:${String(row.decoration_model_name ?? "").toLowerCase()}`,
       ].join("::");
+    case "OTHER":
+      return [row.category_key, String(row.note ?? "").toLowerCase()].join("::");
   }
+};
+
+type RuleDedupRow = {
+  category_key: CategoryKey;
+  scope_material_code: string | null;
+  additional_weight_g: string | null;
+  additional_weight_min_g?: string | null;
+  additional_weight_max_g?: string | null;
+  plating_enabled: boolean | null;
+  color_code: string | null;
+  decoration_master_id: string | null;
+  decoration_model_name: string | null;
+  base_labor_cost_krw?: number | null;
+  additive_delta_krw?: number | null;
+  note?: string | null;
+  [key: string]: unknown;
+};
+
+const isSizeZeroBaselineRow = (row: Record<string, unknown>): boolean => {
+  const minValue = normalizeAdditionalWeightValue(row.additional_weight_min_g ?? row.additional_weight_g);
+  const maxValue = normalizeAdditionalWeightValue(row.additional_weight_max_g ?? row.additional_weight_g);
+  const baseLaborCost = normalizeKrwInteger(row.base_labor_cost_krw, 0);
+  const additiveDelta = normalizeKrwInteger(row.additive_delta_krw, 0);
+  return minValue === "0.00" && maxValue === "0.00" && baseLaborCost === 0 && additiveDelta === 0;
+};
+
+const buildSizeZeroBaselineRow = (template: RuleDedupRow): RuleDedupRow => ({
+  ...template,
+  additional_weight_g: "0.00",
+  additional_weight_min_g: "0.00",
+  additional_weight_max_g: "0.00",
+  base_labor_cost_krw: 0,
+  additive_delta_krw: 0,
+  note: null,
+});
+
+const ensureSizeZeroBaselinesInDedup = (dedup: Map<string, RuleDedupRow>): void => {
+  const templateByMaterial = new Map<string, RuleDedupRow>();
+  const hasZeroByMaterial = new Set<string>();
+
+  for (const row of dedup.values()) {
+    if (row.category_key !== "SIZE") continue;
+    const materialCode = normalizeMaterialScopeCode(row.scope_material_code);
+    if (!materialCode) continue;
+    if (!templateByMaterial.has(materialCode)) templateByMaterial.set(materialCode, row);
+    if (isSizeZeroBaselineRow(row)) hasZeroByMaterial.add(materialCode);
+  }
+
+  for (const [materialCode, template] of templateByMaterial.entries()) {
+    if (hasZeroByMaterial.has(materialCode)) continue;
+
+    const baselineRow = buildSizeZeroBaselineRow(template);
+
+    dedup.set(buildRuleDedupKey(baselineRow), baselineRow);
+  }
+};
+
+const ensurePersistedSizeZeroBaseline = async (
+  sb: NonNullable<ReturnType<typeof getShopAdminClient>>,
+  args: {
+    channelId: string;
+    masterItemId: string;
+    externalProductNo: string;
+    materialCode: string;
+    actor: string;
+  },
+): Promise<Response | null> => {
+  const existingRes = await sb
+    .from("channel_option_labor_rule_v1")
+    .select("rule_id")
+    .eq("channel_id", args.channelId)
+    .eq("master_item_id", args.masterItemId)
+    .eq("external_product_no", args.externalProductNo)
+    .eq("category_key", "SIZE")
+    .eq("scope_material_code", args.materialCode)
+    .eq("additional_weight_g", "0.00")
+    .eq("additional_weight_min_g", "0.00")
+    .eq("additional_weight_max_g", "0.00")
+    .eq("base_labor_cost_krw", 0)
+    .eq("additive_delta_krw", 0)
+    .limit(1)
+    .maybeSingle();
+
+  if (existingRes.error) return jsonError(existingRes.error.message ?? "failed to check 0g SIZE baseline", 500);
+  if (existingRes.data?.rule_id) return null;
+
+  const insertRes = await sb
+    .from("channel_option_labor_rule_v1")
+    .insert({
+      channel_id: args.channelId,
+      master_item_id: args.masterItemId,
+      external_product_no: args.externalProductNo,
+      category_key: "SIZE",
+      scope_material_code: args.materialCode,
+      additional_weight_g: "0.00",
+      additional_weight_min_g: "0.00",
+      additional_weight_max_g: "0.00",
+      plating_enabled: null,
+      color_code: null,
+      decoration_master_id: null,
+      decoration_model_name: null,
+      base_labor_cost_krw: 0,
+      additive_delta_krw: 0,
+      is_active: true,
+      note: null,
+      created_by: args.actor,
+      updated_by: args.actor,
+    })
+    .select("rule_id")
+    .maybeSingle();
+
+  if (insertRes.error) return jsonError(insertRes.error.message ?? "failed to create 0g SIZE baseline", 500);
+  return null;
+};
+
+const ensureSizeZeroBaselineForRuleSave = async (
+  sb: NonNullable<ReturnType<typeof getShopAdminClient>>,
+  row: Record<string, unknown>,
+  args: {
+    channelId: string;
+    masterItemId: string;
+    externalProductNo: string;
+    actor: string;
+  },
+): Promise<Response | null> => {
+  if (row.category_key !== "SIZE") return null;
+
+  const materialCode = normalizeMaterialScopeCode(row.scope_material_code);
+  if (!materialCode) return null;
+
+  return ensurePersistedSizeZeroBaseline(sb, {
+    ...args,
+    materialCode,
+  });
 };
 
 const validateAndNormalizeRuleRow = (
@@ -297,6 +447,8 @@ const validateAndNormalizeRuleRow = (
 
   const scopeMaterialCode = normalizeMaterialScopeCode(input.scope_material_code);
   const additionalWeightValue = normalizeAdditionalWeightValue(input.additional_weight_g);
+  const additionalWeightMinValue = normalizeAdditionalWeightValue(input.additional_weight_min_g);
+  const additionalWeightMaxValue = normalizeAdditionalWeightValue(input.additional_weight_max_g);
   const colorCode = normalizeOptionLaborColorCode(input.color_code);
   const decorationMasterId = String(input.decoration_master_id ?? "").trim() || null;
   const decorationModelName = String(input.decoration_model_name ?? "").trim() || null;
@@ -309,7 +461,7 @@ const validateAndNormalizeRuleRow = (
   if (!isValidMoney(additiveDelta)) return jsonError(`rows[${rowIndex}].additive_delta_krw is invalid`, 400);
 
   if (categoryKey === "MATERIAL") {
-    if (scopeMaterialCode || additionalWeightValue || input.plating_enabled != null || colorCode || decorationMasterId || decorationModelName) {
+    if (scopeMaterialCode || additionalWeightValue || additionalWeightMinValue || additionalWeightMaxValue || input.plating_enabled != null || colorCode || decorationMasterId || decorationModelName) {
       return jsonError(`rows[${rowIndex}] has invalid MATERIAL shape`, 400);
     }
     if (baseLaborCost !== 0 || additiveDelta !== 0) {
@@ -319,7 +471,14 @@ const validateAndNormalizeRuleRow = (
 
   if (categoryKey === "SIZE") {
     if (!scopeMaterialCode) return jsonError(`rows[${rowIndex}].scope_material_code is required`, 400);
-    if (!additionalWeightValue) return jsonError(`rows[${rowIndex}].additional_weight_g is invalid`, 400);
+    const effectiveMin = additionalWeightMinValue ?? additionalWeightValue;
+    const effectiveMax = additionalWeightMaxValue ?? additionalWeightValue;
+    if (!effectiveMin || !effectiveMax) {
+      return jsonError(`rows[${rowIndex}].additional_weight_min_g/additional_weight_max_g is invalid`, 400);
+    }
+    if (Number(effectiveMin) > Number(effectiveMax)) {
+      return jsonError(`rows[${rowIndex}] has invalid SIZE range`, 400);
+    }
     if (input.plating_enabled != null || colorCode || decorationMasterId || decorationModelName) {
       return jsonError(`rows[${rowIndex}] has invalid SIZE shape`, 400);
     }
@@ -331,7 +490,13 @@ const validateAndNormalizeRuleRow = (
     const parsedBoolean = readRequiredBoolean(input.plating_enabled, "plating_enabled", rowIndex);
     if (parsedBoolean instanceof Response) return parsedBoolean;
     platingEnabled = parsedBoolean;
-    if (scopeMaterialCode || additionalWeightValue || decorationMasterId || decorationModelName) {
+    if (!scopeMaterialCode) {
+      return jsonError(`rows[${rowIndex}].scope_material_code is required`, 400);
+    }
+    if (!colorCode) {
+      return jsonError(`rows[${rowIndex}].color_code is required`, 400);
+    }
+    if (additionalWeightValue || additionalWeightMinValue || additionalWeightMaxValue || decorationMasterId || decorationModelName) {
       return jsonError(`rows[${rowIndex}] has invalid COLOR_PLATING shape`, 400);
     }
     if (baseLaborCost !== 0) {
@@ -343,23 +508,26 @@ const validateAndNormalizeRuleRow = (
     if (!decorationMasterId && !decorationModelName) {
       return jsonError(`rows[${rowIndex}] requires decoration_master_id or decoration_model_name`, 400);
     }
-    if (scopeMaterialCode || additionalWeightValue || input.plating_enabled != null || colorCode) {
+    if (scopeMaterialCode || additionalWeightValue || additionalWeightMinValue || additionalWeightMaxValue || input.plating_enabled != null || colorCode) {
       return jsonError(`rows[${rowIndex}] has invalid DECOR shape`, 400);
     }
     if (baseLaborCost < 0) return jsonError(`rows[${rowIndex}].base_labor_cost_krw is invalid`, 400);
   }
 
   if (categoryKey === "OTHER") {
-    if (scopeMaterialCode || additionalWeightValue || input.plating_enabled != null || colorCode || decorationMasterId || decorationModelName) {
+    if (scopeMaterialCode || additionalWeightValue || additionalWeightMinValue || additionalWeightMaxValue || input.plating_enabled != null || colorCode || decorationMasterId || decorationModelName) {
       return jsonError(`rows[${rowIndex}] has invalid OTHER shape`, 400);
     }
     if (baseLaborCost !== 0) return jsonError(`rows[${rowIndex}].base_labor_cost_krw must be 0 for OTHER`, 400);
+    if (!note) return jsonError(`rows[${rowIndex}].note is required for OTHER`, 400);
   }
 
   return {
     category_key: categoryKey,
-    scope_material_code: categoryKey === "SIZE" ? scopeMaterialCode : null,
-    additional_weight_g: categoryKey === "SIZE" ? additionalWeightValue : null,
+    scope_material_code: categoryKey === "SIZE" || categoryKey === "COLOR_PLATING" ? scopeMaterialCode : null,
+    additional_weight_g: categoryKey === "SIZE" ? (additionalWeightValue ?? additionalWeightMinValue ?? additionalWeightMaxValue) : null,
+    additional_weight_min_g: categoryKey === "SIZE" ? (additionalWeightMinValue ?? additionalWeightValue) : null,
+    additional_weight_max_g: categoryKey === "SIZE" ? (additionalWeightMaxValue ?? additionalWeightValue) : null,
     plating_enabled: categoryKey === "COLOR_PLATING" ? platingEnabled : null,
     color_code: categoryKey === "COLOR_PLATING" ? colorCode : null,
     decoration_master_id: categoryKey === "DECOR" ? decorationMasterId : null,
@@ -406,10 +574,12 @@ export async function GET(request: Request) {
     .eq("external_product_no", externalProductNo)
     .order("category_key", { ascending: true })
     .order("scope_material_code", { ascending: true })
-    .order("additional_weight_g", { ascending: true })
+    .order("additional_weight_min_g", { ascending: true })
+    .order("additional_weight_max_g", { ascending: true })
     .order("plating_enabled", { ascending: true })
     .order("color_code", { ascending: true })
     .order("decoration_model_name", { ascending: true })
+    .order("note", { ascending: true })
     .order("updated_at", { ascending: false });
 
   if (masterItemId) query = query.eq("master_item_id", masterItemId);
@@ -461,6 +631,15 @@ export async function POST(request: Request) {
       .select(RULE_SELECT)
       .maybeSingle();
     if (insertRes.error) return jsonError(insertRes.error.message ?? "옵션 공임 규칙 생성 실패", 400);
+
+    const baselineError = await ensureSizeZeroBaselineForRuleSave(sb, serverManaged, {
+          channelId,
+          masterItemId,
+          externalProductNo: resolvedExternalProductNo,
+          actor,
+        });
+        if (baselineError) return baselineError;
+
     return NextResponse.json({ data: insertRes.data }, { headers: { "Cache-Control": "no-store" } });
   }
 
@@ -499,7 +678,7 @@ export async function POST(request: Request) {
     return jsonError(error instanceof Error ? error.message : "활성 별칭 매핑 조회 실패", 500);
   }
 
-  const dedup = new Map<string, Record<string, unknown>>();
+  const dedup = new Map<string, RuleDedupRow>();
   for (let i = 0; i < rowsRaw.length; i += 1) {
     const row = parseJsonObject(rowsRaw[i]);
     if (!row) return jsonError(`rows[${i}] must be object`, 400);
@@ -513,24 +692,15 @@ export async function POST(request: Request) {
       channel_id: channelId,
       master_item_id: masterItemId,
       external_product_no: resolvedExternalProductNo,
-      ...serverManaged,
+      ...(serverManaged as RuleDedupRow),
       updated_by: actor,
       created_by: actor,
-    } as Record<string, unknown>;
+    } satisfies RuleDedupRow;
 
-    dedup.set(
-      buildRuleDedupKey(insertRow as {
-        category_key: CategoryKey;
-        scope_material_code: string | null;
-        additional_weight_g: string | null;
-        plating_enabled: boolean | null;
-        color_code: string | null;
-        decoration_master_id: string | null;
-        decoration_model_name: string | null;
-      }),
-      insertRow,
-    );
+    dedup.set(buildRuleDedupKey(insertRow), insertRow);
   }
+
+  ensureSizeZeroBaselinesInDedup(dedup);
 
   const deleteRes = await sb
     .from("channel_option_labor_rule_v1")
@@ -596,6 +766,15 @@ export async function PUT(request: Request) {
     .select(RULE_SELECT)
     .maybeSingle();
   if (updateRes.error) return jsonError(updateRes.error.message ?? "옵션 공임 규칙 수정 실패", 400);
+
+  const baselineError = await ensureSizeZeroBaselineForRuleSave(sb, serverManaged, {
+      channelId: String(merged.channel_id ?? "").trim(),
+      masterItemId: String(merged.master_item_id ?? "").trim(),
+      externalProductNo: resolvedExternalProductNo,
+      actor,
+    });
+    if (baselineError) return baselineError;
+
   return NextResponse.json({ data: updateRes.data }, { headers: { "Cache-Control": "no-store" } });
 }
 

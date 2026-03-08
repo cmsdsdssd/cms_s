@@ -1,0 +1,4 @@
+[main 70be047] price sync history retention
+ 3 files changed, 539 insertions(+), 12 deletions(-)
+ create mode 100644 docs/runbooks/auto-price-v2-history-retention.md
+ create mode 100644 supabase/migrations/20260307014100_cms_1106_price_sync_change_event_retention_addonly.sql

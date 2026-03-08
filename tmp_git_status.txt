@@ -1,0 +1,70 @@
+## main...origin/main
+A  docs/runbooks/auto-price-v2-history-retention.md
+A  supabase/migrations/20260307000500_cms_1124_auto_sync_default_rate_to_2pct_addonly.sql
+A  supabase/migrations/20260307014000_cms_1125_price_sync_auto_state_v1_addonly.sql
+A  supabase/migrations/20260307014100_cms_1106_price_sync_change_event_retention_addonly.sql
+ m tmp_repos/delta
+ m tmp_repos/invoiceninja
+ m tmp_repos/medusa
+ m tmp_repos/next.js
+ m tmp_repos/saleor-dashboard
+M  web/src/app/(app)/settings/shopping/auto-price/page.tsx
+M  web/src/app/api/price-sync-runs-v2/[run_id]/execute/route.ts
+M  web/src/app/api/price-sync-runs-v2/route.ts
+ M web/src/lib/shop/option-labor-rules.js
+ M web/src/lib/shop/option-labor-rules.ts
+A  web/src/lib/shop/price-sync-policy.js
+A  web/src/lib/shop/price-sync-pressure-policy.js
+A  web/tests/price-sync-policy.test.mjs
+A  web/tests/price-sync-pressure-policy.test.mjs
+?? .sisyphus/plans/2026-03-07-option-labor-rule-manager.md
+?? docs/plans/2026-03-06-auto-sync-policy-and-always-sync-plan.md
+?? docs/plans/2026-03-07-price-sync-pressure-policy-design.md
+?? next-dev-3002.log
+?? next-start-3001.log
+?? next-start-3004.log
+?? next-start-3010.log
+?? next-start.log
+?? supabase/migrations/20260306190000_cms_1122_pricing_policy_auto_sync_settings_addonly.sql
+?? test3.js
+?? test_patch_probe.ts
+?? test_patch_probe.txt
+?? test_patch_probe10.jj
+?? test_patch_probe2.txt
+?? test_patch_probe3.ts
+?? test_patch_probe4.js
+?? test_patch_probe5.md
+?? test_patch_probe6.txt
+?? test_patch_probe7.foo
+?? test_patch_probe8.aa
+?? test_patch_probe9.ab
+?? tmp_auto_price_ui.log
+?? tmp_auto_price_ui_bypass_build.log
+?? tmp_auto_price_ui_start.log
+?? tmp_auto_price_ui_start_3003.log
+?? tmp_auto_price_ui_start_3004.log
+?? tmp_dedupe_preview_type.py
+?? tmp_direct.txt
+?? tmp_fix_auto_price_type.py
+?? tmp_git_ahead_behind.txt
+?? tmp_git_branch.txt
+?? tmp_git_diff.txt
+?? tmp_git_diff_staged.txt
+?? tmp_git_log.txt
+?? tmp_git_probe.cmd
+?? tmp_git_status.txt
+?? tmp_git_upstream.txt
+?? tmp_pop_stash.cmd
+?? tmp_ps_test.txt
+?? tmp_stage_auto_price_commit.cmd
+?? tmp_stash_pop.txt
+?? tmp_stash_verify.txt
+?? tmp_test_file.txt
+?? tmp_verify_auto_price.cmd
+?? tmp_verify_build.txt
+?? tmp_verify_staged_auto_price.cmd
+?? tmp_verify_staged_build.txt
+?? tmp_verify_staged_tests.txt
+?? tmp_verify_tests.txt
+?? web/src/lib/shop/test.js
+?? web/src/lib/shop/test2.js

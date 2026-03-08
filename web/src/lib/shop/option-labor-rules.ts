@@ -10,6 +10,8 @@ export type OptionLaborRuleRow = {
   category_key: OptionLaborRuleCategory;
   scope_material_code: string | null;
   additional_weight_g: number | null;
+  additional_weight_min_g?: number | null;
+  additional_weight_max_g?: number | null;
   plating_enabled: boolean | null;
   color_code: string | null;
   decoration_master_id: string | null;
@@ -17,6 +19,7 @@ export type OptionLaborRuleRow = {
   base_labor_cost_krw: number;
   additive_delta_krw: number;
   is_active: boolean;
+  note?: string | null;
 };
 
 export type OptionLaborRuleBuckets = {
@@ -42,6 +45,7 @@ export const OPTION_LABOR_RULE_CATEGORIES = impl.OPTION_LABOR_RULE_CATEGORIES as
 export const normalizeOptionLaborRuleCategory = impl.normalizeOptionLaborRuleCategory as (value: unknown) => OptionLaborRuleCategory | null;
 export const normalizeMaterialScopeCode = impl.normalizeMaterialScopeCode as (value: unknown) => string | null;
 export const normalizeOptionLaborColorCode = impl.normalizeOptionLaborColorCode as (value: unknown) => string | null;
+export const normalizeDecorationCode = impl.normalizeDecorationCode as (value: unknown) => string | null;
 export const normalizeKrwInteger = impl.normalizeKrwInteger as (value: unknown, fallback?: number) => number;
 export const normalizeAdditionalWeightValue = impl.normalizeAdditionalWeightValue as (value: unknown) => string | null;
 

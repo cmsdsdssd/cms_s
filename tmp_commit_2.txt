@@ -1,0 +1,5 @@
+[main fac01b2] pressure policy
+ 3 files changed, 476 insertions(+)
+ create mode 100644 supabase/migrations/20260307014000_cms_1125_price_sync_auto_state_v1_addonly.sql
+ create mode 100644 web/src/lib/shop/price-sync-pressure-policy.js
+ create mode 100644 web/tests/price-sync-pressure-policy.test.mjs
