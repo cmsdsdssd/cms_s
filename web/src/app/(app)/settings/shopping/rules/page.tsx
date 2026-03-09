@@ -508,6 +508,15 @@ export default function ShoppingRulesPage() {
     ]);
   };
 
+  const refreshPricingPreview = async (): Promise<void> => {
+    if (!effectiveChannelId || !selectedContext?.master_item_id) return;
+    await shopApiSend('/api/pricing/recompute', 'POST', {
+      channel_id: effectiveChannelId,
+      master_item_ids: [selectedContext.master_item_id],
+    });
+  };
+
+
   const saveRuleMutation = useMutation({
     mutationFn: ({ payload }: SaveRuleInput) =>
       shopApiSend('/api/option-labor-rules', payload.rule_id ? 'PUT' : 'POST', payload),
@@ -575,6 +584,7 @@ export default function ShoppingRulesPage() {
         onSuccess: async () => {
           toast.success(`${label} 저장됨`);
           afterSuccess?.();
+          await refreshPricingPreview();
           await refreshRules();
         },
         onError: (error) => {
@@ -590,6 +600,7 @@ export default function ShoppingRulesPage() {
       {
         onSuccess: async () => {
           toast.success(`${label} 삭제됨`);
+          await refreshPricingPreview();
           await refreshRules();
         },
         onError: (error) => {
@@ -730,6 +741,7 @@ export default function ShoppingRulesPage() {
     bulkAdjustMutation.mutate(undefined, {
       onSuccess: async (result) => {
         toast.success(`일괄 조정이 적용되었습니다. (${result.updated}건)`);
+        await refreshPricingPreview();
         await refreshRules();
       },
       onError: (error) => {
@@ -1240,17 +1252,23 @@ export default function ShoppingRulesPage() {
               </Select>
             </div>
             <div className="space-y-2">
- <div className='mb-1 text-xs text-[var(--muted)]'>작업</div>
+<div className='mb-1 text-xs text-[var(--muted)]'>작업</div>
               <Button onClick={handleSaveSize} disabled={Boolean(disabledReason) || !sizeDraft.materialCode || Number(sizeDraft.weightMinG) < 0.01 || Number(sizeDraft.weightMaxG) < 0.01 || Number(sizeDraft.weightMinG) > Number(sizeDraft.weightMaxG) || isRuleMutating}>
- {isSizeEditing ? '중량 규칙 저장' : '중량 규칙 추가'}
+ {isSizeEditing ? '중량 규칙 수정 저장' : '중량 규칙 추가'}
               </Button>
               {isSizeEditing ? (
                 <Button variant="ghost" onClick={resetSizeDraft}>
- 편집 취소
+편집 취소
                 </Button>
               ) : null}
             </div>
           </div>
+
+          {isSizeEditing ? (
+            <div className="rounded border border-sky-200 bg-sky-50 px-3 py-2 text-xs text-sky-900">
+              현재 편집 중: 소재 {sizeDraft.materialCode || '-'} / {sizeDraft.weightMinG}g ~ {sizeDraft.weightMaxG}g / {formatWon(parseAmount(sizeDraft.additiveKrw))}
+            </div>
+          ) : null}
 
           <div className="max-h-[260px] overflow-auto rounded border border-[var(--hairline)]">
             <table className="w-full text-sm">
@@ -1263,8 +1281,10 @@ export default function ShoppingRulesPage() {
                 </tr>
               </thead>
               <tbody>
-                {sizeRules.map((rule) => (
-                  <tr key={rule.rule_id} className="border-t border-[var(--hairline)]">
+                {sizeRules.map((rule) => {
+                  const isEditingRow = sizeDraft.ruleId === rule.rule_id;
+                  return (
+                  <tr key={rule.rule_id} className={"border-t border-[var(--hairline)] " + (isEditingRow ? 'bg-sky-50/80' : '')}>
                     <td className="px-3 py-2">{rule.scope_material_code ?? '-'}</td>
                     <td className={'px-3 py-2'}>{toNumber(rule.additional_weight_min_g ?? rule.additional_weight_g).toFixed(2) + 'g ~ ' + toNumber(rule.additional_weight_max_g ?? rule.additional_weight_g).toFixed(2) + 'g'}</td>
                     <td className="px-3 py-2">{formatWon(rule.additive_delta_krw)}</td>
@@ -1282,7 +1302,7 @@ export default function ShoppingRulesPage() {
                             });
                           }}
                         >
- 편집
+{isEditingRow ? '편집 중' : '편집'}
                         </Button>
                         <Button
                           variant="ghost"
@@ -1294,7 +1314,7 @@ export default function ShoppingRulesPage() {
                       </div>
                     </td>
                   </tr>
-                ))}
+                );})}
                 {sizeRules.length === 0 ? (
                   <tr>
                     <td colSpan={4} className="px-3 py-8 text-center text-[var(--muted)]">

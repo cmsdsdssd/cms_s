@@ -98,6 +98,14 @@ type ActiveMappingRow = {
   current_product_sync_profile: string | null;
 };
 
+type OptionCurrentStateRow = {
+  external_product_no: string | null;
+  external_variant_code: string | null;
+  final_target_additional_amount_krw: number | null;
+  last_pushed_additional_amount_krw: number | null;
+  updated_at?: string | null;
+};
+
 type PreferredMasterTarget = {
   productNo: string;
   target: number;
@@ -114,6 +122,9 @@ type IntentDecisionContext = {
   floor_price_krw: number;
   final_desired_price_krw: number;
   floor_applied: boolean;
+  option_additional_target_krw?: number | null;
+  option_additional_current_krw?: number | null;
+  option_additional_out_of_sync?: boolean;
 };
 
 const isActiveDuringWindow = ({
@@ -596,8 +607,8 @@ export async function POST(request: Request) {
   const snapshotV2Probe = await sb.from("pricing_snapshot").select("final_target_price_v2_krw").limit(1);
   const hasV2TargetColumns = !snapshotV2Probe.error;
   const snapshotSelect = hasV2TargetColumns
-    ? "channel_id, master_item_id, channel_product_id, compute_request_id, final_target_price_krw, final_target_price_v2_krw, pricing_algo_version, base_total_pre_margin_krw, total_after_margin_krw"
-    : "channel_id, master_item_id, channel_product_id, compute_request_id, final_target_price_krw, base_total_pre_margin_krw, total_after_margin_krw";
+    ? "channel_id, master_item_id, channel_product_id, compute_request_id, final_target_price_krw, final_target_price_v2_krw, pricing_algo_version, base_total_pre_margin_krw, total_after_margin_krw, delta_total_krw"
+    : "channel_id, master_item_id, channel_product_id, compute_request_id, final_target_price_krw, base_total_pre_margin_krw, total_after_margin_krw, delta_total_krw";
 
   const snapshotRows: Array<{
     channel_id: string | null;
@@ -609,6 +620,7 @@ export async function POST(request: Request) {
     pricing_algo_version?: string | null;
     base_total_pre_margin_krw: number | null;
     total_after_margin_krw: number | null;
+    delta_total_krw: number | null;
   }> = [];
 
   for (const computeChunk of chunkArray(computeIds, Math.max(1, Math.min(50, IN_QUERY_CHUNK_SIZE)))) {
@@ -686,6 +698,38 @@ export async function POST(request: Request) {
     if (!key || currentByChannelProduct.has(key)) continue;
     const current = Number(row.current_price_krw ?? Number.NaN);
     if (Number.isFinite(current)) currentByChannelProduct.set(key, Math.round(current));
+  }
+
+  const snapshotProductNos = Array.from(new Set(
+    activeMapRows
+      .map((row) => String(row.external_product_no ?? "").trim())
+      .filter(Boolean),
+  ));
+  const optionCurrentStateRows: OptionCurrentStateRow[] = [];
+  for (const productChunk of chunkArray(snapshotProductNos, IN_QUERY_CHUNK_SIZE)) {
+    if (productChunk.length === 0) continue;
+    const optionStateRes = await sb
+      .from("channel_option_current_state_v1")
+      .select("external_product_no, external_variant_code, final_target_additional_amount_krw, last_pushed_additional_amount_krw, updated_at")
+      .eq("channel_id", channelId)
+      .in("external_product_no", productChunk)
+      .order("updated_at", { ascending: false });
+    if (optionStateRes.error) return jsonError(optionStateRes.error.message ?? "옵션 현재상태 조회 실패", 500);
+    optionCurrentStateRows.push(...((optionStateRes.data ?? []) as OptionCurrentStateRow[]));
+  }
+  const optionCurrentStateByProductVariant = new Map<string, { finalTargetAdditionalKrw: number | null; lastPushedAdditionalKrw: number | null }>();
+  for (const row of optionCurrentStateRows) {
+    const productNo = String(row.external_product_no ?? "").trim();
+    const variantCode = String(row.external_variant_code ?? "").trim();
+    if (!productNo || !variantCode) continue;
+    const key = `${productNo}::${variantCode}`;
+    if (optionCurrentStateByProductVariant.has(key)) continue;
+    const finalTargetAdditional = Number(row.final_target_additional_amount_krw ?? Number.NaN);
+    const lastPushedAdditional = Number(row.last_pushed_additional_amount_krw ?? Number.NaN);
+    optionCurrentStateByProductVariant.set(key, {
+      finalTargetAdditionalKrw: Number.isFinite(finalTargetAdditional) ? Math.round(finalTargetAdditional) : null,
+      lastPushedAdditionalKrw: Number.isFinite(lastPushedAdditional) ? Math.round(lastPushedAdditional) : null,
+    });
   }
 
   const pressureStateRows: Array<{
@@ -809,6 +853,18 @@ export async function POST(request: Request) {
       && Number(forcedBaseTarget) > Number(baseSnapshotTarget);
 
     const currentPrice = currentByChannelProduct.get(channelProductId);
+    const snapshotOptionAdditionalRaw = Number(row.delta_total_krw ?? Number.NaN);
+    const snapshotOptionAdditional = Number.isFinite(snapshotOptionAdditionalRaw)
+      ? Math.round(snapshotOptionAdditionalRaw)
+      : null;
+    const currentOptionState = variantCode.length > 0
+      ? optionCurrentStateByProductVariant.get(`${mapping.external_product_no}::${variantCode}`) ?? null
+      : null;
+    const lastKnownOptionAdditional = currentOptionState?.lastPushedAdditionalKrw ?? currentOptionState?.finalTargetAdditionalKrw ?? null;
+    const optionAdditionalOutOfSync = variantCode.length > 0
+      && snapshotOptionAdditional !== null
+      && lastKnownOptionAdditional !== null
+      && snapshotOptionAdditional !== lastKnownOptionAdditional;
     const rowCurrentRounded = Number.isFinite(Number(currentPrice ?? Number.NaN))
       ? Math.round(Number(currentPrice))
       : null;
@@ -863,6 +919,9 @@ export async function POST(request: Request) {
       floor_price_krw: floorPriceKrw,
       final_desired_price_krw: desired,
       floor_applied: floorApplied,
+      option_additional_target_krw: snapshotOptionAdditional,
+      option_additional_current_krw: lastKnownOptionAdditional,
+      option_additional_out_of_sync: optionAdditionalOutOfSync,
     };
 
     if (triggerType === "AUTO" && Number.isFinite(Number(currentPrice ?? Number.NaN))) {
@@ -892,7 +951,7 @@ export async function POST(request: Request) {
         externalVariantCode: variantCode,
       });
 
-      if (!forceFullSync && !isForcedBaseUplift) {
+      if (!forceFullSync && !isForcedBaseUplift && !optionAdditionalOutOfSync) {
         if (pressureDecision.pressureDecayApplied) pressureDecayCount += 1;
         if (pressureDecision.cooldownBlocked) cooldownBlockCount += 1;
         if (pressureDecision.pressureReleaseTriggered) pressureDownsyncReleaseCount += 1;
@@ -900,14 +959,14 @@ export async function POST(request: Request) {
         if (pressureDecision.stalenessReleaseTriggered) stalenessReleaseCount += 1;
       }
 
-      if (!forceFullSync && !isForcedBaseUplift && desired <= currentRounded && !pressureDecision.shouldCreateDownsyncIntent) {
+      if (!forceFullSync && !isForcedBaseUplift && !optionAdditionalOutOfSync && desired <= currentRounded && !pressureDecision.shouldCreateDownsyncIntent) {
         downsyncSuppressedCount += 1;
         continue;
       }
 
       if (!forceFullSync) {
         thresholdEvaluatedCount += 1;
-        if (!isForcedBaseUplift && !pressureDecision.shouldCreateDownsyncIntent && !thresholdDecision.passesThreshold) {
+        if (!isForcedBaseUplift && !optionAdditionalOutOfSync && !pressureDecision.shouldCreateDownsyncIntent && !thresholdDecision.passesThreshold) {
           thresholdFilteredCount += 1;
           continue;
         }

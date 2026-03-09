@@ -190,10 +190,9 @@ export const resolveCentralOptionMapping = ({ category, masterMaterialCode, mast
     const allowedAmounts = [...new Set(matched.map((rule) => toRoundedKrw(rule.delta_krw)))].sort((left, right) => left - right);
     const persistedAmount = toFiniteNumber(persisted?.resolved_delta_krw);
     const selectedAmount = persistedAmount == null ? null : Math.round(persistedAmount);
-    if (selectedAmount != null && !allowedAmounts.includes(selectedAmount)) {
-      return markLegacy(base, '현재 선택한 추가금액이 중앙 허용 범위 밖입니다.');
-    }
-    const resolvedAmount = selectedAmount ?? (allowedAmounts[0] ?? 0);
+    const resolvedAmount = selectedAmount != null && allowedAmounts.includes(selectedAmount)
+      ? selectedAmount
+      : (allowedAmounts[0] ?? 0);
     const sourceRuleEntryIds = matched
       .filter((rule) => toRoundedKrw(rule.delta_krw) === resolvedAmount)
       .map((rule) => rule.rule_id)

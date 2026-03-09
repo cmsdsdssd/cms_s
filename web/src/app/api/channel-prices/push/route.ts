@@ -981,6 +981,38 @@ export async function POST(request: Request) {
   let successCount = 0;
   let failedCount = 0;
   let skippedCount = 0;
+  const variantStateRows = [] as Array<{
+    channel_id: string;
+    external_product_no: string;
+    external_variant_code: string;
+    final_target_additional_amount_krw: number;
+    last_pushed_additional_amount_krw: number | null;
+    last_push_status: "SUCCEEDED" | "FAILED" | "VERIFY_FAILED";
+    last_push_http_status: number | null;
+    last_push_error: string | null;
+    last_pushed_at: string | null;
+    last_verified_at: string | null;
+  }>;
+
+  const recordVariantState = (args: {
+    channel_id: string;
+    external_product_no: string;
+    external_variant_code: string;
+    final_target_additional_amount_krw: number;
+    last_pushed_additional_amount_krw: number | null;
+    last_push_status: "SUCCEEDED" | "FAILED" | "VERIFY_FAILED";
+    last_push_http_status: number | null;
+    last_push_error: string | null;
+    last_pushed_at?: string | null;
+    last_verified_at?: string | null;
+  }) => {
+    if (!args.external_variant_code) return;
+    variantStateRows.push({
+      ...args,
+      last_pushed_at: args.last_pushed_at ?? null,
+      last_verified_at: args.last_verified_at ?? null,
+    });
+  };
 
   const formatOptionTextWithDelta = (baseText: string, delta: number): string => {
     const stripped = String(baseText ?? "").replace(/\s*\([+-][\d,]+원\)\s*$/u, "").trim();
@@ -1137,7 +1169,7 @@ export async function POST(request: Request) {
       failedCount += 1;
       itemRows.push({
         job_id: jobId,
-        channel_id: c.channel_id,
+        channel_id: String(c.channel_id ?? "").trim(),
         channel_product_id: c.channel_product_id,
         master_item_id: c.master_item_id,
         external_product_no: c.external_product_no,
@@ -1158,7 +1190,7 @@ export async function POST(request: Request) {
       skippedCount += 1;
       itemRows.push({
         job_id: jobId,
-        channel_id: c.channel_id,
+        channel_id: String(c.channel_id ?? "").trim(),
         channel_product_id: c.channel_product_id,
         master_item_id: c.master_item_id,
         external_product_no: c.external_product_no,
@@ -1279,7 +1311,7 @@ export async function POST(request: Request) {
         }
         itemRows.push({
           job_id: jobId,
-          channel_id: c.channel_id,
+          channel_id: String(c.channel_id ?? "").trim(),
           channel_product_id: c.channel_product_id,
           master_item_id: c.master_item_id,
           external_product_no: c.external_product_no,
@@ -1299,6 +1331,20 @@ export async function POST(request: Request) {
             verify_pending_accepted: verifyPendingAccepted,
           },
         });
+        if (variantCode && Number.isFinite(Number(expectedAdditionalAmount ?? Number.NaN))) {
+          recordVariantState({
+            channel_id: String(c.channel_id ?? "").trim(),
+            external_product_no: externalProductNo,
+            external_variant_code: variantCode,
+            final_target_additional_amount_krw: Math.round(Number(expectedAdditionalAmount)),
+            last_pushed_additional_amount_krw: Math.round(Number(expectedAdditionalAmount)),
+            last_push_status: "SUCCEEDED",
+            last_push_http_status: pushRes.status,
+            last_push_error: null,
+            last_pushed_at: new Date().toISOString(),
+            last_verified_at: verify.ok ? new Date().toISOString() : null,
+          });
+        }
       } else {
         let retryRecorded = false;
         if (variantCode) {
@@ -1326,7 +1372,7 @@ export async function POST(request: Request) {
                 successCount += 1;
                 itemRows.push({
                   job_id: jobId,
-                  channel_id: c.channel_id,
+                  channel_id: String(c.channel_id ?? "").trim(),
                   channel_product_id: c.channel_product_id,
                   master_item_id: c.master_item_id,
                   external_product_no: c.external_product_no,
@@ -1344,6 +1390,20 @@ export async function POST(request: Request) {
                     retry: { push: retryPush.raw, verify: retryVerify.raw, retry_reason: "VERIFY_MISMATCH_RETRY_WITH_FRESH_BASE" },
                   },
                 });
+                if (Number.isFinite(Number(expectedAdditionalAmount ?? Number.NaN))) {
+                  recordVariantState({
+                    channel_id: String(c.channel_id ?? "").trim(),
+                    external_product_no: externalProductNo,
+                    external_variant_code: variantCode,
+                    final_target_additional_amount_krw: Math.round(Number(expectedAdditionalAmount)),
+                    last_pushed_additional_amount_krw: Math.round(Number(expectedAdditionalAmount)),
+                    last_push_status: "SUCCEEDED",
+                    last_push_http_status: retryPush.status,
+                    last_push_error: null,
+                    last_pushed_at: new Date().toISOString(),
+                    last_verified_at: new Date().toISOString(),
+                  });
+                }
                 retryRecorded = true;
               }
             }
@@ -1357,7 +1417,7 @@ export async function POST(request: Request) {
               successCount += 1;
               itemRows.push({
                 job_id: jobId,
-                channel_id: c.channel_id,
+                channel_id: String(c.channel_id ?? "").trim(),
                 channel_product_id: c.channel_product_id,
                 master_item_id: c.master_item_id,
                 external_product_no: c.external_product_no,
@@ -1395,7 +1455,7 @@ export async function POST(request: Request) {
         if (!variantCode && masterKey) blockedMastersByBaseFailure.add(masterKey);
         itemRows.push({
           job_id: jobId,
-          channel_id: c.channel_id,
+          channel_id: String(c.channel_id ?? "").trim(),
           channel_product_id: c.channel_product_id,
           master_item_id: c.master_item_id,
           external_product_no: c.external_product_no,
@@ -1409,6 +1469,20 @@ export async function POST(request: Request) {
           error_message: `${verify.error ?? "push succeeded but verify mismatch"}${pushRes.attempt_key ? ` (attempt=${pushRes.attempt_key})` : ""}`,
           raw_response_json: { push: pushRes.raw, verify: verify.raw, mismatch_reason: "VERIFY_MISMATCH_AFTER_WRITE_OK" },
         });
+        if (variantCode && Number.isFinite(Number(expectedAdditionalAmount ?? Number.NaN))) {
+          recordVariantState({
+            channel_id: String(c.channel_id ?? "").trim(),
+            external_product_no: externalProductNo,
+            external_variant_code: variantCode,
+            final_target_additional_amount_krw: Math.round(Number(expectedAdditionalAmount)),
+            last_pushed_additional_amount_krw: null,
+            last_push_status: "VERIFY_FAILED",
+            last_push_http_status: Number.isFinite(Number(verify.status || pushRes.status)) ? Number(verify.status || pushRes.status) : null,
+            last_push_error: `${verify.error ?? "push succeeded but verify mismatch"}${pushRes.attempt_key ? ` (attempt=${pushRes.attempt_key})` : ""}`,
+            last_pushed_at: new Date().toISOString(),
+            last_verified_at: null,
+          });
+        }
       }
     } else {
       const pushErrorMessage = String(pushRes.error ?? "");
@@ -1418,7 +1492,7 @@ export async function POST(request: Request) {
       if (!variantCode && masterKey) blockedMastersByBaseFailure.add(masterKey);
       itemRows.push({
         job_id: jobId,
-        channel_id: c.channel_id,
+        channel_id: String(c.channel_id ?? "").trim(),
         channel_product_id: c.channel_product_id,
         master_item_id: c.master_item_id,
         external_product_no: c.external_product_no,
@@ -1436,6 +1510,22 @@ export async function POST(request: Request) {
           ? { push: pushRes.raw, external_product_no: externalProductNo, external_variant_code: variantCode || null }
           : pushRes.raw,
       });
+      if (variantCode && Number.isFinite(Number(expectedAdditionalAmount ?? Number.NaN))) {
+        recordVariantState({
+          channel_id: String(c.channel_id ?? "").trim(),
+          external_product_no: externalProductNo,
+          external_variant_code: variantCode,
+          final_target_additional_amount_krw: Math.round(Number(expectedAdditionalAmount)),
+          last_pushed_additional_amount_krw: null,
+          last_push_status: "FAILED",
+          last_push_http_status: pushRes.status,
+          last_push_error: noApiFound
+            ? "카페24 상품 엔드포인트를 찾지 못했습니다(상품번호/코드 매핑 확인 필요)"
+            : (pushRes.error ?? "카페24 push 실패"),
+          last_pushed_at: new Date().toISOString(),
+          last_verified_at: null,
+        });
+      }
     }
   }
 
@@ -1639,6 +1729,27 @@ export async function POST(request: Request) {
       if (chunk.length === 0) continue;
       const itemRes = await sb.from("price_sync_job_item").insert(chunk);
       if (itemRes.error) return jsonError(itemRes.error.message ?? "동기화 작업 아이템 저장 실패", 500);
+    }
+  }
+
+  if (variantStateRows.length > 0) {
+    for (const row of variantStateRows) {
+      const stateUpdateRes = await sb
+        .from("channel_option_current_state_v1")
+        .update({
+          final_target_additional_amount_krw: row.final_target_additional_amount_krw,
+          last_pushed_additional_amount_krw: row.last_pushed_additional_amount_krw,
+          last_push_status: row.last_push_status,
+          last_push_http_status: row.last_push_http_status,
+          last_push_error: row.last_push_error,
+          last_pushed_at: row.last_pushed_at,
+          last_verified_at: row.last_verified_at,
+          updated_by: "AUTO_SYNC_PUSH",
+        })
+        .eq("channel_id", row.channel_id)
+        .eq("external_product_no", row.external_product_no)
+        .eq("external_variant_code", row.external_variant_code);
+      if (stateUpdateRes.error) return jsonError(stateUpdateRes.error.message ?? "옵션 현재상태 반영결과 저장 실패", 500);
     }
   }
 

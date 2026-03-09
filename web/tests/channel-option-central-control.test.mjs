@@ -80,10 +80,9 @@ test('color_price_by_material_and_color defaults to the first rule-defined amoun
   assert.deepEqual(collectAllowedColors(rules, '18'), ['WG', 'YG']);
 });
 
-test('color_price_by_material_and_color marks legacy when persisted amount is outside the rule-defined set', () => {
+test('color_price_by_material_and_color refreshes stale persisted amount to the active rule-defined set', () => {
   const rules = [
-    { rule_id: 'color-a', rule_type: 'COLOR', material_code: '18', color_code: 'YG', delta_krw: 15000, is_active: true },
-    { rule_id: 'color-b', rule_type: 'COLOR', material_code: '18', color_code: 'YG', delta_krw: 18000, is_active: true },
+    { rule_id: 'color-a', rule_type: 'COLOR', material_code: '18', color_code: 'YG', delta_krw: 1100, is_active: true },
   ];
 
   const result = resolveCentralOptionMapping({
@@ -92,13 +91,13 @@ test('color_price_by_material_and_color marks legacy when persisted amount is ou
     rules,
     persisted: {
       color_code_selected: 'YG',
-      resolved_delta_krw: 12000,
+      resolved_delta_krw: 1000,
     },
   });
 
-  assert.equal(result.resolved_delta_krw, 12000);
-  assert.equal(result.legacy_status, 'LEGACY_OUT_OF_RANGE');
-  assert.ok(result.warnings.some((warning) => warning.includes('추가금액')));
+  assert.equal(result.resolved_delta_krw, 1100);
+  assert.equal(result.legacy_status, 'VALID');
+  assert.deepEqual(result.source_rule_entry_ids, ['color-a']);
 });
 
 test('decor_additive_price_with_snapshot_metadata returns snapshot total labor plus additive delta', () => {
