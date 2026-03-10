@@ -610,10 +610,12 @@ export default function ShoppingMappingsPage() {
     ? withLegacyChoice(loadedOptionAllowlist.decors, focusedDraft.option_decoration_code)
     : [];
   const focusedSizeChoices = focusedDraft
-    ? withLegacyChoice(
-        loadedOptionAllowlist.sizes_by_material[focusedDraft.option_material_code ?? ""] ?? [],
-        focusedDraft.option_size_value_text,
-      )
+    ? (() => {
+        const baseChoices = loadedOptionAllowlist.sizes_by_material[focusedDraft.option_material_code ?? ""] ?? [];
+        return baseChoices.length > 0
+          ? withLegacyChoice(baseChoices, focusedDraft.option_size_value_text)
+          : [];
+      })()
     : [];
   const variantAxisCount = useMemo(
     () => loadedVariants.reduce((max, variant) => Math.max(max, variant.options?.length ?? 0), 0),
@@ -1074,10 +1076,10 @@ export default function ShoppingMappingsPage() {
                 const materialChoices = withLegacyChoice(loadedOptionAllowlist.materials, draft.option_material_code);
                 const colorChoices = withLegacyChoice(loadedOptionAllowlist.colors, draft.option_color_code);
                 const decorChoices = withLegacyChoice(loadedOptionAllowlist.decors, draft.option_decoration_code);
-                const sizeChoices = withLegacyChoice(
-                  loadedOptionAllowlist.sizes_by_material[draft.option_material_code ?? ""] ?? [],
-                  draft.option_size_value_text,
-                );
+                const sizeChoicesBase = loadedOptionAllowlist.sizes_by_material[draft.option_material_code ?? ""] ?? [];
+                const sizeChoices = sizeChoicesBase.length > 0
+                  ? withLegacyChoice(sizeChoicesBase, draft.option_size_value_text)
+                  : [];
 
                 return (
                   <tr key={variantCode} className={`border-t border-[var(--hairline)] align-top ${focusedVariantCode === variantCode ? "bg-[var(--panel)]" : ""}`}>

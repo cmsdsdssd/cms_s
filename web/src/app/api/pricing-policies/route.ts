@@ -6,7 +6,7 @@ export const revalidate = 0;
 
 const AUTO_SYNC_THRESHOLD_PROFILES = ["GENERAL", "MARKET_LINKED"] as const;
 const PRICING_POLICY_SELECT_BASE =
-  "policy_id, channel_id, policy_name, margin_multiplier, gm_material, gm_labor, gm_fixed, fixed_cost_krw, rounding_unit, rounding_mode, option_18k_weight_multiplier, material_factor_set_id, fee_rate, min_margin_rate_total, auto_sync_force_full, auto_sync_min_change_krw, auto_sync_min_change_rate, is_active, created_at, updated_at";
+  "policy_id, channel_id, policy_name, margin_multiplier, gm_material, gm_labor, gm_fixed, fixed_cost_krw, rounding_unit, rounding_mode, option_18k_weight_multiplier, material_factor_set_id, fee_rate, min_margin_rate_total, auto_sync_force_full, auto_sync_min_change_krw, auto_sync_min_change_rate, option_sync_force_full, option_sync_min_change_krw, option_sync_min_change_rate, is_active, created_at, updated_at";
 const PRICING_POLICY_SELECT_COLS = `${PRICING_POLICY_SELECT_BASE}, auto_sync_threshold_profile`;
 
 function parseAutoSyncThresholdProfile(value: unknown): (typeof AUTO_SYNC_THRESHOLD_PROFILES)[number] {
@@ -61,6 +61,9 @@ export async function POST(request: Request) {
   const hasAutoSyncForceFull = Object.prototype.hasOwnProperty.call(body, "auto_sync_force_full");
   const hasAutoSyncMinChangeKrw = Object.prototype.hasOwnProperty.call(body, "auto_sync_min_change_krw");
   const hasAutoSyncMinChangeRate = Object.prototype.hasOwnProperty.call(body, "auto_sync_min_change_rate");
+  const hasOptionSyncForceFull = Object.prototype.hasOwnProperty.call(body, "option_sync_force_full");
+  const hasOptionSyncMinChangeKrw = Object.prototype.hasOwnProperty.call(body, "option_sync_min_change_krw");
+  const hasOptionSyncMinChangeRate = Object.prototype.hasOwnProperty.call(body, "option_sync_min_change_rate");
 
   const marginMultiplier = hasMargin ? Number(body.margin_multiplier) : 1;
   const roundingUnit = hasRoundingUnit ? Number(body.rounding_unit) : 1000;
@@ -75,6 +78,9 @@ export async function POST(request: Request) {
   const autoSyncForceFull = hasAutoSyncForceFull ? body.auto_sync_force_full === true : false;
   const autoSyncMinChangeKrw = hasAutoSyncMinChangeKrw ? Number(body.auto_sync_min_change_krw) : 5000;
   const autoSyncMinChangeRate = hasAutoSyncMinChangeRate ? Number(body.auto_sync_min_change_rate) : 0.01;
+  const optionSyncForceFull = hasOptionSyncForceFull ? body.option_sync_force_full === true : false;
+  const optionSyncMinChangeKrw = hasOptionSyncMinChangeKrw ? Number(body.option_sync_min_change_krw) : 1000;
+  const optionSyncMinChangeRate = hasOptionSyncMinChangeRate ? Number(body.option_sync_min_change_rate) : 0.01;
   let autoSyncThresholdProfile: (typeof AUTO_SYNC_THRESHOLD_PROFILES)[number];
   try {
     autoSyncThresholdProfile = parseAutoSyncThresholdProfile(body.auto_sync_threshold_profile);
@@ -99,6 +105,9 @@ export async function POST(request: Request) {
     auto_sync_force_full: autoSyncForceFull,
     auto_sync_min_change_krw: Math.max(0, Math.round(autoSyncMinChangeKrw)),
     auto_sync_min_change_rate: autoSyncMinChangeRate,
+    option_sync_force_full: optionSyncForceFull,
+    option_sync_min_change_krw: Math.max(0, Math.round(optionSyncMinChangeKrw)),
+    option_sync_min_change_rate: optionSyncMinChangeRate,
     auto_sync_threshold_profile: autoSyncThresholdProfile,
     is_active: body.is_active === false ? false : true,
   };
@@ -116,6 +125,8 @@ export async function POST(request: Request) {
   if (!Number.isFinite(basePayload.min_margin_rate_total) || basePayload.min_margin_rate_total < 0) return jsonError("min_margin_rate_total must be >= 0", 400);
   if (!Number.isFinite(basePayload.auto_sync_min_change_krw) || basePayload.auto_sync_min_change_krw < 0) return jsonError("auto_sync_min_change_krw must be >= 0", 400);
   if (!Number.isFinite(basePayload.auto_sync_min_change_rate) || basePayload.auto_sync_min_change_rate < 0 || basePayload.auto_sync_min_change_rate > 1) return jsonError("auto_sync_min_change_rate must be between 0 and 1", 400);
+  if (!Number.isFinite(basePayload.option_sync_min_change_krw) || basePayload.option_sync_min_change_krw < 0) return jsonError("option_sync_min_change_krw must be >= 0", 400);
+  if (!Number.isFinite(basePayload.option_sync_min_change_rate) || basePayload.option_sync_min_change_rate < 0 || basePayload.option_sync_min_change_rate > 1) return jsonError("option_sync_min_change_rate must be between 0 and 1", 400);
   if (!["CEIL", "ROUND", "FLOOR"].includes(basePayload.rounding_mode)) return jsonError("rounding_mode must be CEIL/ROUND/FLOOR", 400);
   const deactivateOtherPolicies = async (savedPolicyId: string) => {
     if (!basePayload.is_active) return;

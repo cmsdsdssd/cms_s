@@ -850,7 +850,7 @@ export async function POST(request: Request) {
     if (custom) variantOptionPathByAnyCode.set(custom, optionPath);
   }
 
-  const mappingByVariantCode = new Map<string, { channel_product_id: string; master_item_id: string; external_variant_code: string }>();
+  const mappingByVariantCode = new Map<string, { channel_product_id: string; master_item_id: string; external_variant_code: string; option_material_code: string | null }>();
   for (const row of mappings) {
     const code = String(row.external_variant_code ?? "").trim();
     if (!code) continue;
@@ -858,6 +858,7 @@ export async function POST(request: Request) {
       channel_product_id: String(row.channel_product_id ?? "").trim(),
       master_item_id: String(row.master_item_id ?? "").trim(),
       external_variant_code: code,
+      option_material_code: String(row.option_material_code ?? "").trim() || null,
     });
   }
 
@@ -1000,7 +1001,7 @@ export async function POST(request: Request) {
       external_variant_code: resolvedVariantCode,
       product_name: detailBeforeData.productName ?? null,
       option_path: variantOptionPathByAnyCode.get(resolvedVariantCode) ?? variantOptionPathByAnyCode.get(patch.variant_code) ?? [],
-      material_code: String(masterMeta?.material_code_default ?? "").trim() || null,
+      material_code: mapping?.option_material_code || String(masterMeta?.material_code_default ?? "").trim() || null,
       weight_g: Number.isFinite(weightG) ? weightG : null,
       deduction_weight_g: Number.isFinite(deductionWeightG) ? deductionWeightG : null,
       net_weight_g: Number.isFinite(netWeightG) ? netWeightG : null,

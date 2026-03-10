@@ -154,9 +154,28 @@ export const isSilverMaterial = (materialCodeRaw: string | null | undefined): bo
   return code === "925" || code === "999";
 };
 
+export const STANDARD_PLATING_BASE_CODES = ["P", "G", "W", "B"] as const;
+
+export const STANDARD_PLATING_COMBO_CODES = (() => {
+  const out: string[] = [];
+  for (let mask = 1; mask < (1 << STANDARD_PLATING_BASE_CODES.length); mask += 1) {
+    const code = STANDARD_PLATING_BASE_CODES
+      .filter((_, index) => (mask & (1 << index)) !== 0)
+      .join("");
+    if (code) out.push(code);
+  }
+  return out;
+})();
+
+export const formatPlatingComboLabel = (value: string | null | undefined): string => {
+  const normalized = normalizePlatingComboCode(value);
+  if (!normalized) return "";
+  return normalized.split("").join("+");
+};
+
 export const normalizePlatingComboCode = (value: string | null | undefined): string => {
   const text = String(value ?? "").trim().toUpperCase();
   if (!text) return "";
-  const letters = Array.from(new Set(text.replace(/[^PGWB]/g, "").split("").filter((ch) => ch.length > 0))).sort();
-  return letters.join("");
+  const letterSet = new Set(text.replace(/[^PGWB]/g, "").split("").filter((ch) => ch.length > 0));
+  return STANDARD_PLATING_BASE_CODES.filter((code) => letterSet.has(code)).join("");
 };

@@ -1,6 +1,6 @@
 
 > web@0.1.0 start
-> next start
+> next start --port 3000
 
 ⨯ Failed to start server
 Error: listen EADDRINUSE: address already in use :::3000

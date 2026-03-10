@@ -271,6 +271,7 @@ export async function POST(_request: Request, { params }: Params) {
           compute_request_id: computeRequestId,
           run_type: "AUTO",
           dry_run: false,
+          sync_option_labels: false,
           desired_target_price_by_channel_product: desiredTargetByChannelProduct,
         }),
       );

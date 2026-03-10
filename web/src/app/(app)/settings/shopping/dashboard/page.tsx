@@ -1329,7 +1329,7 @@ export default function ShoppingDashboardPage() {
       return shopApiSend<{ ok: boolean; job_id: string; success: number; failed: number; skipped: number; label_sync?: { failed?: number } }>("/api/channel-prices/push", "POST", {
         channel_id: activeChannelId,
         compute_request_id: computeRequestId,
-        sync_option_labels: true,
+        sync_option_labels: false,
       });
     },
     onSuccess: async (res) => {

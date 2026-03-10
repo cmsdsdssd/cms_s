@@ -63,6 +63,8 @@ type FactorSet = {
   is_active: boolean;
   is_global_default: boolean;
 };
+const isRuleDrivenCategory = (categoryKey: string): boolean => categoryKey == "SIZE" || categoryKey == "COLOR_PLATING";
+
 type SyncRun = {
   run_id: string;
   status: "RUNNING" | "SUCCESS" | "PARTIAL" | "FAILED" | "CANCELLED";
@@ -246,6 +248,8 @@ type MappingRow = {
   option_size_value?: number | null;
   material_multiplier_override?: number | null;
   size_weight_delta_g?: number | null;
+  size_price_override_enabled?: boolean | null;
+  size_price_override_krw?: number | null;
   option_price_delta_krw?: number | null;
   option_manual_target_krw?: number | null;
   include_master_plating_labor?: boolean | null;
@@ -265,6 +269,12 @@ type VariantLookupResponse = {
     requested_product_no: string;
     resolved_product_no: string;
     canonical_external_product_no: string;
+    master_material_code: string | null;
+    size_market_context?: {
+      goldTickKrwPerG?: number | null;
+      silverTickKrwPerG?: number | null;
+      materialFactors?: Record<string, unknown> | null;
+    } | null;
     total: number;
     variants: Array<{
       variant_code: string;
@@ -300,6 +310,8 @@ type MappingWritePayload = {
   option_size_value: number | null;
   material_multiplier_override: number | null;
   size_weight_delta_g: number | null;
+  size_price_override_enabled: boolean;
+  size_price_override_krw: number | null;
   option_price_delta_krw: number | null;
   option_price_mode: "SYNC" | "MANUAL";
   option_manual_target_krw: number | null;
@@ -351,6 +363,8 @@ type StringMap = Record<string, string>;
 type CurrentProductSyncProfile = "GENERAL" | "MARKET_LINKED";
 type VariantOptionDraft = MappingOptionSelection & {
   option_size_value_text: string;
+  size_price_override_enabled: boolean;
+  size_price_override_krw_text: string;
 };
 type OptionEntryRow = {
   optionName: string;
@@ -468,7 +482,7 @@ const categoryLabelOf = (value: OptionCategoryKey): string => {
   return CATEGORY_OPTIONS.find((option) => option.key === value)?.label ?? value;
 };
 const legacyStatusLabelOf = (value: "VALID" | "LEGACY_OUT_OF_RANGE" | "UNRESOLVED"): string => {
-  if (value === "LEGACY_OUT_OF_RANGE") return "legacy 유지";
+  if (value === "LEGACY_OUT_OF_RANGE") return "규칙 불일치";
   if (value === "UNRESOLVED") return "확인 필요";
   return "정상";
 };
@@ -540,12 +554,50 @@ const formatOptionSizeValue = (value: number | null | undefined): string => {
   if (value == null || !Number.isFinite(value)) return "";
   return value.toFixed(2);
 };
+const normalizeSizeSelectionParts = (valueLike: string | null | undefined): { major: string; detail: string } => {
+  const raw = String(valueLike ?? "").trim();
+  if (!raw) return { major: "", detail: "" };
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed < 0) return { major: "", detail: "" };
+  const centigram = Math.round(parsed * 100);
+  return {
+    major: String(Math.floor(centigram / 100)),
+    detail: String(centigram % 100).padStart(2, "0"),
+  };
+};
+const buildRuleBackedSizeMajorOptions = (choices: Array<{ value: string; label: string }>): Array<{ value: string; label: string }> => {
+  const next = new Map<string, { value: string; label: string }>();
+  for (const choice of choices ?? []) {
+    const parts = normalizeSizeSelectionParts(choice.value);
+    if (!parts.major) continue;
+    if (!next.has(parts.major)) next.set(parts.major, { value: parts.major, label: `${parts.major}g` });
+  }
+  return Array.from(next.values()).sort((left, right) => Number(left.value) - Number(right.value));
+};
+const buildRuleBackedSizeDetailOptions = (choices: Array<{ value: string; label: string }>, majorValue: string): Array<{ value: string; label: string }> => {
+  return (choices ?? [])
+    .map((choice) => ({ ...choice, parts: normalizeSizeSelectionParts(choice.value) }))
+    .filter((choice) => choice.parts.major === String(majorValue ?? "").trim())
+    .map((choice) => ({ value: choice.parts.detail, label: `.${choice.parts.detail}g` }))
+    .sort((left, right) => Number(left.value) - Number(right.value));
+};
+const combineSizeSelectionParts = (majorValue: string, detailValue: string): string => {
+  const major = String(majorValue ?? "").trim();
+  const detail = String(detailValue ?? "").trim();
+  if (!major || !detail) return "";
+  return `${major}.${detail.padStart(2, "0")}`;
+};
 const toVariantOptionDraft = (selection: Partial<MappingOptionSelection> | null | undefined): VariantOptionDraft => ({
   option_material_code: typeof selection?.option_material_code === "string" ? selection.option_material_code : null,
   option_color_code: typeof selection?.option_color_code === "string" ? selection.option_color_code : null,
   option_decoration_code: typeof selection?.option_decoration_code === "string" ? selection.option_decoration_code : null,
   option_size_value: selection?.option_size_value == null ? null : Number(selection.option_size_value),
   option_size_value_text: formatOptionSizeValue(selection?.option_size_value),
+  size_price_override_enabled: (selection as { size_price_override_enabled?: boolean | null } | null | undefined)?.size_price_override_enabled === true,
+  size_price_override_krw_text: (() => {
+    const value = (selection as { size_price_override_krw?: number | null } | null | undefined)?.size_price_override_krw;
+    return value == null || !Number.isFinite(Number(value)) ? "" : String(Math.round(Number(value)));
+  })(),
 });
 const withResolvedChoice = <T extends { value: string; label: string }>(
   choices: T[],
@@ -556,7 +608,7 @@ const withResolvedChoice = <T extends { value: string; label: string }>(
   const value = String(valueLike ?? "").trim();
   if (!value || choices.some((choice) => choice.value === value)) return choices;
   const label = String(labelOverride ?? value).trim() || value;
-  return [{ ...(choices[0] ?? { value, label }), value, label: isLegacy ? `${label} (legacy)` : label } as T, ...choices];
+  return [{ ...(choices[0] ?? { value, label }), value, label } as T, ...choices];
 };
 const optionDraftWithLegacy = (
   draft: VariantOptionDraft,
@@ -564,12 +616,18 @@ const optionDraftWithLegacy = (
 ): VariantOptionDraft => {
   const next = { ...draft };
   const existingSizeText = formatOptionSizeValue(existing?.option_size_value);
+  const existingSizeOverrideEnabled = (existing as { size_price_override_enabled?: boolean | null } | null | undefined)?.size_price_override_enabled === true;
+  const existingSizeOverrideKrw = (existing as { size_price_override_krw?: number | null } | null | undefined)?.size_price_override_krw;
   if (!next.option_material_code && existing?.option_material_code) next.option_material_code = existing.option_material_code;
   if (!next.option_color_code && existing?.option_color_code) next.option_color_code = existing.option_color_code;
   if (!next.option_decoration_code && existing?.option_decoration_code) next.option_decoration_code = existing.option_decoration_code;
   if (!next.option_size_value_text && existingSizeText) {
     next.option_size_value = Number(existingSizeText);
     next.option_size_value_text = existingSizeText;
+  }
+  if (!next.size_price_override_enabled && existingSizeOverrideEnabled) next.size_price_override_enabled = true;
+  if (!next.size_price_override_krw_text && existingSizeOverrideKrw != null && Number.isFinite(Number(existingSizeOverrideKrw))) {
+    next.size_price_override_krw_text = String(Math.round(Number(existingSizeOverrideKrw)));
   }
   return next;
 };
@@ -579,6 +637,9 @@ const optionSummary = (mapping: Partial<MappingOptionSelection>): string => {
     mapping.option_size_value != null ? `size ${formatOptionSizeValue(mapping.option_size_value)}g` : null,
     mapping.option_color_code ? `color ${mapping.option_color_code}` : null,
     mapping.option_decoration_code ? `decor ${mapping.option_decoration_code}` : null,
+    (mapping as { size_price_override_enabled?: boolean | null; size_price_override_krw?: number | null }).size_price_override_enabled === true
+      ? `size override ${fmtKrw((mapping as { size_price_override_krw?: number | null }).size_price_override_krw ?? 0)}`
+      : null,
   ].filter(Boolean);
   return parts.join(" / ") || "-";
 };
@@ -731,6 +792,7 @@ export default function ShoppingAutoPricePage() {
   const [editorReloadNonce, setEditorReloadNonce] = useState(0);
   const [gallerySearch, setGallerySearch] = useState("");
   const [editorPreview, setEditorPreview] = useState<ProductEditorPreview | null>(null);
+  const [variantLookupFallbackData, setVariantLookupFallbackData] = useState<VariantLookupResponse["data"] | null>(null);
   const [editorMasterItemIdHint, setEditorMasterItemIdHint] = useState("");
   const [editorPrice, setEditorPrice] = useState("");
   const [editorRetailPrice, setEditorRetailPrice] = useState("");
@@ -1751,18 +1813,50 @@ export default function ShoppingAutoPricePage() {
         `/api/channel-products/variants?channel_id=${encodeURIComponent(effectiveChannelId)}&master_item_id=${encodeURIComponent(editorMasterItemId)}&external_product_no=${encodeURIComponent(String(editorProductNo || editorPreview?.productNo || ""))}&_ts=${encodeURIComponent(String(editorReloadNonce))}`,
       ),
   });
-  const loadedVariants = useMemo(() => variantLookupQuery.data?.data.variants ?? [], [variantLookupQuery.data?.data.variants]);
+  useEffect(() => {
+    const productNo = String(editorProductNo || editorPreview?.productNo || "").trim();
+    if (!effectiveChannelId || !editorMasterItemId || !productNo) {
+      setVariantLookupFallbackData(null);
+      return;
+    }
+    let cancelled = false;
+    shopApiGet<VariantLookupResponse>(
+      `/api/channel-products/variants?channel_id=${encodeURIComponent(effectiveChannelId)}&master_item_id=${encodeURIComponent(editorMasterItemId)}&external_product_no=${encodeURIComponent(productNo)}&_ts=${encodeURIComponent(String(Date.now()))}`,
+    )
+      .then((response) => {
+        if (!cancelled) setVariantLookupFallbackData(response.data ?? null);
+      })
+      .catch(() => {
+        if (!cancelled) setVariantLookupFallbackData(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [editorMasterItemId, editorPreview?.productNo, editorProductNo, effectiveChannelId, editorReloadNonce]);
+  const variantLookupData = variantLookupQuery.data?.data ?? variantLookupFallbackData;
+  const ensureVariantLookupData = async (): Promise<VariantLookupResponse["data"] | null> => {
+    const existing = variantLookupQuery.data?.data ?? variantLookupFallbackData;
+    if (existing) return existing;
+    const productNo = String(editorProductNo || editorPreview?.productNo || "").trim();
+    if (!effectiveChannelId || !editorMasterItemId || !productNo) return null;
+    const response = await shopApiGet<VariantLookupResponse>(
+      `/api/channel-products/variants?channel_id=${encodeURIComponent(effectiveChannelId)}&master_item_id=${encodeURIComponent(editorMasterItemId)}&external_product_no=${encodeURIComponent(productNo)}&_ts=${encodeURIComponent(String(Date.now()))}`,
+    );
+    setVariantLookupFallbackData(response.data ?? null);
+    return response.data ?? null;
+  };
+  const loadedVariants = useMemo(() => variantLookupData?.variants ?? [], [variantLookupData?.variants]);
   const loadedOptionAllowlist = useMemo(
-    () => variantLookupQuery.data?.data.option_detail_allowlist ?? EMPTY_OPTION_ALLOWLIST,
-    [variantLookupQuery.data?.data.option_detail_allowlist],
+    () => variantLookupData?.option_detail_allowlist ?? EMPTY_OPTION_ALLOWLIST,
+    [variantLookupData?.option_detail_allowlist],
   );
   const savedOptionCategories = useMemo(
-    () => variantLookupQuery.data?.data.saved_option_categories ?? [],
-    [variantLookupQuery.data?.data.saved_option_categories],
+    () => variantLookupData?.saved_option_categories ?? [],
+    [variantLookupData?.saved_option_categories],
   );
   const canonicalOptionRows = useMemo(
-    () => variantLookupQuery.data?.data.canonical_option_rows ?? [],
-    [variantLookupQuery.data?.data.canonical_option_rows],
+    () => variantLookupData?.canonical_option_rows ?? [],
+    [variantLookupData?.canonical_option_rows],
   );
   const canonicalOptionRowByEntryKey = useMemo(() => {
     const next = new Map<string, MappingCanonicalOptionRow>();
@@ -1773,8 +1867,17 @@ export default function ShoppingAutoPricePage() {
     return next;
   }, [canonicalOptionRows]);
   const resolvedMasterMaterialCode = useMemo(
-    () => canonicalOptionRows.find((row) => String(row.material_code_resolved ?? "").trim())?.material_code_resolved ?? null,
-    [canonicalOptionRows],
+    () => String(variantLookupData?.master_material_code ?? "").trim()
+      || canonicalOptionRows.find((row) => String(row.material_code_resolved ?? "").trim())?.material_code_resolved
+      || null,
+    [canonicalOptionRows, variantLookupData?.master_material_code],
+  );
+  const fallbackSizeMaterialCode = useMemo(
+    () => String(variantLookupData?.master_material_code ?? "").trim()
+      || resolvedMasterMaterialCode
+      || Object.keys(loadedOptionAllowlist.sizes_by_material ?? {}).find((key) => String(key ?? "").trim())
+      || null,
+    [loadedOptionAllowlist.sizes_by_material, resolvedMasterMaterialCode, variantLookupData?.master_material_code],
   );
   const resolvedMasterMaterialLabel = useMemo(
     () => canonicalOptionRows.find((row) => String(row.material_label_resolved ?? "").trim())?.material_label_resolved
@@ -1783,10 +1886,10 @@ export default function ShoppingAutoPricePage() {
     [canonicalOptionRows],
   );
   const requestedEditorProductNo = String(editorProductNo || editorPreview?.productNo || "").trim();
-  const resolvedEditorProductNo = String(variantLookupQuery.data?.data.resolved_product_no ?? requestedEditorProductNo).trim();
+  const resolvedEditorProductNo = String(variantLookupData?.resolved_product_no ?? requestedEditorProductNo).trim();
   const canonicalEditorProductNo = String(
-    variantLookupQuery.data?.data.canonical_external_product_no
-      ?? variantLookupQuery.data?.data.resolved_product_no
+    variantLookupData?.canonical_external_product_no
+      ?? variantLookupData?.resolved_product_no
       ?? requestedEditorProductNo
       ?? "",
   ).trim();
@@ -1875,6 +1978,20 @@ export default function ShoppingAutoPricePage() {
     () => (optionLaborRulesQuery.data?.data ?? []).filter((row) => row.is_active !== false),
     [optionLaborRulesQuery.data?.data],
   );
+  const sizeRuleMarketContext = useMemo(() => {
+    const factors = variantLookupData?.size_market_context?.materialFactors;
+    return {
+      goldTickKrwPerG: Math.round(Number(variantLookupData?.size_market_context?.goldTickKrwPerG ?? editorPreview?.tick_gold_krw_per_g ?? 0)),
+      silverTickKrwPerG: Math.round(Number(variantLookupData?.size_market_context?.silverTickKrwPerG ?? editorPreview?.tick_silver_krw_per_g ?? 0)),
+      materialFactors: factors && typeof factors === "object" ? factors : null,
+    };
+  }, [
+    editorPreview?.tick_gold_krw_per_g,
+    editorPreview?.tick_silver_krw_per_g,
+    variantLookupData?.size_market_context?.goldTickKrwPerG,
+    variantLookupData?.size_market_context?.materialFactors,
+    variantLookupData?.size_market_context?.silverTickKrwPerG,
+  ]);
   const sizeRuleRows = useMemo(
     () => optionLaborRuleRows.filter((row) => row.category_key === "SIZE"),
     [optionLaborRuleRows],
@@ -1992,8 +2109,13 @@ export default function ShoppingAutoPricePage() {
   }, [loadedVariants]);
 
   const variantDraftResetKey = useMemo(
-    () => [effectiveChannelId, editorMasterItemId, optionLaborRuleProductNo || canonicalEditorProductNo || resolvedEditorProductNo || String(editorPreview?.productNo ?? "").trim()].join("|"),
-    [canonicalEditorProductNo, editorMasterItemId, editorPreview?.productNo, effectiveChannelId, optionLaborRuleProductNo, resolvedEditorProductNo],
+    () => [
+      effectiveChannelId,
+      editorMasterItemId,
+      optionLaborRuleProductNo || canonicalEditorProductNo || resolvedEditorProductNo || String(editorPreview?.productNo ?? "").trim(),
+      String(editorReloadNonce || 0),
+    ].join("|"),
+    [canonicalEditorProductNo, editorMasterItemId, editorPreview?.productNo, editorReloadNonce, effectiveChannelId, optionLaborRuleProductNo, resolvedEditorProductNo],
   );
   const defaultOptionCategoryDrafts = useMemo(() => {
     const next: StringMap = {};
@@ -2105,9 +2227,14 @@ export default function ShoppingAutoPricePage() {
     const next: StringMap = {};
     for (const entry of optionEntries) {
       const canonicalRow = canonicalOptionRowByEntryKey.get(entry.entryKey);
-      const categoryKey = resolvePreferredCategoryForOptionName(entry.optionName, canonicalRow?.category_key);
+      const draftCategoryKey = String(optionCategoryDrafts[entry.optionName] ?? "").trim() as OptionCategoryKey;
+      const categoryKey = CATEGORY_OPTIONS.some((option) => option.key === draftCategoryKey)
+        ? draftCategoryKey
+        : resolvePreferredCategoryForOptionName(entry.optionName, canonicalRow?.category_key);
       const resolvedMaterialCode = String(canonicalRow?.material_code_resolved ?? "").trim();
-      if (categoryKey === "SIZE" || categoryKey === "COLOR_PLATING" || categoryKey === "OTHER") {
+      if (categoryKey === "SIZE") {
+        next[entry.entryKey] = String(fallbackSizeMaterialCode || resolvedMasterMaterialCode || resolvedMaterialCode || "").trim();
+      } else if (categoryKey === "COLOR_PLATING" || categoryKey === "OTHER") {
         next[entry.entryKey] = hasChoiceValue(materialChoicePool, resolvedMaterialCode) ? resolvedMaterialCode : "";
       } else if (categoryKey === "DECOR") {
         next[entry.entryKey] = String(canonicalRow?.decor_material_code_snapshot ?? "").trim();
@@ -2116,7 +2243,7 @@ export default function ShoppingAutoPricePage() {
       }
     }
     return next;
-  }, [canonicalOptionRowByEntryKey, materialChoicePool, optionEntries]);
+  }, [canonicalOptionRowByEntryKey, fallbackSizeMaterialCode, materialChoicePool, optionCategoryDrafts, optionEntries]);
   const optionAxis1Drafts =
     optionAxis1DraftSlot.resetKey === variantDraftResetKey ? optionAxis1DraftSlot.value : defaultOptionAxis1Drafts;
   const setOptionAxis1Drafts = (next: StringMap | ((current: StringMap) => StringMap)) => {
@@ -2128,11 +2255,15 @@ export default function ShoppingAutoPricePage() {
     const next: StringMap = {};
     for (const entry of optionEntries) {
       const canonicalRow = canonicalOptionRowByEntryKey.get(entry.entryKey);
-      const categoryKey = resolvePreferredCategoryForOptionName(entry.optionName, canonicalRow?.category_key);
+      const draftCategoryKey = String(optionCategoryDrafts[entry.optionName] ?? "").trim() as OptionCategoryKey;
+      const categoryKey = CATEGORY_OPTIONS.some((option) => option.key === draftCategoryKey)
+        ? draftCategoryKey
+        : resolvePreferredCategoryForOptionName(entry.optionName, canonicalRow?.category_key);
       const resolvedMaterialCode = String(canonicalRow?.material_code_resolved ?? "").trim();
       if (categoryKey === "SIZE") {
+        const sizeMaterialCode = String(fallbackSizeMaterialCode || resolvedMasterMaterialCode || resolvedMaterialCode || "").trim();
         const sizeValue = canonicalRow?.size_weight_g_selected == null ? "" : formatOptionSizeValue(canonicalRow.size_weight_g_selected);
-        const sizeChoices = loadedOptionAllowlist.sizes_by_material[resolvedMaterialCode] ?? [];
+        const sizeChoices = loadedOptionAllowlist.sizes_by_material[sizeMaterialCode] ?? [];
         next[entry.entryKey] = hasChoiceValue(sizeChoices, sizeValue) ? sizeValue : "";
       } else if (categoryKey === "COLOR_PLATING") {
         const colorValue = String(canonicalRow?.color_code_selected ?? "").trim();
@@ -2147,7 +2278,7 @@ export default function ShoppingAutoPricePage() {
       }
     }
     return next;
-  }, [canonicalOptionRowByEntryKey, colorCodesByMaterial, loadedOptionAllowlist.sizes_by_material, optionEntries]);
+  }, [canonicalOptionRowByEntryKey, colorCodesByMaterial, fallbackSizeMaterialCode, loadedOptionAllowlist.sizes_by_material, optionCategoryDrafts, optionEntries, resolvedMasterMaterialCode]);
   const optionAxis2Drafts =
     optionAxis2DraftSlot.resetKey === variantDraftResetKey ? optionAxis2DraftSlot.value : defaultOptionAxis2Drafts;
   const setOptionAxis2Drafts = (next: StringMap | ((current: StringMap) => StringMap)) => {
@@ -2180,19 +2311,35 @@ export default function ShoppingAutoPricePage() {
   const effectiveOptionAxis1ByEntryKey = useMemo(() => {
     const next = new Map<string, string>();
     for (const entry of optionEntries) {
-      const raw = optionAxis1Drafts[entry.entryKey] ?? defaultOptionAxis1Drafts[entry.entryKey] ?? "";
-      next.set(entry.entryKey, String(raw).trim());
+      const draftValue = String(optionAxis1Drafts[entry.entryKey] ?? "").trim();
+      const defaultValue = String(defaultOptionAxis1Drafts[entry.entryKey] ?? "").trim();
+      const draftCategoryKey = String(optionCategoryDrafts[entry.optionName] ?? "").trim() as OptionCategoryKey;
+      const categoryKey = CATEGORY_OPTIONS.some((option) => option.key === draftCategoryKey)
+        ? draftCategoryKey
+        : resolvePreferredCategoryForOptionName(entry.optionName, canonicalOptionRowByEntryKey.get(entry.entryKey)?.category_key);
+      const raw = categoryKey === "SIZE"
+        ? (draftValue || defaultValue)
+        : (draftValue || defaultValue);
+      next.set(entry.entryKey, raw);
     }
     return next;
-  }, [defaultOptionAxis1Drafts, optionAxis1Drafts, optionEntries]);
+  }, [canonicalOptionRowByEntryKey, defaultOptionAxis1Drafts, optionAxis1Drafts, optionCategoryDrafts, optionEntries]);
   const effectiveOptionAxis2ByEntryKey = useMemo(() => {
     const next = new Map<string, string>();
     for (const entry of optionEntries) {
-      const raw = optionAxis2Drafts[entry.entryKey] ?? defaultOptionAxis2Drafts[entry.entryKey] ?? "";
-      next.set(entry.entryKey, String(raw).trim());
+      const draftValue = String(optionAxis2Drafts[entry.entryKey] ?? "").trim();
+      const defaultValue = String(defaultOptionAxis2Drafts[entry.entryKey] ?? "").trim();
+      const draftCategoryKey = String(optionCategoryDrafts[entry.optionName] ?? "").trim() as OptionCategoryKey;
+      const categoryKey = CATEGORY_OPTIONS.some((option) => option.key === draftCategoryKey)
+        ? draftCategoryKey
+        : resolvePreferredCategoryForOptionName(entry.optionName, canonicalOptionRowByEntryKey.get(entry.entryKey)?.category_key);
+      const raw = categoryKey === "SIZE"
+        ? (draftValue || defaultValue)
+        : (draftValue || defaultValue);
+      next.set(entry.entryKey, raw);
     }
     return next;
-  }, [defaultOptionAxis2Drafts, optionAxis2Drafts, optionEntries]);
+  }, [canonicalOptionRowByEntryKey, defaultOptionAxis2Drafts, optionAxis2Drafts, optionCategoryDrafts, optionEntries]);
   const effectiveOptionAxis3ByEntryKey = useMemo(() => {
     const next = new Map<string, string>();
     for (const entry of optionEntries) {
@@ -2214,6 +2361,24 @@ export default function ShoppingAutoPricePage() {
     }
     return next;
   }, [optionCategoryDrafts, optionEntries, savedOptionCategoryByName]);
+  useEffect(() => {
+    const sizeMaterialCode = String(fallbackSizeMaterialCode || "").trim();
+    if (!sizeMaterialCode) return;
+    setOptionAxis1Drafts((prev) => {
+      let changed = false;
+      const next = { ...prev };
+      for (const entry of optionEntries) {
+        const categoryKey = effectiveCategoryByOptionName.get(entry.optionName)
+          ?? resolvePreferredCategoryForOptionName(entry.optionName, canonicalOptionRowByEntryKey.get(entry.entryKey)?.category_key);
+        if (categoryKey !== "SIZE") continue;
+        const currentValue = String(next[entry.entryKey] ?? "").trim();
+        if (currentValue) continue;
+        next[entry.entryKey] = sizeMaterialCode;
+        changed = true;
+      }
+      return changed ? next : prev;
+    });
+  }, [canonicalOptionRowByEntryKey, effectiveCategoryByOptionName, fallbackSizeMaterialCode, optionEntries]);
   const effectiveOptionSyncDeltaByEntryKey = useMemo(() => {
     const next = new Map<string, number>();
     for (const entry of optionEntries) {
@@ -2222,6 +2387,81 @@ export default function ShoppingAutoPricePage() {
     }
     return next;
   }, [defaultOptionSyncDeltaDrafts, optionEntries, optionSyncDeltaDrafts]);
+  const handleOptionCategoryChange = (optionName: string, nextCategoryKey: OptionCategoryKey) => {
+    setOptionCategoryDrafts((prev) => ({ ...prev, [optionName]: nextCategoryKey }));
+    const targetEntries = optionEntries.filter((entry) => entry.optionName === optionName);
+    if (targetEntries.length === 0) return;
+    if (nextCategoryKey === "SIZE") {
+      void ensureVariantLookupData().then((data) => {
+        const sizeMaterialCode = String(data?.master_material_code ?? "").trim()
+          || Object.keys(data?.option_detail_allowlist?.sizes_by_material ?? {}).find((key) => String(key ?? "").trim())
+          || "";
+        if (!sizeMaterialCode) return;
+        setOptionAxis1Drafts((prev) => {
+          const next = { ...prev };
+          for (const entry of targetEntries) next[entry.entryKey] = sizeMaterialCode;
+          return next;
+        });
+      }).catch(() => {});
+    }
+
+    setOptionAxis1Drafts((prev) => {
+      const next = { ...prev };
+      for (const entry of targetEntries) {
+        if (nextCategoryKey === "SIZE") {
+          delete next[entry.entryKey];
+        } else {
+          next[entry.entryKey] = "";
+        }
+      }
+      return next;
+    });
+    setOptionAxis2Drafts((prev) => {
+      const next = { ...prev };
+      for (const entry of targetEntries) {
+        if (nextCategoryKey === "SIZE") delete next[entry.entryKey];
+        else next[entry.entryKey] = "";
+      }
+      return next;
+    });
+    setOptionAxis3Drafts((prev) => {
+      const next = { ...prev };
+      for (const entry of targetEntries) {
+        if (nextCategoryKey === "SIZE") delete next[entry.entryKey];
+        else next[entry.entryKey] = "";
+      }
+      return next;
+    });
+    setOptionDecorSelectionDrafts((prev) => {
+      const next = { ...prev };
+      for (const entry of targetEntries) {
+        next[entry.entryKey] = "";
+      }
+      return next;
+    });
+    setOptionOtherReasonDrafts((prev) => {
+      const next = { ...prev };
+      for (const entry of targetEntries) {
+        next[entry.entryKey] = "";
+      }
+      return next;
+    });
+    setOptionNoticeSelectionDrafts((prev) => {
+      const next = { ...prev };
+      for (const entry of targetEntries) {
+        next[entry.entryKey] = nextCategoryKey === "NOTICE" ? String(entry.optionValue ?? "").trim() : "";
+      }
+      return next;
+    });
+    setOptionSyncDeltaDrafts((prev) => {
+      const next = { ...prev };
+      for (const entry of targetEntries) {
+        next[entry.entryKey] = "0";
+      }
+      return next;
+    });
+  };
+
   const categoryOverrideByEntryKey = useMemo(() => {
     const next: Record<string, OptionCategoryKey> = {};
     for (const entry of optionEntries) {
@@ -2250,8 +2490,9 @@ export default function ShoppingAutoPricePage() {
       const decorMasterItemId = String(effectiveOptionDecorSelectionByEntryKey.get(entry.entryKey) ?? "").trim();
 
       if (categoryKey === "SIZE") {
+        const sizeMaterialCode = String(fallbackSizeMaterialCode || resolvedMasterMaterialCode || axis1Value || "").trim();
         next[entry.entryKey] = {
-          axis1_value: axis1Value || null,
+          axis1_value: sizeMaterialCode || null,
           axis2_value: axis2Value || null,
           axis3_value: axis3Value || null,
           decor_master_item_id: null,
@@ -2314,6 +2555,8 @@ export default function ShoppingAutoPricePage() {
     effectiveOptionAxis1ByEntryKey,
     effectiveOptionAxis2ByEntryKey,
     effectiveOptionAxis3ByEntryKey,
+    fallbackSizeMaterialCode,
+    resolvedMasterMaterialCode,
     effectiveOptionDecorSelectionByEntryKey,
     effectiveOptionNoticeSelectionByEntryKey,
     effectiveOptionOtherReasonByEntryKey,
@@ -2353,24 +2596,52 @@ export default function ShoppingAutoPricePage() {
     }
     return next;
   }, [evaluatedOptionRows]);
+  const resolveSizeRuleDeltaKrw = (materialCodeLike: string, weightTextLike: string): number | null => {
+    const materialCode = String(materialCodeLike ?? "").trim();
+    const weightValue = parseNumericInput(weightTextLike);
+    if (!materialCode || weightValue == null) return null;
+    const buckets = computeOptionLaborRuleBuckets(optionLaborRuleRows, {
+      materialCode,
+      additionalWeightG: weightValue,
+      platingEnabled: false,
+      colorCode: null,
+      decorationCode: null,
+      decorationMasterId: null,
+    }, {
+      masterItemId: editorMasterItemId,
+      externalProductNo: optionLaborRuleProductNo,
+      marketContext: sizeRuleMarketContext,
+    });
+    return Number.isFinite(Number(buckets.size)) ? Math.round(Number(buckets.size)) : null;
+  };
   const compactOptionRows = useMemo<CompactOptionRow[]>(() => {
     return optionEntries.map((entry) => {
       const canonicalRow = evaluatedOptionRowByEntryKey.get(entry.entryKey)
         ?? canonicalOptionRowByEntryKey.get(entry.entryKey);
       const draftSyncDelta = effectiveOptionSyncDeltaByEntryKey.get(entry.entryKey) ?? 0;
       const categoryKey = categoryOverrideByEntryKey[entry.entryKey] ?? canonicalRow?.category_key ?? guessCategoryByOptionName(entry.optionName);
-      const selectedMaterialCode = String(canonicalRow?.material_code_resolved ?? "").trim();
-      const selectedColorCode = String(canonicalRow?.color_code_selected ?? "").trim();
-      const selectedSizeWeightText = canonicalRow?.size_weight_g_selected == null ? "" : formatOptionSizeValue(canonicalRow.size_weight_g_selected);
-      const selectedDecorMasterId = String(canonicalRow?.decor_master_item_id_selected ?? "").trim();
+      const axis1DraftValue = effectiveOptionAxis1ByEntryKey.get(entry.entryKey);
+      const axis2DraftValue = effectiveOptionAxis2ByEntryKey.get(entry.entryKey);
+      const selectedMaterialCode = categoryKey === "SIZE"
+        ? String(fallbackSizeMaterialCode || resolvedMasterMaterialCode || canonicalRow?.material_code_resolved || axis1DraftValue || "").trim()
+        : String(axis1DraftValue ?? canonicalRow?.material_code_resolved ?? resolvedMasterMaterialCode ?? "").trim();
+      const selectedColorCode = categoryKey === "COLOR_PLATING"
+        ? String(axis2DraftValue ?? canonicalRow?.color_code_selected ?? "").trim()
+        : String(canonicalRow?.color_code_selected ?? "").trim();
+      const selectedSizeWeightText = categoryKey === "SIZE"
+        ? String(axis2DraftValue ?? (canonicalRow?.size_weight_g_selected == null ? "" : formatOptionSizeValue(canonicalRow.size_weight_g_selected))).trim()
+        : (canonicalRow?.size_weight_g_selected == null ? "" : formatOptionSizeValue(canonicalRow.size_weight_g_selected));
+      const selectedDecorMasterId = categoryKey === "DECOR"
+        ? String(effectiveOptionDecorSelectionByEntryKey.get(entry.entryKey) ?? canonicalRow?.decor_master_item_id_selected ?? "").trim()
+        : String(canonicalRow?.decor_master_item_id_selected ?? "").trim();
       const decorExtraDeltaKrw = Math.round(Number(canonicalRow?.decor_extra_delta_krw ?? 0));
       const decorFinalAmountKrw = Math.round(Number(canonicalRow?.decor_final_amount_krw ?? 0));
-      const otherReason = categoryKey === "OTHER" ? String(canonicalRow?.other_reason ?? "").trim() : "";
-      const noticeValue = String(
-        canonicalRow?.notice_value_selected
-        ?? entry.optionValue
-        ?? "",
-      ).trim();
+      const otherReason = categoryKey === "OTHER"
+        ? String(effectiveOptionOtherReasonByEntryKey.get(entry.entryKey) ?? canonicalRow?.other_reason ?? "").trim()
+        : "";
+      const noticeValue = categoryKey === "NOTICE"
+        ? String(effectiveOptionNoticeSelectionByEntryKey.get(entry.entryKey) ?? canonicalRow?.notice_value_selected ?? entry.optionValue ?? "").trim()
+        : String(canonicalRow?.notice_value_selected ?? entry.optionValue ?? "").trim();
       const rawAxisColumns = ["", "", ""];
       if (entry.axisIndex >= 0 && entry.axisIndex < rawAxisColumns.length) rawAxisColumns[entry.axisIndex] = entry.optionValue;
       const axisColumns = [...rawAxisColumns];
@@ -2410,9 +2681,23 @@ export default function ShoppingAutoPricePage() {
         axisColumns[2] = otherReason || axisColumns[2];
       }
 
+      const sizeResolvedDelta = categoryKey === "SIZE"
+        ? resolveSizeRuleDeltaKrw(selectedMaterialCode, selectedSizeWeightText)
+        : null;
+      const sizeWarnings = categoryKey === "SIZE"
+        ? (!selectedMaterialCode
+          ? ["소재를 선택해야 합니다."]
+          : !selectedSizeWeightText
+            ? ["중량을 선택해야 합니다."]
+            : sizeResolvedDelta == null
+              ? ["현재 선택한 추가중량이 중앙 허용 범위 밖입니다."]
+              : [])
+        : [];
       const resolvedDeltaKrw = categoryKey === "NOTICE"
         ? 0
-        : Math.round(Number(canonicalRow?.resolved_delta_krw ?? draftSyncDelta));
+        : categoryKey === "SIZE"
+          ? Math.round(Number(sizeResolvedDelta ?? 0))
+          : Math.round(Number(canonicalRow?.resolved_delta_krw ?? draftSyncDelta));
       const syncDeltaKrw = categoryKey === "NOTICE"
         ? 0
         : categoryKey === "DECOR"
@@ -2420,15 +2705,24 @@ export default function ShoppingAutoPricePage() {
           : categoryKey === "SIZE" || categoryKey === "COLOR_PLATING"
             ? resolvedDeltaKrw
             : draftSyncDelta;
+      const legacyStatus = categoryKey === "SIZE"
+        ? (sizeWarnings.length === 0 ? "VALID" : "UNRESOLVED")
+        : (canonicalRow?.legacy_status ?? "VALID");
+      const warnings = categoryKey === "SIZE"
+        ? sizeWarnings
+        : (canonicalRow?.warnings ?? []);
+      const sourceRuleEntryIds = categoryKey === "SIZE"
+        ? (sizeResolvedDelta == null ? [] : (canonicalRow?.source_rule_entry_ids ?? []))
+        : (canonicalRow?.source_rule_entry_ids ?? []);
 
       return {
         ...entry,
         categoryKey,
         syncDeltaKrw,
         resolvedDeltaKrw,
-        legacyStatus: canonicalRow?.legacy_status ?? "VALID",
-        warnings: canonicalRow?.warnings ?? [],
-        sourceRuleEntryIds: canonicalRow?.source_rule_entry_ids ?? [],
+        legacyStatus,
+        warnings,
+        sourceRuleEntryIds,
         otherReason,
         axis1: axisColumns[0] ?? "",
         axis2: axisColumns[1] ?? "",
@@ -2445,9 +2739,17 @@ export default function ShoppingAutoPricePage() {
   }, [
     categoryOverrideByEntryKey,
     canonicalOptionRowByEntryKey,
+    effectiveOptionAxis1ByEntryKey,
+    effectiveOptionAxis2ByEntryKey,
     effectiveOptionSyncDeltaByEntryKey,
     evaluatedOptionRowByEntryKey,
     optionEntries,
+    fallbackSizeMaterialCode,
+    editorMasterItemId,
+    optionLaborRuleProductNo,
+    optionLaborRuleRows,
+    resolvedMasterMaterialCode,
+    sizeRuleMarketContext,
   ]);
   const compactOptionRowByEntryKey = useMemo(() => {
     const next = new Map<string, CompactOptionRow>();
@@ -2484,11 +2786,40 @@ export default function ShoppingAutoPricePage() {
     const next = new Map<string, Array<{ value: string; label: string }>>();
     for (const row of compactOptionRows) {
       if (row.categoryKey !== "SIZE") continue;
-      const base = loadedOptionAllowlist.sizes_by_material[row.selectedMaterialCode ?? ""] ?? [];
+      const sizeMaterialCode = String(row.selectedMaterialCode || fallbackSizeMaterialCode || "").trim();
+      const base = loadedOptionAllowlist.sizes_by_material[sizeMaterialCode] ?? [];
       next.set(row.entryKey, withResolvedChoice(base, row.selectedSizeWeightText, row.legacyStatus !== "VALID", row.selectedSizeWeightText ? `${row.selectedSizeWeightText}g` : row.selectedSizeWeightText));
     }
     return next;
-  }, [compactOptionRows, loadedOptionAllowlist.sizes_by_material]);
+  }, [compactOptionRows, fallbackSizeMaterialCode, loadedOptionAllowlist.sizes_by_material]);
+  const sizeSelectionPartsByEntryKey = useMemo(() => {
+    const next = new Map<string, { major: string; detail: string }>();
+    for (const row of compactOptionRows) {
+      if (row.categoryKey !== "SIZE") continue;
+      next.set(row.entryKey, normalizeSizeSelectionParts(row.selectedSizeWeightText));
+    }
+    return next;
+  }, [compactOptionRows]);
+  const sizeMajorChoicesByEntryKey = useMemo(() => {
+    const next = new Map<string, Array<{ value: string; label: string }>>();
+    for (const row of compactOptionRows) {
+      if (row.categoryKey !== "SIZE") continue;
+      next.set(row.entryKey, buildRuleBackedSizeMajorOptions(sizeChoicesByEntryKey.get(row.entryKey) ?? []));
+    }
+    return next;
+  }, [compactOptionRows, sizeChoicesByEntryKey]);
+  const sizeDetailChoicesByEntryKey = useMemo(() => {
+    const next = new Map<string, Array<{ value: string; label: string }>>();
+    for (const row of compactOptionRows) {
+      if (row.categoryKey !== "SIZE") continue;
+      const parts = sizeSelectionPartsByEntryKey.get(row.entryKey) ?? { major: "", detail: "" };
+      next.set(row.entryKey, buildRuleBackedSizeDetailOptions(sizeChoicesByEntryKey.get(row.entryKey) ?? [], parts.major));
+    }
+    return next;
+  }, [compactOptionRows, sizeChoicesByEntryKey, sizeSelectionPartsByEntryKey]);
+  const hasAnySizeRuleChoices = useMemo(() => Object.values(loadedOptionAllowlist.sizes_by_material ?? {}).some((choices) => (choices?.length ?? 0) > 0), [loadedOptionAllowlist.sizes_by_material]);
+  const hasAnySizeCompactRows = useMemo(() => compactOptionRows.some((row) => row.categoryKey === "SIZE"), [compactOptionRows]);
+
   const colorChoicesByEntryKey = useMemo(() => {
     const next = new Map<string, Array<{ value: string; label: string }>>();
     for (const row of compactOptionRows) {
@@ -2502,21 +2833,25 @@ export default function ShoppingAutoPricePage() {
   const axisColumnHeaders = ["1차분류", "2차분류", "3차분류"] as const;
   const hasUnsavedCompactOptionChanges = useMemo(() => {
     return optionEntries.some((entry) => {
-      const savedCategory = defaultOptionCategoryDrafts[entry.optionName] ?? guessCategoryByOptionName(entry.optionName);
+      const savedCategory = defaultOptionCategoryDrafts[entry.optionName] ?? "OTHER";
       const draftCategory = optionCategoryDrafts[entry.optionName] ?? savedCategory;
       if (draftCategory !== savedCategory) return true;
-      const savedDelta = defaultOptionSyncDeltaDrafts[entry.entryKey] ?? "0";
-      const draftDelta = optionSyncDeltaDrafts[entry.entryKey] ?? savedDelta;
-      if (String(draftDelta).trim() !== String(savedDelta).trim()) return true;
+      if (!isRuleDrivenCategory(draftCategory)) {
+        const savedDelta = defaultOptionSyncDeltaDrafts[entry.entryKey] ?? "0";
+        const draftDelta = optionSyncDeltaDrafts[entry.entryKey] ?? savedDelta;
+        if (String(draftDelta).trim() !== String(savedDelta).trim()) return true;
+      }
       const savedAxis1 = defaultOptionAxis1Drafts[entry.entryKey] ?? "";
       const draftAxis1 = optionAxis1Drafts[entry.entryKey] ?? savedAxis1;
       if (String(draftAxis1).trim() !== String(savedAxis1).trim()) return true;
       const savedAxis2 = defaultOptionAxis2Drafts[entry.entryKey] ?? "";
       const draftAxis2 = optionAxis2Drafts[entry.entryKey] ?? savedAxis2;
       if (String(draftAxis2).trim() !== String(savedAxis2).trim()) return true;
-      const savedAxis3 = defaultOptionAxis3Drafts[entry.entryKey] ?? "";
-      const draftAxis3 = optionAxis3Drafts[entry.entryKey] ?? savedAxis3;
-      if (String(draftAxis3).trim() !== String(savedAxis3).trim()) return true;
+      if (!isRuleDrivenCategory(draftCategory)) {
+        const savedAxis3 = defaultOptionAxis3Drafts[entry.entryKey] ?? "";
+        const draftAxis3 = optionAxis3Drafts[entry.entryKey] ?? savedAxis3;
+        if (String(draftAxis3).trim() !== String(savedAxis3).trim()) return true;
+      }
       if (draftCategory === "OTHER") {
         const savedReason = defaultOptionOtherReasonDrafts[entry.entryKey] ?? "";
         const draftReason = optionOtherReasonDrafts[entry.entryKey] ?? savedReason;
@@ -2689,9 +3024,20 @@ export default function ShoppingAutoPricePage() {
       colorCode: String(draft.option_color_code ?? "").trim() || null,
       decorationCode: decorationCode || null,
       decorationMasterId,
+    }, {
+      masterItemId: editorMasterItemId,
+      externalProductNo: optionLaborRuleProductNo,
+      marketContext: sizeRuleMarketContext,
     });
+    const sizePriceOverrideEnabled = draft.size_price_override_enabled === true;
+    const sizePriceOverrideKrw = sizePriceOverrideEnabled
+      ? Math.round(parseNumericInput(draft.size_price_override_krw_text) ?? 0)
+      : 0;
+    const sizeBucket = sizePriceOverrideEnabled
+      ? sizePriceOverrideKrw
+      : (existing?.sync_rule_weight_enabled !== false ? buckets.size : 0);
     const total = (existing?.sync_rule_material_enabled !== false ? buckets.material : 0)
-      + (existing?.sync_rule_weight_enabled !== false ? buckets.size : 0)
+      + sizeBucket
       + (existing?.sync_rule_plating_enabled !== false ? buckets.colorPlating : 0)
       + (existing?.sync_rule_decoration_enabled !== false ? buckets.decor : 0)
       + buckets.other
@@ -2708,12 +3054,24 @@ export default function ShoppingAutoPricePage() {
       }
       const variantLevelDelta = Math.round(Number(existing?.option_price_delta_krw ?? 0));
       if (hasCompactOptionPricingDraft) {
+        let sizeContribution = 0;
         const optionValueDelta = (variant.options ?? []).reduce((sum, option) => {
           const entryKey = optionEntryKey(option.name, option.value);
-          const compactResolvedDelta = compactOptionRowByEntryKey.get(entryKey)?.resolvedDeltaKrw;
-          return sum + Math.round(Number(compactResolvedDelta ?? 0));
+          const compactRow = compactOptionRowByEntryKey.get(entryKey);
+          const compactResolvedDelta = compactRow?.resolvedDeltaKrw;
+          const resolved = Math.round(Number(compactResolvedDelta ?? 0));
+          if (compactRow?.categoryKey === "SIZE") sizeContribution += resolved;
+          return sum + resolved;
         }, 0);
-        next[variant.variantCode] = Math.round(optionValueDelta + variantLevelDelta);
+        const draft = variantOptionDraftsByCode[variant.variantCode] ?? defaultVariantOptionDrafts[variant.variantCode] ?? toVariantOptionDraft(null);
+        const sizePriceOverrideEnabled = draft.size_price_override_enabled === true;
+        const sizePriceOverrideKrw = sizePriceOverrideEnabled
+          ? Math.round(parseNumericInput(draft.size_price_override_krw_text) ?? 0)
+          : 0;
+        const total = sizePriceOverrideEnabled
+          ? optionValueDelta - sizeContribution + sizePriceOverrideKrw + variantLevelDelta
+          : optionValueDelta + variantLevelDelta;
+        next[variant.variantCode] = Math.round(total);
         continue;
       }
       next[variant.variantCode] = computeDraftAdditionalAmount(variant);
@@ -2751,14 +3109,21 @@ export default function ShoppingAutoPricePage() {
         .filter((value): value is number => value != null),
     );
     const draftSizeValue = parseNumericInput(draft.option_size_value_text);
-    const resolvedSizeValue = draftSizeValue != null && allowedSizeValues.has(draftSizeValue)
+    const resolvedSizeValue = draftSizeValue != null
       ? draftSizeValue
       : (existing?.option_size_value ?? null);
+    const sizePriceOverrideEnabled = draft.size_price_override_enabled === true;
+    const sizePriceOverrideKrw = sizePriceOverrideEnabled
+      ? Math.round(parseNumericInput(draft.size_price_override_krw_text) ?? Number.NaN)
+      : null;
     if (!effectiveChannelId) throw new Error("channel_id가 필요합니다");
     if (!editorMasterItemId) throw new Error("master_item_id가 필요합니다");
     if (!externalProductNo) throw new Error("external_product_no가 필요합니다");
     if (!variantCode) throw new Error("external_variant_code가 필요합니다");
     if (optionPriceMode === "SYNC" && !syncRuleSetId) throw new Error("sync_rule_set_id를 확인할 수 없습니다");
+    if (sizePriceOverrideEnabled && (!Number.isFinite(sizePriceOverrideKrw) || sizePriceOverrideKrw == null || sizePriceOverrideKrw % 100 !== 0)) {
+      throw new Error("SIZE override 금액은 100원 단위 숫자여야 합니다");
+    }
     return {
       channel_id: effectiveChannelId,
       master_item_id: editorMasterItemId,
@@ -2771,6 +3136,8 @@ export default function ShoppingAutoPricePage() {
       option_size_value: resolvedSizeValue,
       material_multiplier_override: existing?.material_multiplier_override ?? null,
       size_weight_delta_g: existing?.size_weight_delta_g ?? null,
+      size_price_override_enabled: sizePriceOverrideEnabled,
+      size_price_override_krw: sizePriceOverrideEnabled ? sizePriceOverrideKrw : null,
       option_price_delta_krw: existing?.option_price_delta_krw ?? null,
       option_price_mode: optionPriceMode,
       option_manual_target_krw: optionPriceMode === "MANUAL" ? existing?.option_manual_target_krw ?? null : null,
@@ -2815,7 +3182,7 @@ export default function ShoppingAutoPricePage() {
       if (!externalProductNo) throw new Error("external_product_no가 필요합니다");
       if (optionEntries.length === 0) return { ok: true, data: [] as OptionCategoryRow[] };
       if (blockingOptionRows.length > 0) {
-        throw new Error(`legacy/unresolved 옵션값 ${blockingOptionRows.length}개를 먼저 해결한 뒤 저장하세요`);
+        throw new Error(`규칙 불일치/미해결 옵션값 ${blockingOptionRows.length}개를 먼저 해결한 뒤 저장하세요`);
       }
       const rows = optionEntries.flatMap((entry) => {
         const compactRow = compactOptionRowByEntryKey.get(entry.entryKey);
@@ -2823,10 +3190,10 @@ export default function ShoppingAutoPricePage() {
         if (categoryKey === "NOTICE") return [];
         const syncDelta = categoryKey === "DECOR"
           ? Math.round(Number(compactRow?.decorFinalAmountKrw ?? 0))
-          : categoryKey === "SIZE" || categoryKey === "COLOR_PLATING"
-            ? Math.round(Number(compactRow?.syncDeltaKrw ?? 0))
+          : isRuleDrivenCategory(categoryKey)
+            ? Math.round(Number(compactRow?.resolvedDeltaKrw ?? compactRow?.syncDeltaKrw ?? 0))
             : Math.round(parseNumericInput(optionSyncDeltaDrafts[entry.entryKey] ?? defaultOptionSyncDeltaDrafts[entry.entryKey] ?? "0") ?? 0);
-        if (categoryKey !== "DECOR" && syncDelta % 1000 !== 0) {
+        if (!isRuleDrivenCategory(categoryKey) && categoryKey !== "DECOR" && syncDelta % 1000 !== 0) {
           throw new Error(`${entry.optionName} ${entry.optionValue} 가격은 1000원 단위로 입력해야 합니다`);
         }
         if (categoryKey === "DECOR") {
@@ -2918,7 +3285,7 @@ export default function ShoppingAutoPricePage() {
             };
           }
           if (categoryKey === "SIZE") {
-            const materialCode = String(compactRow?.selectedMaterialCode ?? "").trim();
+            const materialCode = String(fallbackSizeMaterialCode || resolvedMasterMaterialCode || compactRow?.selectedMaterialCode || "").trim();
             const sizeWeight = String(compactRow?.selectedSizeWeightText ?? "").trim();
             return {
               axis_key: "OPTION_AXIS_SELECTION" as const,
@@ -2926,7 +3293,7 @@ export default function ShoppingAutoPricePage() {
               category_key: "SIZE" as const,
               axis1_value: materialCode || null,
               axis2_value: sizeWeight || null,
-              axis3_value: String(Math.round(Number(compactRow?.syncDeltaKrw ?? 0))),
+              axis3_value: null,
               decor_master_item_id: null,
               decor_extra_delta_krw: null,
               decor_final_amount_krw: null,
@@ -2941,7 +3308,7 @@ export default function ShoppingAutoPricePage() {
               category_key: "COLOR_PLATING" as const,
               axis1_value: materialCode || null,
               axis2_value: colorCode || null,
-              axis3_value: String(Math.round(Number(compactRow?.syncDeltaKrw ?? 0))),
+              axis3_value: null,
               decor_master_item_id: null,
               decor_extra_delta_krw: null,
               decor_final_amount_krw: null,
@@ -3009,7 +3376,7 @@ export default function ShoppingAutoPricePage() {
       setOptionCategorySaveError(null);
       applyComputedMappingPreview();
       await Promise.all([
-        qc.invalidateQueries({ queryKey: ["auto-price-variant-lookup", effectiveChannelId, editorMasterItemId, editorPreview?.productNo ?? ""] }),
+        qc.invalidateQueries({ queryKey: ["auto-price-variant-lookup", effectiveChannelId, editorMasterItemId, canonicalEditorProductNo] }),
         qc.invalidateQueries({ queryKey: ["pricing-snapshot-explain", effectiveChannelId, editorMasterItemId] }),
       ]);
       if (!args?.skipApply && editorPreview && !applyEditorMutation.isPending) {
@@ -3157,6 +3524,7 @@ export default function ShoppingAutoPricePage() {
   const loadPreviewMutation = useMutation({
     onMutate: async (productNo?: string) => {
       const resolvedProductNo = String(productNo ?? editorProductNo).trim();
+      setEditorReloadNonce(Date.now());
       setEditorPreview(null);
       setVariantOptionDraftSlot({ resetKey: '', value: {} });
       setOptionCategoryDraftSlot({ resetKey: '', value: {} });
@@ -3410,7 +3778,7 @@ export default function ShoppingAutoPricePage() {
         "POST",
         {
           channel_id: effectiveChannelId,
-          external_product_no: editorPreview?.productNo ?? editorProductNo.trim(),
+          external_product_no: canonicalEditorProductNo || requestedEditorProductNo,
           master_item_id: editorMasterItemId || undefined,
           product: {
             price: parseNumericInput(editorPrice),
@@ -4104,7 +4472,7 @@ export default function ShoppingAutoPricePage() {
                           <tr key={`preview-compact-row-${row.entryKey}`} className="border-t border-[var(--hairline)]">
                             <td className="px-2 py-1">
                               <div className="flex items-center gap-2">
-                                <span className="font-medium">{row.optionName}</span>
+                                <span className="font-medium">{`${row.optionName}: ${row.optionValue}`}</span>
                                 <span className="text-[10px] text-[var(--muted)]">{legacyStatusLabelOf(row.legacyStatus)}{row.sourceRuleEntryIds.length > 0 ? ` / rule ${row.sourceRuleEntryIds.length}` : ""}{row.categoryKey === "OTHER" && row.otherReason ? ` / 사유:${row.otherReason}` : ""}</span>
                               </div>
                               {row.warnings[0] ? <div className="text-[10px] text-amber-600">{row.warnings[0]}</div> : null}
@@ -4126,7 +4494,7 @@ export default function ShoppingAutoPricePage() {
                   </div>
                   {blockingOptionRows.length > 0 ? (
                     <div className="mt-2 rounded border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-100">
-                      저장/동기화 차단: legacy 또는 미해결 옵션값 {blockingOptionRows.length}개를 먼저 해결해야 합니다.
+                      저장/동기화 차단: 규칙 불일치 또는 미해결 옵션값 {blockingOptionRows.length}개를 먼저 해결해야 합니다.
                     </div>
                   ) : null}
 
@@ -4172,10 +4540,15 @@ export default function ShoppingAutoPricePage() {
                       <Button size="sm" variant="ghost" onClick={() => setShowAdvancedVariantMapping((current) => !current)}>{showAdvancedVariantMapping ? "고급 variant 접기" : "고급 variant 열기"}</Button>
                     </div>
                   </div>
-                  <div className="mt-2 text-[11px] text-[var(--muted)]">현재 편집 행 {compactOptionRows.length}개 · 가격은 1000원 단위로 저장됩니다. legacy/unresolved 행이 남아 있으면 저장과 sync가 차단됩니다.</div>
+                  <div className="mt-2 text-[11px] text-[var(--muted)]">현재 편집 행 {compactOptionRows.length}개 · SIZE/COLOR_PLATING 가격은 rules SOT를 따르고, 이 화면에서는 축 선택만 저장됩니다. 규칙 불일치/미해결 행이 남아 있으면 저장과 sync가 차단됩니다.</div>
                   {blockingOptionRows.length > 0 ? (
                     <div className="mt-2 rounded border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-100">
-                      현재 편집 기준으로 legacy 또는 미해결 옵션값 {blockingOptionRows.length}개가 있어 저장할 수 없습니다.
+                      현재 편집 기준으로 규칙 불일치 또는 미해결 옵션값 {blockingOptionRows.length}개가 있어 저장할 수 없습니다.
+                    </div>
+                  ) : null}
+                  {hasAnySizeCompactRows && !hasAnySizeRuleChoices ? (
+                    <div className="mt-2 rounded border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] text-slate-700">
+                      이 상품에는 아직 가격이 설정된 SIZE 구간이 없어 Size 드롭다운을 표시하지 않습니다. 가격이 연결된 구간만 후보에 노출됩니다.
                     </div>
                   ) : null}
                   {compactOptionRows.length === 0 ? (
@@ -4197,14 +4570,14 @@ export default function ShoppingAutoPricePage() {
                           {compactOptionRows.map((row) => (
                             <tr key={row.entryKey} className="border-t border-[var(--hairline)]">
                               <td className="px-2 py-1">
-                                <div className="font-medium">{row.optionName}</div>
+                                <div className="font-medium">{`${row.optionName}: ${row.optionValue}`}</div>
                                 <div className="mt-1 text-[10px] text-[var(--muted)]">{legacyStatusLabelOf(row.legacyStatus)}{row.sourceRuleEntryIds.length > 0 ? ` / rule ${row.sourceRuleEntryIds.length}` : ""}</div>
                                 {row.warnings[0] ? <div className="mt-1 text-[10px] text-amber-600">{row.warnings[0]}</div> : null}
                               </td>
                               <td className="px-2 py-1">
                                 <Select
                                   value={row.categoryKey}
-                                  onChange={(e) => setOptionCategoryDrafts((prev) => ({ ...prev, [row.optionName]: e.target.value }))}
+                                  onChange={(e) => handleOptionCategoryChange(row.optionName, e.target.value as OptionCategoryKey)}
                                   disabled={saveCategoriesMutation.isPending}
                                   className="h-8 min-w-[120px] border-slate-300 bg-white pr-8 text-[11px] font-medium text-slate-900 focus:border-blue-600 focus:ring-2 focus:ring-blue-600/20"
                                 >
@@ -4232,13 +4605,21 @@ export default function ShoppingAutoPricePage() {
                                       <option key={`quick-notice-${row.entryKey}-${optionValue}`} value={optionValue}>{optionValue}</option>
                                     ))}
                                   </Select>
-                                ) : row.categoryKey === "SIZE" || row.categoryKey === "COLOR_PLATING" || row.categoryKey === "OTHER" ? (
+                                ) : row.categoryKey === "SIZE" ? (
+                                  <Input
+                                    value={row.selectedMaterialCode || fallbackSizeMaterialCode || resolvedMasterMaterialCode || ""}
+                                    disabled
+                                    readOnly
+                                    className="h-8 min-w-[150px] cursor-not-allowed bg-slate-50 text-[11px] text-slate-500"
+                                  />
+                                ) : row.categoryKey === "COLOR_PLATING" || row.categoryKey === "OTHER" ? (
                                   <Select
                                     value={row.selectedMaterialCode}
                                     onChange={(e) => setOptionAxis1Drafts((prev) => ({ ...prev, [row.entryKey]: e.target.value }))}
                                     disabled={saveCategoriesMutation.isPending}
                                     className="h-8 min-w-[150px] border-slate-300 bg-white pr-8 text-[11px] text-slate-900 focus:border-blue-600 focus:ring-2 focus:ring-blue-600/20"
                                   >
+                                    <option value="">소재 선택</option>
                                     {(materialChoicesByEntryKey.get(row.entryKey) ?? []).map((choice) => (
                                       <option key={`quick-axis1-${row.entryKey}-${choice.value}`} value={choice.value}>{choice.label}</option>
                                     ))}
@@ -4257,16 +4638,39 @@ export default function ShoppingAutoPricePage() {
                                     className="h-8 min-w-[120px] cursor-not-allowed bg-slate-50 text-[11px] text-slate-500"
                                   />
                                 ) : row.categoryKey === "SIZE" ? (
-                                  <Select
-                                    value={row.selectedSizeWeightText}
-                                    onChange={(e) => setOptionAxis2Drafts((prev) => ({ ...prev, [row.entryKey]: e.target.value }))}
-                                    disabled={saveCategoriesMutation.isPending}
-                                    className="h-8 min-w-[120px] border-slate-300 bg-white pr-8 text-[11px] text-slate-900 focus:border-blue-600 focus:ring-2 focus:ring-blue-600/20"
-                                  >
-                                    {(sizeChoicesByEntryKey.get(row.entryKey) ?? []).map((choice) => (
-                                      <option key={`quick-axis2-size-${row.entryKey}-${choice.value}`} value={choice.value}>{choice.label}</option>
-                                    ))}
-                                  </Select>
+                                  <div className="flex items-center gap-2">
+                                    <Select
+                                      value={(sizeSelectionPartsByEntryKey.get(row.entryKey)?.major ?? "")}
+                                      onChange={(e) => {
+                                        const nextMajor = e.target.value;
+                                        const currentParts = sizeSelectionPartsByEntryKey.get(row.entryKey) ?? { major: "", detail: "" };
+                                        const nextValue = nextMajor ? combineSizeSelectionParts(nextMajor, currentParts.detail || "00") : "";
+                                        setOptionAxis2Drafts((prev) => ({ ...prev, [row.entryKey]: nextValue }));
+                                      }}
+                                      disabled={saveCategoriesMutation.isPending}
+                                      className="h-8 min-w-[100px] border-slate-300 bg-white pr-8 text-[11px] text-slate-900 focus:border-blue-600 focus:ring-2 focus:ring-blue-600/20"
+                                    >
+                                      <option value="">g 선택</option>
+                                      {(sizeMajorChoicesByEntryKey.get(row.entryKey) ?? []).map((choice) => (
+                                        <option key={`quick-axis2-size-major-${row.entryKey}-${choice.value}`} value={choice.value}>{choice.label}</option>
+                                      ))}
+                                    </Select>
+                                    <Select
+                                      value={(sizeSelectionPartsByEntryKey.get(row.entryKey)?.detail ?? "")}
+                                      onChange={(e) => {
+                                        const currentParts = sizeSelectionPartsByEntryKey.get(row.entryKey) ?? { major: "", detail: "" };
+                                        const nextValue = currentParts.major ? combineSizeSelectionParts(currentParts.major, e.target.value) : "";
+                                        setOptionAxis2Drafts((prev) => ({ ...prev, [row.entryKey]: nextValue }));
+                                      }}
+                                      disabled={saveCategoriesMutation.isPending || !(sizeSelectionPartsByEntryKey.get(row.entryKey)?.major ?? "")}
+                                      className="h-8 min-w-[110px] border-slate-300 bg-white pr-8 text-[11px] text-slate-900 focus:border-blue-600 focus:ring-2 focus:ring-blue-600/20"
+                                    >
+                                      <option value="">0.01g 선택</option>
+                                      {(sizeDetailChoicesByEntryKey.get(row.entryKey) ?? []).map((choice) => (
+                                        <option key={`quick-axis2-size-detail-${row.entryKey}-${choice.value}`} value={choice.value}>{choice.label}</option>
+                                      ))}
+                                    </Select>
+                                  </div>
                                 ) : row.categoryKey === 'DECOR' ? (
                                   <Select
                                     value={row.selectedDecorMasterId}
@@ -4287,6 +4691,7 @@ export default function ShoppingAutoPricePage() {
                                     disabled={saveCategoriesMutation.isPending}
                                     className={'h-8 min-w-[140px] border-slate-300 bg-white pr-8 text-[11px] text-slate-900 focus:border-blue-600 focus:ring-2 focus:ring-blue-600/20'}
                                   >
+                                    <option value="">색상 선택</option>
                                     {(colorChoicesByEntryKey.get(row.entryKey) ?? []).map((choice) => (
                                       <option key={`quick-axis2-color-${row.entryKey}-${choice.value}`} value={choice.value}>{choice.label}</option>
                                     ))}
@@ -4312,29 +4717,9 @@ export default function ShoppingAutoPricePage() {
                                     className={'h-8 min-w-[160px] cursor-not-allowed bg-slate-50 text-[11px] text-slate-500'}
                                   />
                                 ) : row.categoryKey === 'COLOR_PLATING' ? (
-                                  (colorAmountChoicesByEntryKey.get(row.entryKey) ?? []).length > 0 ? (
-                                    <Select
-                                      value={String(row.syncDeltaKrw)}
-                                      onChange={(e) => {
-                                        setOptionAxis3Drafts((prev) => ({ ...prev, [row.entryKey]: e.target.value }));
-                                        setOptionSyncDeltaDrafts((prev) => ({ ...prev, [row.entryKey]: e.target.value }));
-                                      }}
-                                      disabled={saveCategoriesMutation.isPending}
-                                      className={'h-8 min-w-[120px] border-slate-300 bg-white pr-8 text-right text-[11px] text-slate-900 focus:border-blue-600 focus:ring-2 focus:ring-blue-600/20'}
-                                    >
-                                      {(colorAmountChoicesByEntryKey.get(row.entryKey) ?? []).map((amount) => (
-                                        <option key={`quick-axis3-color-${row.entryKey}-${amount}`} value={String(amount)}>{fmtKrw(amount)}</option>
-                                      ))}
-                                    </Select>
-                                  ) : (
-                                    <Input
-                                      value={''}
-                                      placeholder={'룰 금액 없음'}
-                                      disabled
-                                      readOnly
-                                      className={'h-8 min-w-[120px] cursor-not-allowed bg-slate-50 text-[11px] text-slate-500'}
-                                    />
-                                  )
+                                  <span className="text-[11px] text-[var(--muted)]">색상룰 기준</span>
+                                ) : row.categoryKey === 'SIZE' ? (
+                                  <span className="text-[11px] text-[var(--muted)]">구간룰 기준</span>
                                 ) : (
                                   row.axis3 || "-"
                                 )}
@@ -4357,21 +4742,27 @@ export default function ShoppingAutoPricePage() {
                                     className="h-8 min-w-[92px] cursor-not-allowed bg-slate-50 text-right text-[11px] text-slate-500"
                                   />
                                 ) : row.categoryKey === "COLOR_PLATING" ? (
-                                  <Input
-                                    value={String(row.syncDeltaKrw)}
-                                    type="number"
-                                    disabled
-                                    readOnly
-                                    className="h-8 min-w-[92px] cursor-not-allowed bg-slate-50 text-right text-[11px] text-slate-500"
-                                  />
+                                  <div>
+                                    <Input
+                                      value={String(row.syncDeltaKrw)}
+                                      type="number"
+                                      disabled
+                                      readOnly
+                                      className="h-8 min-w-[92px] cursor-not-allowed bg-slate-50 text-right text-[11px] text-slate-500"
+                                    />
+                                    <div className="mt-1 text-[10px] text-[var(--muted)]">가격 수정은 rules &gt; 도금/색상에서만 가능합니다.</div>
+                                  </div>
                                 ) : row.categoryKey === "SIZE" ? (
-                                  <Input
-                                    value={String(row.syncDeltaKrw)}
-                                    type="number"
-                                    disabled
-                                    readOnly
-                                    className="h-8 min-w-[92px] cursor-not-allowed bg-slate-50 text-right text-[11px] text-slate-500"
-                                  />
+                                  <div>
+                                    <Input
+                                      value={String(row.syncDeltaKrw)}
+                                      type="number"
+                                      disabled
+                                      readOnly
+                                      className="h-8 min-w-[92px] cursor-not-allowed bg-slate-50 text-right text-[11px] text-slate-500"
+                                    />
+                                    <div className="mt-1 text-[10px] text-[var(--muted)]">가격 수정은 rules &gt; 중량에서만 가능합니다.</div>
+                                  </div>
                                 ) : (
                                   <Input
                                     value={String(row.syncDeltaKrw)}
@@ -4492,12 +4883,17 @@ export default function ShoppingAutoPricePage() {
                                   <option key={`focused-material-${choice.value}`} value={choice.value}>{choice.label}</option>
                                 ))}
                               </Select>
+                              <div className="text-[10px] text-[var(--muted)]">가격은 rules &gt; 중량 구간룰에서 계산됩니다.</div>
                             </div>
                             <div className="space-y-1">
-                              <div className="text-xs text-[var(--muted)]">size</div>
-                              <Select
+                              <div className="text-xs text-[var(--muted)]">size (구간 선택)</div>
+                              <Input
                                 value={focusedDraft.option_size_value_text}
-                                className="bg-white pr-8 text-slate-900 focus:border-blue-600 focus:ring-2 focus:ring-blue-600/20"
+                                type="number"
+                                min={0}
+                                step="0.01"
+                                placeholder="예: 1.25"
+                                className="bg-white text-slate-900 focus:border-blue-600 focus:ring-2 focus:ring-blue-600/20"
                                 onChange={(e) => {
                                   const nextText = e.target.value;
                                   updateVariantOptionDraft(focusedVariantCode, (draft) => ({
@@ -4506,12 +4902,38 @@ export default function ShoppingAutoPricePage() {
                                     option_size_value: parseNumericInput(nextText),
                                   }));
                                 }}
-                              >
-                                <option value="">선택 안함</option>
-                                {focusedSizeChoices.map((choice) => (
-                                  <option key={`focused-size-${choice.value}`} value={choice.value}>{choice.label}</option>
-                                ))}
-                              </Select>
+                              />
+                              <div className="rounded border border-[var(--hairline)] bg-[var(--panel)] px-3 py-2 text-[11px]">
+                                <label className="flex items-center gap-2 text-[var(--fg)]">
+                                  <input
+                                    type="checkbox"
+                                    checked={focusedDraft.size_price_override_enabled}
+                                    onChange={(e) => updateVariantOptionDraft(focusedVariantCode, (draft) => ({
+                                      ...draft,
+                                      size_price_override_enabled: e.target.checked,
+                                    }))}
+                                  />
+                                  <span>SIZE override</span>
+                                </label>
+                                <div className="mt-2">
+                                  <Input
+                                    value={focusedDraft.size_price_override_krw_text}
+                                    type="number"
+                                    min={0}
+                                    step="100"
+                                    disabled={!focusedDraft.size_price_override_enabled}
+                                    placeholder="override 금액(100원 단위)"
+                                    className={!focusedDraft.size_price_override_enabled ? "cursor-not-allowed bg-slate-50 text-slate-500" : ""}
+                                    onChange={(e) => updateVariantOptionDraft(focusedVariantCode, (draft) => ({
+                                      ...draft,
+                                      size_price_override_krw_text: e.target.value,
+                                    }))}
+                                  />
+                                </div>
+                                <div className="mt-2 text-[10px] text-[var(--muted)]">
+                                  체크 ON이면 SIZE는 시세연동 대신 이 금액을 계속 사용합니다. 체크를 끌 때까지 유지됩니다.
+                                </div>
+                              </div>
                             </div>
                             <div className="space-y-1">
                               <div className="text-xs text-[var(--muted)]">color / plating</div>

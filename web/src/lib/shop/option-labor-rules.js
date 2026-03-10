@@ -1,3 +1,5 @@
+import { resolveMarketLinkedSizeCell } from "./market-linked-size-grid.js";
+
 const CATEGORY_KEYS = ["MATERIAL", "SIZE", "COLOR_PLATING", "DECOR", "OTHER"];
 
 export const OPTION_LABOR_RULE_CATEGORIES = CATEGORY_KEYS;
@@ -33,7 +35,10 @@ export const normalizeMaterialScopeCode = (value) => {
 
 export const normalizeOptionLaborColorCode = (value) => {
   const normalized = String(value ?? "").trim().toUpperCase();
-  return normalized || null;
+  if (!normalized) return null;
+  const letterSet = new Set(normalized.replace(/[^PGWB]/g, "").split("").filter((ch) => ch.length > 0));
+  const canonical = ["P", "G", "W", "B"].filter((code) => letterSet.has(code)).join("");
+  return canonical || null;
 };
 
 export const normalizeDecorationCode = (value) => {
@@ -102,6 +107,14 @@ const normalizeRuleRow = (row) => {
     additional_weight_max_value: effectiveMaxWeightValue,
     additional_weight_min_centigram: effectiveMinCentigram,
     additional_weight_max_centigram: effectiveMaxCentigram,
+    master_item_id: String(row?.master_item_id ?? '').trim() || null,
+    external_product_no: String(row?.external_product_no ?? '').trim() || null,
+    size_price_mode: String(row?.size_price_mode ?? '').trim().toUpperCase() || null,
+    fixed_delta_krw: Number.isFinite(Number(row?.fixed_delta_krw)) ? Math.round(Number(row?.fixed_delta_krw)) : null,
+    formula_multiplier: Number.isFinite(Number(row?.formula_multiplier)) ? Number(row?.formula_multiplier) : null,
+    formula_offset_krw: Number.isFinite(Number(row?.formula_offset_krw)) ? Number(row?.formula_offset_krw) : null,
+    rounding_unit_krw: Number.isFinite(Number(row?.rounding_unit_krw)) ? Math.round(Number(row?.rounding_unit_krw)) : null,
+    rounding_mode: String(row?.rounding_mode ?? '').trim().toUpperCase() || null,
     base_labor_cost_krw: normalizeKrwInteger(row?.base_labor_cost_krw, 0),
     additive_delta_krw: normalizeKrwInteger(
       Math.round(normalizeKrwInteger(row?.additive_delta_krw, 0) / LABOR_AMOUNT_STEP_KRW) * LABOR_AMOUNT_STEP_KRW,
@@ -199,15 +212,30 @@ export const resolveOptionLaborRuleMatches = (rows, context) => {
   return { material, size, sizeRules, colorPlating, colorPlatingRules, decor, decorRules, other, otherRows };
 };
 
-export const computeOptionLaborBuckets = (rows, context) => {
-  const matched = resolveOptionLaborRuleMatches(rows, context);
+export const computeOptionLaborBuckets = (rows, context, options = {}) => {
+  const sourceRows = Array.isArray(rows) ? rows : [];
+  const matched = resolveOptionLaborRuleMatches(sourceRows, context);
   const sizeRules = Array.isArray(matched.sizeRules) ? matched.sizeRules : (matched.size ? [matched.size] : []);
+  const materialCode = normalizeMaterialScopeCode(context?.materialCode);
   const colorPlatingRules = Array.isArray(matched.colorPlatingRules)
     ? matched.colorPlatingRules
     : (matched.colorPlating ? [matched.colorPlating] : []);
   const decorRules = Array.isArray(matched.decorRules) ? matched.decorRules : (matched.decor ? [matched.decor] : []);
   const material = 0;
-  const size = sizeRules.reduce((sum, row) => sum + normalizeKrwInteger(row.additive_delta_krw, 0), 0);
+  const hasExplicitSizeMode = sizeRules.some((row) => String(row?.size_price_mode ?? '').trim().length > 0 || row?.fixed_delta_krw != null);
+  const resolvedSizeCell = hasExplicitSizeMode
+    ? resolveMarketLinkedSizeCell({
+      rows: sourceRows,
+      masterItemId: options?.masterItemId ?? null,
+      externalProductNo: options?.externalProductNo ?? null,
+      materialCode,
+      additionalWeightG: context?.additionalWeightG,
+      marketContext: options?.marketContext ?? null,
+    })
+    : null;
+  const size = resolvedSizeCell
+    ? (resolvedSizeCell.valid ? Math.round(resolvedSizeCell.computed_delta_krw ?? 0) : 0)
+    : sizeRules.reduce((sum, row) => sum + normalizeKrwInteger(row.additive_delta_krw, 0), 0);
   const colorPlating = colorPlatingRules.reduce((sum, row) => sum + normalizeKrwInteger(row.additive_delta_krw, 0), 0);
   const decor = decorRules.reduce((sum, row) => {
     return sum + normalizeKrwInteger(row.base_labor_cost_krw, 0) + normalizeKrwInteger(row.additive_delta_krw, 0);

@@ -197,3 +197,76 @@ test('computeOptionLaborBuckets accumulates overlapping size rules in runtime pa
   assert.equal(result.size, 3500);
   assert.equal(result.total, 3500);
 });
+
+
+test('market_linked_size_price_resolves_from_market_context', () => {
+  const result = resolveCentralOptionMapping({
+    category: 'SIZE',
+    masterMaterialCode: '925',
+    rules: [
+      {
+        rule_id: 'size-market',
+        category_key: 'SIZE',
+        scope_material_code: '925',
+        additional_weight_min_g: 0.01,
+        additional_weight_max_g: 0.05,
+        size_price_mode: 'MARKET_LINKED',
+        rounding_unit_krw: 100,
+        rounding_mode: 'UP',
+        is_active: true,
+      },
+    ],
+    persisted: {
+      size_weight_g_selected: 0.02,
+      material_code_resolved: '925',
+    },
+    sizeMarketContext: {
+      goldTickKrwPerG: 150000,
+      silverTickKrwPerG: 1200,
+      materialFactors: {
+        '925': { material_code: '925', purity_rate: 0.925, material_adjust_factor: 1, price_basis: 'SILVER' },
+      },
+    },
+  });
+
+  assert.equal(result.resolved_delta_krw, 100);
+  assert.deepEqual(result.source_rule_entry_ids, ['size-market']);
+  assert.equal(result.legacy_status, 'VALID');
+});
+
+test('computeOptionLaborBuckets_uses_market_linked_size_when_context_is_provided', () => {
+  const result = computeOptionLaborBuckets([
+    {
+      rule_id: 'size-market',
+      master_item_id: 'master-1',
+      external_product_no: 'P100',
+      category_key: 'SIZE',
+      scope_material_code: '925',
+      additional_weight_min_g: 0.01,
+      additional_weight_max_g: 0.05,
+      size_price_mode: 'MARKET_LINKED',
+      rounding_unit_krw: 100,
+      rounding_mode: 'UP',
+      is_active: true,
+    },
+  ], {
+    materialCode: '925',
+    additionalWeightG: 0.02,
+    platingEnabled: false,
+    colorCode: null,
+    decorationCode: null,
+  }, {
+    masterItemId: 'master-1',
+    externalProductNo: 'P100',
+    marketContext: {
+      goldTickKrwPerG: 150000,
+      silverTickKrwPerG: 1200,
+      materialFactors: {
+        '925': { material_code: '925', purity_rate: 0.925, material_adjust_factor: 1, price_basis: 'SILVER' },
+      },
+    },
+  });
+
+  assert.equal(result.size, 100);
+  assert.equal(result.total, 100);
+});

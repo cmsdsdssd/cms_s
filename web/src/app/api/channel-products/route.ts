@@ -12,7 +12,7 @@ import { normalizePlatingComboCode } from "@/lib/shop/sync-rules";
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
-const CHANNEL_PRODUCT_SELECT_BASE = "channel_product_id, channel_id, master_item_id, external_product_no, external_variant_code, sync_rule_set_id, option_material_code, option_color_code, option_decoration_code, option_size_value, material_multiplier_override, size_weight_delta_g, option_price_delta_krw, option_price_mode, option_manual_target_krw, include_master_plating_labor, sync_rule_material_enabled, sync_rule_weight_enabled, sync_rule_plating_enabled, sync_rule_decoration_enabled, sync_rule_margin_rounding_enabled, mapping_source, is_active, created_at, updated_at";
+const CHANNEL_PRODUCT_SELECT_BASE = "channel_product_id, channel_id, master_item_id, external_product_no, external_variant_code, sync_rule_set_id, option_material_code, option_color_code, option_decoration_code, option_size_value, material_multiplier_override, size_weight_delta_g, size_price_override_enabled, size_price_override_krw, option_price_delta_krw, option_price_mode, option_manual_target_krw, include_master_plating_labor, sync_rule_material_enabled, sync_rule_weight_enabled, sync_rule_plating_enabled, sync_rule_decoration_enabled, sync_rule_margin_rounding_enabled, mapping_source, is_active, created_at, updated_at";
 const CHANNEL_PRODUCT_SELECT_WITH_PROFILE = `${CHANNEL_PRODUCT_SELECT_BASE},current_product_sync_profile`;
 
 const isThousandStep = (value: number): boolean => Number.isInteger(value) && value % 1000 === 0;
@@ -78,6 +78,11 @@ export async function POST(request: Request) {
     body.size_weight_delta_g === null || body.size_weight_delta_g === undefined || body.size_weight_delta_g === ""
       ? null
       : Number(body.size_weight_delta_g);
+  const sizePriceOverrideEnabled = body.size_price_override_enabled === true;
+  const sizePriceOverrideKrw =
+    body.size_price_override_krw === null || body.size_price_override_krw === undefined || body.size_price_override_krw === ""
+      ? null
+      : Number(body.size_price_override_krw);
   const optionPriceDeltaKrw =
     body.option_price_delta_krw === null || body.option_price_delta_krw === undefined || body.option_price_delta_krw === ""
       ? null
@@ -123,6 +128,15 @@ export async function POST(request: Request) {
   }
   if (sizeWeightDeltaG !== null && (!Number.isFinite(sizeWeightDeltaG) || sizeWeightDeltaG < -100 || sizeWeightDeltaG > 100)) {
     return jsonError("size_weight_delta_g must be between -100 and 100", 400);
+  }
+  if (sizePriceOverrideKrw !== null && (!Number.isFinite(sizePriceOverrideKrw) || sizePriceOverrideKrw < -100000000 || sizePriceOverrideKrw > 100000000)) {
+    return jsonError("size_price_override_krw must be between -100000000 and 100000000", 400);
+  }
+  if (sizePriceOverrideKrw !== null && Math.round(sizePriceOverrideKrw) % 100 !== 0) {
+    return jsonError("size_price_override_krw must be 100 KRW step", 400);
+  }
+  if (sizePriceOverrideEnabled && sizePriceOverrideKrw === null) {
+    return jsonError("size_price_override_krw is required when size_price_override_enabled is true", 400);
   }
   if (optionPriceDeltaKrw !== null && (!Number.isFinite(optionPriceDeltaKrw) || optionPriceDeltaKrw < -100000000 || optionPriceDeltaKrw > 100000000)) {
     return jsonError("option_price_delta_krw must be between -100000000 and 100000000", 400);
@@ -176,10 +190,9 @@ export async function POST(request: Request) {
   if (existingMappingRes.error) return jsonError(existingMappingRes.error.message ?? "기존 옵션 상세 조회 실패", 500);
   const optionRuleRes = await sb
     .from("channel_option_labor_rule_v1")
-    .select("rule_id, channel_id, master_item_id, external_product_no, category_key, scope_material_code, additional_weight_g, additional_weight_min_g, additional_weight_max_g, plating_enabled, color_code, decoration_master_id, decoration_model_name, base_labor_cost_krw, additive_delta_krw, is_active, note")
+    .select("rule_id, channel_id, master_item_id, external_product_no, category_key, scope_material_code, additional_weight_g, additional_weight_min_g, additional_weight_max_g, size_price_mode, formula_multiplier, formula_offset_krw, rounding_unit_krw, rounding_mode, fixed_delta_krw, plating_enabled, color_code, decoration_master_id, decoration_model_name, base_labor_cost_krw, additive_delta_krw, is_active, note")
     .eq("channel_id", channelId)
     .eq("master_item_id", masterItemId)
-    .eq("external_product_no", canonicalExternalProductNo)
     .eq("is_active", true);
   if (optionRuleRes.error) return jsonError(optionRuleRes.error.message ?? "옵션 상세 규칙 조회 실패", 500);
 
@@ -290,6 +303,8 @@ export async function POST(request: Request) {
     option_size_value: optionValidation.value.option_size_value,
     material_multiplier_override: materialMultiplierOverride,
     size_weight_delta_g: sizeWeightDeltaG,
+    size_price_override_enabled: sizePriceOverrideEnabled,
+    size_price_override_krw: sizePriceOverrideEnabled ? Math.round(sizePriceOverrideKrw ?? 0) : null,
     option_price_delta_krw: optionPriceDeltaKrw,
     option_price_mode: optionPriceMode,
     option_manual_target_krw: optionManualTargetKrw,

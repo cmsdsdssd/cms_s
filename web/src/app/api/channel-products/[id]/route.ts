@@ -76,6 +76,15 @@ export async function PUT(request: Request, { params }: Params) {
         ? null
         : Number(body.size_weight_delta_g);
   }
+  if (body.size_price_override_enabled !== undefined) {
+    patch.size_price_override_enabled = body.size_price_override_enabled === true;
+  }
+  if (body.size_price_override_krw !== undefined) {
+    patch.size_price_override_krw =
+      body.size_price_override_krw === null || body.size_price_override_krw === ""
+        ? null
+        : Number(body.size_price_override_krw);
+  }
   if (body.option_price_delta_krw !== undefined) {
     patch.option_price_delta_krw =
       body.option_price_delta_krw === null || body.option_price_delta_krw === ""
@@ -97,6 +106,13 @@ export async function PUT(request: Request, { params }: Params) {
   const sizeWeightDeltaG = patch.size_weight_delta_g as number | null | undefined;
   if (sizeWeightDeltaG !== undefined && sizeWeightDeltaG !== null && (!Number.isFinite(sizeWeightDeltaG) || sizeWeightDeltaG < -100 || sizeWeightDeltaG > 100)) {
     return jsonError("size_weight_delta_g must be between -100 and 100", 400);
+  }
+  const sizePriceOverrideKrw = patch.size_price_override_krw as number | null | undefined;
+  if (sizePriceOverrideKrw !== undefined && sizePriceOverrideKrw !== null && (!Number.isFinite(sizePriceOverrideKrw) || sizePriceOverrideKrw < -100000000 || sizePriceOverrideKrw > 100000000)) {
+    return jsonError("size_price_override_krw must be between -100000000 and 100000000", 400);
+  }
+  if (sizePriceOverrideKrw !== undefined && sizePriceOverrideKrw !== null && Math.round(sizePriceOverrideKrw) % 100 !== 0) {
+    return jsonError("size_price_override_krw must be 100 KRW step", 400);
   }
   const optionPriceDeltaKrw = patch.option_price_delta_krw as number | null | undefined;
   if (optionPriceDeltaKrw !== undefined && optionPriceDeltaKrw !== null && (!Number.isFinite(optionPriceDeltaKrw) || optionPriceDeltaKrw < -100000000 || optionPriceDeltaKrw > 100000000)) {

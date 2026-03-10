@@ -61,6 +61,12 @@ const RULE_SELECT = [
   "additional_weight_g",
   "additional_weight_min_g",
   "additional_weight_max_g",
+  "size_price_mode",
+  "formula_multiplier",
+  "formula_offset_krw",
+  "rounding_unit_krw",
+  "rounding_mode",
+  "fixed_delta_krw",
   "plating_enabled",
   "color_code",
   "decoration_master_id",
@@ -332,6 +338,13 @@ const validateAndNormalizeRuleRow = (
   const additionalWeightMinValue = normalizeAdditionalWeightValue(input.additional_weight_min_g);
   const additionalWeightMaxValue = normalizeAdditionalWeightValue(input.additional_weight_max_g);
   const colorCode = normalizeOptionLaborColorCode(input.color_code);
+  const sizePriceMode = categoryKey === "SIZE" ? "MARKET_LINKED" : null;
+  const formulaMultiplier = Number.isFinite(Number(input.formula_multiplier)) && Number(input.formula_multiplier) > 0 ? Number(input.formula_multiplier) : 1;
+  const formulaOffsetKrw = normalizeKrwInteger(input.formula_offset_krw, 0);
+  const roundingUnitKrw = Math.max(1, normalizeKrwInteger(input.rounding_unit_krw, 100));
+  const roundingModeRaw = String(input.rounding_mode ?? "UP").trim().toUpperCase();
+  const roundingMode = roundingModeRaw === "DOWN" || roundingModeRaw === "FLOOR" ? "DOWN" : roundingModeRaw === "NEAREST" || roundingModeRaw === "ROUND" ? "NEAREST" : "UP";
+  const fixedDelta = null;
   const decorationMasterId = String(input.decoration_master_id ?? "").trim() || null;
   const decorationModelName = String(input.decoration_model_name ?? "").trim() || null;
   const note = normalizeNote(input.note);
@@ -368,6 +381,7 @@ const validateAndNormalizeRuleRow = (
       return jsonError(`rows[${rowIndex}] has invalid SIZE shape`, 400);
     }
     if (baseLaborCost !== 0) return jsonError(`rows[${rowIndex}].base_labor_cost_krw must be 0 for SIZE`, 400);
+    if (sizePriceMode === "MARKET_LINKED" && formulaMultiplier <= 0) return jsonError(`rows[${rowIndex}].formula_multiplier must be > 0`, 400);
   }
 
   let platingEnabled: boolean | null = null;
@@ -418,7 +432,13 @@ const validateAndNormalizeRuleRow = (
     decoration_master_id: categoryKey === "DECOR" ? decorationMasterId : null,
     decoration_model_name: categoryKey === "DECOR" ? decorationModelName : null,
     base_labor_cost_krw: baseLaborCost,
-    additive_delta_krw: additiveDelta,
+    additive_delta_krw: categoryKey === "SIZE" ? 0 : additiveDelta,
+    size_price_mode: categoryKey === "SIZE" ? sizePriceMode : null,
+    formula_multiplier: categoryKey === "SIZE" ? formulaMultiplier : null,
+    formula_offset_krw: categoryKey === "SIZE" ? formulaOffsetKrw : null,
+    rounding_unit_krw: categoryKey === "SIZE" ? roundingUnitKrw : null,
+    rounding_mode: categoryKey === "SIZE" ? roundingMode : null,
+    fixed_delta_krw: categoryKey === "SIZE" ? fixedDelta : null,
     is_active: isActive,
     note,
   };
@@ -450,7 +470,7 @@ export async function GET(request: Request) {
   let externalProductNo = String(searchParams.get("external_product_no") ?? "").trim();
 
   if (!channelId) return jsonError("channel_id is required", 400);
-  if (!externalProductNo) return jsonError("external_product_no is required", 400);
+  if (!masterItemId && !externalProductNo) return jsonError("external_product_no is required", 400);
 
   if (masterItemId && externalProductNo) {
     try {
@@ -464,8 +484,8 @@ export async function GET(request: Request) {
     .from("channel_option_labor_rule_v1")
     .select(RULE_SELECT)
     .eq("channel_id", channelId)
-    .eq("external_product_no", externalProductNo)
     .order("category_key", { ascending: true })
+    .order("external_product_no", { ascending: true })
     .order("scope_material_code", { ascending: true })
     .order("additional_weight_min_g", { ascending: true })
     .order("additional_weight_max_g", { ascending: true })
@@ -476,6 +496,7 @@ export async function GET(request: Request) {
     .order("updated_at", { ascending: false });
 
   if (masterItemId) query = query.eq("master_item_id", masterItemId);
+  else query = query.eq("external_product_no", externalProductNo);
 
   const res = await query;
   if (res.error) return jsonError(res.error.message ?? "옵션 공임 규칙 조회 실패", 500);

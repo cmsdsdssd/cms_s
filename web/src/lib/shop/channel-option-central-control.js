@@ -1,3 +1,6 @@
+import { resolveMarketLinkedSizeCell } from "./market-linked-size-grid.js";
+import { resolvePersistedSizeGridCell } from "./weight-grid-store.js";
+
 const WEIGHT_MIN_CENTIGRAM = 0;
 const WEIGHT_MAX_CENTIGRAM = 10000;
 
@@ -49,8 +52,16 @@ const normalizeRuleRow = (raw) => {
   return {
     rule_id: toTrimmed(raw?.rule_id),
     rule_type: ruleType,
+    master_item_id: toTrimmed(raw?.master_item_id) || null,
+    external_product_no: toTrimmed(raw?.external_product_no) || null,
     material_code: toUpper(raw?.material_code ?? raw?.scope_material_code) || null,
     color_code: toUpper(raw?.color_code) || null,
+    size_price_mode: toUpper(raw?.size_price_mode) || null,
+    fixed_delta_krw: toFiniteNumber(raw?.fixed_delta_krw),
+    formula_multiplier: toFiniteNumber(raw?.formula_multiplier),
+    formula_offset_krw: toFiniteNumber(raw?.formula_offset_krw),
+    rounding_unit_krw: toFiniteNumber(raw?.rounding_unit_krw),
+    rounding_mode: toUpper(raw?.rounding_mode) || null,
     decor_master_item_id: toTrimmed(raw?.decor_master_item_id ?? raw?.decoration_master_id) || null,
     decor_model_name_snapshot: toTrimmed(raw?.decor_model_name_snapshot ?? raw?.decoration_model_name) || null,
     decor_material_code_snapshot: toUpper(raw?.decor_material_code_snapshot) || null,
@@ -130,7 +141,22 @@ export const collectAllowedColors = (rules, masterMaterialCode) => {
   return sortText(values);
 };
 
-export const resolveCentralOptionMapping = ({ category, masterMaterialCode, masterMaterialLabel, rules, persisted }) => {
+/**
+ * @param {{
+ *   category: unknown,
+ *   masterMaterialCode: unknown,
+ *   masterMaterialLabel: unknown,
+ *   rules: unknown,
+ *   persisted: unknown,
+ *   sizeMarketContext?: {
+ *     goldTickKrwPerG?: number | null,
+ *     silverTickKrwPerG?: number | null,
+ *     materialFactors?: Record<string, unknown> | null,
+ *     factorMultiplierByMaterialCode?: Record<string, number> | null,
+ *   } | null,
+ * }} args
+ */
+export const resolveCentralOptionMapping = ({ category, masterMaterialCode, masterMaterialLabel, rules, persisted, persistedSizeLookup = null, sizeMarketContext = null }) => {
   const normalizedCategory = normalizeRuleType(category);
   const base = createBaseResult({
     category: normalizedCategory ?? (toUpper(category) || 'OTHER'),
@@ -158,21 +184,30 @@ export const resolveCentralOptionMapping = ({ category, masterMaterialCode, mast
         source_rule_entry_ids: [],
       };
     }
-    const matched = activeRules.filter((rule) => {
-      return rule.rule_type === 'SIZE'
-        && rule.material_code === base.material_code_resolved
-        && Number.isFinite(rule.weight_min_centigram)
-        && Number.isFinite(rule.weight_max_centigram)
-        && selectedCentigram >= rule.weight_min_centigram
-        && selectedCentigram <= rule.weight_max_centigram;
-    });
-    if (matched.length === 0) {
-      return markLegacy(base, '현재 선택한 추가중량이 중앙 허용 범위 밖입니다.');
+    const resolvedSizeCell = persistedSizeLookup
+      ? resolvePersistedSizeGridCell({
+        lookup: persistedSizeLookup,
+        materialCode: base.material_code_resolved,
+        additionalWeightG: selectedCentigram / 100,
+      })
+      : resolveMarketLinkedSizeCell({
+        rows: activeRules,
+        masterItemId: toTrimmed(persisted?.master_item_id),
+        externalProductNo: toTrimmed(persisted?.external_product_no),
+        materialCode: base.material_code_resolved,
+        additionalWeightG: selectedCentigram / 100,
+        marketContext: sizeMarketContext,
+      });
+    if (!resolvedSizeCell.valid) {
+      if (String(resolvedSizeCell.error_message ?? '').includes('size rule not found')) {
+        return markLegacy(base, '현재 선택한 추가중량이 중앙 허용 범위 밖입니다.');
+      }
+      return markUnresolved(base, String(resolvedSizeCell.error_message ?? '중량 계산에 필요한 시세/소재 정보가 부족합니다.'));
     }
     return {
       ...base,
-      resolved_delta_krw: matched.reduce((sum, rule) => sum + toRoundedKrw(rule.delta_krw), 0),
-      source_rule_entry_ids: matched.map((rule) => rule.rule_id).filter(Boolean),
+      resolved_delta_krw: Math.round(resolvedSizeCell.computed_delta_krw ?? 0),
+      source_rule_entry_ids: Array.isArray(resolvedSizeCell.source_rule_ids) ? resolvedSizeCell.source_rule_ids : [],
     };
   }
 

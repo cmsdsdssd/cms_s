@@ -12,6 +12,12 @@ export type OptionLaborRuleRow = {
   additional_weight_g: number | null;
   additional_weight_min_g?: number | null;
   additional_weight_max_g?: number | null;
+  size_price_mode?: "MARKET_LINKED" | "FIXED_DELTA" | null;
+  formula_multiplier?: number | null;
+  formula_offset_krw?: number | null;
+  rounding_unit_krw?: number | null;
+  rounding_mode?: "UP" | "NEAREST" | "DOWN" | "CEIL" | "ROUND" | "FLOOR" | null;
+  fixed_delta_krw?: number | null;
   plating_enabled: boolean | null;
   color_code: string | null;
   decoration_master_id: string | null;
@@ -54,8 +60,32 @@ export const hasAnyActiveOptionLaborRule = (rows: OptionLaborRuleRow[]): boolean
 
 export const normalizeAdditionalWeightG = impl.normalizeAdditionalWeightValue as (value: unknown) => string | null;
 
-export const computeOptionLaborRuleBuckets = (rows: OptionLaborRuleRow[], input: OptionLaborRuleMatchInput) =>
-  ((impl as unknown as { computeOptionLaborBuckets: (rows: OptionLaborRuleRow[], context: OptionLaborRuleMatchInput) => {
+export const computeOptionLaborRuleBuckets = (
+  rows: OptionLaborRuleRow[],
+  input: OptionLaborRuleMatchInput,
+  options?: {
+    masterItemId?: string | null;
+    externalProductNo?: string | null;
+    marketContext?: {
+      goldTickKrwPerG?: number | null;
+      silverTickKrwPerG?: number | null;
+      materialFactors?: Record<string, unknown> | null;
+      factorMultiplierByMaterialCode?: Record<string, number> | null;
+    } | null;
+    persistedSizeLookup?: unknown;
+  },
+) =>
+  ((impl as unknown as { computeOptionLaborBuckets: (rows: OptionLaborRuleRow[], context: OptionLaborRuleMatchInput, options?: {
+    masterItemId?: string | null;
+    externalProductNo?: string | null;
+    marketContext?: {
+      goldTickKrwPerG?: number | null;
+      silverTickKrwPerG?: number | null;
+      materialFactors?: Record<string, unknown> | null;
+      factorMultiplierByMaterialCode?: Record<string, number> | null;
+    } | null;
+    persistedSizeLookup?: unknown;
+  }) => {
     material: number;
     size: number;
     colorPlating: number;
@@ -63,7 +93,7 @@ export const computeOptionLaborRuleBuckets = (rows: OptionLaborRuleRow[], input:
     other: number;
     total: number;
     matched: Record<string, { rule_id: string } | null>;
-  } }).computeOptionLaborBuckets)(rows, input);
+  } }).computeOptionLaborBuckets)(rows, input, options);
 
 export const buildAdditionalWeightOptions = impl.buildAdditionalWeightOptions as () => Array<{
   centigram: number;

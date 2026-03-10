@@ -10,8 +10,10 @@ import {
 import {
   normalizePriceSyncPolicy,
   normalizePriceSyncThresholdProfile,
+  DEFAULT_OPTION_ADDITIONAL_SYNC_POLICY,
   resolvePriceSyncThresholdProfilePolicy,
   resolveRateDerivedThresholdKrw,
+  shouldSyncOptionAdditionalChange,
   shouldSyncPriceChange,
 } from "@/lib/shop/price-sync-policy";
 import { buildCurrentProductSyncProfileByMaster } from "@/lib/shop/current-product-sync-profile";
@@ -125,6 +127,7 @@ type IntentDecisionContext = {
   option_additional_target_krw?: number | null;
   option_additional_current_krw?: number | null;
   option_additional_out_of_sync?: boolean;
+  option_additional_threshold_delta_krw?: number | null;
 };
 
 const isActiveDuringWindow = ({
@@ -508,7 +511,7 @@ export async function POST(request: Request) {
 
   const policyRes = await sb
     .from("pricing_policy")
-    .select("rounding_unit, rounding_mode, auto_sync_force_full, auto_sync_min_change_krw, auto_sync_min_change_rate, auto_sync_threshold_profile, updated_at")
+    .select("rounding_unit, rounding_mode, auto_sync_force_full, auto_sync_min_change_krw, auto_sync_min_change_rate, auto_sync_threshold_profile, option_sync_force_full, option_sync_min_change_krw, option_sync_min_change_rate, updated_at")
     .eq("channel_id", channelId)
     .eq("is_active", true)
     .order("updated_at", { ascending: false })
@@ -532,6 +535,12 @@ export async function POST(request: Request) {
   const forceFullSync = autoSyncPolicy.forceFullSync;
   const minChangeKrw = autoSyncPolicy.minChangeKrw;
   const minChangeRate = autoSyncPolicy.minChangeRate;
+  const optionSyncPolicyInput = {
+    always_sync: policyRes.data?.option_sync_force_full === true,
+    min_change_krw: policyRes.data?.option_sync_min_change_krw,
+    min_change_rate: policyRes.data?.option_sync_min_change_rate,
+  };
+
   const thresholdPolicyInput = {
     auto_sync_force_full: false,
     auto_sync_min_change_krw: requestedMinChangeKrwValue ?? policyRes.data?.auto_sync_min_change_krw,
@@ -861,10 +870,15 @@ export async function POST(request: Request) {
       ? optionCurrentStateByProductVariant.get(`${mapping.external_product_no}::${variantCode}`) ?? null
       : null;
     const lastKnownOptionAdditional = currentOptionState?.lastPushedAdditionalKrw ?? currentOptionState?.finalTargetAdditionalKrw ?? null;
-    const optionAdditionalOutOfSync = variantCode.length > 0
-      && snapshotOptionAdditional !== null
-      && lastKnownOptionAdditional !== null
-      && snapshotOptionAdditional !== lastKnownOptionAdditional;
+    const optionThresholdDecision = variantCode.length > 0 && snapshotOptionAdditional !== null
+      ? shouldSyncOptionAdditionalChange({
+        currentAdditionalKrw: lastKnownOptionAdditional ?? 0,
+        nextAdditionalKrw: snapshotOptionAdditional,
+        policy: optionSyncPolicyInput,
+        defaults: DEFAULT_OPTION_ADDITIONAL_SYNC_POLICY,
+      })
+      : null;
+    const optionAdditionalOutOfSync = Boolean(optionThresholdDecision?.should_sync);
     const rowCurrentRounded = Number.isFinite(Number(currentPrice ?? Number.NaN))
       ? Math.round(Number(currentPrice))
       : null;
@@ -922,6 +936,7 @@ export async function POST(request: Request) {
       option_additional_target_krw: snapshotOptionAdditional,
       option_additional_current_krw: lastKnownOptionAdditional,
       option_additional_out_of_sync: optionAdditionalOutOfSync,
+      option_additional_threshold_delta_krw: optionThresholdDecision?.additional_delta_krw ?? null,
     };
 
     if (triggerType === "AUTO" && Number.isFinite(Number(currentPrice ?? Number.NaN))) {
@@ -1074,6 +1089,8 @@ export async function POST(request: Request) {
     threshold_profile: autoSyncThresholdProfile,
     threshold_min_change_krw: minChangeKrw,
     threshold_min_change_rate: minChangeRate,
+    option_sync_min_change_krw: Math.max(0, Math.round(Number(policyRes.data?.option_sync_min_change_krw ?? DEFAULT_OPTION_ADDITIONAL_SYNC_POLICY.min_change_krw))),
+    option_sync_min_change_rate: Number(policyRes.data?.option_sync_min_change_rate ?? DEFAULT_OPTION_ADDITIONAL_SYNC_POLICY.min_change_rate),
     sync_policy_mode: syncPolicyMode,
     auto_downsync_policy_mode: pressurePolicyConfig.mode,
     threshold_evaluated_count: thresholdEvaluatedCount,

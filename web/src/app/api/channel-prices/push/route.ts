@@ -135,7 +135,9 @@ export async function POST(request: Request) {
   const pinnedComputeRequestId = String(body.compute_request_id ?? "").trim();
   const runType = String(body.run_type ?? "MANUAL").toUpperCase() === "AUTO" ? "AUTO" : "MANUAL";
   const dryRun = body.dry_run === true;
-  const syncOptionLabels = body.sync_option_labels !== false;
+  // Never rewrite option labels during price push. Price sync must only update
+  // base price and variant additional amounts.
+  const syncOptionLabels = false;
 
   const desiredTargetByChannelProduct = new Map<string, number>();
   const desiredRaw = body.desired_target_price_by_channel_product;

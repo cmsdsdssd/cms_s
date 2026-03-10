@@ -60,6 +60,71 @@ const toNonNegativeRate = (value, fallback) => {
   return n;
 };
 
+
+/** @type {Readonly<PriceSyncPolicy>} */
+export const DEFAULT_OPTION_ADDITIONAL_SYNC_POLICY = Object.freeze({
+  always_sync: false,
+  min_change_krw: 1000,
+  min_change_rate: 0.01,
+});
+
+export const normalizeOptionAdditionalSyncPolicy = (policy, defaults = DEFAULT_OPTION_ADDITIONAL_SYNC_POLICY) =>
+  normalizePriceSyncPolicy(policy, defaults);
+
+/**
+ * @param {{ currentAdditionalKrw?: unknown, nextAdditionalKrw?: unknown, policy?: PriceSyncPolicyInput, defaults?: PriceSyncPolicyInput }} [args]
+ */
+export const shouldSyncOptionAdditionalChange = ({ currentAdditionalKrw, nextAdditionalKrw, policy, defaults } = {}) => {
+  const normalizedPolicy = normalizeOptionAdditionalSyncPolicy(policy, defaults);
+  const normalizedCurrentAdditionalKrw = normalizeCurrentPriceKrw(currentAdditionalKrw);
+  const normalizedNextAdditionalKrw = normalizeCurrentPriceKrw(nextAdditionalKrw);
+  const additionalDeltaKrw = Math.abs(normalizedNextAdditionalKrw - normalizedCurrentAdditionalKrw);
+
+  if (normalizedPolicy.always_sync) {
+    return {
+      should_sync: true,
+      threshold_bypassed: true,
+      additional_delta_krw: additionalDeltaKrw,
+      flat_min_change_krw: normalizedPolicy.min_change_krw,
+      rate_min_change_krw: normalizedCurrentAdditionalKrw > 0
+        ? Math.round(normalizedCurrentAdditionalKrw * normalizedPolicy.min_change_rate)
+        : null,
+      effective_mode: normalizedCurrentAdditionalKrw > 0 ? 'OR' : 'FLAT_ONLY',
+      policy: normalizedPolicy,
+    };
+  }
+
+  if (additionalDeltaKrw === 0) {
+    return {
+      should_sync: false,
+      threshold_bypassed: false,
+      additional_delta_krw: 0,
+      flat_min_change_krw: normalizedPolicy.min_change_krw,
+      rate_min_change_krw: normalizedCurrentAdditionalKrw > 0
+        ? Math.round(normalizedCurrentAdditionalKrw * normalizedPolicy.min_change_rate)
+        : null,
+      effective_mode: normalizedCurrentAdditionalKrw > 0 ? 'OR' : 'FLAT_ONLY',
+      policy: normalizedPolicy,
+    };
+  }
+
+  const rateMinChangeKrw = normalizedCurrentAdditionalKrw > 0
+    ? Math.round(normalizedCurrentAdditionalKrw * normalizedPolicy.min_change_rate)
+    : null;
+  const passesThreshold = additionalDeltaKrw >= normalizedPolicy.min_change_krw
+    || (rateMinChangeKrw !== null && additionalDeltaKrw >= rateMinChangeKrw);
+
+  return {
+    should_sync: passesThreshold,
+    threshold_bypassed: false,
+    additional_delta_krw: additionalDeltaKrw,
+    flat_min_change_krw: normalizedPolicy.min_change_krw,
+    rate_min_change_krw: rateMinChangeKrw,
+    effective_mode: rateMinChangeKrw !== null ? 'OR' : 'FLAT_ONLY',
+    policy: normalizedPolicy,
+  };
+};
+
 export const normalizeCurrentPriceKrw = (value) => toNonNegativeInt(value, 0);
 
 export const normalizePriceSyncThresholdProfile = (

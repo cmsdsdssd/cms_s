@@ -7,7 +7,7 @@ export const revalidate = 0;
 type Params = { params: Promise<{ id: string }> };
 
 const PRICING_POLICY_SELECT_COLS =
-  "policy_id, channel_id, policy_name, margin_multiplier, gm_material, gm_labor, gm_fixed, fixed_cost_krw, rounding_unit, rounding_mode, option_18k_weight_multiplier, material_factor_set_id, fee_rate, min_margin_rate_total, auto_sync_force_full, auto_sync_min_change_krw, auto_sync_min_change_rate, auto_sync_threshold_profile, is_active, created_at, updated_at";
+  "policy_id, channel_id, policy_name, margin_multiplier, gm_material, gm_labor, gm_fixed, fixed_cost_krw, rounding_unit, rounding_mode, option_18k_weight_multiplier, material_factor_set_id, fee_rate, min_margin_rate_total, auto_sync_force_full, auto_sync_min_change_krw, auto_sync_min_change_rate, option_sync_force_full, option_sync_min_change_krw, option_sync_min_change_rate, auto_sync_threshold_profile, is_active, created_at, updated_at";
 
 function parseAutoSyncThresholdProfile(value: unknown): "GENERAL" | "MARKET_LINKED" {
   const profile = String(value ?? "GENERAL").trim().toUpperCase();
@@ -91,6 +91,19 @@ export async function PUT(request: Request, { params }: Params) {
       return jsonError("auto_sync_min_change_rate must be between 0 and 1", 400);
     }
     patch.auto_sync_min_change_rate = autoSyncMinChangeRate;
+  }
+  if (body.option_sync_force_full !== undefined) patch.option_sync_force_full = body.option_sync_force_full === true;
+  if (body.option_sync_min_change_krw !== undefined) {
+    const optionSyncMinChangeKrw = Number(body.option_sync_min_change_krw);
+    if (!Number.isFinite(optionSyncMinChangeKrw) || optionSyncMinChangeKrw < 0) return jsonError("option_sync_min_change_krw must be >= 0", 400);
+    patch.option_sync_min_change_krw = Math.max(0, Math.round(optionSyncMinChangeKrw));
+  }
+  if (body.option_sync_min_change_rate !== undefined) {
+    const optionSyncMinChangeRate = Number(body.option_sync_min_change_rate);
+    if (!Number.isFinite(optionSyncMinChangeRate) || optionSyncMinChangeRate < 0 || optionSyncMinChangeRate > 1) {
+      return jsonError("option_sync_min_change_rate must be between 0 and 1", 400);
+    }
+    patch.option_sync_min_change_rate = optionSyncMinChangeRate;
   }
   if (body.auto_sync_threshold_profile !== undefined) {
     try {

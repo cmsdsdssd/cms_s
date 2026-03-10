@@ -14,7 +14,7 @@ import {
   type SyncRuleR3Row,
   type SyncRuleR4Row,
 } from "@/lib/shop/sync-rules";
-import { normalizeMaterialCode } from "@/lib/material-factors";
+import { buildMaterialFactorMap, normalizeMaterialCode } from "@/lib/material-factors";
 import {
   computeOptionLaborRuleBuckets,
   hasAnyActiveOptionLaborRule,
@@ -172,6 +172,8 @@ type MappingRow = {
   option_size_value: number | null;
   material_multiplier_override: number | null;
   size_weight_delta_g: number | null;
+  size_price_override_enabled?: boolean | null;
+  size_price_override_krw?: number | null;
   option_price_delta_krw: number | null;
   option_price_mode: "SYNC" | "MANUAL" | null;
   option_manual_target_krw: number | null;
@@ -605,7 +607,7 @@ export async function POST(request: Request) {
 
   const mapQuery = sb
     .from("sales_channel_product")
-    .select("channel_product_id, channel_id, master_item_id, external_product_no, external_variant_code, sync_rule_set_id, option_material_code, option_color_code, option_decoration_code, option_size_value, material_multiplier_override, size_weight_delta_g, option_price_delta_krw, option_price_mode, option_manual_target_krw, include_master_plating_labor, sync_rule_material_enabled, sync_rule_weight_enabled, sync_rule_plating_enabled, sync_rule_decoration_enabled, sync_rule_margin_rounding_enabled")
+    .select("channel_product_id, channel_id, master_item_id, external_product_no, external_variant_code, sync_rule_set_id, option_material_code, option_color_code, option_decoration_code, option_size_value, material_multiplier_override, size_weight_delta_g, size_price_override_enabled, size_price_override_krw, option_price_delta_krw, option_price_mode, option_manual_target_krw, include_master_plating_labor, sync_rule_material_enabled, sync_rule_weight_enabled, sync_rule_plating_enabled, sync_rule_decoration_enabled, sync_rule_margin_rounding_enabled")
     .eq("channel_id", channelId)
     .eq("is_active", true);
   if (masterItemIds && masterItemIds.length > 0) mapQuery.in("master_item_id", masterItemIds);
@@ -734,16 +736,21 @@ export async function POST(request: Request) {
     mappings.map((m) => String(m.option_decoration_code ?? "").trim()).filter(Boolean),
   )];
 
-  const optionLaborRuleRes = uniqueMasterIds.length > 0 && uniqueExternalProductNos.length > 0
-    ? await sb.from('channel_option_labor_rule_v1').select('rule_id, channel_id, master_item_id, external_product_no, category_key, scope_material_code, additional_weight_g, additional_weight_min_g, additional_weight_max_g, plating_enabled, color_code, decoration_master_id, decoration_model_name, base_labor_cost_krw, additive_delta_krw, is_active, note').eq('channel_id', channelId).in('master_item_id', uniqueMasterIds).in('external_product_no', uniqueExternalProductNos)
+  const optionLaborRuleRes = uniqueMasterIds.length > 0
+    ? await sb.from('channel_option_labor_rule_v1').select('rule_id, channel_id, master_item_id, external_product_no, category_key, scope_material_code, additional_weight_g, additional_weight_min_g, additional_weight_max_g, size_price_mode, formula_multiplier, formula_offset_krw, rounding_unit_krw, rounding_mode, fixed_delta_krw, plating_enabled, color_code, decoration_master_id, decoration_model_name, base_labor_cost_krw, additive_delta_krw, is_active, note').eq('channel_id', channelId).in('master_item_id', uniqueMasterIds)
     : { data: [], error: null };
   if (optionLaborRuleRes.error && !isMissingSchemaObjectError(optionLaborRuleRes.error)) return jsonError(optionLaborRuleRes.error.message ?? '옵션 공임 규칙 조회 실패', 500);
   const optionLaborRules = (optionLaborRuleRes.data ?? []) as OptionLaborRuleRow[];
   const optionLaborRulesByContext = new Map<string, OptionLaborRuleRow[]>();
+  const optionLaborRulesByMaster = new Map<string, OptionLaborRuleRow[]>();
   for (const row of optionLaborRules) {
     const masterId = String(row.master_item_id ?? "").trim();
     const productNo = String(row.external_product_no ?? "").trim();
-    if (!masterId || !productNo) continue;
+    if (!masterId) continue;
+    const masterRows = optionLaborRulesByMaster.get(masterId) ?? [];
+    masterRows.push(row);
+    optionLaborRulesByMaster.set(masterId, masterRows);
+    if (!productNo) continue;
     const key = `${masterId}::${productNo}`;
     const prev = optionLaborRulesByContext.get(key) ?? [];
     prev.push(row);
@@ -751,7 +758,9 @@ export async function POST(request: Request) {
   }
   const resolveOptionLaborRulesForContext = (masterId: string, productNo: string): OptionLaborRuleRow[] => {
     const rows = optionLaborRulesByContext.get(`${masterId}::${productNo}`) ?? [];
-    return hasAnyActiveOptionLaborRule(rows) ? rows : [];
+    if (hasAnyActiveOptionLaborRule(rows)) return rows;
+    const masterRows = optionLaborRulesByMaster.get(masterId) ?? [];
+    return hasAnyActiveOptionLaborRule(masterRows) ? masterRows : [];
   };
 
   const [optionCategoryRes, scopedOptionDeltaRes] = await Promise.all([
@@ -1018,6 +1027,18 @@ export async function POST(request: Request) {
       gold_adjust_factor: Number(r.gold_adjust_factor ?? Number.NaN),
     })),
   );
+  const materialFactors = buildMaterialFactorMap((purityRes.data ?? []).map((r) => ({
+    material_code: normalizeMaterialCode(String(r.material_code ?? "")),
+    purity_rate: Number(r.purity_rate ?? 0),
+    material_adjust_factor: Number(r.material_adjust_factor ?? Number.NaN),
+    gold_adjust_factor: Number(r.gold_adjust_factor ?? Number.NaN),
+    price_basis: String(r.price_basis ?? "").toUpperCase() === "SILVER"
+      ? "SILVER"
+      : String(r.price_basis ?? "").toUpperCase() === "NONE"
+        ? "NONE"
+        : "GOLD",
+  })));
+  const factorMultiplierByMaterialCode = Object.fromEntries(Array.from(factorMap.entries()));
   const materialAdjustMap = new Map<string, number>();
   const materialBasisMap = new Map<string, "GOLD" | "SILVER" | "NONE">();
   for (const row of purityRes.data ?? []) {
@@ -1188,6 +1209,16 @@ export async function POST(request: Request) {
   const guardrailTraceByChannelProductId = new Map<string, Record<string, unknown>>();
 
   const laborComponentRowsByChannelProductId = new Map<string, V2LaborComponentInput[]>();
+
+  const previewStateRowsByVariantKey = new Map<string, {
+    channel_id: string;
+    channel_product_id: string;
+    master_item_id: string;
+    external_product_no: string;
+    external_variant_code: string;
+    option_sync_delta_krw: number;
+    final_target_additional_amount_krw: number;
+  }>();
 
   const rows = mappings.flatMap((m) => {
     const master = masterMap.get(m.master_item_id);
@@ -1581,6 +1612,15 @@ export async function POST(request: Request) {
         colorCode: optionColorCode || null,
         decorationCode: optionDecorationCode || null,
         decorationMasterId: resolvedDecorationMasterId,
+      }, {
+        masterItemId: m.master_item_id,
+        externalProductNo: mappingProductNo,
+        marketContext: {
+          goldTickKrwPerG: goldTick,
+          silverTickKrwPerG: silverTick,
+          materialFactors,
+          factorMultiplierByMaterialCode,
+        },
       })
       : null;
 
@@ -1602,26 +1642,28 @@ export async function POST(request: Request) {
     let deltaDecorBucket = useOptionLaborRuleEngine
       ? Math.round(optionLaborRuleResult?.decor ?? 0)
       : Math.round(ruleDecorDelta + categoryScopedDeltaBuckets.decor);
+    const sizePriceOverrideEnabled = m.size_price_override_enabled === true;
+    const sizePriceOverrideKrw = Number.isFinite(Number(m.size_price_override_krw)) ? Math.round(Number(m.size_price_override_krw)) : null;
+    if (sizePriceOverrideEnabled && sizePriceOverrideKrw !== null) {
+      deltaSizeBucket = sizePriceOverrideKrw;
+    }
     let deltaOtherBucket = useOptionLaborRuleEngine
       ? Math.round(optionLaborRuleResult?.other ?? 0)
       : Math.round(baseOptionDelta + categoryScopedDeltaBuckets.other);
     let optionPriceDelta = deltaMaterialBucket + deltaSizeBucket + deltaColorBucket + deltaDecorBucket + deltaOtherBucket;
-    let optionPriceDeltaSource: "COMPUTED" | "STATE_FALLBACK" | "OPTION_LABOR_RULE_ENGINE" = useOptionLaborRuleEngine ? "OPTION_LABOR_RULE_ENGINE" : "COMPUTED";
+    let optionPriceDeltaSource: "COMPUTED" | "OPTION_LABOR_RULE_ENGINE" = useOptionLaborRuleEngine ? "OPTION_LABOR_RULE_ENGINE" : "COMPUTED";
 
-    if (
-      hasVariant
-      && optionStateDelta
-      && Number.isFinite(optionStateDelta.additionalKrw)
-      && !useOptionLaborRuleEngine
-      && !hasStructuredOptionSignal
-    ) {
-      deltaMaterialBucket = 0;
-      deltaSizeBucket = 0;
-      deltaColorBucket = 0;
-      deltaDecorBucket = 0;
-      deltaOtherBucket = Math.round(optionStateDelta.additionalKrw);
-      optionPriceDelta = deltaOtherBucket;
-      optionPriceDeltaSource = "STATE_FALLBACK";
+    if (hasVariant && mappingProductNo) {
+      const previewStateKey = `${m.master_item_id}::${mappingProductNo}::${variantCode}`;
+      previewStateRowsByVariantKey.set(previewStateKey, {
+        channel_id: m.channel_id,
+        channel_product_id: m.channel_product_id,
+        master_item_id: m.master_item_id,
+        external_product_no: mappingProductNo,
+        external_variant_code: variantCode,
+        option_sync_delta_krw: optionPriceDelta,
+        final_target_additional_amount_krw: optionPriceDelta,
+      });
     }
 
     const basePriceDelta = baseDeltaByMaster.get(m.master_item_id) ?? 0;
@@ -1810,9 +1852,9 @@ export async function POST(request: Request) {
         base_price_delta_krw: applyRule4 ? basePriceDelta : 0,
         option_price_delta_krw: applyRule4 ? optionPriceDelta : 0,
         option_price_delta_source: optionPriceDeltaSource,
-        option_state_fallback_applied: optionPriceDeltaSource === "STATE_FALLBACK",
-        option_state_fallback_delta_krw: optionStateDelta?.additionalKrw ?? null,
-        option_state_fallback_product_no: optionStateDelta?.productNo || null,
+        option_state_fallback_applied: false,
+        option_state_fallback_delta_krw: null,
+        option_state_fallback_product_no: null,
         option_category_sync_delta_krw: categoryScopedDeltaBuckets.total,
         option_category_scoped_delta_material_krw: categoryScopedDeltaBuckets.material,
         option_category_scoped_delta_size_krw: categoryScopedDeltaBuckets.size,
@@ -1855,6 +1897,24 @@ export async function POST(request: Request) {
 
   const insertRes = await sb.from("pricing_snapshot").insert(rows).select("snapshot_id, channel_product_id");
   if (insertRes.error) return jsonError(insertRes.error.message ?? "스냅샷 저장 실패", 500);
+
+  if (previewStateRowsByVariantKey.size > 0) {
+    for (const row of previewStateRowsByVariantKey.values()) {
+      const stateUpdateRes = await sb
+        .from("channel_option_current_state_v1")
+        .update({
+          channel_product_id: row.channel_product_id,
+          master_item_id: row.master_item_id,
+          option_sync_delta_krw: row.option_sync_delta_krw,
+          final_target_additional_amount_krw: row.final_target_additional_amount_krw,
+          updated_by: "RECOMPUTE_PREVIEW",
+        })
+        .eq("channel_id", row.channel_id)
+        .eq("external_product_no", row.external_product_no)
+        .eq("external_variant_code", row.external_variant_code);
+      if (stateUpdateRes.error) return jsonError(stateUpdateRes.error.message ?? "옵션 현재상태 프리뷰 갱신 실패", 500);
+    }
+  }
 
   if (pricingAlgoVersion === "REVERSE_FEE_V2") {
     const insertedRows = (insertRes.data ?? []) as Array<{ snapshot_id?: string | null; channel_product_id?: string | null }>;

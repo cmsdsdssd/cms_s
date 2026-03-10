@@ -3,6 +3,7 @@ import { getShopAdminClient, jsonError } from "@/lib/shop/admin";
 import { OPTION_LABOR_RULE_CATEGORIES } from "@/lib/shop/option-labor-rules";
 import { normalizeMaterialCode } from "@/lib/material-factors";
 import { CONTRACTS } from "@/lib/contracts";
+import { STANDARD_PLATING_COMBO_CODES, formatPlatingComboLabel } from "@/lib/shop/sync-rules";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -597,6 +598,7 @@ export async function GET(request: Request) {
   const colors = Array.from(
     new Set(
       [
+        ...STANDARD_PLATING_COMBO_CODES,
         ...(platingRes.data ?? []).map((row) => toUpper((row as { color_code?: string | null }).color_code)),
         ...mappings.map((row) => toUpper(row.option_color_code)),
         ...(savedRuleColorRes.data ?? []).map((row) => toUpper((row as { color_code?: string | null }).color_code)),
@@ -604,7 +606,7 @@ export async function GET(request: Request) {
     ),
   )
     .sort((a, b) => a.localeCompare(b))
-    .map((colorCode) => ({ color_code: colorCode, display_name: colorCode }));
+    .map((colorCode) => ({ color_code: colorCode, display_name: formatPlatingComboLabel(colorCode) || colorCode }));
 
   const categoryCodes = Array.from(new Set(masters.map((row) => toUpper(row.category_code)).filter(Boolean))).sort((a, b) => a.localeCompare(b));
 

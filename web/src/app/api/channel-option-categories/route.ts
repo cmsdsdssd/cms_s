@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+﻿import { NextResponse } from "next/server";
 import { getShopAdminClient, jsonError, parseJsonObject } from "@/lib/shop/admin";
 
 export const dynamic = "force-dynamic";
@@ -140,8 +140,8 @@ export async function POST(request: Request) {
     if (!Number.isFinite(syncDelta) || syncDelta < -1_000_000 || syncDelta > 1_000_000) {
       return jsonError(`rows[${i}].sync_delta_krw is invalid`, 400);
     }
-    if (syncDelta % 1000 !== 0) {
-      return jsonError(`rows[${i}].sync_delta_krw must be 1000 KRW step`, 400);
+    if (syncDelta % 100 !== 0) {
+      return jsonError(`rows[${i}].sync_delta_krw must be 100 KRW step`, 400);
     }
 
     const prevCategory = categoryByOptionName.get(optionName);

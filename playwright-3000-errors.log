@@ -1,0 +1,7 @@
+Total messages: 4 (Errors: 3, Warnings: 0)
+Returning 3 messages for level "error"
+
+[ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://localhost:3000/_next/static/chunks/2cef031f52d81cfe.js:0
+[ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://localhost:3000/favicon.ico:0
+ChunkLoadError: Failed to load chunk /_next/static/chunks/2cef031f52d81cfe.js from module 64893
+    at http://localhost:3000/_next/static/chunks/turbopack-d8c9b95990f7dbfe.js:1:5988

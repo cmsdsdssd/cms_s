@@ -26,6 +26,8 @@ type BulkRow = {
   option_size_value: number | null;
   material_multiplier_override: number | null;
   size_weight_delta_g: number | null;
+  size_price_override_enabled: boolean;
+  size_price_override_krw: number | null;
   option_price_delta_krw: number | null;
   option_price_mode: "SYNC" | "MANUAL";
   option_manual_target_krw: number | null;
@@ -61,6 +63,13 @@ function normalizeRow(raw: unknown): { ok: true; row: BulkRow } | { ok: false; e
     || body.size_weight_delta_g === ""
       ? null
       : Number(body.size_weight_delta_g);
+  const sizePriceOverrideEnabled = body.size_price_override_enabled === true;
+  const sizePriceOverrideKrw =
+    body.size_price_override_krw === null
+    || body.size_price_override_krw === undefined
+    || body.size_price_override_krw === ""
+      ? null
+      : Number(body.size_price_override_krw);
   const optionPriceDeltaKrw =
     body.option_price_delta_krw === null
     || body.option_price_delta_krw === undefined
@@ -119,6 +128,15 @@ function normalizeRow(raw: unknown): { ok: true; row: BulkRow } | { ok: false; e
   if (sizeWeightDeltaG !== null && (!Number.isFinite(sizeWeightDeltaG) || sizeWeightDeltaG < -100 || sizeWeightDeltaG > 100)) {
     return { ok: false, error: "size_weight_delta_g must be between -100 and 100" };
   }
+  if (sizePriceOverrideKrw !== null && (!Number.isFinite(sizePriceOverrideKrw) || sizePriceOverrideKrw < -100000000 || sizePriceOverrideKrw > 100000000)) {
+    return { ok: false, error: "size_price_override_krw must be between -100000000 and 100000000" };
+  }
+  if (sizePriceOverrideKrw !== null && Math.round(sizePriceOverrideKrw) % 100 !== 0) {
+    return { ok: false, error: "size_price_override_krw must be 100 KRW step" };
+  }
+  if (sizePriceOverrideEnabled && sizePriceOverrideKrw === null) {
+    return { ok: false, error: "size_price_override_krw is required when size_price_override_enabled is true" };
+  }
   if (optionPriceDeltaKrw !== null && (!Number.isFinite(optionPriceDeltaKrw) || optionPriceDeltaKrw < -100000000 || optionPriceDeltaKrw > 100000000)) {
     return { ok: false, error: "option_price_delta_krw must be between -100000000 and 100000000" };
   }
@@ -152,6 +170,8 @@ function normalizeRow(raw: unknown): { ok: true; row: BulkRow } | { ok: false; e
       option_size_value: optionSizeValue,
       material_multiplier_override: materialMultiplierOverride,
       size_weight_delta_g: sizeWeightDeltaG,
+      size_price_override_enabled: sizePriceOverrideEnabled,
+      size_price_override_krw: sizePriceOverrideEnabled ? Math.round(sizePriceOverrideKrw ?? 0) : null,
       option_price_delta_krw: optionPriceDeltaKrw,
       option_price_mode: optionPriceMode,
       option_manual_target_krw: optionManualTargetKrw,
@@ -464,7 +484,7 @@ export async function POST(request: Request) {
   const { data, error } = await sb
     .from("sales_channel_product")
     .upsert(rows, { onConflict: "channel_id,external_product_no,external_variant_code" })
-    .select("channel_product_id, channel_id, master_item_id, external_product_no, external_variant_code, sync_rule_set_id, option_material_code, option_color_code, option_decoration_code, option_size_value, material_multiplier_override, size_weight_delta_g, option_price_delta_krw, option_price_mode, option_manual_target_krw, include_master_plating_labor, sync_rule_material_enabled, sync_rule_weight_enabled, sync_rule_plating_enabled, sync_rule_decoration_enabled, sync_rule_margin_rounding_enabled, mapping_source, is_active, created_at, updated_at");
+    .select("channel_product_id, channel_id, master_item_id, external_product_no, external_variant_code, sync_rule_set_id, option_material_code, option_color_code, option_decoration_code, option_size_value, material_multiplier_override, size_weight_delta_g, size_price_override_enabled, size_price_override_krw, option_price_delta_krw, option_price_mode, option_manual_target_krw, include_master_plating_labor, sync_rule_material_enabled, sync_rule_weight_enabled, sync_rule_plating_enabled, sync_rule_decoration_enabled, sync_rule_margin_rounding_enabled, mapping_source, is_active, created_at, updated_at");
 
   if (error) return jsonError(error.message ?? '일괄 매핑 저장 실패', 400);
 

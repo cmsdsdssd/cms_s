@@ -269,6 +269,7 @@ async function runCron(request: Request) {
       compute_request_id: computeRequestId,
       run_type: "AUTO",
       dry_run: false,
+      sync_option_labels: false,
     }),
   );
   const pushJson = await pushRes.json().catch(() => ({}));
