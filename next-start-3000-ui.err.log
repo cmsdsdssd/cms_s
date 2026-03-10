@@ -1,0 +1,26 @@
+Error: fetch failed
+    at context.fetch (C:\Users\RICH\.gemini\antigravity\scratch\cms_s\web\node_modules\next\dist\server\web\sandbox\context.js:321:60)
+    at C:\Users\RICH\.gemini\antigravity\scratch\cms_s\web\.next\server\edge\chunks\[root-of-the-server]__c5caee05._.js:24:41442
+    at tL (C:\Users\RICH\.gemini\antigravity\scratch\cms_s\web\.next\server\edge\chunks\[root-of-the-server]__c5caee05._.js:24:46382)
+    at tD (C:\Users\RICH\.gemini\antigravity\scratch\cms_s\web\.next\server\edge\chunks\[root-of-the-server]__c5caee05._.js:24:45910)
+    at C:\Users\RICH\.gemini\antigravity\scratch\cms_s\web\.next\server\edge\chunks\[root-of-the-server]__c5caee05._.js:37:14228
+    at ru._useSession (C:\Users\RICH\.gemini\antigravity\scratch\cms_s\web\.next\server\edge\chunks\[root-of-the-server]__c5caee05._.js:37:11746)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async ru._getUser (C:\Users\RICH\.gemini\antigravity\scratch\cms_s\web\.next\server\edge\chunks\[root-of-the-server]__c5caee05._.js:37:14059)
+    at async C:\Users\RICH\.gemini\antigravity\scratch\cms_s\web\.next\server\edge\chunks\[root-of-the-server]__c5caee05._.js:37:13853
+    at async C:\Users\RICH\.gemini\antigravity\scratch\cms_s\web\.next\server\edge\chunks\[root-of-the-server]__c5caee05._.js:37:11020 {
+  
+}
+Market symbol role fetch error: {
+  message: 'TypeError: fetch failed',
+  details: 'TypeError: fetch failed\n' +
+    '\n' +
+    'Caused by: Error: Client network socket disconnected before secure TLS connection was established (ECONNRESET)\n' +
+    'Error: Client network socket disconnected before secure TLS connection was established\n' +
+    '    at TLSSocket.onConnectEnd (node:_tls_wrap:1684:19)\n' +
+    '    at TLSSocket.emit (node:events:520:35)\n' +
+    '    at endReadableNT (node:internal/streams/readable:1701:12)\n' +
+    '    at process.processTicksAndRejections (node:internal/process/task_queues:89:21)',
+  hint: '',
+  code: ''
+}

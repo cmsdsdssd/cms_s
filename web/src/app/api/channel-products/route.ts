@@ -1,5 +1,5 @@
 ﻿import { NextResponse } from "next/server";
-import { getShopAdminClient, isMissingColumnError, jsonError, parseJsonObject } from "@/lib/shop/admin";
+import { getShopAdminClient, isMissingColumnError, isMissingSchemaObjectError, jsonError, parseJsonObject } from "@/lib/shop/admin";
 import { normalizeMaterialCode } from "@/lib/material-factors";
 import {
   buildMappingOptionAllowlist,
@@ -23,6 +23,25 @@ const parseCurrentProductSyncProfile = (value: unknown) => {
   const profile = String(value ?? "GENERAL").trim().toUpperCase();
   if (profile === "GENERAL" || profile === "MARKET_LINKED") return profile;
   throw new Error("current_product_sync_profile must be GENERAL/MARKET_LINKED");
+};
+
+const mergeColorChoices = (allowlist: ReturnType<typeof buildMappingOptionAllowlist>, rows: Array<{ combo_key?: string | null; display_name?: string | null; base_delta_krw?: number | null }>) => {
+  const merged = new Map(
+    (allowlist.colors ?? []).map((choice) => [String(choice.value ?? "").trim(), choice] as const),
+  );
+  for (const row of rows) {
+    const comboKey = String(row.combo_key ?? "").trim();
+    if (!comboKey || merged.has(comboKey)) continue;
+    merged.set(comboKey, {
+      value: comboKey,
+      label: String(row.display_name ?? "").trim() || comboKey,
+      delta_krw: Math.max(0, Math.round(Number(row.base_delta_krw ?? 0))),
+    });
+  }
+  return {
+    ...allowlist,
+    colors: Array.from(merged.values()),
+  };
 };
 
 export async function GET(request: Request) {
@@ -195,9 +214,23 @@ export async function POST(request: Request) {
     .eq("master_item_id", masterItemId)
     .eq("is_active", true);
   if (optionRuleRes.error) return jsonError(optionRuleRes.error.message ?? "옵션 상세 규칙 조회 실패", 500);
+  const colorComboRes = await sb
+    .from("channel_color_combo_catalog_v1")
+    .select("combo_key, display_name, base_delta_krw")
+    .eq("channel_id", channelId)
+    .eq("is_active", true)
+    .limit(5000);
+  if (colorComboRes.error && !isMissingSchemaObjectError(colorComboRes.error, "channel_color_combo_catalog_v1")) {
+    return jsonError(colorComboRes.error.message ?? "색상 중앙금액 조회 실패", 500);
+  }
+
+  const optionAllowlist = mergeColorChoices(
+    buildMappingOptionAllowlist(optionRuleRes.data ?? []),
+    (colorComboRes.data ?? []) as Array<{ combo_key?: string | null; display_name?: string | null; base_delta_krw?: number | null }>,
+  );
 
   const optionValidation = validateMappingOptionSelection({
-    allowlist: buildMappingOptionAllowlist(optionRuleRes.data ?? []),
+    allowlist: optionAllowlist,
     current: {
       option_material_code: optionMaterialCode,
       option_color_code: optionColorCode,

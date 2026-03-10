@@ -1,5 +1,6 @@
 import { resolveMarketLinkedSizeCell } from "./market-linked-size-grid.js";
 import { resolvePersistedSizeGridCell } from "./weight-grid-store.js";
+import { isPlatingComboCode, normalizePlatingComboCode } from "./sync-rules.ts";
 
 const CATEGORY_KEYS = ["MATERIAL", "SIZE", "COLOR_PLATING", "DECOR", "OTHER"];
 
@@ -35,11 +36,8 @@ export const normalizeMaterialScopeCode = (value) => {
 };
 
 export const normalizeOptionLaborColorCode = (value) => {
-  const normalized = String(value ?? "").trim().toUpperCase();
-  if (!normalized) return null;
-  const letterSet = new Set(normalized.replace(/[^PGWB]/g, "").split("").filter((ch) => ch.length > 0));
-  const canonical = ["P", "G", "W", "B"].filter((code) => letterSet.has(code)).join("");
-  return canonical || null;
+  const normalized = normalizePlatingComboCode(value);
+  return normalized || null;
 };
 
 export const normalizeDecorationCode = (value) => {
@@ -161,7 +159,7 @@ export const resolveOptionLaborRuleMatches = (rows, context) => {
   const materialCode = normalizeMaterialScopeCode(context?.materialCode);
   const additionalWeightValue = normalizeAdditionalWeightValue(context?.additionalWeightG);
   const additionalWeightCentigram = normalizeAdditionalWeightCentigram(context?.additionalWeightG);
-  const platingEnabled = context?.platingEnabled === true;
+  const platingEnabled = context?.platingEnabled === true || isPlatingComboCode(context?.colorCode);
   const colorCode = normalizeOptionLaborColorCode(context?.colorCode);
   const decorationCode = normalizeDecorationCode(context?.decorationCode);
   const decorationMasterId = String(context?.decorationMasterId ?? "").trim();

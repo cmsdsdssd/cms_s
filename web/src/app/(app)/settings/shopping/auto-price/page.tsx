@@ -487,6 +487,7 @@ const legacyStatusLabelOf = (value: "VALID" | "LEGACY_OUT_OF_RANGE" | "UNRESOLVE
   return "정상";
 };
 const NOTICE_VALUE_OPTIONS = ["배송안내", "주문안내", "교환반품안내", "맞춤제작안내", "기타공지"];
+const COLOR_AMOUNT_OPTIONS = Array.from({ length: 201 }, (_, index) => String(index * 1000));
 
 
 const currentProductSyncProfileCardClassOf = (value: CurrentProductSyncProfile) => {
@@ -2267,7 +2268,9 @@ export default function ShoppingAutoPricePage() {
         next[entry.entryKey] = hasChoiceValue(sizeChoices, sizeValue) ? sizeValue : "";
       } else if (categoryKey === "COLOR_PLATING") {
         const colorValue = String(canonicalRow?.color_code_selected ?? "").trim();
-        const colorChoices = (colorCodesByMaterial.get(resolvedMaterialCode) ?? []).map((value) => ({ value }));
+        const scopedChoices = (colorCodesByMaterial.get(resolvedMaterialCode) ?? []).map((value) => ({ value }));
+        const fallbackChoices = loadedOptionAllowlist.colors.map((choice) => ({ value: String(choice.value ?? "").trim() })).filter((choice) => choice.value);
+        const colorChoices = scopedChoices.length > 0 ? scopedChoices : fallbackChoices;
         next[entry.entryKey] = hasChoiceValue(colorChoices, colorValue) ? colorValue : "";
       } else if (categoryKey === "DECOR") {
         next[entry.entryKey] = String(canonicalRow?.decor_model_name_selected ?? "").trim();
@@ -2278,7 +2281,7 @@ export default function ShoppingAutoPricePage() {
       }
     }
     return next;
-  }, [canonicalOptionRowByEntryKey, colorCodesByMaterial, fallbackSizeMaterialCode, loadedOptionAllowlist.sizes_by_material, optionCategoryDrafts, optionEntries, resolvedMasterMaterialCode]);
+  }, [canonicalOptionRowByEntryKey, colorCodesByMaterial, fallbackSizeMaterialCode, loadedOptionAllowlist.colors, loadedOptionAllowlist.sizes_by_material, optionCategoryDrafts, optionEntries, resolvedMasterMaterialCode]);
   const optionAxis2Drafts =
     optionAxis2DraftSlot.resetKey === variantDraftResetKey ? optionAxis2DraftSlot.value : defaultOptionAxis2Drafts;
   const setOptionAxis2Drafts = (next: StringMap | ((current: StringMap) => StringMap)) => {
@@ -2824,12 +2827,17 @@ export default function ShoppingAutoPricePage() {
     const next = new Map<string, Array<{ value: string; label: string }>>();
     for (const row of compactOptionRows) {
       if (row.categoryKey !== "COLOR_PLATING") continue;
-      const colorCodes = colorCodesByMaterial.get(row.selectedMaterialCode) ?? [];
-      const base = colorCodes.map((code) => ({ value: code, label: colorLabelByCode.get(code) ?? code }));
+      const scopedColorCodes = colorCodesByMaterial.get(row.selectedMaterialCode) ?? [];
+      const scopedChoices = scopedColorCodes.map((code) => ({ value: code, label: colorLabelByCode.get(code) ?? code }));
+      const fallbackChoices = loadedOptionAllowlist.colors.map((choice) => ({
+        value: String(choice.value ?? "").trim(),
+        label: String(choice.label ?? choice.value ?? "").trim() || String(choice.value ?? "").trim(),
+      })).filter((choice) => choice.value);
+      const base = scopedChoices.length > 0 ? scopedChoices : fallbackChoices;
       next.set(row.entryKey, withResolvedChoice(base, row.selectedColorCode, row.legacyStatus !== "VALID", colorLabelByCode.get(row.selectedColorCode) ?? row.selectedColorCode));
     }
     return next;
-  }, [colorCodesByMaterial, colorLabelByCode, compactOptionRows]);
+  }, [colorCodesByMaterial, colorLabelByCode, compactOptionRows, loadedOptionAllowlist.colors]);
   const axisColumnHeaders = ["1차분류", "2차분류", "3차분류"] as const;
   const hasUnsavedCompactOptionChanges = useMemo(() => {
     return optionEntries.some((entry) => {
@@ -3190,10 +3198,12 @@ export default function ShoppingAutoPricePage() {
         if (categoryKey === "NOTICE") return [];
         const syncDelta = categoryKey === "DECOR"
           ? Math.round(Number(compactRow?.decorFinalAmountKrw ?? 0))
-          : isRuleDrivenCategory(categoryKey)
+          : categoryKey === "COLOR_PLATING"
+            ? Math.round(parseNumericInput(optionSyncDeltaDrafts[entry.entryKey] ?? defaultOptionSyncDeltaDrafts[entry.entryKey] ?? String(compactRow?.syncDeltaKrw ?? 0)) ?? 0)
+            : isRuleDrivenCategory(categoryKey)
             ? Math.round(Number(compactRow?.resolvedDeltaKrw ?? compactRow?.syncDeltaKrw ?? 0))
             : Math.round(parseNumericInput(optionSyncDeltaDrafts[entry.entryKey] ?? defaultOptionSyncDeltaDrafts[entry.entryKey] ?? "0") ?? 0);
-        if (!isRuleDrivenCategory(categoryKey) && categoryKey !== "DECOR" && syncDelta % 1000 !== 0) {
+        if ((categoryKey === "COLOR_PLATING" || (!isRuleDrivenCategory(categoryKey) && categoryKey !== "DECOR")) && syncDelta % 1000 !== 0) {
           throw new Error(`${entry.optionName} ${entry.optionValue} 가격은 1000원 단위로 입력해야 합니다`);
         }
         if (categoryKey === "DECOR") {
@@ -3308,7 +3318,7 @@ export default function ShoppingAutoPricePage() {
               category_key: "COLOR_PLATING" as const,
               axis1_value: materialCode || null,
               axis2_value: colorCode || null,
-              axis3_value: null,
+              axis3_value: String(Math.round(parseNumericInput(optionSyncDeltaDrafts[entry.entryKey] ?? defaultOptionSyncDeltaDrafts[entry.entryKey] ?? String(compactRow?.syncDeltaKrw ?? 0)) ?? 0)),
               decor_master_item_id: null,
               decor_extra_delta_krw: null,
               decor_final_amount_krw: null,
@@ -4742,16 +4752,17 @@ export default function ShoppingAutoPricePage() {
                                     className="h-8 min-w-[92px] cursor-not-allowed bg-slate-50 text-right text-[11px] text-slate-500"
                                   />
                                 ) : row.categoryKey === "COLOR_PLATING" ? (
-                                  <div>
-                                    <Input
-                                      value={String(row.syncDeltaKrw)}
-                                      type="number"
-                                      disabled
-                                      readOnly
-                                      className="h-8 min-w-[92px] cursor-not-allowed bg-slate-50 text-right text-[11px] text-slate-500"
-                                    />
-                                    <div className="mt-1 text-[10px] text-[var(--muted)]">가격 수정은 rules &gt; 도금/색상에서만 가능합니다.</div>
-                                  </div>
+                                  <Select
+                                    value={String(optionSyncDeltaDrafts[row.entryKey] ?? defaultOptionSyncDeltaDrafts[row.entryKey] ?? String(row.syncDeltaKrw))}
+                                    onChange={(e) => setOptionSyncDeltaDrafts((prev) => ({ ...prev, [row.entryKey]: e.target.value }))}
+                                    className="h-8 min-w-[120px] bg-white pr-8 text-right text-[11px] text-slate-900"
+                                  >
+                                    {COLOR_AMOUNT_OPTIONS.map((amount) => (
+                                      <option key={`quick-color-amount-${row.entryKey}-${amount}`} value={amount}>
+                                        {fmt(Math.round(Number(amount)))}
+                                      </option>
+                                    ))}
+                                  </Select>
                                 ) : row.categoryKey === "SIZE" ? (
                                   <div>
                                     <Input

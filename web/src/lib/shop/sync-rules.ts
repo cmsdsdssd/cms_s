@@ -155,6 +155,7 @@ export const isSilverMaterial = (materialCodeRaw: string | null | undefined): bo
 };
 
 export const STANDARD_PLATING_BASE_CODES = ["P", "G", "W", "B"] as const;
+export const PLATING_PREFIX = "[도]";
 
 export const STANDARD_PLATING_COMBO_CODES = (() => {
   const out: string[] = [];
@@ -167,15 +168,42 @@ export const STANDARD_PLATING_COMBO_CODES = (() => {
   return out;
 })();
 
+const extractPlatingLetters = (value: string | null | undefined): string[] => {
+  const text = String(value ?? "").trim().toUpperCase();
+  if (!text) return [];
+  const letterSet = new Set(text.replace(/[^PGWB]/g, "").split("").filter((ch) => ch.length > 0));
+  return STANDARD_PLATING_BASE_CODES.filter((code) => letterSet.has(code));
+};
+
+const hasExplicitPlatingPrefix = (value: string | null | undefined): boolean => {
+  const text = String(value ?? "").trim();
+  return /^\[도\]/iu.test(text);
+};
+
+const looksLegacyImplicitPlatingCode = (value: string | null | undefined): boolean => {
+  const text = String(value ?? "").trim().toUpperCase();
+  if (!text) return false;
+  if (hasExplicitPlatingPrefix(text)) return false;
+  return /^[PGWB]+$/u.test(text);
+};
+
+export const isPlatingComboCode = (value: string | null | undefined): boolean => {
+  const letters = extractPlatingLetters(value);
+  if (letters.length === 0) return false;
+  return hasExplicitPlatingPrefix(value) || looksLegacyImplicitPlatingCode(value);
+};
+
+export const normalizePlatingBaseCode = (value: string | null | undefined): string => {
+  const letters = extractPlatingLetters(value);
+  return letters.join("+");
+};
+
 export const formatPlatingComboLabel = (value: string | null | undefined): string => {
-  const normalized = normalizePlatingComboCode(value);
-  if (!normalized) return "";
-  return normalized.split("").join("+");
+  return normalizePlatingComboCode(value);
 };
 
 export const normalizePlatingComboCode = (value: string | null | undefined): string => {
-  const text = String(value ?? "").trim().toUpperCase();
-  if (!text) return "";
-  const letterSet = new Set(text.replace(/[^PGWB]/g, "").split("").filter((ch) => ch.length > 0));
-  return STANDARD_PLATING_BASE_CODES.filter((code) => letterSet.has(code)).join("");
+  const baseCode = normalizePlatingBaseCode(value);
+  if (!baseCode) return "";
+  return isPlatingComboCode(value) ? `${PLATING_PREFIX} ${baseCode}` : baseCode;
 };

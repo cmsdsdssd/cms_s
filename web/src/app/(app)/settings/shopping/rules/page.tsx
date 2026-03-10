@@ -1,6 +1,6 @@
 ﻿'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { ActionBar } from '@/components/layout/action-bar';
@@ -46,6 +46,16 @@ type PoolMaster = {
 type ColorOption = {
   color_code: string;
   display_name: string;
+  base_delta_krw?: NumberLike;
+};
+
+type ColorCatalogRow = {
+  combo_id: string;
+  combo_key: string;
+  display_name: string;
+  base_delta_krw: number;
+  sort_order: number;
+  is_active: boolean;
 };
 
 type PoolsData = {
@@ -113,7 +123,6 @@ type SizeDraft = {
 type ColorDraft = {
   ruleId: string;
   materialCode: string;
-  platingEnabled: string;
   colorCode: string;
   additiveKrw: string;
 };
@@ -148,6 +157,7 @@ type DeleteRuleInput = {
 const RULE_WEIGHT_OPTIONS = Array.from({ length: 10_000 }, (_, index) => ((index + 1) / 100).toFixed(2));
 const BULK_WEIGHT_OPTIONS = Array.from({ length: 10_001 }, (_, index) => (index / 100).toFixed(2));
 const LABOR_AMOUNT_OPTIONS = Array.from({ length: 10_001 }, (_, index) => String(index * 100));
+const COLOR_AMOUNT_OPTIONS = Array.from({ length: 201 }, (_, index) => String(index * 1000));
 
 const toNumber = (value: NumberLike): number => {
   const parsed = Number(value ?? 0);
@@ -225,7 +235,6 @@ const createEmptySizeDraft = (materials: string[]): SizeDraft => ({
 const createEmptyColorDraft = (materials: string[], colors: ColorOption[]): ColorDraft => ({
   ruleId: '',
   materialCode: materials[0] ?? '',
-  platingEnabled: 'true',
   colorCode: colors[0]?.color_code ?? '',
   additiveKrw: '0',
 });
@@ -271,6 +280,36 @@ export default function ShoppingRulesPage() {
     () => (poolMasterOptions.length ? poolMasterOptions : poolMasters),
     [poolMasterOptions, poolMasters],
   );
+
+  const colorCatalogQuery = useQuery({
+    queryKey: ['channel-color-combos', effectiveChannelId],
+    enabled: Boolean(effectiveChannelId),
+    queryFn: () => shopApiGet<{ data: ColorCatalogRow[] }>(`/api/channel-color-combos?channel_id=${encodeURIComponent(effectiveChannelId)}`),
+  });
+  const [colorCatalogRows, setColorCatalogRows] = useState<ColorCatalogRow[]>([]);
+  useEffect(() => {
+    setColorCatalogRows(colorCatalogQuery.data?.data ?? []);
+  }, [colorCatalogQuery.data?.data]);
+  const saveColorCatalogMutation = useMutation({
+    mutationFn: () => shopApiSend<{ data: ColorCatalogRow[] }>('/api/channel-color-combos', 'POST', {
+      channel_id: effectiveChannelId,
+      rows: colorCatalogRows.map((row) => ({
+        combo_key: row.combo_key,
+        display_name: row.display_name,
+        base_delta_krw: parseAmount(String(row.base_delta_krw ?? 0)),
+        sort_order: row.sort_order,
+        is_active: row.is_active,
+      })),
+    }),
+    onSuccess: async () => {
+      toast.success('색상 중앙금액 저장 완료');
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['channel-color-combos', effectiveChannelId] }),
+        queryClient.invalidateQueries({ queryKey: ['option-labor-rule-pools', effectiveChannelId] }),
+      ]);
+    },
+    onError: (err: Error) => toast.error(err.message),
+  });
 
   const laborMasters = useMemo(() => {
     const entries = [...masterSource, ...decorationMasters];
@@ -409,9 +448,22 @@ export default function ShoppingRulesPage() {
   const colorDraftContextKey = `${effectiveContextKey}::${materials.join('|')}`;
   const colorDraftMatchesContext = colorDraftSlot.resetKey.startsWith(`${colorDraftContextKey}::`);
   const currentTypedColorCode = colorDraftMatchesContext ? colorDraftSlot.value.colorCode : '';
+  const activeColorCatalogChoices = useMemo(
+    () => colorCatalogRows.filter((row) => row.is_active !== false).map((row) => ({ color_code: row.combo_key, display_name: row.display_name, base_delta_krw: row.base_delta_krw })),
+    [colorCatalogRows],
+  );
+  const colorCatalogByCode = useMemo(() => {
+    const map = new Map<string, ColorCatalogRow>();
+    for (const row of colorCatalogRows) {
+      const key = normalizeColorCode(row.combo_key);
+      if (!key || map.has(key)) continue;
+      map.set(key, row);
+    }
+    return map;
+  }, [colorCatalogRows]);
   const mergedColorChoices = useMemo(
-    () => buildMergedColorChoices(colors, colorRules, currentTypedColorCode),
-    [colorRules, colors, currentTypedColorCode],
+    () => buildMergedColorChoices(activeColorCatalogChoices.length > 0 ? activeColorCatalogChoices : colors, colorRules, currentTypedColorCode),
+    [activeColorCatalogChoices, colorRules, colors, currentTypedColorCode],
   );
   const colorDraftResetKey = `${colorDraftContextKey}::${mergedColorChoices.map((row) => row.color_code).join('|')}`;
   const defaultColorDraft = useMemo(() => createEmptyColorDraft(materials, mergedColorChoices), [materials, mergedColorChoices]);
@@ -423,6 +475,9 @@ export default function ShoppingRulesPage() {
   };
   const resetColorDraft = () => {
     setColorDraftSlot({ resetKey: colorDraftResetKey, value: defaultColorDraft });
+  };
+  const updateColorCatalogRow = (comboId: string, patch: Partial<ColorCatalogRow>) => {
+    setColorCatalogRows((prev) => prev.map((row) => (row.combo_id === comboId ? { ...row, ...patch } : row)));
   };
 
   const [includeAllDecorMasters, setIncludeAllDecorMasters] = useState(false);
@@ -656,6 +711,7 @@ export default function ShoppingRulesPage() {
     if (!basePayload) return;
     const normalizedColorCode = normalizeColorCode(colorDraft.colorCode);
     if (!normalizedColorCode) return;
+    const selectedColorCatalog = colorCatalogByCode.get(normalizedColorCode) ?? null;
     handleSaveRule(
       colorDraft.ruleId ? '도금/색상 규칙 수정' : '도금/색상 규칙 추가',
       {
@@ -664,7 +720,7 @@ export default function ShoppingRulesPage() {
         category_key: 'COLOR_PLATING',
         scope_material_code: colorDraft.materialCode || null,
         additional_weight_g: null,
-        plating_enabled: colorDraft.platingEnabled === 'true',
+        plating_enabled: selectedColorCatalog?.display_name?.startsWith('[도]') ?? normalizedColorCode.startsWith('[도]'),
         color_code: normalizedColorCode || null,
         decoration_master_id: null,
         decoration_model_name: null,
@@ -1329,13 +1385,70 @@ export default function ShoppingRulesPage() {
       </Card>
 
       <Card>
-        <CardHeader title='3. 도금 / 색상' description='COLOR_PLATING은 소재와 도금 여부, 색상 코드 조합으로 관리합니다.' />
+        <CardHeader title='3. 색상 중앙 기본금액' description='도금/색상 조합의 기본금액을 중앙에서 통제합니다.' />
+        <CardBody className="space-y-3">
+          <div className="rounded border border-[var(--hairline)] bg-[var(--background)] px-3 py-2 text-xs text-[var(--muted)]">
+            combo는 중앙 catalog에서만 관리합니다. rules의 도금/색상 추가 금액은 여기 기본금액 위에 더해집니다.
+          </div>
+          <div className="max-h-[260px] overflow-auto rounded border border-[var(--hairline)]">
+            <table className="w-full text-sm">
+              <thead className="bg-[var(--panel)] text-left">
+                <tr>
+                  <th className='px-3 py-2'>조합</th>
+                  <th className='px-3 py-2'>기본금액</th>
+                  <th className='px-3 py-2'>활성</th>
+                </tr>
+              </thead>
+              <tbody>
+                {colorCatalogRows.map((row) => (
+                  <tr key={row.combo_id} className="border-t border-[var(--hairline)]">
+                    <td className="px-3 py-2">{row.display_name}</td>
+                    <td className="px-3 py-2">
+                      <Select
+                        value={String(row.base_delta_krw ?? 0)}
+                        onChange={(e) => updateColorCatalogRow(row.combo_id, { base_delta_krw: parseAmount(e.target.value) })}
+                      >
+                        {COLOR_AMOUNT_OPTIONS.map((amount) => (
+                          <option key={`${row.combo_id}-${amount}`} value={amount}>{formatWon(Number(amount))}</option>
+                        ))}
+                      </Select>
+                    </td>
+                    <td className="px-3 py-2">
+                      <label className="inline-flex items-center gap-2 text-xs">
+                        <input
+                          type="checkbox"
+                          checked={row.is_active !== false}
+                          onChange={(e) => updateColorCatalogRow(row.combo_id, { is_active: e.target.checked })}
+                        />
+                        사용
+                      </label>
+                    </td>
+                  </tr>
+                ))}
+                {colorCatalogRows.length === 0 ? (
+                  <tr>
+                    <td colSpan={3} className="px-3 py-8 text-center text-[var(--muted)]">아직 중앙 색상 조합이 없습니다.</td>
+                  </tr>
+                ) : null}
+              </tbody>
+            </table>
+          </div>
+          <div className="flex justify-end">
+            <Button onClick={() => saveColorCatalogMutation.mutate()} disabled={saveColorCatalogMutation.isPending || !effectiveChannelId}>
+              {saveColorCatalogMutation.isPending ? '저장 중...' : '중앙 색상금액 저장'}
+            </Button>
+          </div>
+        </CardBody>
+      </Card>
+
+      <Card>
+        <CardHeader title='4. 도금 / 색상' description='COLOR_PLATING은 소재와 도금 여부, 색상 코드 조합으로 관리합니다.' />
         <CardBody className="space-y-3">
           <div className="rounded border border-[var(--hairline)] bg-[var(--background)] px-3 py-2 text-xs text-[var(--muted)]">
  도금 여부와 색상 코드를 함께 저장합니다. 목록에 없는 색상 코드도 직접 입력해 저장할 수 있습니다.
           </div>
 
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-5">
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-6">
             <div>
               <div className='mb-1 text-xs text-[var(--muted)]'>소재</div>
               <Select
@@ -1352,31 +1465,25 @@ export default function ShoppingRulesPage() {
               </Select>
             </div>
             <div>
- <div className='mb-1 text-xs text-[var(--muted)]'>도금 여부</div>
+              <div className='mb-1 text-xs text-[var(--muted)]'>색상 조합</div>
               <Select
-                value={colorDraft.platingEnabled}
-                onChange={(event) => setColorDraft((current) => ({ ...current, platingEnabled: event.target.value }))}
-              >
- <option value='true'>도금 있음</option>
- <option value='false'>도금 없음</option>
-              </Select>
-            </div>
-            <div>
- <div className='mb-1 text-xs text-[var(--muted)]'>색상</div>
-              <Input
-                list={'option-labor-color-codes'}
                 value={colorDraft.colorCode}
-                onChange={(event) => setColorDraft((current) => ({ ...current, colorCode: normalizeColorCode(event.target.value) }))}
- placeholder='색상 코드 입력 (예: WG)'
-              />
-              <datalist id={'option-labor-color-codes'}>
+                onChange={(event) => setColorDraft((current) => ({ ...current, colorCode: event.target.value }))}
+              >
+                <option value=''>색상 조합 선택</option>
                 {mergedColorChoices.map((color) => (
                   <option key={'draft-color-' + color.color_code} value={color.color_code}>
                     {color.display_name}
                   </option>
                 ))}
-              </datalist>
- <div className={'mt-1 text-[11px] text-[var(--muted)]'}>목록에 없는 색상 코드도 직접 입력하면 저장 시 함께 반영됩니다.</div>
+              </Select>
+            </div>
+            <div>
+              <div className='mb-1 text-xs text-[var(--muted)]'>중앙 기본금액</div>
+              <Input
+                value={formatWon(colorCatalogByCode.get(normalizeColorCode(colorDraft.colorCode))?.base_delta_krw ?? 0)}
+                disabled
+              />
             </div>
             <div>
  <div className='mb-1 text-xs text-[var(--muted)]'>추가 금액</div>
@@ -1384,12 +1491,19 @@ export default function ShoppingRulesPage() {
                 value={colorDraft.additiveKrw}
                 onChange={(event) => setColorDraft((current) => ({ ...current, additiveKrw: event.target.value }))}
               >
-                {LABOR_AMOUNT_OPTIONS.map((amount) => (
+                {COLOR_AMOUNT_OPTIONS.map((amount) => (
                   <option key={amount} value={amount}>
                     {formatWon(Number(amount))}
                   </option>
                 ))}
               </Select>
+            </div>
+            <div>
+              <div className='mb-1 text-xs text-[var(--muted)]'>최종 색상금액</div>
+              <Input
+                value={formatWon((colorCatalogByCode.get(normalizeColorCode(colorDraft.colorCode))?.base_delta_krw ?? 0) + parseAmount(colorDraft.additiveKrw))}
+                disabled
+              />
             </div>
             <div className="space-y-2">
  <div className='mb-1 text-xs text-[var(--muted)]'>작업</div>
@@ -1409,9 +1523,10 @@ export default function ShoppingRulesPage() {
               <thead className="bg-[var(--panel)] text-left">
                 <tr>
  <th className='px-3 py-2'>소재</th>
- <th className='px-3 py-2'>도금 여부</th>
- <th className='px-3 py-2'>색상</th>
+ <th className='px-3 py-2'>색상 조합</th>
+ <th className='px-3 py-2'>중앙 기본금액</th>
  <th className='px-3 py-2'>추가 금액</th>
+ <th className='px-3 py-2'>최종 색상금액</th>
  <th className='px-3 py-2'>작업</th>
                 </tr>
               </thead>
@@ -1419,9 +1534,10 @@ export default function ShoppingRulesPage() {
                 {colorRules.map((rule) => (
                   <tr key={rule.rule_id} className="border-t border-[var(--hairline)]">
                     <td className="px-3 py-2">{rule.scope_material_code ?? '-'}</td>
-                    <td className='px-3 py-2'>{rule.plating_enabled === false ? '도금 없음' : '도금 있음'}</td>
-                    <td className='px-3 py-2'>{rule.color_code ? (colorNameMap.get(rule.color_code) ?? rule.color_code) : '전체 색상'}</td>
+                    <td className='px-3 py-2'>{rule.color_code ? (colorCatalogByCode.get(normalizeColorCode(rule.color_code))?.display_name ?? colorNameMap.get(rule.color_code) ?? rule.color_code) : '전체 색상'}</td>
+                    <td className='px-3 py-2'>{formatWon(colorCatalogByCode.get(normalizeColorCode(rule.color_code ?? ''))?.base_delta_krw ?? 0)}</td>
                     <td className="px-3 py-2">{formatWon(rule.additive_delta_krw)}</td>
+                    <td className="px-3 py-2">{formatWon((colorCatalogByCode.get(normalizeColorCode(rule.color_code ?? ''))?.base_delta_krw ?? 0) + toNumber(rule.additive_delta_krw))}</td>
                     <td className="px-3 py-2">
                       <div className="flex gap-1">
                         <Button
@@ -1430,7 +1546,6 @@ export default function ShoppingRulesPage() {
                             setColorDraft({
                               ruleId: rule.rule_id,
                               materialCode: rule.scope_material_code ?? materials[0] ?? '',
-                              platingEnabled: rule.plating_enabled === false ? 'false' : 'true',
                               colorCode: rule.color_code ?? '',
                               additiveKrw: String(toNumber(rule.additive_delta_krw)),
                             });
@@ -1451,7 +1566,7 @@ export default function ShoppingRulesPage() {
                 ))}
                 {colorRules.length === 0 ? (
                   <tr>
-                    <td colSpan={5} className="px-3 py-8 text-center text-[var(--muted)]">
+                    <td colSpan={6} className="px-3 py-8 text-center text-[var(--muted)]">
  아직 도금/색상 규칙이 없습니다.
                     </td>
                   </tr>
@@ -1463,7 +1578,7 @@ export default function ShoppingRulesPage() {
       </Card>
 
       <Card>
- <CardHeader title='4. 장식' description='DECOR는 장식 마스터별 기본 공임과 추가 금액 합계를 관리합니다.' />
+ <CardHeader title='5. 장식' description='DECOR는 장식 마스터별 총공임원가(흡수공임 포함)와 추가 금액 합계를 관리합니다.' />
         <CardBody className="space-y-3">
           <div className="rounded border border-[var(--hairline)] bg-[var(--background)] px-3 py-2 text-xs text-[var(--muted)]">
             기본적으로 장식 마스터 목록을 사용하고, 필요하면 전체 마스터 목록으로 넓혀 선택할 수 있습니다. 선택한 장식의 기본 공임과 additive 금액을 함께 저장합니다.
@@ -1495,7 +1610,7 @@ export default function ShoppingRulesPage() {
               </Select>
             </div>
             <div>
- <div className='mb-1 text-xs text-[var(--muted)]'>기본 공임</div>
+ <div className='mb-1 text-xs text-[var(--muted)]'>총공임원가</div>
               <Input value={formatWon(laborOf(selectedDecorMaster))} disabled />
             </div>
             <div>
@@ -1512,7 +1627,7 @@ export default function ShoppingRulesPage() {
               </Select>
             </div>
             <div>
- <div className='mb-1 text-xs text-[var(--muted)]'>합산 공임</div>
+ <div className='mb-1 text-xs text-[var(--muted)]'>최종 장식금액</div>
               <Input value={formatWon(laborOf(selectedDecorMaster) + parseAmount(decorDraft.additiveKrw))} disabled />
             </div>
             <div className="space-y-2">
@@ -1533,9 +1648,9 @@ export default function ShoppingRulesPage() {
               <thead className="bg-[var(--panel)] text-left">
                 <tr>
  <th className='px-3 py-2'>장식 마스터</th>
- <th className='px-3 py-2'>기본 공임</th>
+ <th className='px-3 py-2'>총공임원가</th>
  <th className='px-3 py-2'>추가 금액</th>
- <th className='px-3 py-2'>합산 공임</th>
+ <th className='px-3 py-2'>최종 장식금액</th>
  <th className='px-3 py-2'>작업</th>
                 </tr>
               </thead>
@@ -1590,7 +1705,7 @@ export default function ShoppingRulesPage() {
       </Card>
 
       <Card>
- <CardHeader title='5. 기타' description='OTHER는 메모(note)와 추가 금액만 저장하는 보조 규칙입니다.' />
+ <CardHeader title='6. 기타' description='OTHER는 메모(note)와 override 금액만 저장하는 보조 규칙입니다.' />
         <CardBody className="space-y-3">
           <div className="rounded border border-[var(--hairline)] bg-[var(--background)] px-3 py-2 text-xs text-[var(--muted)]">
  별도 분류가 어려운 요청이나 예외 비용을 기록할 때 사용합니다. 메모 내용과 추가 금액만 관리합니다.
@@ -1606,17 +1721,13 @@ export default function ShoppingRulesPage() {
               />
             </div>
             <div>
- <div className='mb-1 text-xs text-[var(--muted)]'>추가 금액</div>
-              <Select
+ <div className='mb-1 text-xs text-[var(--muted)]'>override 금액</div>
+              <Input
                 value={otherDraft.additiveKrw}
                 onChange={(event) => setOtherDraft((current) => ({ ...current, additiveKrw: event.target.value }))}
-              >
-                {LABOR_AMOUNT_OPTIONS.map((amount) => (
-                  <option key={amount} value={amount}>
-                    {formatWon(Number(amount))}
-                  </option>
-                ))}
-              </Select>
+                type="number"
+                placeholder="예: 15000"
+              />
             </div>
             <div>
  <div className='mb-1 text-xs text-[var(--muted)]'>규칙 개수</div>

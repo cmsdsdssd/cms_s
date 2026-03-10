@@ -1,8 +1,9 @@
-import { NextResponse } from "next/server";
+﻿import { NextResponse } from "next/server";
 import { getShopAdminClient, jsonError, parseJsonObject, parseUuidArray } from "@/lib/shop/admin";
 import {
   buildMaterialPurityMap,
   getMaterialPurityFromMap,
+  isPlatingComboCode,
   isRangeMatched,
   isSilverMaterial,
   normalizePlatingComboCode,
@@ -279,11 +280,11 @@ const normalizeKnownMaterialCode = (value: unknown, fallbackCode: string): strin
 const ABSORB_STONE_ROLE_PREFIX = "STONE_ROLE:";
 const LEGACY_BOM_AUTO_REASON = "BOM_AUTO_TOTAL";
 const ACCESSORY_BASE_REASON = "ACCESSORY_LABOR";
-const ACCESSORY_ETC_REASON_KEYWORD = "부속공임";
+const ACCESSORY_ETC_REASON_KEYWORD = "ACCESSORY_ETC";
 const BOM_DECOR_NOTE_PREFIX = "BOM_DECOR_LINE:";
 const BOM_MATERIAL_NOTE_PREFIX = "BOM_MATERIAL_LINE:";
-const BOM_DECOR_REASON_PREFIX = "장식:";
-const BOM_MATERIAL_REASON_PREFIX = "기타-소재:";
+const BOM_DECOR_REASON_PREFIX = "DECOR:";
+const BOM_MATERIAL_REASON_PREFIX = "MATERIAL:";
 const ABSORB_AUTO_EXCLUDED_REASONS = new Set([LEGACY_BOM_AUTO_REASON, ACCESSORY_BASE_REASON]);
 
 const normalizeVariantKey = (value: string | null | undefined): string => String(value ?? "").trim();
@@ -554,7 +555,7 @@ export async function POST(request: Request) {
 
   if (policyRes.error) {
     const msg = String(policyRes.error.message ?? "");
-    if (!msg.includes("gm_material")) return jsonError(msg || "정책 조회 실패", 500);
+    if (!msg.includes("gm_material")) return jsonError(msg || "?뺤콉 議고쉶 ?ㅽ뙣", 500);
     const legacyRes = await sb
       .from("pricing_policy")
       .select(policySelectLegacy)
@@ -563,7 +564,7 @@ export async function POST(request: Request) {
       .order("updated_at", { ascending: false })
       .limit(1)
       .maybeSingle();
-    if (legacyRes.error) return jsonError(legacyRes.error.message ?? "정책 조회 실패", 500);
+    if (legacyRes.error) return jsonError(legacyRes.error.message ?? "?뺤콉 議고쉶 ?ㅽ뙣", 500);
     if (legacyRes.data) {
       policy = {
         ...legacyRes.data,
@@ -580,7 +581,7 @@ export async function POST(request: Request) {
     policy = (policyRes.data as Record<string, unknown> | null);
   }
 
-  if (!policy) return jsonError("활성 정책이 없습니다", 422);
+  if (!policy) return jsonError("?쒖꽦 ?뺤콉???놁뒿?덈떎", 422);
 
   const snapshotV2Probe = await sb.from("pricing_snapshot").select("pricing_algo_version").limit(1);
   const hasV2SnapshotColumns = !snapshotV2Probe.error;
@@ -613,7 +614,7 @@ export async function POST(request: Request) {
   if (masterItemIds && masterItemIds.length > 0) mapQuery.in("master_item_id", masterItemIds);
 
   const mappingRes = await mapQuery;
-  if (mappingRes.error) return jsonError(mappingRes.error.message ?? "매핑 조회 실패", 500);
+  if (mappingRes.error) return jsonError(mappingRes.error.message ?? "留ㅽ븨 議고쉶 ?ㅽ뙣", 500);
   const mappings = (mappingRes.data ?? []) as MappingRow[];
   if (mappings.length === 0) {
     return NextResponse.json({ ok: true, inserted: 0, skipped: 0, reason: "NO_MAPPINGS" }, { headers: { "Cache-Control": "no-store" } });
@@ -628,7 +629,7 @@ export async function POST(request: Request) {
       .in("master_item_id", Array.from(new Set(mappings.map((row) => String(row.master_item_id ?? "").trim()).filter(Boolean))))
       .order("updated_at", { ascending: false })
     : { data: [], error: null };
-  if (currentStateRes.error) return jsonError(currentStateRes.error.message ?? "current_state 조회 실패", 500);
+  if (currentStateRes.error) return jsonError(currentStateRes.error.message ?? "current_state 議고쉶 ?ㅽ뙣", 500);
   const currentStateRows = (currentStateRes.data ?? []) as Array<CurrentStateRow & { updated_at?: string | null }>;
   const currentStateByChannelProductId = new Map<string, CurrentStateRow>();
   const currentStateByVariantKey = new Map<string, CurrentStateRow>();
@@ -705,7 +706,7 @@ export async function POST(request: Request) {
         .eq("option_price_mode", "SYNC")
         .is("sync_rule_set_id", null);
       if (patchRes.error) {
-        return jsonError(patchRes.error.message ?? "누락된 sync_rule_set_id 자동 보정 실패", 500);
+        return jsonError(patchRes.error.message ?? "?꾨씫??sync_rule_set_id ?먮룞 蹂댁젙 ?ㅽ뙣", 500);
       }
     }
   }
@@ -713,7 +714,7 @@ export async function POST(request: Request) {
   const unresolvedMissingSyncRows = syncRowsMissingRuleSet.filter((row) => !syncRuleSetByMaster.has(row.master_item_id));
   if (unresolvedMissingSyncRows.length > 0) {
     const unresolvedMasterIds = Array.from(new Set(unresolvedMissingSyncRows.map((row) => row.master_item_id).filter(Boolean)));
-    return jsonError("SYNC 모드 매핑에 sync_rule_set_id가 필요합니다", 422, {
+    return jsonError("SYNC mappings require sync_rule_set_id", 422, {
       code: "SOT_SYNC_RULESET_REQUIRED",
       channel_product_ids: unresolvedMissingSyncRows.map((row) => row.channel_product_id).slice(0, 100),
       master_item_ids: unresolvedMasterIds.slice(0, 50),
@@ -721,7 +722,7 @@ export async function POST(request: Request) {
     });
   }
   if (inconsistentRuleSetRows.length > 0) {
-    return jsonError("동일 master_item_id의 SYNC 매핑은 sync_rule_set_id가 단일값이어야 합니다", 422, {
+    return jsonError("SYNC mappings under one master_item_id must use the same sync_rule_set_id", 422, {
       code: "SOT_RULESET_INCONSISTENT",
       examples: inconsistentRuleSetRows.slice(0, 50),
       count: inconsistentRuleSetRows.length,
@@ -739,7 +740,7 @@ export async function POST(request: Request) {
   const optionLaborRuleRes = uniqueMasterIds.length > 0
     ? await sb.from('channel_option_labor_rule_v1').select('rule_id, channel_id, master_item_id, external_product_no, category_key, scope_material_code, additional_weight_g, additional_weight_min_g, additional_weight_max_g, size_price_mode, formula_multiplier, formula_offset_krw, rounding_unit_krw, rounding_mode, fixed_delta_krw, plating_enabled, color_code, decoration_master_id, decoration_model_name, base_labor_cost_krw, additive_delta_krw, is_active, note').eq('channel_id', channelId).in('master_item_id', uniqueMasterIds)
     : { data: [], error: null };
-  if (optionLaborRuleRes.error && !isMissingSchemaObjectError(optionLaborRuleRes.error)) return jsonError(optionLaborRuleRes.error.message ?? '옵션 공임 규칙 조회 실패', 500);
+  if (optionLaborRuleRes.error && !isMissingSchemaObjectError(optionLaborRuleRes.error)) return jsonError(optionLaborRuleRes.error.message ?? '?듭뀡 怨듭엫 洹쒖튃 議고쉶 ?ㅽ뙣', 500);
   const optionLaborRules = (optionLaborRuleRes.data ?? []) as OptionLaborRuleRow[];
   const optionLaborRulesByContext = new Map<string, OptionLaborRuleRow[]>();
   const optionLaborRulesByMaster = new Map<string, OptionLaborRuleRow[]>();
@@ -778,10 +779,10 @@ export async function POST(request: Request) {
       .in("external_product_no", uniqueExternalProductNos),
   ]);
 
-  if (optionCategoryRes.error) return jsonError(optionCategoryRes.error.message ?? "옵션 카테고리 델타(legacy) 조회 실패", 500);
+  if (optionCategoryRes.error) return jsonError(optionCategoryRes.error.message ?? "?듭뀡 移댄뀒怨좊━ ?명?(legacy) 議고쉶 ?ㅽ뙣", 500);
 
   if (scopedOptionDeltaRes.error) {
-    return jsonError(scopedOptionDeltaRes.error.message ?? "옵션 카테고리 델타(scoped) 조회 실패", 500);
+    return jsonError(scopedOptionDeltaRes.error.message ?? "?듭뀡 移댄뀒怨좊━ ?명?(scoped) 議고쉶 ?ㅽ뙣", 500);
   }
 
   const categoryDeltaByScope = new Map<string, number>();
@@ -846,7 +847,7 @@ export async function POST(request: Request) {
     .eq("channel_id", channelId)
     .eq("is_active", true)
     .in("master_item_id", uniqueMasterIds);
-  if (floorGuardRes.error) return jsonError(floorGuardRes.error.message ?? "바닥가격 조회 실패", 500);
+  if (floorGuardRes.error) return jsonError(floorGuardRes.error.message ?? "諛붾떏媛寃?議고쉶 ?ㅽ뙣", 500);
   const floorPriceByMaster = new Map(
     (floorGuardRes.data ?? []).map((row) => [
       String((row as { master_item_id?: string | null }).master_item_id ?? ""),
@@ -880,7 +881,7 @@ export async function POST(request: Request) {
     .from("cms_master_item")
     .select("master_item_id, material_code_default, category_code, weight_default_g, deduction_weight_default_g, labor_base_cost, labor_center_cost, labor_sub1_cost, labor_sub2_cost, labor_base_sell, labor_center_sell, labor_sub1_sell, labor_sub2_sell, plating_price_cost_default, plating_price_sell_default, center_qty_default, sub1_qty_default, sub2_qty_default, model_name")
     .in("master_item_id", uniqueMasterIds);
-  if (masterRes.error) return jsonError(masterRes.error.message ?? "마스터 조회 실패", 500);
+  if (masterRes.error) return jsonError(masterRes.error.message ?? "留덉뒪??議고쉶 ?ㅽ뙣", 500);
   const masterMap = new Map((masterRes.data ?? []).map((row) => [String((row as MasterRow).master_item_id), row as MasterRow]));
   const decorationMasterIdByCode = new Map<string, string>();
   if (uniqueDecorationCodes.length > 0) {
@@ -889,7 +890,7 @@ export async function POST(request: Request) {
       .select("master_item_id, model_name")
       .in("model_name", uniqueDecorationCodes);
     if (decorationMasterLookupRes.error) {
-      return jsonError(decorationMasterLookupRes.error.message ?? "장식 마스터 코드 매핑 조회 실패", 500);
+      return jsonError(decorationMasterLookupRes.error.message ?? "?μ떇 留덉뒪??肄붾뱶 留ㅽ븨 議고쉶 ?ㅽ뙣", 500);
     }
     for (const row of decorationMasterLookupRes.data ?? []) {
       const modelName = String((row as { model_name?: string | null }).model_name ?? "").trim().toUpperCase();
@@ -904,7 +905,7 @@ export async function POST(request: Request) {
     .select("bom_id, product_master_id, variant_key")
     .in("product_master_id", uniqueMasterIds)
     .order("variant_key", { ascending: true });
-  if (recipeRes.error) return jsonError(recipeRes.error.message ?? "BOM 레시피 조회 실패", 500);
+  if (recipeRes.error) return jsonError(recipeRes.error.message ?? "BOM ?덉떆??議고쉶 ?ㅽ뙣", 500);
   const recipes = (recipeRes.data ?? []) as BomRecipeWorklistRow[];
   const recipesByMaster = new Map<string, BomRecipeWorklistRow[]>();
   for (const row of recipes) {
@@ -939,7 +940,7 @@ export async function POST(request: Request) {
       .select("bom_id, component_ref_type, component_master_id, qty_per_unit, note, is_void")
       .in("bom_id", selectedBomIds)
       .eq("is_void", false);
-    if (lineRes.error) return jsonError(lineRes.error.message ?? "BOM 라인 조회 실패", 500);
+    if (lineRes.error) return jsonError(lineRes.error.message ?? "BOM ?쇱씤 議고쉶 ?ㅽ뙣", 500);
 
     const masterIdByBomId = new Map<string, string>();
     for (const [masterId, recipe] of selectedRecipeByMaster.entries()) {
@@ -972,7 +973,7 @@ export async function POST(request: Request) {
       .select("master_id, bucket, reason, amount_krw, is_active, note, labor_class, material_qty_per_unit")
       .in("master_id", allAbsorbMasterIds)
       .order("priority", { ascending: true });
-    if (absorbRes.error) return jsonError(absorbRes.error.message ?? "흡수공임 조회 실패", 500);
+    if (absorbRes.error) return jsonError(absorbRes.error.message ?? "?≪닔怨듭엫 議고쉶 ?ㅽ뙣", 500);
     for (const row of (absorbRes.data ?? []) as AbsorbRow[]) {
       const masterId = String(row.master_id ?? "").trim();
       if (!masterId) continue;
@@ -987,7 +988,7 @@ export async function POST(request: Request) {
       .from("cms_master_item")
       .select("master_item_id, material_code_default, category_code, weight_default_g, deduction_weight_default_g, labor_base_cost, labor_center_cost, labor_sub1_cost, labor_sub2_cost, labor_base_sell, labor_center_sell, labor_sub1_sell, labor_sub2_sell, plating_price_cost_default, plating_price_sell_default, center_qty_default, sub1_qty_default, sub2_qty_default, model_name")
       .in("master_item_id", Array.from(componentMasterIds));
-    if (componentRes.error) return jsonError(componentRes.error.message ?? "컴포넌트 마스터 조회 실패", 500);
+    if (componentRes.error) return jsonError(componentRes.error.message ?? "而댄룷?뚰듃 留덉뒪??議고쉶 ?ㅽ뙣", 500);
     componentMasterMap = new Map(
       ((componentRes.data ?? []) as MasterRow[]).map((row) => [String(row.master_item_id ?? ""), row]),
     );
@@ -1002,7 +1003,7 @@ export async function POST(request: Request) {
     silverTick = resolvedTick.silverTick;
     tickSource = resolvedTick.tickSource;
   } catch (error) {
-    return jsonError(errorMessageOf(error) || "시세 조회 실패", 500);
+    return jsonError(errorMessageOf(error) || "?쒖꽭 議고쉶 ?ㅽ뙣", 500);
   }
 
   let factorMap = new Map<string, number>();
@@ -1011,14 +1012,14 @@ export async function POST(request: Request) {
       .from("material_factor")
       .select("material_code, multiplier")
       .eq("factor_set_id", selectedFactorSetId);
-    if (factorRes.error) return jsonError(factorRes.error.message ?? "팩터 조회 실패", 500);
+    if (factorRes.error) return jsonError(factorRes.error.message ?? "?⑺꽣 議고쉶 ?ㅽ뙣", 500);
     factorMap = new Map((factorRes.data ?? []).map((r) => [String(r.material_code), toNum(r.multiplier, 1)]));
   }
 
   const purityRes = await sb
     .from("cms_material_factor_config")
     .select("material_code, purity_rate, material_adjust_factor, gold_adjust_factor, price_basis");
-  if (purityRes.error) return jsonError(purityRes.error.message ?? "소재 함량 조회 실패", 500);
+  if (purityRes.error) return jsonError(purityRes.error.message ?? "?뚯옱 ?⑤웾 議고쉶 ?ㅽ뙣", 500);
   const purityMap = buildMaterialPurityMap(
     (purityRes.data ?? []).map((r) => ({
       material_code: normalizeMaterialCode(String(r.material_code ?? "")),
@@ -1100,10 +1101,10 @@ export async function POST(request: Request) {
       : Promise.resolve({ data: [], error: null }),
   ]);
 
-  if (r1Res.error) return jsonError(r1Res.error.message ?? "R1 룰 조회 실패", 500);
-  if (r2Res.error) return jsonError(r2Res.error.message ?? "R2 룰 조회 실패", 500);
-  if (r3Res.error) return jsonError(r3Res.error.message ?? "R3 룰 조회 실패", 500);
-  if (r4Res.error) return jsonError(r4Res.error.message ?? "R4 룰 조회 실패", 500);
+  if (r1Res.error) return jsonError(r1Res.error.message ?? "R1 猷?議고쉶 ?ㅽ뙣", 500);
+  if (r2Res.error) return jsonError(r2Res.error.message ?? "R2 猷?議고쉶 ?ㅽ뙣", 500);
+  if (r3Res.error) return jsonError(r3Res.error.message ?? "R3 猷?議고쉶 ?ㅽ뙣", 500);
+  if (r4Res.error) return jsonError(r4Res.error.message ?? "R4 猷?議고쉶 ?ㅽ뙣", 500);
 
   const r1BySet = new Map<string, SyncRuleR1Row[]>();
   for (const row of (r1Res.data ?? []) as SyncRuleR1Row[]) {
@@ -1142,7 +1143,7 @@ export async function POST(request: Request) {
     .eq("is_active", true)
     .or(`valid_from.is.null,valid_from.lte.${nowIso}`)
     .or(`valid_to.is.null,valid_to.gte.${nowIso}`);
-  if (adjRes.error) return jsonError(adjRes.error.message ?? "조정 조회 실패", 500);
+  if (adjRes.error) return jsonError(adjRes.error.message ?? "議곗젙 議고쉶 ?ㅽ뙣", 500);
   const adjustments = adjRes.data ?? [];
 
   const ovrRes = await sb
@@ -1152,14 +1153,14 @@ export async function POST(request: Request) {
     .eq("is_active", true)
     .or(`valid_from.is.null,valid_from.lte.${nowIso}`)
     .or(`valid_to.is.null,valid_to.gte.${nowIso}`);
-  if (ovrRes.error) return jsonError(ovrRes.error.message ?? "오버라이드 조회 실패", 500);
+  if (ovrRes.error) return jsonError(ovrRes.error.message ?? "?ㅻ쾭?쇱씠??議고쉶 ?ㅽ뙣", 500);
   const overrideMap = new Map((ovrRes.data ?? []).map((o) => [String(o.master_item_id), o]));
 
   const baseAdjRes = await sb
     .from("channel_base_price_adjustment_log")
     .select("master_item_id, delta_krw")
     .eq("channel_id", channelId);
-  if (baseAdjRes.error) return jsonError(baseAdjRes.error.message ?? "기본가격 조정 로그 조회 실패", 500);
+  if (baseAdjRes.error) return jsonError(baseAdjRes.error.message ?? "湲곕낯媛寃?議곗젙 濡쒓렇 議고쉶 ?ㅽ뙣", 500);
   const baseDeltaByMaster = new Map<string, number>();
   for (const row of baseAdjRes.data ?? []) {
     const key = String(row.master_item_id ?? "");
@@ -1172,7 +1173,7 @@ export async function POST(request: Request) {
     .from("channel_labor_price_adjustment_log")
     .select("master_item_id, delta_krw")
     .eq("channel_id", channelId);
-  if (laborAdjRes.error) return jsonError(laborAdjRes.error.message ?? "공임 조정 로그 조회 실패", 500);
+  if (laborAdjRes.error) return jsonError(laborAdjRes.error.message ?? "怨듭엫 議곗젙 濡쒓렇 議고쉶 ?ㅽ뙣", 500);
   const laborDeltaByMaster = new Map<string, number>();
   for (const row of laborAdjRes.data ?? []) {
     const key = String(row.master_item_id ?? "");
@@ -1188,7 +1189,7 @@ export async function POST(request: Request) {
     .in("master_item_id", uniqueMasterIds)
     .order("updated_at", { ascending: false })
     .order("state_id", { ascending: false });
-  if (optionStateRes.error) return jsonError(optionStateRes.error.message ?? "옵션 현재상태 조회 실패", 500);
+  if (optionStateRes.error) return jsonError(optionStateRes.error.message ?? "?듭뀡 ?꾩옱?곹깭 議고쉶 ?ㅽ뙣", 500);
 
   const optionStateDeltaByProductVariant = new Map<string, { additionalKrw: number; productNo: string }>();
   for (const row of optionStateRes.data ?? []) {
@@ -1203,6 +1204,23 @@ export async function POST(request: Request) {
     optionStateDeltaByProductVariant.set(key, { additionalKrw: additional, productNo });
   }
 
+  const colorComboBaseDeltaByCode = new Map<string, number>();
+  const colorComboRes = await sb
+    .from("channel_color_combo_catalog_v1")
+    .select("combo_key, base_delta_krw")
+    .eq("channel_id", channelId)
+    .eq("is_active", true)
+    .limit(5000);
+  if (!colorComboRes.error) {
+    for (const row of colorComboRes.data ?? []) {
+      const comboKey = normalizePlatingComboCode((row as { combo_key?: string | null }).combo_key);
+      if (!comboKey || colorComboBaseDeltaByCode.has(comboKey)) continue;
+      colorComboBaseDeltaByCode.set(comboKey, Math.max(0, Math.round(Number((row as { base_delta_krw?: unknown }).base_delta_krw ?? 0))));
+    }
+  } else if (!isMissingSchemaObjectError(colorComboRes.error)) {
+    return jsonError(colorComboRes.error.message ?? "색상 중앙금액 조회 실패", 500);
+  }
+
   const blockedByMissingRules: Array<{ channel_product_id: string; missing_rules: string[] }> = [];
   const recomputeAt = new Date().toISOString();
   const computeRequestId = crypto.randomUUID();
@@ -1210,14 +1228,29 @@ export async function POST(request: Request) {
 
   const laborComponentRowsByChannelProductId = new Map<string, V2LaborComponentInput[]>();
 
-  const previewStateRowsByVariantKey = new Map<string, {
+  const currentStateRowsByVariantKey = new Map<string, {
     channel_id: string;
     channel_product_id: string;
     master_item_id: string;
     external_product_no: string;
     external_variant_code: string;
+    product_name: string | null;
+    material_code: string | null;
+    weight_g: number | null;
+    deduction_weight_g: number | null;
+    net_weight_g: number | null;
+    material_price_krw: number | null;
+    tick_gold_krw_per_g: number | null;
+    tick_silver_krw_per_g: number | null;
+    base_price_krw: number;
+    floor_price_krw: number;
+    exclude_plating_labor: boolean;
+    plating_labor_sell_krw: number;
+    total_labor_sell_krw: number;
     option_sync_delta_krw: number;
     final_target_additional_amount_krw: number;
+    source_snapshot_hash: string;
+    updated_by: string;
   }>();
 
   const rows = mappings.flatMap((m) => {
@@ -1241,6 +1274,7 @@ export async function POST(request: Request) {
 
     const optionMaterialCode = normalizeKnownMaterialCode(m.option_material_code, materialCode);
     const optionColorCode = normalizePlatingComboCode(String(m.option_color_code ?? ""));
+    const optionColorPlatingEnabled = isPlatingComboCode(optionColorCode);
     const optionDecorationCode = String(m.option_decoration_code ?? "").trim().toUpperCase();
     const optionSizeValue = m.option_size_value == null ? null : Number(m.option_size_value);
     const mappingProductNo = String(m.external_product_no ?? "").trim();
@@ -1608,7 +1642,7 @@ export async function POST(request: Request) {
       ? computeOptionLaborRuleBuckets(contextOptionLaborRules, {
         materialCode: optionMaterialCode,
         additionalWeightG: optionLaborAdditionalWeightG,
-        platingEnabled: optionColorCode.length > 0,
+        platingEnabled: optionColorPlatingEnabled,
         colorCode: optionColorCode || null,
         decorationCode: optionDecorationCode || null,
         decorationMasterId: resolvedDecorationMasterId,
@@ -1636,9 +1670,10 @@ export async function POST(request: Request) {
     let deltaSizeBucket = useOptionLaborRuleEngine
       ? Math.round(optionLaborRuleResult?.size ?? 0)
       : Math.round(ruleSizeDelta + categoryScopedDeltaBuckets.size);
+    const colorComboBaseDelta = optionColorCode ? Math.round(Number(colorComboBaseDeltaByCode.get(optionColorCode) ?? 0)) : 0;
     let deltaColorBucket = useOptionLaborRuleEngine
-      ? Math.round(optionLaborRuleResult?.colorPlating ?? 0)
-      : Math.round(ruleColorDelta + categoryScopedDeltaBuckets.colorPlating);
+      ? Math.round(colorComboBaseDelta + Number(optionLaborRuleResult?.colorPlating ?? 0))
+      : Math.round(colorComboBaseDelta + ruleColorDelta + categoryScopedDeltaBuckets.colorPlating);
     let deltaDecorBucket = useOptionLaborRuleEngine
       ? Math.round(optionLaborRuleResult?.decor ?? 0)
       : Math.round(ruleDecorDelta + categoryScopedDeltaBuckets.decor);
@@ -1652,19 +1687,6 @@ export async function POST(request: Request) {
       : Math.round(baseOptionDelta + categoryScopedDeltaBuckets.other);
     let optionPriceDelta = deltaMaterialBucket + deltaSizeBucket + deltaColorBucket + deltaDecorBucket + deltaOtherBucket;
     let optionPriceDeltaSource: "COMPUTED" | "OPTION_LABOR_RULE_ENGINE" = useOptionLaborRuleEngine ? "OPTION_LABOR_RULE_ENGINE" : "COMPUTED";
-
-    if (hasVariant && mappingProductNo) {
-      const previewStateKey = `${m.master_item_id}::${mappingProductNo}::${variantCode}`;
-      previewStateRowsByVariantKey.set(previewStateKey, {
-        channel_id: m.channel_id,
-        channel_product_id: m.channel_product_id,
-        master_item_id: m.master_item_id,
-        external_product_no: mappingProductNo,
-        external_variant_code: variantCode,
-        option_sync_delta_krw: optionPriceDelta,
-        final_target_additional_amount_krw: optionPriceDelta,
-      });
-    }
 
     const basePriceDelta = baseDeltaByMaster.get(m.master_item_id) ?? 0;
     const targetRawSync = applyRule4
@@ -1704,6 +1726,46 @@ export async function POST(request: Request) {
     const finalTarget = pricingAlgoVersion === "REVERSE_FEE_V2" ? finalTargetV2 : legacyFinalTarget;
     const finalTargetBeforeFloor = pricingAlgoVersion === "REVERSE_FEE_V2" ? finalTargetV2BeforeOverride : legacyFinalBeforeFloor;
     const floorClamped = pricingAlgoVersion === "REVERSE_FEE_V2" ? false : (legacyFinalTarget > legacyFinalBeforeFloor);
+    const basePriceForState = Math.max(0, finalTarget - optionPriceDelta);
+    const sourceSnapshotHash = [
+      computeRequestId,
+      m.channel_id,
+      m.channel_product_id,
+      m.master_item_id,
+      mappingProductNo,
+      variantCode,
+      materialCode,
+      String(finalTarget),
+      String(optionPriceDelta),
+    ].join("|");
+
+    if (hasVariant && mappingProductNo) {
+      const stateKey = `${m.master_item_id}::${mappingProductNo}::${variantCode}`;
+      currentStateRowsByVariantKey.set(stateKey, {
+        channel_id: m.channel_id,
+        channel_product_id: m.channel_product_id,
+        master_item_id: m.master_item_id,
+        external_product_no: mappingProductNo,
+        external_variant_code: variantCode,
+        product_name: String(master.model_name ?? "").trim() || null,
+        material_code: materialCode || null,
+        weight_g: Number.isFinite(weight) ? weight : null,
+        deduction_weight_g: Number.isFinite(deduction) ? deduction : null,
+        net_weight_g: Number.isFinite(netWeight) ? netWeight : null,
+        material_price_krw: Math.max(0, Math.round(materialFinal)),
+        tick_gold_krw_per_g: Number.isFinite(goldTick) ? Math.round(goldTick) : null,
+        tick_silver_krw_per_g: Number.isFinite(silverTick) ? Math.round(silverTick) : null,
+        base_price_krw: basePriceForState,
+        floor_price_krw: Math.max(0, pricingAlgoVersion === "REVERSE_FEE_V2" ? 0 : floorPrice),
+        exclude_plating_labor: !includePlating,
+        plating_labor_sell_krw: Math.max(0, Math.round(masterLaborProfile.platingSell + masterAbsorbSummary.plating)),
+        total_labor_sell_krw: Math.max(0, Math.round(laborRawBase)),
+        option_sync_delta_krw: optionPriceDelta,
+        final_target_additional_amount_krw: optionPriceDelta,
+        source_snapshot_hash: sourceSnapshotHash,
+        updated_by: "RECOMPUTE_PREVIEW",
+      });
+    }
 
     const laborComponentRows: V2LaborComponentInput[] = [
       {
@@ -1896,23 +1958,16 @@ export async function POST(request: Request) {
   }
 
   const insertRes = await sb.from("pricing_snapshot").insert(rows).select("snapshot_id, channel_product_id");
-  if (insertRes.error) return jsonError(insertRes.error.message ?? "스냅샷 저장 실패", 500);
+  if (insertRes.error) return jsonError(insertRes.error.message ?? "?ㅻ깄??????ㅽ뙣", 500);
 
-  if (previewStateRowsByVariantKey.size > 0) {
-    for (const row of previewStateRowsByVariantKey.values()) {
-      const stateUpdateRes = await sb
+  if (currentStateRowsByVariantKey.size > 0) {
+    {
+      const stateUpsertRes = await sb
         .from("channel_option_current_state_v1")
-        .update({
-          channel_product_id: row.channel_product_id,
-          master_item_id: row.master_item_id,
-          option_sync_delta_krw: row.option_sync_delta_krw,
-          final_target_additional_amount_krw: row.final_target_additional_amount_krw,
-          updated_by: "RECOMPUTE_PREVIEW",
-        })
-        .eq("channel_id", row.channel_id)
-        .eq("external_product_no", row.external_product_no)
-        .eq("external_variant_code", row.external_variant_code);
-      if (stateUpdateRes.error) return jsonError(stateUpdateRes.error.message ?? "옵션 현재상태 프리뷰 갱신 실패", 500);
+        .upsert(Array.from(currentStateRowsByVariantKey.values()), {
+          onConflict: "channel_id,external_product_no,external_variant_code",
+        });
+      if (stateUpsertRes.error) return jsonError(stateUpsertRes.error.message ?? "?듭뀡 ?꾩옱?곹깭 ?꾨━酉?媛깆떊 ?ㅽ뙣", 500);
     }
   }
 
@@ -1956,12 +2011,12 @@ export async function POST(request: Request) {
 
     if (v2LaborComponentRows.length > 0) {
       const laborComponentInsertRes = await sb.from("pricing_snapshot_labor_component_v2").insert(v2LaborComponentRows);
-      if (laborComponentInsertRes.error) return jsonError(laborComponentInsertRes.error.message ?? "V2 labor component 저장 실패", 500);
+      if (laborComponentInsertRes.error) return jsonError(laborComponentInsertRes.error.message ?? "V2 labor component ????ㅽ뙣", 500);
     }
 
     if (v2GuardrailRows.length > 0) {
       const guardrailInsertRes = await sb.from("pricing_snapshot_guardrail_trace_v2").insert(v2GuardrailRows);
-      if (guardrailInsertRes.error) return jsonError(guardrailInsertRes.error.message ?? "V2 guardrail trace 저장 실패", 500);
+      if (guardrailInsertRes.error) return jsonError(guardrailInsertRes.error.message ?? "V2 guardrail trace ????ㅽ뙣", 500);
     }
   }
 
@@ -1982,7 +2037,7 @@ export async function POST(request: Request) {
       .from("pricing_compute_cursor")
       .upsert(cursorRows, { onConflict: "channel_id,master_item_id" });
     if (cursorUpsertRes.error) {
-      return jsonError(cursorUpsertRes.error.message ?? "계산 커서 저장 실패", 500);
+      return jsonError(cursorUpsertRes.error.message ?? "怨꾩궛 而ㅼ꽌 ????ㅽ뙣", 500);
     }
   }
 
@@ -1997,3 +2052,5 @@ export async function POST(request: Request) {
     compute_request_id: computeRequestId,
   }, { headers: { "Cache-Control": "no-store" } });
 }
+
+

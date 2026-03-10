@@ -584,6 +584,16 @@ async function runCron(request: Request) {
     if (runStatus !== "RUNNING" || !Number.isFinite(pending) || pending <= 0) break;
   }
 
+  let cleanupJson: Record<string, unknown> | null = null;
+  if (new Date().getUTCMinutes() % 30 === 0) {
+    const cleanupRes = await sb.rpc("cleanup_operational_snapshot_history_v1");
+    if (!cleanupRes.error) {
+      cleanupJson = typeof cleanupRes.data === "object" && cleanupRes.data && !Array.isArray(cleanupRes.data)
+        ? cleanupRes.data as Record<string, unknown>
+        : { ok: true };
+    }
+  }
+
   return NextResponse.json(
     {
       ok: true,
@@ -600,6 +610,7 @@ async function runCron(request: Request) {
       execute_round_limit: executeRoundLimit,
       execute_intent_batch_size: executeIntentBatchSize,
       push_chunk_size: pushChunkSize,
+      cleanup: cleanupJson,
     },
     { headers: { "Cache-Control": "no-store" } },
   );

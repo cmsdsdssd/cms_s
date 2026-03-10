@@ -6,7 +6,8 @@ import {
   normalizeOptionLaborColorCode,
   normalizeOptionLaborRuleCategory,
 } from "@/lib/shop/option-labor-rules";
-import { getShopAdminClient, jsonError, parseJsonObject } from "@/lib/shop/admin";
+import { isPlatingComboCode } from "@/lib/shop/sync-rules";
+import { getShopAdminClient, isMissingSchemaObjectError, jsonError, parseJsonObject } from "@/lib/shop/admin";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -310,6 +311,30 @@ const buildRuleDedupKey = (row: {
   }
 };
 
+const ensureColorComboExists = async (
+  sb: NonNullable<ReturnType<typeof getShopAdminClient>>,
+  channelId: string,
+  colorCode: string,
+  rowIndex: number,
+): Promise<null | Response> => {
+  const normalizedColorCode = normalizeOptionLaborColorCode(colorCode);
+  if (!normalizedColorCode) return jsonError(`rows[${rowIndex}].color_code is required`, 400);
+  const comboRes = await sb
+    .from("channel_color_combo_catalog_v1")
+    .select("combo_id")
+    .eq("channel_id", channelId)
+    .eq("combo_key", normalizedColorCode)
+    .eq("is_active", true)
+    .limit(1)
+    .maybeSingle();
+  if (comboRes.error) {
+    if (isMissingSchemaObjectError(comboRes.error, "channel_color_combo_catalog_v1")) return null;
+    return jsonError(comboRes.error.message ?? "색상 조합 중앙목록 조회 실패", 500);
+  }
+  if (!comboRes.data?.combo_id) return jsonError(`rows[${rowIndex}].color_code must exist in channel color combo catalog`, 400);
+  return null;
+};
+
 type RuleDedupRow = {
   category_key: CategoryKey;
   scope_material_code: string | null;
@@ -525,6 +550,11 @@ export async function POST(request: Request) {
     if (normalized instanceof Response) return normalized;
     const serverManaged = await hydrateServerManagedRuleFields(sb, normalized, 0);
     if (serverManaged instanceof Response) return serverManaged;
+    if (serverManaged.category_key === "COLOR_PLATING") {
+      const comboValidation = await ensureColorComboExists(sb, channelId, String(serverManaged.color_code ?? ""), 0);
+      if (comboValidation instanceof Response) return comboValidation;
+      serverManaged.plating_enabled = isPlatingComboCode(String(serverManaged.color_code ?? ""));
+    }
 
     const resolvedExternalProductNo = await resolveCanonicalExternalProductNo(
       sb,
@@ -593,6 +623,11 @@ export async function POST(request: Request) {
     if (normalized instanceof Response) return normalized;
     const serverManaged = await hydrateServerManagedRuleFields(sb, normalized, i);
     if (serverManaged instanceof Response) return serverManaged;
+    if (serverManaged.category_key === "COLOR_PLATING") {
+      const comboValidation = await ensureColorComboExists(sb, channelId, String(serverManaged.color_code ?? ""), i);
+      if (comboValidation instanceof Response) return comboValidation;
+      serverManaged.plating_enabled = isPlatingComboCode(String(serverManaged.color_code ?? ""));
+    }
 
     const insertRow = {
       channel_id: channelId,
@@ -648,6 +683,11 @@ export async function PUT(request: Request) {
   if (normalized instanceof Response) return normalized;
   const serverManaged = await hydrateServerManagedRuleFields(sb, normalized, 0);
   if (serverManaged instanceof Response) return serverManaged;
+  if (serverManaged.category_key === "COLOR_PLATING") {
+    const comboValidation = await ensureColorComboExists(sb, String(merged.channel_id ?? "").trim(), String(serverManaged.color_code ?? ""), 0);
+    if (comboValidation instanceof Response) return comboValidation;
+    serverManaged.plating_enabled = isPlatingComboCode(String(serverManaged.color_code ?? ""));
+  }
 
   const actor = readActor(request, body);
   const resolvedExternalProductNo = await resolveCanonicalExternalProductNo(

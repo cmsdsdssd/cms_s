@@ -385,6 +385,7 @@ export const buildCanonicalOptionRows = (args: {
     decor_extra_delta_krw?: number | null | undefined;
     decor_final_amount_krw?: number | null | undefined;
   } | null | undefined>;
+  colorBaseDeltaByCode?: Record<string, number> | null;
 }): MappingCanonicalOptionRow[] => {
   const entries = buildMappingOptionEntries({
     productOptions: args.productOptions,
@@ -469,6 +470,7 @@ export const buildCanonicalOptionRows = (args: {
         materialFactors?: Record<string, unknown> | null;
         factorMultiplierByMaterialCode?: Record<string, number> | null;
       } | null;
+      colorBaseDeltaByCode?: Record<string, number> | null;
     } = {
       category: categoryKey,
       masterMaterialCode: args.masterMaterialCode ?? null,
@@ -481,6 +483,7 @@ export const buildCanonicalOptionRows = (args: {
       },
       persistedSizeLookup: args.persistedSizeLookup ?? null,
       sizeMarketContext: args.sizeMarketContext ?? null,
+      colorBaseDeltaByCode: args.colorBaseDeltaByCode ?? null,
     };
     const resolved = resolveCentralOptionMapping(resolveArgs) as {
       category: "MATERIAL" | "SIZE" | "COLOR" | "DECOR" | "OTHER" | "NOTICE";
@@ -698,6 +701,7 @@ export const buildMappingOptionAllowlist = (
   if (options?.persistedSizeLookup) {
     for (const materialCode of Array.from(materialSet)) {
       const deltaByValue = new Map<string, number | null>();
+      const values = sizeSets.get(materialCode) ?? new Set<string>();
       const persistedChoices = getPersistedSizeChoicesByMaterial(options.persistedSizeLookup, materialCode);
       if (persistedChoices.length > 0) {
         const persistedValues = new Set<string>();
@@ -709,15 +713,28 @@ export const buildMappingOptionAllowlist = (
         }
         sizeSets.set(materialCode, persistedValues);
       } else {
-        const values = sizeSets.get(materialCode) ?? new Set<string>();
         for (const value of values) {
           const resolved = resolvePersistedSizeGridCell({
             lookup: options.persistedSizeLookup,
             materialCode,
             additionalWeightG: Number(value),
           });
-          if (!resolved.valid) continue;
-          deltaByValue.set(value, Math.round(Number(resolved.computed_delta_krw ?? 0)));
+          if (resolved.valid) {
+            deltaByValue.set(value, Math.round(Number(resolved.computed_delta_krw ?? 0)));
+            continue;
+          }
+          if (options?.sizeMarketContext) {
+            const marketResolved = resolveMarketLinkedSizeCell({
+              rows: rules ?? [],
+              masterItemId: options.masterItemId ?? null,
+              externalProductNo: options.externalProductNo ?? null,
+              materialCode,
+              additionalWeightG: Number(value),
+              marketContext: options.sizeMarketContext,
+            });
+            if (!marketResolved.valid) continue;
+            deltaByValue.set(value, Number.isFinite(Number(marketResolved.computed_delta_krw)) ? Math.round(Number(marketResolved.computed_delta_krw)) : null);
+          }
         }
       }
       sizeDeltaByMaterial.set(materialCode, deltaByValue);

@@ -64,3 +64,25 @@ export function isMissingColumnError(error: unknown, columnName?: string) {
     : normalizedColumn;
   return haystack.includes(normalizedColumn) || haystack.includes(bareColumn);
 }
+
+export function isMissingSchemaObjectError(error: unknown, objectName?: string) {
+  if (!error || typeof error !== "object") return false;
+  const err = error as DbErrorLike;
+  const haystack = [err.message, err.details, err.hint, err.code]
+    .map((value) => String(value ?? "").toLowerCase())
+    .join(" ");
+  if (!haystack) return false;
+
+  const mentionsMissingObject =
+    (haystack.includes("could not find the table") && haystack.includes("schema cache")) ||
+    (haystack.includes("relation") && haystack.includes("does not exist")) ||
+    haystack.includes("does not exist");
+  if (!mentionsMissingObject) return false;
+
+  if (!objectName) return true;
+  const normalizedObject = objectName.toLowerCase();
+  const bareObject = normalizedObject.includes(".")
+    ? normalizedObject.slice(normalizedObject.lastIndexOf(".") + 1)
+    : normalizedObject;
+  return haystack.includes(normalizedObject) || haystack.includes(bareObject);
+}

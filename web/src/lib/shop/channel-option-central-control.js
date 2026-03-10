@@ -1,11 +1,11 @@
 import { resolveMarketLinkedSizeCell } from "./market-linked-size-grid.js";
 import { resolvePersistedSizeGridCell } from "./weight-grid-store.js";
+import { normalizePlatingComboCode } from "./sync-rules.ts";
 
 const WEIGHT_MIN_CENTIGRAM = 0;
 const WEIGHT_MAX_CENTIGRAM = 10000;
 
-const toTrimmed = (value) => String(value ?? '').trim();
-
+const toTrimmed = (value) => String(value ?? "").trim();
 const toUpper = (value) => toTrimmed(value).toUpperCase();
 
 const toFiniteNumber = (value) => {
@@ -39,8 +39,8 @@ const centigramToWeightString = (centigram) => {
 
 const normalizeRuleType = (value) => {
   const normalized = toUpper(value);
-  if (normalized === 'COLOR_PLATING') return 'COLOR';
-  if (normalized === 'MATERIAL' || normalized === 'SIZE' || normalized === 'COLOR' || normalized === 'DECOR' || normalized === 'OTHER' || normalized === 'NOTICE') {
+  if (normalized === "COLOR_PLATING") return "COLOR";
+  if (normalized === "MATERIAL" || normalized === "SIZE" || normalized === "COLOR" || normalized === "DECOR" || normalized === "OTHER" || normalized === "NOTICE") {
     return normalized;
   }
   return null;
@@ -55,7 +55,7 @@ const normalizeRuleRow = (raw) => {
     master_item_id: toTrimmed(raw?.master_item_id) || null,
     external_product_no: toTrimmed(raw?.external_product_no) || null,
     material_code: toUpper(raw?.material_code ?? raw?.scope_material_code) || null,
-    color_code: toUpper(raw?.color_code) || null,
+    color_code: normalizePlatingComboCode(raw?.color_code) || null,
     size_price_mode: toUpper(raw?.size_price_mode) || null,
     fixed_delta_krw: toFiniteNumber(raw?.fixed_delta_krw),
     formula_multiplier: toFiniteNumber(raw?.formula_multiplier),
@@ -92,19 +92,19 @@ const createBaseResult = ({ category, masterMaterialCode, masterMaterialLabel, p
   notice_value_selected: toTrimmed(persisted?.notice_value_selected) || null,
   resolved_delta_krw: toRoundedKrw(persisted?.resolved_delta_krw),
   source_rule_entry_ids: [],
-  legacy_status: 'VALID',
+  legacy_status: "VALID",
   warnings: [],
 });
 
 const markLegacy = (result, warning) => ({
   ...result,
-  legacy_status: 'LEGACY_OUT_OF_RANGE',
+  legacy_status: "LEGACY_OUT_OF_RANGE",
   warnings: warning ? [...result.warnings, warning] : result.warnings,
 });
 
 const markUnresolved = (result, warning) => ({
   ...result,
-  legacy_status: 'UNRESOLVED',
+  legacy_status: "UNRESOLVED",
   warnings: warning ? [...result.warnings, warning] : result.warnings,
 });
 
@@ -115,7 +115,7 @@ export const collectAllowedSizeWeights = (rules, masterMaterialCode) => {
   const values = new Set();
   for (const raw of Array.isArray(rules) ? rules : []) {
     const rule = normalizeRuleRow(raw);
-    if (!rule || !rule.is_active || rule.rule_type !== 'SIZE') continue;
+    if (!rule || !rule.is_active || rule.rule_type !== "SIZE") continue;
     if ((rule.material_code ?? null) !== (materialCode || null)) continue;
     const min = Number(rule.weight_min_centigram);
     const max = Number(rule.weight_max_centigram);
@@ -133,7 +133,7 @@ export const collectAllowedColors = (rules, masterMaterialCode) => {
   const values = new Set();
   for (const raw of Array.isArray(rules) ? rules : []) {
     const rule = normalizeRuleRow(raw);
-    if (!rule || !rule.is_active || rule.rule_type !== 'COLOR') continue;
+    if (!rule || !rule.is_active || rule.rule_type !== "COLOR") continue;
     if ((rule.material_code ?? null) !== (materialCode || null)) continue;
     if (!rule.color_code) continue;
     values.add(rule.color_code);
@@ -148,18 +148,24 @@ export const collectAllowedColors = (rules, masterMaterialCode) => {
  *   masterMaterialLabel: unknown,
  *   rules: unknown,
  *   persisted: unknown,
- *   sizeMarketContext?: {
- *     goldTickKrwPerG?: number | null,
- *     silverTickKrwPerG?: number | null,
- *     materialFactors?: Record<string, unknown> | null,
- *     factorMultiplierByMaterialCode?: Record<string, number> | null,
- *   } | null,
+ *   persistedSizeLookup?: unknown,
+ *   sizeMarketContext?: unknown,
+ *   colorBaseDeltaByCode?: unknown,
  * }} args
  */
-export const resolveCentralOptionMapping = ({ category, masterMaterialCode, masterMaterialLabel, rules, persisted, persistedSizeLookup = null, sizeMarketContext = null }) => {
+export const resolveCentralOptionMapping = ({
+  category,
+  masterMaterialCode,
+  masterMaterialLabel,
+  rules,
+  persisted,
+  persistedSizeLookup = null,
+  sizeMarketContext = null,
+  colorBaseDeltaByCode = null,
+}) => {
   const normalizedCategory = normalizeRuleType(category);
   const base = createBaseResult({
-    category: normalizedCategory ?? (toUpper(category) || 'OTHER'),
+    category: normalizedCategory ?? (toUpper(category) || "OTHER"),
     masterMaterialCode,
     masterMaterialLabel,
     persisted,
@@ -168,15 +174,15 @@ export const resolveCentralOptionMapping = ({ category, masterMaterialCode, mast
     .map((rule) => normalizeRuleRow(rule))
     .filter((rule) => rule && rule.is_active);
 
-  if (normalizedCategory === 'MATERIAL') {
-    if (!base.material_code_resolved) return markUnresolved(base, '마스터 소재를 찾지 못했습니다.');
+  if (normalizedCategory === "MATERIAL") {
+    if (!base.material_code_resolved) return markUnresolved(base, "마스터 소재를 찾지 못했습니다.");
     return { ...base, resolved_delta_krw: 0 };
   }
 
-  if (normalizedCategory === 'SIZE') {
+  if (normalizedCategory === "SIZE") {
     const selectedCentigram = normalizeWeightCentigram(base.size_weight_g_selected);
-    if (!base.material_code_resolved) return markUnresolved(base, '소재가 없어서 사이즈를 결정할 수 없습니다.');
-    if (selectedCentigram === null) return markUnresolved(base, '추가중량을 선택해야 합니다.');
+    if (!base.material_code_resolved) return markUnresolved(base, "소재가 없어서 사이즈를 계산할 수 없습니다.");
+    if (selectedCentigram === null) return markUnresolved(base, "추가중량을 선택해야 합니다.");
     if (selectedCentigram === 0) {
       return {
         ...base,
@@ -199,10 +205,10 @@ export const resolveCentralOptionMapping = ({ category, masterMaterialCode, mast
         marketContext: sizeMarketContext,
       });
     if (!resolvedSizeCell.valid) {
-      if (String(resolvedSizeCell.error_message ?? '').includes('size rule not found')) {
-        return markLegacy(base, '현재 선택한 추가중량이 중앙 허용 범위 밖입니다.');
+      if (String(resolvedSizeCell.error_message ?? "").includes("size rule not found")) {
+        return markLegacy(base, "현재 선택한 추가중량이 중앙 허용 범위 밖입니다.");
       }
-      return markUnresolved(base, String(resolvedSizeCell.error_message ?? '중량 계산에 필요한 시세/소재 정보가 부족합니다.'));
+      return markUnresolved(base, String(resolvedSizeCell.error_message ?? "중량 계산에 필요한 시세/소재 정보가 부족합니다."));
     }
     return {
       ...base,
@@ -211,25 +217,34 @@ export const resolveCentralOptionMapping = ({ category, masterMaterialCode, mast
     };
   }
 
-  if (normalizedCategory === 'COLOR') {
-    if (!base.material_code_resolved) return markUnresolved(base, '소재가 없어서 색상을 결정할 수 없습니다.');
-    if (!base.color_code_selected) return markUnresolved(base, '색상을 선택해야 합니다.');
+  if (normalizedCategory === "COLOR") {
+    if (!base.material_code_resolved) return markUnresolved(base, "소재가 없어서 색상을 결정할 수 없습니다.");
+    if (!base.color_code_selected) return markUnresolved(base, "색상을 선택해야 합니다.");
+    const baseColorDelta = colorBaseDeltaByCode && typeof colorBaseDeltaByCode === "object"
+      ? toRoundedKrw(colorBaseDeltaByCode[base.color_code_selected] ?? 0)
+      : 0;
+    const persistedAmount = toFiniteNumber(persisted?.resolved_delta_krw);
     const matched = activeRules.filter((rule) => {
-      return rule.rule_type === 'COLOR'
+      return rule.rule_type === "COLOR"
         && rule.material_code === base.material_code_resolved
         && rule.color_code === base.color_code_selected;
     });
     if (matched.length === 0) {
-      return markLegacy(base, '현재 선택한 색상이 중앙 허용 범위 밖입니다.');
+      const resolvedAmount = persistedAmount == null ? baseColorDelta : Math.max(baseColorDelta, Math.round(persistedAmount));
+      return {
+        ...base,
+        resolved_delta_krw: resolvedAmount,
+        source_rule_entry_ids: [],
+      };
     }
     const allowedAmounts = [...new Set(matched.map((rule) => toRoundedKrw(rule.delta_krw)))].sort((left, right) => left - right);
-    const persistedAmount = toFiniteNumber(persisted?.resolved_delta_krw);
-    const selectedAmount = persistedAmount == null ? null : Math.round(persistedAmount);
-    const resolvedAmount = selectedAmount != null && allowedAmounts.includes(selectedAmount)
+    const selectedAmount = persistedAmount == null ? null : Math.round(persistedAmount - baseColorDelta);
+    const resolvedAdditive = selectedAmount != null && allowedAmounts.includes(selectedAmount)
       ? selectedAmount
       : (allowedAmounts[0] ?? 0);
+    const resolvedAmount = baseColorDelta + resolvedAdditive;
     const sourceRuleEntryIds = matched
-      .filter((rule) => toRoundedKrw(rule.delta_krw) === resolvedAmount)
+      .filter((rule) => toRoundedKrw(rule.delta_krw) === resolvedAdditive)
       .map((rule) => rule.rule_id)
       .filter(Boolean);
     return {
@@ -239,13 +254,11 @@ export const resolveCentralOptionMapping = ({ category, masterMaterialCode, mast
     };
   }
 
-  if (normalizedCategory === 'DECOR') {
-    if (!base.decor_master_item_id_selected) return markUnresolved(base, '장식 마스터를 선택해야 합니다.');
-    const matched = activeRules.filter((rule) => {
-      return rule.rule_type === 'DECOR' && rule.decor_master_item_id === base.decor_master_item_id_selected;
-    });
+  if (normalizedCategory === "DECOR") {
+    if (!base.decor_master_item_id_selected) return markUnresolved(base, "장식 마스터를 선택해야 합니다.");
+    const matched = activeRules.filter((rule) => rule.rule_type === "DECOR" && rule.decor_master_item_id === base.decor_master_item_id_selected);
     if (matched.length === 0) {
-      return markLegacy(base, '현재 선택한 장식이 중앙 허용 범위 밖입니다.');
+      return markLegacy(base, "현재 선택한 장식이 중앙 허용 범위 밖입니다.");
     }
     const primary = matched[0];
     const baseLabor = toRoundedKrw(primary.decor_total_labor_cost_snapshot);
@@ -264,20 +277,20 @@ export const resolveCentralOptionMapping = ({ category, masterMaterialCode, mast
     };
   }
 
-  if (normalizedCategory === 'NOTICE') {
+  if (normalizedCategory === "NOTICE") {
     const noticeValue = toTrimmed(base.notice_value_selected);
-    if (!noticeValue) return markUnresolved({ ...base, resolved_delta_krw: 0 }, '공지 값을 선택해야 합니다.');
+    if (!noticeValue) return markUnresolved({ ...base, resolved_delta_krw: 0 }, "공지 값을 선택해야 합니다.");
     return { ...base, notice_value_selected: noticeValue, resolved_delta_krw: 0 };
   }
 
-  if (normalizedCategory === 'OTHER') {
+  if (normalizedCategory === "OTHER") {
     const delta = toRoundedKrw(base.other_delta_krw ?? base.resolved_delta_krw);
     const reason = toTrimmed(base.other_reason);
     if (!reason) {
-      return markUnresolved({ ...base, resolved_delta_krw: delta }, '기타 카테고리는 사유가 필요합니다.');
+      return markUnresolved({ ...base, resolved_delta_krw: delta }, "기타 카테고리는 사유가 필요합니다.");
     }
     return { ...base, other_reason: reason, resolved_delta_krw: delta };
   }
 
-  return markUnresolved(base, '지원하지 않는 카테고리입니다.');
+  return markUnresolved(base, "지원하지 않는 카테고리입니다.");
 };

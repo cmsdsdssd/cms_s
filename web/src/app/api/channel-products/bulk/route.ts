@@ -1,5 +1,5 @@
 ﻿import { NextResponse } from "next/server";
-import { getShopAdminClient, jsonError, parseJsonObject } from "@/lib/shop/admin";
+import { getShopAdminClient, isMissingSchemaObjectError, jsonError, parseJsonObject } from "@/lib/shop/admin";
 import { normalizeMaterialCode } from "@/lib/material-factors";
 import {
   buildMappingOptionAllowlist,
@@ -13,6 +13,25 @@ export const revalidate = 0;
 
 const isThousandStep = (value: number): boolean => Number.isInteger(value) && value % 1000 === 0;
 const toTrimmed = (value: unknown): string => String(value ?? "").trim();
+
+const mergeColorChoices = (allowlist: ReturnType<typeof buildMappingOptionAllowlist>, rows: Array<{ combo_key?: string | null; display_name?: string | null; base_delta_krw?: number | null }>) => {
+  const merged = new Map(
+    (allowlist.colors ?? []).map((choice) => [String(choice.value ?? "").trim(), choice] as const),
+  );
+  for (const row of rows) {
+    const comboKey = String(row.combo_key ?? "").trim();
+    if (!comboKey || merged.has(comboKey)) continue;
+    merged.set(comboKey, {
+      value: comboKey,
+      label: String(row.display_name ?? "").trim() || comboKey,
+      delta_krw: Math.max(0, Math.round(Number(row.base_delta_krw ?? 0))),
+    });
+  }
+  return {
+    ...allowlist,
+    colors: Array.from(merged.values()),
+  };
+};
 
 type BulkRow = {
   channel_id: string;
@@ -222,7 +241,7 @@ export async function POST(request: Request) {
   const affectedPairSet = new Set(rows.map((row) => `${row.channel_id}::${row.master_item_id}`));
   const affectedChannelIds = Array.from(new Set(rows.map((row) => row.channel_id)));
   const affectedMasterIds = Array.from(new Set(rows.map((row) => row.master_item_id)));
-  const [existingRes, activeProductRes, optionRuleRes] = await Promise.all([
+  const [existingRes, activeProductRes, optionRuleRes, colorComboRes] = await Promise.all([
     sb
       .from('sales_channel_product')
       .select('channel_id, master_item_id, external_product_no, external_variant_code, option_material_code, option_color_code, option_decoration_code, option_size_value, option_price_mode, sync_rule_set_id, current_product_sync_profile, is_active')
@@ -240,10 +259,18 @@ export async function POST(request: Request) {
       .in('channel_id', affectedChannelIds)
       .in('master_item_id', affectedMasterIds)
       .eq('is_active', true),
+    sb
+      .from("channel_color_combo_catalog_v1")
+      .select("channel_id, combo_key, display_name, base_delta_krw")
+      .in("channel_id", affectedChannelIds)
+      .eq("is_active", true),
   ]);
   if (existingRes.error) return jsonError(existingRes.error.message ?? '기존 옵션 조회 실패', 500);
   if (activeProductRes.error) return jsonError(activeProductRes.error.message ?? '활성 상품번호 조회 실패', 500);
   if (optionRuleRes.error) return jsonError(optionRuleRes.error.message ?? '옵션 상세 규칙 조회 실패', 500);
+  if (colorComboRes.error && !isMissingSchemaObjectError(colorComboRes.error, "channel_color_combo_catalog_v1")) {
+    return jsonError(colorComboRes.error.message ?? "색상 중앙금액 조회 실패", 500);
+  }
 
   const activeProductNosByPair = new Map<string, string[]>();
   for (const row of (activeProductRes.data ?? []) as Array<{ channel_id: string; master_item_id: string; external_product_no: string | null }>) {
@@ -290,6 +317,14 @@ export async function POST(request: Request) {
     prev.push(row);
     ruleRowsByContext.set(contextKey, prev);
   }
+  const colorComboRowsByChannel = new Map<string, Array<{ combo_key?: string | null; display_name?: string | null; base_delta_krw?: number | null }>>();
+  for (const row of (colorComboRes.data ?? []) as Array<{ channel_id?: string | null; combo_key?: string | null; display_name?: string | null; base_delta_krw?: number | null }>) {
+    const channelId = String(row.channel_id ?? "").trim();
+    if (!channelId) continue;
+    const bucket = colorComboRowsByChannel.get(channelId) ?? [];
+    bucket.push(row);
+    colorComboRowsByChannel.set(channelId, bucket);
+  }
 
   const resolutionTraceLogs: Array<Record<string, unknown>> = [];
   const aliasHistoryCandidates: Array<{ channel_id: string; master_item_id: string; alias_external_product_no: string; canonical_external_product_no: string; external_variant_code: string }> = [];
@@ -301,7 +336,10 @@ export async function POST(request: Request) {
         row.external_product_no,
       );
       const contextKey = `${pairKey}::${canonicalExternalProductNo}`;
-      const allowlist = buildMappingOptionAllowlist(ruleRowsByContext.get(contextKey) ?? []);
+      const allowlist = mergeColorChoices(
+        buildMappingOptionAllowlist(ruleRowsByContext.get(contextKey) ?? []),
+        colorComboRowsByChannel.get(row.channel_id) ?? [],
+      );
       const optionValidation = validateMappingOptionSelection({
         allowlist,
         current: row,

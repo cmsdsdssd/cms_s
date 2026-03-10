@@ -11,7 +11,12 @@ import {
   loadCafe24Account,
 } from "@/lib/shop/cafe24";
 import { buildCanonicalBaseProductByMaster } from "@/lib/shop/canonical-mapping";
+import { buildCurrentProductSyncProfileByMaster } from "@/lib/shop/current-product-sync-profile";
 import { restoreVariantTargetFromRawDelta } from "@/lib/shop/price-sync-guards";
+import {
+  normalizePriceSyncThresholdProfile,
+  resolvePriceSyncThresholdProfilePolicy,
+} from "@/lib/shop/price-sync-policy.js";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -25,6 +30,19 @@ const chunkArray = <T,>(items: T[], chunkSize: number): T[][] => {
   const chunks: T[][] = [];
   for (let i = 0; i < items.length; i += chunkSize) chunks.push(items.slice(i, i + chunkSize));
   return chunks;
+};
+
+const computeThresholdKrw = (
+  absoluteMinKrw: number,
+  rate: number,
+  baselineKrw: number | null | undefined,
+): number => {
+  const normalizedAbsolute = Number.isFinite(absoluteMinKrw) ? Math.max(0, Math.round(absoluteMinKrw)) : 0;
+  const normalizedRate = Number.isFinite(rate) ? Math.max(0, rate) : 0;
+  const normalizedBaseline = Number.isFinite(Number(baselineKrw ?? Number.NaN))
+    ? Math.abs(Math.round(Number(baselineKrw)))
+    : 0;
+  return Math.max(normalizedAbsolute, Math.round(normalizedBaseline * normalizedRate));
 };
 
 const isProductWriteAcceptedButVerifyPending = (raw: unknown, expectedPrice: number): boolean => {
@@ -166,6 +184,47 @@ export async function POST(request: Request) {
     return jsonError(e instanceof Error ? e.message : "카페24 토큰 확인 실패", 422);
   }
 
+  const thresholdDefaults = {
+    autoSyncForceFull: false,
+    autoSyncMinChangeKrw: 5000,
+    autoSyncMinChangeRate: 0.02,
+    autoSyncThresholdProfile: "GENERAL",
+    optionSyncForceFull: false,
+    optionSyncMinChangeKrw: 1000,
+    optionSyncMinChangeRate: 0.01,
+  };
+
+  const thresholdPolicyRes = await sb
+    .from("pricing_policy")
+    .select("auto_sync_force_full, auto_sync_min_change_krw, auto_sync_min_change_rate, auto_sync_threshold_profile, option_sync_force_full, option_sync_min_change_krw, option_sync_min_change_rate")
+    .eq("channel_id", channelId)
+    .eq("is_active", true)
+    .order("updated_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (thresholdPolicyRes.error) return jsonError(thresholdPolicyRes.error.message ?? "동기화 임계치 정책 조회 실패", 500);
+
+  const thresholdPolicy = {
+    autoSyncForceFull: thresholdPolicyRes.data?.auto_sync_force_full === true,
+    autoSyncMinChangeKrw: Number.isFinite(Number(thresholdPolicyRes.data?.auto_sync_min_change_krw))
+      ? Math.max(0, Math.round(Number(thresholdPolicyRes.data?.auto_sync_min_change_krw)))
+      : thresholdDefaults.autoSyncMinChangeKrw,
+    autoSyncMinChangeRate: Number.isFinite(Number(thresholdPolicyRes.data?.auto_sync_min_change_rate))
+      ? Math.max(0, Number(thresholdPolicyRes.data?.auto_sync_min_change_rate))
+      : thresholdDefaults.autoSyncMinChangeRate,
+    autoSyncThresholdProfile: normalizePriceSyncThresholdProfile(
+      thresholdPolicyRes.data?.auto_sync_threshold_profile,
+      thresholdDefaults.autoSyncThresholdProfile as "GENERAL",
+    ),
+    optionSyncForceFull: thresholdPolicyRes.data?.option_sync_force_full === true,
+    optionSyncMinChangeKrw: Number.isFinite(Number(thresholdPolicyRes.data?.option_sync_min_change_krw))
+      ? Math.max(0, Math.round(Number(thresholdPolicyRes.data?.option_sync_min_change_krw)))
+      : thresholdDefaults.optionSyncMinChangeKrw,
+    optionSyncMinChangeRate: Number.isFinite(Number(thresholdPolicyRes.data?.option_sync_min_change_rate))
+      ? Math.max(0, Number(thresholdPolicyRes.data?.option_sync_min_change_rate))
+      : thresholdDefaults.optionSyncMinChangeRate,
+  };
+
   const listVariantsWithRefresh = async (externalProductNo: string) => {
     let variants = await cafe24ListProductVariants(account, accessToken, externalProductNo);
     if (!variants.ok && variants.status === 401) {
@@ -214,7 +273,11 @@ export async function POST(request: Request) {
 
   const logicalTargetKey = (masterItemId: string, externalVariantCode: string) => `${masterItemId}::${externalVariantCode || "BASE"}`;
   const baseTargetKey = (masterItemId: string, externalProductNo: string) => `${masterItemId}::${externalProductNo || "BASE"}`;
-  const allowVariantAdditionalOverride = pinnedComputeRequestId.length === 0;
+  // Variant additional_amount must stay variant-specific even for pinned/auto
+  // pushes. Reuse the latest computed per-variant additional amount from
+  // current_state when it exists instead of re-deriving solely from
+  // targetPrice - basePrice, which can flatten variants under guardrails.
+  const allowVariantAdditionalOverride = true;
   let pinnedTargetByChannelProduct = new Map<string, number>();
   let pinnedTargetByLogical = new Map<string, number>();
   let pinnedRawByChannelProduct = new Map<string, number>();
@@ -732,6 +795,22 @@ export async function POST(request: Request) {
   }
 
   let dedupedCandidates = Array.from(dedupedMap.values());
+  const thresholdProfileMasterIds = Array.from(new Set(
+    dedupedCandidates.map((row) => String(row.master_item_id ?? "").trim()).filter(Boolean),
+  ));
+  const thresholdProfileRows: Array<{ master_item_id?: string | null; current_product_sync_profile?: string | null }> = [];
+  for (const masterChunk of chunkArray(thresholdProfileMasterIds, IN_QUERY_CHUNK_SIZE)) {
+    if (masterChunk.length === 0) continue;
+    const profileRes = await sb
+      .from("sales_channel_product")
+      .select("master_item_id, current_product_sync_profile")
+      .eq("channel_id", channelId)
+      .eq("is_active", true)
+      .in("master_item_id", masterChunk);
+    if (profileRes.error) return jsonError(profileRes.error.message ?? "상품 동기화 프로필 조회 실패", 500);
+    thresholdProfileRows.push(...(profileRes.data ?? []));
+  }
+  const currentProductSyncProfileByMaster = buildCurrentProductSyncProfileByMaster(thresholdProfileRows);
 
   if (pinnedTargetByChannelProduct.size > 0) {
     dedupedCandidates = dedupedCandidates
@@ -847,6 +926,8 @@ export async function POST(request: Request) {
 
   const variantAdditionalOverrideByMasterVariant = new Map<string, number>();
   const variantAdditionalOverrideByProductVariant = new Map<string, number>();
+  const lastPushedAdditionalByMasterVariant = new Map<string, number>();
+  const lastPushedAdditionalByProductVariant = new Map<string, number>();
   const overrideMasterIds = Array.from(new Set(
     sortedCandidates
       .map((row) => String(row.master_item_id ?? "").trim())
@@ -859,8 +940,26 @@ export async function POST(request: Request) {
   ));
   const overrideMasterUpdatedAt = new Map<string, number>();
   const overrideProductUpdatedAt = new Map<string, number>();
+  const lastPushedMasterUpdatedAt = new Map<string, number>();
+  const lastPushedProductUpdatedAt = new Map<string, number>();
 
   const upsertOverride = (
+    map: Map<string, number>,
+    tsMap: Map<string, number>,
+    key: string,
+    delta: number,
+    updatedAt: unknown,
+  ) => {
+    const ts = Date.parse(String(updatedAt ?? ""));
+    const nextTs = Number.isFinite(ts) ? ts : Number.MIN_SAFE_INTEGER;
+    const prevTs = tsMap.get(key);
+    if (prevTs === undefined || nextTs >= prevTs) {
+      map.set(key, Math.round(delta));
+      tsMap.set(key, nextTs);
+    }
+  };
+
+  const upsertLastPushed = (
     map: Map<string, number>,
     tsMap: Map<string, number>,
     key: string,
@@ -881,7 +980,7 @@ export async function POST(request: Request) {
       if (masterChunk.length === 0) continue;
       const stateRes = await sb
         .from("channel_option_current_state_v1")
-        .select("state_id, master_item_id, external_product_no, external_variant_code, final_target_additional_amount_krw, updated_at")
+        .select("state_id, master_item_id, external_product_no, external_variant_code, final_target_additional_amount_krw, last_pushed_additional_amount_krw, updated_at")
         .eq("channel_id", channelId)
         .in("master_item_id", masterChunk)
         .order("updated_at", { ascending: false })
@@ -893,6 +992,7 @@ export async function POST(request: Request) {
         if (!variantCode) continue;
         const delta = Number(row.final_target_additional_amount_krw ?? Number.NaN);
         if (!Number.isFinite(delta)) continue;
+        const lastPushedAdditional = Number(row.last_pushed_additional_amount_krw ?? Number.NaN);
 
         const masterKey = String(row.master_item_id ?? "").trim();
         const productNo = String(row.external_product_no ?? "").trim();
@@ -900,11 +1000,17 @@ export async function POST(request: Request) {
         if (masterKey) {
           const mk = `${masterKey}::${variantCode}`;
           upsertOverride(variantAdditionalOverrideByMasterVariant, overrideMasterUpdatedAt, mk, delta, row.updated_at);
+          if (Number.isFinite(lastPushedAdditional)) {
+            upsertLastPushed(lastPushedAdditionalByMasterVariant, lastPushedMasterUpdatedAt, mk, lastPushedAdditional, row.updated_at);
+          }
         }
 
         if (productNo) {
           const pk = `${productNo}::${variantCode}`;
           upsertOverride(variantAdditionalOverrideByProductVariant, overrideProductUpdatedAt, pk, delta, row.updated_at);
+          if (Number.isFinite(lastPushedAdditional)) {
+            upsertLastPushed(lastPushedAdditionalByProductVariant, lastPushedProductUpdatedAt, pk, lastPushedAdditional, row.updated_at);
+          }
         }
       }
     }
@@ -915,7 +1021,7 @@ export async function POST(request: Request) {
       if (productChunk.length === 0) continue;
       const stateRes = await sb
         .from("channel_option_current_state_v1")
-        .select("state_id, master_item_id, external_product_no, external_variant_code, final_target_additional_amount_krw, updated_at")
+        .select("state_id, master_item_id, external_product_no, external_variant_code, final_target_additional_amount_krw, last_pushed_additional_amount_krw, updated_at")
         .eq("channel_id", channelId)
         .in("external_product_no", productChunk)
         .order("updated_at", { ascending: false })
@@ -927,6 +1033,7 @@ export async function POST(request: Request) {
         if (!variantCode) continue;
         const delta = Number(row.final_target_additional_amount_krw ?? Number.NaN);
         if (!Number.isFinite(delta)) continue;
+        const lastPushedAdditional = Number(row.last_pushed_additional_amount_krw ?? Number.NaN);
 
         const masterKey = String(row.master_item_id ?? "").trim();
         const productNo = String(row.external_product_no ?? "").trim();
@@ -934,11 +1041,17 @@ export async function POST(request: Request) {
         if (masterKey) {
           const mk = `${masterKey}::${variantCode}`;
           upsertOverride(variantAdditionalOverrideByMasterVariant, overrideMasterUpdatedAt, mk, delta, row.updated_at);
+          if (Number.isFinite(lastPushedAdditional)) {
+            upsertLastPushed(lastPushedAdditionalByMasterVariant, lastPushedMasterUpdatedAt, mk, lastPushedAdditional, row.updated_at);
+          }
         }
 
         if (productNo) {
           const pk = `${productNo}::${variantCode}`;
           upsertOverride(variantAdditionalOverrideByProductVariant, overrideProductUpdatedAt, pk, delta, row.updated_at);
+          if (Number.isFinite(lastPushedAdditional)) {
+            upsertLastPushed(lastPushedAdditionalByProductVariant, lastPushedProductUpdatedAt, pk, lastPushedAdditional, row.updated_at);
+          }
         }
       }
     }
@@ -950,6 +1063,37 @@ export async function POST(request: Request) {
     const byMaster = variantAdditionalOverrideByMasterVariant.get(`${masterKey}::${variantCode}`);
     if (Number.isFinite(Number(byMaster))) return Math.round(Number(byMaster));
     return undefined;
+  };
+
+  const resolveLastPushedAdditional = (masterKey: string, productNo: string, variantCode: string): number | undefined => {
+    const byProduct = lastPushedAdditionalByProductVariant.get(`${productNo}::${variantCode}`);
+    if (Number.isFinite(Number(byProduct))) return Math.round(Number(byProduct));
+    const byMaster = lastPushedAdditionalByMasterVariant.get(`${masterKey}::${variantCode}`);
+    if (Number.isFinite(Number(byMaster))) return Math.round(Number(byMaster));
+    return undefined;
+  };
+
+  const resolveBaseThresholdPolicyForMaster = (masterKey: string) => {
+    const currentProfile = currentProductSyncProfileByMaster.get(masterKey) ?? null;
+    const effectiveProfile = normalizePriceSyncThresholdProfile(
+      currentProfile || thresholdPolicy.autoSyncThresholdProfile,
+      thresholdPolicy.autoSyncThresholdProfile as "GENERAL",
+    );
+    if (effectiveProfile === thresholdPolicy.autoSyncThresholdProfile) {
+      return {
+        forceFull: thresholdPolicy.autoSyncForceFull,
+        minChangeKrw: thresholdPolicy.autoSyncMinChangeKrw,
+        minChangeRate: thresholdPolicy.autoSyncMinChangeRate,
+        profile: effectiveProfile,
+      };
+    }
+    const preset = resolvePriceSyncThresholdProfilePolicy(effectiveProfile);
+    return {
+      forceFull: preset.always_sync,
+      minChangeKrw: Math.max(0, Math.round(Number(preset.min_change_krw ?? thresholdPolicy.autoSyncMinChangeKrw))),
+      minChangeRate: Math.max(0, Number(preset.min_change_rate ?? thresholdPolicy.autoSyncMinChangeRate)),
+      profile: effectiveProfile,
+    };
   };
 
   if (dryRun) {
@@ -1214,6 +1358,87 @@ export async function POST(request: Request) {
     const overrideAdditionalAmount = allowVariantAdditionalOverride && variantCode
       ? resolveVariantAdditionalOverride(masterKey, String(c.external_product_no ?? "").trim(), variantCode)
       : undefined;
+    const preferredBaseForThreshold = Number(productFallbackTarget.get(productBaseKey) ?? masterFallbackTarget.get(masterKey));
+    const baseForThreshold = Number.isFinite(preferredBaseForThreshold) ? Math.round(preferredBaseForThreshold) : null;
+    const plannedAdditionalAmount = variantCode
+      ? (Number.isFinite(Number(overrideAdditionalAmount ?? Number.NaN))
+        ? Math.round(Number(overrideAdditionalAmount))
+        : (baseForThreshold !== null ? (targetPrice - baseForThreshold) : undefined))
+      : undefined;
+
+    const baseThresholdPolicy = resolveBaseThresholdPolicyForMaster(masterKey);
+
+    if (!variantCode && !baseThresholdPolicy.forceFull && Number.isFinite(Number(c.current_channel_price_krw ?? Number.NaN))) {
+      const currentChannelPrice = Math.round(Number(c.current_channel_price_krw));
+      const baseThresholdKrw = computeThresholdKrw(
+        baseThresholdPolicy.minChangeKrw,
+        baseThresholdPolicy.minChangeRate,
+        currentChannelPrice,
+      );
+      const baseDeltaKrw = Math.abs(targetPrice - currentChannelPrice);
+      if (baseDeltaKrw < baseThresholdKrw) {
+        skippedCount += 1;
+        itemRows.push({
+          job_id: jobId,
+          channel_id: String(c.channel_id ?? "").trim(),
+          channel_product_id: c.channel_product_id,
+          master_item_id: c.master_item_id,
+          external_product_no: c.external_product_no,
+          external_variant_code: variantCode,
+          before_price_krw: c.current_channel_price_krw,
+          target_price_krw: targetPrice,
+          after_price_krw: c.current_channel_price_krw,
+          status: "SKIPPED",
+          http_status: null,
+          error_code: "BASE_THRESHOLD_NOT_MET",
+          error_message: "기준 가격 변동이 자동 push 임계치 미만입니다",
+          raw_response_json: {
+            delta_krw: baseDeltaKrw,
+            threshold_krw: baseThresholdKrw,
+            baseline_krw: currentChannelPrice,
+            threshold_profile: baseThresholdPolicy.profile,
+          },
+        });
+        continue;
+      }
+    }
+
+    if (variantCode && !thresholdPolicy.optionSyncForceFull && Number.isFinite(Number(plannedAdditionalAmount ?? Number.NaN))) {
+      const lastPushedAdditional = resolveLastPushedAdditional(masterKey, externalProductNo, variantCode);
+      if (Number.isFinite(Number(lastPushedAdditional ?? Number.NaN))) {
+        const optionThresholdKrw = computeThresholdKrw(
+          thresholdPolicy.optionSyncMinChangeKrw,
+          thresholdPolicy.optionSyncMinChangeRate,
+          lastPushedAdditional,
+        );
+        const optionDeltaKrw = Math.abs(Math.round(Number(plannedAdditionalAmount)) - Math.round(Number(lastPushedAdditional)));
+        if (optionDeltaKrw < optionThresholdKrw) {
+          skippedCount += 1;
+          itemRows.push({
+            job_id: jobId,
+            channel_id: String(c.channel_id ?? "").trim(),
+            channel_product_id: c.channel_product_id,
+            master_item_id: c.master_item_id,
+            external_product_no: c.external_product_no,
+            external_variant_code: variantCode,
+            before_price_krw: c.current_channel_price_krw,
+            target_price_krw: baseForThreshold !== null ? (baseForThreshold + Math.round(Number(plannedAdditionalAmount))) : targetPrice,
+            after_price_krw: c.current_channel_price_krw,
+            status: "SKIPPED",
+            http_status: null,
+            error_code: "OPTION_THRESHOLD_NOT_MET",
+            error_message: "옵션 추가금 변동이 자동 push 임계치 미만입니다",
+            raw_response_json: {
+              delta_krw: optionDeltaKrw,
+              threshold_krw: optionThresholdKrw,
+              baseline_krw: Math.round(Number(lastPushedAdditional)),
+              planned_additional_amount_krw: Math.round(Number(plannedAdditionalAmount)),
+            },
+          });
+          continue;
+        }
+      }
+    }
 
     let pushRes = variantCode
       ? await (async () => {

@@ -1,5 +1,5 @@
 ﻿import { NextResponse } from "next/server";
-import { getShopAdminClient, jsonError } from "@/lib/shop/admin";
+import { getShopAdminClient, isMissingSchemaObjectError, jsonError } from "@/lib/shop/admin";
 import {
   buildCanonicalOptionRows,
   buildMappingOptionAllowlist,
@@ -10,6 +10,7 @@ import {
   type MappingOptionAllowlist,
 } from "@/lib/shop/mapping-option-details";
 import { buildMaterialFactorMap, normalizeMaterialCode } from "@/lib/material-factors";
+import { resolveCanonicalProductNo } from "@/lib/shop/canonical-mapping";
 import { createPersistedSizeGridLookup, loadPersistedSizeGridRowsForScope } from "@/lib/shop/weight-grid-store.js";
 import {
   cafe24ListProductVariants,
@@ -45,33 +46,9 @@ const normalizeProductNoCandidates = (values: Array<unknown>): string[] => {
   return Array.from(new Set(values.map((value) => String(value ?? '').trim()).filter(Boolean)));
 };
 
-const pickStableMaterialCode = (candidates: Array<unknown>): string | null => {
-  const counts = new Map<string, number>();
-  for (const candidate of candidates) {
-    const normalized = normalizeMaterialCode(String(candidate ?? "").trim());
-    if (!normalized || normalized === "00") continue;
-    counts.set(normalized, (counts.get(normalized) ?? 0) + 1);
-  }
-  const sorted = Array.from(counts.entries()).sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]));
-  return sorted[0]?.[0] ?? null;
-};
-
 const pickPreferredGridProductNo = (values: Array<unknown>): string | null => {
   const normalized = normalizeProductNoCandidates(values);
   return normalized.find((value) => /^P/i.test(value)) ?? normalized[0] ?? null;
-};
-
-const hasMaterialSignal = (
-  variants: Array<{ options?: Array<{ name?: string | null; value?: string | null }> | null }>,
-  savedCategoryRows: Array<{ category_key?: string | null }> = [],
-): boolean => {
-  if (savedCategoryRows.some((row) => String(row.category_key ?? "").trim().toUpperCase() === "MATERIAL")) return true;
-  return variants.some((variant) =>
-    (variant.options ?? []).some((option) =>
-      /(재질|소재|material|금종|함량|14k|18k|24k|925|999)/iu.test(String(option?.name ?? ""))
-      || /(14k|18k|24k|925|999)/iu.test(String(option?.value ?? "")),
-    ),
-  );
 };
 
 export async function GET(request: Request) {
@@ -126,6 +103,7 @@ export async function GET(request: Request) {
   let canonicalOptionRows: ReturnType<typeof buildCanonicalOptionRows> = [];
   let masterMaterialCode: string | null = null;
   let persistedSizeLookup: unknown = null;
+  let colorBaseDeltaByCode: Record<string, number> = {};
   let sizeMarketContext: {
     goldTickKrwPerG?: number | null;
     silverTickKrwPerG?: number | null;
@@ -133,10 +111,10 @@ export async function GET(request: Request) {
   } | null = null;
 
   if (masterItemId) {
-    const [activeProductRes, optionRuleRes, categoryRes, masterRes, otherReasonLogRes, materialFactorRes, tickRes, currentStateRes, latestSnapshotRes] = await Promise.all([
+    const [activeProductRes, optionRuleRes, categoryRes, masterRes, otherReasonLogRes, materialFactorRes, tickRes, colorComboRes] = await Promise.all([
       sb
         .from("sales_channel_product")
-        .select("external_product_no, option_material_code")
+        .select("external_product_no, external_variant_code, option_material_code, option_color_code, option_decoration_code, option_size_value")
         .eq("channel_id", channelId)
         .eq("master_item_id", masterItemId)
         .eq("is_active", true)
@@ -149,7 +127,7 @@ export async function GET(request: Request) {
         .eq("is_active", true),
       sb
         .from("channel_option_category_v2")
-        .select("external_product_no, option_name, option_value, category_key, sync_delta_krw")
+        .select("external_product_no, option_name, option_value, category_key, sync_delta_krw, updated_at")
         .eq("channel_id", channelId)
         .eq("master_item_id", masterItemId)
         .order("updated_at", { ascending: false })
@@ -177,19 +155,11 @@ export async function GET(request: Request) {
         .select("gold_price_krw_per_g, silver_price_krw_per_g")
         .maybeSingle(),
       sb
-        .from("channel_option_current_state_v1")
-        .select("external_product_no, external_variant_code, material_code")
+        .from("channel_color_combo_catalog_v1")
+        .select("combo_key, base_delta_krw")
         .eq("channel_id", channelId)
-        .eq("master_item_id", masterItemId)
-        .order("updated_at", { ascending: false })
+        .eq("is_active", true)
         .limit(5000),
-      sb
-        .from("pricing_snapshot")
-        .select("material_code_effective")
-        .eq("channel_id", channelId)
-        .eq("master_item_id", masterItemId)
-        .order("computed_at", { ascending: false })
-        .limit(20),
     ]);
 
     if (activeProductRes.error) return jsonError(activeProductRes.error.message ?? "활성 상품번호 조회 실패", 500);
@@ -199,22 +169,30 @@ export async function GET(request: Request) {
     if (otherReasonLogRes.error) return jsonError(otherReasonLogRes.error.message ?? "기타 사유 로그 조회 실패", 500);
     if (materialFactorRes.error) return jsonError(materialFactorRes.error.message ?? "소재 팩터 조회 실패", 500);
     if (tickRes.error) return jsonError(tickRes.error.message ?? "시세 조회 실패", 500);
-    if (currentStateRes.error) return jsonError(currentStateRes.error.message ?? "현재 옵션 상태 소재 조회 실패", 500);
-    if (latestSnapshotRes.error) return jsonError(latestSnapshotRes.error.message ?? "최근 스냅샷 소재 조회 실패", 500);
-
-    const canonicalPreferredProductNos = normalizeProductNoCandidates([externalProductNo, resolvedProductNo]);
-    const activeRows = (activeProductRes.data ?? []) as Array<{ external_product_no?: string | null; option_material_code?: string | null }>;
-    const productScopedActiveRows = activeRows.filter((row) => canonicalPreferredProductNos.includes(String(row.external_product_no ?? "").trim()));
-    const currentStateRows = (currentStateRes.data ?? []) as Array<{ external_product_no?: string | null; material_code?: string | null }>;
-    const productScopedCurrentStateRows = currentStateRows.filter((row) => canonicalPreferredProductNos.includes(String(row.external_product_no ?? "").trim()));
+    if (colorComboRes.error && !isMissingSchemaObjectError(colorComboRes.error, "channel_color_combo_catalog_v1")) {
+      return jsonError(colorComboRes.error.message ?? "색상 중앙금액 조회 실패", 500);
+    }
+    const activeRows = (activeProductRes.data ?? []) as Array<{
+      external_product_no?: string | null;
+      external_variant_code?: string | null;
+      option_material_code?: string | null;
+      option_color_code?: string | null;
+      option_decoration_code?: string | null;
+      option_size_value?: number | null;
+    }>;
     const preferredProductNos = normalizeProductNoCandidates([externalProductNo, resolvedProductNo]);
+    const activeCanonicalProductNo = resolveCanonicalProductNo(
+      activeRows.map((row) => String(row.external_product_no ?? "").trim()),
+      String(resolvedProductNo ?? externalProductNo ?? "").trim(),
+    );
     const hasCentralRowsForProductNo = (productNo: string) => {
       if (!productNo) return false;
       return (categoryRes.data ?? []).some((row) => String(row.external_product_no ?? "").trim() === productNo)
         || (optionRuleRes.data ?? []).some((row) => String(row.external_product_no ?? "").trim() === productNo);
     };
     const scopedCentralProductNo = preferredProductNos.find((productNo) => hasCentralRowsForProductNo(productNo)) ?? "";
-    canonicalExternalProductNo = scopedCentralProductNo
+    canonicalExternalProductNo = activeCanonicalProductNo
+      || scopedCentralProductNo
       || resolveCanonicalExternalProductNo(
         (activeProductRes.data ?? []).map((row) => String(row.external_product_no ?? "").trim()),
         String(resolvedProductNo ?? externalProductNo ?? "").trim(),
@@ -234,9 +212,41 @@ export async function GET(request: Request) {
         validOptionValuesByName.set(optionName, bucket);
       }
     }
-    const filteredSavedOptionCategories = (categoryRes.data ?? [])
-      .filter((row) => String(row.external_product_no ?? "").trim() === canonicalExternalProductNo)
+    const categoryProductNosForRead = new Set(
+      normalizeProductNoCandidates([
+        canonicalExternalProductNo,
+        activeCanonicalProductNo,
+        scopedCentralProductNo,
+        externalProductNo,
+        resolvedProductNo,
+      ]),
+    );
+    const preferredCategoryRows = (() => {
+      const allRows = (categoryRes.data ?? []) as Array<{
+        external_product_no?: string | null;
+        option_name?: string | null;
+        option_value?: string | null;
+        category_key?: string | null;
+        sync_delta_krw?: number | null;
+        updated_at?: string | null;
+      }>;
+      const canonicalRows = allRows.filter((row) => String(row.external_product_no ?? "").trim() === canonicalExternalProductNo);
+      const scopedRows = canonicalRows.length > 0
+        ? canonicalRows
+        : allRows.filter((row) => categoryProductNosForRead.has(String(row.external_product_no ?? "").trim()));
+      return scopedRows
+        .slice()
+        .sort((left, right) => {
+          const leftNo = String(left.external_product_no ?? "").trim();
+          const rightNo = String(right.external_product_no ?? "").trim();
+          if (leftNo === canonicalExternalProductNo && rightNo !== canonicalExternalProductNo) return -1;
+          if (rightNo === canonicalExternalProductNo && leftNo !== canonicalExternalProductNo) return 1;
+          return String(right.updated_at ?? "").localeCompare(String(left.updated_at ?? ""));
+        });
+    })();
+    const filteredSavedOptionCategories = preferredCategoryRows
       .map((row) => ({
+        external_product_no: String(row.external_product_no ?? "").trim(),
         option_name: String(row.option_name ?? "").trim(),
         option_value: String(row.option_value ?? "").trim(),
         category_key: normalizeSavedCategoryKey(row.category_key),
@@ -246,30 +256,25 @@ export async function GET(request: Request) {
         if (row.option_name.length === 0 || row.option_value.length === 0) return false;
         const allowedValues = validOptionValuesByName.get(row.option_name);
         return Boolean(allowedValues && allowedValues.has(row.option_value));
-      });
-    const materialSignalExists = hasMaterialSignal(
-      result.variants.map((variant) => ({
-        options: variant.options.map((option) => ({ name: option.name, value: option.value })),
-      })),
-      filteredSavedOptionCategories,
+      })
+      .reduce<Array<{
+        external_product_no: string;
+        option_name: string;
+        option_value: string;
+        category_key: SavedOptionCategoryRowWithDelta["category_key"];
+        sync_delta_krw: number | null;
+      }>>((acc, row) => {
+        if (acc.some((existing) => existing.option_name === row.option_name && existing.option_value === row.option_value)) return acc;
+        acc.push(row);
+        return acc;
+      }, [])
+      .map(({ external_product_no: _externalProductNo, ...row }) => row);
+    masterMaterialCode = normalizeMaterialCode(String(masterRes.data?.material_code_default ?? "").trim()) || null;
+    colorBaseDeltaByCode = Object.fromEntries(
+      ((colorComboRes.data ?? []) as Array<{ combo_key?: string | null; base_delta_krw?: number | null }>)
+        .map((row) => [String(row.combo_key ?? "").trim(), Math.max(0, Math.round(Number(row.base_delta_krw ?? 0)))])
+        .filter(([key]) => Boolean(key)),
     );
-    const mappedMaterialCode = materialSignalExists
-      ? (pickStableMaterialCode(productScopedActiveRows.map((row) => row.option_material_code))
-        || pickStableMaterialCode(activeRows.map((row) => row.option_material_code)))
-      : null;
-    const currentStateMaterialCode = materialSignalExists
-      ? (pickStableMaterialCode(productScopedCurrentStateRows.map((row) => row.material_code))
-        || pickStableMaterialCode(currentStateRows.map((row) => row.material_code)))
-      : null;
-    const snapshotMaterialCode = materialSignalExists
-      ? pickStableMaterialCode((latestSnapshotRes.data ?? []).map((row) => (row as { material_code_effective?: string | null }).material_code_effective))
-      : null;
-    masterMaterialCode =
-      String(masterRes.data?.material_code_default ?? "").trim()
-      || mappedMaterialCode
-      || currentStateMaterialCode
-      || snapshotMaterialCode
-      || null;
     sizeMarketContext = {
       goldTickKrwPerG: Math.round(Number(tickRes.data?.gold_price_krw_per_g ?? 0)),
       silverTickKrwPerG: Math.round(Number(tickRes.data?.silver_price_krw_per_g ?? 0)),
@@ -312,8 +317,30 @@ export async function GET(request: Request) {
       sizeMarketContext,
       observedOptionValues,
     });
+    const mergedColorChoices = new Map(
+      (baseAllowlist.colors ?? []).map((choice) => [String(choice.value ?? "").trim(), choice] as const),
+    );
+    for (const row of (colorComboRes.data ?? []) as Array<{ combo_key?: string | null; display_name?: string | null; base_delta_krw?: number | null }>) {
+      const comboKey = String(row.combo_key ?? "").trim();
+      if (!comboKey || mergedColorChoices.has(comboKey)) continue;
+      mergedColorChoices.set(comboKey, {
+        value: comboKey,
+        label: String(row.display_name ?? "").trim() || comboKey,
+        delta_krw: Math.max(0, Math.round(Number(row.base_delta_krw ?? 0))),
+      });
+    }
+    for (const row of activeRows) {
+      const comboKey = String(row.option_color_code ?? "").trim();
+      if (!comboKey || mergedColorChoices.has(comboKey)) continue;
+      mergedColorChoices.set(comboKey, {
+        value: comboKey,
+        label: comboKey,
+        delta_krw: null,
+      });
+    }
     optionDetailAllowlist = {
       ...baseAllowlist,
+      colors: Array.from(mergedColorChoices.values()).sort((left, right) => String(left.label ?? "").localeCompare(String(right.label ?? ""))),
       sizes_by_material: baseAllowlist.sizes_by_material ?? {},
     };
     optionDetailAllowlist = {
@@ -337,12 +364,24 @@ export async function GET(request: Request) {
     const otherReasonRankByEntryKey: Record<string, number> = {};
     const categoryOverrideRankByEntryKey: Record<string, number> = {};
     const axisSelectionRankByEntryKey: Record<string, number> = {};
+    const savedCategoryEntryKeys = new Set(
+      filteredSavedOptionCategories
+        .map((row) => mappingOptionEntryKey(row.option_name, row.option_value))
+        .filter(Boolean),
+    );
     const validEntryKeys = new Set(
       (result.variants ?? []).flatMap((variant) =>
         (variant.options ?? []).map((option) => mappingOptionEntryKey(String(option?.name ?? "").trim(), String(option?.value ?? "").trim())),
       ).filter(Boolean),
     );
-    const axisPrefixes = [canonicalExternalProductNo].filter(Boolean).map((productNo) => `${productNo}::`);
+    const axisPrefixes = Array.from(categoryProductNosForRead)
+      .filter(Boolean)
+      .sort((left, right) => {
+        if (left === canonicalExternalProductNo) return -1;
+        if (right === canonicalExternalProductNo) return 1;
+        return left.localeCompare(right);
+      })
+      .map((productNo) => `${productNo}::`);
     const axisPrefixRank = new Map(axisPrefixes.map((prefix, index) => [prefix, index]));
     for (const row of (otherReasonLogRes.data ?? []) as Array<{ axis_key?: string | null; axis_value: string | null; new_row: unknown }>) {
       const axisValue = String(row.axis_value ?? "").trim();
@@ -364,6 +403,7 @@ export async function GET(request: Request) {
         continue;
       }
       if (axisKey === "OPTION_CATEGORY") {
+        if (savedCategoryEntryKeys.has(entryKey)) continue;
         const currentRank = categoryOverrideRankByEntryKey[entryKey];
         if (currentRank != null && currentRank <= prefixRank) continue;
         const categoryKey = parseSavedCategoryKey(nextRow?.category_key);
@@ -392,6 +432,62 @@ export async function GET(request: Request) {
         .map((row) => [mappingOptionEntryKey(row.option_name, row.option_value), row.category_key] as const)
         .filter(([entryKey]) => entryKey.length > 0 && validEntryKeys.has(entryKey)),
     );
+    const mappingByVariantCode = new Map<string, typeof activeRows[number]>();
+    for (const row of activeRows) {
+      const productNo = String(row.external_product_no ?? "").trim();
+      const variantCode = String(row.external_variant_code ?? "").trim();
+      if (!variantCode || (productNo && productNo !== canonicalExternalProductNo)) continue;
+      if (!mappingByVariantCode.has(variantCode)) mappingByVariantCode.set(variantCode, row);
+    }
+    const inferredSelectionByEntryKey = new Map<string, {
+      materialCode: string | null;
+      colorCode: string | null;
+      sizeValue: string | null;
+      decorCode: string | null;
+    }>();
+    for (const variant of result.variants ?? []) {
+      const mapping = mappingByVariantCode.get(String(variant.variantCode ?? "").trim());
+      if (!mapping) continue;
+      for (const option of variant.options ?? []) {
+        const inferredKey = mappingOptionEntryKey(String(option?.name ?? "").trim(), String(option?.value ?? "").trim());
+        if (!inferredKey || !validEntryKeys.has(inferredKey) || inferredSelectionByEntryKey.has(inferredKey)) continue;
+        inferredSelectionByEntryKey.set(inferredKey, {
+          materialCode: normalizeMaterialCode(String(mapping.option_material_code ?? "").trim()) || null,
+          colorCode: String(mapping.option_color_code ?? "").trim() || null,
+          sizeValue: Number.isFinite(Number(mapping.option_size_value)) ? Number(mapping.option_size_value).toFixed(2) : null,
+          decorCode: String(mapping.option_decoration_code ?? "").trim() || null,
+        });
+      }
+    }
+    for (const entryKey of validEntryKeys) {
+      const inferred = inferredSelectionByEntryKey.get(entryKey);
+      if (!inferred) continue;
+      const categoryKey = categoryOverrideByEntryKey[entryKey] ?? savedCategoryByEntryKey.get(entryKey) ?? null;
+      const current = axisSelectionByEntryKey[entryKey] ?? {};
+      if (categoryKey === "SIZE") {
+        axisSelectionByEntryKey[entryKey] = {
+          ...current,
+          axis1_value: inferred.materialCode || String(current.axis1_value ?? "").trim() || null,
+          axis2_value: inferred.sizeValue || String(current.axis2_value ?? "").trim() || null,
+        };
+        continue;
+      }
+      if (categoryKey === "COLOR_PLATING") {
+        axisSelectionByEntryKey[entryKey] = {
+          ...current,
+          axis1_value: inferred.materialCode || String(current.axis1_value ?? "").trim() || null,
+          axis2_value: inferred.colorCode || String(current.axis2_value ?? "").trim() || null,
+        };
+        continue;
+      }
+      if (categoryKey === "DECOR") {
+        axisSelectionByEntryKey[entryKey] = {
+          ...current,
+          axis1_value: inferred.materialCode || String(current.axis1_value ?? "").trim() || null,
+          axis2_value: inferred.decorCode || String(current.axis2_value ?? "").trim() || null,
+        };
+      }
+    }
     const fallbackMaterialCode = String(masterRes.data?.material_code_default ?? "").trim();
     const allowedMaterialCodes = new Set(
       optionDetailAllowlist.materials
@@ -399,6 +495,11 @@ export async function GET(request: Request) {
         .filter(Boolean),
     );
     const allowedColorCodesByMaterial = new Map<string, Set<string>>();
+    const globallyAllowedColorCodes = new Set(
+      optionDetailAllowlist.colors
+        .map((choice) => String(choice.value ?? "").trim())
+        .filter(Boolean),
+    );
     for (const row of filteredRuleRows) {
       if (String(row.category_key ?? "").trim().toUpperCase() !== "COLOR_PLATING") continue;
       const materialCode = String(row.scope_material_code ?? "").trim();
@@ -428,8 +529,11 @@ export async function GET(request: Request) {
         }
       }
       if (categoryKey === "COLOR_PLATING" && selectedAxis2Value) {
-        const allowedColors = allowedColorCodesByMaterial.get(effectiveMaterialCode) ?? null;
-        if (effectiveMaterialCode && (!allowedColors || !allowedColors.has(selectedAxis2Value))) {
+        const allowedColors = allowedColorCodesByMaterial.get(effectiveMaterialCode);
+        const isAllowed = allowedColors
+          ? allowedColors.has(selectedAxis2Value)
+          : globallyAllowedColorCodes.has(selectedAxis2Value);
+        if (effectiveMaterialCode && !isAllowed) {
           selection.axis2_value = null;
           selection.axis3_value = null;
         }
@@ -454,6 +558,7 @@ export async function GET(request: Request) {
       otherReasonByEntryKey,
       categoryOverrideByEntryKey,
       axisSelectionByEntryKey,
+      colorBaseDeltaByCode,
     });
   }
 

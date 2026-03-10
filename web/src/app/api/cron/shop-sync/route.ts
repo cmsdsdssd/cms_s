@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
-import { POST as pullPost } from "@/app/api/channel-prices/pull/route";
+import { POST as runCronV2 } from "@/app/api/cron/shop-sync-v2/route";
 import { POST as recomputePost } from "@/app/api/pricing/recompute/route";
-import { POST as pushPost } from "@/app/api/channel-prices/push/route";
 import { getShopAdminClient } from "@/lib/shop/admin";
 
 export const dynamic = "force-dynamic";
@@ -90,7 +89,7 @@ async function runCron(request: Request) {
     return bad(err instanceof Error ? err.message : "invalid request", status);
   }
 
-  const { channelId, batchLimit, masterRecomputeOnly } = input;
+  const { channelId, masterRecomputeOnly } = input;
 
   const sb = getShopAdminClient();
   if (!sb) return bad("Supabase server env missing", 500);
@@ -209,91 +208,10 @@ async function runCron(request: Request) {
     );
   }
 
-  const pullRes = await pullPost(mkJsonRequest("/api/channel-prices/pull", { channel_id: channelId }));
-  const pullJson = await pullRes.json().catch(() => ({}));
-  if (!pullRes.ok) {
-    return NextResponse.json(
-      { ok: false, stage: "pull", status: pullRes.status, detail: pullJson, channel_id: channelId },
-      { status: pullRes.status, headers: { "Cache-Control": "no-store" } },
-    );
-  }
-
-  const recomputeRes = await recomputePost(mkJsonRequest("/api/pricing/recompute", { channel_id: channelId }));
-  const recomputeJson = await recomputeRes.json().catch(() => ({}));
-  if (!recomputeRes.ok) {
-    return NextResponse.json(
-      { ok: false, stage: "recompute", status: recomputeRes.status, detail: recomputeJson, channel_id: channelId },
-      { status: recomputeRes.status, headers: { "Cache-Control": "no-store" } },
-    );
-  }
-  const computeRequestId = String((recomputeJson as { compute_request_id?: unknown }).compute_request_id ?? "").trim();
-  if (!computeRequestId) {
-    return NextResponse.json(
-      { ok: false, stage: "recompute", status: 500, detail: "compute_request_id missing", channel_id: channelId },
-      { status: 500, headers: { "Cache-Control": "no-store" } },
-    );
-  }
-
-  const diffRes = await sb
-    .from("v_channel_price_dashboard")
-    .select("channel_product_id")
-    .eq("channel_id", channelId)
-    .eq("price_state", "OUT_OF_SYNC")
-    .order("channel_price_fetched_at", { ascending: true, nullsFirst: true })
-    .limit(batchLimit);
-
-  if (diffRes.error) return bad(diffRes.error.message ?? "dashboard diff query failed", 500);
-  const diffIds = (diffRes.data ?? [])
-    .map((r) => String((r as { channel_product_id: string | null }).channel_product_id ?? "").trim())
-    .filter(Boolean);
-
-  if (diffIds.length === 0) {
-    return NextResponse.json(
-      {
-        ok: true,
-        skipped: true,
-        reason: "NO_CANDIDATES",
-        channel_id: channelId,
-        pull: pullJson,
-        recompute: recomputeJson,
-        compute_request_id: computeRequestId,
-      },
-      { headers: { "Cache-Control": "no-store" } },
-    );
-  }
-
-  const pushRes = await pushPost(
-    mkJsonRequest("/api/channel-prices/push", {
-      channel_id: channelId,
-      channel_product_ids: diffIds,
-      compute_request_id: computeRequestId,
-      run_type: "AUTO",
-      dry_run: false,
-      sync_option_labels: false,
-    }),
-  );
-  const pushJson = await pushRes.json().catch(() => ({}));
-  if (!pushRes.ok) {
-    return NextResponse.json(
-      { ok: false, stage: "push", status: pushRes.status, detail: pushJson, channel_id: channelId },
-      { status: pushRes.status, headers: { "Cache-Control": "no-store" } },
-    );
-  }
-
-  return NextResponse.json(
-    {
-      ok: true,
-      mode: "FULL_SYNC",
-      channel_id: channelId,
-      batch_limit: batchLimit,
-      candidate_count: diffIds.length,
-      pull: pullJson,
-      recompute: recomputeJson,
-      compute_request_id: computeRequestId,
-      push: pushJson,
-    },
-    { headers: { "Cache-Control": "no-store" } },
-  );
+  // Legacy cron endpoint is retained as an alias only. All regular automatic
+  // price sync should run through the v2 run/intent/execute pipeline so
+  // threshold profiles and downsync pressure logic stay consistent.
+  return runCronV2(request);
 }
 
 export async function POST(request: Request) {
