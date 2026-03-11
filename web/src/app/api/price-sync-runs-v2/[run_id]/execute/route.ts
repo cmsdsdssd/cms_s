@@ -368,7 +368,11 @@ export async function POST(_request: Request, { params }: Params) {
         const itemErrorCode = String(item.error_code ?? "").trim().toUpperCase();
         const itemErrorMessage = String(item.error_message ?? "").trim();
         const itemReason = itemErrorCode || itemErrorMessage || null;
-        const nextState = status === "SUCCESS" ? "SUCCEEDED" : "FAILED";
+        const nextState = status === "SUCCESS"
+          ? "SUCCEEDED"
+          : status === "SKIPPED"
+            ? "SKIPPED"
+            : "FAILED";
         const externalProductNo = String(item.external_product_no ?? "").trim() || null;
         const beforePriceKrw = Math.round(Number(item.before_price_krw ?? 0));
         const targetPriceKrw = Math.round(Number(item.target_price_krw ?? 0));

@@ -291,6 +291,16 @@ type VariantLookupResponse = {
 
 type VariantLookupVariant = VariantLookupResponse["data"]["variants"][number];
 
+type OptionLaborRulePoolsResponse = {
+  data: {
+    decoration_masters?: Array<{
+      master_item_id: string;
+      model_name: string | null;
+      total_labor_cost_krw?: number | null;
+    }>;
+  };
+};
+
 type BulkMappingResponse = {
   data: MappingRow[];
   requested: number;
@@ -1896,7 +1906,7 @@ export default function ShoppingAutoPricePage() {
   ).trim();
   const optionLaborRuleProductNo = String(requestedEditorProductNo || resolvedEditorProductNo || canonicalEditorProductNo || "").trim();
   const optionEntries = useMemo(() => {
-    return buildMappingOptionEntries({
+    const baseEntries = buildMappingOptionEntries({
       productOptions: (editorPreview?.options ?? []).map((option) => ({
         option_name: option.option_name,
         option_value: (option.option_value ?? []).map((value) => ({ option_text: value?.option_text })),
@@ -1910,7 +1920,17 @@ export default function ShoppingAutoPricePage() {
       axisIndex: entry.axis_index,
       entryKey: entry.entry_key,
     }));
-  }, [editorPreview]);
+    const existingKeys = new Set(baseEntries.map((entry) => entry.entryKey));
+    const syntheticEntries = canonicalOptionRows
+      .filter((row) => row.entry_key && !existingKeys.has(row.entry_key))
+      .map((row) => ({
+        optionName: row.option_name,
+        optionValue: row.option_value,
+        axisIndex: row.axis_index,
+        entryKey: row.entry_key,
+      }));
+    return [...baseEntries, ...syntheticEntries];
+  }, [canonicalOptionRows, editorPreview]);
   const savedOptionCategoryByName = useMemo(() => {
     const next = new Map<string, OptionCategoryKey>();
     for (const row of savedOptionCategories) {
@@ -1979,6 +1999,38 @@ export default function ShoppingAutoPricePage() {
     () => (optionLaborRulesQuery.data?.data ?? []).filter((row) => row.is_active !== false),
     [optionLaborRulesQuery.data?.data],
   );
+  const optionLaborRulePoolsQuery = useQuery({
+    queryKey: ["auto-price-option-labor-rule-pools", effectiveChannelId],
+    enabled: Boolean(effectiveChannelId),
+    queryFn: () =>
+      shopApiGet<OptionLaborRulePoolsResponse>(
+        `/api/option-labor-rule-pools?channel_id=${encodeURIComponent(effectiveChannelId)}`,
+      ),
+  });
+  const pooledDecorChoices = useMemo(() => {
+    return (optionLaborRulePoolsQuery.data?.data?.decoration_masters ?? [])
+      .map((master) => ({
+        value: String(master.model_name ?? master.master_item_id).trim(),
+        label: String(master.model_name ?? master.master_item_id).trim(),
+        decoration_master_id: master.master_item_id,
+        decoration_model_name: String(master.model_name ?? master.master_item_id).trim(),
+        total_labor_cost_krw: Math.round(Number(master.total_labor_cost_krw ?? 0)),
+        total_labor_sell_krw: Math.round(Number((master as { total_labor_sell_krw?: number | null }).total_labor_sell_krw ?? 0)),
+      }))
+      .filter((choice) => choice.value && choice.decoration_master_id);
+  }, [optionLaborRulePoolsQuery.data?.data?.decoration_masters]);
+  const pooledDecorCostByMasterId = useMemo(() => {
+    const next = new Map<string, { totalLaborCostKrw: number; totalLaborSellKrw: number }>();
+    for (const choice of pooledDecorChoices) {
+      const masterId = String(choice.decoration_master_id ?? "").trim();
+      if (!masterId || next.has(masterId)) continue;
+      next.set(masterId, {
+        totalLaborCostKrw: Math.round(Number(choice.total_labor_cost_krw ?? 0)),
+        totalLaborSellKrw: Math.round(Number(choice.total_labor_sell_krw ?? 0)),
+      });
+    }
+    return next;
+  }, [pooledDecorChoices]);
   const sizeRuleMarketContext = useMemo(() => {
     const factors = variantLookupData?.size_market_context?.materialFactors;
     return {
@@ -2071,10 +2123,9 @@ export default function ShoppingAutoPricePage() {
     }
     return next;
   }, [optionLaborRuleRows]);
-  const allowedDecorChoices = useMemo(
-    () => loadedOptionAllowlist.decors.filter((choice) => String(choice.decoration_master_id ?? "").trim().length > 0),
-    [loadedOptionAllowlist.decors],
-  );
+  const allowedDecorChoices = useMemo(() => {
+    return loadedOptionAllowlist.decors.filter((choice) => String(choice.decoration_master_id ?? "").trim().length > 0);
+  }, [loadedOptionAllowlist.decors]);
   const decorChoiceByMasterId = useMemo(() => {
     const next = new Map<string, MappingOptionAllowlist["decors"][number]>();
     for (const choice of allowedDecorChoices) {
@@ -2179,12 +2230,17 @@ export default function ShoppingAutoPricePage() {
   }, [defaultOptionOtherReasonDrafts, optionEntries, optionOtherReasonDrafts]);
   const defaultOptionDecorSelectionDrafts = useMemo(() => {
     const next: StringMap = {};
+    const fallbackDecorMasterId = String(allowedDecorChoices[0]?.decoration_master_id ?? "").trim();
     for (const entry of optionEntries) {
       const canonicalRow = canonicalOptionRowByEntryKey.get(entry.entryKey);
-      next[entry.entryKey] = String(canonicalRow?.decor_master_item_id_selected ?? "").trim();
+      const categoryKey = resolvePreferredCategoryForOptionName(entry.optionName, canonicalRow?.category_key);
+      const currentValue = String(canonicalRow?.decor_master_item_id_selected ?? "").trim();
+      next[entry.entryKey] = categoryKey === "DECOR"
+        ? (currentValue || fallbackDecorMasterId)
+        : currentValue;
     }
     return next;
-  }, [canonicalOptionRowByEntryKey, optionEntries]);
+  }, [allowedDecorChoices, canonicalOptionRowByEntryKey, optionEntries]);
   const optionDecorSelectionDrafts =
     optionDecorSelectionDraftSlot.resetKey === variantDraftResetKey ? optionDecorSelectionDraftSlot.value : defaultOptionDecorSelectionDrafts;
   const setOptionDecorSelectionDrafts = (next: StringMap | ((current: StringMap) => StringMap)) => {
@@ -2238,7 +2294,13 @@ export default function ShoppingAutoPricePage() {
       } else if (categoryKey === "COLOR_PLATING" || categoryKey === "OTHER") {
         next[entry.entryKey] = hasChoiceValue(materialChoicePool, resolvedMaterialCode) ? resolvedMaterialCode : "";
       } else if (categoryKey === "DECOR") {
-        next[entry.entryKey] = String(canonicalRow?.decor_material_code_snapshot ?? "").trim();
+        next[entry.entryKey] = String(
+          canonicalRow?.decor_material_code_snapshot
+          ?? canonicalRow?.material_code_resolved
+          ?? resolvedMasterMaterialCode
+          ?? resolvedMaterialCode
+          ?? "",
+        ).trim();
       } else {
         next[entry.entryKey] = "";
       }
@@ -2438,7 +2500,9 @@ export default function ShoppingAutoPricePage() {
     setOptionDecorSelectionDrafts((prev) => {
       const next = { ...prev };
       for (const entry of targetEntries) {
-        next[entry.entryKey] = "";
+        next[entry.entryKey] = nextCategoryKey === "DECOR"
+          ? String(allowedDecorChoices[0]?.decoration_master_id ?? "").trim()
+          : "";
       }
       return next;
     });
@@ -2635,10 +2699,44 @@ export default function ShoppingAutoPricePage() {
         ? String(axis2DraftValue ?? (canonicalRow?.size_weight_g_selected == null ? "" : formatOptionSizeValue(canonicalRow.size_weight_g_selected))).trim()
         : (canonicalRow?.size_weight_g_selected == null ? "" : formatOptionSizeValue(canonicalRow.size_weight_g_selected));
       const selectedDecorMasterId = categoryKey === "DECOR"
-        ? String(effectiveOptionDecorSelectionByEntryKey.get(entry.entryKey) ?? canonicalRow?.decor_master_item_id_selected ?? "").trim()
+        ? String(
+          effectiveOptionDecorSelectionByEntryKey.get(entry.entryKey)
+          ?? canonicalRow?.decor_master_item_id_selected
+          ?? allowedDecorChoices[0]?.decoration_master_id
+          ?? "",
+        ).trim()
         : String(canonicalRow?.decor_master_item_id_selected ?? "").trim();
-      const decorExtraDeltaKrw = Math.round(Number(canonicalRow?.decor_extra_delta_krw ?? 0));
-      const decorFinalAmountKrw = Math.round(Number(canonicalRow?.decor_final_amount_krw ?? 0));
+      const selectedDecorChoice = selectedDecorMasterId
+        ? (decorChoiceByMasterId.get(selectedDecorMasterId) ?? null)
+        : null;
+      const selectedDecorRule = selectedDecorMasterId
+        ? (decorRuleByMasterId.get(selectedDecorMasterId) ?? null)
+        : null;
+      const pooledDecorCost = selectedDecorMasterId
+        ? (pooledDecorCostByMasterId.get(selectedDecorMasterId) ?? null)
+        : null;
+      const canonicalDecorBaseLaborRaw = Number(canonicalRow?.decor_total_labor_cost_snapshot ?? Number.NaN);
+      const canonicalDecorBaseLaborKrw = Number.isFinite(canonicalDecorBaseLaborRaw) && canonicalDecorBaseLaborRaw > 0
+        ? Math.round(canonicalDecorBaseLaborRaw)
+        : null;
+      const decorBaseLaborKrw = Math.round(Number(
+        selectedDecorRule?.base_labor_cost_krw
+        ?? canonicalDecorBaseLaborKrw
+        ?? selectedDecorChoice?.delta_krw
+        ?? pooledDecorCost?.totalLaborCostKrw
+        ?? 0,
+      ));
+      const decorExtraDeltaKrw = Math.round(Number(
+        selectedDecorRule?.additive_delta_krw
+        ?? canonicalRow?.decor_extra_delta_krw
+        ?? 0,
+      ));
+      const decorFinalAmountKrw = Math.round(Number(
+        (selectedDecorMasterId
+          ? (decorBaseLaborKrw + decorExtraDeltaKrw)
+          : canonicalRow?.decor_final_amount_krw)
+        ?? 0,
+      ));
       const otherReason = categoryKey === "OTHER"
         ? String(effectiveOptionOtherReasonByEntryKey.get(entry.entryKey) ?? canonicalRow?.other_reason ?? "").trim()
         : "";
@@ -2650,14 +2748,28 @@ export default function ShoppingAutoPricePage() {
       const axisColumns = [...rawAxisColumns];
       const materialText = String(canonicalRow?.material_label_resolved ?? canonicalRow?.material_code_resolved ?? "").trim();
       const colorText = selectedColorCode || String(canonicalRow?.color_code_selected ?? "").trim();
-      const decorMaterialText = String(canonicalRow?.decor_material_code_snapshot ?? "").trim();
-      const decorModelText = String(canonicalRow?.decor_model_name_selected ?? "").trim();
+      const decorMaterialText = String(selectedMaterialCode || canonicalRow?.decor_material_code_snapshot || materialText || "").trim();
+      const decorModelText = String(
+        selectedDecorChoice?.label
+        ?? selectedDecorRule?.decoration_model_name
+        ?? canonicalRow?.decor_model_name_selected
+        ?? "",
+      ).trim();
       const sizeWeightText = selectedSizeWeightText ? `${selectedSizeWeightText}g` : "";
       const decorReferenceText = [
         canonicalRow?.decor_weight_g_snapshot == null ? "" : `중량 ${Number(canonicalRow.decor_weight_g_snapshot)}g`,
-        canonicalRow?.decor_total_labor_cost_snapshot == null
+        (selectedDecorRule?.base_labor_cost_krw
+          ?? canonicalDecorBaseLaborKrw
+          ?? selectedDecorChoice?.delta_krw
+          ?? pooledDecorCost?.totalLaborCostKrw) == null
           ? ""
-          : `공임 ${Math.round(Number(canonicalRow.decor_total_labor_cost_snapshot))}원`,
+          : `공임 ${Math.round(Number(
+            selectedDecorRule?.base_labor_cost_krw
+            ?? canonicalDecorBaseLaborKrw
+            ?? selectedDecorChoice?.delta_krw
+            ?? pooledDecorCost?.totalLaborCostKrw
+            ?? 0,
+          ))}원`,
       ].filter(Boolean).join(" | ");
 
       if (categoryKey === "MATERIAL") {
@@ -2673,7 +2785,7 @@ export default function ShoppingAutoPricePage() {
         axisColumns[1] = sizeWeightText || entry.optionValue;
         axisColumns[2] = fmtKrw(canonicalRow?.resolved_delta_krw ?? draftSyncDelta);
       } else if (categoryKey === "DECOR") {
-        axisColumns[0] = decorMaterialText || "";
+        axisColumns[0] = decorMaterialText || selectedMaterialCode || materialText || "";
         axisColumns[1] = decorModelText || entry.optionValue;
         axisColumns[2] = decorReferenceText;
       } else if (categoryKey === "NOTICE") {
@@ -2700,6 +2812,8 @@ export default function ShoppingAutoPricePage() {
         ? 0
         : categoryKey === "SIZE"
           ? Math.round(Number(sizeResolvedDelta ?? 0))
+          : categoryKey === "DECOR"
+            ? decorFinalAmountKrw
           : Math.round(Number(canonicalRow?.resolved_delta_krw ?? draftSyncDelta));
       const syncDeltaKrw = categoryKey === "NOTICE"
         ? 0
@@ -2710,9 +2824,13 @@ export default function ShoppingAutoPricePage() {
             : draftSyncDelta;
       const legacyStatus = categoryKey === "SIZE"
         ? (sizeWarnings.length === 0 ? "VALID" : "UNRESOLVED")
+        : categoryKey === "DECOR"
+          ? (selectedDecorMasterId ? "VALID" : "UNRESOLVED")
         : (canonicalRow?.legacy_status ?? "VALID");
       const warnings = categoryKey === "SIZE"
         ? sizeWarnings
+        : categoryKey === "DECOR"
+          ? (selectedDecorMasterId ? [] : ["장식 마스터를 선택해야 합니다."])
         : (canonicalRow?.warnings ?? []);
       const sourceRuleEntryIds = categoryKey === "SIZE"
         ? (sizeResolvedDelta == null ? [] : (canonicalRow?.source_rule_entry_ids ?? []))
@@ -2740,6 +2858,9 @@ export default function ShoppingAutoPricePage() {
       };
     });
   }, [
+    allowedDecorChoices,
+    decorChoiceByMasterId,
+    decorRuleByMasterId,
     categoryOverrideByEntryKey,
     canonicalOptionRowByEntryKey,
     effectiveOptionAxis1ByEntryKey,
@@ -2751,6 +2872,7 @@ export default function ShoppingAutoPricePage() {
     editorMasterItemId,
     optionLaborRuleProductNo,
     optionLaborRuleRows,
+    pooledDecorCostByMasterId,
     resolvedMasterMaterialCode,
     sizeRuleMarketContext,
   ]);
@@ -2962,7 +3084,7 @@ export default function ShoppingAutoPricePage() {
     ? withResolvedChoice(loadedOptionAllowlist.colors, focusedDraft.option_color_code, shouldMarkFocusedChoiceAsLegacy, focusedDraft.option_color_code)
     : [];
   const focusedDecorChoices = focusedDraft
-    ? withResolvedChoice(loadedOptionAllowlist.decors, focusedDraft.option_decoration_code, shouldMarkFocusedChoiceAsLegacy, focusedDraft.option_decoration_code)
+    ? withResolvedChoice(allowedDecorChoices, focusedDraft.option_decoration_code, shouldMarkFocusedChoiceAsLegacy, focusedDraft.option_decoration_code)
     : [];
   const focusedSizeChoices = focusedDraft
     ? withResolvedChoice(
@@ -3352,6 +3474,64 @@ export default function ShoppingAutoPricePage() {
           })
         : { ok: true, data: [] as OptionCategoryRow[] };
 
+      const colorRuleTargets = new Map<string, {
+        materialCode: string;
+        colorCode: string;
+        additiveDeltaKrw: number;
+      }>();
+      for (const entry of optionEntries) {
+        const compactRow = compactOptionRowByEntryKey.get(entry.entryKey);
+        const categoryKey = compactRow?.categoryKey ?? effectiveCategoryByOptionName.get(entry.optionName) ?? guessCategoryByOptionName(entry.optionName);
+        if (categoryKey !== "COLOR_PLATING") continue;
+        const materialCode = String(compactRow?.selectedMaterialCode ?? "").trim();
+        const colorCode = String(compactRow?.selectedColorCode ?? "").trim();
+        if (!materialCode || !colorCode) continue;
+        const additiveDeltaKrw = Math.round(parseNumericInput(
+          optionSyncDeltaDrafts[entry.entryKey]
+          ?? defaultOptionSyncDeltaDrafts[entry.entryKey]
+          ?? String(compactRow?.syncDeltaKrw ?? 0),
+        ) ?? 0);
+        const key = `${materialCode}::${colorCode}`;
+        const existing = colorRuleTargets.get(key);
+        if (existing && existing.additiveDeltaKrw !== additiveDeltaKrw) {
+          throw new Error(`${entry.optionName} 색상 ${colorCode}의 금액이 서로 다르게 입력되어 저장할 수 없습니다`);
+        }
+        colorRuleTargets.set(key, { materialCode, colorCode, additiveDeltaKrw });
+      }
+
+      for (const target of colorRuleTargets.values()) {
+        const existingRule = colorRuleRows.find((row) =>
+          String(row.scope_material_code ?? "").trim() === target.materialCode
+          && String(row.color_code ?? "").trim() === target.colorCode,
+        );
+        try {
+          if (existingRule?.rule_id) {
+            await shopApiSend("/api/option-labor-rules", "PUT", {
+              rule_id: existingRule.rule_id,
+              additive_delta_krw: target.additiveDeltaKrw,
+              updated_by: "AUTO_PRICE_PAGE",
+            });
+            continue;
+          }
+          await shopApiSend("/api/option-labor-rules", "POST", {
+            channel_id: effectiveChannelId,
+            master_item_id: editorMasterItemId,
+            external_product_no: optionLaborRuleProductNo || externalProductNo,
+            category_key: "COLOR_PLATING",
+            scope_material_code: target.materialCode,
+            color_code: target.colorCode,
+            plating_enabled: String(target.colorCode).trim().startsWith("[도]"),
+            additive_delta_krw: target.additiveDeltaKrw,
+            base_labor_cost_krw: 0,
+            is_active: true,
+            note: null,
+          });
+        } catch {
+          // Cron recompute now reads COLOR_PLATING axis logs directly.
+          // Keep rule sync as best-effort so UI save is not blocked by legacy DB constraints.
+        }
+      }
+
       if (otherReasonRows.length > 0) {
         await shopApiSend<{ data: Array<{ policy_log_id: string }>; saved: number }>("/api/channel-product-option-mappings-v2-logs", "POST", {
           channel_id: effectiveChannelId,
@@ -3387,6 +3567,7 @@ export default function ShoppingAutoPricePage() {
       applyComputedMappingPreview();
       await Promise.all([
         qc.invalidateQueries({ queryKey: ["auto-price-variant-lookup", effectiveChannelId, editorMasterItemId, canonicalEditorProductNo] }),
+        qc.invalidateQueries({ queryKey: ["auto-price-option-labor-rules", effectiveChannelId, editorMasterItemId, optionLaborRuleProductNo] }),
         qc.invalidateQueries({ queryKey: ["pricing-snapshot-explain", effectiveChannelId, editorMasterItemId] }),
       ]);
       if (!args?.skipApply && editorPreview && !applyEditorMutation.isPending) {

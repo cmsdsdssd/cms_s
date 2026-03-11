@@ -6,7 +6,9 @@ import {
   resolveCanonicalExternalProductNo,
   validateMappingOptionSelection,
 } from "@/lib/shop/mapping-option-details";
+import { normalizeDecorationCode } from "@/lib/shop/option-labor-rules";
 import { resolveCurrentProductSyncProfileForWrite } from "@/lib/shop/current-product-sync-profile.js";
+import { validateActiveMappingInvariants } from "@/lib/shop/mapping-integrity";
 import { normalizePlatingComboCode } from "@/lib/shop/sync-rules";
 
 export const dynamic = 'force-dynamic';
@@ -115,7 +117,7 @@ export async function POST(request: Request) {
   const syncRuleSetId = typeof body.sync_rule_set_id === "string" ? body.sync_rule_set_id.trim() || null : null;
   const optionMaterialCode = typeof body.option_material_code === "string" ? normalizeMaterialCode(body.option_material_code) || null : null;
   const optionColorCode = typeof body.option_color_code === "string" ? normalizePlatingComboCode(body.option_color_code) || null : null;
-  const optionDecorationCode = typeof body.option_decoration_code === "string" ? body.option_decoration_code.trim().toUpperCase() || null : null;
+  const optionDecorationCode = typeof body.option_decoration_code === "string" ? normalizeDecorationCode(body.option_decoration_code) : null;
   const optionSizeValue =
     body.option_size_value === null || body.option_size_value === undefined || body.option_size_value === ""
       ? null
@@ -177,6 +179,23 @@ export async function POST(request: Request) {
   }
   if (optionPriceMode === "SYNC" && !syncRuleSetId) {
     return jsonError("sync_rule_set_id is required when option_price_mode is SYNC", 400);
+  }
+
+  const invariantCheck = await validateActiveMappingInvariants({
+    sb,
+    rows: [{
+      channel_id: channelId,
+      master_item_id: masterItemId,
+      external_product_no: externalProductNo,
+      external_variant_code: externalVariantCode,
+      is_active: true,
+    }],
+  });
+  if (!invariantCheck.ok) {
+    return jsonError(invariantCheck.message, 422, {
+      code: invariantCheck.code,
+      ...(invariantCheck.detail ?? {}),
+    });
   }
 
   const activeProductRes = await sb

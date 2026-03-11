@@ -101,6 +101,12 @@ type RulePayload = {
   decoration_model_name?: string | null;
   base_labor_cost_krw?: number;
   additive_delta_krw: number;
+  size_price_mode?: string | null;
+  formula_multiplier?: number | null;
+  formula_offset_krw?: number | null;
+  rounding_unit_krw?: number | null;
+  rounding_mode?: string | null;
+  fixed_delta_krw?: number | null;
   note?: string | null;
   is_active: boolean;
 };
@@ -741,12 +747,21 @@ export default function ShoppingRulesPage() {
         category_key: 'DECOR',
         scope_material_code: null,
         additional_weight_g: null,
+        additional_weight_min_g: null,
+        additional_weight_max_g: null,
         plating_enabled: null,
         color_code: null,
         decoration_master_id: selectedDecorMaster.master_item_id,
         decoration_model_name: selectedDecorMaster.model_name,
         base_labor_cost_krw: laborOf(selectedDecorMaster),
         additive_delta_krw: parseAmount(decorDraft.additiveKrw),
+        size_price_mode: null,
+        formula_multiplier: null,
+        formula_offset_krw: null,
+        rounding_unit_krw: null,
+        rounding_mode: null,
+        fixed_delta_krw: null,
+        note: null,
       },
       resetDecorDraft,
     );

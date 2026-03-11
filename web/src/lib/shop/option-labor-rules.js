@@ -66,6 +66,8 @@ export const centigramToWeightString = (centigram) => {
 };
 
 export const normalizeAdditionalWeightValue = (value) => {
+  if (value === null || value === undefined) return null;
+  if (typeof value === 'string' && value.trim() === '') return null;
   const centigram = normalizeAdditionalWeightCentigram(value);
   return centigram === null ? null : centigramToWeightString(centigram);
 };

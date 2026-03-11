@@ -11,12 +11,8 @@ import {
   loadCafe24Account,
 } from "@/lib/shop/cafe24";
 import { buildCanonicalBaseProductByMaster } from "@/lib/shop/canonical-mapping";
-import { buildCurrentProductSyncProfileByMaster } from "@/lib/shop/current-product-sync-profile";
 import { restoreVariantTargetFromRawDelta } from "@/lib/shop/price-sync-guards";
-import {
-  normalizePriceSyncThresholdProfile,
-  resolvePriceSyncThresholdProfilePolicy,
-} from "@/lib/shop/price-sync-policy.js";
+import { loadPublishedBaseStateByMasterIds, loadPublishedPriceStateByChannelProducts } from "@/lib/shop/publish-price-state";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -43,20 +39,6 @@ const computeThresholdKrw = (
     ? Math.abs(Math.round(Number(baselineKrw)))
     : 0;
   return Math.max(normalizedAbsolute, Math.round(normalizedBaseline * normalizedRate));
-};
-
-const isProductWriteAcceptedButVerifyPending = (raw: unknown, expectedPrice: number): boolean => {
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return false;
-  const payload = raw as Record<string, unknown>;
-  if (payload.verify_pending !== true) return false;
-  const verifyExpected = Math.round(Number(payload.verify_expected ?? Number.NaN));
-  if (!Number.isFinite(verifyExpected) || verifyExpected !== Math.round(expectedPrice)) return false;
-  const response = payload.response;
-  if (!response || typeof response !== "object" || Array.isArray(response)) return false;
-  const product = (response as Record<string, unknown>).product;
-  if (!product || typeof product !== "object" || Array.isArray(product)) return false;
-  const responsePrice = Math.round(Number((product as Record<string, unknown>).price ?? Number.NaN));
-  return Number.isFinite(responsePrice) && responsePrice === Math.round(expectedPrice);
 };
 
 async function verifyAppliedPrice(
@@ -184,47 +166,6 @@ export async function POST(request: Request) {
     return jsonError(e instanceof Error ? e.message : "카페24 토큰 확인 실패", 422);
   }
 
-  const thresholdDefaults = {
-    autoSyncForceFull: false,
-    autoSyncMinChangeKrw: 5000,
-    autoSyncMinChangeRate: 0.02,
-    autoSyncThresholdProfile: "GENERAL",
-    optionSyncForceFull: false,
-    optionSyncMinChangeKrw: 1000,
-    optionSyncMinChangeRate: 0.01,
-  };
-
-  const thresholdPolicyRes = await sb
-    .from("pricing_policy")
-    .select("auto_sync_force_full, auto_sync_min_change_krw, auto_sync_min_change_rate, auto_sync_threshold_profile, option_sync_force_full, option_sync_min_change_krw, option_sync_min_change_rate")
-    .eq("channel_id", channelId)
-    .eq("is_active", true)
-    .order("updated_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  if (thresholdPolicyRes.error) return jsonError(thresholdPolicyRes.error.message ?? "동기화 임계치 정책 조회 실패", 500);
-
-  const thresholdPolicy = {
-    autoSyncForceFull: thresholdPolicyRes.data?.auto_sync_force_full === true,
-    autoSyncMinChangeKrw: Number.isFinite(Number(thresholdPolicyRes.data?.auto_sync_min_change_krw))
-      ? Math.max(0, Math.round(Number(thresholdPolicyRes.data?.auto_sync_min_change_krw)))
-      : thresholdDefaults.autoSyncMinChangeKrw,
-    autoSyncMinChangeRate: Number.isFinite(Number(thresholdPolicyRes.data?.auto_sync_min_change_rate))
-      ? Math.max(0, Number(thresholdPolicyRes.data?.auto_sync_min_change_rate))
-      : thresholdDefaults.autoSyncMinChangeRate,
-    autoSyncThresholdProfile: normalizePriceSyncThresholdProfile(
-      thresholdPolicyRes.data?.auto_sync_threshold_profile,
-      thresholdDefaults.autoSyncThresholdProfile as "GENERAL",
-    ),
-    optionSyncForceFull: thresholdPolicyRes.data?.option_sync_force_full === true,
-    optionSyncMinChangeKrw: Number.isFinite(Number(thresholdPolicyRes.data?.option_sync_min_change_krw))
-      ? Math.max(0, Math.round(Number(thresholdPolicyRes.data?.option_sync_min_change_krw)))
-      : thresholdDefaults.optionSyncMinChangeKrw,
-    optionSyncMinChangeRate: Number.isFinite(Number(thresholdPolicyRes.data?.option_sync_min_change_rate))
-      ? Math.max(0, Number(thresholdPolicyRes.data?.option_sync_min_change_rate))
-      : thresholdDefaults.optionSyncMinChangeRate,
-  };
-
   const listVariantsWithRefresh = async (externalProductNo: string) => {
     let variants = await cafe24ListProductVariants(account, accessToken, externalProductNo);
     if (!variants.ok && variants.status === 401) {
@@ -248,7 +189,7 @@ export async function POST(request: Request) {
     final_target_price_krw: number | null;
     current_channel_price_krw: number | null;
   }> = [];
-  if (channelProductIds && channelProductIds.length > 0) {
+  if (Array.isArray(channelProductIds) && channelProductIds.length > 0) {
     for (const idChunk of chunkArray(channelProductIds, IN_QUERY_CHUNK_SIZE)) {
       if (idChunk.length === 0) continue;
       const initialRes = await sb
@@ -282,413 +223,66 @@ export async function POST(request: Request) {
   let pinnedTargetByLogical = new Map<string, number>();
   let pinnedRawByChannelProduct = new Map<string, number>();
   let pinnedRawByLogical = new Map<string, number>();
+  let pinnedAdditionalByChannelProduct = new Map<string, number>();
+  let pinnedAdditionalByLogical = new Map<string, number>();
   const pinnedBaseTargetByMaster = new Map<string, number>();
   const pinnedBaseTargetByProduct = new Map<string, number>();
   const pinnedBaseRawTargetByMaster = new Map<string, number>();
   const pinnedBaseRawTargetByProduct = new Map<string, number>();
   if (pinnedComputeRequestId) {
-    const pinnedRows: Array<{
-      channel_product_id: string | null;
-      master_item_id: string | null;
-      final_target_price_krw: number | null;
-      target_price_raw_krw: number | null;
-    }> = [];
-    if (channelProductIds && channelProductIds.length > 0) {
-      for (const idChunk of chunkArray(channelProductIds, IN_QUERY_CHUNK_SIZE)) {
-        if (idChunk.length === 0) continue;
-        const pinnedRes = await sb
-          .from("pricing_snapshot")
-          .select("channel_product_id, master_item_id, final_target_price_krw, target_price_raw_krw")
-          .eq("channel_id", channelId)
-          .eq("compute_request_id", pinnedComputeRequestId)
-          .in("channel_product_id", idChunk);
-        if (pinnedRes.error) return jsonError(pinnedRes.error.message ?? "고정 스냅샷 조회 실패", 500);
-        pinnedRows.push(...(pinnedRes.data ?? []));
-      }
-    } else {
-      const pinnedRes = await sb
-        .from("pricing_snapshot")
-        .select("channel_product_id, master_item_id, final_target_price_krw, target_price_raw_krw")
-        .eq("channel_id", channelId)
-        .eq("compute_request_id", pinnedComputeRequestId);
-      if (pinnedRes.error) return jsonError(pinnedRes.error.message ?? "고정 스냅샷 조회 실패", 500);
-      pinnedRows.push(...(pinnedRes.data ?? []));
-    }
-    const pinnedPairs: Array<[string, number]> = pinnedRows
-      .map((r) => [String(r.channel_product_id ?? "").trim(), Number(r.final_target_price_krw)] as [string, number])
-      .filter(([id, target]) => id.length > 0 && Number.isFinite(target))
-      .map(([id, target]) => [id, Math.round(target)] as [string, number]);
-    pinnedTargetByChannelProduct = new Map<string, number>(pinnedPairs);
-    const pinnedRawPairs: Array<[string, number]> = pinnedRows
-      .map((r) => [String(r.channel_product_id ?? "").trim(), Number(r.target_price_raw_krw)] as [string, number])
-      .filter(([id, targetRaw]) => id.length > 0 && Number.isFinite(targetRaw));
-    pinnedRawByChannelProduct = new Map<string, number>(pinnedRawPairs);
-
-    const pinnedChannelProductIds = Array.from(
-      new Set(
-        pinnedRows
-          .map((r) => String(r.channel_product_id ?? "").trim())
-          .filter(Boolean),
-      ),
-    );
-    const variantCodeByChannelProduct = new Map<string, string>();
-    for (const idChunk of chunkArray(pinnedChannelProductIds, IN_QUERY_CHUNK_SIZE)) {
-      if (idChunk.length === 0) continue;
-      const mapRes = await sb
-        .from("sales_channel_product")
-        .select("channel_product_id, external_variant_code, external_product_no")
-        .in("channel_product_id", idChunk);
-      if (mapRes.error) return jsonError(mapRes.error.message ?? "고정 스냅샷 매핑 조회 실패", 500);
-      for (const row of mapRes.data ?? []) {
-        const channelProductId = String(row.channel_product_id ?? "").trim();
-        if (!channelProductId) continue;
-        variantCodeByChannelProduct.set(channelProductId, String(row.external_variant_code ?? "").trim());
-      }
-    }
-
-    const pinnedLogicalPairs: Array<[string, number]> = pinnedRows
-      .map((r) => {
-        const masterId = String(r.master_item_id ?? "").trim();
-        const channelProductId = String(r.channel_product_id ?? "").trim();
-        const variantCode = variantCodeByChannelProduct.get(channelProductId) ?? "";
-        const target = Number(r.final_target_price_krw);
-        if (!masterId || !Number.isFinite(target)) return null;
-        return [logicalTargetKey(masterId, variantCode), Math.round(target)] as [string, number];
-      })
-      .filter((pair): pair is [string, number] => pair !== null);
-    pinnedTargetByLogical = new Map<string, number>(pinnedLogicalPairs);
-    const pinnedLogicalRawPairs: Array<[string, number]> = pinnedRows
-      .map((r) => {
-        const masterId = String(r.master_item_id ?? "").trim();
-        const channelProductId = String(r.channel_product_id ?? "").trim();
-        const variantCode = variantCodeByChannelProduct.get(channelProductId) ?? "";
-        const targetRaw = Number(r.target_price_raw_krw);
-        if (!masterId || !Number.isFinite(targetRaw)) return null;
-        return [logicalTargetKey(masterId, variantCode), targetRaw] as [string, number];
-      })
-      .filter((pair): pair is [string, number] => pair !== null);
-    pinnedRawByLogical = new Map<string, number>(pinnedLogicalRawPairs);
-    const pinnedMasterIds = Array.from(new Set(
-      pinnedRows
-        .map((r) => String(r.master_item_id ?? "").trim())
-        .filter(Boolean),
-    ));
-    const pinnedBaseRows: Array<{
-      channel_product_id: string | null;
-      master_item_id: string | null;
-      final_target_price_krw: number | null;
-      target_price_raw_krw: number | null;
-    }> = [];
-    for (const masterChunk of chunkArray(pinnedMasterIds, IN_QUERY_CHUNK_SIZE)) {
-      if (masterChunk.length === 0) continue;
-      const pinnedBaseRes = await sb
-        .from("pricing_snapshot")
-        .select("channel_product_id, master_item_id, final_target_price_krw, target_price_raw_krw")
-        .eq("channel_id", channelId)
-        .eq("compute_request_id", pinnedComputeRequestId)
-        .in("master_item_id", masterChunk);
-      if (pinnedBaseRes.error) return jsonError(pinnedBaseRes.error.message ?? "고정 기준 스냅샷 조회 실패", 500);
-      pinnedBaseRows.push(...(pinnedBaseRes.data ?? []));
-    }
-    const pinnedBaseChannelProductIds = Array.from(new Set(
-      pinnedBaseRows
-        .map((r) => String(r.channel_product_id ?? "").trim())
-        .filter(Boolean),
-    ));
-    const pinnedBaseVariantCodeByChannelProduct = new Map<string, string>();
-    const pinnedBaseProductNoByChannelProduct = new Map<string, string>();
-    for (const idChunk of chunkArray(pinnedBaseChannelProductIds, IN_QUERY_CHUNK_SIZE)) {
-      if (idChunk.length === 0) continue;
-      const mapRes = await sb
-        .from("sales_channel_product")
-        .select("channel_product_id, external_variant_code, external_product_no")
-        .in("channel_product_id", idChunk);
-      if (mapRes.error) return jsonError(mapRes.error.message ?? "고정 기준 스냅샷 매핑 조회 실패", 500);
-      for (const row of mapRes.data ?? []) {
-        const channelProductId = String(row.channel_product_id ?? "").trim();
-        if (!channelProductId) continue;
-        pinnedBaseVariantCodeByChannelProduct.set(channelProductId, String(row.external_variant_code ?? "").trim());
-        pinnedBaseProductNoByChannelProduct.set(channelProductId, String(row.external_product_no ?? "").trim());
-      }
-    }
-    for (const row of pinnedBaseRows) {
-      const masterId = String(row.master_item_id ?? "").trim();
-      const channelProductId = String(row.channel_product_id ?? "").trim();
-      const target = Number(row.final_target_price_krw);
-      const targetRaw = Number(row.target_price_raw_krw);
-      if (!masterId) continue;
-      const variantCode = pinnedBaseVariantCodeByChannelProduct.get(channelProductId) ?? "";
-      const productNo = pinnedBaseProductNoByChannelProduct.get(channelProductId) ?? "";
-      if (variantCode) continue;
-      if (Number.isFinite(target) && !pinnedBaseTargetByMaster.has(masterId)) {
-        pinnedBaseTargetByMaster.set(masterId, Math.round(target));
-      }
-      if (productNo && Number.isFinite(target) && !pinnedBaseTargetByProduct.has(baseTargetKey(masterId, productNo))) {
-        pinnedBaseTargetByProduct.set(baseTargetKey(masterId, productNo), Math.round(target));
-      }
-      if (Number.isFinite(targetRaw) && !pinnedBaseRawTargetByMaster.has(masterId)) {
-        pinnedBaseRawTargetByMaster.set(masterId, targetRaw);
-      }
-      if (productNo && Number.isFinite(targetRaw) && !pinnedBaseRawTargetByProduct.has(baseTargetKey(masterId, productNo))) {
-        pinnedBaseRawTargetByProduct.set(baseTargetKey(masterId, productNo), targetRaw);
+    const usePublishedPinnedState = Array.isArray(channelProductIds) && channelProductIds.length > 0;
+    if (usePublishedPinnedState) {
+      const publishedRes = await loadPublishedPriceStateByChannelProducts({
+        sb,
+        channelId,
+        channelProductIds,
+        publishVersions: [pinnedComputeRequestId],
+      });
+      if (publishedRes.available && publishedRes.rowsByChannelProduct.size > 0) {
+        const publishedRows = Array.from(publishedRes.rowsByChannelProduct.values());
+        pinnedTargetByChannelProduct = new Map(publishedRows.map((row) => [row.channelProductId, row.publishedTotalPriceKrw] as [string, number]));
+        pinnedRawByChannelProduct = new Map(
+          publishedRows
+            .filter((row) => Number.isFinite(Number(row.targetPriceRawKrw ?? Number.NaN)))
+            .map((row) => [row.channelProductId, Math.round(Number(row.targetPriceRawKrw))] as [string, number]),
+        );
+        pinnedTargetByLogical = new Map(publishedRows.map((row) => [logicalTargetKey(row.masterItemId, row.externalVariantCode), row.publishedTotalPriceKrw] as [string, number]));
+        pinnedRawByLogical = new Map(
+          publishedRows
+            .filter((row) => Number.isFinite(Number(row.targetPriceRawKrw ?? Number.NaN)))
+            .map((row) => [logicalTargetKey(row.masterItemId, row.externalVariantCode), Math.round(Number(row.targetPriceRawKrw))] as [string, number]),
+        );
+        pinnedAdditionalByChannelProduct = new Map(publishedRows.map((row) => [row.channelProductId, row.publishedAdditionalAmountKrw] as [string, number]));
+        pinnedAdditionalByLogical = new Map(publishedRows.map((row) => [logicalTargetKey(row.masterItemId, row.externalVariantCode), row.publishedAdditionalAmountKrw] as [string, number]));
+        const publishedBaseRes = await loadPublishedBaseStateByMasterIds({
+          sb,
+          channelId,
+          masterItemIds: Array.from(new Set(publishedRows.map((row) => row.masterItemId))),
+          publishVersion: pinnedComputeRequestId,
+        });
+        if (publishedBaseRes.available) {
+          for (const row of publishedBaseRes.rows) {
+            if (!pinnedBaseTargetByMaster.has(row.masterItemId)) {
+              pinnedBaseTargetByMaster.set(row.masterItemId, row.publishedBasePriceKrw);
+            }
+            if (!pinnedBaseTargetByProduct.has(baseTargetKey(row.masterItemId, row.externalProductNo))) {
+              pinnedBaseTargetByProduct.set(baseTargetKey(row.masterItemId, row.externalProductNo), row.publishedBasePriceKrw);
+            }
+            if (Number.isFinite(Number(row.targetPriceRawKrw ?? Number.NaN)) && !pinnedBaseRawTargetByMaster.has(row.masterItemId)) {
+              pinnedBaseRawTargetByMaster.set(row.masterItemId, Math.round(Number(row.targetPriceRawKrw)));
+            }
+            if (Number.isFinite(Number(row.targetPriceRawKrw ?? Number.NaN)) && !pinnedBaseRawTargetByProduct.has(baseTargetKey(row.masterItemId, row.externalProductNo))) {
+              pinnedBaseRawTargetByProduct.set(baseTargetKey(row.masterItemId, row.externalProductNo), Math.round(Number(row.targetPriceRawKrw)));
+            }
+          }
+        }
       }
     }
     if (pinnedTargetByChannelProduct.size === 0) {
-      return jsonError("해당 compute_request_id로 사용할 대상 스냅샷이 없습니다", 422);
-    }
-  }
-
-  const baseRows = initialCandidates.filter((r) => String(r.external_variant_code ?? "").trim().length === 0);
-  if (baseRows.length > 0) {
-    const externalProductNos = Array.from(new Set(baseRows.map((r) => String(r.external_product_no ?? "").trim()).filter(Boolean)));
-    const baseChannelProductIds = Array.from(new Set(baseRows.map((r) => String(r.channel_product_id ?? "").trim()).filter(Boolean)));
-    const existingMapRows: Array<{ external_product_no: string | null; external_variant_code: string | null }> = [];
-    for (const productChunk of chunkArray(externalProductNos, IN_QUERY_CHUNK_SIZE)) {
-      if (productChunk.length === 0) continue;
-      const existingMapRes = await sb
-        .from("sales_channel_product")
-        .select("external_product_no, external_variant_code")
-        .eq("channel_id", channelId)
-        .eq("is_active", true)
-        .in("external_product_no", productChunk);
-      if (existingMapRes.error) return jsonError(existingMapRes.error.message ?? "기존 매핑 조회 실패", 500);
-      existingMapRows.push(...(existingMapRes.data ?? []));
-    }
-
-    const baseDetailRows: Array<{
-      channel_product_id: string | null;
-      master_item_id: string | null;
-      external_product_no: string | null;
-      sync_rule_set_id: string | null;
-      option_material_code: string | null;
-      option_color_code: string | null;
-      option_decoration_code: string | null;
-      option_size_value: string | null;
-      material_multiplier_override: number | null;
-      size_weight_delta_g: number | null;
-      option_price_delta_krw: number | null;
-      option_price_mode: string | null;
-      option_manual_target_krw: number | null;
-      include_master_plating_labor: boolean | null;
-      sync_rule_material_enabled: boolean | null;
-      sync_rule_weight_enabled: boolean | null;
-      sync_rule_plating_enabled: boolean | null;
-      sync_rule_decoration_enabled: boolean | null;
-      sync_rule_margin_rounding_enabled: boolean | null;
-    }> = [];
-    for (const baseIdChunk of chunkArray(baseChannelProductIds, IN_QUERY_CHUNK_SIZE)) {
-      if (baseIdChunk.length === 0) continue;
-      const baseDetailRes = await sb
-        .from("sales_channel_product")
-        .select("channel_product_id, master_item_id, external_product_no, sync_rule_set_id, option_material_code, option_color_code, option_decoration_code, option_size_value, material_multiplier_override, size_weight_delta_g, option_price_delta_krw, option_price_mode, option_manual_target_krw, include_master_plating_labor, sync_rule_material_enabled, sync_rule_weight_enabled, sync_rule_plating_enabled, sync_rule_decoration_enabled, sync_rule_margin_rounding_enabled")
-        .eq("channel_id", channelId)
-        .eq("is_active", true)
-        .in("channel_product_id", baseIdChunk);
-      if (baseDetailRes.error) return jsonError(baseDetailRes.error.message ?? "기준 매핑 조회 실패", 500);
-      baseDetailRows.push(...(baseDetailRes.data ?? []));
-    }
-
-    const baseMasterIds = Array.from(new Set(
-      baseDetailRows
-        .map((row) => String(row.master_item_id ?? "").trim())
-        .filter(Boolean),
-    ));
-    const siblingRuleSetRows: Array<{
-      master_item_id: string | null;
-      option_price_mode: string | null;
-      sync_rule_set_id: string | null;
-      is_active: boolean | null;
-    }> = [];
-    if (baseMasterIds.length > 0) {
-      for (const masterChunk of chunkArray(baseMasterIds, IN_QUERY_CHUNK_SIZE)) {
-        if (masterChunk.length === 0) continue;
-        const siblingRuleSetRes = await sb
-          .from("sales_channel_product")
-          .select("master_item_id, option_price_mode, sync_rule_set_id, is_active")
-          .eq("channel_id", channelId)
-          .in("master_item_id", masterChunk)
-          .eq("is_active", true);
-        if (siblingRuleSetRes.error) return jsonError(siblingRuleSetRes.error.message ?? "룰셋 보정 조회 실패", 500);
-        siblingRuleSetRows.push(...(siblingRuleSetRes.data ?? []));
-      }
-    }
-
-    const existingVariantByProduct = new Map<string, Set<string>>();
-    for (const row of existingMapRows) {
-      const p = String(row.external_product_no ?? "").trim();
-      const v = String(row.external_variant_code ?? "").trim();
-      if (!p || !v) continue;
-      const set = existingVariantByProduct.get(p) ?? new Set<string>();
-      set.add(v);
-      existingVariantByProduct.set(p, set);
-    }
-
-    const baseDetailByChannelProduct = new Map(
-      baseDetailRows.map((r) => [String(r.channel_product_id), r]),
-    );
-
-    const canonicalBaseProductByMaster = buildCanonicalBaseProductByMaster(baseRows);
-
-    const syncRuleSetCandidatesByMaster = new Map<string, Set<string>>();
-    for (const row of siblingRuleSetRows) {
-      const masterId = String(row.master_item_id ?? "").trim();
-      const optionMode = String(row.option_price_mode ?? "SYNC").trim().toUpperCase();
-      const ruleSetId = String(row.sync_rule_set_id ?? "").trim();
-      if (!masterId || optionMode !== "SYNC" || !ruleSetId) continue;
-      const set = syncRuleSetCandidatesByMaster.get(masterId) ?? new Set<string>();
-      set.add(ruleSetId);
-      syncRuleSetCandidatesByMaster.set(masterId, set);
-    }
-
-    for (const baseRow of baseRows) {
-      const externalProductNo = String(baseRow.external_product_no ?? "").trim();
-      if (!externalProductNo) continue;
-
-      const existingSet = existingVariantByProduct.get(externalProductNo) ?? new Set<string>();
-      if (existingSet.size > 0) continue;
-
-      const baseSnapshot = await getBaseSnapshot(externalProductNo);
-      if (!baseSnapshot.ok || !hasOptionProduct(baseSnapshot.raw)) continue;
-
-      const variantsRes = await listVariantsWithRefresh(externalProductNo);
-      if (!variantsRes.ok || variantsRes.variants.length === 0) continue;
-
-      const baseDetail = baseDetailByChannelProduct.get(String(baseRow.channel_product_id));
-      if (!baseDetail?.master_item_id) continue;
-      const masterId = String(baseDetail.master_item_id ?? "").trim();
-      const canonicalBaseProductNo = canonicalBaseProductByMaster.get(masterId) ?? "";
-      if (canonicalBaseProductNo && externalProductNo !== canonicalBaseProductNo) continue;
-      const baseOptionMode = String(baseDetail.option_price_mode ?? "SYNC").trim().toUpperCase() === "MANUAL" ? "MANUAL" : "SYNC";
-      let resolvedRuleSetId = String(baseDetail.sync_rule_set_id ?? "").trim();
-      if (baseOptionMode === "SYNC" && !resolvedRuleSetId) {
-        const candidates = syncRuleSetCandidatesByMaster.get(masterId);
-        if (candidates && candidates.size === 1) {
-          resolvedRuleSetId = Array.from(candidates)[0] ?? "";
-        }
-      }
-      if (baseOptionMode === "SYNC" && !resolvedRuleSetId) {
-        return jsonError("SYNC 모드 자동 옵션 매핑에 sync_rule_set_id가 필요합니다", 422, {
-          code: "SOT_SYNC_RULESET_REQUIRED",
-          channel_id: channelId,
-          master_item_id: masterId,
-          external_product_no: externalProductNo,
-        });
-      }
-
-      const variantCodes = Array.from(new Set(
-        variantsRes.variants.map((v) => String(v.variantCode ?? "").trim()).filter(Boolean),
-      ));
-      if (variantCodes.length === 0) continue;
-
-      const preConflictRes = await sb
-        .from("sales_channel_product")
-        .select("external_product_no")
-        .eq("channel_id", channelId)
-        .eq("master_item_id", masterId)
-        .eq("is_active", true)
-        .in("external_variant_code", variantCodes)
-        .not("external_product_no", "is", null)
-        .neq("external_product_no", externalProductNo);
-      if (preConflictRes.error) {
-        return jsonError(preConflictRes.error.message ?? "옵션 자동 매핑 사전 충돌 조회 실패", 500);
-      }
-
-      const conflictingProductNos = Array.from(new Set(
-        (preConflictRes.data ?? [])
-          .map((row) => String(row.external_product_no ?? "").trim())
-          .filter(Boolean),
-      ));
-
-      if (conflictingProductNos.length > 0) {
-        const aliasHistoryRes = await sb
-          .from("sales_channel_product_alias_history")
-          .insert(conflictingProductNos.map((productNo) => ({
-            channel_id: channelId,
-            canonical_channel_product_id: String(baseRow.channel_product_id ?? "").trim() || null,
-            master_item_id: masterId,
-            canonical_external_product_no: externalProductNo,
-            alias_external_product_no: productNo,
-            external_variant_code: "",
-            reason: "AUTO_PUSH_CANONICALIZATION",
-          })));
-        if (aliasHistoryRes.error) {
-          return jsonError(aliasHistoryRes.error.message ?? "별칭 이력 저장 실패", 500);
-        }
-      }
-
-      const deactivateRes = await sb
-        .from("sales_channel_product")
-        .update({ is_active: false })
-        .eq("channel_id", channelId)
-        .eq("master_item_id", masterId)
-        .not("external_product_no", "is", null)
-        .neq("external_product_no", externalProductNo)
-        .in("external_variant_code", variantCodes)
-        .eq("is_active", true);
-      if (deactivateRes.error) {
-        return jsonError(deactivateRes.error.message ?? "옵션 자동 매핑 비활성화 실패", 500, {
-          code: "DEACTIVATE_CONFLICTING_VARIANTS_FAILED",
-          channel_id: channelId,
-          master_item_id: masterId,
-          external_product_no: externalProductNo,
-          variant_codes: variantCodes,
-        });
-      }
-
-      const postConflictRes = await sb
-        .from("sales_channel_product")
-        .select("channel_product_id, external_product_no, external_variant_code")
-        .eq("channel_id", channelId)
-        .eq("master_item_id", masterId)
-        .eq("is_active", true)
-        .in("external_variant_code", variantCodes)
-        .not("external_product_no", "is", null)
-        .neq("external_product_no", externalProductNo);
-      if (postConflictRes.error) {
-        return jsonError(postConflictRes.error.message ?? "옵션 자동 매핑 잔여 충돌 조회 실패", 500);
-      }
-
-      const postConflicts = postConflictRes.data ?? [];
-      if (postConflicts.length > 0) {
-        return jsonError("옵션 자동 매핑 충돌: 동일 master+variant가 다른 상품번호에 이미 활성화되어 있습니다", 409, {
-          code: "ACTIVE_VARIANT_MAPPING_CONFLICT",
-          channel_id: channelId,
-          master_item_id: masterId,
-          target_external_product_no: externalProductNo,
-          variant_codes: variantCodes,
-          conflicts: postConflicts.slice(0, 50),
-        });
-      }
-
-      const upsertRows = variantCodes.map((variantCode) => ({
-        channel_id: channelId,
-        master_item_id: masterId,
-        external_product_no: externalProductNo,
-        external_variant_code: variantCode,
-        sync_rule_set_id: resolvedRuleSetId || null,
-        option_material_code: baseDetail.option_material_code ?? null,
-        option_color_code: baseDetail.option_color_code ?? null,
-        option_decoration_code: baseDetail.option_decoration_code ?? null,
-        option_size_value: baseDetail.option_size_value ?? null,
-        material_multiplier_override: baseDetail.material_multiplier_override ?? null,
-        size_weight_delta_g: baseDetail.size_weight_delta_g ?? null,
-        option_price_delta_krw: baseDetail.option_price_delta_krw ?? null,
-        option_price_mode: baseOptionMode,
-        option_manual_target_krw: baseDetail.option_manual_target_krw ?? null,
-        include_master_plating_labor: baseDetail.include_master_plating_labor ?? true,
-        sync_rule_material_enabled: baseDetail.sync_rule_material_enabled ?? true,
-        sync_rule_weight_enabled: baseDetail.sync_rule_weight_enabled ?? true,
-        sync_rule_plating_enabled: baseDetail.sync_rule_plating_enabled ?? true,
-        sync_rule_decoration_enabled: baseDetail.sync_rule_decoration_enabled ?? true,
-        sync_rule_margin_rounding_enabled: baseDetail.sync_rule_margin_rounding_enabled ?? true,
-        mapping_source: "AUTO",
-        is_active: true,
-      }));
-
-      const upsertRes = await sb
-        .from("sales_channel_product")
-        .upsert(upsertRows, { onConflict: "channel_id,external_product_no,external_variant_code" });
-      if (upsertRes.error) return jsonError(upsertRes.error.message ?? "옵션 자동 매핑 실패", 500);
+      return jsonError("publish rows are required for deterministic push", 422, {
+        code: "PUBLISHED_PRICE_ROWS_REQUIRED",
+        publish_version: pinnedComputeRequestId,
+      });
     }
   }
 
@@ -703,7 +297,7 @@ export async function POST(request: Request) {
     current_channel_price_krw: number | null;
   }> = [];
 
-  if (channelProductIds && channelProductIds.length > 0) {
+  if (Array.isArray(channelProductIds) && channelProductIds.length > 0) {
     const targetMasterIds = Array.from(new Set(
       initialCandidates.map((r) => String(r.master_item_id ?? "").trim()).filter(Boolean),
     ));
@@ -761,7 +355,7 @@ export async function POST(request: Request) {
     const master = String(row.master_item_id ?? "").trim();
     const variant = String(row.external_variant_code ?? "").trim();
     const productNo = String(row.external_product_no ?? "").trim();
-    const key = `${master}::${variant}`;
+    const key = `${master}::${variant}::${productNo}`;
     const prev = dedupedMap.get(key);
     if (!prev) {
       dedupedMap.set(key, row);
@@ -795,23 +389,6 @@ export async function POST(request: Request) {
   }
 
   let dedupedCandidates = Array.from(dedupedMap.values());
-  const thresholdProfileMasterIds = Array.from(new Set(
-    dedupedCandidates.map((row) => String(row.master_item_id ?? "").trim()).filter(Boolean),
-  ));
-  const thresholdProfileRows: Array<{ master_item_id?: string | null; current_product_sync_profile?: string | null }> = [];
-  for (const masterChunk of chunkArray(thresholdProfileMasterIds, IN_QUERY_CHUNK_SIZE)) {
-    if (masterChunk.length === 0) continue;
-    const profileRes = await sb
-      .from("sales_channel_product")
-      .select("master_item_id, current_product_sync_profile")
-      .eq("channel_id", channelId)
-      .eq("is_active", true)
-      .in("master_item_id", masterChunk);
-    if (profileRes.error) return jsonError(profileRes.error.message ?? "상품 동기화 프로필 조회 실패", 500);
-    thresholdProfileRows.push(...(profileRes.data ?? []));
-  }
-  const currentProductSyncProfileByMaster = buildCurrentProductSyncProfileByMaster(thresholdProfileRows);
-
   if (pinnedTargetByChannelProduct.size > 0) {
     dedupedCandidates = dedupedCandidates
       .map((row) => {
@@ -833,7 +410,7 @@ export async function POST(request: Request) {
       })
       .filter((row): row is NonNullable<typeof row> => row !== null);
 
-    if (channelProductIds && channelProductIds.length > 0) {
+    if (Array.isArray(channelProductIds) && channelProductIds.length > 0) {
       const missingPinned = channelProductIds.filter((id) => !pinnedTargetByChannelProduct.has(id));
       if (missingPinned.length > 0) {
         return jsonError(`compute_request_id에 없는 channel_product_id가 있습니다: ${missingPinned.slice(0, 5).join(",")}`, 422);
@@ -851,7 +428,6 @@ export async function POST(request: Request) {
     if (av && !bv) return 1;
     return av.localeCompare(bv);
   });
-
   const masterBaseRawTarget = new Map<string, number>();
   const productBaseRawTarget = new Map<string, number>();
 
@@ -924,176 +500,12 @@ export async function POST(request: Request) {
     }
   }
 
-  const variantAdditionalOverrideByMasterVariant = new Map<string, number>();
-  const variantAdditionalOverrideByProductVariant = new Map<string, number>();
-  const lastPushedAdditionalByMasterVariant = new Map<string, number>();
-  const lastPushedAdditionalByProductVariant = new Map<string, number>();
-  const overrideMasterIds = Array.from(new Set(
-    sortedCandidates
-      .map((row) => String(row.master_item_id ?? "").trim())
-      .filter(Boolean),
-  ));
-  const overrideProductNos = Array.from(new Set(
-    sortedCandidates
-      .map((row) => String(row.external_product_no ?? "").trim())
-      .filter(Boolean),
-  ));
-  const overrideMasterUpdatedAt = new Map<string, number>();
-  const overrideProductUpdatedAt = new Map<string, number>();
-  const lastPushedMasterUpdatedAt = new Map<string, number>();
-  const lastPushedProductUpdatedAt = new Map<string, number>();
-
-  const upsertOverride = (
-    map: Map<string, number>,
-    tsMap: Map<string, number>,
-    key: string,
-    delta: number,
-    updatedAt: unknown,
-  ) => {
-    const ts = Date.parse(String(updatedAt ?? ""));
-    const nextTs = Number.isFinite(ts) ? ts : Number.MIN_SAFE_INTEGER;
-    const prevTs = tsMap.get(key);
-    if (prevTs === undefined || nextTs >= prevTs) {
-      map.set(key, Math.round(delta));
-      tsMap.set(key, nextTs);
-    }
-  };
-
-  const upsertLastPushed = (
-    map: Map<string, number>,
-    tsMap: Map<string, number>,
-    key: string,
-    delta: number,
-    updatedAt: unknown,
-  ) => {
-    const ts = Date.parse(String(updatedAt ?? ""));
-    const nextTs = Number.isFinite(ts) ? ts : Number.MIN_SAFE_INTEGER;
-    const prevTs = tsMap.get(key);
-    if (prevTs === undefined || nextTs >= prevTs) {
-      map.set(key, Math.round(delta));
-      tsMap.set(key, nextTs);
-    }
-  };
-
-  if (overrideMasterIds.length > 0) {
-    for (const masterChunk of chunkArray(overrideMasterIds, IN_QUERY_CHUNK_SIZE)) {
-      if (masterChunk.length === 0) continue;
-      const stateRes = await sb
-        .from("channel_option_current_state_v1")
-        .select("state_id, master_item_id, external_product_no, external_variant_code, final_target_additional_amount_krw, last_pushed_additional_amount_krw, updated_at")
-        .eq("channel_id", channelId)
-        .in("master_item_id", masterChunk)
-        .order("updated_at", { ascending: false })
-        .order("state_id", { ascending: false });
-      if (stateRes.error) return jsonError(stateRes.error.message ?? "옵션 현재상태 조회 실패", 500);
-
-      for (const row of stateRes.data ?? []) {
-        const variantCode = String(row.external_variant_code ?? "").trim();
-        if (!variantCode) continue;
-        const delta = Number(row.final_target_additional_amount_krw ?? Number.NaN);
-        if (!Number.isFinite(delta)) continue;
-        const lastPushedAdditional = Number(row.last_pushed_additional_amount_krw ?? Number.NaN);
-
-        const masterKey = String(row.master_item_id ?? "").trim();
-        const productNo = String(row.external_product_no ?? "").trim();
-
-        if (masterKey) {
-          const mk = `${masterKey}::${variantCode}`;
-          upsertOverride(variantAdditionalOverrideByMasterVariant, overrideMasterUpdatedAt, mk, delta, row.updated_at);
-          if (Number.isFinite(lastPushedAdditional)) {
-            upsertLastPushed(lastPushedAdditionalByMasterVariant, lastPushedMasterUpdatedAt, mk, lastPushedAdditional, row.updated_at);
-          }
-        }
-
-        if (productNo) {
-          const pk = `${productNo}::${variantCode}`;
-          upsertOverride(variantAdditionalOverrideByProductVariant, overrideProductUpdatedAt, pk, delta, row.updated_at);
-          if (Number.isFinite(lastPushedAdditional)) {
-            upsertLastPushed(lastPushedAdditionalByProductVariant, lastPushedProductUpdatedAt, pk, lastPushedAdditional, row.updated_at);
-          }
-        }
-      }
-    }
-  }
-
-  if (overrideProductNos.length > 0) {
-    for (const productChunk of chunkArray(overrideProductNos, IN_QUERY_CHUNK_SIZE)) {
-      if (productChunk.length === 0) continue;
-      const stateRes = await sb
-        .from("channel_option_current_state_v1")
-        .select("state_id, master_item_id, external_product_no, external_variant_code, final_target_additional_amount_krw, last_pushed_additional_amount_krw, updated_at")
-        .eq("channel_id", channelId)
-        .in("external_product_no", productChunk)
-        .order("updated_at", { ascending: false })
-        .order("state_id", { ascending: false });
-      if (stateRes.error) return jsonError(stateRes.error.message ?? "옵션 현재상태 조회 실패", 500);
-
-      for (const row of stateRes.data ?? []) {
-        const variantCode = String(row.external_variant_code ?? "").trim();
-        if (!variantCode) continue;
-        const delta = Number(row.final_target_additional_amount_krw ?? Number.NaN);
-        if (!Number.isFinite(delta)) continue;
-        const lastPushedAdditional = Number(row.last_pushed_additional_amount_krw ?? Number.NaN);
-
-        const masterKey = String(row.master_item_id ?? "").trim();
-        const productNo = String(row.external_product_no ?? "").trim();
-
-        if (masterKey) {
-          const mk = `${masterKey}::${variantCode}`;
-          upsertOverride(variantAdditionalOverrideByMasterVariant, overrideMasterUpdatedAt, mk, delta, row.updated_at);
-          if (Number.isFinite(lastPushedAdditional)) {
-            upsertLastPushed(lastPushedAdditionalByMasterVariant, lastPushedMasterUpdatedAt, mk, lastPushedAdditional, row.updated_at);
-          }
-        }
-
-        if (productNo) {
-          const pk = `${productNo}::${variantCode}`;
-          upsertOverride(variantAdditionalOverrideByProductVariant, overrideProductUpdatedAt, pk, delta, row.updated_at);
-          if (Number.isFinite(lastPushedAdditional)) {
-            upsertLastPushed(lastPushedAdditionalByProductVariant, lastPushedProductUpdatedAt, pk, lastPushedAdditional, row.updated_at);
-          }
-        }
-      }
-    }
-  }
-
-  const resolveVariantAdditionalOverride = (masterKey: string, productNo: string, variantCode: string): number | undefined => {
-    const byProduct = variantAdditionalOverrideByProductVariant.get(`${productNo}::${variantCode}`);
-    if (Number.isFinite(Number(byProduct))) return Math.round(Number(byProduct));
-    const byMaster = variantAdditionalOverrideByMasterVariant.get(`${masterKey}::${variantCode}`);
-    if (Number.isFinite(Number(byMaster))) return Math.round(Number(byMaster));
+  const resolveVariantAdditionalOverride = (channelProductId: string, masterKey: string, variantCode: string): number | undefined => {
+    const byChannelProduct = pinnedAdditionalByChannelProduct.get(channelProductId);
+    if (Number.isFinite(Number(byChannelProduct))) return Math.round(Number(byChannelProduct));
+    const byLogical = pinnedAdditionalByLogical.get(logicalTargetKey(masterKey, variantCode));
+    if (Number.isFinite(Number(byLogical))) return Math.round(Number(byLogical));
     return undefined;
-  };
-
-  const resolveLastPushedAdditional = (masterKey: string, productNo: string, variantCode: string): number | undefined => {
-    const byProduct = lastPushedAdditionalByProductVariant.get(`${productNo}::${variantCode}`);
-    if (Number.isFinite(Number(byProduct))) return Math.round(Number(byProduct));
-    const byMaster = lastPushedAdditionalByMasterVariant.get(`${masterKey}::${variantCode}`);
-    if (Number.isFinite(Number(byMaster))) return Math.round(Number(byMaster));
-    return undefined;
-  };
-
-  const resolveBaseThresholdPolicyForMaster = (masterKey: string) => {
-    const currentProfile = currentProductSyncProfileByMaster.get(masterKey) ?? null;
-    const effectiveProfile = normalizePriceSyncThresholdProfile(
-      currentProfile || thresholdPolicy.autoSyncThresholdProfile,
-      thresholdPolicy.autoSyncThresholdProfile as "GENERAL",
-    );
-    if (effectiveProfile === thresholdPolicy.autoSyncThresholdProfile) {
-      return {
-        forceFull: thresholdPolicy.autoSyncForceFull,
-        minChangeKrw: thresholdPolicy.autoSyncMinChangeKrw,
-        minChangeRate: thresholdPolicy.autoSyncMinChangeRate,
-        profile: effectiveProfile,
-      };
-    }
-    const preset = resolvePriceSyncThresholdProfilePolicy(effectiveProfile);
-    return {
-      forceFull: preset.always_sync,
-      minChangeKrw: Math.max(0, Math.round(Number(preset.min_change_krw ?? thresholdPolicy.autoSyncMinChangeKrw))),
-      minChangeRate: Math.max(0, Number(preset.min_change_rate ?? thresholdPolicy.autoSyncMinChangeRate)),
-      profile: effectiveProfile,
-    };
   };
 
   if (dryRun) {
@@ -1308,7 +720,7 @@ export async function POST(request: Request) {
     }
 
     const overrideAdditionalForValidation = allowVariantAdditionalOverride && variantCode
-      ? resolveVariantAdditionalOverride(masterKey, String(c.external_product_no ?? "").trim(), variantCode)
+      ? resolveVariantAdditionalOverride(String(c.channel_product_id ?? "").trim(), masterKey, variantCode)
       : undefined;
     if ((!Number.isFinite(targetPrice) || targetPrice <= 0) && !Number.isFinite(Number(overrideAdditionalForValidation ?? Number.NaN))) {
       if (!variantCode && masterKey) blockedMastersByBaseFailure.add(masterKey);
@@ -1356,7 +768,7 @@ export async function POST(request: Request) {
     let expectedAdditionalAmount: number | undefined;
     let targetPriceForPush = targetPrice;
     const overrideAdditionalAmount = allowVariantAdditionalOverride && variantCode
-      ? resolveVariantAdditionalOverride(masterKey, String(c.external_product_no ?? "").trim(), variantCode)
+      ? resolveVariantAdditionalOverride(String(c.channel_product_id ?? "").trim(), masterKey, variantCode)
       : undefined;
     const preferredBaseForThreshold = Number(productFallbackTarget.get(productBaseKey) ?? masterFallbackTarget.get(masterKey));
     const baseForThreshold = Number.isFinite(preferredBaseForThreshold) ? Math.round(preferredBaseForThreshold) : null;
@@ -1365,80 +777,6 @@ export async function POST(request: Request) {
         ? Math.round(Number(overrideAdditionalAmount))
         : (baseForThreshold !== null ? (targetPrice - baseForThreshold) : undefined))
       : undefined;
-
-    const baseThresholdPolicy = resolveBaseThresholdPolicyForMaster(masterKey);
-
-    if (!variantCode && !baseThresholdPolicy.forceFull && Number.isFinite(Number(c.current_channel_price_krw ?? Number.NaN))) {
-      const currentChannelPrice = Math.round(Number(c.current_channel_price_krw));
-      const baseThresholdKrw = computeThresholdKrw(
-        baseThresholdPolicy.minChangeKrw,
-        baseThresholdPolicy.minChangeRate,
-        currentChannelPrice,
-      );
-      const baseDeltaKrw = Math.abs(targetPrice - currentChannelPrice);
-      if (baseDeltaKrw < baseThresholdKrw) {
-        skippedCount += 1;
-        itemRows.push({
-          job_id: jobId,
-          channel_id: String(c.channel_id ?? "").trim(),
-          channel_product_id: c.channel_product_id,
-          master_item_id: c.master_item_id,
-          external_product_no: c.external_product_no,
-          external_variant_code: variantCode,
-          before_price_krw: c.current_channel_price_krw,
-          target_price_krw: targetPrice,
-          after_price_krw: c.current_channel_price_krw,
-          status: "SKIPPED",
-          http_status: null,
-          error_code: "BASE_THRESHOLD_NOT_MET",
-          error_message: "기준 가격 변동이 자동 push 임계치 미만입니다",
-          raw_response_json: {
-            delta_krw: baseDeltaKrw,
-            threshold_krw: baseThresholdKrw,
-            baseline_krw: currentChannelPrice,
-            threshold_profile: baseThresholdPolicy.profile,
-          },
-        });
-        continue;
-      }
-    }
-
-    if (variantCode && !thresholdPolicy.optionSyncForceFull && Number.isFinite(Number(plannedAdditionalAmount ?? Number.NaN))) {
-      const lastPushedAdditional = resolveLastPushedAdditional(masterKey, externalProductNo, variantCode);
-      if (Number.isFinite(Number(lastPushedAdditional ?? Number.NaN))) {
-        const optionThresholdKrw = computeThresholdKrw(
-          thresholdPolicy.optionSyncMinChangeKrw,
-          thresholdPolicy.optionSyncMinChangeRate,
-          lastPushedAdditional,
-        );
-        const optionDeltaKrw = Math.abs(Math.round(Number(plannedAdditionalAmount)) - Math.round(Number(lastPushedAdditional)));
-        if (optionDeltaKrw < optionThresholdKrw) {
-          skippedCount += 1;
-          itemRows.push({
-            job_id: jobId,
-            channel_id: String(c.channel_id ?? "").trim(),
-            channel_product_id: c.channel_product_id,
-            master_item_id: c.master_item_id,
-            external_product_no: c.external_product_no,
-            external_variant_code: variantCode,
-            before_price_krw: c.current_channel_price_krw,
-            target_price_krw: baseForThreshold !== null ? (baseForThreshold + Math.round(Number(plannedAdditionalAmount))) : targetPrice,
-            after_price_krw: c.current_channel_price_krw,
-            status: "SKIPPED",
-            http_status: null,
-            error_code: "OPTION_THRESHOLD_NOT_MET",
-            error_message: "옵션 추가금 변동이 자동 push 임계치 미만입니다",
-            raw_response_json: {
-              delta_krw: optionDeltaKrw,
-              threshold_krw: optionThresholdKrw,
-              baseline_krw: Math.round(Number(lastPushedAdditional)),
-              planned_additional_amount_krw: Math.round(Number(plannedAdditionalAmount)),
-            },
-          });
-          continue;
-        }
-      }
-    }
 
     let pushRes = variantCode
       ? await (async () => {
@@ -1453,10 +791,10 @@ export async function POST(request: Request) {
           };
         }
 
-        const preferredBaseForDelta = Number(productFallbackTarget.get(productBaseKey) ?? masterFallbackTarget.get(masterKey));
-        const usePreferredBase = Number.isFinite(preferredBaseForDelta);
-        const baseForDelta = usePreferredBase ? Math.round(preferredBaseForDelta) : baseResolved.basePrice;
-        const additionalAmount = Number.isFinite(Number(overrideAdditionalAmount ?? Number.NaN)) ? Math.round(Number(overrideAdditionalAmount)) : (targetPrice - baseForDelta);
+        const baseForDelta = baseResolved.basePrice;
+        const additionalAmount = Number.isFinite(Number(overrideAdditionalAmount ?? Number.NaN))
+          ? Math.round(Number(overrideAdditionalAmount))
+          : (targetPrice - baseForDelta);
         targetPriceForPush = baseForDelta + additionalAmount;
         expectedAdditionalAmount = additionalAmount;
         return cafe24UpdateVariantAdditionalAmount(
@@ -1485,10 +823,10 @@ export async function POST(request: Request) {
               };
             }
 
-            const preferredBaseForDelta = Number(productFallbackTarget.get(productBaseKey) ?? masterFallbackTarget.get(masterKey));
-            const usePreferredBase = Number.isFinite(preferredBaseForDelta);
-            const baseForDelta = usePreferredBase ? Math.round(preferredBaseForDelta) : baseResolved.basePrice;
-            const additionalAmount = Number.isFinite(Number(overrideAdditionalAmount ?? Number.NaN)) ? Math.round(Number(overrideAdditionalAmount)) : (targetPrice - baseForDelta);
+            const baseForDelta = baseResolved.basePrice;
+            const additionalAmount = Number.isFinite(Number(overrideAdditionalAmount ?? Number.NaN))
+              ? Math.round(Number(overrideAdditionalAmount))
+              : (targetPrice - baseForDelta);
             targetPriceForPush = baseForDelta + additionalAmount;
             expectedAdditionalAmount = additionalAmount;
             return cafe24UpdateVariantAdditionalAmount(
@@ -1517,24 +855,14 @@ export async function POST(request: Request) {
         )
         : await verifyAppliedPrice(account, accessToken, String(c.external_product_no), targetPrice);
 
-      const verifyPendingAccepted = !variantCode && isProductWriteAcceptedButVerifyPending(pushRes.raw, targetPrice);
-      if (verify.ok || verifyPendingAccepted) {
+      const verifyPendingAccepted = false;
+      if (verify.ok) {
         successCount += 1;
-        if (variantCode) {
-          const masterBaseTarget = productFallbackTarget.get(productBaseKey) ?? masterFallbackTarget.get(masterKey);
-          let basePriceForDelta: number | null = Number.isFinite(Number(masterBaseTarget ?? Number.NaN))
-            ? Math.round(Number(masterBaseTarget))
-            : null;
-          if (basePriceForDelta === null) {
-            const base = await getBaseSnapshot(externalProductNo);
-            if (base.ok && base.currentPriceKrw !== null) basePriceForDelta = base.currentPriceKrw;
-          }
-          if (basePriceForDelta !== null) {
-            const delta = Math.round(targetPriceForPush - basePriceForDelta);
-            const byVariant = successfulVariantDeltaByProduct.get(String(c.external_product_no)) ?? new Map<string, number>();
-            byVariant.set(variantCode, delta);
-            successfulVariantDeltaByProduct.set(String(c.external_product_no), byVariant);
-          }
+        if (variantCode && Number.isFinite(Number(expectedAdditionalAmount ?? Number.NaN))) {
+          const delta = Math.round(Number(expectedAdditionalAmount));
+          const byVariant = successfulVariantDeltaByProduct.get(String(c.external_product_no)) ?? new Map<string, number>();
+          byVariant.set(variantCode, delta);
+          successfulVariantDeltaByProduct.set(String(c.external_product_no), byVariant);
         }
         itemRows.push({
           job_id: jobId,
@@ -1639,8 +967,8 @@ export async function POST(request: Request) {
           const retryPush = await cafe24UpdateProductPrice(account, accessToken, externalProductNo, targetPrice);
           if (retryPush.ok) {
             const retryVerify = await verifyAppliedPrice(account, accessToken, String(c.external_product_no), targetPrice);
-            const retryPendingAccepted = isProductWriteAcceptedButVerifyPending(retryPush.raw, targetPrice);
-            if (retryVerify.ok || retryPendingAccepted) {
+            const retryPendingAccepted = false;
+            if (retryVerify.ok) {
               successCount += 1;
               itemRows.push({
                 job_id: jobId,
@@ -1768,7 +1096,7 @@ export async function POST(request: Request) {
       if (!externalProductNo || !masterKey) continue;
 
       const overrideAdditionalAmount = allowVariantAdditionalOverride
-        ? resolveVariantAdditionalOverride(masterKey, externalProductNo, variantCode)
+        ? resolveVariantAdditionalOverride(String(c.channel_product_id ?? "").trim(), masterKey, variantCode)
         : undefined;
       if (Number.isFinite(Number(overrideAdditionalAmount ?? Number.NaN))) {
         const byVariant = labelDeltaByProduct.get(externalProductNo) ?? new Map<string, number>();
@@ -1980,6 +1308,55 @@ export async function POST(request: Request) {
     }
   }
 
+  if (pinnedComputeRequestId && itemRows.length > 0) {
+    const liveStateRows = itemRows
+      .map((raw) => {
+        const row = raw as Record<string, unknown>;
+        const channelProductId = String(row.channel_product_id ?? "").trim();
+        const channelIdValue = String(row.channel_id ?? "").trim();
+        const externalProductNo = String(row.external_product_no ?? "").trim();
+        if (!channelProductId || !channelIdValue || !externalProductNo) return null;
+        const externalVariantCode = String(row.external_variant_code ?? "").trim();
+        const status = String(row.status ?? "").trim().toUpperCase();
+        if (status === "SKIPPED") return null;
+        const targetPrice = Number(row.target_price_krw ?? Number.NaN);
+        const afterPrice = Number(row.after_price_krw ?? Number.NaN);
+        const liveTotalPriceKrw = Number.isFinite(afterPrice)
+          ? Math.round(afterPrice)
+          : (Number.isFinite(targetPrice) ? Math.round(targetPrice) : null);
+        const errorCode = String(row.error_code ?? "").trim() || null;
+        return {
+          channel_product_id: channelProductId,
+          channel_id: channelIdValue,
+          master_item_id: String(row.master_item_id ?? "").trim() || null,
+          external_product_no: externalProductNo,
+          external_variant_code: externalVariantCode,
+          publish_version: pinnedComputeRequestId,
+          live_base_price_krw: externalVariantCode ? null : liveTotalPriceKrw,
+          live_additional_amount_krw: externalVariantCode
+            ? (variantStateRows.find((state) => state.external_product_no === externalProductNo && state.external_variant_code === externalVariantCode)?.last_pushed_additional_amount_krw ?? null)
+            : null,
+          live_total_price_krw: liveTotalPriceKrw,
+          sync_status: status === "SUCCESS"
+            ? "SYNCED"
+            : errorCode === "VERIFY_MISMATCH"
+              ? "VERIFY_FAILED"
+              : "FAILED",
+          last_error_code: errorCode,
+          last_error_message: String(row.error_message ?? "").trim() || null,
+          verified_at: status === "SUCCESS" ? new Date().toISOString() : null,
+          updated_at: new Date().toISOString(),
+        };
+      })
+      .filter((row): row is NonNullable<typeof row> => row !== null);
+    if (liveStateRows.length > 0) {
+      const liveStateRes = await sb
+        .from("product_price_live_state_v1")
+        .upsert(liveStateRows, { onConflict: "channel_product_id,publish_version" });
+      if (liveStateRes.error) return jsonError(liveStateRes.error.message ?? "publish live state upsert failed", 500);
+    }
+  }
+
   const finalStatus =
     dedupedCandidates.length === 0
       ? "SUCCESS"
@@ -2004,6 +1381,7 @@ export async function POST(request: Request) {
   return NextResponse.json({
     ok: true,
     job_id: jobId,
+    publish_version: pinnedComputeRequestId || null,
     compute_request_id: pinnedComputeRequestId || null,
     total: dedupedCandidates.length,
     success: successCount,

@@ -21,8 +21,9 @@ function isPublicApi(pathname: string) {
 export async function updateSessionAndGuard(req: NextRequest) {
     // 정적 리소스는 matcher에서 제외되지만, 2중 방어
     const pathname = req.nextUrl.pathname;
+    const isLocalDevHost = req.nextUrl.hostname === "localhost" || req.nextUrl.hostname === "127.0.0.1";
 
-    if ((process.env.CMS_E2E_BYPASS_AUTH ?? "") === "1") {
+    if ((process.env.CMS_E2E_BYPASS_AUTH ?? "") === "1" || (process.env.NODE_ENV !== "production" && isLocalDevHost)) {
         return NextResponse.next();
     }
 

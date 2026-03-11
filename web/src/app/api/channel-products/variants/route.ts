@@ -320,6 +320,9 @@ export async function GET(request: Request) {
     const mergedColorChoices = new Map(
       (baseAllowlist.colors ?? []).map((choice) => [String(choice.value ?? "").trim(), choice] as const),
     );
+    const mergedDecorChoices = new Map(
+      (baseAllowlist.decors ?? []).map((choice) => [String(choice.decoration_master_id ?? choice.value ?? "").trim(), choice] as const),
+    );
     for (const row of (colorComboRes.data ?? []) as Array<{ combo_key?: string | null; display_name?: string | null; base_delta_krw?: number | null }>) {
       const comboKey = String(row.combo_key ?? "").trim();
       if (!comboKey || mergedColorChoices.has(comboKey)) continue;
@@ -338,9 +341,25 @@ export async function GET(request: Request) {
         delta_krw: null,
       });
     }
+    for (const row of filteredRuleRows) {
+      if (String(row.category_key ?? "").trim().toUpperCase() !== "DECOR") continue;
+      const masterId = String(row.decoration_master_id ?? "").trim();
+      const label = String(row.decoration_model_name ?? "").trim();
+      const value = label.toUpperCase();
+      const key = masterId || value;
+      if (!key || !label || mergedDecorChoices.has(key)) continue;
+      mergedDecorChoices.set(key, {
+        value,
+        label,
+        decoration_master_id: masterId || null,
+        decoration_model_name: label,
+        delta_krw: Math.round(Number(row.base_labor_cost_krw ?? 0)) + Math.round(Number(row.additive_delta_krw ?? 0)),
+      });
+    }
     optionDetailAllowlist = {
       ...baseAllowlist,
       colors: Array.from(mergedColorChoices.values()).sort((left, right) => String(left.label ?? "").localeCompare(String(right.label ?? ""))),
+      decors: Array.from(mergedDecorChoices.values()).sort((left, right) => String(left.label ?? "").localeCompare(String(right.label ?? ""))),
       sizes_by_material: baseAllowlist.sizes_by_material ?? {},
     };
     optionDetailAllowlist = {
@@ -560,6 +579,22 @@ export async function GET(request: Request) {
       axisSelectionByEntryKey,
       colorBaseDeltaByCode,
     });
+    for (const row of canonicalOptionRows) {
+      if (String(row.category_key ?? "").trim().toUpperCase() !== "SIZE") continue;
+      const inferred = inferredSelectionByEntryKey.get(String(row.entry_key ?? "").trim());
+      const inferredSizeValue = Number(inferred?.sizeValue ?? Number.NaN);
+      if (!Number.isFinite(inferredSizeValue) || inferredSizeValue <= 0) continue;
+      const currentSizeValue = Number(row.size_weight_g_selected ?? Number.NaN);
+      if (Number.isFinite(currentSizeValue) && currentSizeValue > 0) continue;
+      row.size_weight_g_selected = Number(inferredSizeValue.toFixed(2));
+      const materialCode = String(row.material_code_resolved ?? inferred?.materialCode ?? masterMaterialCode ?? "").trim();
+      const normalizedWeight = inferredSizeValue.toFixed(2);
+      const resolvedChoice = (optionDetailAllowlist.sizes_by_material?.[materialCode] ?? [])
+        .find((choice) => String(choice.value ?? "").trim() === normalizedWeight);
+      if (resolvedChoice && Number.isFinite(Number(resolvedChoice.delta_krw ?? Number.NaN))) {
+        row.resolved_delta_krw = Math.round(Number(resolvedChoice.delta_krw));
+      }
+    }
   }
 
   return NextResponse.json(

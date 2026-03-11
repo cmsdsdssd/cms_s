@@ -6,7 +6,9 @@ import {
   resolveCanonicalExternalProductNo,
   validateMappingOptionSelection,
 } from "@/lib/shop/mapping-option-details";
+import { normalizeDecorationCode } from "@/lib/shop/option-labor-rules";
 import { normalizePlatingComboCode } from "@/lib/shop/sync-rules";
+import { validateActiveMappingInvariants } from "@/lib/shop/mapping-integrity";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -100,7 +102,7 @@ function normalizeRow(raw: unknown): { ok: true; row: BulkRow } | { ok: false; e
   const syncRuleSetId = typeof body.sync_rule_set_id === "string" ? body.sync_rule_set_id.trim() || null : null;
   const optionMaterialCode = typeof body.option_material_code === "string" ? normalizeMaterialCode(body.option_material_code) || null : null;
   const optionColorCode = typeof body.option_color_code === "string" ? normalizePlatingComboCode(body.option_color_code) || null : null;
-  const optionDecorationCode = typeof body.option_decoration_code === "string" ? body.option_decoration_code.trim().toUpperCase() || null : null;
+  const optionDecorationCode = typeof body.option_decoration_code === "string" ? normalizeDecorationCode(body.option_decoration_code) : null;
   const optionSizeValue =
     body.option_size_value === null
     || body.option_size_value === undefined
@@ -231,6 +233,23 @@ export async function POST(request: Request) {
     normalized.push(result.row);
   }
 
+  const invariantCheck = await validateActiveMappingInvariants({
+    sb,
+    rows: normalized.map((row) => ({
+      channel_id: row.channel_id,
+      master_item_id: row.master_item_id,
+      external_product_no: row.external_product_no,
+      external_variant_code: row.external_variant_code,
+      is_active: row.is_active,
+    })),
+  });
+  if (!invariantCheck.ok) {
+    return jsonError(invariantCheck.message, 422, {
+      code: invariantCheck.code,
+      ...(invariantCheck.detail ?? {}),
+    });
+  }
+
   const dedup = new Map<string, BulkRow>();
   for (const row of normalized) {
     const key = `${row.channel_id}::${row.external_product_no}::${row.external_variant_code}`;
@@ -312,7 +331,7 @@ export async function POST(request: Request) {
 
   const ruleRowsByContext = new Map<string, Array<Record<string, unknown>>>();
   for (const row of (optionRuleRes.data ?? []) as Array<Record<string, unknown>>) {
-    const contextKey = `${String(row.channel_id ?? '').trim()}::${String(row.master_item_id ?? '').trim()}::${String(row.external_product_no ?? '').trim()}`;
+    const contextKey = `${String(row.channel_id ?? '').trim()}::${String(row.master_item_id ?? '').trim()}`;
     const prev = ruleRowsByContext.get(contextKey) ?? [];
     prev.push(row);
     ruleRowsByContext.set(contextKey, prev);
@@ -335,7 +354,7 @@ export async function POST(request: Request) {
         activeProductNosByPair.get(pairKey) ?? [],
         row.external_product_no,
       );
-      const contextKey = `${pairKey}::${canonicalExternalProductNo}`;
+      const contextKey = pairKey;
       const allowlist = mergeColorChoices(
         buildMappingOptionAllowlist(ruleRowsByContext.get(contextKey) ?? []),
         colorComboRowsByChannel.get(row.channel_id) ?? [],

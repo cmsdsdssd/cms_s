@@ -21,6 +21,8 @@ import {
   hasAnyActiveOptionLaborRule,
 } from "@/lib/shop/option-labor-rules";
 import { CONTRACTS } from "@/lib/contracts";
+import { cafe24ListProductVariants, ensureValidCafe24AccessToken, loadCafe24Account } from "@/lib/shop/cafe24";
+import { buildOptionAxisBreakdownFromPublishedVariants, buildOptionEntryRowsFromBreakdown } from "@/lib/shop/single-sot-pricing.js";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -191,7 +193,12 @@ type CurrentStateRow = {
   master_item_id: string | null;
   external_product_no: string | null;
   external_variant_code: string | null;
-  exclude_plating_labor: boolean | null;
+  last_pushed_additional_amount_krw?: number | null;
+  last_push_status?: string | null;
+  last_push_http_status?: number | null;
+  last_push_error?: string | null;
+  last_pushed_at?: string | null;
+  last_verified_at?: string | null;
 };
 
 type OptionCategoryDeltaRow = {
@@ -624,7 +631,7 @@ export async function POST(request: Request) {
   const currentStateRes = mappingChannelProductIds.length > 0
     ? await sb
       .from("channel_option_current_state_v1")
-      .select("channel_product_id, master_item_id, external_product_no, external_variant_code, exclude_plating_labor, updated_at")
+      .select("channel_product_id, master_item_id, external_product_no, external_variant_code, last_pushed_additional_amount_krw, last_push_status, last_push_http_status, last_push_error, last_pushed_at, last_verified_at, updated_at")
       .eq("channel_id", channelId)
       .in("master_item_id", Array.from(new Set(mappings.map((row) => String(row.master_item_id ?? "").trim()).filter(Boolean))))
       .order("updated_at", { ascending: false })
@@ -644,7 +651,12 @@ export async function POST(request: Request) {
       master_item_id: masterItemId || null,
       external_product_no: externalProductNo || null,
       external_variant_code: externalVariantCode || null,
-      exclude_plating_labor: row.exclude_plating_labor,
+      last_pushed_additional_amount_krw: row.last_pushed_additional_amount_krw ?? null,
+      last_push_status: row.last_push_status ?? null,
+      last_push_http_status: row.last_push_http_status ?? null,
+      last_push_error: row.last_push_error ?? null,
+      last_pushed_at: row.last_pushed_at ?? null,
+      last_verified_at: row.last_verified_at ?? null,
     };
     if (channelProductId && !currentStateByChannelProductId.has(channelProductId)) {
       currentStateByChannelProductId.set(channelProductId, normalizedRow);
@@ -764,7 +776,7 @@ export async function POST(request: Request) {
     return hasAnyActiveOptionLaborRule(masterRows) ? masterRows : [];
   };
 
-  const [optionCategoryRes, scopedOptionDeltaRes] = await Promise.all([
+  const [optionCategoryRes, scopedOptionDeltaRes, optionAxisLogRes] = await Promise.all([
     sb
       .from("channel_option_category_v2")
       .select("master_item_id, external_product_no, category_key, sync_delta_krw")
@@ -777,12 +789,23 @@ export async function POST(request: Request) {
       .eq("channel_id", channelId)
       .in("master_item_id", uniqueMasterIds)
       .in("external_product_no", uniqueExternalProductNos),
+    sb
+      .from("channel_option_value_policy_log")
+      .select("master_item_id, axis_value, new_row, created_at")
+      .eq("channel_id", channelId)
+      .eq("axis_key", "OPTION_AXIS_SELECTION")
+      .in("master_item_id", uniqueMasterIds)
+      .order("created_at", { ascending: false })
+      .limit(20000),
   ]);
 
   if (optionCategoryRes.error) return jsonError(optionCategoryRes.error.message ?? "?듭뀡 移댄뀒怨좊━ ?명?(legacy) 議고쉶 ?ㅽ뙣", 500);
 
   if (scopedOptionDeltaRes.error) {
     return jsonError(scopedOptionDeltaRes.error.message ?? "?듭뀡 移댄뀒怨좊━ ?명?(scoped) 議고쉶 ?ㅽ뙣", 500);
+  }
+  if (optionAxisLogRes.error) {
+    return jsonError(optionAxisLogRes.error.message ?? "옵션 축 저장로그 조회 실패", 500);
   }
 
   const categoryDeltaByScope = new Map<string, number>();
@@ -817,6 +840,36 @@ export async function POST(request: Request) {
     const scopeMaterial = normalizedScope === "00" ? "" : normalizedScope;
     const delta = Math.round(Number(row.sync_delta_krw ?? 0));
     scopedCategoryDeltaMap.set(`${masterId}::${productNo}::${categoryKey}::${scopeMaterial}`, delta);
+  }
+
+  const colorAxisResolvedAmountByScope = new Map<string, number>();
+  const sortedProductPrefixes = uniqueExternalProductNos
+    .slice()
+    .sort((left, right) => right.length - left.length)
+    .map((productNo) => `${productNo}::`);
+  for (const row of (optionAxisLogRes.data ?? []) as Array<{
+    master_item_id?: string | null;
+    axis_value?: string | null;
+    new_row?: unknown;
+  }>) {
+    const masterId = String(row.master_item_id ?? "").trim();
+    const axisValue = String(row.axis_value ?? "").trim();
+    if (!masterId || !axisValue) continue;
+    const matchedPrefix = sortedProductPrefixes.find((prefix) => axisValue.startsWith(prefix));
+    if (!matchedPrefix) continue;
+    const productNo = matchedPrefix.slice(0, -2);
+    const nextRow = row.new_row && typeof row.new_row === "object" ? (row.new_row as Record<string, unknown>) : null;
+    if (!nextRow) continue;
+    const categoryKey = String(nextRow.category_key ?? "").trim().toUpperCase();
+    if (categoryKey !== "COLOR_PLATING") continue;
+    const materialCode = normalizeOptionalMaterialCode(nextRow.axis1_value ?? "");
+    const colorCode = normalizePlatingComboCode(String(nextRow.axis2_value ?? ""));
+    const resolvedAmount = Math.round(Number(nextRow.axis3_value ?? Number.NaN));
+    if (!materialCode || !colorCode || !Number.isFinite(resolvedAmount)) continue;
+    const key = `${masterId}::${productNo}::${materialCode}::${colorCode}`;
+    if (!colorAxisResolvedAmountByScope.has(key)) {
+      colorAxisResolvedAmountByScope.set(key, resolvedAmount);
+    }
   }
 
   const resolveCategoryDelta = (
@@ -1249,9 +1302,17 @@ export async function POST(request: Request) {
     total_labor_sell_krw: number;
     option_sync_delta_krw: number;
     final_target_additional_amount_krw: number;
+    last_pushed_additional_amount_krw: number | null;
+    last_push_status: string | null;
+    last_push_http_status: number | null;
+    last_push_error: string | null;
+    last_pushed_at: string | null;
+    last_verified_at: string | null;
     source_snapshot_hash: string;
     updated_by: string;
   }>();
+  const publishBaseRowsByChannelProductId = new Map<string, Record<string, unknown>>();
+  const publishVariantRowsByChannelProductId = new Map<string, Record<string, unknown>>();
 
   const rows = mappings.flatMap((m) => {
     const master = masterMap.get(m.master_item_id);
@@ -1453,15 +1514,7 @@ export async function POST(request: Request) {
 
     const mappingChannelProductId = String(m.channel_product_id ?? "").trim();
     const mappingVariantCode = String(m.external_variant_code ?? "").trim();
-    const currentState = currentStateByChannelProductId.get(mappingChannelProductId)
-      ?? (mappingVariantCode
-        ? currentStateByVariantKey.get(`${m.master_item_id}::${mappingProductNo}::${mappingVariantCode}`)
-        : null)
-      ?? (!mappingVariantCode && mappingProductNo
-        ? currentStateByProductNo.get(`${m.master_item_id}::${mappingProductNo}`)
-        : null)
-      ?? null;
-    const includePlating = currentState ? currentState.exclude_plating_labor !== true : m.include_master_plating_labor !== false;
+    const includePlating = m.include_master_plating_labor !== false;
     const masterAbsorbItems = absorbByMasterId.get(m.master_item_id) ?? [];
     const masterLaborSell = computeMasterLaborSellPerUnit(master, masterAbsorbItems, includePlating);
     const masterLaborProfile = computeMasterLaborProfileWithoutAbsorb(master, includePlating);
@@ -1674,6 +1727,12 @@ export async function POST(request: Request) {
     let deltaColorBucket = useOptionLaborRuleEngine
       ? Math.round(colorComboBaseDelta + Number(optionLaborRuleResult?.colorPlating ?? 0))
       : Math.round(colorComboBaseDelta + ruleColorDelta + categoryScopedDeltaBuckets.colorPlating);
+    const colorAxisResolvedAmount = optionColorCode
+      ? colorAxisResolvedAmountByScope.get(`${m.master_item_id}::${mappingProductNo}::${optionMaterialCode}::${optionColorCode}`)
+      : undefined;
+    if (optionColorCode && Number.isFinite(Number(colorAxisResolvedAmount ?? Number.NaN))) {
+      deltaColorBucket = Math.round(Number(colorAxisResolvedAmount));
+    }
     let deltaDecorBucket = useOptionLaborRuleEngine
       ? Math.round(optionLaborRuleResult?.decor ?? 0)
       : Math.round(ruleDecorDelta + categoryScopedDeltaBuckets.decor);
@@ -1741,6 +1800,11 @@ export async function POST(request: Request) {
 
     if (hasVariant && mappingProductNo) {
       const stateKey = `${m.master_item_id}::${mappingProductNo}::${variantCode}`;
+      const existingState =
+        currentStateByChannelProductId.get(String(m.channel_product_id ?? "").trim())
+        ?? currentStateByVariantKey.get(stateKey)
+        ?? currentStateByProductNo.get(`${m.master_item_id}::${mappingProductNo}`)
+        ?? null;
       currentStateRowsByVariantKey.set(stateKey, {
         channel_id: m.channel_id,
         channel_product_id: m.channel_product_id,
@@ -1763,7 +1827,46 @@ export async function POST(request: Request) {
         option_sync_delta_krw: optionPriceDelta,
         final_target_additional_amount_krw: optionPriceDelta,
         source_snapshot_hash: sourceSnapshotHash,
+        last_pushed_additional_amount_krw: existingState?.last_pushed_additional_amount_krw ?? null,
+        last_push_status: existingState?.last_push_status ?? null,
+        last_push_http_status: existingState?.last_push_http_status ?? null,
+        last_push_error: existingState?.last_push_error ?? null,
+        last_pushed_at: existingState?.last_pushed_at ?? null,
+        last_verified_at: existingState?.last_verified_at ?? null,
         updated_by: "RECOMPUTE_PREVIEW",
+      });
+    }
+
+    if (!hasVariant && mappingProductNo) {
+      publishBaseRowsByChannelProductId.set(String(m.channel_product_id ?? "").trim(), {
+        channel_product_id: m.channel_product_id,
+        channel_id: m.channel_id,
+        master_item_id: m.master_item_id,
+        external_product_no: mappingProductNo,
+        publish_version: computeRequestId,
+        pricing_algo_version: pricingAlgoVersion,
+        target_price_raw_krw: Number.isFinite(targetRaw) ? Math.round(targetRaw) : null,
+        published_base_price_krw: Math.max(0, Math.round(finalTarget)),
+        published_total_price_krw: Math.max(0, Math.round(finalTarget)),
+        computed_at: recomputeAt,
+        updated_at: recomputeAt,
+      });
+    }
+    if (hasVariant && mappingProductNo) {
+      publishVariantRowsByChannelProductId.set(String(m.channel_product_id ?? "").trim(), {
+        channel_product_id: m.channel_product_id,
+        channel_id: m.channel_id,
+        master_item_id: m.master_item_id,
+        external_product_no: mappingProductNo,
+        external_variant_code: variantCode,
+        publish_version: computeRequestId,
+        pricing_algo_version: pricingAlgoVersion,
+        target_price_raw_krw: Number.isFinite(targetRaw) ? Math.round(targetRaw) : null,
+        published_base_price_krw: Math.max(0, Math.round(basePriceForState)),
+        published_additional_amount_krw: Math.round(optionPriceDelta),
+        published_total_price_krw: Math.max(0, Math.round(finalTarget)),
+        computed_at: recomputeAt,
+        updated_at: recomputeAt,
       });
     }
 
@@ -1960,6 +2063,116 @@ export async function POST(request: Request) {
   const insertRes = await sb.from("pricing_snapshot").insert(rows).select("snapshot_id, channel_product_id");
   if (insertRes.error) return jsonError(insertRes.error.message ?? "?ㅻ깄??????ㅽ뙣", 500);
 
+  const publishBaseRows = Array.from(publishBaseRowsByChannelProductId.values());
+  if (publishBaseRows.length > 0) {
+    const publishBaseRes = await sb
+      .from("product_price_publish_base_v1")
+      .upsert(publishBaseRows, { onConflict: "channel_product_id,publish_version" });
+    if (publishBaseRes.error) {
+      if (isMissingSchemaObjectError(publishBaseRes.error)) {
+        return jsonError(publishBaseRes.error.message ?? "publish base table missing", 500, { code: "PUBLISH_BASE_TABLE_MISSING" });
+      }
+      return jsonError(publishBaseRes.error.message ?? "publish base upsert failed", 500);
+    }
+  }
+
+  const publishVariantRows = Array.from(publishVariantRowsByChannelProductId.values());
+  if (publishVariantRows.length > 0) {
+    const publishVariantRes = await sb
+      .from("product_price_publish_variant_v1")
+      .upsert(publishVariantRows, { onConflict: "channel_product_id,publish_version" });
+    if (publishVariantRes.error) {
+      if (isMissingSchemaObjectError(publishVariantRes.error)) {
+        return jsonError(publishVariantRes.error.message ?? "publish variant table missing", 500, { code: "PUBLISH_VARIANT_TABLE_MISSING" });
+      }
+      return jsonError(publishVariantRes.error.message ?? "publish variant upsert failed", 500);
+    }
+  }
+
+  if (publishVariantRows.length > 0) {
+    const account = await loadCafe24Account(sb, channelId);
+    if (!account) return jsonError("Cafe24 account is missing", 422);
+    let accessToken: string;
+    try {
+      accessToken = await ensureValidCafe24AccessToken(sb, account);
+    } catch (error) {
+      return jsonError(error instanceof Error ? error.message : "Cafe24 token refresh failed", 422);
+    }
+
+    const publishVariantsByProductNo = new Map<string, Array<Record<string, unknown>>>();
+    for (const row of publishVariantRows) {
+      const productNo = String(row.external_product_no ?? "").trim();
+      if (!productNo) continue;
+      const prev = publishVariantsByProductNo.get(productNo) ?? [];
+      prev.push(row);
+      publishVariantsByProductNo.set(productNo, prev);
+    }
+
+    const optionEntryRows: Array<Record<string, unknown>> = [];
+    for (const [externalProductNo, productRows] of publishVariantsByProductNo.entries()) {
+      let variantsRes = await cafe24ListProductVariants(account, accessToken, externalProductNo);
+      if (!variantsRes.ok && variantsRes.status === 401) {
+        try {
+          accessToken = await ensureValidCafe24AccessToken(sb, account);
+          variantsRes = await cafe24ListProductVariants(account, accessToken, externalProductNo);
+        } catch {
+          // keep original failure
+        }
+      }
+      if (!variantsRes.ok) {
+        return jsonError(variantsRes.error ?? "variant lookup failed for publish option entries", 422, {
+          code: "PUBLISH_OPTION_ENTRY_VARIANT_LOOKUP_FAILED",
+          external_product_no: externalProductNo,
+          status: variantsRes.status,
+        });
+      }
+      const deltaByVariantCode = new Map(
+        productRows.map((row) => [String(row.external_variant_code ?? "").trim(), Math.round(Number(row.published_additional_amount_krw ?? 0))] as [string, number]),
+      );
+      const missingVariantCodes = variantsRes.variants
+        .map((variant) => String(variant.variantCode ?? "").trim())
+        .filter((variantCode) => variantCode.length > 0 && !deltaByVariantCode.has(variantCode));
+      if (missingVariantCodes.length > 0) {
+        return jsonError("publish option entry variants missing published deltas", 422, {
+          code: "PUBLISH_OPTION_ENTRY_VARIANT_DELTA_MISSING",
+          external_product_no: externalProductNo,
+          missing_variant_codes: missingVariantCodes,
+        });
+      }
+      const breakdown = buildOptionAxisBreakdownFromPublishedVariants(
+        variantsRes.variants.map((variant) => ({
+          variantCode: String(variant.variantCode ?? "").trim(),
+          options: variant.options ?? [],
+          publishedAdditionalAmountKrw: deltaByVariantCode.get(String(variant.variantCode ?? "").trim()) ?? 0,
+        })),
+      );
+      const sampleRow = productRows[0] ?? null;
+      if (!sampleRow) continue;
+      optionEntryRows.push(...buildOptionEntryRowsFromBreakdown({
+        channelId,
+        masterItemId: String(sampleRow.master_item_id ?? "").trim(),
+        externalProductNo,
+        publishVersion: computeRequestId,
+        breakdown,
+        computedAt: recomputeAt,
+      }));
+    }
+
+    if (optionEntryRows.length > 0) {
+      const optionEntryRes = await sb
+        .from("product_price_publish_option_entry_v1")
+        .upsert(optionEntryRows, {
+          onConflict: "channel_id,master_item_id,external_product_no,option_axis_index,option_name,option_value,publish_version",
+        });
+      if (optionEntryRes.error) {
+        if (isMissingSchemaObjectError(optionEntryRes.error)) {
+          return jsonError(optionEntryRes.error.message ?? "publish option entry table missing", 500, { code: "PUBLISH_OPTION_ENTRY_TABLE_MISSING" });
+        }
+        return jsonError(optionEntryRes.error.message ?? "publish option entry upsert failed", 500);
+      }
+    }
+  }
+
   if (currentStateRowsByVariantKey.size > 0) {
     {
       const stateUpsertRes = await sb
@@ -2049,6 +2262,7 @@ export async function POST(request: Request) {
     blocked_by_missing_rules: blockedByMissingRules.slice(0, 50),
     channel_id: channelId,
     factor_set_id_used: selectedFactorSetId,
+    publish_version: computeRequestId,
     compute_request_id: computeRequestId,
   }, { headers: { "Cache-Control": "no-store" } });
 }

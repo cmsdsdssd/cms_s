@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+﻿import { NextResponse } from "next/server";
 import { getShopAdminClient, jsonError, parseJsonObject } from "@/lib/shop/admin";
 import {
   buildMaterialPurityMap,
@@ -14,6 +14,7 @@ import {
   type SyncRuleR3Row,
 } from "@/lib/shop/sync-rules";
 import { normalizeMaterialCode } from "@/lib/material-factors";
+import { validateActiveMappingInvariants } from "@/lib/shop/mapping-integrity";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -149,6 +150,29 @@ export async function PUT(request: Request, { params }: Params) {
   if (currentRes.error) return jsonError(currentRes.error.message ?? "기존 옵션 조회 실패", 500);
   const current = currentRes.data;
   if (!current) return jsonError("channel product not found", 404);
+
+  const nextChannelId = String(body.channel_id ?? currentRes.data?.channel_id ?? "").trim() || String(currentRes.data?.channel_id ?? "").trim();
+  const nextMasterItemId = String(body.master_item_id ?? currentRes.data?.master_item_id ?? "").trim() || String(currentRes.data?.master_item_id ?? "").trim();
+  const nextExternalProductNo = String(body.external_product_no ?? currentRes.data?.external_product_no ?? "").trim() || String(currentRes.data?.external_product_no ?? "").trim();
+  const nextExternalVariantCode = String(body.external_variant_code ?? currentRes.data?.external_variant_code ?? "").trim() || String(currentRes.data?.external_variant_code ?? "").trim();
+  const invariantCheck = await validateActiveMappingInvariants({
+    sb,
+    rows: [{
+      channel_product_id: channelProductId,
+      channel_id: nextChannelId,
+      master_item_id: nextMasterItemId,
+      external_product_no: nextExternalProductNo,
+      external_variant_code: nextExternalVariantCode,
+      is_active: true,
+    }],
+    excludeChannelProductIds: [channelProductId],
+  });
+  if (!invariantCheck.ok) {
+    return jsonError(invariantCheck.message, 422, {
+      code: invariantCheck.code,
+      ...(invariantCheck.detail ?? {}),
+    });
+  }
 
   const effectiveOptionPriceMode = String((optionPriceMode ?? current.option_price_mode ?? "SYNC")).toUpperCase();
   const effectiveSyncRuleSetId = String((syncRuleSetId ?? current.sync_rule_set_id ?? "")).trim();
