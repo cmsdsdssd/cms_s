@@ -4,6 +4,7 @@ import { POST as recomputePost } from "@/app/api/pricing/recompute/route";
 import { POST as createRunPost } from "@/app/api/price-sync-runs-v2/route";
 import { POST as executeRunPost } from "@/app/api/price-sync-runs-v2/[run_id]/execute/route";
 import { getShopAdminClient } from "@/lib/shop/admin";
+import { isAuthorizedCronRequest, resolveAllowedCronSecrets } from "@/lib/shop/cron-auth";
 import { CRON_TICK_ERROR_PREFIX, isCronTickError } from "@/lib/shop/price-sync-guards";
 
 export const dynamic = "force-dynamic";
@@ -182,20 +183,20 @@ async function recordCronTickRun(
 }
 
 function parseInput(request: Request, bodyObj: Record<string, unknown>) {
-  const secret = (process.env.SHOP_SYNC_CRON_SECRET ?? "").trim();
-  if (!secret) throw new Error("SHOP_SYNC_CRON_SECRET env is required");
+  const allowedSecrets = resolveAllowedCronSecrets({
+    shopSyncCronSecret: process.env.SHOP_SYNC_CRON_SECRET,
+    cronSecret: process.env.CRON_SECRET,
+  });
+  if (allowedSecrets.length === 0) throw new Error("SHOP_SYNC_CRON_SECRET or CRON_SECRET env is required");
 
-  const { searchParams } = new URL(request.url);
-  const providedSecret = String(
-    request.headers.get("x-shop-sync-secret")
-    ?? bodyObj.secret
-    ?? searchParams.get("secret")
-    ?? "",
-  ).trim();
-  if (!providedSecret || providedSecret !== secret) {
+  if (!isAuthorizedCronRequest(request, bodyObj, {
+    shopSyncCronSecret: process.env.SHOP_SYNC_CRON_SECRET,
+    cronSecret: process.env.CRON_SECRET,
+  })) {
     throw Object.assign(new Error("unauthorized"), { status: 401 });
   }
 
+  const { searchParams } = new URL(request.url);
   const channelId = String(
     bodyObj.channel_id
     ?? searchParams.get("channel_id")

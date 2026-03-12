@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { POST as runCronV2 } from "@/app/api/cron/shop-sync-v2/route";
 import { POST as recomputePost } from "@/app/api/pricing/recompute/route";
 import { getShopAdminClient } from "@/lib/shop/admin";
+import { isAuthorizedCronRequest, resolveAllowedCronSecrets } from "@/lib/shop/cron-auth";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -20,30 +21,28 @@ function mkJsonRequest(path: string, payload: Record<string, unknown>): Request 
 }
 
 type CronInput = {
-  secret: string;
   channelId: string;
   batchLimit: number;
   masterRecomputeOnly: boolean;
 };
 
 function parseCronInput(request: Request, bodyObj: Record<string, unknown>): CronInput {
-  const secret = (process.env.SHOP_SYNC_CRON_SECRET ?? "").trim();
-  if (!secret) {
-    throw new Error("SHOP_SYNC_CRON_SECRET env is required");
+  const allowedSecrets = resolveAllowedCronSecrets({
+    shopSyncCronSecret: process.env.SHOP_SYNC_CRON_SECRET,
+    cronSecret: process.env.CRON_SECRET,
+  });
+  if (allowedSecrets.length === 0) {
+    throw new Error("SHOP_SYNC_CRON_SECRET or CRON_SECRET env is required");
   }
 
-  const { searchParams } = new URL(request.url);
-  const providedSecret = String(
-    request.headers.get("x-shop-sync-secret")
-    ?? bodyObj.secret
-    ?? searchParams.get("secret")
-    ?? "",
-  ).trim();
-
-  if (!providedSecret || providedSecret !== secret) {
+  if (!isAuthorizedCronRequest(request, bodyObj, {
+    shopSyncCronSecret: process.env.SHOP_SYNC_CRON_SECRET,
+    cronSecret: process.env.CRON_SECRET,
+  })) {
     throw Object.assign(new Error("unauthorized"), { status: 401 });
   }
 
+  const { searchParams } = new URL(request.url);
   const channelId = String(
     bodyObj.channel_id
     ?? searchParams.get("channel_id")
@@ -70,7 +69,6 @@ function parseCronInput(request: Request, bodyObj: Record<string, unknown>): Cro
   const masterRecomputeOnly = masterOnlyRaw === "1" || masterOnlyRaw === "true" || masterOnlyRaw === "yes";
 
   return {
-    secret,
     channelId,
     batchLimit,
     masterRecomputeOnly,
