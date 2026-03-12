@@ -1,4 +1,4 @@
-﻿import { NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 import { getShopAdminClient, jsonError, parseJsonObject, parseUuidArray } from "@/lib/shop/admin";
 import {
   buildMaterialPurityMap,
@@ -20,6 +20,7 @@ import {
   computeOptionLaborRuleBuckets,
   hasAnyActiveOptionLaborRule,
 } from "@/lib/shop/option-labor-rules";
+import { buildSavedCategoryBucketsFromVariantOptions, composeOptionDeltaBuckets, hasActiveRuleCategory } from "@/lib/shop/option-delta-buckets";
 import { CONTRACTS } from "@/lib/contracts";
 import { cafe24ListProductVariants, ensureValidCafe24AccessToken, loadCafe24Account } from "@/lib/shop/cafe24";
 import { buildOptionAxisBreakdownFromPublishedVariants, buildOptionEntryRowsFromBreakdown, validateAdditiveBreakdown } from "@/lib/shop/single-sot-pricing.js";
@@ -784,7 +785,7 @@ export async function POST(request: Request) {
   const [optionCategoryRes, scopedOptionDeltaRes, optionAxisLogRes] = await Promise.all([
     sb
       .from("channel_option_category_v2")
-      .select("master_item_id, external_product_no, category_key, sync_delta_krw")
+      .select("master_item_id, external_product_no, option_name, option_value, category_key, sync_delta_krw")
       .eq("channel_id", channelId)
       .in("master_item_id", uniqueMasterIds)
       .in("external_product_no", uniqueExternalProductNos),
@@ -811,6 +812,37 @@ export async function POST(request: Request) {
   }
   if (optionAxisLogRes.error) {
     return jsonError(optionAxisLogRes.error.message ?? "옵션 축 저장로그 조회 실패", 500);
+  }
+
+  const savedOptionCategoryRowsByScope = new Map<string, Array<{
+    option_name: string;
+    option_value: string;
+    category_key: string;
+    sync_delta_krw: number;
+  }>>();
+  for (const row of (optionCategoryRes.data ?? []) as Array<{
+    master_item_id?: string | null;
+    external_product_no?: string | null;
+    option_name?: string | null;
+    option_value?: string | null;
+    category_key?: string | null;
+    sync_delta_krw?: number | null;
+  }>) {
+    const masterId = String(row.master_item_id ?? '').trim();
+    const productNo = String(row.external_product_no ?? '').trim();
+    const optionName = String(row.option_name ?? '').trim();
+    const optionValue = String(row.option_value ?? '').trim();
+    const categoryKey = String(row.category_key ?? '').trim().toUpperCase();
+    if (!masterId || !productNo || !optionName || !optionValue || !categoryKey) continue;
+    const scopeKey = `${masterId}::${productNo}`;
+    const prev = savedOptionCategoryRowsByScope.get(scopeKey) ?? [];
+    prev.push({
+      option_name: optionName,
+      option_value: optionValue,
+      category_key: categoryKey,
+      sync_delta_krw: Math.round(Number(row.sync_delta_krw ?? 0)),
+    });
+    savedOptionCategoryRowsByScope.set(scopeKey, prev);
   }
 
   const categoryDeltaByScope = new Map<string, number>();
@@ -874,6 +906,37 @@ export async function POST(request: Request) {
     const key = `${masterId}::${productNo}::${materialCode}::${colorCode}`;
     if (!colorAxisResolvedAmountByScope.has(key)) {
       colorAxisResolvedAmountByScope.set(key, resolvedAmount);
+    }
+  }
+
+  const cafe24VariantsByProductNo = new Map<string, Awaited<ReturnType<typeof cafe24ListProductVariants>>>();
+  if (uniqueExternalProductNos.length > 0) {
+    const account = await loadCafe24Account(sb, channelId);
+    if (!account) return jsonError("Cafe24 account is missing", 422);
+    let accessToken: string;
+    try {
+      accessToken = await ensureValidCafe24AccessToken(sb, account);
+    } catch (error) {
+      return jsonError(error instanceof Error ? error.message : "Cafe24 token refresh failed", 422);
+    }
+    for (const externalProductNo of uniqueExternalProductNos) {
+      let variantsRes = await cafe24ListProductVariants(account, accessToken, externalProductNo);
+      if (!variantsRes.ok && variantsRes.status === 401) {
+        try {
+          accessToken = await ensureValidCafe24AccessToken(sb, account);
+          variantsRes = await cafe24ListProductVariants(account, accessToken, externalProductNo);
+        } catch {
+          // keep original failure
+        }
+      }
+      if (!variantsRes.ok) {
+        return jsonError(variantsRes.error ?? "variant lookup failed for recompute", 422, {
+          code: "RECOMPUTE_VARIANT_LOOKUP_FAILED",
+          external_product_no: externalProductNo,
+          status: variantsRes.status,
+        });
+      }
+      cafe24VariantsByProductNo.set(externalProductNo, variantsRes);
     }
   }
 
@@ -1656,6 +1719,16 @@ export async function POST(request: Request) {
         };
       }
 
+      const liveVariantOptions = String(m.external_variant_code ?? "").trim()
+        ? (cafe24VariantsByProductNo.get(mappingProductNo)?.variants ?? []).find((variant) => String(variant.variantCode ?? "").trim() === variantCode)?.options ?? []
+        : [];
+      if (liveVariantOptions.length > 0) {
+        return buildSavedCategoryBucketsFromVariantOptions(
+          liveVariantOptions,
+          savedOptionCategoryRowsByScope.get(`${m.master_item_id}::${mappingProductNo}`) ?? [],
+        );
+      }
+
       let material = 0;
       let size = 0;
       let colorPlating = 0;
@@ -1721,36 +1794,43 @@ export async function POST(request: Request) {
     const ruleColorDelta = applyRuleSetPricing && applyRule3 ? r3Delta : 0;
     const ruleDecorDelta = applyRuleSetPricing && applyRuleDecor ? r4Delta : 0;
     const baseOptionDelta = toNum(m.option_price_delta_krw, 0);
-
-    let deltaMaterialBucket = useOptionLaborRuleEngine
-      ? Math.round(optionLaborRuleResult?.material ?? 0)
-      : Math.round(ruleMaterialDelta + categoryScopedDeltaBuckets.material);
-    let deltaSizeBucket = useOptionLaborRuleEngine
-      ? Math.round(optionLaborRuleResult?.size ?? 0)
-      : Math.round(ruleSizeDelta + categoryScopedDeltaBuckets.size);
     const colorComboBaseDelta = optionColorCode ? Math.round(Number(colorComboBaseDeltaByCode.get(optionColorCode) ?? 0)) : 0;
-    let deltaColorBucket = useOptionLaborRuleEngine
-      ? Math.round(colorComboBaseDelta + Number(optionLaborRuleResult?.colorPlating ?? 0))
-      : Math.round(colorComboBaseDelta + ruleColorDelta + categoryScopedDeltaBuckets.colorPlating);
     const colorAxisResolvedAmount = optionColorCode
       ? colorAxisResolvedAmountByScope.get(`${m.master_item_id}::${mappingProductNo}::${optionMaterialCode}::${optionColorCode}`)
       : undefined;
-    if (optionColorCode && Number.isFinite(Number(colorAxisResolvedAmount ?? Number.NaN))) {
-      deltaColorBucket = Math.round(Number(colorAxisResolvedAmount));
-    }
-    let deltaDecorBucket = useOptionLaborRuleEngine
-      ? Math.round(optionLaborRuleResult?.decor ?? 0)
-      : Math.round(ruleDecorDelta + categoryScopedDeltaBuckets.decor);
     const sizePriceOverrideEnabled = m.size_price_override_enabled === true;
     const sizePriceOverrideKrw = Number.isFinite(Number(m.size_price_override_krw)) ? Math.round(Number(m.size_price_override_krw)) : null;
-    if (sizePriceOverrideEnabled && sizePriceOverrideKrw !== null) {
-      deltaSizeBucket = sizePriceOverrideKrw;
-    }
-    let deltaOtherBucket = useOptionLaborRuleEngine
-      ? Math.round(optionLaborRuleResult?.other ?? 0)
-      : Math.round(baseOptionDelta + categoryScopedDeltaBuckets.other);
-    let optionPriceDelta = deltaMaterialBucket + deltaSizeBucket + deltaColorBucket + deltaDecorBucket + deltaOtherBucket;
-    let optionPriceDeltaSource: "COMPUTED" | "OPTION_LABOR_RULE_ENGINE" = useOptionLaborRuleEngine ? "OPTION_LABOR_RULE_ENGINE" : "COMPUTED";
+    const activeRuleCategories = {
+      material: hasActiveRuleCategory(contextOptionLaborRules, "MATERIAL"),
+      size: hasActiveRuleCategory(contextOptionLaborRules, "SIZE"),
+      colorPlating: hasActiveRuleCategory(contextOptionLaborRules, "COLOR_PLATING"),
+      decor: hasActiveRuleCategory(contextOptionLaborRules, "DECOR"),
+      other: hasActiveRuleCategory(contextOptionLaborRules, "OTHER"),
+    };
+    const composedOptionDeltas = composeOptionDeltaBuckets({
+      useOptionLaborRuleEngine,
+      activeRuleCategories,
+      optionLaborRuleResult,
+      ruleDeltas: {
+        material: ruleMaterialDelta,
+        size: ruleSizeDelta,
+        color: ruleColorDelta,
+        decor: ruleDecorDelta,
+      },
+      categoryScopedDeltaBuckets,
+      colorComboBaseDelta,
+      colorAxisResolvedAmount,
+      sizePriceOverrideEnabled,
+      sizePriceOverrideKrw,
+      baseOptionDelta,
+    });
+    let deltaMaterialBucket = composedOptionDeltas.material;
+    let deltaSizeBucket = composedOptionDeltas.size;
+    let deltaColorBucket = composedOptionDeltas.color;
+    let deltaDecorBucket = composedOptionDeltas.decor;
+    let deltaOtherBucket = composedOptionDeltas.other;
+    let optionPriceDelta = composedOptionDeltas.total;
+    let optionPriceDeltaSource: "COMPUTED" | "OPTION_LABOR_RULE_ENGINE" = composedOptionDeltas.source;
 
     const basePriceDelta = baseDeltaByMaster.get(m.master_item_id) ?? 0;
     const targetRawSync = applyRule4
