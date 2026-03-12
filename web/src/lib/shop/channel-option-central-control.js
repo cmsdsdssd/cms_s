@@ -1,4 +1,3 @@
-import { resolveMarketLinkedSizeCell } from "./market-linked-size-grid.js";
 import { resolvePersistedSizeGridCell } from "./weight-grid-store.js";
 import { normalizePlatingComboCode } from "./sync-rules.ts";
 
@@ -190,20 +189,14 @@ export const resolveCentralOptionMapping = ({
         source_rule_entry_ids: [],
       };
     }
-    const resolvedSizeCell = persistedSizeLookup
-      ? resolvePersistedSizeGridCell({
-        lookup: persistedSizeLookup,
-        materialCode: base.material_code_resolved,
-        additionalWeightG: selectedCentigram / 100,
-      })
-      : resolveMarketLinkedSizeCell({
-        rows: activeRules,
-        masterItemId: toTrimmed(persisted?.master_item_id),
-        externalProductNo: toTrimmed(persisted?.external_product_no),
-        materialCode: base.material_code_resolved,
-        additionalWeightG: selectedCentigram / 100,
-        marketContext: sizeMarketContext,
-      });
+    if (!persistedSizeLookup) {
+      return markUnresolved(base, "사이즈 중앙 그리드가 없어 추가중량을 계산할 수 없습니다.");
+    }
+    const resolvedSizeCell = resolvePersistedSizeGridCell({
+      lookup: persistedSizeLookup,
+      materialCode: base.material_code_resolved,
+      additionalWeightG: selectedCentigram / 100,
+    });
     if (!resolvedSizeCell.valid) {
       if (String(resolvedSizeCell.error_message ?? "").includes("size rule not found")) {
         return markLegacy(base, "현재 선택한 추가중량이 중앙 허용 범위 밖입니다.");
@@ -223,25 +216,23 @@ export const resolveCentralOptionMapping = ({
     const baseColorDelta = colorBaseDeltaByCode && typeof colorBaseDeltaByCode === "object"
       ? toRoundedKrw(colorBaseDeltaByCode[base.color_code_selected] ?? 0)
       : 0;
-    const persistedAmount = toFiniteNumber(persisted?.resolved_delta_krw);
     const matched = activeRules.filter((rule) => {
       return rule.rule_type === "COLOR"
         && rule.material_code === base.material_code_resolved
         && rule.color_code === base.color_code_selected;
     });
     if (matched.length === 0) {
-      const resolvedAmount = persistedAmount == null ? baseColorDelta : Math.max(baseColorDelta, Math.round(persistedAmount));
       return {
         ...base,
-        resolved_delta_krw: resolvedAmount,
+        resolved_delta_krw: baseColorDelta,
         source_rule_entry_ids: [],
       };
     }
     const allowedAmounts = [...new Set(matched.map((rule) => toRoundedKrw(rule.delta_krw)))].sort((left, right) => left - right);
-    const selectedAmount = persistedAmount == null ? null : Math.round(persistedAmount - baseColorDelta);
-    const resolvedAdditive = selectedAmount != null && allowedAmounts.includes(selectedAmount)
-      ? selectedAmount
-      : (allowedAmounts[0] ?? 0);
+    if (allowedAmounts.length !== 1) {
+      return markUnresolved(base, "색상 중앙 규칙이 하나로 결정되지 않습니다.");
+    }
+    const resolvedAdditive = allowedAmounts[0] ?? 0;
     const resolvedAmount = baseColorDelta + resolvedAdditive;
     const sourceRuleEntryIds = matched
       .filter((rule) => toRoundedKrw(rule.delta_krw) === resolvedAdditive)

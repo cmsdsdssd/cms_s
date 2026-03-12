@@ -5,9 +5,9 @@ import {
   type OptionLaborRuleRow,
 } from "@/lib/shop/option-labor-rules";
 import { resolveCentralOptionMapping } from "@/lib/shop/channel-option-central-control.js";
-import { resolveMarketLinkedSizeCell } from "@/lib/shop/market-linked-size-grid.js";
-import { getPersistedSizeChoicesByMaterial, resolvePersistedSizeGridCell } from "@/lib/shop/weight-grid-store.js";
-import { formatPlatingComboLabel, normalizePlatingComboCode } from "@/lib/shop/sync-rules";
+import { getPersistedSizeChoicesByMaterial } from "@/lib/shop/weight-grid-store.js";
+import { roundSizeDeltaKrw } from "@/lib/shop/market-linked-size-grid.js";
+import { PLATING_PREFIX, formatPlatingComboLabel, getPlatingComboSortOrder, normalizePlatingCatalogComboKey } from "@/lib/shop/sync-rules";
 
 export type OptionDetailCategory = "MATERIAL" | "SIZE" | "COLOR_PLATING" | "DECOR";
 
@@ -113,6 +113,8 @@ const EMPTY_ALLOWLIST: MappingOptionAllowlist = {
   is_empty: true,
 };
 
+const KNOWN_MATERIAL_CODES = new Set(["14", "18", "24", "925", "999"]);
+
 const toTrimmed = (value: unknown): string => String(value ?? "").trim();
 
 const toRoundedOrNull = (value: unknown): number | null => {
@@ -139,13 +141,40 @@ const weightStringToCentigram = (value: string | null): number | null => {
 };
 
 const normalizeMaterialSelection = (value: unknown): string | null => {
-  const normalized = normalizeMaterialCode(toTrimmed(value));
-  return normalized && normalized !== "00" ? normalized : null;
+  const trimmed = toTrimmed(value);
+  const normalized = normalizeMaterialCode(trimmed);
+  if (KNOWN_MATERIAL_CODES.has(normalized)) return normalized;
+  const upper = trimmed.toUpperCase();
+  if (/S?925/.test(upper) || trimmed.includes("925")) return "925";
+  if (/S?999/.test(upper) || trimmed.includes("999")) return "999";
+  if (/24\s*K/.test(upper) || /24K/.test(upper) || trimmed.includes("24")) return "24";
+  if (/18\s*K/.test(upper) || /18K/.test(upper) || trimmed.includes("18")) return "18";
+  if (/14\s*K/.test(upper) || /14K/.test(upper) || trimmed.includes("14")) return "14";
+  return null;
 };
 
 const normalizeColorSelection = (value: unknown): string | null => {
-  const normalized = normalizePlatingComboCode(toTrimmed(value));
-  return normalized || null;
+  const trimmed = toTrimmed(value);
+  const normalized = normalizePlatingCatalogComboKey(trimmed);
+  if (normalized) return normalized;
+  const upper = trimmed.toUpperCase();
+  const explicitPlating = /^\[도\]/iu.test(trimmed) || /(도금|PLATING)/iu.test(trimmed);
+  const detectedLetters = new Set<string>();
+  if (upper.includes("핑크") || upper.includes("로즈") || upper.includes("PINK") || upper.includes("ROSE")) {
+    detectedLetters.add("P");
+  }
+  if (upper.includes("화이트") || upper.includes("백금") || upper.includes("WHITE") || upper.includes("PLATINUM")) {
+    detectedLetters.add("W");
+  }
+  if (upper.includes("블랙") || upper.includes("흑") || upper.includes("BLACK")) {
+    detectedLetters.add("B");
+  }
+  if (upper.includes("옐로우") || upper.includes("골드") || upper.includes("YELLOW") || upper.includes("GOLD")) {
+    detectedLetters.add("G");
+  }
+  if (detectedLetters.size === 0) return null;
+  const baseCode = Array.from(detectedLetters).join("");
+  return normalizePlatingCatalogComboKey(explicitPlating ? `${PLATING_PREFIX} ${baseCode}` : baseCode) || null;
 };
 
 const normalizeDecorSelection = (value: unknown): string | null => {
@@ -159,21 +188,6 @@ const normalizeSizeSelection = (value: unknown): string | null => {
   if (exact) return exact;
   const match = trimmed.match(/\d+(?:\.\d+)?/);
   return match ? normalizeAdditionalWeightValue(match[0]) : null;
-};
-
-const UNIVERSAL_SIZE_MAX_CENTIGRAM = 10000;
-
-const buildUniversalSizeChoices = (deltaByValue?: Map<string, number | null>): MappingOptionAllowlistChoice[] => {
-  const next: MappingOptionAllowlistChoice[] = [];
-  for (let centigram = 0; centigram <= UNIVERSAL_SIZE_MAX_CENTIGRAM; centigram += 1) {
-    const value = (centigram / 100).toFixed(2);
-    const choice: MappingOptionAllowlistChoice = { value, label: `${value}g` };
-    if (deltaByValue?.has(value)) {
-      choice.delta_krw = deltaByValue.get(value) ?? null;
-    }
-    next.push(choice);
-  }
-  return next;
 };
 
 export const guessMappingOptionCategoryByName = (
@@ -294,6 +308,49 @@ const buildSavedCategoryIndexes = (rows: SavedOptionCategoryRowWithDelta[]) => {
   return { byEntryKey, byOptionName };
 };
 
+const readRecordValue = (value: unknown, key: string): unknown => {
+  if (!value || typeof value !== "object") return undefined;
+  return Reflect.get(value, key);
+};
+
+const buildSyntheticMarketLinkedSizeChoices = (
+  materialCode: string,
+  marketContext: {
+    goldTickKrwPerG?: number | null;
+    silverTickKrwPerG?: number | null;
+    materialFactors?: Record<string, unknown> | null;
+  } | null | undefined,
+): MappingOptionAllowlistChoice[] => {
+  const normalizedMaterialCode = normalizeMaterialSelection(materialCode);
+  if (!normalizedMaterialCode) return [];
+  const factorRow = readRecordValue(marketContext?.materialFactors, normalizedMaterialCode);
+  const rawPriceBasis = String(readRecordValue(factorRow, "price_basis") ?? "").trim().toUpperCase();
+  const purityRate = Number(readRecordValue(factorRow, "purity_rate") ?? 0);
+  const adjustFactor = Number(
+    readRecordValue(factorRow, "material_adjust_factor")
+      ?? readRecordValue(factorRow, "gold_adjust_factor")
+      ?? 1,
+  );
+  const tickKrwPerG = rawPriceBasis === "SILVER"
+    ? Math.round(Number(marketContext?.silverTickKrwPerG ?? 0))
+    : Math.round(Number(marketContext?.goldTickKrwPerG ?? 0));
+  if (!(purityRate > 0) || !(adjustFactor > 0) || !(tickKrwPerG > 0) || rawPriceBasis === "NONE") return [];
+  const effectiveFactor = purityRate * adjustFactor;
+  const choices: MappingOptionAllowlistChoice[] = [];
+  for (let centigram = 0; centigram <= 10000; centigram += 1) {
+    const value = (centigram / 100).toFixed(2);
+    const deltaKrw = centigram === 0
+      ? 0
+      : roundSizeDeltaKrw((centigram / 100) * tickKrwPerG * effectiveFactor, 100, "UP");
+    choices.push({
+      value,
+      label: `${value}g`,
+      delta_krw: deltaKrw,
+    });
+  }
+  return choices;
+};
+
 export const buildObservedOptionValuePool = (args: {
   productOptions?: Array<{ option_name?: string | null; option_value?: Array<{ option_text?: string | null }> | null }>;
   variants?: Array<{ options?: Array<{ name?: string | null; value?: string | null }> | null }>;
@@ -311,7 +368,9 @@ export const buildObservedOptionValuePool = (args: {
 
   for (const entry of entries) {
     const saved = byEntryKey.get(entry.entry_key);
-    const categoryKey = saved?.category_key ?? "OTHER";
+    const categoryKey = saved?.category_key
+      ?? byOptionName.get(entry.option_name)
+      ?? guessMappingOptionCategoryByName(entry.option_name);
     if (categoryKey === "MATERIAL") {
       const materialCode = normalizeMaterialSelection(entry.option_value);
       if (materialCode) materials.add(materialCode);
@@ -336,7 +395,7 @@ export const buildObservedOptionValuePool = (args: {
   return {
     materials: Array.from(materials).sort((left, right) => left.localeCompare(right)),
     sizes: Array.from(sizes).sort((left, right) => Number(left) - Number(right)),
-    colors: Array.from(colors).sort((left, right) => left.localeCompare(right)),
+    colors: Array.from(colors).sort((left, right) => getPlatingComboSortOrder(left) - getPlatingComboSortOrder(right) || left.localeCompare(right)),
     decors: Array.from(decors).sort((left, right) => left.localeCompare(right)),
   };
 };
@@ -686,22 +745,29 @@ export const buildMappingOptionAllowlist = (
     }
   }
 
-  const observedSizes = Array.from(new Set(
-    (options?.observedOptionValues?.sizes ?? [])
-      .map((value) => normalizeSizeSelection(value))
-      .filter((value): value is string => Boolean(value)),
-  )).sort((left, right) => Number(left) - Number(right));
-  for (const materialCode of Array.from(materialSet)) {
-    const bucket = sizeSets.get(materialCode) ?? new Set<string>();
-    for (const value of observedSizes) bucket.add(value);
-    sizeSets.set(materialCode, bucket);
+  for (const observedMaterial of options?.observedOptionValues?.materials ?? []) {
+    const materialCode = normalizeMaterialSelection(observedMaterial);
+    if (materialCode) materialSet.add(materialCode);
+  }
+  for (const observedColor of options?.observedOptionValues?.colors ?? []) {
+    const colorCode = normalizeColorSelection(observedColor);
+    if (!colorCode || colorMap.has(colorCode)) continue;
+    colorMap.set(colorCode, { value: colorCode, label: formatPlatingComboLabel(colorCode) || colorCode });
+  }
+  if (options?.persistedSizeLookup && typeof options.persistedSizeLookup === 'object' && 'choicesByMaterial' in options.persistedSizeLookup) {
+    const choicesByMaterial = (options.persistedSizeLookup as { choicesByMaterial?: Map<string, MappingOptionAllowlistChoice[]> }).choicesByMaterial;
+    if (choicesByMaterial instanceof Map) {
+      for (const materialCodeRaw of choicesByMaterial.keys()) {
+        const materialCode = normalizeMaterialSelection(materialCodeRaw);
+        if (materialCode) materialSet.add(materialCode);
+      }
+    }
   }
 
   const sizeDeltaByMaterial = new Map<string, Map<string, number | null>>();
   if (options?.persistedSizeLookup) {
     for (const materialCode of Array.from(materialSet)) {
       const deltaByValue = new Map<string, number | null>();
-      const values = sizeSets.get(materialCode) ?? new Set<string>();
       const persistedChoices = getPersistedSizeChoicesByMaterial(options.persistedSizeLookup, materialCode);
       if (persistedChoices.length > 0) {
         const persistedValues = new Set<string>();
@@ -713,48 +779,18 @@ export const buildMappingOptionAllowlist = (
         }
         sizeSets.set(materialCode, persistedValues);
       } else {
-        for (const value of values) {
-          const resolved = resolvePersistedSizeGridCell({
-            lookup: options.persistedSizeLookup,
-            materialCode,
-            additionalWeightG: Number(value),
-          });
-          if (resolved.valid) {
-            deltaByValue.set(value, Math.round(Number(resolved.computed_delta_krw ?? 0)));
-            continue;
-          }
-          if (options?.sizeMarketContext) {
-            const marketResolved = resolveMarketLinkedSizeCell({
-              rows: rules ?? [],
-              masterItemId: options.masterItemId ?? null,
-              externalProductNo: options.externalProductNo ?? null,
-              materialCode,
-              additionalWeightG: Number(value),
-              marketContext: options.sizeMarketContext,
-            });
-            if (!marketResolved.valid) continue;
-            deltaByValue.set(value, Number.isFinite(Number(marketResolved.computed_delta_krw)) ? Math.round(Number(marketResolved.computed_delta_krw)) : null);
-          }
-        }
+        sizeSets.set(materialCode, new Set<string>());
       }
       sizeDeltaByMaterial.set(materialCode, deltaByValue);
     }
-  } else if (options?.sizeMarketContext) {
-    for (const [materialCode, values] of sizeSets.entries()) {
-      const deltaByValue = new Map<string, number | null>();
-      for (const value of values) {
-        const resolved = resolveMarketLinkedSizeCell({
-          rows: rules ?? [],
-          masterItemId: options.masterItemId ?? null,
-          externalProductNo: options.externalProductNo ?? null,
-          materialCode,
-          additionalWeightG: Number(value),
-          marketContext: options.sizeMarketContext,
-        });
-        if (!resolved.valid) continue;
-        deltaByValue.set(value, Number.isFinite(Number(resolved.computed_delta_krw)) ? Math.round(Number(resolved.computed_delta_krw)) : null);
-      }
-      sizeDeltaByMaterial.set(materialCode, deltaByValue);
+  } else {
+    for (const materialCode of Array.from(materialSet)) {
+      const syntheticChoices = buildSyntheticMarketLinkedSizeChoices(materialCode, options?.sizeMarketContext ?? null);
+      sizeSets.set(materialCode, new Set(syntheticChoices.map((choice) => choice.value)));
+      sizeDeltaByMaterial.set(
+        materialCode,
+        new Map(syntheticChoices.map((choice) => [choice.value, choice.delta_krw ?? null])),
+      );
     }
   }
 
@@ -776,7 +812,7 @@ export const buildMappingOptionAllowlist = (
   const materials = Array.from(materialSet)
     .sort((left, right) => left.localeCompare(right))
     .map((value) => ({ value, label: value }));
-  const colors = Array.from(colorMap.values()).sort((left, right) => left.label.localeCompare(right.label));
+  const colors = Array.from(colorMap.values()).sort((left, right) => getPlatingComboSortOrder(left.value) - getPlatingComboSortOrder(right.value) || left.label.localeCompare(right.label));
   const decors = Array.from(decorMap.values()).sort((left, right) => left.label.localeCompare(right.label));
 
   return {

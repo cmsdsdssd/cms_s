@@ -1,4 +1,5 @@
 import { normalizePriceSyncThresholdProfile } from './price-sync-policy.js';
+import './price-sync-policy.js';
 
 export const DEFAULT_CURRENT_PRODUCT_SYNC_PROFILE = 'GENERAL';
 

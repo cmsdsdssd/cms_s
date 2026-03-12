@@ -113,8 +113,20 @@ const resolveScopedRows = (rows, masterItemId, externalProductNo, materialCode =
     ? normalized.filter((row) => row.scope_material_code === normalizedMaterialCode)
     : normalized;
   const scopedRows = productNo ? materialRows.filter((row) => row.external_product_no === productNo) : [];
-  if (scopedRows.length > 0) return { rows: scopedRows, scope_source: "PRODUCT_SCOPED" };
-  return { rows: materialRows, scope_source: "MASTER_FALLBACK" };
+  if (productNo) {
+    return {
+      rows: scopedRows,
+      scope_source: scopedRows.length > 0 ? "PRODUCT_SCOPED" : "MASTER_FALLBACK",
+      product_scope_required: true,
+      matched_product_scope: scopedRows.length > 0,
+    };
+  }
+  return {
+    rows: materialRows,
+    scope_source: "MASTER_SCOPED",
+    product_scope_required: false,
+    matched_product_scope: materialRows.length > 0,
+  };
 };
 
 const resolveTickForMaterial = (materialCode, marketContext) => {
@@ -186,6 +198,9 @@ export const resolveMarketLinkedSizeCell = ({
   if (additionalWeightCentigram === 0) {
     return { valid: true, computed_delta_krw: 0, source_rule_id: null, source_rule_ids: [], scope_source: scoped.scope_source, mode: null, error_message: null };
   }
+  if (scoped.product_scope_required && !scoped.matched_product_scope) {
+    return { valid: false, computed_delta_krw: 0, source_rule_id: null, source_rule_ids: [], scope_source: scoped.scope_source, mode: null, error_message: "product-scoped market-linked size rule required" };
+  }
   const matched = scoped.rows.filter((row) => isRuleMatched(row, normalizedMaterialCode, additionalWeightCentigram));
   if (matched.length === 0) {
     return { valid: false, computed_delta_krw: 0, source_rule_id: null, source_rule_ids: [], scope_source: scoped.scope_source, mode: null, error_message: 'size rule not found' };
@@ -204,15 +219,15 @@ export const resolveMarketLinkedSizeCell = ({
   }
   if (explicitModeRows.length === 1) {
     const row = explicitModeRows[0];
-    if (row.size_price_mode === SIZE_PRICE_MODE.FIXED_DELTA) {
+    if (row.size_price_mode !== SIZE_PRICE_MODE.MARKET_LINKED) {
       return {
-        valid: true,
-        computed_delta_krw: Math.round(row.fixed_delta_krw ?? row.additive_delta_krw ?? 0),
-        source_rule_id: row.rule_id || null,
+        valid: false,
+        computed_delta_krw: 0,
+        source_rule_id: null,
         source_rule_ids: row.rule_id ? [row.rule_id] : [],
         scope_source: scoped.scope_source,
-        mode: SIZE_PRICE_MODE.FIXED_DELTA,
-        error_message: null,
+        mode: null,
+        error_message: "market-linked size rule required",
       };
     }
     const computed = computeMarketLinkedDelta(row, normalizedMaterialCode, additionalWeightCentigram / 100, marketContext);
@@ -228,13 +243,13 @@ export const resolveMarketLinkedSizeCell = ({
     };
   }
   return {
-    valid: true,
-    computed_delta_krw: matched.reduce((sum, row) => sum + Math.round(row.additive_delta_krw ?? 0), 0),
-    source_rule_id: matched[0]?.rule_id || null,
+    valid: false,
+    computed_delta_krw: 0,
+    source_rule_id: null,
     source_rule_ids: matched.map((row) => row.rule_id).filter(Boolean),
     scope_source: scoped.scope_source,
-    mode: SIZE_PRICE_MODE.LEGACY_ADDITIVE,
-    error_message: null,
+    mode: null,
+    error_message: "market-linked size rule required",
   };
 };
 

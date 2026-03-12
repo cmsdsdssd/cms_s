@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -2498,11 +2498,11 @@ export default function ShoppingDashboardPage() {
                           <div className="rounded border border-[var(--hairline)] bg-[var(--panel)] px-2 py-2 text-xs">
                             <div className="grid grid-cols-2 gap-x-3 gap-y-2">
                               <div>
-                                <div className="text-[var(--muted)]">쇼핑몰 가격</div>
+                                <div className="text-[var(--muted)]">실몰 가격(live)</div>
                                 <div className="font-semibold">{fmt(row.base_current_krw)}</div>
                               </div>
                               <div>
-                                <div className="text-[var(--muted)]">마스터 가격</div>
+                                <div className="text-[var(--muted)]">게시 기준 원본가</div>
                                 <div className="font-semibold">{fmt(row.master_original_krw ?? row.final_price_krw)}</div>
                               </div>
                               <div>
@@ -2618,7 +2618,7 @@ export default function ShoppingDashboardPage() {
                 {optionGroupedBySelectedBuckets.map((bucket) => (
                   <div key={`bucket-${bucket.bucket}`} className="rounded border border-[var(--hairline)] bg-[var(--background)] p-2 space-y-2">
                     <div className="text-sm font-semibold">
-                      {optionGroupPriceBasis === "RULE" ? "룰기여금" : "적용추가금(SoT)"} {signedFmt(bucket.bucket)} ({bucket.items.length}개)
+                      {optionGroupPriceBasis === "RULE" ? "룰기여금" : "게시 기준 추가금"} {signedFmt(bucket.bucket)} ({bucket.items.length}개)
                     </div>
                     <div className="grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(240px,1fr))]">
                       {bucket.items.map((item) => {
@@ -2646,8 +2646,8 @@ export default function ShoppingDashboardPage() {
                                 룰기여금 {signedFmt(item.ruleOptionDelta)}
                                 <span className="ml-1 text-[10px] text-[var(--muted)]">({item.ruleDeltaSource === "POLICY" ? "정책" : "역산"})</span>
                               </div>
-                              <div>적용추가금(SoT) {signedFmt(item.totalOptionDelta)}</div>
-                              <div>저장추가금 {signedFmt(item.manualOptionDelta)}</div>
+                              <div>게시 기준 추가금 {signedFmt(item.totalOptionDelta)}</div>
+                              <div>수동 저장 추가금 {signedFmt(item.manualOptionDelta)}</div>
                               <div>목표 {fmt(item.row?.final_target_price_krw)}</div>
                               <div className="rounded border border-[var(--hairline)] bg-[var(--background)] p-1">
                                 {options.length === 0 ? (
@@ -2717,11 +2717,11 @@ export default function ShoppingDashboardPage() {
                       </div>
 
                       <div className="grid grid-cols-[140px_1fr] gap-y-2 text-sm">
-                        <div className="text-[var(--muted)]">쇼핑몰 가격</div>
+                        <div className="text-[var(--muted)]">실몰 가격(live)</div>
                         <div className="text-lg font-semibold">{fmt(detailMasterRow?.base_current_krw ?? null)}원</div>
-                        <div className="text-[var(--muted)]">마스터 가격</div>
+                        <div className="text-[var(--muted)]">게시 기준 원본가</div>
                         <div>{fmt(detailMasterOriginal)}원</div>
-                        <div className="text-[var(--muted)]">운영 목표가</div>
+                        <div className="text-[var(--muted)]">게시 기준 목표가</div>
                         <div>{fmt(detailFinalTarget)}원</div>
                         <div className="text-[var(--muted)]">마진</div>
                         <div>{detailMasterRow?.margin_pct == null ? "-" : `${detailMasterRow.margin_pct.toFixed(1)}%`}</div>
@@ -2734,7 +2734,7 @@ export default function ShoppingDashboardPage() {
                         <div className="mt-1 font-semibold">{fmt(detailMasterOriginal)} {detailBaseDeltaTotal >= 0 ? "+" : "-"} {fmt(Math.abs(detailBaseDeltaTotal))} = {fmt(detailFinalTarget)}</div>
                         <div className="mt-1 text-xs text-[var(--muted)]">(마스터 원본가 +/- 조정 누적 = 운영 목표가)</div>
                         <div className="mt-2 rounded border border-[var(--hairline)] bg-[var(--panel)] px-2 py-1 text-xs">
-                          <span className="text-[var(--muted)]">핀된 compute_request_id:</span>{" "}
+                          <span className="text-[var(--muted)]">게시 버전:</span>{" "}
                           <span className="font-semibold">{pinnedComputeRequestId || "-"}</span>
                         </div>
                         <div className="mt-2">
@@ -2749,7 +2749,7 @@ export default function ShoppingDashboardPage() {
                           >
                             V2 계산 근거
                           </Button>
-                          <div className="mt-1 text-[11px] text-[var(--muted)]">fallback 없이 V2 뷰 최신 스냅샷 값을 그대로 표시합니다.</div>
+                          <div className="mt-1 text-[11px] text-[var(--muted)]">이 버튼은 게시 기준 계산 근거를 여는 debug 화면입니다.</div>
                         </div>
                       </div>
 
@@ -2818,10 +2818,10 @@ export default function ShoppingDashboardPage() {
                         <th className="px-3 py-2 whitespace-nowrap">룰합Δ(R2~R4)</th>
                         <th className="px-3 py-2 whitespace-nowrap">총옵션Δ(수동+룰)</th>
                         <th className="px-3 py-2 whitespace-nowrap">기준보정Δ</th>
-                        <th className="px-3 py-2 whitespace-nowrap">현재가</th>
-                        <th className="px-3 py-2 whitespace-nowrap">최종가</th>
-                        <th className="px-3 py-2 whitespace-nowrap">동기화Δ</th>
-                        <th className="px-3 py-2 whitespace-nowrap">전략</th>
+                        <th className="px-3 py-2 whitespace-nowrap">실몰 현재가</th>
+                        <th className="px-3 py-2 whitespace-nowrap">게시 기준 최종가</th>
+                        <th className="px-3 py-2 whitespace-nowrap">게시-실몰 차이</th>
+                        <th className="px-3 py-2 whitespace-nowrap">적용 방식</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -2897,7 +2897,7 @@ export default function ShoppingDashboardPage() {
                         <option value="SIZE_RULE">1) 사이즈룰</option>
                         <option value="PLATING_RULE">2) 도금룰</option>
                         <option value="DECORATION_RULE">3) 장식룰</option>
-                        <option value="MISC_OVERRIDE">4) 기타(Override)</option>
+                        <option value="MISC_OVERRIDE">4) 기타(수동)</option>
                       </Select>
 
                       <Select
@@ -2924,7 +2924,7 @@ export default function ShoppingDashboardPage() {
                       <Input
                         value={optionEditDraft.option_manual_target_krw}
                         onChange={(e) => setOptionEditDraft((prev) => (prev ? { ...prev, option_manual_target_krw: e.target.value } : prev))}
-                        placeholder="Override 목표가"
+                        placeholder="수동 목표가"
                         disabled={getOptionRuleCategory(optionEditDraft) !== "MISC_OVERRIDE"}
                       />
 
@@ -3336,7 +3336,7 @@ export default function ShoppingDashboardPage() {
                           <thead className="bg-[var(--panel)] text-left">
                             <tr>
                               <th className="px-2 py-1">값</th>
-                              <th className="px-2 py-1">전략</th>
+                              <th className="px-2 py-1">적용 방식</th>
                               <th className="px-2 py-1">룰항목</th>
                               <th className="px-2 py-1">룰추가</th>
                               <th className="px-2 py-1">추가금(1000원)</th>

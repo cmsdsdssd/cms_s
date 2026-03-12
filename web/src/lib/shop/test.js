@@ -1,1 +1,1 @@
-const x = row?.value ?? '';
+ok

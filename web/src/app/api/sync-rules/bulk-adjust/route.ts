@@ -1,5 +1,6 @@
-import { NextResponse } from "next/server";
+﻿import { NextResponse } from "next/server";
 import { getShopAdminClient, jsonError, parseJsonObject } from "@/lib/shop/admin";
+import { ensureActiveSyncRuleSet } from "@/lib/shop/active-sync-rule-set";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -22,9 +23,14 @@ export async function POST(request: Request) {
   if (!body) return jsonError("Invalid request body", 400);
 
   const ruleType = String(body.rule_type ?? "").trim().toUpperCase() as RuleType;
-  const ruleSetId = String(body.rule_set_id ?? "").trim();
+  let ruleSetId = String(body.rule_set_id ?? "").trim();
+  const channelId = String(body.channel_id ?? "").trim();
   const delta = toNum(body.delta_krw);
-  if (!ruleSetId) return jsonError("rule_set_id is required", 400);
+  if (!ruleSetId && channelId) {
+    const activeRuleSet = await ensureActiveSyncRuleSet(sb, channelId);
+    ruleSetId = activeRuleSet?.rule_set_id ?? "";
+  }
+  if (!ruleSetId) return jsonError("active rule_set_id is required", 422, { code: "ACTIVE_SYNC_RULE_SET_REQUIRED", channel_id: channelId || null });
   if (!delta || delta === 0) return jsonError("delta_krw must be non-zero", 400);
   if (!isThousandStep(Math.round(delta))) return jsonError("delta_krw must be 1000 KRW step", 400);
   if (!["R2", "R3"].includes(ruleType)) return jsonError("rule_type must be R2 or R3", 400);

@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+﻿import { NextResponse } from "next/server";
 import { getShopAdminClient, jsonError, parseJsonObject } from "@/lib/shop/admin";
 
 export const dynamic = "force-dynamic";
@@ -45,6 +45,15 @@ export async function POST(request: Request) {
 
   if (!channelId) return jsonError("channel_id is required", 400);
   if (!name) return jsonError("name is required", 400);
+
+  if (isActive) {
+    const deactivateRes = await sb
+      .from("sync_rule_set")
+      .update({ is_active: false })
+      .eq("channel_id", channelId)
+      .eq("is_active", true);
+    if (deactivateRes.error) return jsonError(deactivateRes.error.message ?? "기존 활성 룰셋 비활성화 실패", 400);
+  }
 
   const { data, error } = await sb
     .from("sync_rule_set")

@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+﻿import { NextResponse } from "next/server";
 import { getShopAdminClient, isMissingColumnError, jsonError } from "@/lib/shop/admin";
 import { buildSyncReasonSummary, inferSyncReasonCode, syncReasonMeta } from "@/lib/shop/sync-reasons";
 
@@ -149,6 +149,7 @@ export async function GET(_request: Request, { params }: Params) {
       master_item_id: row.master_item_id,
       external_product_no: row.external_product_no,
       external_variant_code: row.external_variant_code,
+      publish_version: row.compute_request_id,
       compute_request_id: row.compute_request_id,
       state: row.state,
       created_at: row.created_at,
@@ -195,7 +196,10 @@ export async function GET(_request: Request, { params }: Params) {
   return NextResponse.json(
     {
       data: {
-        run: runRes.data,
+        run: {
+          ...runRes.data,
+          publish_version: runRes.data?.pinned_compute_request_id ?? null,
+        },
         intents: enrichedIntents,
         summary: {
           reasons: reasonSummary,

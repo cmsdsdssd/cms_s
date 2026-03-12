@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
@@ -114,7 +114,7 @@ export default function ShoppingSyncJobsPage() {
 
   return (
     <div className="space-y-4">
-      <ActionBar title="동기화 로그" subtitle="push 작업 및 item 결과 추적" />
+      <ActionBar title="동기화 로그" subtitle="push 작업과 항목 결과를 추적합니다" />
 
       <ShoppingPageHeader
         purpose="반영 작업의 성공/실패/건너뜀을 추적하고 실패 항목의 원인을 빠르게 확인합니다."
@@ -152,9 +152,9 @@ export default function ShoppingSyncJobsPage() {
               <table className="w-full text-sm">
                 <thead className="bg-[var(--panel)] text-left">
                   <tr>
-                    <th className="px-3 py-2">작업 ID(job_id)</th>
-                    <th className="px-3 py-2">동기화 시간(sync_time)</th>
-                    <th className="px-3 py-2">상태(status)</th>
+                    <th className="px-3 py-2">작업 ID</th>
+                    <th className="px-3 py-2">동기화 시각</th>
+                    <th className="px-3 py-2">상태</th>
                     <th className="px-3 py-2">성공/실패/건너뜀</th>
                   </tr>
                 </thead>
@@ -216,16 +216,16 @@ export default function ShoppingSyncJobsPage() {
               <table className="w-full text-sm">
                 <thead className="bg-[var(--panel)] text-left">
                   <tr>
-                    <th className="px-3 py-2">상품번호(product_no)</th>
-                    <th className="px-3 py-2">옵션코드(variant_code)</th>
-                    <th className="px-3 py-2">반영전(before_price_krw)</th>
-                    <th className="px-3 py-2">목표가(target_price_krw)</th>
-                    <th className="px-3 py-2">반영후(after_price_krw)</th>
-                    <th className="px-3 py-2">동기화 시간(sync_time)</th>
-                    <th className="px-3 py-2">상태(status)</th>
-                    <th className="px-3 py-2">사유코드(reason_code)</th>
-                    <th className="px-3 py-2">사유라벨(reason_label)</th>
-                    <th className="px-3 py-2">오류메시지(error_message)</th>
+                    <th className="px-3 py-2">상품번호</th>
+                    <th className="px-3 py-2">옵션코드</th>
+                    <th className="px-3 py-2">반영 전</th>
+                    <th className="px-3 py-2">게시 기준 목표가</th>
+                    <th className="px-3 py-2">반영 후</th>
+                    <th className="px-3 py-2">동기화 시각</th>
+                    <th className="px-3 py-2">상태</th>
+                    <th className="px-3 py-2">사유코드</th>
+                    <th className="px-3 py-2">사유라벨</th>
+                    <th className="px-3 py-2">오류메시지</th>
                   </tr>
                 </thead>
                 <tbody>

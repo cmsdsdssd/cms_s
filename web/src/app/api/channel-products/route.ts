@@ -8,7 +8,8 @@ import {
 } from "@/lib/shop/mapping-option-details";
 import { normalizeDecorationCode } from "@/lib/shop/option-labor-rules";
 import { resolveCurrentProductSyncProfileForWrite } from "@/lib/shop/current-product-sync-profile.js";
-import { validateActiveMappingInvariants } from "@/lib/shop/mapping-integrity";
+import { attachExistingChannelProductIds, validateActiveMappingInvariants } from "@/lib/shop/mapping-integrity";
+import { ensureActiveSyncRuleSet } from "@/lib/shop/active-sync-rule-set";
 import { normalizePlatingComboCode } from "@/lib/shop/sync-rules";
 
 export const dynamic = 'force-dynamic';
@@ -114,7 +115,7 @@ export async function POST(request: Request) {
       ? null
       : Number(body.option_manual_target_krw);
   const mappingSource = String(body.mapping_source ?? "MANUAL").trim().toUpperCase();
-  const syncRuleSetId = typeof body.sync_rule_set_id === "string" ? body.sync_rule_set_id.trim() || null : null;
+  let syncRuleSetId = typeof body.sync_rule_set_id === "string" ? body.sync_rule_set_id.trim() || null : null;
   const optionMaterialCode = typeof body.option_material_code === "string" ? normalizeMaterialCode(body.option_material_code) || null : null;
   const optionColorCode = typeof body.option_color_code === "string" ? normalizePlatingComboCode(body.option_color_code) || null : null;
   const optionDecorationCode = typeof body.option_decoration_code === "string" ? normalizeDecorationCode(body.option_decoration_code) : null;
@@ -143,6 +144,10 @@ export async function POST(request: Request) {
   if (!channelId) return jsonError("channel_id is required", 400);
   if (!masterItemId) return jsonError("master_item_id is required", 400);
   if (!externalProductNo) return jsonError("external_product_no is required", 400);
+  if (optionPriceMode === "SYNC" && !syncRuleSetId) {
+    const activeRuleSet = await ensureActiveSyncRuleSet(sb, channelId);
+    syncRuleSetId = activeRuleSet?.rule_set_id ?? null;
+  }
   if (!isActive) return jsonError("활성 매핑만 허용됩니다 (is_active must be true)", 422);
   if (materialMultiplierOverride !== null && (!Number.isFinite(materialMultiplierOverride) || materialMultiplierOverride <= 0)) {
     return jsonError("material_multiplier_override must be > 0", 400);
@@ -181,23 +186,6 @@ export async function POST(request: Request) {
     return jsonError("sync_rule_set_id is required when option_price_mode is SYNC", 400);
   }
 
-  const invariantCheck = await validateActiveMappingInvariants({
-    sb,
-    rows: [{
-      channel_id: channelId,
-      master_item_id: masterItemId,
-      external_product_no: externalProductNo,
-      external_variant_code: externalVariantCode,
-      is_active: true,
-    }],
-  });
-  if (!invariantCheck.ok) {
-    return jsonError(invariantCheck.message, 422, {
-      code: invariantCheck.code,
-      ...(invariantCheck.detail ?? {}),
-    });
-  }
-
   const activeProductRes = await sb
     .from("sales_channel_product")
     .select("external_product_no")
@@ -211,10 +199,21 @@ export async function POST(request: Request) {
     (activeProductRes.data ?? []).map((row) => String(row.external_product_no ?? "").trim()),
     externalProductNo,
   );
-  const existingMappingCandidates = Array.from(new Set([externalProductNo, canonicalExternalProductNo].filter(Boolean)));
+  if (canonicalExternalProductNo !== externalProductNo) {
+    return jsonError("canonical external_product_no drift is not allowed", 422, {
+      code: "CANONICAL_PRODUCT_NO_DRIFT",
+      channel_id: channelId,
+      master_item_id: masterItemId,
+      requested_external_product_no: externalProductNo,
+      canonical_external_product_no: canonicalExternalProductNo,
+      external_variant_code: externalVariantCode || null,
+    });
+  }
+
+  const existingMappingCandidates = [canonicalExternalProductNo].filter(Boolean);
   let existingMappingQuery = sb
     .from("sales_channel_product")
-    .select("option_material_code, option_color_code, option_decoration_code, option_size_value, external_product_no")
+    .select("channel_product_id, option_material_code, option_color_code, option_decoration_code, option_size_value, external_product_no")
     .eq("channel_id", channelId)
     .eq("external_variant_code", externalVariantCode)
     .order("updated_at", { ascending: false })
@@ -226,6 +225,36 @@ export async function POST(request: Request) {
   }
   const existingMappingRes = await existingMappingQuery.maybeSingle();
   if (existingMappingRes.error) return jsonError(existingMappingRes.error.message ?? "기존 옵션 상세 조회 실패", 500);
+
+  const invariantRows = attachExistingChannelProductIds(
+    [{
+      channel_id: channelId,
+      master_item_id: masterItemId,
+      external_product_no: canonicalExternalProductNo,
+      external_variant_code: externalVariantCode,
+      is_active: true,
+    }],
+    existingMappingRes.data
+      ? [{
+          channel_product_id: existingMappingRes.data.channel_product_id,
+          channel_id: channelId,
+          master_item_id: masterItemId,
+          external_product_no: canonicalExternalProductNo,
+          external_variant_code: externalVariantCode,
+        }]
+      : [],
+  );
+
+  const invariantCheck = await validateActiveMappingInvariants({
+    sb,
+    rows: invariantRows,
+  });
+  if (!invariantCheck.ok) {
+    return jsonError(invariantCheck.message, 422, {
+      code: invariantCheck.code,
+      ...(invariantCheck.detail ?? {}),
+    });
+  }
   const optionRuleRes = await sb
     .from("channel_option_labor_rule_v1")
     .select("rule_id, channel_id, master_item_id, external_product_no, category_key, scope_material_code, additional_weight_g, additional_weight_min_g, additional_weight_max_g, size_price_mode, formula_multiplier, formula_offset_krw, rounding_unit_krw, rounding_mode, fixed_delta_krw, plating_enabled, color_code, decoration_master_id, decoration_model_name, base_labor_cost_krw, additive_delta_krw, is_active, note")
@@ -375,10 +404,7 @@ export async function POST(request: Request) {
   };
 
   const executeUpsert = (payload: typeof payloadBase | typeof payloadWithProfile) => sb
-    .from("sales_channel_product")
-    .upsert(payload, { onConflict: "channel_id,external_product_no,external_variant_code" })
-    .select(CHANNEL_PRODUCT_SELECT_BASE)
-    .single();
+    .rpc("cms_fn_upsert_sales_channel_product_mappings_v1", { p_rows: [payload] });
 
   let { data, error } = await executeUpsert(payloadWithProfile);
   if (error && isMissingColumnError(error, "sales_channel_product.current_product_sync_profile")) {
@@ -386,19 +412,20 @@ export async function POST(request: Request) {
   }
 
   if (error) return jsonError(error.message ?? "매핑 저장 실패", 400);
-  const responseData = data
+  const savedRow = Array.isArray(data) ? data[0] : null;
+  const responseData = savedRow
     ? {
-        ...data,
+        ...savedRow,
         current_product_sync_profile: resolvedCurrentProductSyncProfile,
       }
-    : data;
+    : savedRow;
 
   if (canonicalExternalProductNo !== externalProductNo) {
     const aliasHistoryRes = await sb
       .from("sales_channel_product_alias_history")
       .insert([{
         channel_id: channelId,
-        canonical_channel_product_id: String(data?.channel_product_id ?? "").trim() || null,
+        canonical_channel_product_id: String(savedRow?.channel_product_id ?? "").trim() || null,
         master_item_id: masterItemId,
         canonical_external_product_no: canonicalExternalProductNo,
         alias_external_product_no: externalProductNo,

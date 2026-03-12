@@ -6,8 +6,10 @@ import {
   normalizeOptionLaborColorCode,
   normalizeOptionLaborRuleCategory,
 } from "@/lib/shop/option-labor-rules";
-import { isPlatingComboCode } from "@/lib/shop/sync-rules";
+import { PLATING_PREFIX, buildPlatingComboChoices, getPlatingComboSortOrder, isPlatingComboCode } from "@/lib/shop/sync-rules";
 import { getShopAdminClient, isMissingSchemaObjectError, jsonError, parseJsonObject } from "@/lib/shop/admin";
+import { buildMaterialFactorMap } from "@/lib/material-factors";
+import { rebuildPersistedSizeGridForScope } from "@/lib/shop/weight-grid-store.js";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -257,6 +259,75 @@ const resolveDecorMasterCost = async (
   };
 };
 
+type SizeGridMarketContext = {
+  goldTickKrwPerG: number;
+  silverTickKrwPerG: number;
+  materialFactors: ReturnType<typeof buildMaterialFactorMap>;
+};
+
+const loadSizeGridMarketContext = async (
+  sb: NonNullable<ReturnType<typeof getShopAdminClient>>,
+): Promise<SizeGridMarketContext> => {
+  const [materialFactorRes, tickRes] = await Promise.all([
+    sb
+      .from("cms_material_factor_config")
+      .select("material_code, purity_rate, material_adjust_factor, gold_adjust_factor, price_basis"),
+    sb
+      .from("cms_v_market_tick_latest_gold_silver_ops_v1")
+      .select("gold_price_krw_per_g, silver_price_krw_per_g")
+      .maybeSingle(),
+  ]);
+  if (materialFactorRes.error) throw new Error(materialFactorRes.error.message ?? "소재 팩터 조회 실패");
+  if (tickRes.error) throw new Error(tickRes.error.message ?? "시세 조회 실패");
+  return {
+    goldTickKrwPerG: Math.round(Number(tickRes.data?.gold_price_krw_per_g ?? 0)),
+    silverTickKrwPerG: Math.round(Number(tickRes.data?.silver_price_krw_per_g ?? 0)),
+    materialFactors: buildMaterialFactorMap(materialFactorRes.data ?? []),
+  };
+};
+
+const syncPersistedSizeGridForScope = async ({
+  sb,
+  channelId,
+  masterItemId,
+  externalProductNo,
+}: {
+  sb: NonNullable<ReturnType<typeof getShopAdminClient>>;
+  channelId: string;
+  masterItemId: string;
+  externalProductNo: string;
+}): Promise<void> => {
+  const scopeRes = await sb
+    .from("channel_option_labor_rule_v1")
+    .select(RULE_SELECT)
+    .eq("channel_id", channelId)
+    .eq("master_item_id", masterItemId)
+    .eq("external_product_no", externalProductNo)
+    .eq("is_active", true);
+  if (scopeRes.error) throw new Error(scopeRes.error.message ?? "사이즈 규칙 조회 실패");
+  const scopeRows = ((scopeRes.data ?? []) as unknown) as Array<Record<string, unknown>>;
+  const hasSizeRules = scopeRows.some((row) => String(row.category_key ?? "").trim().toUpperCase() === "SIZE");
+  if (!hasSizeRules) {
+    const deleteRes = await sb
+      .from("channel_option_weight_grid_v1")
+      .delete()
+      .eq("channel_id", channelId)
+      .eq("master_item_id", masterItemId)
+      .eq("external_product_no", externalProductNo);
+    if (deleteRes.error) throw new Error(deleteRes.error.message ?? "사이즈 그리드 삭제 실패");
+    return;
+  }
+  const marketContext = await loadSizeGridMarketContext(sb);
+  await rebuildPersistedSizeGridForScope({
+    sb,
+    channelId,
+    masterItemId,
+    externalProductNo,
+    rules: scopeRows,
+    marketContext,
+  });
+};
+
 const readActor = (request: Request, body: Record<string, unknown>): string => {
   const fromHeaders = String(
     request.headers.get("x-user-email")
@@ -321,17 +392,56 @@ const ensureColorComboExists = async (
   if (!normalizedColorCode) return jsonError(`rows[${rowIndex}].color_code is required`, 400);
   const comboRes = await sb
     .from("channel_color_combo_catalog_v1")
-    .select("combo_id")
+    .select("combo_key, display_name, base_delta_krw, sort_order")
     .eq("channel_id", channelId)
-    .eq("combo_key", normalizedColorCode)
     .eq("is_active", true)
-    .limit(1)
-    .maybeSingle();
+    .limit(5000);
   if (comboRes.error) {
     if (isMissingSchemaObjectError(comboRes.error, "channel_color_combo_catalog_v1")) return null;
     return jsonError(comboRes.error.message ?? "색상 조합 중앙목록 조회 실패", 500);
   }
-  if (!comboRes.data?.combo_id) return jsonError(`rows[${rowIndex}].color_code must exist in channel color combo catalog`, 400);
+  const allowedColorCodes = new Set(
+    buildPlatingComboChoices({
+      catalogRows: (comboRes.data ?? []) as Array<{ combo_key?: string | null; display_name?: string | null; base_delta_krw?: number | null; sort_order?: number | null }>,
+      includeStandard: false,
+    }).map((choice) => choice.value),
+  );
+  if (allowedColorCodes.has(normalizedColorCode)) {
+    return null;
+  }
+  const standardChoices = new Set(
+    buildPlatingComboChoices({
+      catalogRows: [],
+      includeStandard: true,
+    }).map((choice) => choice.value),
+  );
+  if (!standardChoices.has(normalizedColorCode)) {
+    return jsonError(`rows[${rowIndex}].color_code must exist in channel color combo catalog`, 400);
+  }
+  const componentCodes = normalizedColorCode.replace(/^\[도\]\s*/u, "").split("+").filter(Boolean);
+  const platingEnabled = normalizedColorCode.startsWith(`${PLATING_PREFIX} `);
+  const upsertRes = await sb
+    .from("channel_color_combo_catalog_v1")
+    .upsert({
+      channel_id: channelId,
+      combo_key: normalizedColorCode,
+      component_codes: componentCodes,
+      plating_enabled: platingEnabled,
+      display_name: normalizedColorCode,
+      base_delta_krw: 0,
+      sort_order: getPlatingComboSortOrder(normalizedColorCode),
+      is_active: true,
+      created_by: "OPTION_LABOR_RULE_AUTO_SEED",
+      updated_by: "OPTION_LABOR_RULE_AUTO_SEED",
+    }, { onConflict: "channel_id,combo_key" })
+    .select("combo_id")
+    .maybeSingle();
+  if (upsertRes.error) {
+    return jsonError(upsertRes.error.message ?? "색상 조합 중앙목록 자동 보정 실패", 500);
+  }
+  if (!upsertRes.data?.combo_id) {
+    return jsonError(`rows[${rowIndex}].color_code must exist in channel color combo catalog`, 400);
+  }
   return null;
 };
 
@@ -576,6 +686,15 @@ export async function POST(request: Request) {
       .maybeSingle();
     if (insertRes.error) return jsonError(insertRes.error.message ?? "옵션 공임 규칙 생성 실패", 400);
 
+    if (String(serverManaged.category_key ?? "").trim().toUpperCase() === "SIZE") {
+      await syncPersistedSizeGridForScope({
+        sb,
+        channelId,
+        masterItemId,
+        externalProductNo: resolvedExternalProductNo,
+      });
+    }
+
     return NextResponse.json({ data: insertRes.data }, { headers: { "Cache-Control": "no-store" } });
   }
 
@@ -650,11 +769,24 @@ export async function POST(request: Request) {
   if (deleteRes.error) return jsonError(deleteRes.error.message ?? "옵션 공임 규칙 기존값 삭제 실패", 500);
 
   if (dedup.size === 0) {
+    await syncPersistedSizeGridForScope({
+      sb,
+      channelId,
+      masterItemId,
+      externalProductNo: resolvedExternalProductNo,
+    });
     return NextResponse.json({ ok: true, data: [] }, { headers: { "Cache-Control": "no-store" } });
   }
 
   const insertRes = await sb.from("channel_option_labor_rule_v1").insert(Array.from(dedup.values())).select(RULE_SELECT);
   if (insertRes.error) return jsonError(insertRes.error.message ?? "옵션 공임 규칙 저장 실패", 500);
+
+  await syncPersistedSizeGridForScope({
+    sb,
+    channelId,
+    masterItemId,
+    externalProductNo: resolvedExternalProductNo,
+  });
 
   return NextResponse.json({ ok: true, data: insertRes.data ?? [] }, { headers: { "Cache-Control": "no-store" } });
 }
@@ -711,6 +843,13 @@ export async function PUT(request: Request) {
     .maybeSingle();
   if (updateRes.error) return jsonError(updateRes.error.message ?? "옵션 공임 규칙 수정 실패", 400);
 
+  await syncPersistedSizeGridForScope({
+    sb,
+    channelId: String(merged.channel_id ?? "").trim(),
+    masterItemId: String(merged.master_item_id ?? "").trim(),
+    externalProductNo: resolvedExternalProductNo,
+  });
+
   return NextResponse.json({ data: updateRes.data }, { headers: { "Cache-Control": "no-store" } });
 }
 
@@ -725,6 +864,15 @@ export async function DELETE(request: Request) {
   const ruleId = String(body.rule_id ?? "").trim();
   if (!ruleId) return jsonError("rule_id is required", 400);
 
+  const existingRes = await sb
+    .from("channel_option_labor_rule_v1")
+    .select(RULE_SELECT)
+    .eq("rule_id", ruleId)
+    .maybeSingle();
+  if (existingRes.error) return jsonError(existingRes.error.message ?? "기존 옵션 공임 규칙 조회 실패", 500);
+  if (!existingRes.data) return jsonError("rule_id not found", 404);
+  const existingRow = (existingRes.data as unknown) as Record<string, unknown>;
+
   const deleteRes = await sb
     .from("channel_option_labor_rule_v1")
     .delete()
@@ -733,5 +881,13 @@ export async function DELETE(request: Request) {
     .maybeSingle();
   if (deleteRes.error) return jsonError(deleteRes.error.message ?? "옵션 공임 규칙 삭제 실패", 400);
   if (!deleteRes.data) return jsonError("rule_id not found", 404);
+
+  await syncPersistedSizeGridForScope({
+    sb,
+    channelId: String(existingRow.channel_id ?? "").trim(),
+    masterItemId: String(existingRow.master_item_id ?? "").trim(),
+    externalProductNo: String(existingRow.external_product_no ?? "").trim(),
+  });
+
   return NextResponse.json({ ok: true, rule_id: ruleId }, { headers: { "Cache-Control": "no-store" } });
 }

@@ -22,7 +22,7 @@ import {
 } from "@/lib/shop/option-labor-rules";
 import { CONTRACTS } from "@/lib/contracts";
 import { cafe24ListProductVariants, ensureValidCafe24AccessToken, loadCafe24Account } from "@/lib/shop/cafe24";
-import { buildOptionAxisBreakdownFromPublishedVariants, buildOptionEntryRowsFromBreakdown } from "@/lib/shop/single-sot-pricing.js";
+import { buildOptionAxisBreakdownFromPublishedVariants, buildOptionEntryRowsFromBreakdown, validateAdditiveBreakdown } from "@/lib/shop/single-sot-pricing.js";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -562,7 +562,7 @@ export async function POST(request: Request) {
 
   if (policyRes.error) {
     const msg = String(policyRes.error.message ?? "");
-    if (!msg.includes("gm_material")) return jsonError(msg || "?뺤콉 議고쉶 ?ㅽ뙣", 500);
+    if (!msg.includes("gm_material")) return jsonError(msg || "가격 정책 조회 실패", 500);
     const legacyRes = await sb
       .from("pricing_policy")
       .select(policySelectLegacy)
@@ -571,7 +571,7 @@ export async function POST(request: Request) {
       .order("updated_at", { ascending: false })
       .limit(1)
       .maybeSingle();
-    if (legacyRes.error) return jsonError(legacyRes.error.message ?? "?뺤콉 議고쉶 ?ㅽ뙣", 500);
+    if (legacyRes.error) return jsonError(legacyRes.error.message ?? "가격 정책 조회 실패", 500);
     if (legacyRes.data) {
       policy = {
         ...legacyRes.data,
@@ -588,7 +588,12 @@ export async function POST(request: Request) {
     policy = (policyRes.data as Record<string, unknown> | null);
   }
 
-  if (!policy) return jsonError("?쒖꽦 ?뺤콉???놁뒿?덈떎", 422);
+  if (!policy) {
+    return jsonError("활성 가격 정책이 없습니다. 정책 및 팩터에서 활성 정책을 먼저 저장하세요.", 422, {
+      code: "ACTIVE_PRICING_POLICY_REQUIRED",
+      channel_id: channelId,
+    });
+  }
 
   const snapshotV2Probe = await sb.from("pricing_snapshot").select("pricing_algo_version").limit(1);
   const hasV2SnapshotColumns = !snapshotV2Probe.error;
@@ -1828,7 +1833,7 @@ export async function POST(request: Request) {
         final_target_additional_amount_krw: optionPriceDelta,
         source_snapshot_hash: sourceSnapshotHash,
         last_pushed_additional_amount_krw: existingState?.last_pushed_additional_amount_krw ?? null,
-        last_push_status: existingState?.last_push_status ?? null,
+        last_push_status: existingState?.last_push_status ?? "PENDING",
         last_push_http_status: existingState?.last_push_http_status ?? null,
         last_push_error: existingState?.last_push_error ?? null,
         last_pushed_at: existingState?.last_pushed_at ?? null,
@@ -2146,6 +2151,15 @@ export async function POST(request: Request) {
           publishedAdditionalAmountKrw: deltaByVariantCode.get(String(variant.variantCode ?? "").trim()) ?? 0,
         })),
       );
+      const additiveValidation = validateAdditiveBreakdown(breakdown);
+      if (!additiveValidation.ok) {
+        return jsonError("non-additive option pricing combinations are not allowed", 422, {
+          code: "NON_ADDITIVE_OPTION_COMBINATION",
+          external_product_no: externalProductNo,
+          publish_version: computeRequestId,
+          violations: additiveValidation.violations,
+        });
+      }
       const sampleRow = productRows[0] ?? null;
       if (!sampleRow) continue;
       optionEntryRows.push(...buildOptionEntryRowsFromBreakdown({

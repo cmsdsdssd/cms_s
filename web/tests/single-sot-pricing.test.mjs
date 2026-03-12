@@ -4,9 +4,12 @@ import assert from 'node:assert/strict';
 import {
   stripPriceDeltaSuffix,
   formatDeltaDisplay,
+  buildOptionAxisFromCanonicalRows,
   buildOptionAxisBreakdownFromPublishedVariants,
   buildOptionEntryRowsFromBreakdown,
   buildOptionAxisFromPublishedEntries,
+  buildVariantBreakdownFromCanonicalRows,
+  validateAdditiveBreakdown,
 } from '../src/lib/shop/single-sot-pricing.js';
 
 test('stripPriceDeltaSuffix removes trailing delta labels only', () => {
@@ -100,4 +103,65 @@ test('buildOptionEntryRowsFromBreakdown and buildOptionAxisFromPublishedEntries 
     { label: '로즈골드(P)', delta_krw: 199600, delta_display: '+199,600' },
     { label: '화이트골드(W)', delta_krw: 1110800, delta_display: '+1,110,800' },
   ]);
+});
+
+test('buildOptionAxisFromCanonicalRows preserves dynamic axes beyond two axes', () => {
+  const axis = buildOptionAxisFromCanonicalRows([
+    { axis_index: 1, option_name: '사이즈', option_value: '0.08g', resolved_delta_krw: 3500 },
+    { axis_index: 2, option_name: '색상/도금', option_value: '[도] G', resolved_delta_krw: 1100 },
+    { axis_index: 3, option_name: '장식', option_value: 'D-100', resolved_delta_krw: 25000 },
+  ]);
+
+  assert.deepEqual(axis.axes.map((entry) => entry.name), ['사이즈', '색상/도금', '장식']);
+  assert.equal(axis.third.name, '장식');
+  assert.equal(axis.third.values[0]?.delta_krw, 25000);
+});
+
+test('buildVariantBreakdownFromCanonicalRows sums rule-backed deltas across three axes', () => {
+  const breakdown = buildVariantBreakdownFromCanonicalRows({
+    canonicalRows: [
+      { axis_index: 1, option_name: '사이즈', option_value: '0.08g', resolved_delta_krw: 3500 },
+      { axis_index: 2, option_name: '색상/도금', option_value: '[도] G', resolved_delta_krw: 1100 },
+      { axis_index: 3, option_name: '장식', option_value: 'D-100', resolved_delta_krw: 25000 },
+    ],
+    variants: [
+      {
+        variantCode: 'V1',
+        options: [
+          { name: '사이즈', value: '0.08g' },
+          { name: '색상/도금', value: '[도] G' },
+          { name: '장식', value: 'D-100' },
+        ],
+      },
+    ],
+  });
+
+  assert.equal(breakdown.axes.length, 3);
+  assert.equal(breakdown.byVariant[0]?.total_delta_krw, 29600);
+  assert.equal(breakdown.byVariant[0]?.third_value, 'D-100');
+});
+
+
+test('validateAdditiveBreakdown rejects combination-only pricing exceptions', () => {
+  const valid = validateAdditiveBreakdown({
+    firstAxisValues: [{ label: '14K', delta_krw: 0 }, { label: '18K', delta_krw: 20000 }],
+    secondAxisValues: [{ label: '로즈', delta_krw: 300 }, { label: '화이트', delta_krw: 32400 }],
+    byVariant: [
+      { variant_code: 'A', first_value: '14K', second_value: '로즈', total_delta_krw: 300 },
+      { variant_code: 'B', first_value: '18K', second_value: '화이트', total_delta_krw: 52400 },
+    ],
+  });
+  assert.equal(valid.ok, true);
+
+  const invalid = validateAdditiveBreakdown({
+    firstAxisValues: [{ label: '14K', delta_krw: 0 }, { label: '18K', delta_krw: 20000 }],
+    secondAxisValues: [{ label: '로즈', delta_krw: 300 }, { label: '화이트', delta_krw: 32400 }],
+    byVariant: [
+      { variant_code: 'A', first_value: '14K', second_value: '로즈', total_delta_krw: 300 },
+      { variant_code: 'B', first_value: '18K', second_value: '화이트', total_delta_krw: 61000 },
+    ],
+  });
+  assert.equal(invalid.ok, false);
+  assert.equal(invalid.violations[0].variant_code, 'B');
+  assert.equal(invalid.violations[0].expected_total_delta_krw, 52400);
 });

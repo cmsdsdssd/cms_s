@@ -156,17 +156,25 @@ export const isSilverMaterial = (materialCodeRaw: string | null | undefined): bo
 
 export const STANDARD_PLATING_BASE_CODES = ["P", "G", "W", "B"] as const;
 export const PLATING_PREFIX = "[도]";
+const PLATING_PREFIX_PATTERN = /^\[도\]\s*/iu;
 
-export const STANDARD_PLATING_COMBO_CODES = (() => {
-  const out: string[] = [];
-  for (let mask = 1; mask < (1 << STANDARD_PLATING_BASE_CODES.length); mask += 1) {
-    const code = STANDARD_PLATING_BASE_CODES
-      .filter((_, index) => (mask & (1 << index)) !== 0)
-      .join("");
-    if (code) out.push(code);
-  }
-  return out;
-})();
+export const STANDARD_PLATING_COMBO_CODES = [
+  "P",
+  "G",
+  "W",
+  "B",
+  "PG",
+  "PW",
+  "PB",
+  "GW",
+  "GB",
+  "WB",
+  "PGW",
+  "PGB",
+  "PWB",
+  "GWB",
+  "PGWB",
+] as const;
 
 const extractPlatingLetters = (value: string | null | undefined): string[] => {
   const text = String(value ?? "").trim().toUpperCase();
@@ -177,7 +185,11 @@ const extractPlatingLetters = (value: string | null | undefined): string[] => {
 
 const hasExplicitPlatingPrefix = (value: string | null | undefined): boolean => {
   const text = String(value ?? "").trim();
-  return /^\[도\]/iu.test(text);
+  return PLATING_PREFIX_PATTERN.test(text);
+};
+
+const stripPlatingPrefix = (value: string | null | undefined): string => {
+  return String(value ?? "").trim().replace(PLATING_PREFIX_PATTERN, "").trim();
 };
 
 const looksLegacyImplicitPlatingCode = (value: string | null | undefined): boolean => {
@@ -198,8 +210,14 @@ export const normalizePlatingBaseCode = (value: string | null | undefined): stri
   return letters.join("+");
 };
 
+export const normalizePlatingCatalogComboKey = (value: string | null | undefined): string => {
+  const baseCode = normalizePlatingBaseCode(value);
+  if (!baseCode) return "";
+  return hasExplicitPlatingPrefix(value) ? `${PLATING_PREFIX} ${baseCode}` : baseCode;
+};
+
 export const formatPlatingComboLabel = (value: string | null | undefined): string => {
-  return normalizePlatingComboCode(value);
+  return normalizePlatingCatalogComboKey(value);
 };
 
 export const normalizePlatingComboCode = (value: string | null | undefined): string => {
@@ -207,3 +225,106 @@ export const normalizePlatingComboCode = (value: string | null | undefined): str
   if (!baseCode) return "";
   return isPlatingComboCode(value) ? `${PLATING_PREFIX} ${baseCode}` : baseCode;
 };
+
+const STANDARD_PLATING_SORT_ORDER = new Map(
+  STANDARD_PLATING_COMBO_CODES.map((code, index) => [normalizePlatingCatalogComboKey(code), (index + 1) * 10] as const),
+);
+
+const toFiniteSortOrder = (value: unknown, fallback: number): number => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? Math.round(parsed) : fallback;
+};
+
+export const getPlatingComboSortOrder = (value: string | null | undefined): number => {
+  const normalized = normalizePlatingCatalogComboKey(value);
+  if (!normalized) return Number.MAX_SAFE_INTEGER;
+  const baseCode = stripPlatingPrefix(normalized);
+  const baseOrder = STANDARD_PLATING_SORT_ORDER.get(baseCode) ?? Number.MAX_SAFE_INTEGER - 2000;
+  return hasExplicitPlatingPrefix(normalized) ? baseOrder + 1000 : baseOrder;
+};
+
+export type PlatingComboChoice = {
+  value: string;
+  label: string;
+  delta_krw: number | null;
+  sort_order: number;
+};
+
+type PlatingComboCatalogRowLike = {
+  combo_key?: string | null;
+  display_name?: string | null;
+  base_delta_krw?: number | null;
+  sort_order?: number | null;
+  is_active?: boolean | null;
+};
+
+export const buildPlatingComboChoices = (args?: {
+  catalogRows?: PlatingComboCatalogRowLike[] | null;
+  fallbackValues?: Array<string | null | undefined>;
+  includeStandard?: boolean;
+}): PlatingComboChoice[] => {
+  const choices = new Map<string, PlatingComboChoice>();
+
+  const register = (input: {
+    rawValue: string | null | undefined;
+    label?: string | null | undefined;
+    delta_krw?: number | null | undefined;
+    sort_order?: number | null | undefined;
+    preferred?: boolean;
+  }) => {
+    const normalizedValue = normalizePlatingCatalogComboKey(input.rawValue);
+    if (!normalizedValue) return;
+    const nextChoice: PlatingComboChoice = {
+      value: normalizedValue,
+      label: normalizePlatingCatalogComboKey(String(input.label ?? "").trim()) || String(input.label ?? "").trim() || formatPlatingComboLabel(normalizedValue) || normalizedValue,
+      delta_krw: Number.isFinite(Number(input.delta_krw)) ? Math.round(Number(input.delta_krw)) : null,
+      sort_order: toFiniteSortOrder(input.sort_order, getPlatingComboSortOrder(normalizedValue)),
+    };
+    const existing = choices.get(normalizedValue);
+    if (!existing) {
+      choices.set(normalizedValue, nextChoice);
+      return;
+    }
+    const shouldReplace = input.preferred === true
+      || nextChoice.sort_order < existing.sort_order
+      || (nextChoice.sort_order === existing.sort_order && nextChoice.label.length > existing.label.length);
+    if (shouldReplace) {
+      choices.set(normalizedValue, nextChoice);
+    }
+  };
+
+  for (const row of args?.catalogRows ?? []) {
+    if (row?.is_active === false) continue;
+    register({
+      rawValue: row?.combo_key,
+      label: row?.display_name,
+      delta_krw: row?.base_delta_krw,
+      sort_order: row?.sort_order,
+      preferred: true,
+    });
+  }
+
+  if (args?.includeStandard !== false) {
+    for (const code of STANDARD_PLATING_COMBO_CODES) {
+      register({ rawValue: code, label: code, delta_krw: 0, sort_order: getPlatingComboSortOrder(code) });
+      register({
+        rawValue: `${PLATING_PREFIX} ${code}`,
+        label: `${PLATING_PREFIX} ${code}`,
+        delta_krw: 0,
+        sort_order: getPlatingComboSortOrder(`${PLATING_PREFIX} ${code}`),
+      });
+    }
+  }
+
+  for (const value of args?.fallbackValues ?? []) {
+    register({ rawValue: value, label: value, delta_krw: null, sort_order: getPlatingComboSortOrder(value) });
+  }
+
+  return Array.from(choices.values()).sort((left, right) => {
+    if (left.sort_order !== right.sort_order) return left.sort_order - right.sort_order;
+    const labelCompare = left.label.localeCompare(right.label);
+    if (labelCompare !== 0) return labelCompare;
+    return left.value.localeCompare(right.value);
+  });
+};
+

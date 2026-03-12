@@ -78,6 +78,180 @@ export const buildOptionAxisFromPublishedEntries = (entries) => {
   return {
     first: first,
     second: second,
+    axes: [first, second].filter((axis) => String(axis?.name ?? '').trim().length > 0),
+  };
+};
+
+export const buildOptionAxisFromCanonicalRows = (rows) => {
+  const grouped = new Map();
+  for (const row of Array.isArray(rows) ? rows : []) {
+    const axisIndex = Number(row?.axis_index ?? Number.NaN);
+    const optionName = String(row?.option_name ?? '').trim();
+    const optionValue = String(row?.option_value ?? '').trim();
+    const delta = Math.round(Number(row?.resolved_delta_krw ?? Number.NaN));
+    if (!Number.isFinite(axisIndex) || !optionName || !optionValue || !Number.isFinite(delta)) continue;
+    const key = String(axisIndex);
+    const prev = grouped.get(key) ?? { index: axisIndex, name: optionName, values: new Map() };
+    if (!prev.values.has(optionValue)) {
+      prev.values.set(optionValue, {
+        label: optionValue,
+        delta_krw: delta,
+        delta_display: formatDeltaDisplay(delta),
+      });
+    }
+    grouped.set(key, prev);
+  }
+  const axes = Array.from(grouped.values())
+    .sort((a, b) => a.index - b.index)
+    .map((axis) => ({
+      index: axis.index,
+      name: axis.name,
+      values: Array.from(axis.values.values()).sort((a, b) => a.label.localeCompare(b.label, 'ko')),
+    }));
+  return {
+    axes,
+    first: axes[0] ?? { index: 1, name: '', values: [] },
+    second: axes[1] ?? { index: 2, name: '', values: [] },
+    third: axes[2] ?? { index: 3, name: '', values: [] },
+  };
+};
+
+
+export const buildVariantBreakdownFromPublishedEntries = (entries) => {
+  const axis = buildOptionAxisFromPublishedEntries(entries);
+  const firstValues = Array.isArray(axis.first?.values) ? axis.first.values : [];
+  const secondValues = Array.isArray(axis.second?.values) ? axis.second.values : [];
+
+  if (firstValues.length === 0 && secondValues.length === 0) {
+    return { firstAxisName: '', secondAxisName: '', firstAxisValues: [], secondAxisValues: [], byVariant: [] };
+  }
+
+  if (secondValues.length === 0) {
+    return {
+      firstAxisName: axis.first?.name ?? '',
+      secondAxisName: '',
+      firstAxisValues: firstValues,
+      secondAxisValues: [],
+      byVariant: firstValues.map((row, index) => ({
+        variant_code: `axis1-${index + 1}` ,
+        first_value: row.label,
+        second_value: '',
+        total_delta_krw: Math.round(Number(row.delta_krw ?? 0)),
+      })),
+    };
+  }
+
+  const byVariant = [];
+  let index = 1;
+  for (const first of firstValues) {
+    for (const second of secondValues) {
+      byVariant.push({
+        variant_code: `axis-${index++}`,
+        first_value: first.label,
+        second_value: second.label,
+        total_delta_krw: Math.round(Number(first.delta_krw ?? 0)) + Math.round(Number(second.delta_krw ?? 0)),
+      });
+    }
+  }
+
+  return {
+    firstAxisName: axis.first?.name ?? '',
+    secondAxisName: axis.second?.name ?? '',
+    firstAxisValues: firstValues,
+    secondAxisValues: secondValues,
+    byVariant,
+  };
+};
+
+export const buildVariantBreakdownFromCanonicalRows = ({ variants, canonicalRows }) => {
+  const axis = buildOptionAxisFromCanonicalRows(canonicalRows);
+  const deltaByEntryKey = new Map(
+    (Array.isArray(canonicalRows) ? canonicalRows : [])
+      .map((row) => [
+        `${String(row?.option_name ?? '').trim()}::${stripPriceDeltaSuffix(String(row?.option_value ?? '').trim())}`,
+        Math.round(Number(row?.resolved_delta_krw ?? 0)),
+      ])
+      .filter(([entryKey]) => String(entryKey).trim().length > 0),
+  );
+  const byVariant = (Array.isArray(variants) ? variants : []).map((variant, index) => {
+    const axisValues = (Array.isArray(variant?.options) ? variant.options : []).map((option, optionIndex) => ({
+      index: optionIndex + 1,
+      name: String(option?.name ?? '').trim(),
+      value: stripPriceDeltaSuffix(String(option?.value ?? '').trim()),
+    })).filter((axisValue) => axisValue.name && axisValue.value);
+    const totalDelta = axisValues.reduce((sum, axisValue) => (
+      sum + Math.round(Number(deltaByEntryKey.get(`${axisValue.name}::${axisValue.value}`) ?? 0))
+    ), 0);
+    return {
+      variant_code: String(variant?.variantCode ?? variant?.variant_code ?? `axis-${index + 1}`).trim() || `axis-${index + 1}`,
+      axis_values: axisValues,
+      first_value: axisValues[0]?.value ?? '',
+      second_value: axisValues[1]?.value ?? '',
+      third_value: axisValues[2]?.value ?? '',
+      total_delta_krw: totalDelta,
+    };
+  });
+  return {
+    axes: axis.axes,
+    firstAxisName: axis.first?.name ?? '',
+    secondAxisName: axis.second?.name ?? '',
+    thirdAxisName: axis.third?.name ?? '',
+    firstAxisValues: axis.first?.values ?? [],
+    secondAxisValues: axis.second?.values ?? [],
+    thirdAxisValues: axis.third?.values ?? [],
+    byVariant,
+  };
+};
+
+export const validateAdditiveBreakdown = (breakdown) => {
+  const firstDeltaByValue = new Map(
+    Array.isArray(breakdown?.firstAxisValues)
+      ? breakdown.firstAxisValues
+          .map((row) => [String(row?.label ?? '').trim(), Math.round(Number(row?.delta_krw ?? Number.NaN))])
+          .filter(([label, delta]) => label && Number.isFinite(delta))
+      : [],
+  );
+  const secondDeltaByValue = new Map(
+    Array.isArray(breakdown?.secondAxisValues)
+      ? breakdown.secondAxisValues
+          .map((row) => [String(row?.label ?? '').trim(), Math.round(Number(row?.delta_krw ?? Number.NaN))])
+          .filter(([label, delta]) => label && Number.isFinite(delta))
+      : [],
+  );
+  const violations = [];
+  for (const row of Array.isArray(breakdown?.byVariant) ? breakdown.byVariant : []) {
+    const firstValue = String(row?.first_value ?? '').trim();
+    const secondValue = String(row?.second_value ?? '').trim();
+    const totalDelta = Math.round(Number(row?.total_delta_krw ?? Number.NaN));
+    if (!firstValue || !secondValue || !Number.isFinite(totalDelta)) continue;
+    const firstDelta = firstDeltaByValue.get(firstValue);
+    const secondDelta = secondDeltaByValue.get(secondValue);
+    if (!Number.isFinite(firstDelta) || !Number.isFinite(secondDelta)) {
+      violations.push({
+        variant_code: String(row?.variant_code ?? '').trim(),
+        first_value: firstValue,
+        second_value: secondValue,
+        total_delta_krw: totalDelta,
+        expected_total_delta_krw: null,
+        reason: 'MISSING_AXIS_DELTA',
+      });
+      continue;
+    }
+    const expected = Math.round(Number(firstDelta) + Number(secondDelta));
+    if (expected !== totalDelta) {
+      violations.push({
+        variant_code: String(row?.variant_code ?? '').trim(),
+        first_value: firstValue,
+        second_value: secondValue,
+        total_delta_krw: totalDelta,
+        expected_total_delta_krw: expected,
+        reason: 'NON_ADDITIVE_VARIANT_DELTA',
+      });
+    }
+  }
+  return {
+    ok: violations.length === 0,
+    violations,
   };
 };
 

@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { Sheet } from "@/components/ui/sheet";
 import type { PricingSnapshotExplainRow } from "@/types/pricingSnapshot";
@@ -81,14 +81,14 @@ export function PricingSnapshotDrawer({
     <Sheet
       open={open}
       onOpenChange={onOpenChange}
-      title="V2 가격 결정 근거"
+      title="게시 기준 계산 근거"
       side="right"
       className="w-full lg:w-[1380px]"
     >
       <div className="flex h-full flex-col">
         <div className="border-b border-[var(--hairline)] px-4 py-3">
-          <div className="text-sm font-semibold">V2 계산 근거</div>
-        <div className="text-xs text-[var(--muted)]">fallback 없이 V2 뷰 최신 스냅샷 값을 그대로 표시합니다.</div>
+          <div className="text-sm font-semibold">게시 기준 계산 근거</div>
+        <div className="text-xs text-[var(--muted)]">이 화면은 게시 기준 가격의 계산 근거를 설명하는 디버그 뷰입니다. 운영 기준값은 publish/live 비교를 우선 보세요.</div>
         </div>
 
         <div className="flex-1 space-y-3 overflow-auto p-4 text-sm">
@@ -99,18 +99,18 @@ export function PricingSnapshotDrawer({
           {row ? (
             <>
               <section className="rounded border border-[var(--hairline)] bg-[var(--panel)] p-3">
-                <div className="mb-2 text-xs text-[var(--muted)]">Outcome</div>
+                <div className="mb-2 text-xs text-[var(--muted)]">Publish vs Live</div>
                 <div className="grid grid-cols-2 gap-x-4 gap-y-2 lg:grid-cols-4">
                   <div>
-                    <div className="text-[11px] text-[var(--muted)]">쇼핑몰 현재가</div>
+                    <div className="text-[11px] text-[var(--muted)]">실몰 현재가(live)</div>
                     <div className="font-semibold">{fmt(currentChannelPriceKrw)}</div>
                   </div>
                   <div>
-                    <div className="text-[11px] text-[var(--muted)]">최종 목표가</div>
+                    <div className="text-[11px] text-[var(--muted)]">게시 목표가(publish)</div>
                     <div className="font-semibold">{fmt(finalShown)}</div>
                   </div>
                   <div>
-                    <div className="text-[11px] text-[var(--muted)]">동기화 Δ</div>
+                    <div className="text-[11px] text-[var(--muted)]">게시-실몰 Δ</div>
                     <div className="font-semibold">{currentGap == null ? "-" : signed(currentGap)}</div>
                   </div>
                   <div>
@@ -119,12 +119,12 @@ export function PricingSnapshotDrawer({
                   </div>
                 </div>
                 <div className="mt-2 text-xs text-[var(--muted)]">
-                  calc_version: {row.calc_version ?? "-"} / guardrail 정책: max(후보가, 최소마진보장가) / floor: 미사용(V2 no-floor)
+                  debug: calc_version {row.calc_version ?? "-"} / guardrail 정책 max(후보가, 최소마진보장가) / floor 미사용
                 </div>
               </section>
 
               <section className="rounded border border-[var(--hairline)] bg-[var(--panel)] p-3">
-                <div className="mb-2 text-xs text-[var(--muted)]">V2 Decision Trace (후보가 -&gt; 최소마진보장가 -&gt; guardrail -&gt; final)</div>
+                <div className="mb-2 text-xs text-[var(--muted)]">계산 trace (debug)</div>
                 {isV2 && hasV2Trace ? (
                   <div className="grid grid-cols-[180px_1fr] gap-y-2">
                     <div className="text-[var(--muted)]">후보가</div>
@@ -166,7 +166,7 @@ export function PricingSnapshotDrawer({
 
               {isV2 && laborComponents.length > 0 ? (
                 <section className="rounded border border-[var(--hairline)] bg-[var(--panel)] p-3">
-                  <div className="mb-2 text-xs text-[var(--muted)]">V2 노무 컴포넌트 상세</div>
+                  <div className="mb-2 text-xs text-[var(--muted)]">노무 컴포넌트 상세 (debug)</div>
                   <div className="mb-2 grid grid-cols-2 gap-1 text-xs lg:grid-cols-4">
                     <div>총 absorb(applied)</div><div className="text-right font-semibold">{fmt(row.absorb_total_applied_krw)}</div>
                     <div>총 absorb(raw)</div><div className="text-right font-semibold">{fmt(row.absorb_total_raw_krw)}</div>
@@ -199,7 +199,7 @@ export function PricingSnapshotDrawer({
               ) : null}
 
               <details className="rounded border border-[var(--hairline)] bg-[var(--background)] p-3" open>
-                <summary className="cursor-pointer text-xs font-semibold text-[var(--muted)]">Inputs</summary>
+                <summary className="cursor-pointer text-xs font-semibold text-[var(--muted)]">Inputs (debug)</summary>
                 <div className="mt-3 grid grid-cols-2 gap-1 lg:grid-cols-3">
                   <div>material_pre_fee</div><div className="text-right">{fmt(row.material_pre_fee_krw)}</div>
                   <div>labor_pre_fee</div><div className="text-right">{fmt(row.labor_pre_fee_krw)}</div>
@@ -216,12 +216,12 @@ export function PricingSnapshotDrawer({
               </details>
 
               <section className="rounded border border-[var(--hairline)] bg-[var(--background)] p-3 text-xs">
-                <div>Metadata</div>
-                <div className="mt-1 text-[var(--muted)]">algo_version: {algoVersion}</div>
+                <div>Metadata (debug)</div>
+                <div className="mt-1 text-[var(--muted)]">debug algo_version: {algoVersion}</div>
                 <div className="text-[var(--muted)]">master_item_id: {row.master_item_id}</div>
                 <div className="text-[var(--muted)]">channel_product_id: {row.channel_product_id}</div>
                 <div className="text-[var(--muted)]">external_variant_code: {row.external_variant_code ?? "-"}</div>
-                <div className="mt-1 text-[var(--muted)]">compute_request_id: {row.compute_request_id}</div>
+                <div className="mt-1 text-[var(--muted)]">publish_version alias: {row.compute_request_id}</div>
                 <div className="text-[var(--muted)]">computed_at: {computedAt}</div>
               </section>
             </>

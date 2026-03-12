@@ -1,6 +1,6 @@
 import { resolveMarketLinkedSizeCell } from "./market-linked-size-grid.js";
 import { resolvePersistedSizeGridCell } from "./weight-grid-store.js";
-import { isPlatingComboCode, normalizePlatingComboCode } from "./sync-rules.ts";
+import { isPlatingComboCode, normalizePlatingCatalogComboKey } from "./sync-rules.ts";
 
 const CATEGORY_KEYS = ["MATERIAL", "SIZE", "COLOR_PLATING", "DECOR", "OTHER"];
 
@@ -36,7 +36,7 @@ export const normalizeMaterialScopeCode = (value) => {
 };
 
 export const normalizeOptionLaborColorCode = (value) => {
-  const normalized = normalizePlatingComboCode(value);
+  const normalized = normalizePlatingCatalogComboKey(value);
   return normalized || null;
 };
 

@@ -1,5 +1,6 @@
 ﻿import { NextResponse } from "next/server";
 import { getShopAdminClient, jsonError, parseJsonObject } from "@/lib/shop/admin";
+import { ensureActiveSyncRuleSet } from "@/lib/shop/active-sync-rule-set";
 import {
   buildMaterialPurityMap,
   getMaterialPurityFromMap,
@@ -115,12 +116,16 @@ export async function POST(request: Request) {
   if (!body) return jsonError("Invalid request body", 400);
 
   const channelId = String(body.channel_id ?? "").trim();
-  const ruleSetId = String(body.rule_set_id ?? "").trim();
+  let ruleSetId = String(body.rule_set_id ?? "").trim();
   const channelProductId = typeof body.channel_product_id === "string" ? body.channel_product_id.trim() : "";
   const sampleLimitRaw = Number(body.sample_limit ?? 10);
   const sampleLimit = Number.isFinite(sampleLimitRaw) ? Math.max(1, Math.min(100, Math.floor(sampleLimitRaw))) : 10;
   if (!channelId) return jsonError("channel_id is required", 400);
-  if (!ruleSetId) return jsonError("rule_set_id is required", 400);
+  if (!ruleSetId) {
+    const activeRuleSet = await ensureActiveSyncRuleSet(sb, channelId);
+    ruleSetId = activeRuleSet?.rule_set_id ?? "";
+  }
+  if (!ruleSetId) return jsonError("active rule_set_id is required", 422, { code: "ACTIVE_SYNC_RULE_SET_REQUIRED", channel_id: channelId });
 
   const mappingQuery = sb
     .from("sales_channel_product")

@@ -21,6 +21,116 @@ const toRoundedOrNull = (value: unknown): number | null => {
   return Number.isFinite(parsed) ? Math.round(parsed) : null;
 };
 
+const readRowValue = (row: Record<string, unknown>, snakeKey: string, camelKey: string): unknown => {
+  if (row[snakeKey] !== undefined) return row[snakeKey];
+  return row[camelKey];
+};
+
+export const buildPolicyLogInsertRows = (args: {
+  channelId: string;
+  masterItemId: string;
+  externalProductNo: string;
+  changeReason: string;
+  changedBy: string | null;
+  rowsRaw: unknown[];
+}) => {
+  return args.rowsRaw
+    .map((rawRow) => {
+      const row = parseJsonObject(rawRow);
+      if (!row) return null;
+      const entryKey = toTrimmed(readRowValue(row, "entry_key", "entryKey"));
+      const axisKeyRaw = toTrimmed(readRowValue(row, "axis_key", "axisKey")).toUpperCase();
+      if (!entryKey || !axisKeyRaw || !ALLOWED_AXIS_KEYS.has(axisKeyRaw)) return null;
+      const axisKey = axisKeyRaw as "OTHER_REASON" | "OPTION_CATEGORY" | "OPTION_AXIS_SELECTION";
+
+      if (axisKey === "OTHER_REASON") {
+        const otherReason = toTrimmed(readRowValue(row, "other_reason", "otherReason"));
+        if (!otherReason) return null;
+        return {
+          policy_id: null,
+          channel_id: args.channelId,
+          master_item_id: args.masterItemId,
+          axis_key: "OTHER_REASON",
+          axis_value: `${args.externalProductNo}::${entryKey}`,
+          action_type: "UPDATE",
+          old_row: null,
+          new_row: {
+            entry_key: entryKey,
+            other_reason: otherReason,
+            resolved_delta_krw: toRoundedOrNull(readRowValue(row, "resolved_delta_krw", "resolvedDeltaKrw")) ?? 0,
+            category_key: normalizeCategoryKey(readRowValue(row, "category_key", "categoryKey")) ?? "OTHER",
+          },
+          change_reason: args.changeReason || "OTHER_REASON_SAVE",
+          changed_by: args.changedBy,
+        };
+      }
+
+      if (axisKey === "OPTION_CATEGORY") {
+        const categoryKey = normalizeCategoryKey(readRowValue(row, "category_key", "categoryKey"));
+        if (!categoryKey) return null;
+        return {
+          policy_id: null,
+          channel_id: args.channelId,
+          master_item_id: args.masterItemId,
+          axis_key: "OPTION_CATEGORY",
+          axis_value: `${args.externalProductNo}::${entryKey}`,
+          action_type: "UPDATE",
+          old_row: null,
+          new_row: {
+            entry_key: entryKey,
+            category_key: categoryKey,
+          },
+          change_reason: args.changeReason || "OPTION_CATEGORY_SAVE",
+          changed_by: args.changedBy,
+        };
+      }
+
+      if (axisKey === "OPTION_AXIS_SELECTION") {
+        const categoryKey = normalizeCategoryKey(readRowValue(row, "category_key", "categoryKey"));
+        const axis1Value = toTrimmed(readRowValue(row, "axis1_value", "axis1Value")) || null;
+        const axis2Value = toTrimmed(readRowValue(row, "axis2_value", "axis2Value")) || null;
+        const axis3Value = toTrimmed(readRowValue(row, "axis3_value", "axis3Value")) || null;
+        const decorMasterItemId = toTrimmed(readRowValue(row, "decor_master_item_id", "decorMasterItemId")) || null;
+        const decorExtraDeltaKrw = toRoundedOrNull(readRowValue(row, "decor_extra_delta_krw", "decorExtraDeltaKrw"));
+        const decorFinalAmountKrw = toRoundedOrNull(readRowValue(row, "decor_final_amount_krw", "decorFinalAmountKrw"));
+        const hasMeaningfulSelection = Boolean(
+          categoryKey
+          || axis1Value
+          || axis2Value
+          || axis3Value
+          || decorMasterItemId
+          || decorExtraDeltaKrw != null
+          || decorFinalAmountKrw != null,
+        );
+        if (!hasMeaningfulSelection) return null;
+        return {
+          policy_id: null,
+          channel_id: args.channelId,
+          master_item_id: args.masterItemId,
+          axis_key: "OPTION_AXIS_SELECTION",
+          axis_value: `${args.externalProductNo}::${entryKey}`,
+          action_type: "UPDATE",
+          old_row: null,
+          new_row: {
+            entry_key: entryKey,
+            category_key: categoryKey,
+            axis1_value: axis1Value,
+            axis2_value: axis2Value,
+            axis3_value: axis3Value,
+            decor_master_item_id: decorMasterItemId,
+            decor_extra_delta_krw: decorExtraDeltaKrw,
+            decor_final_amount_krw: decorFinalAmountKrw,
+          },
+          change_reason: args.changeReason || "OPTION_AXIS_SELECTION_SAVE",
+          changed_by: args.changedBy,
+        };
+      }
+
+      return null;
+    })
+    .filter((row): row is NonNullable<typeof row> => Boolean(row));
+};
+
 export async function GET(request: Request) {
   const sb = getShopAdminClient();
   if (!sb) return jsonError("Supabase server env missing", 500);
@@ -78,86 +188,18 @@ export async function POST(request: Request) {
   const rowsRaw = Array.isArray(body.rows) ? body.rows : [];
   if (rowsRaw.length === 0) return jsonError("rows is required", 400);
 
-  const insertRows = rowsRaw
-    .map((rawRow) => {
-      const row = parseJsonObject(rawRow);
-      if (!row) return null;
-      const entryKey = toTrimmed(row.entry_key);
-      const axisKeyRaw = toTrimmed(row.axis_key).toUpperCase();
-      if (!entryKey || !axisKeyRaw || !ALLOWED_AXIS_KEYS.has(axisKeyRaw)) return null;
-      const axisKey = axisKeyRaw as "OTHER_REASON" | "OPTION_CATEGORY" | "OPTION_AXIS_SELECTION";
+  const insertRows = buildPolicyLogInsertRows({
+    channelId,
+    masterItemId,
+    externalProductNo,
+    changeReason,
+    changedBy,
+    rowsRaw,
+  });
 
-      if (axisKey === "OTHER_REASON") {
-        const otherReason = toTrimmed(row.other_reason);
-        if (!otherReason) return null;
-        return {
-          policy_id: null,
-          channel_id: channelId,
-          master_item_id: masterItemId,
-          axis_key: "OTHER_REASON",
-          axis_value: `${externalProductNo}::${entryKey}`,
-          action_type: "UPDATE",
-          old_row: null,
-          new_row: {
-            entry_key: entryKey,
-            other_reason: otherReason,
-            resolved_delta_krw: toRoundedOrNull(row.resolved_delta_krw) ?? 0,
-            category_key: normalizeCategoryKey(row.category_key) ?? "OTHER",
-          },
-          change_reason: changeReason || "OTHER_REASON_SAVE",
-          changed_by: changedBy,
-        };
-      }
-
-      if (axisKey === "OPTION_CATEGORY") {
-        const categoryKey = normalizeCategoryKey(row.category_key);
-        if (!categoryKey) return null;
-        return {
-          policy_id: null,
-          channel_id: channelId,
-          master_item_id: masterItemId,
-          axis_key: "OPTION_CATEGORY",
-          axis_value: `${externalProductNo}::${entryKey}`,
-          action_type: "UPDATE",
-          old_row: null,
-          new_row: {
-            entry_key: entryKey,
-            category_key: categoryKey,
-          },
-          change_reason: changeReason || "OPTION_CATEGORY_SAVE",
-          changed_by: changedBy,
-        };
-      }
-
-      if (axisKey === "OPTION_AXIS_SELECTION") {
-        return {
-          policy_id: null,
-          channel_id: channelId,
-          master_item_id: masterItemId,
-          axis_key: "OPTION_AXIS_SELECTION",
-          axis_value: `${externalProductNo}::${entryKey}`,
-          action_type: "UPDATE",
-          old_row: null,
-          new_row: {
-            entry_key: entryKey,
-            category_key: normalizeCategoryKey(row.category_key),
-            axis1_value: toTrimmed(row.axis1_value) || null,
-            axis2_value: toTrimmed(row.axis2_value) || null,
-            axis3_value: toTrimmed(row.axis3_value) || null,
-            decor_master_item_id: toTrimmed(row.decor_master_item_id) || null,
-            decor_extra_delta_krw: toRoundedOrNull(row.decor_extra_delta_krw),
-            decor_final_amount_krw: toRoundedOrNull(row.decor_final_amount_krw),
-          },
-          change_reason: changeReason || "OPTION_AXIS_SELECTION_SAVE",
-          changed_by: changedBy,
-        };
-      }
-
-      return null;
-    })
-    .filter((row): row is NonNullable<typeof row> => Boolean(row));
-
-  if (insertRows.length === 0) return jsonError("유효한 로그 rows가 없습니다", 400);
+  if (insertRows.length === 0) {
+    return NextResponse.json({ data: [], saved: 0 }, { headers: { "Cache-Control": "no-store" } });
+  }
 
   const { data, error } = await sb
     .from("channel_option_value_policy_log")

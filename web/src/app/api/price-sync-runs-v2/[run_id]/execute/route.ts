@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+﻿import { NextResponse } from "next/server";
 import { getShopAdminClient, jsonError, parseJsonObject } from "@/lib/shop/admin";
 import { POST as pushPost } from "@/app/api/channel-prices/push/route";
 import {
@@ -255,24 +255,15 @@ export async function POST(_request: Request, { params }: Params) {
         if (logical) chunkLogicalTargets.add(logical);
       }
 
-      const desiredTargetByChannelProduct: Record<string, number> = {};
-      for (const row of pendingIntents) {
-        if (row.compute_request_id !== computeRequestId) continue;
-        if (!productChunk.includes(row.channel_product_id)) continue;
-        const desired = Number(row.desired_price_krw ?? Number.NaN);
-        if (!Number.isFinite(desired) || desired <= 0) continue;
-        desiredTargetByChannelProduct[row.channel_product_id] = Math.round(desired);
-      }
-
       const pushRes = await pushPost(
         mkJsonRequest("/api/channel-prices/push", {
           channel_id: channelId,
           channel_product_ids: productChunk,
           compute_request_id: computeRequestId,
+          publish_version: computeRequestId,
           run_type: "AUTO",
           dry_run: false,
           sync_option_labels: false,
-          desired_target_price_by_channel_product: desiredTargetByChannelProduct,
         }),
       );
       const pushJson = await pushRes.json().catch(() => ({}));

@@ -1883,12 +1883,17 @@ export default function ShoppingAutoPricePage() {
       || null,
     [canonicalOptionRows, variantLookupData?.master_material_code],
   );
+  const singleAllowlistMaterialCode = useMemo(
+    () => loadedOptionAllowlist.materials.length === 1 ? String(loadedOptionAllowlist.materials[0]?.value ?? "").trim() : "",
+    [loadedOptionAllowlist.materials],
+  );
   const fallbackSizeMaterialCode = useMemo(
-    () => String(variantLookupData?.master_material_code ?? "").trim()
+    () => singleAllowlistMaterialCode
+      || String(variantLookupData?.master_material_code ?? "").trim()
       || resolvedMasterMaterialCode
       || Object.keys(loadedOptionAllowlist.sizes_by_material ?? {}).find((key) => String(key ?? "").trim())
       || null,
-    [loadedOptionAllowlist.sizes_by_material, resolvedMasterMaterialCode, variantLookupData?.master_material_code],
+    [loadedOptionAllowlist.materials, loadedOptionAllowlist.sizes_by_material, resolvedMasterMaterialCode, singleAllowlistMaterialCode, variantLookupData?.master_material_code],
   );
   const resolvedMasterMaterialLabel = useMemo(
     () => canonicalOptionRows.find((row) => String(row.material_label_resolved ?? "").trim())?.material_label_resolved
@@ -2108,10 +2113,19 @@ export default function ShoppingAutoPricePage() {
     }
     return Array.from(next.values()).sort((left, right) => left.value.localeCompare(right.value));
   }, [loadedOptionAllowlist.materials, optionLaborRuleRows]);
+  const singleMaterialChoiceValue = useMemo(
+    () => materialChoicePool.length === 1 ? String(materialChoicePool[0]?.value ?? "").trim() : "",
+    [materialChoicePool],
+  );
   const hasChoiceValue = (choices: Array<{ value: string }>, value: string | null | undefined): boolean => {
     const normalized = String(value ?? '').trim();
     if (!normalized) return false;
     return choices.some((choice) => String(choice.value ?? '').trim() === normalized);
+  };
+  const resolvePreferredMaterialDraftValue = (resolvedMaterialCode: string, fallbackValue = ""): string => {
+    if (hasChoiceValue(materialChoicePool, resolvedMaterialCode)) return resolvedMaterialCode;
+    if (singleMaterialChoiceValue) return singleMaterialChoiceValue;
+    return fallbackValue;
   };
   const decorRuleByMasterId = useMemo(() => {
     const next = new Map<string, OptionLaborRuleRow>();
@@ -2290,9 +2304,12 @@ export default function ShoppingAutoPricePage() {
         : resolvePreferredCategoryForOptionName(entry.optionName, canonicalRow?.category_key);
       const resolvedMaterialCode = String(canonicalRow?.material_code_resolved ?? "").trim();
       if (categoryKey === "SIZE") {
-        next[entry.entryKey] = String(fallbackSizeMaterialCode || resolvedMasterMaterialCode || resolvedMaterialCode || "").trim();
+        next[entry.entryKey] = resolvePreferredMaterialDraftValue(
+          resolvedMaterialCode,
+          String(fallbackSizeMaterialCode || resolvedMasterMaterialCode || resolvedMaterialCode || "").trim(),
+        );
       } else if (categoryKey === "COLOR_PLATING" || categoryKey === "OTHER") {
-        next[entry.entryKey] = hasChoiceValue(materialChoicePool, resolvedMaterialCode) ? resolvedMaterialCode : "";
+        next[entry.entryKey] = resolvePreferredMaterialDraftValue(resolvedMaterialCode);
       } else if (categoryKey === "DECOR") {
         next[entry.entryKey] = String(
           canonicalRow?.decor_material_code_snapshot
@@ -2306,7 +2323,15 @@ export default function ShoppingAutoPricePage() {
       }
     }
     return next;
-  }, [canonicalOptionRowByEntryKey, fallbackSizeMaterialCode, materialChoicePool, optionCategoryDrafts, optionEntries]);
+  }, [
+    canonicalOptionRowByEntryKey,
+    fallbackSizeMaterialCode,
+    materialChoicePool,
+    optionCategoryDrafts,
+    optionEntries,
+    resolvePreferredMaterialDraftValue,
+    resolvedMasterMaterialCode,
+  ]);
   const optionAxis1Drafts =
     optionAxis1DraftSlot.resetKey === variantDraftResetKey ? optionAxis1DraftSlot.value : defaultOptionAxis1Drafts;
   const setOptionAxis1Drafts = (next: StringMap | ((current: StringMap) => StringMap)) => {
@@ -2332,7 +2357,7 @@ export default function ShoppingAutoPricePage() {
         const colorValue = String(canonicalRow?.color_code_selected ?? "").trim();
         const scopedChoices = (colorCodesByMaterial.get(resolvedMaterialCode) ?? []).map((value) => ({ value }));
         const fallbackChoices = loadedOptionAllowlist.colors.map((choice) => ({ value: String(choice.value ?? "").trim() })).filter((choice) => choice.value);
-        const colorChoices = scopedChoices.length > 0 ? scopedChoices : fallbackChoices;
+        const colorChoices = Array.from(new Map([...scopedChoices, ...fallbackChoices].map((choice) => [choice.value, choice] as const)).values());
         next[entry.entryKey] = hasChoiceValue(colorChoices, colorValue) ? colorValue : "";
       } else if (categoryKey === "DECOR") {
         next[entry.entryKey] = String(canonicalRow?.decor_model_name_selected ?? "").trim();
@@ -2458,9 +2483,14 @@ export default function ShoppingAutoPricePage() {
     if (targetEntries.length === 0) return;
     if (nextCategoryKey === "SIZE") {
       void ensureVariantLookupData().then((data) => {
-        const sizeMaterialCode = String(data?.master_material_code ?? "").trim()
-          || Object.keys(data?.option_detail_allowlist?.sizes_by_material ?? {}).find((key) => String(key ?? "").trim())
-          || "";
+        const allowlistMaterials = Array.isArray(data?.option_detail_allowlist?.materials)
+          ? data.option_detail_allowlist.materials.map((choice) => String(choice?.value ?? "").trim()).filter(Boolean)
+          : [];
+        const sizeMaterialCode = allowlistMaterials.length === 1
+          ? (allowlistMaterials[0] ?? "")
+          : String(data?.master_material_code ?? "").trim()
+            || Object.keys(data?.option_detail_allowlist?.sizes_by_material ?? {}).find((key) => String(key ?? "").trim())
+            || "";
         if (!sizeMaterialCode) return;
         setOptionAxis1Drafts((prev) => {
           const next = { ...prev };
@@ -2472,9 +2502,14 @@ export default function ShoppingAutoPricePage() {
 
     setOptionAxis1Drafts((prev) => {
       const next = { ...prev };
+      const preferredMaterialCode = nextCategoryKey === "SIZE" || nextCategoryKey === "COLOR_PLATING" || nextCategoryKey === "OTHER"
+        ? resolvePreferredMaterialDraftValue("")
+        : "";
       for (const entry of targetEntries) {
         if (nextCategoryKey === "SIZE") {
           delete next[entry.entryKey];
+        } else if (preferredMaterialCode) {
+          next[entry.entryKey] = preferredMaterialCode;
         } else {
           next[entry.entryKey] = "";
         }
@@ -2665,21 +2700,13 @@ export default function ShoppingAutoPricePage() {
   }, [evaluatedOptionRows]);
   const resolveSizeRuleDeltaKrw = (materialCodeLike: string, weightTextLike: string): number | null => {
     const materialCode = String(materialCodeLike ?? "").trim();
-    const weightValue = parseNumericInput(weightTextLike);
-    if (!materialCode || weightValue == null) return null;
-    const buckets = computeOptionLaborRuleBuckets(optionLaborRuleRows, {
-      materialCode,
-      additionalWeightG: weightValue,
-      platingEnabled: false,
-      colorCode: null,
-      decorationCode: null,
-      decorationMasterId: null,
-    }, {
-      masterItemId: editorMasterItemId,
-      externalProductNo: optionLaborRuleProductNo,
-      marketContext: sizeRuleMarketContext,
-    });
-    return Number.isFinite(Number(buckets.size)) ? Math.round(Number(buckets.size)) : null;
+    const weightText = String(weightTextLike ?? "").trim();
+    if (!materialCode || !weightText) return null;
+    const matchedChoice = (loadedOptionAllowlist.sizes_by_material[materialCode] ?? []).find(
+      (choice) => String(choice.value ?? "").trim() === weightText,
+    );
+    const delta = matchedChoice?.delta_krw;
+    return Number.isFinite(Number(delta)) ? Math.round(Number(delta)) : null;
   };
   const compactOptionRows = useMemo<CompactOptionRow[]>(() => {
     return optionEntries.map((entry) => {
@@ -2955,7 +2982,7 @@ export default function ShoppingAutoPricePage() {
         value: String(choice.value ?? "").trim(),
         label: String(choice.label ?? choice.value ?? "").trim() || String(choice.value ?? "").trim(),
       })).filter((choice) => choice.value);
-      const base = scopedChoices.length > 0 ? scopedChoices : fallbackChoices;
+      const base = Array.from(new Map([...scopedChoices, ...fallbackChoices].map((choice) => [choice.value, choice] as const)).values());
       next.set(row.entryKey, withResolvedChoice(base, row.selectedColorCode, row.legacyStatus !== "VALID", colorLabelByCode.get(row.selectedColorCode) ?? row.selectedColorCode));
     }
     return next;
@@ -3228,7 +3255,7 @@ export default function ShoppingAutoPricePage() {
       : baseDraft;
     const optionPriceMode: "SYNC" | "MANUAL" = existing?.option_price_mode === "MANUAL" ? "MANUAL" : "SYNC";
     const syncRuleSetId = optionPriceMode === "SYNC" ? (siblingSyncRuleSetId || String(existing?.sync_rule_set_id ?? "").trim()) : "";
-    const externalProductNo = requestedEditorProductNo || canonicalEditorProductNo || resolvedEditorProductNo || String(editorPreview?.productNo ?? "").trim();
+    const externalProductNo = canonicalEditorProductNo || requestedEditorProductNo || resolvedEditorProductNo || String(editorPreview?.productNo ?? "").trim();
     const allowedMaterialCodes = new Set(loadedOptionAllowlist.materials.map((choice) => choice.value));
     const resolvedMaterialCode = draft.option_material_code && allowedMaterialCodes.has(draft.option_material_code)
       ? draft.option_material_code
@@ -3308,7 +3335,7 @@ export default function ShoppingAutoPricePage() {
     mutationFn: async (_args?: { skipApply?: boolean }) => {
       if (!effectiveChannelId) throw new Error("channel_id가 필요합니다");
       if (!editorMasterItemId) throw new Error("master_item_id가 필요합니다");
-      const externalProductNo = requestedEditorProductNo || canonicalEditorProductNo || resolvedEditorProductNo || String(editorPreview?.productNo ?? "").trim();
+      const externalProductNo = canonicalEditorProductNo || requestedEditorProductNo || resolvedEditorProductNo || String(editorPreview?.productNo ?? "").trim();
       if (!externalProductNo) throw new Error("external_product_no가 필요합니다");
       if (optionEntries.length === 0) return { ok: true, data: [] as OptionCategoryRow[] };
       if (blockingOptionRows.length > 0) {
@@ -3350,13 +3377,14 @@ export default function ShoppingAutoPricePage() {
             throw new Error(`${entry.optionName} ${entry.optionValue} 기타 카테고리는 사유를 입력해야 합니다`);
           }
           return {
+            axis_key: "OTHER_REASON" as const,
             entry_key: entry.entryKey,
             other_reason: reason,
             resolved_delta_krw: Math.round(parseNumericInput(optionSyncDeltaDrafts[entry.entryKey] ?? defaultOptionSyncDeltaDrafts[entry.entryKey] ?? "0") ?? 0),
             category_key: "OTHER",
           };
         })
-        .filter((row): row is { entry_key: string; other_reason: string; resolved_delta_krw: number; category_key: "OTHER" } => Boolean(row));
+        .filter((row): row is { axis_key: "OTHER_REASON"; entry_key: string; other_reason: string; resolved_delta_krw: number; category_key: "OTHER" } => Boolean(row));
 
       const noticeCategoryRows = optionEntries
         .map((entry) => {
@@ -3474,63 +3502,106 @@ export default function ShoppingAutoPricePage() {
           })
         : { ok: true, data: [] as OptionCategoryRow[] };
 
+      const centralRuleTargetProductNo = canonicalEditorProductNo || optionLaborRuleProductNo || externalProductNo;
+      const preservedCentralRuleRows = optionLaborRuleRows
+        .filter((row) => String(row.external_product_no ?? "").trim() === centralRuleTargetProductNo)
+        .filter((row) => row.category_key !== "COLOR_PLATING" && row.category_key !== "DECOR")
+        .map((row) => ({
+          category_key: row.category_key,
+          scope_material_code: row.scope_material_code,
+          additional_weight_g: row.additional_weight_g,
+          additional_weight_min_g: row.additional_weight_min_g,
+          additional_weight_max_g: row.additional_weight_max_g,
+          plating_enabled: row.plating_enabled,
+          color_code: row.color_code,
+          decoration_master_id: row.decoration_master_id,
+          decoration_model_name: row.decoration_model_name,
+          base_labor_cost_krw: row.base_labor_cost_krw,
+          additive_delta_krw: row.additive_delta_krw,
+          formula_multiplier: row.formula_multiplier,
+          formula_offset_krw: row.formula_offset_krw,
+          rounding_unit_krw: row.rounding_unit_krw,
+          rounding_mode: row.rounding_mode,
+          is_active: row.is_active !== false,
+          note: row.note ?? null,
+        }));
       const colorRuleTargets = new Map<string, {
         materialCode: string;
         colorCode: string;
         additiveDeltaKrw: number;
       }>();
+      const decorRuleTargets = new Map<string, {
+        decorationMasterId: string;
+        decorationModelName: string;
+        additiveDeltaKrw: number;
+      }>();
       for (const entry of optionEntries) {
         const compactRow = compactOptionRowByEntryKey.get(entry.entryKey);
         const categoryKey = compactRow?.categoryKey ?? effectiveCategoryByOptionName.get(entry.optionName) ?? guessCategoryByOptionName(entry.optionName);
-        if (categoryKey !== "COLOR_PLATING") continue;
-        const materialCode = String(compactRow?.selectedMaterialCode ?? "").trim();
-        const colorCode = String(compactRow?.selectedColorCode ?? "").trim();
-        if (!materialCode || !colorCode) continue;
-        const additiveDeltaKrw = Math.round(parseNumericInput(
-          optionSyncDeltaDrafts[entry.entryKey]
-          ?? defaultOptionSyncDeltaDrafts[entry.entryKey]
-          ?? String(compactRow?.syncDeltaKrw ?? 0),
-        ) ?? 0);
-        const key = `${materialCode}::${colorCode}`;
-        const existing = colorRuleTargets.get(key);
-        if (existing && existing.additiveDeltaKrw !== additiveDeltaKrw) {
-          throw new Error(`${entry.optionName} 색상 ${colorCode}의 금액이 서로 다르게 입력되어 저장할 수 없습니다`);
-        }
-        colorRuleTargets.set(key, { materialCode, colorCode, additiveDeltaKrw });
-      }
-
-      for (const target of colorRuleTargets.values()) {
-        const existingRule = colorRuleRows.find((row) =>
-          String(row.scope_material_code ?? "").trim() === target.materialCode
-          && String(row.color_code ?? "").trim() === target.colorCode,
-        );
-        try {
-          if (existingRule?.rule_id) {
-            await shopApiSend("/api/option-labor-rules", "PUT", {
-              rule_id: existingRule.rule_id,
-              additive_delta_krw: target.additiveDeltaKrw,
-              updated_by: "AUTO_PRICE_PAGE",
-            });
-            continue;
+        if (categoryKey === "COLOR_PLATING") {
+          const materialCode = String(compactRow?.selectedMaterialCode ?? "").trim();
+          const colorCode = String(compactRow?.selectedColorCode ?? "").trim();
+          if (!materialCode || !colorCode) continue;
+          const additiveDeltaKrw = Math.round(parseNumericInput(
+            optionSyncDeltaDrafts[entry.entryKey]
+            ?? defaultOptionSyncDeltaDrafts[entry.entryKey]
+            ?? String(compactRow?.syncDeltaKrw ?? 0),
+          ) ?? 0);
+          const key = `${materialCode}::${colorCode}`;
+          const existing = colorRuleTargets.get(key);
+          if (existing && existing.additiveDeltaKrw !== additiveDeltaKrw) {
+            throw new Error(`${entry.optionName} 색상 ${colorCode}의 금액이 서로 다르게 입력되어 저장할 수 없습니다`);
           }
-          await shopApiSend("/api/option-labor-rules", "POST", {
-            channel_id: effectiveChannelId,
-            master_item_id: editorMasterItemId,
-            external_product_no: optionLaborRuleProductNo || externalProductNo,
-            category_key: "COLOR_PLATING",
-            scope_material_code: target.materialCode,
-            color_code: target.colorCode,
-            plating_enabled: String(target.colorCode).trim().startsWith("[도]"),
-            additive_delta_krw: target.additiveDeltaKrw,
-            base_labor_cost_krw: 0,
-            is_active: true,
-            note: null,
+          colorRuleTargets.set(key, { materialCode, colorCode, additiveDeltaKrw });
+          continue;
+        }
+        if (categoryKey === "DECOR") {
+          const decorationMasterId = String(compactRow?.selectedDecorMasterId ?? "").trim();
+          const decorationChoice = decorationMasterId ? (decorChoiceByMasterId.get(decorationMasterId) ?? null) : null;
+          if (!decorationMasterId || !decorationChoice) {
+            throw new Error(`${entry.optionName} ${entry.optionValue} 장식은 등록된 allowlist 항목만 선택할 수 있습니다`);
+          }
+          const additiveDeltaKrw = Math.round(Number(compactRow?.decorExtraDeltaKrw ?? 0));
+          const existing = decorRuleTargets.get(decorationMasterId);
+          if (existing && existing.additiveDeltaKrw !== additiveDeltaKrw) {
+            throw new Error(`${entry.optionName} 장식 ${decorationChoice.label}의 추가공임이 서로 다르게 입력되어 저장할 수 없습니다`);
+          }
+          decorRuleTargets.set(decorationMasterId, {
+            decorationMasterId,
+            decorationModelName: decorationChoice.label,
+            additiveDeltaKrw,
           });
-        } catch {
-          // Cron recompute now reads COLOR_PLATING axis logs directly.
-          // Keep rule sync as best-effort so UI save is not blocked by legacy DB constraints.
         }
       }
+      const centralRuleRows = [
+        ...preservedCentralRuleRows,
+        ...Array.from(colorRuleTargets.values()).map((target) => ({
+          category_key: "COLOR_PLATING" as const,
+          scope_material_code: target.materialCode,
+          color_code: target.colorCode,
+          plating_enabled: String(target.colorCode).trim().startsWith("[도]"),
+          additive_delta_krw: target.additiveDeltaKrw,
+          base_labor_cost_krw: 0,
+          is_active: true,
+          note: null,
+        })),
+        ...Array.from(decorRuleTargets.values()).map((target) => ({
+          category_key: "DECOR" as const,
+          decoration_master_id: target.decorationMasterId,
+          decoration_model_name: target.decorationModelName,
+          additive_delta_krw: target.additiveDeltaKrw,
+          base_labor_cost_krw: 0,
+          is_active: true,
+          note: null,
+        })),
+      ];
+      await shopApiSend<{ ok: boolean; data: OptionLaborRuleRow[] }>("/api/option-labor-rules", "POST", {
+        channel_id: effectiveChannelId,
+        master_item_id: editorMasterItemId,
+        external_product_no: centralRuleTargetProductNo,
+        actor: "AUTO_PRICE_PAGE",
+        rows: centralRuleRows,
+      });
 
       if (otherReasonRows.length > 0) {
         await shopApiSend<{ data: Array<{ policy_log_id: string }>; saved: number }>("/api/channel-product-option-mappings-v2-logs", "POST", {

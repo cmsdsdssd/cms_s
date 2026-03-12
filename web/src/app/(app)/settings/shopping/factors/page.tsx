@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -382,7 +382,7 @@ export default function ShoppingFactorsPage() {
 
   return (
     <div className="space-y-4">
-      <ActionBar title="정책/팩터 관리" subtitle="채널별 마진/반올림/소재 배수(Factor Set) 설정" />
+      <ActionBar title="정책/팩터 관리" subtitle="채널별 마진, 반올림, 소재 팩터를 설정합니다." />
 
       <ShoppingPageHeader
         purpose="채널의 가격 정책(마진/반올림)과 소재 팩터 세트를 조정해 재계산 기준을 안정화합니다."
@@ -402,7 +402,7 @@ export default function ShoppingFactorsPage() {
         <CardBody className="space-y-3">
           <div className="grid grid-cols-1 gap-2 md:grid-cols-12">
             <div className="space-y-1">
-              <div className="text-xs text-[var(--muted)]">채널(channel_id)</div>
+              <div className="text-xs text-[var(--muted)]">채널</div>
               <Select value={channelId} onChange={(e) => setChannelId(e.target.value)}>
                 <option value="">채널 선택</option>
                 {channels.map((ch) => (
@@ -417,19 +417,19 @@ export default function ShoppingFactorsPage() {
               <Input value={marginRatePercent} onChange={(e) => setMarginRatePercent(e.target.value)} placeholder="예: 10" />
             </div>
             <div className="space-y-1">
-              <div className="text-xs text-[var(--muted)]">소재마진율(gm_material, %)</div>
+              <div className="text-xs text-[var(--muted)]">소재 마진율(%)</div>
               <Input value={materialMarginRatePercent} onChange={(e) => setMaterialMarginRatePercent(e.target.value)} placeholder="예: 10" />
             </div>
             <div className="space-y-1">
-              <div className="text-xs text-[var(--muted)]">공임마진율(gm_labor, %)</div>
+              <div className="text-xs text-[var(--muted)]">공임 마진율(%)</div>
               <Input value={laborMarginRatePercent} onChange={(e) => setLaborMarginRatePercent(e.target.value)} placeholder="예: 10" />
             </div>
             <div className="space-y-1">
-              <div className="text-xs text-[var(--muted)]">고정마진율(gm_fixed, %)</div>
+              <div className="text-xs text-[var(--muted)]">고정 마진율(%)</div>
               <Input value={fixedMarginRatePercent} onChange={(e) => setFixedMarginRatePercent(e.target.value)} placeholder="예: 10" />
             </div>
             <div className="space-y-1">
-              <div className="text-xs text-[var(--muted)]">고정가격(fixed_cost_krw, KRW)</div>
+              <div className="text-xs text-[var(--muted)]">고정가격(KRW)</div>
               <Input value={fixedCostKrw} onChange={(e) => setFixedCostKrw(e.target.value)} placeholder="예: 5000" />
             </div>
             <div className="space-y-1">
@@ -441,11 +441,11 @@ export default function ShoppingFactorsPage() {
               <Input value={minMarginRatePercent} onChange={(e) => setMinMarginRatePercent(e.target.value)} placeholder="예: 15" />
             </div>
             <div className="space-y-1">
-              <div className="text-xs text-[var(--muted)]">반올림 단위(rounding_unit)</div>
+              <div className="text-xs text-[var(--muted)]">반올림 단위</div>
               <Input value={roundingUnit} onChange={(e) => setRoundingUnit(e.target.value)} placeholder="예: 1000" />
             </div>
             <div className="space-y-1">
-              <div className="text-xs text-[var(--muted)]">반올림 방식(rounding_mode)</div>
+              <div className="text-xs text-[var(--muted)]">반올림 방식</div>
               <Select value={roundingMode} onChange={(e) => setRoundingMode(e.target.value as "CEIL" | "ROUND" | "FLOOR") }>
                 <option value="CEIL">올림 (CEIL)</option>
                 <option value="ROUND">반올림 (ROUND)</option>
@@ -453,7 +453,7 @@ export default function ShoppingFactorsPage() {
               </Select>
             </div>
             <div className="space-y-1">
-              <div className="text-xs text-[var(--muted)]">팩터 세트(material_factor_set_id)</div>
+              <div className="text-xs text-[var(--muted)]">팩터 세트</div>
               <Select value={policyFactorSetId} onChange={(e) => setPolicyFactorSetId(e.target.value)}>
                 <option value="">팩터 세트 선택</option>
                 {(factorSetsQuery.data ?? []).map((fs) => (
@@ -471,7 +471,7 @@ export default function ShoppingFactorsPage() {
       </Card>
 
       <Card>
-          <CardHeader title="소재 함량/보정계수" description="소재별 함량은 settings 값을 따르고, 보정계수(multiplier)는 여기서 저장합니다." />
+          <CardHeader title="소재 함량/보정계수" description="소재별 함량은 설정값을 따르고, 보정계수는 여기서 저장합니다." />
         <CardBody className="grid grid-cols-1 gap-3 xl:grid-cols-3">
           {renderMaterialGroup("금 소재", groupedCodes.gold)}
           {renderMaterialGroup("은 소재", groupedCodes.silver)}
@@ -489,14 +489,14 @@ export default function ShoppingFactorsPage() {
 
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
         <Card>
-          <CardHeader title="팩터 세트 생성" description="전체(GLOBAL) 또는 채널(CHANNEL) 범위" />
+          <CardHeader title="팩터 세트 생성" description="전체 공통 또는 채널 전용 범위" />
           <CardBody className="space-y-2">
             <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
               <Select value={newFactorScope} onChange={(e) => setNewFactorScope(e.target.value as "GLOBAL" | "CHANNEL") }>
-                <option value="GLOBAL">전체 공통 (GLOBAL)</option>
-                <option value="CHANNEL">채널 전용 (CHANNEL)</option>
+                <option value="GLOBAL">전체 공통</option>
+                <option value="CHANNEL">채널 전용</option>
               </Select>
-              <Input value={newFactorSetName} onChange={(e) => setNewFactorSetName(e.target.value)} placeholder="팩터 세트 이름(name)" />
+              <Input value={newFactorSetName} onChange={(e) => setNewFactorSetName(e.target.value)} placeholder="팩터 세트 이름" />
               <Input value={newFactorDescription} onChange={(e) => setNewFactorDescription(e.target.value)} placeholder="설명(description)" />
             </div>
             <Button

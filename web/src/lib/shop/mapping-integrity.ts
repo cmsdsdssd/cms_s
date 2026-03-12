@@ -17,6 +17,45 @@ type ActiveMappingInvariantArgs = {
 
 const trim = (value: unknown) => String(value ?? "").trim();
 
+const activeMappingLogicalKey = (
+  row: Pick<ActiveMappingInvariantInputRow, "channel_id" | "master_item_id" | "external_product_no" | "external_variant_code">,
+) => `${trim(row.channel_id)}::${trim(row.master_item_id)}::${trim(row.external_product_no)}::${trim(row.external_variant_code)}`;
+
+export function attachExistingChannelProductIds<T extends ActiveMappingInvariantInputRow>(
+  rows: T[],
+  existingRows: ActiveMappingInvariantInputRow[],
+): Array<T & { channel_product_id?: string | null }> {
+  const existingIdByLogicalKey = new Map<string, string>();
+  for (const row of existingRows) {
+    const channelProductId = trim(row.channel_product_id);
+    if (!channelProductId) continue;
+    const logicalKey = activeMappingLogicalKey(row);
+    if (!existingIdByLogicalKey.has(logicalKey)) {
+      existingIdByLogicalKey.set(logicalKey, channelProductId);
+    }
+  }
+
+  const nextRows: Array<T & { channel_product_id?: string | null }> = [];
+  for (const row of rows) {
+    const preservedChannelProductId = trim(row.channel_product_id);
+    if (preservedChannelProductId) {
+      nextRows.push(row);
+      continue;
+    }
+    const matchedChannelProductId = existingIdByLogicalKey.get(activeMappingLogicalKey(row));
+    if (!matchedChannelProductId) {
+      nextRows.push(row);
+      continue;
+    }
+    nextRows.push({
+      ...row,
+      channel_product_id: matchedChannelProductId,
+    });
+  }
+
+  return nextRows;
+}
+
 export async function validateActiveMappingInvariants(args: ActiveMappingInvariantArgs) {
   const candidateRows = args.rows
     .map((row) => ({

@@ -8,7 +8,9 @@ import {
 } from "@/lib/shop/mapping-option-details";
 import { normalizeDecorationCode } from "@/lib/shop/option-labor-rules";
 import { normalizePlatingComboCode } from "@/lib/shop/sync-rules";
-import { validateActiveMappingInvariants } from "@/lib/shop/mapping-integrity";
+import { attachExistingChannelProductIds, validateActiveMappingInvariants } from "@/lib/shop/mapping-integrity";
+import { resolveCurrentProductSyncProfileForWrite } from "@/lib/shop/current-product-sync-profile";
+import { ensureActiveSyncRuleSet } from "@/lib/shop/active-sync-rule-set";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -36,6 +38,7 @@ const mergeColorChoices = (allowlist: ReturnType<typeof buildMappingOptionAllowl
 };
 
 type BulkRow = {
+  channel_product_id?: string | null;
   channel_id: string;
   master_item_id: string;
   external_product_no: string;
@@ -62,6 +65,64 @@ type BulkRow = {
   mapping_source: "MANUAL" | "CSV" | "AUTO";
   is_active: boolean;
 };
+
+type SyncRuleSetTargetRow = {
+  channel_id: string;
+  external_product_no: string;
+  external_variant_code: string;
+  option_price_mode: 'SYNC' | 'MANUAL';
+  sync_rule_set_id: string | null;
+  is_active: boolean;
+};
+
+async function ensureActiveSyncRuleSetIdsForRows<T extends SyncRuleSetTargetRow>(
+  rows: T[],
+  loadActiveRuleSet: (channelId: string) => Promise<{ rule_set_id: string }>,
+): Promise<T[]> {
+  const channelIds = Array.from(new Set(
+    rows
+      .filter((row) => row.is_active && row.option_price_mode === 'SYNC' && !toTrimmed(row.sync_rule_set_id))
+      .map((row) => row.channel_id),
+  ));
+
+  if (channelIds.length === 0) return rows;
+
+  const activeRuleSetIdByChannel = new Map<string, string>();
+  await Promise.all(channelIds.map(async (channelId) => {
+    const activeRuleSet = await loadActiveRuleSet(channelId);
+    activeRuleSetIdByChannel.set(channelId, activeRuleSet.rule_set_id);
+  }));
+
+  return rows.map((row) => {
+    if (!row.is_active) return row;
+    if (row.option_price_mode !== 'SYNC') return row;
+    if (toTrimmed(row.sync_rule_set_id)) return row;
+    return {
+      ...row,
+      sync_rule_set_id: activeRuleSetIdByChannel.get(row.channel_id) ?? null,
+    } as T;
+  });
+}
+
+export function canonicalizeBulkRowsByActiveProductNos<T extends Pick<BulkRow, "channel_id" | "master_item_id" | "external_product_no">>(
+  rows: T[],
+  activeProductNosByPair: Map<string, string[]>,
+): T[] {
+  return rows.map((row) => {
+    const pairKey = `${row.channel_id}::${row.master_item_id}`;
+    const canonicalExternalProductNo = resolveCanonicalExternalProductNo(
+      activeProductNosByPair.get(pairKey) ?? [],
+      row.external_product_no,
+    );
+    if (!canonicalExternalProductNo || canonicalExternalProductNo === row.external_product_no) {
+      return row;
+    }
+    return {
+      ...row,
+      external_product_no: canonicalExternalProductNo,
+    };
+  });
+}
 
 function normalizeRow(raw: unknown): { ok: true; row: BulkRow } | { ok: false; error: string } {
   const body = parseJsonObject(raw);
@@ -170,9 +231,6 @@ function normalizeRow(raw: unknown): { ok: true; row: BulkRow } | { ok: false; e
   if (optionPriceMode === "MANUAL" && optionManualTargetKrw === null) {
     return { ok: false, error: "option_manual_target_krw is required when option_price_mode is MANUAL" };
   }
-  if (optionPriceMode === "SYNC" && !syncRuleSetId) {
-    return { ok: false, error: "sync_rule_set_id is required when option_price_mode is SYNC" };
-  }
   if (optionSizeValue !== null && (!Number.isFinite(optionSizeValue) || optionSizeValue < 0)) {
     return { ok: false, error: "option_size_value must be >= 0" };
   }
@@ -226,16 +284,72 @@ export async function POST(request: Request) {
   const inputRows = Array.isArray(body.rows) ? body.rows : [];
   if (inputRows.length === 0) return jsonError("rows is required", 400);
 
-  const normalized: BulkRow[] = [];
+  let normalized: BulkRow[] = [];
   for (let i = 0; i < inputRows.length; i += 1) {
     const result = normalizeRow(inputRows[i]);
     if (!result.ok) return jsonError(`rows[${i}]: ${result.error}`, 400);
     normalized.push(result.row);
   }
 
+  normalized = await ensureActiveSyncRuleSetIdsForRows(
+    normalized,
+    (channelId) => ensureActiveSyncRuleSet(sb, channelId),
+  );
+
+  const affectedChannelIds = Array.from(new Set(normalized.map((row) => row.channel_id)));
+  const affectedMasterIds = Array.from(new Set(normalized.map((row) => row.master_item_id)));
+  const activeProductRes = await sb
+    .from('sales_channel_product')
+    .select('channel_id, master_item_id, external_product_no')
+    .in('channel_id', affectedChannelIds)
+    .in('master_item_id', affectedMasterIds)
+    .eq('is_active', true);
+  if (activeProductRes.error) return jsonError(activeProductRes.error.message ?? '활성 상품번호 조회 실패', 500);
+
+  const activeProductNosByPair = new Map<string, string[]>();
+  for (const row of (activeProductRes.data ?? []) as Array<{ channel_id: string; master_item_id: string; external_product_no: string | null }>) {
+    const pairKey = `${row.channel_id}::${row.master_item_id}`;
+    const prev = activeProductNosByPair.get(pairKey) ?? [];
+    const productNo = String(row.external_product_no ?? '').trim();
+    if (!productNo || prev.includes(productNo)) continue;
+    prev.push(productNo);
+    activeProductNosByPair.set(pairKey, prev);
+  }
+
+  normalized = canonicalizeBulkRowsByActiveProductNos(normalized, activeProductNosByPair);
+
+  const existingIdentityRes = await sb
+    .from('sales_channel_product')
+    .select('channel_product_id, channel_id, master_item_id, external_product_no, external_variant_code')
+    .in('channel_id', affectedChannelIds)
+    .in('master_item_id', affectedMasterIds)
+    .eq('is_active', true);
+  if (existingIdentityRes.error) return jsonError(existingIdentityRes.error.message ?? '활성 매핑 식별자 조회 실패', 500);
+
+  normalized = attachExistingChannelProductIds(
+    normalized,
+    ((existingIdentityRes.data ?? []) as Array<{
+      channel_product_id: string | null;
+      channel_id: string;
+      master_item_id: string;
+      external_product_no: string | null;
+      external_variant_code: string | null;
+    }>).map((row) => {
+      const pairKey = `${row.channel_id}::${row.master_item_id}`;
+      return {
+        ...row,
+        external_product_no: resolveCanonicalExternalProductNo(
+          activeProductNosByPair.get(pairKey) ?? [],
+          String(row.external_product_no ?? "").trim(),
+        ),
+      };
+    }),
+  );
+
   const invariantCheck = await validateActiveMappingInvariants({
     sb,
     rows: normalized.map((row) => ({
+      channel_product_id: row.channel_product_id,
       channel_id: row.channel_id,
       master_item_id: row.master_item_id,
       external_product_no: row.external_product_no,
@@ -258,20 +372,12 @@ export async function POST(request: Request) {
   let rows = Array.from(dedup.values());
 
   const affectedPairSet = new Set(rows.map((row) => `${row.channel_id}::${row.master_item_id}`));
-  const affectedChannelIds = Array.from(new Set(rows.map((row) => row.channel_id)));
-  const affectedMasterIds = Array.from(new Set(rows.map((row) => row.master_item_id)));
-  const [existingRes, activeProductRes, optionRuleRes, colorComboRes] = await Promise.all([
+  const [existingRes, optionRuleRes, colorComboRes] = await Promise.all([
     sb
       .from('sales_channel_product')
       .select('channel_id, master_item_id, external_product_no, external_variant_code, option_material_code, option_color_code, option_decoration_code, option_size_value, option_price_mode, sync_rule_set_id, current_product_sync_profile, is_active')
       .in('channel_id', affectedChannelIds)
       .in('master_item_id', affectedMasterIds),
-    sb
-      .from('sales_channel_product')
-      .select('channel_id, master_item_id, external_product_no')
-      .in('channel_id', affectedChannelIds)
-      .in('master_item_id', affectedMasterIds)
-      .eq('is_active', true),
     sb
       .from('channel_option_labor_rule_v1')
       .select('rule_id, channel_id, master_item_id, external_product_no, category_key, scope_material_code, additional_weight_g, additional_weight_min_g, additional_weight_max_g, plating_enabled, color_code, decoration_master_id, decoration_model_name, base_labor_cost_krw, additive_delta_krw, is_active, note')
@@ -285,20 +391,9 @@ export async function POST(request: Request) {
       .eq("is_active", true),
   ]);
   if (existingRes.error) return jsonError(existingRes.error.message ?? '기존 옵션 조회 실패', 500);
-  if (activeProductRes.error) return jsonError(activeProductRes.error.message ?? '활성 상품번호 조회 실패', 500);
   if (optionRuleRes.error) return jsonError(optionRuleRes.error.message ?? '옵션 상세 규칙 조회 실패', 500);
   if (colorComboRes.error && !isMissingSchemaObjectError(colorComboRes.error, "channel_color_combo_catalog_v1")) {
     return jsonError(colorComboRes.error.message ?? "색상 중앙금액 조회 실패", 500);
-  }
-
-  const activeProductNosByPair = new Map<string, string[]>();
-  for (const row of (activeProductRes.data ?? []) as Array<{ channel_id: string; master_item_id: string; external_product_no: string | null }>) {
-    const pairKey = `${row.channel_id}::${row.master_item_id}`;
-    const prev = activeProductNosByPair.get(pairKey) ?? [];
-    const productNo = String(row.external_product_no ?? '').trim();
-    if (!productNo || prev.includes(productNo)) continue;
-    prev.push(productNo);
-    activeProductNosByPair.set(pairKey, prev);
   }
 
   const existingRows = (existingRes.data ?? []) as Array<{
@@ -348,7 +443,7 @@ export async function POST(request: Request) {
   const resolutionTraceLogs: Array<Record<string, unknown>> = [];
   const aliasHistoryCandidates: Array<{ channel_id: string; master_item_id: string; alias_external_product_no: string; canonical_external_product_no: string; external_variant_code: string }> = [];
   try {
-    const validatedRows = rows.map((row) => {
+    const validatedRows: Array<Response | BulkRow> = rows.map((row) => {
       const pairKey = `${row.channel_id}::${row.master_item_id}`;
       const canonicalExternalProductNo = resolveCanonicalExternalProductNo(
         activeProductNosByPair.get(pairKey) ?? [],
@@ -375,15 +470,6 @@ export async function POST(request: Request) {
         });
       }
       const previous = existingOptionByKey.get(`${row.channel_id}::${canonicalExternalProductNo}::${row.external_variant_code}`) ?? null;
-      if (canonicalExternalProductNo !== row.external_product_no) {
-        aliasHistoryCandidates.push({
-          channel_id: row.channel_id,
-          master_item_id: row.master_item_id,
-          alias_external_product_no: row.external_product_no,
-          canonical_external_product_no: canonicalExternalProductNo,
-          external_variant_code: row.external_variant_code,
-        });
-      }
       resolutionTraceLogs.push({
         policy_id: null,
         channel_id: row.channel_id,
@@ -409,10 +495,17 @@ export async function POST(request: Request) {
         change_reason: changeReason || "BULK_MAPPING_SAVE",
         changed_by: changedBy,
       });
+      const existingProfileRows = existingRows
+        .filter((existingRow) => existingRow.channel_id === row.channel_id && existingRow.master_item_id === row.master_item_id && existingRow.is_active !== false)
+        .map((existingRow) => ({ current_product_sync_profile: existingRow.current_product_sync_profile }));
       return {
         ...row,
         external_product_no: canonicalExternalProductNo,
-        current_product_sync_profile: row.current_product_sync_profile ?? (typeof previous?.current_product_sync_profile === "string" ? previous.current_product_sync_profile : null),
+        current_product_sync_profile: resolveCurrentProductSyncProfileForWrite({
+          incomingProfile: row.current_product_sync_profile,
+          hasIncomingProfile: row.current_product_sync_profile !== null,
+          existingRows: existingProfileRows,
+        }),
         option_material_code: optionValidation.value.option_material_code,
         option_color_code: optionValidation.value.option_color_code,
         option_decoration_code: optionValidation.value.option_decoration_code,
@@ -423,10 +516,9 @@ export async function POST(request: Request) {
     for (const validatedRow of validatedRows) {
       if (validatedRow instanceof Response) return validatedRow;
     }
-    rows = Array.from(new Map(
-      validatedRows
-        .filter((row): row is BulkRow => !(row instanceof Response))
-        .map((row) => [`${row.channel_id}::${row.external_product_no}::${row.external_variant_code}`, row]),
+    const normalizedValidatedRows = validatedRows.filter((row): row is BulkRow => !(row instanceof Response));
+    rows = Array.from(new Map<string, BulkRow>(
+      normalizedValidatedRows.map((row) => [`${row.channel_id}::${row.external_product_no}::${row.external_variant_code}`, row]),
     ).values());
   } catch (error) {
     return jsonError(error instanceof Error ? error.message : '옵션 상세 검증 실패', 500);
@@ -510,6 +602,16 @@ export async function POST(request: Request) {
     });
   }
 
+  const projectedRows = await ensureActiveSyncRuleSetIdsForRows(
+    Array.from(projectedByKey.values()),
+    (channelId) => ensureActiveSyncRuleSet(sb, channelId),
+  );
+  projectedByKey.clear();
+  for (const row of projectedRows) {
+    const key = `${row.channel_id}::${row.external_product_no}::${row.external_variant_code}`;
+    projectedByKey.set(key, row);
+  }
+
   for (const pairKey of affectedPairSet) {
     const [channelId, masterItemId] = pairKey.split("::");
     const syncRows = Array.from(projectedByKey.values()).filter((row) =>
@@ -538,15 +640,14 @@ export async function POST(request: Request) {
     }
   }
 
-  const { data, error } = await sb
-    .from("sales_channel_product")
-    .upsert(rows, { onConflict: "channel_id,external_product_no,external_variant_code" })
-    .select("channel_product_id, channel_id, master_item_id, external_product_no, external_variant_code, sync_rule_set_id, option_material_code, option_color_code, option_decoration_code, option_size_value, material_multiplier_override, size_weight_delta_g, size_price_override_enabled, size_price_override_krw, option_price_delta_krw, option_price_mode, option_manual_target_krw, include_master_plating_labor, sync_rule_material_enabled, sync_rule_weight_enabled, sync_rule_plating_enabled, sync_rule_decoration_enabled, sync_rule_margin_rounding_enabled, mapping_source, is_active, created_at, updated_at");
+  const { data, error } = await sb.rpc("cms_fn_upsert_sales_channel_product_mappings_v1", { p_rows: rows });
 
   if (error) return jsonError(error.message ?? '일괄 매핑 저장 실패', 400);
 
-  if (aliasHistoryCandidates.length > 0 && (data ?? []).length > 0) {
-    const channelProductIdByCanonicalKey = new Map((data ?? []).map((row) => [
+  const savedRows = Array.isArray(data) ? (data as Array<Record<string, unknown>>) : [];
+
+  if (aliasHistoryCandidates.length > 0 && savedRows.length > 0) {
+    const channelProductIdByCanonicalKey = new Map(savedRows.map((row) => [
       `${String(row.channel_id ?? '').trim()}::${String(row.master_item_id ?? '').trim()}::${String(row.external_product_no ?? '').trim()}::${String(row.external_variant_code ?? '').trim()}`,
       String(row.channel_product_id ?? '').trim(),
     ]));
@@ -574,10 +675,10 @@ export async function POST(request: Request) {
 
   return NextResponse.json(
     {
-      data: data ?? [],
+      data: savedRows,
       requested: inputRows.length,
       deduplicated: rows.length,
-      saved: (data ?? []).length,
+      saved: savedRows.length,
     },
     { headers: { "Cache-Control": "no-store" } },
   );

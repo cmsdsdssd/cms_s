@@ -11,7 +11,8 @@ import {
 } from "@/lib/shop/mapping-option-details";
 import { buildMaterialFactorMap, normalizeMaterialCode } from "@/lib/material-factors";
 import { resolveCanonicalProductNo } from "@/lib/shop/canonical-mapping";
-import { createPersistedSizeGridLookup, loadPersistedSizeGridRowsForScope } from "@/lib/shop/weight-grid-store.js";
+import { createPersistedSizeGridLookup, loadPersistedSizeGridRowsForScope, rebuildAndLoadPersistedSizeGridForScope } from "@/lib/shop/weight-grid-store.js";
+import { buildPlatingComboChoices, normalizePlatingCatalogComboKey } from "@/lib/shop/sync-rules";
 import {
   cafe24ListProductVariants,
   ensureValidCafe24AccessToken,
@@ -156,7 +157,7 @@ export async function GET(request: Request) {
         .maybeSingle(),
       sb
         .from("channel_color_combo_catalog_v1")
-        .select("combo_key, base_delta_krw")
+        .select("combo_key, display_name, base_delta_krw, sort_order")
         .eq("channel_id", channelId)
         .eq("is_active", true)
         .limit(5000),
@@ -271,15 +272,21 @@ export async function GET(request: Request) {
       .map(({ external_product_no: _externalProductNo, ...row }) => row);
     masterMaterialCode = normalizeMaterialCode(String(masterRes.data?.material_code_default ?? "").trim()) || null;
     colorBaseDeltaByCode = Object.fromEntries(
-      ((colorComboRes.data ?? []) as Array<{ combo_key?: string | null; base_delta_krw?: number | null }>)
-        .map((row) => [String(row.combo_key ?? "").trim(), Math.max(0, Math.round(Number(row.base_delta_krw ?? 0)))])
-        .filter(([key]) => Boolean(key)),
+      buildPlatingComboChoices({
+        catalogRows: (colorComboRes.data ?? []) as Array<{ combo_key?: string | null; display_name?: string | null; base_delta_krw?: number | null; sort_order?: number | null }>,
+        includeStandard: false,
+      }).map((choice) => [
+        normalizePlatingCatalogComboKey(choice.value),
+        Math.max(0, Math.round(Number(choice.delta_krw ?? 0))),
+      ]),
     );
     sizeMarketContext = {
       goldTickKrwPerG: Math.round(Number(tickRes.data?.gold_price_krw_per_g ?? 0)),
       silverTickKrwPerG: Math.round(Number(tickRes.data?.silver_price_krw_per_g ?? 0)),
       materialFactors: buildMaterialFactorMap(materialFactorRes.data ?? []),
     };
+    const activeSizeRuleRows = ((optionRuleRes.data ?? []) as Array<{ category_key?: string | null; is_active?: boolean | null }>)
+      .filter((row) => row.is_active !== false && String(row.category_key ?? "").trim().toUpperCase() === "SIZE");
     try {
       const preferredGridProductNos = Array.from(new Set([
         canonicalExternalProductNo,
@@ -296,6 +303,16 @@ export async function GET(request: Request) {
           persistedSizeLookup = createPersistedSizeGridLookup(persistedSizeRows);
           break;
         }
+        if (activeSizeRuleRows.length === 0) continue;
+        persistedSizeLookup = await rebuildAndLoadPersistedSizeGridForScope({
+          sb,
+          channelId,
+          masterItemId,
+          externalProductNo: gridProductNo,
+          rules: optionRuleRes.data ?? [],
+          marketContext: sizeMarketContext,
+        });
+        if (persistedSizeLookup) break;
       }
     } catch {
       persistedSizeLookup = null;
@@ -317,30 +334,21 @@ export async function GET(request: Request) {
       sizeMarketContext,
       observedOptionValues,
     });
-    const mergedColorChoices = new Map(
-      (baseAllowlist.colors ?? []).map((choice) => [String(choice.value ?? "").trim(), choice] as const),
-    );
+    const mergedColorChoices = buildPlatingComboChoices({
+      catalogRows: (colorComboRes.data ?? []) as Array<{ combo_key?: string | null; display_name?: string | null; base_delta_krw?: number | null; sort_order?: number | null }>,
+      fallbackValues: [
+        ...(baseAllowlist.colors ?? []).map((choice) => String(choice.value ?? "").trim()),
+        ...activeRows.map((row) => String(row.option_color_code ?? "").trim()),
+      ],
+      includeStandard: true,
+    }).map((choice) => ({
+      value: choice.value,
+      label: choice.label,
+      delta_krw: choice.delta_krw,
+    }));
     const mergedDecorChoices = new Map(
       (baseAllowlist.decors ?? []).map((choice) => [String(choice.decoration_master_id ?? choice.value ?? "").trim(), choice] as const),
     );
-    for (const row of (colorComboRes.data ?? []) as Array<{ combo_key?: string | null; display_name?: string | null; base_delta_krw?: number | null }>) {
-      const comboKey = String(row.combo_key ?? "").trim();
-      if (!comboKey || mergedColorChoices.has(comboKey)) continue;
-      mergedColorChoices.set(comboKey, {
-        value: comboKey,
-        label: String(row.display_name ?? "").trim() || comboKey,
-        delta_krw: Math.max(0, Math.round(Number(row.base_delta_krw ?? 0))),
-      });
-    }
-    for (const row of activeRows) {
-      const comboKey = String(row.option_color_code ?? "").trim();
-      if (!comboKey || mergedColorChoices.has(comboKey)) continue;
-      mergedColorChoices.set(comboKey, {
-        value: comboKey,
-        label: comboKey,
-        delta_krw: null,
-      });
-    }
     for (const row of filteredRuleRows) {
       if (String(row.category_key ?? "").trim().toUpperCase() !== "DECOR") continue;
       const masterId = String(row.decoration_master_id ?? "").trim();
@@ -358,7 +366,7 @@ export async function GET(request: Request) {
     }
     optionDetailAllowlist = {
       ...baseAllowlist,
-      colors: Array.from(mergedColorChoices.values()).sort((left, right) => String(left.label ?? "").localeCompare(String(right.label ?? ""))),
+      colors: mergedColorChoices,
       decors: Array.from(mergedDecorChoices.values()).sort((left, right) => String(left.label ?? "").localeCompare(String(right.label ?? ""))),
       sizes_by_material: baseAllowlist.sizes_by_material ?? {},
     };

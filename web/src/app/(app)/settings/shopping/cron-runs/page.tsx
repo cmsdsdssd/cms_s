@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
@@ -14,6 +14,7 @@ type SyncRun = {
   run_id: string;
   channel_id: string;
   pinned_compute_request_id: string | null;
+  publish_version?: string | null;
   interval_minutes: number;
   trigger_type: "AUTO" | "MANUAL";
   status: "RUNNING" | "SUCCESS" | "PARTIAL" | "FAILED" | "CANCELLED";
@@ -33,6 +34,7 @@ type RunIntent = {
   external_product_no: string;
   external_variant_code: string | null;
   desired_price_krw: number | null;
+  publish_version?: string | null;
   snapshot_desired_price_krw?: number | null;
   effective_desired_price_krw?: number | null;
   floor_price_krw: number;
@@ -148,7 +150,7 @@ export default function ShoppingCronRunsPage() {
       <ActionBar title="자동동기화 런 로그" subtitle="run/intent 기준으로 cron 실행 이력을 추적" />
 
       <ShoppingPageHeader
-        purpose="자동동기화(run v2) 대상 개수, 결과 상태, 사유 코드를 한 화면에서 확인합니다."
+        purpose="자동동기화 대상 수, 실행 결과, 사유 코드를 한 화면에서 확인합니다."
         status={[
           { label: "최근 run", value: `${runs.length}건` },
           { label: "선택 run", value: selectedRunId ? selectedRunId.slice(0, 8) : "미선택", tone: selectedRunId ? "good" : "warn" },
@@ -215,7 +217,7 @@ export default function ShoppingCronRunsPage() {
         <Card>
           <CardHeader
             title="Run 상세"
-            description={run ? `interval=${run.interval_minutes}m · compute=${run.pinned_compute_request_id ?? "-"}` : "run 선택"}
+            description={run ? `interval=${run.interval_minutes}m · 게시 버전=${run.publish_version ?? run.pinned_compute_request_id ?? "-"}` : "run 선택"}
           />
           <CardBody>
             <div className="mb-3 grid grid-cols-1 gap-3 md:grid-cols-2">
@@ -252,7 +254,7 @@ export default function ShoppingCronRunsPage() {
             </div>
 
             <div className='mb-2 text-xs text-[var(--muted)]'>
-              계산 목표가는 재계산 스냅샷 기준이며, 실반영 목표가/실반영 후는 push 작업 결과 기준입니다.
+              게시 기준 목표가는 publish 기준이고, 실반영 목표가/실반영 후는 push 작업 결과 기준입니다. 스냅샷 값은 debug 비교용입니다.
             </div>
 
             <div className="max-h-[520px] overflow-auto rounded-[var(--radius)] border border-[var(--hairline)]">
@@ -262,11 +264,11 @@ export default function ShoppingCronRunsPage() {
                     <th className="px-3 py-2">master_item_id</th>
                     <th className="px-3 py-2">product_no</th>
                     <th className="px-3 py-2">variant_code</th>
-                    <th className="px-3 py-2">계산 목표가(스냅샷)</th>
-                    <th className="px-3 py-2">옵션반영 목표가</th>
+                    <th className="px-3 py-2">게시 기준 목표가</th>
+                    <th className="px-3 py-2">실제 push 목표가</th>
                     <th className="px-3 py-2">실반영 후</th>
                     <th className="px-3 py-2">바닥가</th>
-                    <th className="px-3 py-2">floor_applied</th>
+                    <th className="px-3 py-2">바닥가 적용</th>
                     <th className="px-3 py-2">상태</th>
                     <th className="px-3 py-2">사유코드</th>
                     <th className="px-3 py-2">오류</th>

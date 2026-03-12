@@ -41,9 +41,10 @@ test('buildMarketLinkedSizeGrid computes rounded centigram cells for market-link
     },
   });
 
-  assert.equal(grid.cells.length, 3);
+  const validCells = grid.cells.filter((cell) => cell.valid && Number(cell.weight_g) > 0);
+  assert.equal(validCells.length, 3);
   assert.deepEqual(
-    grid.cells.map((cell) => [cell.weight_g, cell.computed_delta_krw]),
+    validCells.map((cell) => [cell.weight_g, cell.computed_delta_krw]),
     [
       [0.01, 100],
       [0.02, 100],
@@ -52,7 +53,7 @@ test('buildMarketLinkedSizeGrid computes rounded centigram cells for market-link
   );
 });
 
-test('resolveMarketLinkedSizeCell uses product-scoped rows first and falls back to master-shared rows', () => {
+test('resolveMarketLinkedSizeCell rejects master-shared fallback rows for size', () => {
   const rows = [
     {
       rule_id: 'fallback-row',
@@ -77,12 +78,13 @@ test('resolveMarketLinkedSizeCell uses product-scoped rows first and falls back 
     marketContext: { goldTickKrwPerG: 0, silverTickKrwPerG: 0, materialFactors },
   });
 
-  assert.equal(resolved.computed_delta_krw, 700);
-  assert.equal(resolved.source_rule_id, 'fallback-row');
+  assert.equal(resolved.valid, false);
+  assert.equal(resolved.computed_delta_krw, 0);
   assert.equal(resolved.scope_source, 'MASTER_FALLBACK');
+  assert.match(resolved.error_message ?? '', /product-scoped/i);
 });
 
-test('resolveMarketLinkedSizeCell keeps FIXED_DELTA as compatibility fallback', () => {
+test('resolveMarketLinkedSizeCell rejects fixed-delta fallback rows for size', () => {
   const resolved = resolveMarketLinkedSizeCell({
     rows: [
       {
@@ -105,8 +107,10 @@ test('resolveMarketLinkedSizeCell keeps FIXED_DELTA as compatibility fallback', 
     marketContext: { goldTickKrwPerG: 150000, silverTickKrwPerG: 1200, materialFactors },
   });
 
-  assert.equal(resolved.computed_delta_krw, 1300);
-  assert.equal(resolved.mode, 'FIXED_DELTA');
+  assert.equal(resolved.valid, false);
+  assert.equal(resolved.computed_delta_krw, 0);
+  assert.equal(resolved.mode, null);
+  assert.match(resolved.error_message ?? '', /market-linked/i);
 });
 
 test('resolveMarketLinkedSizeCell marks material-factor gaps invalid for market-linked rows', () => {

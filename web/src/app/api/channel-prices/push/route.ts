@@ -10,9 +10,7 @@ import {
   ensureValidCafe24AccessToken,
   loadCafe24Account,
 } from "@/lib/shop/cafe24";
-import { buildCanonicalBaseProductByMaster } from "@/lib/shop/canonical-mapping";
-import { restoreVariantTargetFromRawDelta } from "@/lib/shop/price-sync-guards";
-import { loadPublishedBaseStateByMasterIds, loadPublishedPriceStateByChannelProducts } from "@/lib/shop/publish-price-state";
+import { loadPublishedBaseStateByMasterIds, loadPublishedPriceStateByChannelProducts, loadPublishedPriceStateByVersion } from "@/lib/shop/publish-price-state";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -132,28 +130,16 @@ export async function POST(request: Request) {
 
   const channelId = String(body.channel_id ?? "").trim();
   const channelProductIds = parseUuidArray(body.channel_product_ids);
-  const pinnedComputeRequestId = String(body.compute_request_id ?? "").trim();
+  const pinnedComputeRequestId = String(body.publish_version ?? body.compute_request_id ?? "").trim();
   const runType = String(body.run_type ?? "MANUAL").toUpperCase() === "AUTO" ? "AUTO" : "MANUAL";
   const dryRun = body.dry_run === true;
   // Never rewrite option labels during price push. Price sync must only update
   // base price and variant additional amounts.
   const syncOptionLabels = false;
 
-  const desiredTargetByChannelProduct = new Map<string, number>();
-  const desiredRaw = body.desired_target_price_by_channel_product;
-  if (desiredRaw && typeof desiredRaw === "object" && !Array.isArray(desiredRaw)) {
-    for (const [key, value] of Object.entries(desiredRaw as Record<string, unknown>)) {
-      const channelProductId = String(key ?? "").trim();
-      if (!channelProductId) continue;
-      const desired = Math.round(Number(value ?? Number.NaN));
-      if (!Number.isFinite(desired) || desired <= 0) continue;
-      desiredTargetByChannelProduct.set(channelProductId, desired);
-    }
-  }
-
   if (!channelId) return jsonError("channel_id is required", 400);
   if (!dryRun && !pinnedComputeRequestId) {
-    return jsonError("compute_request_id is required for deterministic push", 400);
+    return jsonError("publish_version is required for deterministic push", 400);
   }
 
   const account = await loadCafe24Account(sb, channelId);
@@ -179,45 +165,8 @@ export async function POST(request: Request) {
     return variants;
   };
 
-  const initialRows: Array<{
-    channel_id: string | null;
-    channel_product_id: string | null;
-    master_item_id: string | null;
-    external_product_no: string | null;
-    external_variant_code: string | null;
-    target_price_raw_krw: number | null;
-    final_target_price_krw: number | null;
-    current_channel_price_krw: number | null;
-  }> = [];
-  if (Array.isArray(channelProductIds) && channelProductIds.length > 0) {
-    for (const idChunk of chunkArray(channelProductIds, IN_QUERY_CHUNK_SIZE)) {
-      if (idChunk.length === 0) continue;
-      const initialRes = await sb
-        .from("v_channel_price_dashboard")
-        .select("channel_id, channel_product_id, master_item_id, external_product_no, external_variant_code, target_price_raw_krw, final_target_price_krw, current_channel_price_krw")
-        .eq("channel_id", channelId)
-        .in("channel_product_id", idChunk);
-      if (initialRes.error) return jsonError(initialRes.error.message ?? "반영 대상 조회 실패", 500);
-      initialRows.push(...(initialRes.data ?? []));
-    }
-  } else {
-    const initialRes = await sb
-      .from("v_channel_price_dashboard")
-      .select("channel_id, channel_product_id, master_item_id, external_product_no, external_variant_code, target_price_raw_krw, final_target_price_krw, current_channel_price_krw")
-      .eq("channel_id", channelId);
-    if (initialRes.error) return jsonError(initialRes.error.message ?? "반영 대상 조회 실패", 500);
-    initialRows.push(...(initialRes.data ?? []));
-  }
-  const initialCandidates = await filterActiveCandidates(
-    initialRows.filter((r) => r.channel_product_id && r.external_product_no),
-  );
-
   const logicalTargetKey = (masterItemId: string, externalVariantCode: string) => `${masterItemId}::${externalVariantCode || "BASE"}`;
   const baseTargetKey = (masterItemId: string, externalProductNo: string) => `${masterItemId}::${externalProductNo || "BASE"}`;
-  // Variant additional_amount must stay variant-specific even for pinned/auto
-  // pushes. Reuse the latest computed per-variant additional amount from
-  // current_state when it exists instead of re-deriving solely from
-  // targetPrice - basePrice, which can flatten variants under guardrails.
   const allowVariantAdditionalOverride = true;
   let pinnedTargetByChannelProduct = new Map<string, number>();
   let pinnedTargetByLogical = new Map<string, number>();
@@ -229,276 +178,162 @@ export async function POST(request: Request) {
   const pinnedBaseTargetByProduct = new Map<string, number>();
   const pinnedBaseRawTargetByMaster = new Map<string, number>();
   const pinnedBaseRawTargetByProduct = new Map<string, number>();
-  if (pinnedComputeRequestId) {
-    const usePublishedPinnedState = Array.isArray(channelProductIds) && channelProductIds.length > 0;
-    if (usePublishedPinnedState) {
-      const publishedRes = await loadPublishedPriceStateByChannelProducts({
-        sb,
-        channelId,
-        channelProductIds,
-        publishVersions: [pinnedComputeRequestId],
-      });
-      if (publishedRes.available && publishedRes.rowsByChannelProduct.size > 0) {
-        const publishedRows = Array.from(publishedRes.rowsByChannelProduct.values());
-        pinnedTargetByChannelProduct = new Map(publishedRows.map((row) => [row.channelProductId, row.publishedTotalPriceKrw] as [string, number]));
-        pinnedRawByChannelProduct = new Map(
-          publishedRows
-            .filter((row) => Number.isFinite(Number(row.targetPriceRawKrw ?? Number.NaN)))
-            .map((row) => [row.channelProductId, Math.round(Number(row.targetPriceRawKrw))] as [string, number]),
-        );
-        pinnedTargetByLogical = new Map(publishedRows.map((row) => [logicalTargetKey(row.masterItemId, row.externalVariantCode), row.publishedTotalPriceKrw] as [string, number]));
-        pinnedRawByLogical = new Map(
-          publishedRows
-            .filter((row) => Number.isFinite(Number(row.targetPriceRawKrw ?? Number.NaN)))
-            .map((row) => [logicalTargetKey(row.masterItemId, row.externalVariantCode), Math.round(Number(row.targetPriceRawKrw))] as [string, number]),
-        );
-        pinnedAdditionalByChannelProduct = new Map(publishedRows.map((row) => [row.channelProductId, row.publishedAdditionalAmountKrw] as [string, number]));
-        pinnedAdditionalByLogical = new Map(publishedRows.map((row) => [logicalTargetKey(row.masterItemId, row.externalVariantCode), row.publishedAdditionalAmountKrw] as [string, number]));
-        const publishedBaseRes = await loadPublishedBaseStateByMasterIds({
-          sb,
-          channelId,
-          masterItemIds: Array.from(new Set(publishedRows.map((row) => row.masterItemId))),
-          publishVersion: pinnedComputeRequestId,
-        });
-        if (publishedBaseRes.available) {
-          for (const row of publishedBaseRes.rows) {
-            if (!pinnedBaseTargetByMaster.has(row.masterItemId)) {
-              pinnedBaseTargetByMaster.set(row.masterItemId, row.publishedBasePriceKrw);
-            }
-            if (!pinnedBaseTargetByProduct.has(baseTargetKey(row.masterItemId, row.externalProductNo))) {
-              pinnedBaseTargetByProduct.set(baseTargetKey(row.masterItemId, row.externalProductNo), row.publishedBasePriceKrw);
-            }
-            if (Number.isFinite(Number(row.targetPriceRawKrw ?? Number.NaN)) && !pinnedBaseRawTargetByMaster.has(row.masterItemId)) {
-              pinnedBaseRawTargetByMaster.set(row.masterItemId, Math.round(Number(row.targetPriceRawKrw)));
-            }
-            if (Number.isFinite(Number(row.targetPriceRawKrw ?? Number.NaN)) && !pinnedBaseRawTargetByProduct.has(baseTargetKey(row.masterItemId, row.externalProductNo))) {
-              pinnedBaseRawTargetByProduct.set(baseTargetKey(row.masterItemId, row.externalProductNo), Math.round(Number(row.targetPriceRawKrw)));
-            }
-          }
-        }
-      }
-    }
-    if (pinnedTargetByChannelProduct.size === 0) {
-      return jsonError("publish rows are required for deterministic push", 422, {
-        code: "PUBLISHED_PRICE_ROWS_REQUIRED",
-        publish_version: pinnedComputeRequestId,
-      });
-    }
+
+  const publishedRes = Array.isArray(channelProductIds) && channelProductIds.length > 0
+    ? await loadPublishedPriceStateByChannelProducts({ sb, channelId, channelProductIds, publishVersions: [pinnedComputeRequestId] })
+    : await loadPublishedPriceStateByVersion({ sb, channelId, publishVersion: pinnedComputeRequestId });
+  if (!publishedRes.available || publishedRes.rowsByChannelProduct.size === 0) {
+    return jsonError("publish rows are required for deterministic push", 422, {
+      code: "PUBLISHED_PRICE_ROWS_REQUIRED",
+      publish_version: pinnedComputeRequestId,
+    });
   }
 
-  const finalRows: Array<{
-    channel_id: string | null;
-    channel_product_id: string | null;
-    master_item_id: string | null;
-    external_product_no: string | null;
-    external_variant_code: string | null;
-    target_price_raw_krw: number | null;
-    final_target_price_krw: number | null;
-    current_channel_price_krw: number | null;
-  }> = [];
+  const activeMapQuery = sb
+    .from("sales_channel_product")
+    .select("channel_id, channel_product_id, master_item_id, external_product_no, external_variant_code")
+    .eq("channel_id", channelId)
+    .eq("is_active", true)
+    .order("external_variant_code", { ascending: true });
+  const activeMapRes = Array.isArray(channelProductIds) && channelProductIds.length > 0
+    ? await activeMapQuery.in("channel_product_id", channelProductIds)
+    : await activeMapQuery;
+  if (activeMapRes.error) return jsonError(activeMapRes.error.message ?? "활성 매핑 조회 실패", 500);
+  const activeMapRows = (activeMapRes.data ?? []).filter((row) => publishedRes.rowsByChannelProduct.has(String(row.channel_product_id ?? "").trim()));
+  if (activeMapRows.length === 0) {
+    return jsonError("active published mappings are required for push", 422, {
+      code: "ACTIVE_PUBLISHED_MAPPINGS_REQUIRED",
+      publish_version: pinnedComputeRequestId,
+    });
+  }
 
   if (Array.isArray(channelProductIds) && channelProductIds.length > 0) {
-    const targetMasterIds = Array.from(new Set(
-      initialCandidates.map((r) => String(r.master_item_id ?? "").trim()).filter(Boolean),
-    ));
-    if (targetMasterIds.length > 0) {
-      for (const masterChunk of chunkArray(targetMasterIds, IN_QUERY_CHUNK_SIZE)) {
-        if (masterChunk.length === 0) continue;
-        const candRes = await sb
-          .from("v_channel_price_dashboard")
-          .select("channel_id, channel_product_id, master_item_id, external_product_no, external_variant_code, target_price_raw_krw, final_target_price_krw, current_channel_price_krw")
-          .eq("channel_id", channelId)
-          .in("master_item_id", masterChunk);
-        if (candRes.error) return jsonError(candRes.error.message ?? "반영 대상 재조회 실패", 500);
-        finalRows.push(...(candRes.data ?? []));
-      }
-    } else {
-      for (const idChunk of chunkArray(channelProductIds, IN_QUERY_CHUNK_SIZE)) {
-        if (idChunk.length === 0) continue;
-        const candRes = await sb
-          .from("v_channel_price_dashboard")
-          .select("channel_id, channel_product_id, master_item_id, external_product_no, external_variant_code, target_price_raw_krw, final_target_price_krw, current_channel_price_krw")
-          .eq("channel_id", channelId)
-          .in("channel_product_id", idChunk);
-        if (candRes.error) return jsonError(candRes.error.message ?? "반영 대상 재조회 실패", 500);
-        finalRows.push(...(candRes.data ?? []));
-      }
+    const activeIds = new Set(activeMapRows.map((row) => String(row.channel_product_id ?? "").trim()));
+    const missingIds = channelProductIds.filter((id) => !activeIds.has(id));
+    if (missingIds.length > 0) {
+      return jsonError("inactive or unpublished channel_product_id is included", 422, {
+        code: "PUBLISHED_MAPPING_MISMATCH",
+        publish_version: pinnedComputeRequestId,
+        missing_channel_product_ids: missingIds,
+      });
     }
-  } else {
-    const candRes = await sb
-      .from("v_channel_price_dashboard")
-      .select("channel_id, channel_product_id, master_item_id, external_product_no, external_variant_code, target_price_raw_krw, final_target_price_krw, current_channel_price_krw")
-      .eq("channel_id", channelId);
-    if (candRes.error) return jsonError(candRes.error.message ?? "반영 대상 재조회 실패", 500);
-    finalRows.push(...(candRes.data ?? []));
   }
 
-  const candidates = await filterActiveCandidates(
-    finalRows.filter((r) => r.channel_product_id && r.external_product_no),
+  const currentRows: Array<{ channel_product_id: string | null; current_price_krw: number | null }> = [];
+  const activeIdsForCurrent = activeMapRows.map((row) => String(row.channel_product_id ?? "").trim()).filter(Boolean);
+  for (const idChunk of chunkArray(activeIdsForCurrent, IN_QUERY_CHUNK_SIZE)) {
+    if (idChunk.length === 0) continue;
+    const currentRes = await sb
+      .from("channel_price_snapshot_latest")
+      .select("channel_product_id, current_price_krw")
+      .eq("channel_id", channelId)
+      .in("channel_product_id", idChunk);
+    if (currentRes.error) return jsonError(currentRes.error.message ?? "현재 채널 가격 조회 실패", 500);
+    currentRows.push(...(currentRes.data ?? []));
+  }
+  const currentByChannelProduct = new Map<string, number>();
+  for (const row of currentRows) {
+    const id = String(row.channel_product_id ?? "").trim();
+    const current = Number(row.current_price_krw ?? Number.NaN);
+    if (!id || !Number.isFinite(current) || currentByChannelProduct.has(id)) continue;
+    currentByChannelProduct.set(id, Math.round(current));
+  }
+
+  const publishedRows = Array.from(publishedRes.rowsByChannelProduct.values());
+  for (const row of publishedRows) {
+    if (Number.isFinite(Number(row.targetPriceRawKrw ?? Number.NaN))) {
+      pinnedRawByChannelProduct.set(row.channelProductId, Math.round(Number(row.targetPriceRawKrw)));
+      pinnedRawByLogical.set(logicalTargetKey(row.masterItemId, row.externalVariantCode), Math.round(Number(row.targetPriceRawKrw)));
+    }
+    pinnedAdditionalByChannelProduct.set(row.channelProductId, row.publishedAdditionalAmountKrw);
+    pinnedAdditionalByLogical.set(logicalTargetKey(row.masterItemId, row.externalVariantCode), row.publishedAdditionalAmountKrw);
+    if (!row.externalVariantCode) {
+      pinnedBaseTargetByMaster.set(row.masterItemId, row.publishedBasePriceKrw);
+      pinnedBaseTargetByProduct.set(baseTargetKey(row.masterItemId, row.externalProductNo), row.publishedBasePriceKrw);
+      if (Number.isFinite(Number(row.targetPriceRawKrw ?? Number.NaN))) {
+        pinnedBaseRawTargetByMaster.set(row.masterItemId, Math.round(Number(row.targetPriceRawKrw)));
+        pinnedBaseRawTargetByProduct.set(baseTargetKey(row.masterItemId, row.externalProductNo), Math.round(Number(row.targetPriceRawKrw)));
+      }
+    }
+  }
+
+  const candidateRows = activeMapRows
+    .map((mapping) => {
+      const id = String(mapping.channel_product_id ?? "").trim();
+      const published = publishedRes.rowsByChannelProduct.get(id) ?? null;
+      const masterKey = String(mapping.master_item_id ?? "").trim();
+      const productNo = String(mapping.external_product_no ?? "").trim();
+      const variantCode = String(mapping.external_variant_code ?? "").trim();
+      if (!published || !masterKey || !productNo) return null;
+      const exactBaseKey = baseTargetKey(masterKey, productNo);
+      const exactPublishedBasePrice = pinnedBaseTargetByProduct.get(exactBaseKey);
+      if (variantCode && !Number.isFinite(Number(exactPublishedBasePrice ?? Number.NaN))) {
+        return {
+          missingExactPublishedBase: true as const,
+          channel_product_id: id,
+          master_item_id: masterKey,
+          external_product_no: productNo,
+          external_variant_code: variantCode,
+          publish_version: pinnedComputeRequestId,
+        };
+      }
+      const basePrice = variantCode ? Math.round(Number(exactPublishedBasePrice)) : published.publishedBasePriceKrw;
+      const totalPrice = variantCode ? basePrice + published.publishedAdditionalAmountKrw : published.publishedBasePriceKrw;
+      pinnedTargetByChannelProduct.set(id, totalPrice);
+      pinnedTargetByLogical.set(logicalTargetKey(masterKey, variantCode), totalPrice);
+      return {
+        channel_id: String(mapping.channel_id ?? "").trim() || null,
+        channel_product_id: id || null,
+        master_item_id: masterKey || null,
+        external_product_no: productNo || null,
+        external_variant_code: variantCode || null,
+        target_price_raw_krw: published.targetPriceRawKrw,
+        final_target_price_krw: totalPrice,
+        current_channel_price_krw: currentByChannelProduct.get(id) ?? null,
+      };
+    });
+
+  const missingExactPublishedBase = candidateRows.find(
+    (row): row is {
+      missingExactPublishedBase: true;
+      channel_product_id: string;
+      master_item_id: string;
+      external_product_no: string;
+      external_variant_code: string;
+      publish_version: string;
+    } => row !== null && "missingExactPublishedBase" in row,
   );
 
-  const canonicalProductByMaster = buildCanonicalBaseProductByMaster(candidates);
-
-  const dedupedMap = new Map<string, (typeof candidates)[number]>();
-  const scoreCandidateRow = (row: (typeof candidates)[number], canonicalProductNo: string): number => {
-    const productNo = String(row.external_product_no ?? "").trim();
-    const target = Number(row.final_target_price_krw);
-    const hasFinitePositiveTarget = Number.isFinite(target) && target > 0;
-    const looksCanonicalCode = /^P/i.test(productNo);
-    let score = 0;
-    if (hasFinitePositiveTarget) score += 1000;
-    if (canonicalProductNo && productNo === canonicalProductNo) score += 100;
-    if (looksCanonicalCode) score += 30;
-    return score;
-  };
-  for (const row of candidates) {
-    const master = String(row.master_item_id ?? "").trim();
-    const variant = String(row.external_variant_code ?? "").trim();
-    const productNo = String(row.external_product_no ?? "").trim();
-    const key = `${master}::${variant}::${productNo}`;
-    const prev = dedupedMap.get(key);
-    if (!prev) {
-      dedupedMap.set(key, row);
-      continue;
-    }
-
-    const canonical = canonicalProductByMaster.get(master) ?? "";
-    const prevScore = scoreCandidateRow(prev, canonical);
-    const nextScore = scoreCandidateRow(row, canonical);
-    if (nextScore > prevScore) {
-      dedupedMap.set(key, row);
-      continue;
-    }
-    if (prevScore > nextScore) {
-      continue;
-    }
-    if (canonical) {
-      if (productNo === canonical && String(prev.external_product_no ?? "").trim() !== canonical) {
-        dedupedMap.set(key, row);
-        continue;
-      }
-      if (String(prev.external_product_no ?? "").trim() === canonical) continue;
-    }
-
-    const prevNo = String(prev.external_product_no ?? "").trim();
-    const currIsCode = /^P/i.test(productNo);
-    const prevIsCode = /^P/i.test(prevNo);
-    if (currIsCode && !prevIsCode) {
-      dedupedMap.set(key, row);
-    }
+  if (missingExactPublishedBase) {
+    return jsonError("variant push requires an exact published base row for the same master/product/publish version", 422, {
+      code: "EXACT_PUBLISHED_BASE_ROW_REQUIRED",
+      channel_product_id: missingExactPublishedBase.channel_product_id,
+      master_item_id: missingExactPublishedBase.master_item_id,
+      external_product_no: missingExactPublishedBase.external_product_no,
+      external_variant_code: missingExactPublishedBase.external_variant_code,
+      publish_version: missingExactPublishedBase.publish_version,
+    });
   }
 
-  let dedupedCandidates = Array.from(dedupedMap.values());
-  if (pinnedTargetByChannelProduct.size > 0) {
-    dedupedCandidates = dedupedCandidates
-      .map((row) => {
-        const id = String(row.channel_product_id ?? "").trim();
-        const master = String(row.master_item_id ?? "").trim();
-        const variant = String(row.external_variant_code ?? "").trim();
-        const logicalKey = master ? logicalTargetKey(master, variant) : "";
-        const pinned = pinnedTargetByChannelProduct.get(id)
-          ?? (logicalKey ? pinnedTargetByLogical.get(logicalKey) : undefined);
-        if (!id || pinned == null || !Number.isFinite(pinned)) return null;
-        const pinnedRaw = pinnedRawByChannelProduct.get(id)
-          ?? (logicalKey ? pinnedRawByLogical.get(logicalKey) : undefined);
-        const normalizedPinned = Math.round(pinned);
-        return {
-          ...row,
-          final_target_price_krw: normalizedPinned,
-          target_price_raw_krw: Number.isFinite(Number(pinnedRaw ?? Number.NaN)) ? Number(pinnedRaw) : row.target_price_raw_krw,
-        };
-      })
-      .filter((row): row is NonNullable<typeof row> => row !== null);
+  const sortedCandidates = candidateRows
+    .filter((row): row is Exclude<NonNullable<typeof row>, { missingExactPublishedBase: true }> => (
+      row !== null && !("missingExactPublishedBase" in row)
+    ))
+    .sort((a, b) => {
+      const am = String(a.master_item_id ?? "");
+      const bm = String(b.master_item_id ?? "");
+      if (am !== bm) return am.localeCompare(bm);
+      const av = String(a.external_variant_code ?? "").trim();
+      const bv = String(b.external_variant_code ?? "").trim();
+      if (!av && bv) return -1;
+      if (av && !bv) return 1;
+      return av.localeCompare(bv);
+    });
 
-    if (Array.isArray(channelProductIds) && channelProductIds.length > 0) {
-      const missingPinned = channelProductIds.filter((id) => !pinnedTargetByChannelProduct.has(id));
-      if (missingPinned.length > 0) {
-        return jsonError(`compute_request_id에 없는 channel_product_id가 있습니다: ${missingPinned.slice(0, 5).join(",")}`, 422);
-      }
-    }
-  }
-
-  const sortedCandidates = [...dedupedCandidates].sort((a, b) => {
-    const am = String(a.master_item_id ?? "");
-    const bm = String(b.master_item_id ?? "");
-    if (am !== bm) return am.localeCompare(bm);
-    const av = String(a.external_variant_code ?? "").trim();
-    const bv = String(b.external_variant_code ?? "").trim();
-    if (!av && bv) return -1;
-    if (av && !bv) return 1;
-    return av.localeCompare(bv);
-  });
-  const masterBaseRawTarget = new Map<string, number>();
-  const productBaseRawTarget = new Map<string, number>();
-
-  const masterFallbackTarget = new Map<string, number>();
-  const productFallbackTarget = new Map<string, number>();
-  for (const row of sortedCandidates) {
-    const masterKey = String(row.master_item_id ?? "").trim();
-    const variantCode = String(row.external_variant_code ?? "").trim();
-    const target = Number(row.final_target_price_krw);
-    const targetRaw = Number(row.target_price_raw_krw);
-    const productNo = String(row.external_product_no ?? "").trim();
-    if (!masterKey || variantCode) continue;
-    if (Number.isFinite(target) && !masterFallbackTarget.has(masterKey)) {
-      masterFallbackTarget.set(masterKey, Math.round(target));
-    }
-    if (productNo && Number.isFinite(target) && !productFallbackTarget.has(baseTargetKey(masterKey, productNo))) {
-      productFallbackTarget.set(baseTargetKey(masterKey, productNo), Math.round(target));
-    }
-    if (Number.isFinite(targetRaw) && !masterBaseRawTarget.has(masterKey)) {
-      masterBaseRawTarget.set(masterKey, targetRaw);
-    }
-    if (productNo && Number.isFinite(targetRaw) && !productBaseRawTarget.has(baseTargetKey(masterKey, productNo))) {
-      productBaseRawTarget.set(baseTargetKey(masterKey, productNo), targetRaw);
-    }
-  }
-  for (const [masterKey, target] of pinnedBaseTargetByMaster.entries()) {
-    if (!masterFallbackTarget.has(masterKey)) {
-      masterFallbackTarget.set(masterKey, target);
-    }
-  }
-  for (const [productKey, target] of pinnedBaseTargetByProduct.entries()) {
-    if (!productFallbackTarget.has(productKey)) {
-      productFallbackTarget.set(productKey, target);
-    }
-  }
-  for (const [masterKey, targetRaw] of pinnedBaseRawTargetByMaster.entries()) {
-    if (!masterBaseRawTarget.has(masterKey)) {
-      masterBaseRawTarget.set(masterKey, targetRaw);
-    }
-  }
-  for (const [productKey, targetRaw] of pinnedBaseRawTargetByProduct.entries()) {
-    if (!productBaseRawTarget.has(productKey)) {
-      productBaseRawTarget.set(productKey, targetRaw);
-    }
-  }
-
-  const missingMasterFallbackIds = Array.from(new Set(
-    sortedCandidates
-      .map((row) => String(row.master_item_id ?? "").trim())
-      .filter((masterKey) => masterKey.length > 0 && !masterFallbackTarget.has(masterKey)),
-  ));
-  if (missingMasterFallbackIds.length > 0) {
-    for (const masterChunk of chunkArray(missingMasterFallbackIds, IN_QUERY_CHUNK_SIZE)) {
-      if (masterChunk.length === 0) continue;
-      const fallbackRes = await sb
-        .from("v_channel_price_dashboard")
-        .select("master_item_id, final_target_price_krw")
-        .eq("channel_id", channelId)
-        .eq("external_variant_code", "")
-        .in("master_item_id", masterChunk);
-      if (fallbackRes.error) return jsonError(fallbackRes.error.message ?? "기준옵션 목표가 조회 실패", 500);
-      for (const row of fallbackRes.data ?? []) {
-        const masterKey = String(row.master_item_id ?? "").trim();
-        const target = Number(row.final_target_price_krw);
-        if (!masterKey || masterFallbackTarget.has(masterKey)) continue;
-        if (Number.isFinite(target) && target > 0) {
-          masterFallbackTarget.set(masterKey, Math.round(target));
-        }
-      }
-    }
-  }
+  const masterBaseRawTarget = new Map<string, number>(pinnedBaseRawTargetByMaster);
+  const productBaseRawTarget = new Map<string, number>(pinnedBaseRawTargetByProduct);
+  const masterFallbackTarget = new Map<string, number>(pinnedBaseTargetByMaster);
+  const productFallbackTarget = new Map<string, number>(pinnedBaseTargetByProduct);
 
   const resolveVariantAdditionalOverride = (channelProductId: string, masterKey: string, variantCode: string): number | undefined => {
     const byChannelProduct = pinnedAdditionalByChannelProduct.get(channelProductId);
@@ -512,8 +347,8 @@ export async function POST(request: Request) {
     return NextResponse.json({
       ok: true,
       dry_run: true,
-      total: dedupedCandidates.length,
-      data: dedupedCandidates,
+      total: sortedCandidates.length,
+      data: sortedCandidates,
     }, { headers: { "Cache-Control": "no-store" } });
   }
 
@@ -688,36 +523,7 @@ export async function POST(request: Request) {
 
     const rawTarget = Number(c.final_target_price_krw);
     const productBaseKey = baseTargetKey(masterKey, externalProductNo);
-    const fallbackTarget = productFallbackTarget.get(productBaseKey) ?? masterFallbackTarget.get(masterKey);
-    const hasFiniteRawTarget = Number.isFinite(rawTarget);
-    const shouldUseFallbackForVariant = Boolean(variantCode)
-      && fallbackTarget !== undefined
-      && (!hasFiniteRawTarget || rawTarget <= 0);
-    let targetPrice = shouldUseFallbackForVariant
-      ? Math.round(fallbackTarget)
-      : (hasFiniteRawTarget ? Math.round(rawTarget) : Number.NaN);
-
-    const forcedDesiredTarget = desiredTargetByChannelProduct.get(String(c.channel_product_id ?? "").trim());
-    if (Number.isFinite(Number(forcedDesiredTarget ?? Number.NaN))) {
-      targetPrice = Math.round(Number(forcedDesiredTarget));
-    }
-
-    if (variantCode) {
-      const baseFinalTarget = productFallbackTarget.get(productBaseKey) ?? masterFallbackTarget.get(masterKey);
-      const baseRawTarget = productBaseRawTarget.get(productBaseKey) ?? masterBaseRawTarget.get(masterKey);
-      const variantRawTarget = Number(c.target_price_raw_krw);
-      const hasBaseFinal = Number.isFinite(Number(baseFinalTarget ?? Number.NaN));
-      const hasBaseRaw = Number.isFinite(Number(baseRawTarget ?? Number.NaN));
-      const hasVariantRaw = Number.isFinite(variantRawTarget);
-      if (hasBaseFinal && hasBaseRaw && hasVariantRaw) {
-        targetPrice = restoreVariantTargetFromRawDelta({
-          targetPrice,
-          baseFinalTarget: Number(baseFinalTarget),
-          baseRawTarget: Number(baseRawTarget),
-          variantRawTarget,
-        });
-      }
-    }
+    let targetPrice = Number.isFinite(rawTarget) ? Math.round(rawTarget) : Number.NaN;
 
     const overrideAdditionalForValidation = allowVariantAdditionalOverride && variantCode
       ? resolveVariantAdditionalOverride(String(c.channel_product_id ?? "").trim(), masterKey, variantCode)
@@ -739,7 +545,7 @@ export async function POST(request: Request) {
         http_status: 422,
         error_code: "INVALID_TARGET_PRICE",
         error_message: "target price must be > 0",
-        raw_response_json: { target: c.final_target_price_krw, fallback_target: fallbackTarget ?? null },
+        raw_response_json: { target: c.final_target_price_krw },
       });
       continue;
     }
@@ -1105,36 +911,8 @@ export async function POST(request: Request) {
         continue;
       }
 
-      const rawTarget = Number(c.final_target_price_krw);
+      let targetPrice = Number.isFinite(Number(c.final_target_price_krw ?? Number.NaN)) ? Math.round(Number(c.final_target_price_krw)) : Number.NaN;
       const productBaseKey = baseTargetKey(masterKey, externalProductNo);
-      const fallbackTarget = productFallbackTarget.get(productBaseKey) ?? masterFallbackTarget.get(masterKey);
-      const hasFiniteRawTarget = Number.isFinite(rawTarget);
-      const shouldUseFallbackForVariant = Boolean(variantCode)
-        && fallbackTarget !== undefined
-        && (!hasFiniteRawTarget || rawTarget <= 0);
-      let targetPrice = shouldUseFallbackForVariant
-        ? Math.round(fallbackTarget)
-        : (hasFiniteRawTarget ? Math.round(rawTarget) : Number.NaN);
-      const forcedDesiredTarget = desiredTargetByChannelProduct.get(String(c.channel_product_id ?? "").trim());
-      if (Number.isFinite(Number(forcedDesiredTarget ?? Number.NaN))) {
-        targetPrice = Math.round(Number(forcedDesiredTarget));
-      }
-      if (variantCode) {
-        const baseFinalTarget = productFallbackTarget.get(productBaseKey) ?? masterFallbackTarget.get(masterKey);
-        const baseRawTarget = productBaseRawTarget.get(productBaseKey) ?? masterBaseRawTarget.get(masterKey);
-        const variantRawTarget = Number(c.target_price_raw_krw);
-        const hasBaseFinal = Number.isFinite(Number(baseFinalTarget ?? Number.NaN));
-        const hasBaseRaw = Number.isFinite(Number(baseRawTarget ?? Number.NaN));
-        const hasVariantRaw = Number.isFinite(variantRawTarget);
-        if (hasBaseFinal && hasBaseRaw && hasVariantRaw) {
-          targetPrice = restoreVariantTargetFromRawDelta({
-            targetPrice,
-            baseFinalTarget: Number(baseFinalTarget),
-            baseRawTarget: Number(baseRawTarget),
-            variantRawTarget,
-          });
-        }
-      }
       if (!Number.isFinite(targetPrice) || targetPrice <= 0) continue;
 
       const preferredBaseForDelta = productFallbackTarget.get(productBaseKey) ?? masterFallbackTarget.get(masterKey);
@@ -1358,7 +1136,7 @@ export async function POST(request: Request) {
   }
 
   const finalStatus =
-    dedupedCandidates.length === 0
+    sortedCandidates.length === 0
       ? "SUCCESS"
       : failedCount === 0
         ? (skippedCount > 0 ? "PARTIAL" : "SUCCESS")
@@ -1383,7 +1161,7 @@ export async function POST(request: Request) {
     job_id: jobId,
     publish_version: pinnedComputeRequestId || null,
     compute_request_id: pinnedComputeRequestId || null,
-    total: dedupedCandidates.length,
+    total: sortedCandidates.length,
     success: successCount,
     failed: failedCount,
     skipped: skippedCount,

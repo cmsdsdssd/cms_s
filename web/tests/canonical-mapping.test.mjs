@@ -1,4 +1,5 @@
 import test from 'node:test';
+import assert2 from 'node:assert/strict';
 import assert from 'node:assert/strict';
 
 import {

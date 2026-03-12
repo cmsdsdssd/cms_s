@@ -15,7 +15,7 @@ import {
   shouldSyncPriceChange,
 } from "@/lib/shop/price-sync-policy";
 import { buildCurrentProductSyncProfileByMaster } from "@/lib/shop/current-product-sync-profile";
-import { loadPublishedPriceStateByChannelProducts } from "@/lib/shop/publish-price-state";
+import { loadPublishedPriceStateByVersion } from "@/lib/shop/publish-price-state";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -622,43 +622,13 @@ export async function POST(request: Request) {
     total_after_margin_krw: number | null;
     delta_total_krw: number | null;
   }> = [];
+  const publishedByChannelProduct = new Map<string, { publishVersion: string; targetPriceRawKrw: number | null; publishedBasePriceKrw: number; publishedAdditionalAmountKrw: number; publishedTotalPriceKrw: number; masterItemId: string; externalProductNo: string; externalVariantCode: string; }>();
 
-  for (const computeChunk of chunkArray(computeIds, Math.max(1, Math.min(50, IN_QUERY_CHUNK_SIZE)))) {
-    if (computeChunk.length === 0) continue;
-
-    if (fullAutoScope || masterIds.length === 0) {
-      const snapshotRes = await sb
-        .from("pricing_snapshot")
-        .select(snapshotSelect)
-        .eq("channel_id", channelId)
-        .in("compute_request_id", computeChunk);
-      if (snapshotRes.error) return jsonError(snapshotRes.error.message ?? "??산퉬??鈺곌퀬????쎈솭", 500);
-      snapshotRows.push(...((snapshotRes.data ?? []) as unknown as Array<typeof snapshotRows[number]>));
-      continue;
-    }
-
-    for (const masterChunk of chunkArray(masterIds, IN_QUERY_CHUNK_SIZE)) {
-      if (masterChunk.length === 0) continue;
-      const snapshotRes = await sb
-        .from("pricing_snapshot")
-        .select(snapshotSelect)
-        .eq("channel_id", channelId)
-        .in("compute_request_id", computeChunk)
-        .in("master_item_id", masterChunk);
-      if (snapshotRes.error) return jsonError(snapshotRes.error.message ?? "??산퉬??鈺곌퀬????쎈솭", 500);
-      snapshotRows.push(...((snapshotRes.data ?? []) as unknown as Array<typeof snapshotRows[number]>));
-    }
-  }
-
-  const rawSnapshotChannelProductIds = Array.from(
-    new Set(snapshotRows.map((r) => String(r.channel_product_id ?? "").trim()).filter(Boolean)),
-  );
-  if (rawSnapshotChannelProductIds.length > 0) {
-    const publishedRes = await loadPublishedPriceStateByChannelProducts({
+  for (const computeId of computeIds) {
+    const publishedRes = await loadPublishedPriceStateByVersion({
       sb,
       channelId,
-      channelProductIds: rawSnapshotChannelProductIds,
-      publishVersions: computeIds,
+      publishVersion: computeId,
     });
     if (!publishedRes.available) {
       return jsonError("published price rows are required for run creation", 422, {
@@ -666,23 +636,58 @@ export async function POST(request: Request) {
         publish_versions: computeIds,
       });
     }
-    snapshotRows.splice(0, snapshotRows.length, ...snapshotRows.filter((row) => {
-      const channelProductId = String(row.channel_product_id ?? "").trim();
-      const computeRequestId = String(row.compute_request_id ?? "").trim();
-      const published = publishedRes.rowsByChannelProduct.get(channelProductId) ?? null;
-      return published?.publishVersion === computeRequestId;
-    }));
-    if (snapshotRows.length === 0) {
-      return jsonError("no publish-backed snapshot rows matched the requested versions", 422, {
-        code: "PUBLISHED_SNAPSHOT_MISMATCH",
-        publish_versions: computeIds,
-      });
+    for (const [key, value] of publishedRes.rowsByChannelProduct.entries()) {
+      if (masterIds.length > 0 && !masterIds.includes(value.masterItemId)) continue;
+      publishedByChannelProduct.set(key, value as never);
     }
   }
-  const snapshotChannelProductIds = Array.from(
-    new Set(snapshotRows.map((r) => String(r.channel_product_id ?? "").trim()).filter(Boolean)),
-  );
+  if (publishedByChannelProduct.size === 0) {
+    return jsonError("no published rows matched the requested versions", 422, {
+      code: "PUBLISHED_ROWS_EMPTY",
+      publish_versions: computeIds,
+    });
+  }
 
+  const snapshotChannelProductIds = Array.from(publishedByChannelProduct.keys());
+  for (const idChunk of chunkArray(snapshotChannelProductIds, IN_QUERY_CHUNK_SIZE)) {
+    if (idChunk.length === 0) continue;
+    const snapshotRes = await sb
+      .from("pricing_snapshot")
+      .select(snapshotSelect)
+      .eq("channel_id", channelId)
+      .in("compute_request_id", computeIds)
+      .in("channel_product_id", idChunk);
+    if (snapshotRes.error) return jsonError(snapshotRes.error.message ?? "pricing snapshot context lookup failed", 500);
+    snapshotRows.push(...((snapshotRes.data ?? []) as unknown as Array<typeof snapshotRows[number]>));
+  }
+
+  const snapshotContextByChannelProduct = new Map<string, typeof snapshotRows[number]>();
+  for (const row of snapshotRows) {
+    const key = String(row.channel_product_id ?? "").trim();
+    const computeRequestId = String(row.compute_request_id ?? "").trim();
+    const published = publishedByChannelProduct.get(key) ?? null;
+    if (!key || !published || published.publishVersion !== computeRequestId || snapshotContextByChannelProduct.has(key)) continue;
+    snapshotContextByChannelProduct.set(key, row);
+  }
+
+  snapshotRows.splice(0, snapshotRows.length, ...Array.from(publishedByChannelProduct.entries()).map(([channelProductId, published]) => {
+    const context = snapshotContextByChannelProduct.get(channelProductId) ?? null;
+    const finalTarget = !published.externalVariantCode
+      ? published.publishedBasePriceKrw
+      : published.publishedBasePriceKrw + published.publishedAdditionalAmountKrw;
+    return {
+      channel_id: context?.channel_id ?? channelId,
+      master_item_id: published.masterItemId,
+      channel_product_id: channelProductId,
+      compute_request_id: published.publishVersion,
+      final_target_price_krw: finalTarget,
+      final_target_price_v2_krw: context?.final_target_price_v2_krw ?? finalTarget,
+      pricing_algo_version: context?.pricing_algo_version ?? null,
+      base_total_pre_margin_krw: context?.base_total_pre_margin_krw ?? null,
+      total_after_margin_krw: context?.total_after_margin_krw ?? null,
+      delta_total_krw: published.publishedAdditionalAmountKrw,
+    };
+  }));
   const activeMapRows: ActiveMappingRow[] = [];
   for (const idChunk of chunkArray(snapshotChannelProductIds, IN_QUERY_CHUNK_SIZE)) {
     if (idChunk.length === 0) continue;
@@ -704,6 +709,12 @@ export async function POST(request: Request) {
     },
   ]));
   const currentProductSyncProfileByMaster = buildCurrentProductSyncProfileByMaster(activeMapRows);
+  const publishedBaseRowsByMasterProduct = new Map<string, number>();
+  for (const published of publishedByChannelProduct.values()) {
+    if (!published.externalVariantCode) {
+      publishedBaseRowsByMasterProduct.set(`${published.masterItemId}::${published.externalProductNo}`, published.publishedBasePriceKrw);
+    }
+  }
 
   const { summary: missingMappingSummary } = buildMissingActiveMappingSummary({
     snapshotRows,
@@ -836,9 +847,13 @@ export async function POST(request: Request) {
     if (!channelProductId || !mapping || !mapping.external_product_no) continue;
 
     const masterItemId = String(row.master_item_id ?? "").trim();
-    const targetRaw = row.final_target_price_v2_krw ?? row.final_target_price_krw;
-    const target = Math.round(Number(targetRaw ?? 0));
     const variantCode = String(mapping.external_variant_code ?? "").trim();
+    const published = publishedByChannelProduct.get(channelProductId) ?? null;
+    if (!published || published.publishVersion !== String(row.compute_request_id ?? "").trim()) continue;
+    const basePublished = variantCode
+      ? (publishedBaseRowsByMasterProduct.get(`${masterItemId}::${mapping.external_product_no}`) ?? published.publishedBasePriceKrw)
+      : published.publishedBasePriceKrw;
+    const target = variantCode ? basePublished + published.publishedAdditionalAmountKrw : basePublished;
     let desired = target;
     if (!(desired > 0)) continue;
     const masterThresholdPolicy = resolveThresholdPolicyForProfile(currentProductSyncProfileByMaster.get(masterItemId) ?? null);
@@ -850,10 +865,7 @@ export async function POST(request: Request) {
       && Number(forcedBaseTarget) > Number(baseSnapshotTarget);
 
     const currentPrice = currentByChannelProduct.get(channelProductId);
-    const snapshotOptionAdditionalRaw = Number(row.delta_total_krw ?? Number.NaN);
-    const snapshotOptionAdditional = Number.isFinite(snapshotOptionAdditionalRaw)
-      ? Math.round(snapshotOptionAdditionalRaw)
-      : null;
+    const snapshotOptionAdditional = variantCode ? published.publishedAdditionalAmountKrw : null;
     const lastKnownOptionAdditional = null;
     const optionAdditionalOutOfSync = false;
     const rowCurrentRounded = Number.isFinite(Number(currentPrice ?? Number.NaN))

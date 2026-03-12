@@ -1,4 +1,4 @@
-import { isMissingSchemaObjectError } from "@/lib/shop/admin";
+﻿import { isMissingSchemaObjectError } from "@/lib/shop/admin";
 
 type AdminClient = NonNullable<ReturnType<typeof import("@/lib/shop/admin").getShopAdminClient>>;
 
@@ -192,6 +192,54 @@ export async function loadPublishedPriceStateByChannelProducts(args: {
       if (!row || rowsByChannelProduct.has(row.channelProductId)) continue;
       rowsByChannelProduct.set(row.channelProductId, row);
     }
+  }
+
+  return { available: true, rowsByChannelProduct };
+}
+
+export async function loadPublishedPriceStateByVersion(args: {
+  sb: AdminClient;
+  channelId: string;
+  publishVersion: string;
+}) {
+  const { sb, channelId } = args;
+  const publishVersion = String(args.publishVersion ?? "").trim();
+  const rowsByChannelProduct = new Map<string, PublishedPriceStateRow>();
+  if (!publishVersion) return { available: true, rowsByChannelProduct };
+
+  const [baseRes, variantRes] = await Promise.all([
+    sb
+      .from("product_price_publish_base_v1")
+      .select("channel_product_id, channel_id, master_item_id, external_product_no, publish_version, target_price_raw_krw, published_base_price_krw, published_total_price_krw, computed_at")
+      .eq("channel_id", channelId)
+      .eq("publish_version", publishVersion)
+      .order("computed_at", { ascending: false }),
+    sb
+      .from("product_price_publish_variant_v1")
+      .select("channel_product_id, channel_id, master_item_id, external_product_no, external_variant_code, publish_version, target_price_raw_krw, published_base_price_krw, published_additional_amount_krw, published_total_price_krw, computed_at")
+      .eq("channel_id", channelId)
+      .eq("publish_version", publishVersion)
+      .order("computed_at", { ascending: false }),
+  ]);
+
+  if (baseRes.error && isMissingSchemaObjectError(baseRes.error, "product_price_publish_base_v1")) {
+    return { available: false, rowsByChannelProduct: new Map<string, PublishedPriceStateRow>() };
+  }
+  if (variantRes.error && isMissingSchemaObjectError(variantRes.error, "product_price_publish_variant_v1")) {
+    return { available: false, rowsByChannelProduct: new Map<string, PublishedPriceStateRow>() };
+  }
+  if (baseRes.error) throw new Error(baseRes.error.message ?? "published base by version lookup failed");
+  if (variantRes.error) throw new Error(variantRes.error.message ?? "published variant by version lookup failed");
+
+  for (const raw of baseRes.data ?? []) {
+    const row = normalizeBaseRow(raw as BasePublishRow);
+    if (!row || rowsByChannelProduct.has(row.channelProductId)) continue;
+    rowsByChannelProduct.set(row.channelProductId, row);
+  }
+  for (const raw of variantRes.data ?? []) {
+    const row = normalizeVariantRow(raw as VariantPublishRow);
+    if (!row || rowsByChannelProduct.has(row.channelProductId)) continue;
+    rowsByChannelProduct.set(row.channelProductId, row);
   }
 
   return { available: true, rowsByChannelProduct };

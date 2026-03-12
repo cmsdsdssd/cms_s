@@ -3,7 +3,7 @@ import { getShopAdminClient, isMissingSchemaObjectError, jsonError } from "@/lib
 import { OPTION_LABOR_RULE_CATEGORIES } from "@/lib/shop/option-labor-rules";
 import { normalizeMaterialCode } from "@/lib/material-factors";
 import { CONTRACTS } from "@/lib/contracts";
-import { STANDARD_PLATING_COMBO_CODES, formatPlatingComboLabel, normalizePlatingComboCode } from "@/lib/shop/sync-rules";
+import { buildPlatingComboChoices } from "@/lib/shop/sync-rules";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -310,7 +310,7 @@ export async function GET(request: Request) {
       : Promise.resolve({ data: [], error: null }),
     sb
       .from("channel_color_combo_catalog_v1")
-      .select("combo_key, display_name, base_delta_krw")
+      .select("combo_key, display_name, base_delta_krw, sort_order")
       .eq("channel_id", channelId)
       .eq("is_active", true)
       .order("sort_order", { ascending: true })
@@ -605,31 +605,19 @@ export async function GET(request: Request) {
     ),
   ).sort((a, b) => a.localeCompare(b));
 
-  const colorMap = new Map<string, { color_code: string; display_name: string; base_delta_krw: number }>();
-  for (const row of (comboCatalogRes.data ?? []) as Array<{ combo_key?: string | null; display_name?: string | null; base_delta_krw?: number | null }>) {
-    const colorCode = normalizePlatingComboCode(row.combo_key);
-    if (!colorCode || colorMap.has(colorCode)) continue;
-    colorMap.set(colorCode, {
-      color_code: colorCode,
-      display_name: toTrimmed(row.display_name) || formatPlatingComboLabel(colorCode) || colorCode,
-      base_delta_krw: Math.max(0, Math.round(Number(row.base_delta_krw ?? 0))),
-    });
-  }
-  for (const colorCodeRaw of [
-    ...STANDARD_PLATING_COMBO_CODES,
-    ...(platingRes.data ?? []).map((row) => (row as { color_code?: string | null }).color_code),
-    ...mappings.map((row) => row.option_color_code),
-    ...(savedRuleColorRes.data ?? []).map((row) => (row as { color_code?: string | null }).color_code),
-  ]) {
-    const colorCode = normalizePlatingComboCode(colorCodeRaw);
-    if (!colorCode || colorMap.has(colorCode)) continue;
-    colorMap.set(colorCode, {
-      color_code: colorCode,
-      display_name: formatPlatingComboLabel(colorCode) || colorCode,
-      base_delta_krw: 0,
-    });
-  }
-  const colors = Array.from(colorMap.values()).sort((a, b) => a.display_name.localeCompare(b.display_name) || a.color_code.localeCompare(b.color_code));
+  const colors = buildPlatingComboChoices({
+    catalogRows: (comboCatalogRes.data ?? []) as Array<{ combo_key?: string | null; display_name?: string | null; base_delta_krw?: number | null; sort_order?: number | null }>,
+    fallbackValues: [
+      ...(platingRes.data ?? []).map((row) => (row as { color_code?: string | null }).color_code),
+      ...mappings.map((row) => row.option_color_code),
+      ...(savedRuleColorRes.data ?? []).map((row) => (row as { color_code?: string | null }).color_code),
+    ],
+    includeStandard: true,
+  }).map((choice) => ({
+    color_code: choice.value,
+    display_name: choice.label,
+    base_delta_krw: Math.max(0, Math.round(Number(choice.delta_krw ?? 0))),
+  }));
 
   const categoryCodes = Array.from(new Set(masters.map((row) => toUpper(row.category_code)).filter(Boolean))).sort((a, b) => a.localeCompare(b));
 

@@ -58,6 +58,13 @@ type SyncRuleSet = {
   is_active: boolean;
 };
 
+type PricingPolicy = {
+  policy_id: string;
+  channel_id: string;
+  policy_name: string;
+  is_active: boolean;
+};
+
 type MasterSuggest = {
   master_item_id: string;
   model_name: string;
@@ -96,6 +103,16 @@ type BulkMappingResponse = {
   saved: number;
 };
 
+type RecomputeResponse = {
+  ok: boolean;
+  inserted: number;
+  skipped: number;
+  reason?: string;
+  blocked_by_missing_rules_count?: number;
+  compute_request_id?: string;
+  publish_version?: string;
+};
+
 type VariantOptionDraft = MappingOptionSelection & {
   option_size_value_text: string;
 };
@@ -118,8 +135,6 @@ type MappingWritePayload = {
   option_color_code: string | null;
   option_decoration_code: string | null;
   option_size_value: number | null;
-  material_multiplier_override: number | null;
-  size_weight_delta_g: number | null;
   option_price_delta_krw: number | null;
   option_price_mode: "SYNC" | "MANUAL";
   option_manual_target_krw: number | null;
@@ -260,6 +275,17 @@ export default function ShoppingMappingsPage() {
   });
   const mappings = useMemo(() => mappingsQuery.data?.data ?? [], [mappingsQuery.data?.data]);
 
+  const pricingPoliciesQuery = useQuery({
+    queryKey: ["shop-pricing-policies", effectiveChannelId],
+    enabled: Boolean(effectiveChannelId),
+    queryFn: () =>
+      shopApiGet<{ data: PricingPolicy[] }>(
+        "/api/pricing-policies?channel_id=" + encodeURIComponent(effectiveChannelId),
+      ),
+  });
+  const pricingPolicies = pricingPoliciesQuery.data?.data ?? [];
+
+
   const syncRuleSetsQuery = useQuery({
     queryKey: ["shop-sync-rule-sets", effectiveChannelId],
     enabled: Boolean(effectiveChannelId),
@@ -274,10 +300,7 @@ export default function ShoppingMappingsPage() {
   const [masterQuery, setMasterQuery] = useState("");
   const [masterQueryDebounced, setMasterQueryDebounced] = useState("");
   const [masterLabel, setMasterLabel] = useState("");
-  const [syncRuleSetId, setSyncRuleSetId] = useState("");
   const [externalProductNo, setExternalProductNo] = useState("");
-  const [materialMultiplierOverride, setMaterialMultiplierOverride] = useState("");
-  const [sizeWeightDeltaG, setSizeWeightDeltaG] = useState("");
   const [loadedVariants, setLoadedVariants] = useState<VariantCandidate[]>([]);
   const [selectedVariants, setSelectedVariants] = useState<Record<string, boolean>>({});
   const [variantDeltaByCode, setVariantDeltaByCode] = useState<Record<string, string>>({});
@@ -306,7 +329,8 @@ export default function ShoppingMappingsPage() {
   });
   const masterSuggestions = masterSuggestQuery.data?.data ?? [];
 
-  const effectiveSyncRuleSetId = syncRuleSetId || syncRuleSets[0]?.rule_set_id || "";
+  const effectiveSyncRuleSetId = syncRuleSets[0]?.rule_set_id || "";
+  const activeSyncRuleSetName = syncRuleSets[0]?.name || "-";
 
   const resetVariantState = () => {
     setLoadedVariants([]);
@@ -325,10 +349,7 @@ export default function ShoppingMappingsPage() {
     setMasterItemId("");
     setMasterQuery("");
     setMasterLabel("");
-    setSyncRuleSetId("");
     setExternalProductNo("");
-    setMaterialMultiplierOverride("");
-    setSizeWeightDeltaG("");
     resetVariantState();
   };
 
@@ -339,6 +360,7 @@ export default function ShoppingMappingsPage() {
   }, [canonicalProductNo, externalProductNo, resolvedProductNo]);
 
   const activeProductNo = canonicalProductNo || resolvedProductNo || externalProductNo.trim();
+  const hasEditorScope = Boolean(masterItemId.trim() || productCandidates.length > 0);
 
   const editorMappings = useMemo(() => {
     return mappings.filter((row) => {
@@ -356,6 +378,37 @@ export default function ShoppingMappingsPage() {
     }
     return index;
   }, [editorMappings]);
+  const hasSavedEditorMappings = useMemo(
+    () => editorMappings.some((row) => row.is_active),
+    [editorMappings],
+  );
+  const activePricingPolicy = useMemo(
+    () => pricingPolicies.find((policy) => policy.is_active) ?? null,
+    [pricingPolicies],
+  );
+  const hasActivePricingPolicy = Boolean(activePricingPolicy);
+  const statusScopeMappings = useMemo(
+    () => (hasEditorScope ? editorMappings : mappings),
+    [editorMappings, hasEditorScope, mappings],
+  );
+  const statusBaseRowCount = useMemo(
+    () => statusScopeMappings.filter((row) => !normalizeVariantCode(row.external_variant_code)).length,
+    [statusScopeMappings],
+  );
+  const statusVariantRowCount = useMemo(
+    () => statusScopeMappings.filter((row) => Boolean(normalizeVariantCode(row.external_variant_code))).length,
+    [statusScopeMappings],
+  );
+  const inferredSyncRuleSetId = useMemo(() => {
+    const ids = Array.from(new Set(
+      editorMappings
+        .filter((row) => String(row.option_price_mode ?? "SYNC").toUpperCase() === "SYNC")
+        .map((row) => String(row.sync_rule_set_id ?? "").trim())
+        .filter(Boolean),
+    ));
+    return ids.length === 1 ? ids[0] : "";
+  }, [editorMappings]);
+
 
   const findExistingRowForVariant = (variant: VariantCandidate): Mapping | null => {
     for (const code of candidateVariantCodes(variant)) {
@@ -366,9 +419,9 @@ export default function ShoppingMappingsPage() {
   };
 
   const visibleMappings = useMemo(() => {
-    if (masterItemId.trim() || productCandidates.length > 0) return editorMappings;
+    if (hasEditorScope) return editorMappings;
     return mappings.slice(0, 80);
-  }, [editorMappings, mappings, masterItemId, productCandidates.length]);
+  }, [editorMappings, hasEditorScope, mappings]);
 
   const updateVariantOptionDraft = (variantCode: string, updater: (draft: VariantOptionDraft) => VariantOptionDraft) => {
     setVariantOptionDraftsByCode((prev) => {
@@ -486,20 +539,19 @@ export default function ShoppingMappingsPage() {
     const existing = findExistingRowForVariant(variant);
     const draft = variantOptionDraftsByCode[variantCode] ?? toVariantOptionDraft(null);
     const delta = parseOptionalNumber(variantDeltaByCode[variantCode] ?? "");
-    const materialMultiplier = parseOptionalNumber(materialMultiplierOverride);
-    const sizeWeightDelta = parseOptionalNumber(sizeWeightDeltaG);
     const optionSizeValue = parseOptionalNumber(draft.option_size_value_text);
     const optionPriceMode: "SYNC" | "MANUAL" = existing?.option_price_mode === "MANUAL" ? "MANUAL" : "SYNC";
-    const syncRuleSet = optionPriceMode === "SYNC" ? effectiveSyncRuleSetId || existing?.sync_rule_set_id || "" : "";
+    const syncRuleSet = optionPriceMode === "SYNC"
+      ? effectiveSyncRuleSetId
+        || existing?.sync_rule_set_id
+        || inferredSyncRuleSetId
+      : "";
 
     if (!effectiveChannelId) throw new Error("channel_id is required");
     if (!masterItemId.trim()) throw new Error("master_item_id is required");
     if (!activeProductNo) throw new Error("external_product_no is required");
     if (!variantCode) throw new Error("external_variant_code is required");
-    if (materialMultiplier != null && materialMultiplier <= 0) throw new Error("material_multiplier_override must be > 0");
-    if (sizeWeightDelta != null && (sizeWeightDelta < -100 || sizeWeightDelta > 100)) throw new Error("size_weight_delta_g must be between -100 and 100");
     if (delta != null && (!Number.isInteger(delta) || delta % 1000 !== 0)) throw new Error("option_price_delta_krw must be 1000 KRW step");
-    if (optionPriceMode === "SYNC" && !syncRuleSet) throw new Error("sync_rule_set_id is required for SYNC mode");
 
     return {
       channel_id: effectiveChannelId,
@@ -511,8 +563,6 @@ export default function ShoppingMappingsPage() {
       option_color_code: draft.option_color_code,
       option_decoration_code: draft.option_decoration_code,
       option_size_value: optionSizeValue,
-      material_multiplier_override: materialMultiplier,
-      size_weight_delta_g: sizeWeightDelta,
       option_price_delta_krw: delta,
       option_price_mode: optionPriceMode,
       option_manual_target_krw: optionPriceMode === "MANUAL" ? existing?.option_manual_target_krw ?? null : null,
@@ -537,7 +587,7 @@ export default function ShoppingMappingsPage() {
       setEditingRowId(response.data.channel_product_id);
       setSelectedVariants((prev) => ({ ...prev, [variantCode]: true }));
       setFocusedVariantCode(variantCode);
-      toast.success(`Saved ${variantCode}`);
+      toast.success(`매핑 저장 완료: ${variantCode}. 신규 매핑이면 상단의 최초 계산을 바로 실행하세요.`);
       await queryClient.invalidateQueries({ queryKey: ["shop-mappings", effectiveChannelId] });
     },
     onError: (error: Error) => toast.error(error.message),
@@ -551,8 +601,44 @@ export default function ShoppingMappingsPage() {
       });
     },
     onSuccess: async (response) => {
-      toast.success(`Bulk saved ${response.saved} rows.`);
+      toast.success(`일괄 저장 완료: ${response.saved}건. 신규 매핑이 포함됐다면 상단의 최초 계산을 이어서 실행하세요.`);
       await queryClient.invalidateQueries({ queryKey: ["shop-mappings", effectiveChannelId] });
+    },
+    onError: (error: Error) => toast.error(error.message),
+  });
+
+  const recomputeInitialPricing = useMutation({
+    mutationFn: async () => {
+      const nextMasterItemId = masterItemId.trim();
+      if (!effectiveChannelId) throw new Error("channel_id is required");
+      if (!nextMasterItemId) throw new Error("master_item_id is required");
+      if (!hasActivePricingPolicy) {
+        throw new Error("최초 계산 전에 정책 및 팩터에서 활성 가격 정책을 먼저 저장하세요.");
+      }
+      return shopApiSend<RecomputeResponse>("/api/pricing/recompute", "POST", {
+        channel_id: effectiveChannelId,
+        master_item_ids: [nextMasterItemId],
+        pricing_algo_version: "REVERSE_FEE_V2",
+      });
+    },
+    onSuccess: (response) => {
+      const targetLabel = activeProductNo || externalProductNo.trim() || masterItemId.trim();
+      if ((response.inserted ?? 0) > 0) {
+        toast.success(`최초 계산 완료: ${targetLabel} 기준 ${response.inserted}건을 생성했습니다.`);
+        return;
+      }
+
+      if (response.reason === "BLOCKED_BY_MISSING_RULES") {
+        toast.error(`최초 계산이 막혔습니다. 필요한 룰이 없어 ${response.blocked_by_missing_rules_count ?? 0}건을 계산하지 못했습니다.`);
+        return;
+      }
+
+      if (response.reason === "NO_MAPPINGS") {
+        toast.error("저장된 활성 매핑이 없습니다. 매핑을 먼저 저장한 뒤 최초 계산을 실행하세요.");
+        return;
+      }
+
+      toast.error(`최초 계산 결과가 없습니다${response.reason ? ` (${response.reason})` : ""}. 매핑과 룰 상태를 확인하세요.`);
     },
     onError: (error: Error) => toast.error(error.message),
   });
@@ -573,10 +659,7 @@ export default function ShoppingMappingsPage() {
     setMasterItemId(row.master_item_id);
     setMasterQuery(row.master_item_id);
     setMasterLabel(row.master_item_id);
-    setSyncRuleSetId(row.sync_rule_set_id ?? "");
     setExternalProductNo(row.external_product_no);
-    setMaterialMultiplierOverride(row.material_multiplier_override != null ? String(row.material_multiplier_override) : "");
-    setSizeWeightDeltaG(row.size_weight_delta_g != null ? String(row.size_weight_delta_g) : "");
     requestVariantLoad({
       masterItemId: row.master_item_id,
       externalProductNo: row.external_product_no,
@@ -644,8 +727,8 @@ export default function ShoppingMappingsPage() {
   return (
     <div className="space-y-4">
       <ActionBar
-        title="Shopping Mappings"
-        subtitle="Load channel variants, infer option details from settings, and save per variant or in bulk."
+        title="쇼핑 매핑"
+        subtitle="채널 variant를 불러와 옵션 구조를 매핑하고 variant별 또는 일괄 저장합니다."
         actions={
           <>
             <Button
@@ -654,35 +737,56 @@ export default function ShoppingMappingsPage() {
               onClick={() => requestVariantLoad()}
               disabled={loadVariants.isPending || !effectiveChannelId || !masterItemId.trim() || !externalProductNo.trim()}
             >
-              {loadVariants.isPending ? "Loading..." : "Load variants"}
+              {loadVariants.isPending ? "불러오는 중..." : "variant 불러오기"}
+            </Button>
+            <Button
+              size="sm"
+              onClick={() => recomputeInitialPricing.mutate()}
+              disabled={
+                recomputeInitialPricing.isPending
+                || !effectiveChannelId
+                || !masterItemId.trim()
+                || !activeProductNo
+                || !hasSavedEditorMappings
+                || !hasActivePricingPolicy
+              }
+            >
+              {recomputeInitialPricing.isPending ? "계산 중..." : "최초 계산"}
             </Button>
             <Button size="sm" variant="secondary" onClick={resetEditor}>
-              Reset editor
+              편집기 초기화
             </Button>
           </>
         }
       />
 
       <ShoppingPageHeader
-        purpose="This page restores the settings-driven option detail mapping workflow for channel products and variants."
+        purpose="채널 상품과 variant의 옵션 구조 매핑을 관리합니다."
         status={[
-          { label: "Channel", value: activeChannelName, tone: effectiveChannelId ? "good" : "warn" },
-          { label: "Mappings", value: `${mappings.length}`, tone: mappings.length > 0 ? "good" : "neutral" },
-          { label: "Loaded variants", value: `${loadedVariants.length}`, tone: loadedVariants.length > 0 ? "good" : "neutral" },
+          { label: "채널", value: activeChannelName, tone: effectiveChannelId ? "good" : "warn" },
+          {
+            label: "활성 가격 정책",
+            value: activePricingPolicy?.policy_name ?? "없음",
+            tone: hasActivePricingPolicy ? "good" : "warn",
+          },
+          { label: "기본가 row", value: `${statusBaseRowCount}`, tone: statusBaseRowCount > 0 ? "good" : "neutral" },
+          { label: "옵션 row", value: `${statusVariantRowCount}`, tone: statusVariantRowCount > 0 ? "good" : "neutral" },
+          { label: "불러온 variant 수", value: `${loadedVariants.length}`, tone: loadedVariants.length > 0 ? "good" : "neutral" },
         ]}
         nextActions={[
-          { label: "Option rules", href: "/settings/shopping/rules" },
-          { label: "Auto price", href: "/settings/shopping/auto-price" },
+          { label: "옵션 규칙", href: "/settings/shopping/rules" },
+          { label: "정책 및 팩터", href: "/settings/shopping/factors" },
+          { label: "자동 가격", href: "/settings/shopping/auto-price" },
         ]}
       />
 
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
         <Card>
-          <CardHeader title="Editor" description={editingRowId ? `Editing ${editingRowId}` : "Choose channel, master, and product."} />
+          <CardHeader title="편집기" description={editingRowId ? `수정 중 ${editingRowId}` : "채널, 마스터, 상품번호를 선택하세요."} />
           <CardBody className="space-y-4">
             <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
               <div className="space-y-2">
-                <div className="text-xs text-[var(--muted)]">Channel</div>
+                <div className="text-xs text-[var(--muted)]">채널</div>
                 <Select
                   value={effectiveChannelId}
                   onChange={(event) => {
@@ -690,7 +794,7 @@ export default function ShoppingMappingsPage() {
                     resetEditor();
                   }}
                 >
-                  <option value="">Select channel</option>
+                  <option value="">채널 선택</option>
                   {channels.map((channel) => (
                     <option key={channel.channel_id} value={channel.channel_id}>
                       {channel.channel_name} ({channel.channel_code})
@@ -699,22 +803,20 @@ export default function ShoppingMappingsPage() {
                 </Select>
               </div>
               <div className="space-y-2">
-                <div className="text-xs text-[var(--muted)]">Sync rule set</div>
-                <Select value={syncRuleSetId} onChange={(event) => setSyncRuleSetId(event.target.value)}>
-                  <option value="">Use default active rule set</option>
-                  {syncRuleSets.map((ruleSet) => (
-                    <option key={ruleSet.rule_set_id} value={ruleSet.rule_set_id}>
-                      {ruleSet.name}
-                    </option>
-                  ))}
-                </Select>
+                <div className="text-xs text-[var(--muted)]">채널 기본 룰세트</div>
+                <div className="rounded-[var(--radius)] border border-[var(--hairline)] bg-[var(--panel)] px-3 py-2 text-sm">
+                  {activeSyncRuleSetName}
+                </div>
+                <div className="text-[11px] text-[var(--muted)]">
+                  SYNC 저장은 이 채널의 활성 룰세트를 자동으로 사용합니다.
+                </div>
               </div>
             </div>
 
             <div className="grid grid-cols-1 gap-3 lg:grid-cols-[1.4fr_0.9fr_0.8fr]">
               <div className="space-y-2">
-                <div className="text-xs text-[var(--muted)]">Master search</div>
-                <Input value={masterQuery} onChange={(event) => setMasterQuery(event.target.value)} placeholder="Search model name" />
+                <div className="text-xs text-[var(--muted)]">마스터 검색</div>
+                <Input value={masterQuery} onChange={(event) => setMasterQuery(event.target.value)} placeholder="모델명 검색" />
                 {masterSuggestions.length > 0 ? (
                   <div className="max-h-48 overflow-auto rounded-[var(--radius)] border border-[var(--hairline)]">
                     {masterSuggestions.map((suggestion) => (
@@ -733,68 +835,52 @@ export default function ShoppingMappingsPage() {
               </div>
 
               <div className="space-y-2">
-                <div className="text-xs text-[var(--muted)]">Master item id</div>
+                <div className="text-xs text-[var(--muted)]">마스터 상품 ID</div>
                 <Input value={masterItemId} onChange={(event) => setMasterItemId(event.target.value)} placeholder="master_item_id" />
-                <div className="text-xs text-[var(--muted)]">{masterLabel || "Choose from search or enter directly."}</div>
+                <div className="text-xs text-[var(--muted)]">{masterLabel || "검색에서 고르거나 직접 입력하세요."}</div>
               </div>
 
               <div className="space-y-2">
-                <div className="text-xs text-[var(--muted)]">External product no</div>
+                <div className="text-xs text-[var(--muted)]">쇼핑몰 상품번호</div>
                 <Input
                   value={externalProductNo}
                   onChange={(event) => setExternalProductNo(event.target.value)}
-                  placeholder="external_product_no"
+                  placeholder="쇼핑몰 상품번호"
                 />
               </div>
             </div>
 
-            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-              <div className="space-y-2">
-                <div className="text-xs text-[var(--muted)]">Material multiplier override</div>
-                <Input
-                  value={materialMultiplierOverride}
-                  onChange={(event) => setMaterialMultiplierOverride(event.target.value)}
-                  placeholder="Example 1.05"
-                  inputMode="decimal"
-                  autoFormat={false}
-                />
-              </div>
-              <div className="space-y-2">
-                <div className="text-xs text-[var(--muted)]">Size weight delta g</div>
-                <Input
-                  value={sizeWeightDeltaG}
-                  onChange={(event) => setSizeWeightDeltaG(event.target.value)}
-                  placeholder="-100 to 100"
-                  inputMode="decimal"
-                  autoFormat={false}
-                />
-              </div>
-            </div>
 
             <div className="grid grid-cols-1 gap-3 rounded-[var(--radius)] border border-[var(--hairline)] bg-[var(--panel)] p-3 text-sm md:grid-cols-4">
               <div>
-                <div className="text-[11px] text-[var(--muted)]">Requested</div>
+                <div className="text-[11px] text-[var(--muted)]">요청값</div>
                 <div>{externalProductNo.trim() || "-"}</div>
               </div>
               <div>
-                <div className="text-[11px] text-[var(--muted)]">Resolved</div>
+                <div className="text-[11px] text-[var(--muted)]">해석된 상품번호</div>
                 <div>{resolvedProductNo || "-"}</div>
               </div>
               <div>
-                <div className="text-[11px] text-[var(--muted)]">Canonical</div>
+                <div className="text-[11px] text-[var(--muted)]">기준 상품번호</div>
                 <div>{canonicalProductNo || "-"}</div>
               </div>
               <div>
-                <div className="text-[11px] text-[var(--muted)]">Settings</div>
+                <div className="text-[11px] text-[var(--muted)]">설정 상태</div>
                 <div>
                   {loadedOptionAllowlist.materials.length} materials / {loadedOptionAllowlist.colors.length} colors / {loadedOptionAllowlist.decors.length} decors
                 </div>
               </div>
             </div>
 
-            {(channelsQuery.error || mappingsQuery.error || syncRuleSetsQuery.error) ? (
+            <div className="rounded-[var(--radius)] border border-[var(--hairline)] bg-[var(--background)] px-3 py-2 text-xs text-[var(--muted)]">
+              {hasActivePricingPolicy
+                ? "새 매핑을 저장한 뒤에는 기본가 row를 따로 선택할 필요 없고, 현재 마스터 전체를 이 화면의 `최초 계산`으로 먼저 계산하세요. 5분 cron은 그 다음 자동 run/push 단계에서 타는 흐름입니다."
+                : "`최초 계산` 전에 `정책 및 팩터`에서 활성 가격 정책을 먼저 저장하세요. 활성 정책이 없으면 현재 마스터의 기본가 row와 옵션 row 계산을 시작할 수 없습니다."}
+            </div>
+
+            {(channelsQuery.error || mappingsQuery.error || pricingPoliciesQuery.error || syncRuleSetsQuery.error) ? (
               <div className="rounded-[var(--radius)] border border-red-300 bg-red-500/10 px-3 py-2 text-sm text-red-700">
-                {describeError(channelsQuery.error ?? mappingsQuery.error ?? syncRuleSetsQuery.error)}
+                {describeError(channelsQuery.error ?? mappingsQuery.error ?? pricingPoliciesQuery.error ?? syncRuleSetsQuery.error)}
               </div>
             ) : null}
           </CardBody>
@@ -802,27 +888,27 @@ export default function ShoppingMappingsPage() {
 
         <Card>
           <CardHeader
-            title="Existing mappings"
-            description={masterItemId.trim() || productCandidates.length > 0 ? "Filtered to current editor context." : "Showing latest rows."}
+            title="기존 매핑"
+            description={hasEditorScope ? "현재 편집 대상 기준으로 필터링했습니다." : "최신 row를 보여줍니다."}
           />
           <CardBody className="space-y-3">
-            <div className="text-xs text-[var(--muted)]">Showing {visibleMappings.length} of {mappings.length}</div>
+            <div className="text-xs text-[var(--muted)]">표시 {visibleMappings.length} / 전체 {mappings.length} / 기본가 {statusBaseRowCount} / 옵션 {statusVariantRowCount}</div>
 
             {visibleMappings.length === 0 ? (
               <div className="rounded-[var(--radius)] border border-dashed border-[var(--hairline)] px-3 py-8 text-center text-sm text-[var(--muted)]">
-                No mappings to show.
+                표시할 매핑이 없습니다.
               </div>
             ) : (
               <div className="max-h-[36rem] overflow-auto rounded-[var(--radius)] border border-[var(--hairline)]">
                 <table className="w-full text-sm">
                   <thead className="bg-[var(--panel)] text-left">
                     <tr>
-                      <th className="px-3 py-2">Product</th>
-                      <th className="px-3 py-2">Master</th>
-                      <th className="px-3 py-2">Details</th>
-                      <th className="px-3 py-2">Delta</th>
-                      <th className="px-3 py-2">Updated</th>
-                      <th className="px-3 py-2">Actions</th>
+                      <th className="px-3 py-2">상품</th>
+                      <th className="px-3 py-2">마스터</th>
+                      <th className="px-3 py-2">상세</th>
+                      <th className="px-3 py-2">추가금</th>
+                      <th className="px-3 py-2">수정 시각</th>
+                      <th className="px-3 py-2">작업</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -833,7 +919,7 @@ export default function ShoppingMappingsPage() {
                       >
                         <td className="px-3 py-2 align-top">
                           <div className="font-medium">{row.external_product_no}</div>
-                          <div className="text-xs text-[var(--muted)]">{row.external_variant_code || "BASE"}</div>
+                          <div className="text-xs text-[var(--muted)]">{row.external_variant_code || "기본가"}</div>
                         </td>
                         <td className="px-3 py-2 align-top">
                           <div>{row.master_item_id}</div>
@@ -851,7 +937,7 @@ export default function ShoppingMappingsPage() {
                               size="sm"
                               variant="danger"
                               onClick={() => {
-                                const ok = window.confirm(`Delete mapping ${row.external_product_no} / ${row.external_variant_code || "BASE"}?`);
+                                const ok = window.confirm(`Delete mapping ${row.external_product_no} / ${row.external_variant_code || "기본가"}?`);
                                 if (ok) deleteMapping.mutate(row);
                               }}
                               disabled={deleteMapping.isPending}
@@ -872,16 +958,16 @@ export default function ShoppingMappingsPage() {
 
       <Card>
         <CardHeader
-          title="Variant option detail mapping"
-          description="Original axes are shown first, then settings-driven material, size, color, decor, and per-variant delta fields."
+          title="variant 옵션 상세 매핑"
+          description="원본 옵션축을 기준으로 소재, 사이즈, 색상, 장식, variant 추가금을 매핑합니다."
         />
         <CardBody className="space-y-4">
           <div className="rounded-[var(--radius)] border border-[var(--hairline)] bg-[var(--panel)] p-3">
             <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
               <div>
-                <div className="text-sm font-medium">Focused variant manual controls</div>
+                <div className="text-sm font-medium">선택 variant 편집</div>
                 <div className="text-xs text-[var(--muted)]">
-                  {focusedVariant ? `${focusedVariantCode} / ${focusedVariant.option_label || "-"}` : "Focus a variant row to edit and save from the top form."}
+                  {focusedVariant ? `${focusedVariantCode} / ${focusedVariant.option_label || "-"}` : "variant를 선택해 편집하고 저장하세요."}
                 </div>
               </div>
               <Button
@@ -891,15 +977,15 @@ export default function ShoppingMappingsPage() {
                 }}
                 disabled={!focusedVariant || saveVariant.isPending}
               >
-                {saveVariant.isPending && focusedVariant ? "Saving..." : "Save focused variant"}
+                {saveVariant.isPending && focusedVariant ? "저장 중..." : "선택 variant 저장"}
               </Button>
             </div>
 
             <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-6">
               <div className="space-y-1">
-                <div className="text-[11px] text-[var(--muted)]">Focused variant</div>
+                <div className="text-[11px] text-[var(--muted)]">선택 variant</div>
                 <Select value={focusedVariantCode} onChange={(event) => setFocusedVariantCode(event.target.value)}>
-                  <option value="">Choose variant</option>
+                  <option value="">variant 선택</option>
                   {loadedVariants.map((variant) => {
                     const code = normalizeVariantCode(variant.variant_code);
                     return (
@@ -912,7 +998,7 @@ export default function ShoppingMappingsPage() {
               </div>
 
               <div className="space-y-1">
-                <div className="text-[11px] text-[var(--muted)]">Material</div>
+                <div className="text-[11px] text-[var(--muted)]">소재</div>
                 <Select
                   value={focusedDraft?.option_material_code ?? ""}
                   onChange={(event) => {
@@ -933,7 +1019,7 @@ export default function ShoppingMappingsPage() {
                   }}
                   disabled={!focusedDraft}
                 >
-                  <option value="">None</option>
+                  <option value="">선택 안함</option>
                   {focusedMaterialChoices.map((choice) => (
                     <option key={choice.value} value={choice.value}>
                       {choice.label}
@@ -943,7 +1029,7 @@ export default function ShoppingMappingsPage() {
               </div>
 
               <div className="space-y-1">
-                <div className="text-[11px] text-[var(--muted)]">Size</div>
+                <div className="text-[11px] text-[var(--muted)]">사이즈</div>
                 <Select
                   value={focusedDraft?.option_size_value_text ?? ""}
                   onChange={(event) => {
@@ -957,7 +1043,7 @@ export default function ShoppingMappingsPage() {
                   }}
                   disabled={!focusedDraft}
                 >
-                  <option value="">None</option>
+                  <option value="">선택 안함</option>
                   {focusedSizeChoices.map((choice) => (
                     <option key={choice.value} value={choice.value}>
                       {choice.label}
@@ -967,7 +1053,7 @@ export default function ShoppingMappingsPage() {
               </div>
 
               <div className="space-y-1">
-                <div className="text-[11px] text-[var(--muted)]">Color</div>
+                <div className="text-[11px] text-[var(--muted)]">색상</div>
                 <Select
                   value={focusedDraft?.option_color_code ?? ""}
                   onChange={(event) => {
@@ -979,7 +1065,7 @@ export default function ShoppingMappingsPage() {
                   }}
                   disabled={!focusedDraft}
                 >
-                  <option value="">None</option>
+                  <option value="">선택 안함</option>
                   {focusedColorChoices.map((choice) => (
                     <option key={choice.value} value={choice.value}>
                       {choice.label}
@@ -989,7 +1075,7 @@ export default function ShoppingMappingsPage() {
               </div>
 
               <div className="space-y-1">
-                <div className="text-[11px] text-[var(--muted)]">Decor</div>
+                <div className="text-[11px] text-[var(--muted)]">장식</div>
                 <Select
                   value={focusedDraft?.option_decoration_code ?? ""}
                   onChange={(event) => {
@@ -1001,7 +1087,7 @@ export default function ShoppingMappingsPage() {
                   }}
                   disabled={!focusedDraft}
                 >
-                  <option value="">None</option>
+                  <option value="">선택 안함</option>
                   {focusedDecorChoices.map((choice) => (
                     <option key={choice.value} value={choice.value}>
                       {choice.label}
@@ -1011,14 +1097,14 @@ export default function ShoppingMappingsPage() {
               </div>
 
               <div className="space-y-1">
-                <div className="text-[11px] text-[var(--muted)]">Focused delta / saved</div>
+                <div className="text-[11px] text-[var(--muted)]">선택 variant 추가금</div>
                 <Input
                   value={focusedVariantCode ? (variantDeltaByCode[focusedVariantCode] ?? "") : ""}
                   onChange={(event) => {
                     if (!focusedVariantCode) return;
                     setVariantDeltaByCode((prev) => ({ ...prev, [focusedVariantCode]: event.target.value }));
                   }}
-                  placeholder="Example 3000"
+                  placeholder="예: 3000"
                   inputMode="numeric"
                   disabled={!focusedVariantCode}
                 />
@@ -1038,34 +1124,34 @@ export default function ShoppingMappingsPage() {
               Select unmapped
             </Button>
             <Button size="sm" onClick={() => bulkSave.mutate(selectedVariantList)} disabled={bulkSave.isPending || selectedVariantList.length === 0}>
-              {bulkSave.isPending ? "Saving..." : `Bulk save ${selectedVariantList.length}`}
+              {bulkSave.isPending ? "저장 중..." : `일괄 저장 ${selectedVariantList.length}`}
             </Button>
             <div className="text-xs text-[var(--muted)]">
-              saved categories {savedOptionCategories.length} / allowlist empty {loadedOptionAllowlist.is_empty ? "yes" : "no"}
+              저장된 카테고리 {savedOptionCategories.length} / allowlist 비어있음 {loadedOptionAllowlist.is_empty ? "예" : "아니오"}
             </div>
           </div>
 
           {loadedVariants.length === 0 ? (
             <div className="rounded-[var(--radius)] border border-dashed border-[var(--hairline)] px-3 py-10 text-center text-sm text-[var(--muted)]">
-              Load variants to start mapping option details.
+              variant를 불러오면 옵션 매핑을 시작할 수 있습니다.
             </div>
           ) : (
             <div className="overflow-auto rounded-[var(--radius)] border border-[var(--hairline)]">
               <table className="w-full min-w-[1400px] text-sm">
                 <thead className="bg-[var(--panel)] text-left">
                   <tr>
-                    <th className="px-3 py-2">Select</th>
-                    <th className="px-3 py-2">Variant</th>
-                    <th className="px-3 py-2">Status</th>
+                    <th className="px-3 py-2">선택</th>
+                    <th className="px-3 py-2">variant</th>
+                    <th className="px-3 py-2">상태</th>
                     {Array.from({ length: variantAxisCount }).map((_, index) => (
                       <th key={`axis-column-${index + 1}`} className="px-3 py-2">{`Axis ${index + 1}`}</th>
                     ))}
-                    <th className="px-3 py-2">Material</th>
-                    <th className="px-3 py-2">Size</th>
-                    <th className="px-3 py-2">Color</th>
-                    <th className="px-3 py-2">Decor</th>
-                    <th className="px-3 py-2">Delta</th>
-                    <th className="px-3 py-2">Actions</th>
+                    <th className="px-3 py-2">소재</th>
+                    <th className="px-3 py-2">사이즈</th>
+                    <th className="px-3 py-2">색상</th>
+                    <th className="px-3 py-2">장식</th>
+                    <th className="px-3 py-2">추가금</th>
+                    <th className="px-3 py-2">작업</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1095,15 +1181,15 @@ export default function ShoppingMappingsPage() {
                     </td>
                     <td className="px-3 py-2">
                       <div className="font-medium">{variantCode}</div>
-                      {variant.custom_variant_code ? <div className="text-xs text-[var(--muted)]">custom {variant.custom_variant_code}</div> : null}
+                      {variant.custom_variant_code ? <div className="text-xs text-[var(--muted)]">커스텀 {variant.custom_variant_code}</div> : null}
                       <div className="text-xs text-[var(--muted)]">{variant.option_label || "-"}</div>
                     </td>
                     <td className="px-3 py-2 text-xs">
                       <div className={`inline-flex rounded-full px-2 py-0.5 ${existing ? "bg-emerald-500/15 text-emerald-700" : "bg-[var(--panel)] text-[var(--muted)]"}`}>
-                        {existing ? "saved" : "new"}
+                        {existing ? "저장됨" : "신규"}
                       </div>
-                      <div className="mt-2 text-[var(--muted)]">cafe24 {formatMoney(variant.additional_amount)}</div>
-                      <div className="text-[var(--muted)]">mapped {optionSummary(existing ?? {})}</div>
+                      <div className="mt-2 text-[var(--muted)]">실몰 {formatMoney(variant.additional_amount)}</div>
+                      <div className="text-[var(--muted)]">매핑 {optionSummary(existing ?? {})}</div>
                     </td>
                     {Array.from({ length: variantAxisCount }).map((_, index) => (
                       <td key={`${variantCode}-axis-${index + 1}`} className="px-3 py-2 text-xs text-[var(--foreground)]">
@@ -1129,7 +1215,7 @@ export default function ShoppingMappingsPage() {
                             });
                           }}
                         >
-                          <option value="">None</option>
+                          <option value="">선택 안함</option>
                           {materialChoices.map((choice) => (
                             <option key={choice.value} value={choice.value}>
                               {choice.label}
@@ -1149,7 +1235,7 @@ export default function ShoppingMappingsPage() {
                             }));
                           }}
                         >
-                          <option value="">None</option>
+                          <option value="">선택 안함</option>
                           {sizeChoices.map((choice) => (
                             <option key={choice.value} value={choice.value}>
                               {choice.label}
@@ -1165,7 +1251,7 @@ export default function ShoppingMappingsPage() {
                             option_color_code: event.target.value || null,
                           }))}
                         >
-                          <option value="">None</option>
+                          <option value="">선택 안함</option>
                           {colorChoices.map((choice) => (
                             <option key={choice.value} value={choice.value}>
                               {choice.label}
@@ -1181,7 +1267,7 @@ export default function ShoppingMappingsPage() {
                             option_decoration_code: event.target.value || null,
                           }))}
                         >
-                          <option value="">None</option>
+                          <option value="">선택 안함</option>
                           {decorChoices.map((choice) => (
                             <option key={choice.value} value={choice.value}>
                               {choice.label}
@@ -1194,7 +1280,7 @@ export default function ShoppingMappingsPage() {
                           value={variantDeltaByCode[variantCode] ?? ""}
                           onChange={(event) => setVariantDeltaByCode((prev) => ({ ...prev, [variantCode]: event.target.value }))}
                           list={`delta-options-${variantCode}`}
-                          placeholder="Example 3000"
+                          placeholder="예: 3000"
                           inputMode="numeric"
                         />
                         <datalist id={`delta-options-${variantCode}`}>
@@ -1209,7 +1295,7 @@ export default function ShoppingMappingsPage() {
                           Focus
                         </Button>
                         <Button size="sm" onClick={() => saveVariant.mutate(variant)} disabled={saveVariant.isPending}>
-                          {saveVariant.isPending && focusedVariantCode === variantCode ? "Saving..." : "Save"}
+                          {saveVariant.isPending && focusedVariantCode === variantCode ? "저장 중..." : "저장"}
                         </Button>
                       </div>
                     </td>
