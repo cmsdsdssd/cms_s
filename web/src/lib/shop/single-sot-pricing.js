@@ -1,4 +1,4 @@
-﻿export const stripPriceDeltaSuffix = (text) =>
+export const stripPriceDeltaSuffix = (text) =>
   String(text ?? '').replace(/\s*\([+-][\d,]+원\)\s*$/u, '').trim();
 
 export const formatDeltaDisplay = (delta) => {
@@ -23,6 +23,116 @@ export const pickRepresentativeDelta = (deltas) => {
   return ranked[0]?.[0] ?? 0;
 };
 
+const normalizeAxisValue = (value) => stripPriceDeltaSuffix(String(value ?? '').trim());
+
+const normalizeAxis = (axis, index) => {
+  const name = String(axis?.name ?? '').trim();
+  const values = Array.isArray(axis?.values)
+    ? axis.values
+        .map((value) => {
+          const label = String(value?.label ?? '').trim();
+          const delta = Math.round(Number(value?.delta_krw ?? Number.NaN));
+          if (!label || !Number.isFinite(delta)) return null;
+          return {
+            label,
+            delta_krw: delta,
+            delta_display: formatDeltaDisplay(delta),
+          };
+        })
+        .filter(Boolean)
+        .sort((a, b) => a.label.localeCompare(b.label, 'ko'))
+    : [];
+  return { index, name, values };
+};
+
+const resolveAxesFromBreakdown = (breakdown) => {
+  if (Array.isArray(breakdown?.axes) && breakdown.axes.length > 0) {
+    return breakdown.axes
+      .map((axis, index) => normalizeAxis(axis, index + 1))
+      .filter((axis) => axis.name);
+  }
+  const candidates = [
+    { name: breakdown?.firstAxisName, values: breakdown?.firstAxisValues },
+    { name: breakdown?.secondAxisName, values: breakdown?.secondAxisValues },
+    { name: breakdown?.thirdAxisName, values: breakdown?.thirdAxisValues },
+  ];
+  return candidates
+    .map((axis, index) => normalizeAxis(axis, index + 1))
+    .filter((axis) => axis.name);
+};
+
+const buildBreakdownShape = (axes, byVariant) => ({
+  axes,
+  first: axes[0] ?? { index: 1, name: '', values: [] },
+  second: axes[1] ?? { index: 2, name: '', values: [] },
+  third: axes[2] ?? { index: 3, name: '', values: [] },
+  firstAxisName: axes[0]?.name ?? '',
+  secondAxisName: axes[1]?.name ?? '',
+  thirdAxisName: axes[2]?.name ?? '',
+  firstAxisValues: axes[0]?.values ?? [],
+  secondAxisValues: axes[1]?.values ?? [],
+  thirdAxisValues: axes[2]?.values ?? [],
+  byVariant,
+});
+
+const buildAxisValuesForRow = (row, axisNames = []) => {
+  if (Array.isArray(row?.axis_values) && row.axis_values.length > 0) {
+    return row.axis_values
+      .map((axisValue, index) => ({
+        index: Number(axisValue?.index ?? index + 1),
+        name: String(axisValue?.name ?? '').trim(),
+        value: normalizeAxisValue(axisValue?.value ?? axisValue?.label ?? ''),
+      }))
+      .filter((axisValue) => axisValue.name && axisValue.value);
+  }
+  const fallback = [
+    { name: axisNames[0] ?? '', value: row?.first_value ?? '' },
+    { name: axisNames[1] ?? '', value: row?.second_value ?? '' },
+    { name: axisNames[2] ?? '', value: row?.third_value ?? '' },
+  ];
+  return fallback
+    .map((axisValue, index) => ({
+      index: index + 1,
+      name: String(axisValue.name ?? '').trim(),
+      value: normalizeAxisValue(axisValue.value),
+    }))
+    .filter((axisValue) => axisValue.name && axisValue.value);
+};
+
+const buildCartesianVariantBreakdown = (axes) => {
+  if (!Array.isArray(axes) || axes.length === 0) return [];
+  const normalizedAxes = axes.filter((axis) => axis.name && Array.isArray(axis.values) && axis.values.length > 0);
+  if (normalizedAxes.length === 0) return [];
+
+  const rows = [];
+  const walk = (axisIndex, pickedValues) => {
+    if (axisIndex >= normalizedAxes.length) {
+      rows.push({
+        axis_values: pickedValues.map((picked, index) => ({
+          index: index + 1,
+          name: picked.name,
+          value: picked.label,
+        })),
+        first_value: pickedValues[0]?.label ?? '',
+        second_value: pickedValues[1]?.label ?? '',
+        third_value: pickedValues[2]?.label ?? '',
+        total_delta_krw: pickedValues.reduce((sum, picked) => sum + Math.round(Number(picked.delta_krw ?? 0)), 0),
+      });
+      return;
+    }
+    const axis = normalizedAxes[axisIndex];
+    for (const value of axis.values) {
+      walk(axisIndex + 1, [...pickedValues, { name: axis.name, ...value }]);
+    }
+  };
+
+  walk(0, []);
+  return rows.map((row, index) => ({
+    variant_code: `axis-${index + 1}`,
+    ...row,
+  }));
+};
+
 export const buildOptionEntryRowsFromBreakdown = ({
   channelId,
   masterItemId,
@@ -32,10 +142,11 @@ export const buildOptionEntryRowsFromBreakdown = ({
   computedAt,
 }) => {
   const rows = [];
-  const pushAxis = (axisIndex, axisName, values) => {
-    const normalizedAxisName = String(axisName ?? '').trim();
-    if (!normalizedAxisName) return;
-    for (const value of Array.isArray(values) ? values : []) {
+  const axes = resolveAxesFromBreakdown(breakdown);
+  for (const axis of axes) {
+    const normalizedAxisName = String(axis?.name ?? '').trim();
+    if (!normalizedAxisName) continue;
+    for (const value of Array.isArray(axis?.values) ? axis.values : []) {
       const label = String(value?.label ?? '').trim();
       const delta = Math.round(Number(value?.delta_krw ?? Number.NaN));
       if (!label || !Number.isFinite(delta)) continue;
@@ -43,7 +154,7 @@ export const buildOptionEntryRowsFromBreakdown = ({
         channel_id: channelId,
         master_item_id: masterItemId,
         external_product_no: externalProductNo,
-        option_axis_index: axisIndex,
+        option_axis_index: Number(axis.index ?? rows.length + 1),
         option_name: normalizedAxisName,
         option_value: label,
         publish_version: publishVersion,
@@ -52,9 +163,7 @@ export const buildOptionEntryRowsFromBreakdown = ({
         updated_at: computedAt,
       });
     }
-  };
-  pushAxis(1, breakdown?.firstAxisName, breakdown?.firstAxisValues);
-  pushAxis(2, breakdown?.secondAxisName, breakdown?.secondAxisValues);
+  }
   return rows;
 };
 
@@ -66,20 +175,20 @@ export const buildOptionAxisFromPublishedEntries = (entries) => {
     const optionValue = String(entry?.option_value ?? '').trim();
     const delta = Math.round(Number(entry?.published_delta_krw ?? Number.NaN));
     if (!Number.isFinite(axisIndex) || !optionName || !optionValue || !Number.isFinite(delta)) continue;
-    const key = String(axisIndex);
-    const prev = grouped.get(key) ?? { name: optionName, values: [] };
-    prev.values.push({ label: optionValue, delta_krw: delta, delta_display: formatDeltaDisplay(delta) });
-    grouped.set(key, prev);
+    const prev = grouped.get(axisIndex) ?? { index: axisIndex, name: optionName, values: new Map() };
+    if (!prev.values.has(optionValue)) {
+      prev.values.set(optionValue, { label: optionValue, delta_krw: delta, delta_display: formatDeltaDisplay(delta) });
+    }
+    grouped.set(axisIndex, prev);
   }
-  const first = grouped.get('1') ?? { name: '', values: [] };
-  const second = grouped.get('2') ?? { name: '', values: [] };
-  first.values.sort((a, b) => a.label.localeCompare(b.label, 'ko'));
-  second.values.sort((a, b) => a.label.localeCompare(b.label, 'ko'));
-  return {
-    first: first,
-    second: second,
-    axes: [first, second].filter((axis) => String(axis?.name ?? '').trim().length > 0),
-  };
+  const axes = Array.from(grouped.values())
+    .sort((a, b) => a.index - b.index)
+    .map((axis) => ({
+      index: axis.index,
+      name: axis.name,
+      values: Array.from(axis.values.values()).sort((a, b) => a.label.localeCompare(b.label, 'ko')),
+    }));
+  return buildBreakdownShape(axes, []);
 };
 
 export const buildOptionAxisFromCanonicalRows = (rows) => {
@@ -119,48 +228,8 @@ export const buildOptionAxisFromCanonicalRows = (rows) => {
 
 export const buildVariantBreakdownFromPublishedEntries = (entries) => {
   const axis = buildOptionAxisFromPublishedEntries(entries);
-  const firstValues = Array.isArray(axis.first?.values) ? axis.first.values : [];
-  const secondValues = Array.isArray(axis.second?.values) ? axis.second.values : [];
-
-  if (firstValues.length === 0 && secondValues.length === 0) {
-    return { firstAxisName: '', secondAxisName: '', firstAxisValues: [], secondAxisValues: [], byVariant: [] };
-  }
-
-  if (secondValues.length === 0) {
-    return {
-      firstAxisName: axis.first?.name ?? '',
-      secondAxisName: '',
-      firstAxisValues: firstValues,
-      secondAxisValues: [],
-      byVariant: firstValues.map((row, index) => ({
-        variant_code: `axis1-${index + 1}` ,
-        first_value: row.label,
-        second_value: '',
-        total_delta_krw: Math.round(Number(row.delta_krw ?? 0)),
-      })),
-    };
-  }
-
-  const byVariant = [];
-  let index = 1;
-  for (const first of firstValues) {
-    for (const second of secondValues) {
-      byVariant.push({
-        variant_code: `axis-${index++}`,
-        first_value: first.label,
-        second_value: second.label,
-        total_delta_krw: Math.round(Number(first.delta_krw ?? 0)) + Math.round(Number(second.delta_krw ?? 0)),
-      });
-    }
-  }
-
-  return {
-    firstAxisName: axis.first?.name ?? '',
-    secondAxisName: axis.second?.name ?? '',
-    firstAxisValues: firstValues,
-    secondAxisValues: secondValues,
-    byVariant,
-  };
+  const byVariant = buildCartesianVariantBreakdown(axis.axes);
+  return buildBreakdownShape(axis.axes, byVariant);
 };
 
 export const buildVariantBreakdownFromCanonicalRows = ({ variants, canonicalRows }) => {
@@ -204,45 +273,54 @@ export const buildVariantBreakdownFromCanonicalRows = ({ variants, canonicalRows
 };
 
 export const validateAdditiveBreakdown = (breakdown) => {
-  const firstDeltaByValue = new Map(
-    Array.isArray(breakdown?.firstAxisValues)
-      ? breakdown.firstAxisValues
+  const axes = resolveAxesFromBreakdown(breakdown);
+  const axisNames = axes.map((axis) => axis.name);
+  const axisDeltaByName = new Map(
+    axes.map((axis) => [
+      axis.name,
+      new Map(
+        (Array.isArray(axis.values) ? axis.values : [])
           .map((row) => [String(row?.label ?? '').trim(), Math.round(Number(row?.delta_krw ?? Number.NaN))])
-          .filter(([label, delta]) => label && Number.isFinite(delta))
-      : [],
-  );
-  const secondDeltaByValue = new Map(
-    Array.isArray(breakdown?.secondAxisValues)
-      ? breakdown.secondAxisValues
-          .map((row) => [String(row?.label ?? '').trim(), Math.round(Number(row?.delta_krw ?? Number.NaN))])
-          .filter(([label, delta]) => label && Number.isFinite(delta))
-      : [],
+          .filter(([label, delta]) => label && Number.isFinite(delta)),
+      ),
+    ]),
   );
   const violations = [];
   for (const row of Array.isArray(breakdown?.byVariant) ? breakdown.byVariant : []) {
-    const firstValue = String(row?.first_value ?? '').trim();
-    const secondValue = String(row?.second_value ?? '').trim();
+    const axisValues = buildAxisValuesForRow(row, axisNames);
     const totalDelta = Math.round(Number(row?.total_delta_krw ?? Number.NaN));
-    if (!firstValue || !secondValue || !Number.isFinite(totalDelta)) continue;
-    const firstDelta = firstDeltaByValue.get(firstValue);
-    const secondDelta = secondDeltaByValue.get(secondValue);
-    if (!Number.isFinite(firstDelta) || !Number.isFinite(secondDelta)) {
+    if (axisValues.length === 0 || !Number.isFinite(totalDelta)) continue;
+    let expected = 0;
+    let missing = false;
+    for (const axisValue of axisValues) {
+      const deltaByValue = axisDeltaByName.get(axisValue.name);
+      const axisDelta = deltaByValue?.get(axisValue.value);
+      if (!Number.isFinite(axisDelta)) {
+        missing = true;
+        break;
+      }
+      expected += Math.round(Number(axisDelta));
+    }
+    if (missing) {
       violations.push({
         variant_code: String(row?.variant_code ?? '').trim(),
-        first_value: firstValue,
-        second_value: secondValue,
+        first_value: axisValues[0]?.value ?? '',
+        second_value: axisValues[1]?.value ?? '',
+        third_value: axisValues[2]?.value ?? '',
+        axis_values: axisValues,
         total_delta_krw: totalDelta,
         expected_total_delta_krw: null,
         reason: 'MISSING_AXIS_DELTA',
       });
       continue;
     }
-    const expected = Math.round(Number(firstDelta) + Number(secondDelta));
     if (expected !== totalDelta) {
       violations.push({
         variant_code: String(row?.variant_code ?? '').trim(),
-        first_value: firstValue,
-        second_value: secondValue,
+        first_value: axisValues[0]?.value ?? '',
+        second_value: axisValues[1]?.value ?? '',
+        third_value: axisValues[2]?.value ?? '',
+        axis_values: axisValues,
         total_delta_krw: totalDelta,
         expected_total_delta_krw: expected,
         reason: 'NON_ADDITIVE_VARIANT_DELTA',
@@ -257,64 +335,84 @@ export const validateAdditiveBreakdown = (breakdown) => {
 
 export const buildOptionAxisBreakdownFromPublishedVariants = (variants) => {
   const normalizedVariants = Array.isArray(variants) ? variants : [];
-  const firstAxisName = String(normalizedVariants.find((v) => (v.options ?? []).length > 0)?.options?.[0]?.name ?? '').trim();
-  const secondAxisName = String(normalizedVariants.find((v) => (v.options ?? []).length > 1)?.options?.[1]?.name ?? '').trim();
+  const axisNames = [];
+  for (const variant of normalizedVariants) {
+    for (const option of Array.isArray(variant?.options) ? variant.options : []) {
+      const optionName = String(option?.name ?? '').trim();
+      if (optionName && !axisNames.includes(optionName)) axisNames.push(optionName);
+    }
+  }
 
   const variantAxis = new Map();
   for (const variant of normalizedVariants) {
     const code = String(variant.variantCode ?? '').trim();
     if (!code) continue;
-    const firstRaw = (variant.options ?? []).find((o) => String(o?.name ?? '').trim() === firstAxisName)?.value ?? '';
-    const secondRaw = (variant.options ?? []).find((o) => String(o?.name ?? '').trim() === secondAxisName)?.value ?? '';
-    const totalDelta = Math.round(Number(variant.publishedAdditionalAmountKrw ?? 0));
+    const axisValuesByName = new Map();
+    for (const axisName of axisNames) {
+      const raw = (Array.isArray(variant?.options) ? variant.options : []).find((option) => String(option?.name ?? '').trim() === axisName)?.value ?? '';
+      const normalizedValue = normalizeAxisValue(raw);
+      if (normalizedValue) axisValuesByName.set(axisName, normalizedValue);
+    }
     variantAxis.set(code, {
-      first: stripPriceDeltaSuffix(String(firstRaw)),
-      second: stripPriceDeltaSuffix(String(secondRaw)),
-      totalDelta,
+      axisValuesByName,
+      axisValues: axisNames
+        .map((axisName, index) => ({
+          index: index + 1,
+          name: axisName,
+          value: axisValuesByName.get(axisName) ?? '',
+        }))
+        .filter((axisValue) => axisValue.value),
+      totalDelta: Math.round(Number(variant.publishedAdditionalAmountKrw ?? 0)),
     });
   }
 
-  const firstAxisBaseDeltaByValue = new Map();
-  for (const row of variantAxis.values()) {
-    if (!row.first) continue;
-    const prev = firstAxisBaseDeltaByValue.get(row.first);
-    if (prev == null || row.totalDelta < prev) {
-      firstAxisBaseDeltaByValue.set(row.first, row.totalDelta);
+  const axisDeltaMaps = axisNames.map(() => new Map());
+  axisNames.forEach((axisName, axisIndex) => {
+    const residualsByValue = new Map();
+    for (const row of variantAxis.values()) {
+      const axisValue = row.axisValuesByName.get(axisName) ?? '';
+      if (!axisValue) continue;
+      let priorDelta = 0;
+      for (let priorIndex = 0; priorIndex < axisIndex; priorIndex += 1) {
+        const priorAxisName = axisNames[priorIndex];
+        const priorValue = row.axisValuesByName.get(priorAxisName) ?? '';
+        const priorAxisDelta = axisDeltaMaps[priorIndex].get(priorValue);
+        if (priorValue && Number.isFinite(priorAxisDelta)) {
+          priorDelta += Math.round(Number(priorAxisDelta));
+        }
+      }
+      const residual = row.totalDelta - priorDelta;
+      const prev = residualsByValue.get(axisValue) ?? new Set();
+      prev.add(residual);
+      residualsByValue.set(axisValue, prev);
     }
-  }
+    for (const [value, residuals] of residualsByValue.entries()) {
+      const normalizedResiduals = Array.from(residuals)
+        .map((residual) => Math.round(Number(residual)))
+        .filter((residual) => Number.isFinite(residual));
+      if (normalizedResiduals.length === 0) continue;
+      axisDeltaMaps[axisIndex].set(value, Math.min(...normalizedResiduals));
+    }
+  });
 
-  const secondResidualByValue = new Map();
-  for (const row of variantAxis.values()) {
-    if (!row.first || !row.second) continue;
-    const firstDelta = firstAxisBaseDeltaByValue.get(row.first);
-    if (firstDelta == null) continue;
-    const residual = row.totalDelta - firstDelta;
-    const prev = secondResidualByValue.get(row.second) ?? new Set();
-    prev.add(residual);
-    secondResidualByValue.set(row.second, prev);
-  }
-
-  const secondAxisDeltaByValue = new Map();
-  for (const [value, deltas] of secondResidualByValue.entries()) {
-    secondAxisDeltaByValue.set(value, pickRepresentativeDelta(deltas));
-  }
-
-  return {
-    firstAxisName,
-    secondAxisName,
-    firstAxisValues: Array.from(firstAxisBaseDeltaByValue.entries())
-      .sort((a, b) => a[0].localeCompare(b[0]))
+  const axes = axisNames.map((axisName, axisIndex) => ({
+    index: axisIndex + 1,
+    name: axisName,
+    values: Array.from(axisDeltaMaps[axisIndex].entries())
+      .sort((a, b) => a[0].localeCompare(b[0], 'ko'))
       .map(([label, delta]) => ({ label, delta_krw: delta, delta_display: formatDeltaDisplay(delta) })),
-    secondAxisValues: Array.from(secondAxisDeltaByValue.entries())
-      .sort((a, b) => a[0].localeCompare(b[0]))
-      .map(([label, delta]) => ({ label, delta_krw: delta, delta_display: formatDeltaDisplay(delta) })),
-    byVariant: Array.from(variantAxis.entries())
-      .map(([variantCode, row]) => ({
-        variant_code: variantCode,
-        first_value: row.first,
-        second_value: row.second,
-        total_delta_krw: row.totalDelta,
-      }))
-      .sort((a, b) => a.variant_code.localeCompare(b.variant_code)),
-  };
+  }));
+
+  const byVariant = Array.from(variantAxis.entries())
+    .map(([variantCode, row]) => ({
+      variant_code: variantCode,
+      axis_values: row.axisValues,
+      first_value: row.axisValues[0]?.value ?? '',
+      second_value: row.axisValues[1]?.value ?? '',
+      third_value: row.axisValues[2]?.value ?? '',
+      total_delta_krw: row.totalDelta,
+    }))
+    .sort((a, b) => a.variant_code.localeCompare(b.variant_code));
+
+  return buildBreakdownShape(axes, byVariant);
 };
