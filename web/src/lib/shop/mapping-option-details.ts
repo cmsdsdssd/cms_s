@@ -8,6 +8,7 @@ import { resolveCentralOptionMapping } from "@/lib/shop/channel-option-central-c
 import { getPersistedSizeChoicesByMaterial } from "@/lib/shop/weight-grid-store.js";
 import { roundSizeDeltaKrw } from "@/lib/shop/market-linked-size-grid.js";
 import { PLATING_PREFIX, formatPlatingComboLabel, getPlatingComboSortOrder, normalizePlatingCatalogComboKey } from "@/lib/shop/sync-rules";
+import { stripPriceDeltaSuffix } from "@/lib/shop/option-labels.js";
 
 export type OptionDetailCategory = "MATERIAL" | "SIZE" | "COLOR_PLATING" | "DECOR";
 
@@ -123,7 +124,7 @@ const toRoundedOrNull = (value: unknown): number | null => {
 };
 
 const normalizeOptionValue = (value: unknown): string =>
-  toTrimmed(value).replace(/\s*\([+-][\d,]+원\)\s*$/u, "").trim();
+  stripPriceDeltaSuffix(toTrimmed(value));
 
 export const normalizeMappingOptionValue = normalizeOptionValue;
 

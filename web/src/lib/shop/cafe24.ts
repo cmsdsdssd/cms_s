@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { normalizeMallId } from "@/lib/shop/mall-id";
+import { stripPriceDeltaSuffix } from "@/lib/shop/option-labels.js";
 
 type ShopChannelAccount = {
   account_id: string;
@@ -425,12 +426,6 @@ function parseVariantOptions(optionsRaw: unknown): Cafe24VariantOption[] {
       return { name, value } satisfies Cafe24VariantOption;
     })
     .filter((v): v is Cafe24VariantOption => Boolean(v));
-}
-
-function stripPriceDeltaSuffix(text: string): string {
-  return String(text ?? "")
-    .replace(/\s*\([+-][\d,]+원\)\s*$/u, "")
-    .trim();
 }
 
 function parseVariantListFromJson(json: Record<string, unknown>): Cafe24VariantSummary[] {

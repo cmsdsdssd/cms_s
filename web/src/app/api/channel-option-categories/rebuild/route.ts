@@ -8,6 +8,7 @@ import {
 import { resolveCanonicalProductNo } from "@/lib/shop/canonical-mapping";
 import { normalizeMaterialCode } from "@/lib/material-factors";
 import { normalizePlatingComboCode } from "@/lib/shop/sync-rules";
+import { stripPriceDeltaSuffix } from "@/lib/shop/option-labels.js";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -35,7 +36,7 @@ type ExistingCategoryRow = {
 
 const toTrimmed = (value: unknown) => String(value ?? "").trim();
 const normalizeVariantCode = (value: unknown) => toTrimmed(value);
-const normalizeOptionValue = (value: unknown) => toTrimmed(value).replace(/\s*\([+-][\d,]+\)\s*$/u, "").trim();
+const normalizeOptionValue = (value: unknown) => stripPriceDeltaSuffix(toTrimmed(value));
 const entryKey = (name: unknown, value: unknown) => {
   const n = toTrimmed(name);
   const v = normalizeOptionValue(value);

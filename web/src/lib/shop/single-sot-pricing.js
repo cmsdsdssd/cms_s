@@ -1,5 +1,6 @@
-export const stripPriceDeltaSuffix = (text) =>
-  String(text ?? '').replace(/\s*\([+-][\d,]+원\)\s*$/u, '').trim();
+import { formatOptionDisplayLabel, stripPriceDeltaSuffix } from './option-labels.js';
+
+export { stripPriceDeltaSuffix } from './option-labels.js';
 
 export const formatDeltaDisplay = (delta) => {
   const rounded = Math.round(Number(delta ?? 0));
@@ -30,13 +31,14 @@ const normalizeAxis = (axis, index) => {
   const values = Array.isArray(axis?.values)
     ? axis.values
         .map((value) => {
-          const label = String(value?.label ?? '').trim();
+          const label = stripPriceDeltaSuffix(String(value?.label ?? '').trim());
           const delta = Math.round(Number(value?.delta_krw ?? Number.NaN));
           if (!label || !Number.isFinite(delta)) return null;
           return {
             label,
             delta_krw: delta,
             delta_display: formatDeltaDisplay(delta),
+            display_label: formatOptionDisplayLabel(label, delta),
           };
         })
         .filter(Boolean)
@@ -172,12 +174,17 @@ export const buildOptionAxisFromPublishedEntries = (entries) => {
   for (const entry of Array.isArray(entries) ? entries : []) {
     const axisIndex = Number(entry?.option_axis_index ?? Number.NaN);
     const optionName = String(entry?.option_name ?? '').trim();
-    const optionValue = String(entry?.option_value ?? '').trim();
+    const optionValue = stripPriceDeltaSuffix(String(entry?.option_value ?? '').trim());
     const delta = Math.round(Number(entry?.published_delta_krw ?? Number.NaN));
     if (!Number.isFinite(axisIndex) || !optionName || !optionValue || !Number.isFinite(delta)) continue;
     const prev = grouped.get(axisIndex) ?? { index: axisIndex, name: optionName, values: new Map() };
     if (!prev.values.has(optionValue)) {
-      prev.values.set(optionValue, { label: optionValue, delta_krw: delta, delta_display: formatDeltaDisplay(delta) });
+      prev.values.set(optionValue, {
+        label: optionValue,
+        delta_krw: delta,
+        delta_display: formatDeltaDisplay(delta),
+        display_label: formatOptionDisplayLabel(optionValue, delta),
+      });
     }
     grouped.set(axisIndex, prev);
   }
@@ -196,7 +203,7 @@ export const buildOptionAxisFromCanonicalRows = (rows) => {
   for (const row of Array.isArray(rows) ? rows : []) {
     const axisIndex = Number(row?.axis_index ?? Number.NaN);
     const optionName = String(row?.option_name ?? '').trim();
-    const optionValue = String(row?.option_value ?? '').trim();
+    const optionValue = stripPriceDeltaSuffix(String(row?.option_value ?? '').trim());
     const delta = Math.round(Number(row?.resolved_delta_krw ?? Number.NaN));
     if (!Number.isFinite(axisIndex) || !optionName || !optionValue || !Number.isFinite(delta)) continue;
     const key = String(axisIndex);
@@ -206,6 +213,7 @@ export const buildOptionAxisFromCanonicalRows = (rows) => {
         label: optionValue,
         delta_krw: delta,
         delta_display: formatDeltaDisplay(delta),
+        display_label: formatOptionDisplayLabel(optionValue, delta),
       });
     }
     grouped.set(key, prev);

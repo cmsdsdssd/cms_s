@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import {
   buildOptionAxisBreakdownFromPublishedVariants,
+  buildOptionAxisFromPublishedEntries,
   buildOptionEntryRowsFromBreakdown,
   validateAdditiveBreakdown,
 } from "../src/lib/shop/single-sot-pricing.js";
@@ -84,4 +85,23 @@ test("buildOptionEntryRowsFromBreakdown emits rows for every axis", () => {
       [3, "색상", "핑크", 4000],
     ],
   );
+});
+
+
+test("buildOptionAxisFromPublishedEntries adds display-only labels while preserving canonical labels", () => {
+  const axis = buildOptionAxisFromPublishedEntries([
+    { option_axis_index: 1, option_name: "사이즈", option_value: "1호 (+1,000원)", published_delta_krw: 1000 },
+    { option_axis_index: 1, option_name: "사이즈", option_value: "2호", published_delta_krw: 0 },
+  ]);
+
+  assert.deepEqual(axis.axes, [
+    {
+      index: 1,
+      name: "사이즈",
+      values: [
+        { label: "1호", delta_krw: 1000, delta_display: "+1,000", display_label: "1호 (+1,000원)" },
+        { label: "2호", delta_krw: 0, delta_display: "0", display_label: "2호" },
+      ],
+    },
+  ]);
 });

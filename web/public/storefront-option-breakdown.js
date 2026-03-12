@@ -52,6 +52,14 @@
     ]).filter(([label]) => label),
   );
 
+  const buildDisplayLabelMap = (axis) => new Map(
+    (Array.isArray(axis?.values) ? axis.values : []).map((value) => {
+      const canonical = stripSuffix(String(value?.label ?? "").trim());
+      const display = String(value?.display_label ?? "").trim();
+      return [canonical, display || formatWithDelta(canonical, value?.delta_krw)];
+    }).filter(([label]) => label),
+  );
+
   const buildConditionalDeltaMap = (axisDefs, axisIndex, selectedPriorLabels, byVariant) => {
     const totalsByLabel = new Map();
     for (const row of Array.isArray(byVariant) ? byVariant : []) {
@@ -84,7 +92,7 @@
     return map;
   };
 
-  const applyAxisDeltasToSelect = (selectEl, deltaByLabel) => {
+  const applyAxisDeltasToSelect = (selectEl, deltaByLabel, displayLabelByLabel) => {
     if (!selectEl || !(selectEl instanceof HTMLSelectElement)) return;
     for (const option of Array.from(selectEl.options)) {
       const raw = String(option.textContent ?? option.innerText ?? "").trim();
@@ -92,9 +100,8 @@
       if (!normalized) continue;
       if (/^[-]+$/.test(normalized)) continue;
       if (normalized.includes("필수") || normalized.includes("선택")) continue;
-      option.textContent = deltaByLabel.has(normalized)
-        ? formatWithDelta(normalized, deltaByLabel.get(normalized))
-        : normalized;
+      option.textContent = displayLabelByLabel?.get(normalized)
+        ?? (deltaByLabel.has(normalized) ? formatWithDelta(normalized, deltaByLabel.get(normalized)) : normalized);
     }
   };
 
@@ -130,7 +137,7 @@
     for (const value of Array.isArray(axis?.values) ? axis.values : []) {
       const option = document.createElement("option");
       option.value = String(value?.label ?? "").trim();
-      option.textContent = String(value?.label ?? "").trim();
+      option.textContent = String(value?.display_label ?? value?.label ?? "").trim();
       select.appendChild(option);
     }
 
@@ -193,11 +200,15 @@
       for (let i = 0; i < axisDefs.length; i += 1) {
         const axis = axisDefs[i];
         const directMap = buildDirectDeltaMap(axis);
+        const directDisplayMap = buildDisplayLabelMap(axis);
         const conditionalMap = i === 0
           ? directMap
           : buildConditionalDeltaMap(axisDefs, i, selectedPriorLabels, byVariant);
         const effectiveMap = conditionalMap.size > 0 ? conditionalMap : directMap;
-        applyAxisDeltasToSelect(controls[i], effectiveMap);
+        const effectiveDisplayMap = conditionalMap.size > 0
+          ? new Map(Array.from(conditionalMap.entries()).map(([label, delta]) => [label, formatWithDelta(label, delta)]))
+          : directDisplayMap;
+        applyAxisDeltasToSelect(controls[i], effectiveMap, effectiveDisplayMap);
         selectedPriorLabels[i] = getSelectedLabel(controls[i]);
       }
 
