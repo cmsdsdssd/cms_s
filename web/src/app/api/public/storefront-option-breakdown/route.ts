@@ -1,11 +1,6 @@
 import { NextResponse } from "next/server";
 import { getShopAdminClient, jsonError } from "@/lib/shop/admin";
-import {
-  buildOptionAxisFromCanonicalRows,
-  buildOptionAxisFromPublishedEntries,
-  buildVariantBreakdownFromCanonicalRows,
-  buildVariantBreakdownFromPublishedEntries,
-} from "@/lib/shop/single-sot-pricing.js";
+import { selectStorefrontBreakdownSource } from "@/lib/shop/single-sot-pricing.js";
 import { loadPublishedPriceStateByChannelProducts } from "@/lib/shop/publish-price-state";
 import { GET as getChannelProductVariants } from "@/app/api/channel-products/variants/route";
 
@@ -74,7 +69,7 @@ export async function GET(request: Request) {
   const baseChannelProductId = String(baseMapping?.channel_product_id ?? "").trim();
 
   let publishVersion: string | null = null;
-  let publishedByChannelProduct = new Map<string, {
+  const publishedByChannelProduct = new Map<string, {
     finalTargetPriceKrw: number;
     deltaTotalKrw: number;
     publishVersion: string | null;
@@ -134,6 +129,7 @@ export async function GET(request: Request) {
   let canonicalOptionRows: Array<Record<string, unknown>> = [];
   let optionDetailAllowlist: Record<string, unknown> | null = null;
 
+  let adminVariants: Array<Record<string, unknown>> = [];
   if (String(baseMapping?.master_item_id ?? "").trim()) {
     const variantsUrl = new URL("http://local/api/channel-products/variants");
     variantsUrl.searchParams.set("channel_id", channelId);
@@ -144,20 +140,11 @@ export async function GET(request: Request) {
       if (variantsRes.ok) {
         const variantsPayload = await variantsRes.json();
         const variantsData = variantsPayload?.data ?? null;
-        const adminVariants = Array.isArray(variantsData?.variants) ? variantsData.variants : [];
+        adminVariants = Array.isArray(variantsData?.variants) ? variantsData.variants : [];
         canonicalOptionRows = Array.isArray(variantsData?.canonical_option_rows) ? variantsData.canonical_option_rows : [];
         optionDetailAllowlist = variantsData?.option_detail_allowlist && typeof variantsData.option_detail_allowlist === "object"
           ? variantsData.option_detail_allowlist
           : null;
-        const canonicalAxis = buildOptionAxisFromCanonicalRows(canonicalOptionRows);
-        if (canonicalAxis.axes.length > 0) {
-          previewAxis = canonicalAxis;
-          breakdown = buildVariantBreakdownFromCanonicalRows({
-            variants: adminVariants,
-            canonicalRows: canonicalOptionRows,
-          });
-          previewSource = "canonical_rows";
-        }
       }
     } catch {
       // fall back to published entries below
@@ -177,12 +164,18 @@ export async function GET(request: Request) {
       .order("option_value", { ascending: true });
     if (!optionEntryRes.error && (optionEntryRes.data ?? []).length > 0) {
       optionEntryRows = optionEntryRes.data ?? [];
-      if (!previewAxis) {
-        previewAxis = buildOptionAxisFromPublishedEntries(optionEntryRows);
-        breakdown = buildVariantBreakdownFromPublishedEntries(optionEntryRows);
-        previewSource = "published_entries";
-      }
     }
+  }
+
+  const selectedBreakdown = selectStorefrontBreakdownSource({
+    canonicalOptionRows,
+    canonicalVariants: adminVariants,
+    optionEntryRows,
+  });
+  if (selectedBreakdown.axis.axes.length > 0) {
+    previewAxis = selectedBreakdown.axis;
+    breakdown = selectedBreakdown.breakdown;
+    previewSource = selectedBreakdown.previewSource;
   }
   if (!basePublished) {
     return withCors(jsonError("published base price missing for product", 422, {

@@ -8,6 +8,7 @@ const toMs = (value) => {
 };
 
 const uniqueSorted = (values) => Array.from(new Set(values.filter(Boolean))).sort((left, right) => left.localeCompare(right));
+const MARKET_LINKED_EARLY_DUE_GRACE_MS = 60 * 1000;
 
 export const resolveMasterScheduleDecision = ({
   existingRow,
@@ -50,8 +51,10 @@ export const resolveMasterScheduleDecision = ({
     };
   }
 
+  const earlyDueGraceMs = effectiveProfile === 'MARKET_LINKED' ? MARKET_LINKED_EARLY_DUE_GRACE_MS : 0;
+
   return {
-    isDue: (nextDueMs ?? nowMs) <= nowMs,
+    isDue: (nextDueMs ?? nowMs) <= (nowMs + earlyDueGraceMs),
     nextDueAt: new Date(nextDueMs ?? nowMs).toISOString(),
     shouldPersistSeed,
   };

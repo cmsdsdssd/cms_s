@@ -14,6 +14,7 @@ import { POST as recomputePost } from "@/app/api/pricing/recompute/route";
 import { POST as pushPost } from "@/app/api/channel-prices/push/route";
 import { resolveCurrentProductSyncProfile } from "@/lib/shop/current-product-sync-profile.js";
 import { loadEffectiveMarketTicks } from "@/lib/shop/effective-market-ticks.js";
+import { summarizeOptionStateMoments } from "@/lib/shop/auto-price-preview-display.js";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -26,6 +27,10 @@ type EditorMeta = {
   tick_gold_krw_per_g: number;
   tick_silver_krw_per_g: number;
   current_product_sync_profile: 'GENERAL' | 'MARKET_LINKED';
+  last_option_pushed_at?: string | null;
+  last_option_verified_at?: string | null;
+  last_option_push_status?: string | null;
+  last_option_push_error?: string | null;
 };
 
 type MasterMeta = {
@@ -240,7 +245,7 @@ async function loadEditorMeta(
   const productNos = normalizeProductNoCandidates(externalProductNos);
   let stateLatestQuery = sb
     .from("channel_option_current_state_v1")
-    .select("external_product_no, exclude_plating_labor, plating_labor_sell_krw, total_labor_sell_krw, floor_price_krw")
+    .select("external_product_no, exclude_plating_labor, plating_labor_sell_krw, total_labor_sell_krw, floor_price_krw, updated_at, last_pushed_at, last_verified_at, last_push_status, last_push_error")
     .eq("channel_id", channelId)
     .order("updated_at", { ascending: false })
     .order("state_id", { ascending: false });
@@ -316,6 +321,11 @@ async function loadEditorMeta(
     total_labor_sell_krw?: number;
     floor_price_krw?: number;
     external_product_no?: string | null;
+    updated_at?: string | null;
+    last_pushed_at?: string | null;
+    last_verified_at?: string | null;
+    last_push_status?: string | null;
+    last_push_error?: string | null;
   }>).filter((row) => Boolean(row) && typeof row === "object");
   const preferredProductNo = String(preferredExternalProductNo ?? "").trim();
   const relevantStateRows = (() => {
@@ -339,6 +349,7 @@ async function loadEditorMeta(
 
   const excludePlatingLabor = relevantStateRows.length > 0
     && relevantStateRows.every((row) => row.exclude_plating_labor === true);
+  const optionStateMoments = summarizeOptionStateMoments(relevantStateRows);
   const platingSell = excludePlatingLabor ? 0 : rawPlatingSell;
   const resolvedTotalLaborSell = excludePlatingLabor
     ? (Number.isFinite(laborFromSnapshot) ? laborFromSnapshot : Math.max(0, laborFallback - rawPlatingSell))
@@ -355,6 +366,10 @@ async function loadEditorMeta(
     tick_gold_krw_per_g: toIntCeilNonNegative(effectiveTicks.goldTickKrwPerG ?? 0),
     tick_silver_krw_per_g: toIntCeilNonNegative(effectiveTicks.silverTickKrwPerG ?? 0),
     current_product_sync_profile: resolveCurrentProductSyncProfile(mappingProfileRows),
+    last_option_pushed_at: optionStateMoments.lastPushedAt,
+    last_option_verified_at: optionStateMoments.lastVerifiedAt,
+    last_option_push_status: optionStateMoments.lastPushStatus,
+    last_option_push_error: optionStateMoments.lastPushError,
   };
 }
 

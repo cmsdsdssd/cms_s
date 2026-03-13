@@ -240,6 +240,43 @@ export const buildVariantBreakdownFromPublishedEntries = (entries) => {
   return buildBreakdownShape(axis.axes, byVariant);
 };
 
+
+export const selectStorefrontBreakdownSource = ({
+  canonicalOptionRows,
+  canonicalVariants,
+  optionEntryRows,
+}) => {
+  const publishedCount = Array.isArray(optionEntryRows) ? optionEntryRows.length : 0;
+  if (publishedCount > 0) {
+    const axis = buildOptionAxisFromPublishedEntries(optionEntryRows);
+    const breakdown = buildVariantBreakdownFromPublishedEntries(optionEntryRows);
+    return {
+      axis,
+      breakdown,
+      previewSource: 'published_entries',
+    };
+  }
+
+  const axis = buildOptionAxisFromCanonicalRows(canonicalOptionRows);
+  if (axis.axes.length > 0) {
+    const breakdown = buildVariantBreakdownFromCanonicalRows({
+      variants: canonicalVariants,
+      canonicalRows: canonicalOptionRows,
+    });
+    return {
+      axis,
+      breakdown,
+      previewSource: 'canonical_rows',
+    };
+  }
+
+  return {
+    axis: buildBreakdownShape([], []),
+    breakdown: buildBreakdownShape([], []),
+    previewSource: 'published_entries',
+  };
+};
+
 export const buildVariantBreakdownFromCanonicalRows = ({ variants, canonicalRows }) => {
   const axis = buildOptionAxisFromCanonicalRows(canonicalRows);
   const deltaByEntryKey = new Map(

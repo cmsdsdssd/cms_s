@@ -87,6 +87,38 @@ test('buildScopedSyncPlan returns only due master scope', () => {
   assert.deepEqual(plan.dueChannelProductIds, ['cp-1']);
 });
 
+
+
+test('MARKET_LINKED schedule is due within 60-second early grace window', () => {
+  const decision = resolveMasterScheduleDecision({
+    existingRow: {
+      effective_sync_profile: 'MARKET_LINKED',
+      cadence_minutes: 5,
+      next_due_at: '2026-03-13T13:25:35.000Z',
+      last_evaluated_at: '2026-03-13T13:20:35.000Z',
+    },
+    effectiveProfile: 'MARKET_LINKED',
+    cadenceMinutes: 5,
+    now: '2026-03-13T13:25:04.000Z',
+  });
+  assert.equal(decision.isDue, true);
+});
+
+test('GENERAL schedule does not use early grace window', () => {
+  const decision = resolveMasterScheduleDecision({
+    existingRow: {
+      effective_sync_profile: 'GENERAL',
+      cadence_minutes: 120,
+      next_due_at: '2026-03-13T13:25:35.000Z',
+      last_evaluated_at: '2026-03-13T11:25:35.000Z',
+    },
+    effectiveProfile: 'GENERAL',
+    cadenceMinutes: 120,
+    now: '2026-03-13T13:25:04.000Z',
+  });
+  assert.equal(decision.isDue, false);
+});
+
 test('buildFinalizedScheduleRows advances next_due_at by profile cadence', () => {
   const rows = buildFinalizedScheduleRows({
     channelId: 'channel-1',

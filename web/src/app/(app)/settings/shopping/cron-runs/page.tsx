@@ -7,6 +7,7 @@ import { ShoppingPageHeader } from "@/components/layout/shopping-page-header";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
 import { Select } from "@/components/ui/field";
 import { shopApiGet } from "@/lib/shop/http";
+import { buildThresholdProfileSummary } from "@/lib/shop/price-sync-run-summary.js";
 
 type Channel = { channel_id: string; channel_name: string; channel_code: string };
 
@@ -15,6 +16,8 @@ type SyncRun = {
   channel_id: string;
   pinned_compute_request_id: string | null;
   publish_version?: string | null;
+  channel_threshold_profile?: "GENERAL" | "MARKET_LINKED" | null;
+  request_payload?: { summary?: { threshold_profile?: "GENERAL" | "MARKET_LINKED" | null } | null } | null;
   due_master_count?: number | null;
   scheduler_reason?: string | null;
   interval_minutes: number;
@@ -42,6 +45,10 @@ type RunIntent = {
   floor_price_krw: number;
   floor_applied: boolean;
   state: "PENDING" | "SUCCEEDED" | "SKIPPED" | "FAILED";
+  threshold_profile?: "GENERAL" | "MARKET_LINKED" | null;
+  channel_threshold_profile?: "GENERAL" | "MARKET_LINKED" | null;
+  effective_threshold_profile?: "GENERAL" | "MARKET_LINKED" | null;
+  threshold_profile_override_active?: boolean | null;
   updated_at: string | null;
   created_at: string;
   reason_code?: string | null;
@@ -166,6 +173,10 @@ export default function ShoppingCronRunsPage() {
   const run = detailQuery.data?.data.run ?? null;
   const intents = detailQuery.data?.data.intents ?? [];
   const reasons = detailQuery.data?.data.summary?.reasons ?? [];
+  const selectedRunThreshold = buildThresholdProfileSummary({
+    channelThresholdProfile: run?.channel_threshold_profile ?? run?.request_payload?.summary?.threshold_profile ?? null,
+    effectiveThresholdProfile: intents.find((item) => item.effective_threshold_profile)?.effective_threshold_profile ?? intents.find((item) => item.threshold_profile)?.threshold_profile ?? null,
+  });
   const failedReasons = detailQuery.data?.data.summary?.failed_reasons ?? [];
   const skippedReasons = detailQuery.data?.data.summary?.skipped_reasons ?? [];
 
@@ -285,7 +296,7 @@ export default function ShoppingCronRunsPage() {
         <Card>
           <CardHeader
             title="Run 상세"
-            description={run ? `interval=${run.interval_minutes}m · 게시 버전=${run.publish_version ?? run.pinned_compute_request_id ?? "-"}` : "run 선택"}
+            description={run ? `interval=${run.interval_minutes}m · 게시 버전=${run.publish_version ?? run.pinned_compute_request_id ?? "-"} · 채널 threshold=${run.channel_threshold_profile ?? run.request_payload?.summary?.threshold_profile ?? "-"}` : "run 선택"}
           />
           <CardBody>
             <div className="mb-3 grid grid-cols-1 gap-3 md:grid-cols-2">
@@ -324,6 +335,17 @@ export default function ShoppingCronRunsPage() {
             <div className='mb-2 text-xs text-[var(--muted)]'>
               게시 기준 목표가는 publish 기준이고, 실반영 목표가/실반영 후는 push 작업 결과 기준입니다. 스냅샷 값은 debug 비교용입니다.
             </div>
+            <div className="mb-3 rounded-[var(--radius)] border border-[var(--hairline)] p-3 text-sm">
+              <div className="mb-2 font-medium">threshold 프로필</div>
+              <div className="grid grid-cols-[1fr_auto] gap-x-3 gap-y-1 text-xs text-[var(--muted)]">
+                <div>채널 기본</div>
+                <div className="text-right">{selectedRunThreshold.channelThresholdProfile ?? "-"}</div>
+                <div>상품 적용</div>
+                <div className="text-right">{selectedRunThreshold.effectiveThresholdProfile ?? "-"}</div>
+                <div>override</div>
+                <div className="text-right">{selectedRunThreshold.isOverrideActive ? "Y" : "N"}</div>
+              </div>
+            </div>
 
             <div className="max-h-[520px] overflow-auto rounded-[var(--radius)] border border-[var(--hairline)]">
               <table className="w-full text-sm">
@@ -337,6 +359,8 @@ export default function ShoppingCronRunsPage() {
                     <th className="px-3 py-2">실반영 후</th>
                     <th className="px-3 py-2">바닥가</th>
                     <th className="px-3 py-2">바닥가 적용</th>
+                    <th className="px-3 py-2">채널 기본 threshold</th>
+                    <th className="px-3 py-2">상품 적용 threshold</th>
                     <th className="px-3 py-2">상태</th>
                     <th className="px-3 py-2">사유코드</th>
                     <th className="px-3 py-2">오류</th>
@@ -353,6 +377,8 @@ export default function ShoppingCronRunsPage() {
                       <td className="px-3 py-2">{fmt(it.applied_after_price_krw)}</td>
                       <td className="px-3 py-2">{fmt(it.floor_price_krw)}</td>
                       <td className="px-3 py-2">{it.floor_applied ? "Y" : "N"}</td>
+                      <td className="px-3 py-2">{it.channel_threshold_profile ?? run?.channel_threshold_profile ?? run?.request_payload?.summary?.threshold_profile ?? "-"}</td>
+                      <td className="px-3 py-2">{it.effective_threshold_profile ?? it.threshold_profile ?? "-"}</td>
                       <td className="px-3 py-2">{toIntentStateKo(it.state)}</td>
                       <td className="px-3 py-2">{it.reason_code ?? "-"}</td>
                       <td className="px-3 py-2 text-xs">{it.task_last_error ?? "-"}</td>

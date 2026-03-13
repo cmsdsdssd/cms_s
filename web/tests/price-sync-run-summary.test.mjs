@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import {
   buildMissingActiveMappingSummary,
+  buildThresholdProfileSummary,
   resolveNoIntentsReason,
 } from "../src/lib/shop/price-sync-run-summary.js";
 
@@ -63,4 +64,18 @@ test("resolveNoIntentsReason prioritizes threshold filter reason", () => {
     resolveNoIntentsReason({ thresholdFilteredCount: 0, missingActiveMappingProductCount: 0 }),
     "NO_INTENTS",
   );
+});
+
+
+test("buildThresholdProfileSummary separates channel and effective profiles", () => {
+  const summary = buildThresholdProfileSummary({
+    channelThresholdProfile: "GENERAL",
+    effectiveThresholdProfile: "MARKET_LINKED",
+  });
+
+  assert.deepEqual(summary, {
+    channelThresholdProfile: "GENERAL",
+    effectiveThresholdProfile: "MARKET_LINKED",
+    isOverrideActive: true,
+  });
 });

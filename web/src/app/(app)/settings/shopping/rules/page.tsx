@@ -124,7 +124,6 @@ type SizeDraft = {
   materialCode: string;
   weightMinG: string;
   weightMaxG: string;
-  additiveKrw: string;
 };
 
 type ColorDraft = {
@@ -195,11 +194,11 @@ const RULES_SECTION_GROUPS: RulesSectionGroup[] = [
     icon: <Sparkles className="h-4 w-4" />,
     items: [
       { key: 'rule-material', label: '1. 소재', desc: 'MATERIAL 분류 규칙' },
-      { key: 'rule-size', label: '2. 사이즈', desc: 'SIZE additive 구간 규칙' },
+      { key: 'rule-size', label: '2. 사이즈', desc: '사이즈 구간 규칙 + 자동 계산 안내' },
       { key: 'rule-color-catalog', label: '3. 색상 중앙 기본금액', desc: '중앙 color/plating SoT' },
       { key: 'rule-color-policy', label: '4. 색상 예외 규칙 사용 안 함', desc: '예외 비활성 정책' },
-      { key: 'rule-decor', label: '5. 장식', desc: 'DECOR 총공임원가 + additive' },
-      { key: 'rule-other', label: '6. 기타', desc: '메모 기반 보조 규칙' },
+      { key: 'rule-decor', label: '5. 장식', desc: '장식 마스터 기본 공임 + 수동 조정 저장' },
+      { key: 'rule-other', label: '6. 기타', desc: '수동 override 금액 직접 저장' },
     ],
   },
   {
@@ -229,7 +228,7 @@ const RULES_SECTION_META: Record<RulesSection, { title: string; desc: string }> 
   },
   'rule-size': {
     title: '2. 사이즈',
-    desc: 'SIZE는 소재와 사이즈 구간별 additive 금액을 관리하는 핵심 규칙 섹션입니다.',
+    desc: 'SIZE는 소재와 사이즈 구간만 정의하고, 최종 금액은 settings 시세/소재 계수를 기준으로 자동 계산합니다.',
   },
   'rule-color-catalog': {
     title: '3. 색상 중앙 기본금액',
@@ -241,11 +240,11 @@ const RULES_SECTION_META: Record<RulesSection, { title: string; desc: string }> 
   },
   'rule-decor': {
     title: '5. 장식',
-    desc: 'DECOR는 장식 마스터의 총공임원가와 추가 금액 합계를 기준으로 저장합니다.',
+    desc: 'DECOR는 선택한 장식 마스터의 기본 공임원가를 읽고, 운영자가 수동 조정금액을 더한 저장 결과를 관리합니다.',
   },
   'rule-other': {
     title: '6. 기타',
-    desc: 'OTHER는 별도 분류가 어려운 비용이나 메모성 override를 보조적으로 기록합니다.',
+    desc: 'OTHER는 자동 계산 없이 운영자가 메모와 수동 override 금액을 직접 저장하는 소스 규칙입니다.',
   },
   context: {
     title: '채널 / 상품 컨텍스트',
@@ -417,7 +416,6 @@ const createEmptySizeDraft = (materials: string[]): SizeDraft => ({
   materialCode: materials[0] ?? '',
   weightMinG: RULE_WEIGHT_OPTIONS[0] ?? '0.01',
   weightMaxG: RULE_WEIGHT_OPTIONS[0] ?? '0.01',
-  additiveKrw: '0',
 });
 
 const createEmptyColorDraft = (materials: string[], colors: ColorOption[]): ColorDraft => ({
@@ -940,7 +938,7 @@ export default function ShoppingRulesPage() {
     const weightMin = Number(sizeDraft.weightMinG);
     const weightMax = Number(sizeDraft.weightMaxG);
     handleSaveRule(
-      sizeDraft.ruleId ? '중량 규칙 수정' : '중량 규칙 추가',
+      sizeDraft.ruleId ? '사이즈 규칙 수정' : '사이즈 규칙 추가',
       {
         ...basePayload,
         rule_id: sizeDraft.ruleId || undefined,
@@ -954,7 +952,7 @@ export default function ShoppingRulesPage() {
         decoration_master_id: null,
         decoration_model_name: null,
         base_labor_cost_krw: 0,
-        additive_delta_krw: parseAmount(sizeDraft.additiveKrw),
+        additive_delta_krw: 0,
       },
       resetSizeDraft,
     );
@@ -1118,6 +1116,11 @@ export default function ShoppingRulesPage() {
   }).length; }, [bulkCategory, bulkColorCode, bulkMaterialCode, bulkSizeMaxG, bulkSizeMinG, colorRules, sizeRules]);
   const selectedColorCatalogRow = colorCatalogByCode.get(normalizeColorCode(colorDraft.colorCode)) ?? null;
   const selectedColorBaseKrw = parseAmount(String(selectedColorCatalogRow?.base_delta_krw ?? 0));
+  const sizeRuleMaterialCount = useMemo(
+    () => new Set(sizeRules.map((rule) => String(rule.scope_material_code ?? '').trim()).filter(Boolean)).size,
+    [sizeRules],
+  );
+  const sizeRuleGuideLabel = '최종 추가금액은 settings 시세/소재 계수로 자동 계산';
   const activeSectionMeta = RULES_SECTION_META[activeSection];
   const showRuleSectionContextNotice = activeSection.startsWith('rule-') && !selectedContext;
 
@@ -1505,10 +1508,27 @@ export default function ShoppingRulesPage() {
 
   const sizeRuleSection = (
     <Card>
-      <CardHeader title='2. 사이즈' description='SIZE는 소재와 사이즈 구간별 additive 금액을 관리합니다.' />
+      <CardHeader title='2. 사이즈 구간 규칙' description='운영자는 소재와 사이즈 구간만 정의하고, 최종 추가금액은 settings 시세/소재 계수 기준으로 자동 계산됩니다.' />
       <CardBody className="space-y-3">
         <div className="rounded border border-[var(--hairline)] bg-[var(--background)] px-3 py-2 text-xs text-[var(--muted)]">
-          소재별로 사이즈 구간을 나누고, 각 구간에 적용할 SIZE additive 금액을 설정합니다.
+          소재별 사이즈 시작/종료 구간을 정의하면 저장된 규칙을 기준으로 persisted size grid와 runtime 계산값이 다시 만들어집니다.
+        </div>
+        <div className="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+          자동 계산 결과 안내: 여기서는 수동 최종금액을 입력하지 않습니다. `settings`에서 시세/소재팩터를 저장하면 이 구간 규칙을 기준으로 persisted size grid와 runtime 계산값만 다시 재빌드됩니다.
+        </div>
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+          <div className="rounded border border-[var(--hairline)] bg-[var(--background)] px-3 py-2">
+            <div className="text-[11px] text-[var(--muted)]">활성 사이즈 규칙</div>
+            <div className="text-base font-semibold">{sizeRules.length}</div>
+          </div>
+          <div className="rounded border border-[var(--hairline)] bg-[var(--background)] px-3 py-2">
+            <div className="text-[11px] text-[var(--muted)]">규칙 적용 소재 수</div>
+            <div className="text-base font-semibold">{sizeRuleMaterialCount}</div>
+          </div>
+          <div className="rounded border border-[var(--hairline)] bg-[var(--background)] px-3 py-2">
+            <div className="text-[11px] text-[var(--muted)]">계산 방식</div>
+            <div className="text-sm font-medium">자동 계산</div>
+          </div>
         </div>
 
         <div className="grid grid-cols-1 gap-3 md:grid-cols-5">
@@ -1554,17 +1574,8 @@ export default function ShoppingRulesPage() {
             </Select>
           </div>
           <div>
-            <div className='mb-1 text-xs text-[var(--muted)]'>추가 금액</div>
-            <Select
-              value={sizeDraft.additiveKrw}
-              onChange={(event) => setSizeDraft((current) => ({ ...current, additiveKrw: event.target.value }))}
-            >
-              {LABOR_AMOUNT_OPTIONS.map((amount) => (
-                <option key={amount} value={amount}>
-                  {formatWon(Number(amount))}
-                </option>
-              ))}
-            </Select>
+            <div className='mb-1 text-xs text-[var(--muted)]'>자동 계산 결과 안내</div>
+            <Input value={sizeRuleGuideLabel} disabled />
           </div>
           <div className="space-y-2">
             <div className='mb-1 text-xs text-[var(--muted)]'>작업</div>
@@ -1581,7 +1592,7 @@ export default function ShoppingRulesPage() {
 
         {isSizeEditing ? (
           <div className="rounded border border-sky-200 bg-sky-50 px-3 py-2 text-xs text-sky-900">
-            현재 편집 중: 소재 {sizeDraft.materialCode || '-'} / {sizeDraft.weightMinG}g ~ {sizeDraft.weightMaxG}g / {formatWon(parseAmount(sizeDraft.additiveKrw))}
+            현재 편집 중: 소재 {sizeDraft.materialCode || '-'} / {sizeDraft.weightMinG}g ~ {sizeDraft.weightMaxG}g / 최종 추가금액은 자동 계산됩니다.
           </div>
         ) : null}
 
@@ -1591,7 +1602,7 @@ export default function ShoppingRulesPage() {
               <tr>
                 <th className='px-3 py-2'>소재</th>
                 <th className='px-3 py-2'>추가 사이즈 구간</th>
-                <th className='px-3 py-2'>추가 금액</th>
+                <th className='px-3 py-2'>자동 계산 결과 안내</th>
                 <th className='px-3 py-2'>작업</th>
               </tr>
             </thead>
@@ -1602,7 +1613,7 @@ export default function ShoppingRulesPage() {
                   <tr key={rule.rule_id} className={"border-t border-[var(--hairline)] " + (isEditingRow ? 'bg-sky-50/80' : '')}>
                     <td className="px-3 py-2">{rule.scope_material_code ?? '-'}</td>
                     <td className={'px-3 py-2'}>{toNumber(rule.additional_weight_min_g ?? rule.additional_weight_g).toFixed(2) + 'g ~ ' + toNumber(rule.additional_weight_max_g ?? rule.additional_weight_g).toFixed(2) + 'g'}</td>
-                    <td className="px-3 py-2">{formatWon(rule.additive_delta_krw)}</td>
+                    <td className="px-3 py-2 text-xs text-[var(--muted)]">{sizeRuleGuideLabel}</td>
                     <td className="px-3 py-2">
                       <div className="flex gap-1">
                         <Button
@@ -1613,7 +1624,6 @@ export default function ShoppingRulesPage() {
                               materialCode: rule.scope_material_code ?? materials[0] ?? '',
                               weightMinG: toNumber(rule.additional_weight_min_g ?? rule.additional_weight_g).toFixed(2),
                               weightMaxG: toNumber(rule.additional_weight_max_g ?? rule.additional_weight_g).toFixed(2),
-                              additiveKrw: String(toNumber(rule.additive_delta_krw)),
                             });
                           }}
                         >
@@ -1777,10 +1787,13 @@ export default function ShoppingRulesPage() {
 
   const decorRuleSection = (
     <Card>
-      <CardHeader title='5. 장식' description='DECOR는 장식 마스터별 총공임원가(흡수공임 포함)와 추가 금액 합계를 관리합니다.' />
+      <CardHeader title='5. 장식' description='DECOR는 선택한 장식 마스터의 기본 공임원가를 읽고, 운영자가 수동 조정금액을 더해 저장 결과를 관리하는 소스 규칙입니다.' />
       <CardBody className="space-y-3">
         <div className="rounded border border-[var(--hairline)] bg-[var(--background)] px-3 py-2 text-xs text-[var(--muted)]">
-          기본적으로 장식 마스터 목록을 사용하고, 필요하면 전체 마스터 목록으로 넓혀 선택할 수 있습니다. 선택한 장식의 기본 공임과 additive 금액을 함께 저장합니다.
+          기본적으로 장식 마스터 목록을 사용하고, 필요하면 전체 마스터 목록으로 넓혀 선택할 수 있습니다. 선택한 장식 마스터의 기본 공임원가는 마스터에서 읽고, 여기서는 운영자가 수동 조정금액만 추가로 저장합니다.
+        </div>
+        <div className="rounded border border-sky-200 bg-sky-50 px-3 py-2 text-xs text-sky-900">
+          저장 결과 안내: 저장 결과 금액은 `기본 공임원가 + 수동 조정금액`으로 계산됩니다. preview/runtime은 이 저장 결과를 그대로 반영합니다.
         </div>
 
         <label className="flex items-center gap-2 text-sm text-[var(--muted)]">
@@ -1813,7 +1826,7 @@ export default function ShoppingRulesPage() {
             <Input value={formatWon(laborOf(selectedDecorMaster))} disabled />
           </div>
           <div>
-            <div className='mb-1 text-xs text-[var(--muted)]'>추가 금액</div>
+            <div className='mb-1 text-xs text-[var(--muted)]'>수동 조정금액</div>
             <Select
               value={decorDraft.additiveKrw}
               onChange={(event) => setDecorDraft((current) => ({ ...current, additiveKrw: event.target.value }))}
@@ -1826,7 +1839,7 @@ export default function ShoppingRulesPage() {
             </Select>
           </div>
           <div>
-            <div className='mb-1 text-xs text-[var(--muted)]'>최종 장식금액</div>
+            <div className='mb-1 text-xs text-[var(--muted)]'>저장 결과 금액</div>
             <Input value={formatWon(laborOf(selectedDecorMaster) + parseAmount(decorDraft.additiveKrw))} disabled />
           </div>
           <div className="space-y-2">
@@ -1848,8 +1861,8 @@ export default function ShoppingRulesPage() {
               <tr>
                 <th className='px-3 py-2'>장식 마스터</th>
                 <th className='px-3 py-2'>총공임원가</th>
-                <th className='px-3 py-2'>추가 금액</th>
-                <th className='px-3 py-2'>최종 장식금액</th>
+                <th className='px-3 py-2'>수동 조정금액</th>
+                <th className='px-3 py-2'>저장 결과 금액</th>
                 <th className='px-3 py-2'>작업</th>
               </tr>
             </thead>
@@ -1906,10 +1919,13 @@ export default function ShoppingRulesPage() {
 
   const otherRuleSection = (
     <Card>
-      <CardHeader title='6. 기타' description='OTHER는 메모(note)와 override 금액만 저장하는 보조 규칙입니다.' />
+      <CardHeader title='6. 기타' description='OTHER는 자동 계산 없이 운영자가 메모와 수동 override 금액을 직접 저장하는 소스 규칙입니다.' />
       <CardBody className="space-y-3">
         <div className="rounded border border-[var(--hairline)] bg-[var(--background)] px-3 py-2 text-xs text-[var(--muted)]">
-          별도 분류가 어려운 요청이나 예외 비용을 기록할 때 사용합니다. 메모 내용과 추가 금액만 관리합니다.
+          별도 분류가 어려운 요청이나 예외 비용을 기록할 때 사용합니다. SIZE나 DECOR처럼 계산 결과를 안내하는 섹션이 아니라, 여기 입력한 메모와 수동 override 금액 자체가 곧 저장 소스 규칙입니다.
+        </div>
+        <div className="rounded border border-sky-200 bg-sky-50 px-3 py-2 text-xs text-sky-900">
+          저장 결과 안내: 운영자가 직접 입력한 수동 override 금액이 별도 계산 없이 preview/runtime에 그대로 합산됩니다.
         </div>
 
         <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
@@ -1922,7 +1938,7 @@ export default function ShoppingRulesPage() {
             />
           </div>
           <div>
-            <div className='mb-1 text-xs text-[var(--muted)]'>override 금액</div>
+            <div className='mb-1 text-xs text-[var(--muted)]'>수동 override 금액</div>
             <Input
               value={otherDraft.additiveKrw}
               onChange={(event) => setOtherDraft((current) => ({ ...current, additiveKrw: event.target.value }))}
@@ -1952,7 +1968,7 @@ export default function ShoppingRulesPage() {
             <thead className="bg-[var(--panel)] text-left">
               <tr>
                 <th className='px-3 py-2'>메모</th>
-                <th className='px-3 py-2'>추가 금액</th>
+                <th className='px-3 py-2'>수동 override 저장금액</th>
                 <th className='px-3 py-2'>최근 변경</th>
                 <th className='px-3 py-2'>작업</th>
               </tr>

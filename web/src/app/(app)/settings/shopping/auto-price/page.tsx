@@ -9,6 +9,7 @@ import { Input, Select } from "@/components/ui/field";
 import { Sheet } from "@/components/ui/sheet";
 import { cn } from "@/lib/utils";
 import { shopApiGet, shopApiSend } from "@/lib/shop/http";
+import { buildAppliedTargetSummary, buildPreviewTruthSections, resolveColorPlatingDisplay } from "@/lib/shop/auto-price-preview-display.js";
 import {
   buildCanonicalOptionRows,
   buildMappingOptionEntries,
@@ -135,6 +136,7 @@ type SyncRunDetail = {
   run: {
     run_id: string;
     status?: string | null;
+    total_count?: number | null;
     pinned_compute_request_id?: string | null;
     started_at?: string | null;
     request_payload?: {
@@ -175,6 +177,10 @@ type DashboardGalleryRow = {
   price_state: "OK" | "OUT_OF_SYNC" | "ERROR" | "UNMAPPED";
   computed_at: string | null;
   current_product_sync_profile?: CurrentProductSyncProfile | null;
+  last_option_pushed_at?: string | null;
+  last_option_verified_at?: string | null;
+  last_option_push_status?: string | null;
+  last_option_push_error?: string | null;
 };
 type MasterMetaRow = {
   master_item_id?: string | null;
@@ -222,6 +228,10 @@ type ProductEditorPreview = {
   tick_gold_krw_per_g?: number | null;
   tick_silver_krw_per_g?: number | null;
   current_product_sync_profile?: CurrentProductSyncProfile | null;
+  last_option_pushed_at?: string | null;
+  last_option_verified_at?: string | null;
+  last_option_push_status?: string | null;
+  last_option_push_error?: string | null;
   options: Array<{ option_name: string; option_value: Array<{ option_text: string }> }>;
   variants: Array<{
     variantCode: string;
@@ -357,6 +367,10 @@ type MappingRow = {
   sync_rule_decoration_enabled?: boolean | null;
   sync_rule_margin_rounding_enabled?: boolean | null;
   current_product_sync_profile?: CurrentProductSyncProfile | null;
+  last_option_pushed_at?: string | null;
+  last_option_verified_at?: string | null;
+  last_option_push_status?: string | null;
+  last_option_push_error?: string | null;
   mapping_source?: string;
   is_active?: boolean;
 };
@@ -1176,7 +1190,24 @@ export default function ShoppingAutoPricePage() {
   });
 
   const snapshotExplainRow = snapshotExplainQuery.data?.data ?? null;
-
+  const thresholdNoPushNormal = Boolean(
+    Number(runDetailQuery.data?.data.run?.total_count ?? 0) === 0
+    && activeRunThresholdFilteredCount > 0
+    && String(runDetailQuery.data?.data.run?.status ?? "").trim().toUpperCase() === "SUCCESS"
+  );
+  const productPriceSummary = useMemo(() => buildAppliedTargetSummary({
+    appliedKrw: editorPreview?.price,
+    targetKrw: snapshotExplainRow?.final_target_price_v2_krw ?? snapshotExplainRow?.final_target_price_krw ?? null,
+    thresholdNoPushNormal,
+  }), [editorPreview?.price, snapshotExplainRow?.final_target_price_krw, snapshotExplainRow?.final_target_price_v2_krw, thresholdNoPushNormal]);
+  const productTruthSections = useMemo(() => buildPreviewTruthSections({
+    appliedKrw: editorPreview?.price,
+    targetKrw: snapshotExplainRow?.final_target_price_v2_krw ?? snapshotExplainRow?.final_target_price_krw ?? null,
+    lastPushedAt: editorPreview?.last_option_pushed_at,
+    lastVerifiedAt: editorPreview?.last_option_verified_at,
+    computedAt: snapshotExplainRow?.computed_at ?? null,
+    thresholdNoPushNormal,
+  }), [editorPreview?.last_option_pushed_at, editorPreview?.last_option_verified_at, editorPreview?.price, snapshotExplainRow?.computed_at, snapshotExplainRow?.final_target_price_krw, snapshotExplainRow?.final_target_price_v2_krw, thresholdNoPushNormal]);
 
   const previewEffectiveFloor = useMemo(() => {
     const floorRaw = Math.max(0, Math.round(Number(editorPreview?.floor_price_krw ?? 0)));
@@ -2820,6 +2851,13 @@ export default function ShoppingAutoPricePage() {
       const selectedColorCode = categoryKey === "COLOR_PLATING"
         ? String(axis2DraftValue ?? canonicalRow?.color_code_selected ?? "").trim()
         : String(canonicalRow?.color_code_selected ?? "").trim();
+      const colorAmountKey = selectedMaterialCode && selectedColorCode ? `${selectedMaterialCode}::${selectedColorCode}` : "";
+      const colorPlatingDisplay = categoryKey === "COLOR_PLATING"
+        ? resolveColorPlatingDisplay({
+          candidateAmounts: colorAmountKey ? (colorAmountChoicesByMaterialColor.get(colorAmountKey) ?? []) : [],
+          fallbackDeltaKrw: canonicalRow?.resolved_delta_krw ?? draftSyncDelta,
+        })
+        : null;
       const selectedSizeWeightText = categoryKey === "SIZE"
         ? String(axis2DraftValue ?? (canonicalRow?.size_weight_g_selected == null ? "" : formatOptionSizeValue(canonicalRow.size_weight_g_selected))).trim()
         : (canonicalRow?.size_weight_g_selected == null ? "" : formatOptionSizeValue(canonicalRow.size_weight_g_selected));
@@ -2904,7 +2942,7 @@ export default function ShoppingAutoPricePage() {
       } else if (categoryKey === "COLOR_PLATING") {
         axisColumns[0] = selectedMaterialCode || materialText || axisColumns[0];
         axisColumns[1] = colorText || entry.optionValue;
-        axisColumns[2] = fmtKrw(canonicalRow?.resolved_delta_krw ?? draftSyncDelta);
+        axisColumns[2] = colorPlatingDisplay?.sourceLabel ?? fmtKrw(canonicalRow?.resolved_delta_krw ?? draftSyncDelta);
       } else if (categoryKey === "SIZE") {
         axisColumns[0] = selectedMaterialCode || materialText || axisColumns[0];
         axisColumns[1] = sizeWeightText || entry.optionValue;
@@ -2939,7 +2977,9 @@ export default function ShoppingAutoPricePage() {
           ? Math.round(Number(sizeResolvedDelta ?? 0))
           : categoryKey === "DECOR"
             ? decorFinalAmountKrw
-          : Math.round(Number(canonicalRow?.resolved_delta_krw ?? draftSyncDelta));
+            : categoryKey === "COLOR_PLATING"
+              ? colorPlatingDisplay?.resolvedDeltaKrw ?? Math.round(Number(canonicalRow?.resolved_delta_krw ?? draftSyncDelta))
+              : Math.round(Number(canonicalRow?.resolved_delta_krw ?? draftSyncDelta));
       const syncDeltaKrw = categoryKey === "NOTICE"
         ? 0
         : categoryKey === "DECOR"
@@ -3000,6 +3040,7 @@ export default function ShoppingAutoPricePage() {
     pooledDecorCostByMasterId,
     resolvedMasterMaterialCode,
     sizeRuleMarketContext,
+    colorAmountChoicesByMaterialColor,
   ]);
   const compactOptionRowByEntryKey = useMemo(() => {
     const next = new Map<string, CompactOptionRow>();
@@ -3200,6 +3241,10 @@ export default function ShoppingAutoPricePage() {
     () => (editorPreview?.variants ?? []).find((variant) => normalizeVariantCode(variant.variantCode) === focusedVariantCode) ?? null,
     [editorPreview, focusedVariantCode],
   );
+  const focusedVariantPriceSummary = useMemo(() => buildAppliedTargetSummary({
+    appliedKrw: focusedVariant?.additionalAmount,
+    targetKrw: focusedVariant?.savedTargetAdditionalAmount ?? null,
+  }), [focusedVariant?.additionalAmount, focusedVariant?.savedTargetAdditionalAmount]);
   const focusedDraft = focusedVariantCode ? (variantOptionDraftsByCode[focusedVariantCode] ?? defaultVariantOptionDrafts[focusedVariantCode] ?? toVariantOptionDraft(null)) : null;
   const shouldMarkFocusedChoiceAsLegacy = !loadedOptionAllowlist.is_empty;
   const focusedMaterialChoices = focusedDraft
@@ -4555,9 +4600,31 @@ export default function ShoppingAutoPricePage() {
                       </div>
 
                       <div className={`rounded border p-3 ${currentProductSyncProfilePanelClassOf(editorCurrentProductSyncProfile)}`}>
-                        <div className="text-[10px] text-[var(--muted)]">판매가(쇼핑몰)</div>
+                        <div className="text-[10px] text-[var(--muted)]">스토어 기준 · 현재 쇼핑몰 적용가</div>
                         <div className="mt-1">
-                          <div className="whitespace-nowrap text-2xl font-semibold leading-none tabular-nums">{fmtKrw(editorPreview.price)}</div>
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="whitespace-nowrap text-2xl font-semibold leading-none tabular-nums">{fmtKrw(productPriceSummary.appliedKrw)}</div>
+                            {productPriceSummary.targetKrw != null ? (
+                              <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${productPriceSummary.isThresholdNoPushNormal ? "border border-sky-300 bg-sky-50 text-sky-900" : productPriceSummary.isMismatch ? "border border-amber-300 bg-amber-50 text-amber-900" : "border border-emerald-300 bg-emerald-50 text-emerald-900"}`}>
+                                {productTruthSections.statusLabel}
+                              </span>
+                            ) : null}
+                          </div>
+                          <div className="mt-2 rounded border border-[var(--hairline)] bg-[var(--panel)] px-2 py-2 text-[11px] tabular-nums">
+                            <div className="mb-1 text-[10px] font-semibold text-slate-700">내부 계산 기준</div>
+                            <div className="grid grid-cols-[1fr_auto] gap-x-3 gap-y-1">
+                              <div className="text-[var(--muted)]">타겟값</div>
+                              <div className="whitespace-nowrap text-right font-medium">{fmtKrw(productPriceSummary.targetKrw)}</div>
+                              {productPriceSummary.isMismatch && productPriceSummary.deltaKrw != null ? (
+                                <>
+                                  <div className="text-[var(--muted)]">차이</div>
+                                  <div className="whitespace-nowrap text-right font-medium text-amber-900">{fmtSignedKrw(productPriceSummary.deltaKrw)}</div>
+                                </>
+                              ) : null}
+                              <div className="text-[var(--muted)]">마지막 계산</div>
+                              <div className="whitespace-nowrap text-right tabular-nums">{fmtTsCompact(snapshotExplainRow?.computed_at)}</div>
+                            </div>
+                          </div>
                           <div className="mt-1 grid grid-cols-1 gap-1 text-[11px] text-[var(--muted)] tabular-nums sm:grid-cols-2">
                             <div className="rounded border border-[var(--hairline)] px-2 py-1">
                               <div className="text-[10px] text-[var(--muted)]">최근 후보가격 #1</div>
@@ -4574,8 +4641,16 @@ export default function ShoppingAutoPricePage() {
                           <div className="whitespace-nowrap text-right tabular-nums">{fmtKrw(editorPreview.retailPrice)}</div>
                           <div className="text-[var(--muted)]">상태</div>
                           <div className="whitespace-nowrap text-right">{`${toDisplayKo(editorPreview.display)} / ${toSellingKo(editorPreview.selling)}`}</div>
-                          <div className="text-[var(--muted)]">스냅샷 최종 타겟</div>
-                          <div className="whitespace-nowrap text-right tabular-nums">{snapshotExplainRow ? fmtKrw(snapshotExplainRow.final_target_price_v2_krw ?? snapshotExplainRow.final_target_price_krw) : "-"}</div>
+                          <div className="text-[var(--muted)]">동기화 상태</div>
+                          <div className="whitespace-nowrap text-right">
+                            <span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold ${productPriceSummary.targetKrw == null ? "border border-slate-300 bg-slate-50 text-slate-700" : productPriceSummary.isThresholdNoPushNormal ? "border border-sky-300 bg-sky-50 text-sky-900" : productPriceSummary.isMismatch ? "border border-amber-300 bg-amber-50 text-amber-900" : "border border-emerald-300 bg-emerald-50 text-emerald-900"}`}>
+                              {productTruthSections.statusLabel}
+                            </span>
+                          </div>
+                          <div className="text-[var(--muted)]">마지막 옵션 push</div>
+                          <div className="whitespace-nowrap text-right tabular-nums">{fmtTsCompact(typeof productTruthSections.storeRows[1]?.value === "string" ? productTruthSections.storeRows[1].value : null)}</div>
+                          <div className="text-[var(--muted)]">마지막 verify</div>
+                          <div className="whitespace-nowrap text-right tabular-nums">{fmtTsCompact(typeof productTruthSections.storeRows[2]?.value === "string" ? productTruthSections.storeRows[2].value : null)}</div>
                         </div>
                       </div>
 
@@ -5399,14 +5474,30 @@ export default function ShoppingAutoPricePage() {
                               </Select>
                             </div>
                           </div>
-                          <div className="grid grid-cols-1 gap-2 md:grid-cols-4">
+                          <div className="grid grid-cols-1 gap-2 md:grid-cols-5">
                             <div className="rounded border border-[var(--hairline)] px-3 py-2 text-xs">
-                              <div className="text-[var(--muted)]">저장값</div>
-                              <div className="mt-1 font-medium tabular-nums">{fmt(focusedVariant.savedTargetAdditionalAmount)}</div>
+                              <div className="flex items-start justify-between gap-2">
+                                <div className="text-[var(--muted)]">실제 적용값</div>
+                                {focusedVariantPriceSummary.targetKrw != null ? (
+                                  <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${focusedVariantPriceSummary.isMismatch ? "border border-amber-300 bg-amber-50 text-amber-900" : "border border-emerald-300 bg-emerald-50 text-emerald-900"}`}>
+                                    {focusedVariantPriceSummary.statusLabel}
+                                  </span>
+                                ) : null}
+                              </div>
+                              <div className="mt-1 font-medium tabular-nums">{fmt(focusedVariantPriceSummary.appliedKrw)}</div>
                             </div>
                             <div className="rounded border border-[var(--hairline)] px-3 py-2 text-xs">
-                              <div className="text-[var(--muted)]">스토어 옵션가</div>
-                              <div className="mt-1 font-medium tabular-nums">{fmt(focusedVariant.additionalAmount)}</div>
+                              <div className="text-[var(--muted)]">타겟값</div>
+                              <div className="mt-1 font-medium tabular-nums">{fmt(focusedVariantPriceSummary.targetKrw)}</div>
+                            </div>
+                            <div className="rounded border border-[var(--hairline)] px-3 py-2 text-xs">
+                              <div className="text-[var(--muted)]">동기화 계산 옵션가</div>
+                              <div className="mt-1 font-medium tabular-nums">{fmt(computedVariantAdditionalByCode[focusedVariantCode] ?? null)}</div>
+                              {focusedVariantPriceSummary.isMismatch && focusedVariantPriceSummary.deltaKrw != null ? (
+                                <div className="mt-1 text-[10px] text-amber-900 tabular-nums">차이 {fmtSignedKrw(focusedVariantPriceSummary.deltaKrw)}</div>
+                              ) : (
+                                <div className="mt-1 text-[10px] text-[var(--muted)]">{focusedVariantPriceSummary.statusLabel}</div>
+                              )}
                             </div>
                             <div className="rounded border border-[var(--hairline)] px-3 py-2 text-xs">
                               <div className="text-[var(--muted)]">base 판매가</div>
@@ -5532,9 +5623,9 @@ export default function ShoppingAutoPricePage() {
                           <th key={`detail-axis-${index + 1}`} className="px-2 py-1">{`axis ${index + 1}`}</th>
                         ))}
                         <th className="px-2 py-1">매핑</th>
-                        <th className="px-2 py-1">저장기반 옵션가</th>
+                        <th className="px-2 py-1">실제 적용 옵션가</th>
+                        <th className="px-2 py-1">타겟 옵션가</th>
                         <th className="px-2 py-1">동기화 계산 옵션가</th>
-                        <th className="px-2 py-1">쇼핑몰 옵션가</th>
                         <th className="px-2 py-1">base 판매가</th>
                         <th className="px-2 py-1">최종 판매가 미리보기</th>
                         <th className="px-2 py-1">상태</th>
@@ -5548,10 +5639,10 @@ export default function ShoppingAutoPricePage() {
                         const savedTargetAdditionalAmount = variant.savedTargetAdditionalAmount == null ? null : Math.round(Number(variant.savedTargetAdditionalAmount));
                         const storefrontAdditionalAmount = variant.additionalAmount == null ? null : Math.round(Number(variant.additionalAmount));
                         const computedAdditionalAmount = Math.round(Number(computedVariantAdditionalByCode[variantCode] ?? 0));
-                        let syncState = "확인필요";
-                        if (savedTargetAdditionalAmount == null) syncState = "저장값없음";
-                        else if (storefrontAdditionalAmount === savedTargetAdditionalAmount) syncState = "일치";
-                        else if (storefrontAdditionalAmount != null) syncState = "불일치";
+                        const appliedTargetSummary = buildAppliedTargetSummary({
+                          appliedKrw: storefrontAdditionalAmount,
+                          targetKrw: savedTargetAdditionalAmount,
+                        });
                         return (
                           <tr key={variant.variantCode} className={`border-t border-[var(--hairline)] ${variantCode === focusedVariantCode ? "bg-[var(--panel)]" : ""}`}>
                             <td className="px-2 py-1">
@@ -5562,12 +5653,16 @@ export default function ShoppingAutoPricePage() {
                               <td key={`${variantCode}-axis-${index + 1}`} className="px-2 py-1">{axisCellText(variant.options[index])}</td>
                             ))}
                             <td className="px-2 py-1">{optionSummary(draft)}</td>
+                            <td className="px-2 py-1">{fmt(storefrontAdditionalAmount)}</td>
                             <td className="px-2 py-1">{fmt(savedTargetAdditionalAmount)}</td>
                             <td className="px-2 py-1">{fmt(computedAdditionalAmount)}</td>
-                            <td className="px-2 py-1">{fmt(variant.additionalAmount)}</td>
                             <td className="px-2 py-1">{fmt(editorPreview.price)}</td>
                             <td className="px-2 py-1">{editorPreview.price == null ? "-" : fmt(Math.max(Math.round(Number(editorPreview.price) + computedAdditionalAmount), previewEffectiveFloor))}</td>
-                            <td className="px-2 py-1">{syncState}</td>
+                            <td className="px-2 py-1">
+                              <span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold ${appliedTargetSummary.targetKrw == null ? "border border-slate-300 bg-slate-50 text-slate-700" : appliedTargetSummary.isMismatch ? "border border-amber-300 bg-amber-50 text-amber-900" : "border border-emerald-300 bg-emerald-50 text-emerald-900"}`}>
+                                {appliedTargetSummary.isMismatch && appliedTargetSummary.deltaKrw != null ? `${appliedTargetSummary.statusLabel} (${fmtSignedKrw(appliedTargetSummary.deltaKrw)})` : appliedTargetSummary.statusLabel}
+                              </span>
+                            </td>
                             <td className="px-2 py-1">
                               <Button size="sm" variant={variantCode === focusedVariantCode ? "secondary" : "ghost"} onClick={() => setFocusedVariantCode(variantCode)}>
                                 Focus

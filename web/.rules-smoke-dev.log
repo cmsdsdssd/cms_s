@@ -1,0 +1,13 @@
+
+> web@0.1.0 dev
+> next dev --hostname 127.0.0.1 --port 3000
+
+▲ Next.js 16.1.4 (Turbopack)
+- Local:         http://127.0.0.1:3000
+- Network:       http://127.0.0.1:3000
+- Environments: .env.local, .env
+
+✓ Starting...
+⨯ Unable to acquire lock at C:\Users\RICH\.gemini\antigravity\scratch\cms_s\web\.next\dev\lock, is another instance of next dev running?
+  Suggestion: If you intended to restart next dev, terminate the other process, and then try again.
+[?25h

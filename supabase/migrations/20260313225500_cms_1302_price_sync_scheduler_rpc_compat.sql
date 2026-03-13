@@ -1,33 +1,13 @@
 set search_path = public, pg_temp;
 
-create or replace function public.claim_price_sync_scheduler_lease_v1(
-  p_channel_id uuid,
-  p_lease_seconds integer,
-  p_owner_token text
-)
-returns jsonb
-language sql
-as $$
-  select public.claim_price_sync_scheduler_lease_v1(
-    p_channel_id := p_channel_id,
-    p_owner_token := p_owner_token,
-    p_lease_seconds := p_lease_seconds
-  );
-$$;
+-- cms_1301 already creates the canonical scheduler lease RPCs used by the app.
+-- Additional overloads make PostgREST RPC resolution ambiguous for claim and are
+-- not needed for release because the existing signature already matches the
+-- runtime call shape.
+-- Keep this migration as a no-op so fresh environments stay aligned with remote
+-- history without reintroducing the ambiguity.
 
-create or replace function public.release_price_sync_scheduler_lease_v1(
-  p_channel_id uuid,
-  p_error text,
-  p_owner_token text,
-  p_status text
-)
-returns jsonb
-language sql
-as $$
-  select public.release_price_sync_scheduler_lease_v1(
-    p_channel_id := p_channel_id,
-    p_owner_token := p_owner_token,
-    p_status := p_status,
-    p_error := p_error
-  );
-$$;
+do $$
+begin
+  null;
+end $$;

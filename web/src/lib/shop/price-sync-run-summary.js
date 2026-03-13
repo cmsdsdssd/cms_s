@@ -42,3 +42,14 @@ export const resolveNoIntentsReason = ({ thresholdFilteredCount, missingActiveMa
   if (Number(missingActiveMappingProductCount) > 0) return 'NO_ACTIVE_MAPPING_FOR_SNAPSHOT_ROWS';
   return 'NO_INTENTS';
 };
+
+
+export const buildThresholdProfileSummary = ({ channelThresholdProfile, effectiveThresholdProfile }) => ({
+  channelThresholdProfile: typeof channelThresholdProfile === 'string' && channelThresholdProfile.trim() ? channelThresholdProfile.trim() : null,
+  effectiveThresholdProfile: typeof effectiveThresholdProfile === 'string' && effectiveThresholdProfile.trim() ? effectiveThresholdProfile.trim() : null,
+  isOverrideActive: Boolean(
+    typeof channelThresholdProfile === 'string' && channelThresholdProfile.trim()
+    && typeof effectiveThresholdProfile === 'string' && effectiveThresholdProfile.trim()
+    && channelThresholdProfile.trim() !== effectiveThresholdProfile.trim(),
+  ),
+});

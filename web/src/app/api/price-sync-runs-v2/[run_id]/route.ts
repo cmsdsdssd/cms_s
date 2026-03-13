@@ -1,6 +1,7 @@
 ﻿import { NextResponse } from "next/server";
 import { getShopAdminClient, isMissingColumnError, jsonError } from "@/lib/shop/admin";
 import { buildSyncReasonSummary, inferSyncReasonCode, syncReasonMeta } from "@/lib/shop/sync-reasons";
+import { buildThresholdProfileSummary } from "@/lib/shop/price-sync-run-summary.js";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -74,13 +75,24 @@ export async function GET(_request: Request, { params }: Params) {
   if (!runRes.data) return jsonError("run not found", 404);
   if (intentRes.error) return jsonError(intentRes.error.message ?? "intent 조회 실패", 500);
 
+  const runRequestPayload = runRes.data?.request_payload && typeof runRes.data.request_payload === "object" && !Array.isArray(runRes.data.request_payload)
+    ? (runRes.data.request_payload as Record<string, unknown>)
+    : null;
+  const runSummaryPayload = runRequestPayload?.summary && typeof runRequestPayload.summary === "object" && !Array.isArray(runRequestPayload.summary)
+    ? (runRequestPayload.summary as Record<string, unknown>)
+    : null;
+  const channelThresholdProfile = typeof runSummaryPayload?.threshold_profile === "string"
+    ? runSummaryPayload.threshold_profile
+    : null;
+
+
   const intentRows = intentRes.data ?? [];
   const intents = intentRows as unknown as Array<Record<string, unknown>>;
   const intentIds = intents
     .map((row) => String(row.intent_id ?? "").trim())
     .filter(Boolean);
 
-  let taskByIntentId = new Map<string, {
+  const taskByIntentId = new Map<string, {
     state: string;
     last_error: string | null;
     raw_response_json: unknown;
@@ -137,6 +149,10 @@ export async function GET(_request: Request, { params }: Params) {
     const reasonMeta = reasonCode ? syncReasonMeta(reasonCode) : null;
 
     const decisionContext = toDecisionContext(row.decision_context_json ?? null);
+    const thresholdProfileSummary = buildThresholdProfileSummary({
+      channelThresholdProfile,
+      effectiveThresholdProfile: decisionContext?.threshold_profile ?? null,
+    });
     const snapshotDesiredPrice = toNullableNumber(row.desired_price_krw);
     const snapshotFloorPrice = toNullableNumber(row.floor_price_krw);
     const appliedTargetPrice = task?.applied_target_price_krw ?? null;
@@ -160,6 +176,9 @@ export async function GET(_request: Request, { params }: Params) {
       floor_price_krw: snapshotFloorPrice,
       floor_applied: row.floor_applied === true,
       decision_context: decisionContext,
+      channel_threshold_profile: thresholdProfileSummary.channelThresholdProfile,
+      effective_threshold_profile: thresholdProfileSummary.effectiveThresholdProfile,
+      threshold_profile_override_active: thresholdProfileSummary.isOverrideActive,
       threshold_profile: decisionContext?.threshold_profile ?? null,
       current_price_krw: decisionContext?.current_price_krw ?? null,
       base_target_price_krw: decisionContext?.base_target_price_krw ?? null,
@@ -199,6 +218,7 @@ export async function GET(_request: Request, { params }: Params) {
         run: {
           ...runRes.data,
           publish_version: runRes.data?.pinned_compute_request_id ?? null,
+          channel_threshold_profile: channelThresholdProfile,
         },
         intents: enrichedIntents,
         summary: {

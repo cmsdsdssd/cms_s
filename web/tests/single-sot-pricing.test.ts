@@ -5,6 +5,7 @@ import {
   buildOptionAxisBreakdownFromPublishedVariants,
   buildOptionAxisFromPublishedEntries,
   buildOptionEntryRowsFromBreakdown,
+  selectStorefrontBreakdownSource,
   validateAdditiveBreakdown,
 } from "../src/lib/shop/single-sot-pricing.js";
 
@@ -104,4 +105,23 @@ test("buildOptionAxisFromPublishedEntries adds display-only labels while preserv
       ],
     },
   ]);
+});
+
+
+test("prefer published storefront source when both published and canonical data exist", () => {
+  const result = selectStorefrontBreakdownSource({
+    canonicalOptionRows: [
+      { axis_index: 1, option_name: "색상", option_value: "골드", resolved_delta_krw: 0 },
+    ],
+    canonicalVariants: [
+      { variantCode: "V1", options: [{ name: "색상", value: "골드" }] },
+    ],
+    optionEntryRows: [
+      { option_axis_index: 1, option_name: "색상", option_value: "골드", published_delta_krw: 3000 },
+    ],
+  });
+
+  assert.equal(result.previewSource, "published_entries");
+  assert.equal(result.breakdown.byVariant[0]?.total_delta_krw, 3000);
+  assert.equal(result.axis.axes[0]?.values[0]?.delta_krw, 3000);
 });
