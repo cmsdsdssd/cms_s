@@ -16,6 +16,7 @@ import {
   type SyncRuleR4Row,
 } from "@/lib/shop/sync-rules";
 import { buildMaterialFactorMap, normalizeMaterialCode } from "@/lib/material-factors";
+import { loadEffectiveMarketTicks } from "@/lib/shop/effective-market-ticks.js";
 import {
   computeOptionLaborRuleBuckets,
   hasAnyActiveOptionLaborRule,
@@ -51,93 +52,19 @@ const isMissingSchemaObjectError = (value: unknown): boolean => {
   );
 };
 
-const toPositiveTick = (value: unknown): number => {
-  const n = Number(value);
-  return Number.isFinite(n) && n > 0 ? n : Number.NaN;
-};
-
-const readTickFromSymbol = async (
-  sb: ShopAdminClient,
-  symbol: string,
-): Promise<{ tick: number; source: string } | null> => {
-  const symbolText = String(symbol ?? "").trim();
-  if (!symbolText) return null;
-  const tickRes = await sb
-    .from("cms_v_market_tick_latest_by_symbol_ops_v1")
-    .select("price_krw_per_g")
-    .eq("symbol", symbolText)
-    .limit(1)
-    .maybeSingle();
-  if (tickRes.error) {
-    if (isMissingSchemaObjectError(tickRes.error)) return null;
-    throw new Error(errorMessageOf(tickRes.error) || "tick by symbol query failed");
-  }
-  const tick = toPositiveTick((tickRes.data as { price_krw_per_g?: unknown } | null)?.price_krw_per_g);
-  if (!Number.isFinite(tick)) return null;
-  return { tick, source: `cms_v_market_tick_latest_by_symbol_ops_v1:${symbolText}` };
-};
-
 const resolveMarketTicks = async (
   sb: ShopAdminClient,
 ): Promise<{ goldTick: number; silverTick: number; tickSource: string }> => {
-  const [cmsViewRes, roleRes, krxGoldRes] = await Promise.all([
-    sb
-      .from("cms_v_market_tick_latest_gold_silver_ops_v1")
-      .select("gold_price_krw_per_g, silver_price_krw_per_g")
-      .maybeSingle(),
-    sb
-      .from("cms_v_market_symbol_role_v1")
-      .select("role_code, symbol, is_active")
-      .in("role_code", ["GOLD", "SILVER"]),
-    readTickFromSymbol(sb, "KRX_GOLD_TICK"),
-  ]);
-
-  if (cmsViewRes.error && !isMissingSchemaObjectError(cmsViewRes.error)) {
-    throw new Error(errorMessageOf(cmsViewRes.error) || "cms tick view query failed");
-  }
-  if (roleRes.error && !isMissingSchemaObjectError(roleRes.error)) {
-    throw new Error(errorMessageOf(roleRes.error) || "market role mapping query failed");
-  }
-
-  const cmsGoldTick = toPositiveTick((cmsViewRes.data as { gold_price_krw_per_g?: unknown } | null)?.gold_price_krw_per_g);
-  const cmsSilverTick = toPositiveTick((cmsViewRes.data as { silver_price_krw_per_g?: unknown } | null)?.silver_price_krw_per_g);
-
-  const roleRows = (roleRes.data ?? []) as Array<{ role_code?: string | null; symbol?: string | null; is_active?: boolean | null }>;
-  const goldRoleSymbol = String(
-    roleRows.find((row) => String(row.role_code ?? "").toUpperCase() === "GOLD" && row.is_active !== false)?.symbol ?? "",
-  ).trim();
-  const silverRoleSymbol = String(
-    roleRows.find((row) => String(row.role_code ?? "").toUpperCase() === "SILVER" && row.is_active !== false)?.symbol ?? "",
-  ).trim();
-
-  const [goldRoleTickRes, silverRoleTickRes] = await Promise.all([
-    readTickFromSymbol(sb, goldRoleSymbol),
-    readTickFromSymbol(sb, silverRoleSymbol),
-  ]);
-
-  const roleGoldTick = goldRoleTickRes?.tick ?? Number.NaN;
-  const roleSilverTick = silverRoleTickRes?.tick ?? Number.NaN;
-  const krxGoldTick = krxGoldRes?.tick ?? Number.NaN;
-
-  const fallbackGoldTick = Number.isFinite(roleGoldTick) ? roleGoldTick : cmsGoldTick;
-  const goldTick = Number.isFinite(krxGoldTick) ? krxGoldTick : fallbackGoldTick;
-  const silverTick = Number.isFinite(roleSilverTick) ? roleSilverTick : cmsSilverTick;
-
-  if (!Number.isFinite(goldTick) || !Number.isFinite(silverTick)) {
+  const resolved = await loadEffectiveMarketTicks(sb);
+  const goldTick = Number(resolved.goldTickKrwPerG ?? Number.NaN);
+  const silverTick = Number(resolved.silverTickKrwPerG ?? Number.NaN);
+  if (!Number.isFinite(goldTick) || !Number.isFinite(silverTick) || goldTick <= 0 || silverTick <= 0) {
     throw new Error("unable to resolve valid gold/silver ticks");
   }
-
-  const tickSourceParts = [
-    Number.isFinite(krxGoldTick)
-      ? (krxGoldRes?.source ?? "cms_v_market_tick_latest_by_symbol_ops_v1:KRX_GOLD_TICK")
-      : (goldRoleTickRes?.source ?? "cms_v_market_tick_latest_gold_silver_ops_v1"),
-    silverRoleTickRes?.source ?? "cms_v_market_tick_latest_gold_silver_ops_v1",
-  ];
-
   return {
     goldTick,
     silverTick,
-    tickSource: `gold=${tickSourceParts[0]};silver=${tickSourceParts[1]}`,
+    tickSource: `gold=${resolved.tickSource.gold};silver=${resolved.tickSource.silver}`,
   };
 };
 

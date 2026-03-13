@@ -1,13 +1,13 @@
-﻿"use client";
+"use client";
 
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ActionBar } from "@/components/layout/action-bar";
-import { ShoppingPageHeader } from "@/components/layout/shopping-page-header";
+import { Activity, Settings as SettingsIcon, ShoppingBag } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
 import { Input, Select } from "@/components/ui/field";
 import { Sheet } from "@/components/ui/sheet";
+import { cn } from "@/lib/utils";
 import { shopApiGet, shopApiSend } from "@/lib/shop/http";
 import {
   buildCanonicalOptionRows,
@@ -232,6 +232,104 @@ type ProductEditorPreview = {
     selling: string | null;
     display: string | null;
   }>;
+};
+
+type AutoPriceSection =
+  | "storefront-preview"
+  | "basic-settings"
+  | "pricing-policy"
+  | "active-floor-guards"
+  | "run-create"
+  | "run-list"
+  | "run-intents"
+  | "status-intro"
+  | "status-linkage";
+
+type AutoPriceSectionGroup = {
+  key: string;
+  label: string;
+  icon: React.ReactNode;
+  items: Array<{
+    key: AutoPriceSection;
+    label: string;
+    desc: string;
+  }>;
+};
+
+const AUTO_PRICE_SECTION_GROUPS: AutoPriceSectionGroup[] = [
+  {
+    key: "storefront",
+    label: "쇼핑몰",
+    icon: <ShoppingBag className="h-4 w-4" />,
+    items: [
+      {
+        key: "storefront-preview",
+        label: "쇼핑몰 미리보기+상세수정",
+        desc: "상품 탐색 · 미리보기 · 상세수정",
+      },
+    ],
+  },
+  {
+    key: "settings",
+    label: "설정",
+    icon: <SettingsIcon className="h-4 w-4" />,
+    items: [
+      { key: "basic-settings", label: "기본설정", desc: "채널 · 바닥가 기본값" },
+      { key: "pricing-policy", label: "가격정책", desc: "마진 · 반올림 · threshold" },
+      { key: "active-floor-guards", label: "활성 바닥가격 목록", desc: "현재 floor guard 목록" },
+      { key: "run-create", label: "자동동기화RUN생성", desc: "수동 run 생성" },
+      { key: "run-list", label: "RUN목록", desc: "생성된 run 상태" },
+      { key: "run-intents", label: "RUN intent 상세", desc: "선택 run intent 상세" },
+    ],
+  },
+  {
+    key: "status",
+    label: "상태",
+    icon: <Activity className="h-4 w-4" />,
+    items: [
+      { key: "status-intro", label: "이 화면에서 하는 일", desc: "자동 가격 반영 목적과 흐름" },
+      { key: "status-linkage", label: "연동 상태(가시화)", desc: "마스터 ↔ 쇼핑몰 연결 현황" },
+    ],
+  },
+];
+
+const AUTO_PRICE_SECTION_META: Record<AutoPriceSection, { title: string; desc: string }> = {
+  "storefront-preview": {
+    title: "쇼핑몰 미리보기+상세수정",
+    desc: "쇼핑몰 상품을 탐색하고 미리보기와 상세수정을 같은 작업 흐름에서 처리합니다.",
+  },
+  "basic-settings": {
+    title: "기본설정",
+    desc: "채널, 마스터, 바닥가격 등 자동 가격 반영의 기본 기준을 관리합니다.",
+  },
+  "pricing-policy": {
+    title: "가격정책",
+    desc: "재계산과 자동동기화에 쓰이는 마진, 반올림, threshold 정책을 관리합니다.",
+  },
+  "active-floor-guards": {
+    title: "활성 바닥가격 목록",
+    desc: "현재 활성화된 바닥가격 guard를 조회합니다.",
+  },
+  "run-create": {
+    title: "자동동기화RUN생성",
+    desc: "수동으로 자동동기화 run을 생성해 push 대상을 준비합니다.",
+  },
+  "run-list": {
+    title: "RUN목록",
+    desc: "생성된 run들의 상태와 처리 건수를 확인합니다.",
+  },
+  "run-intents": {
+    title: "RUN intent 상세",
+    desc: "선택한 run의 intent와 사유 코드를 상세하게 확인합니다.",
+  },
+  "status-intro": {
+    title: "이 화면에서 하는 일",
+    desc: "자동 가격 반영 화면의 목적, 핵심 상태, 다음 작업을 한눈에 확인합니다.",
+  },
+  "status-linkage": {
+    title: "연동 상태(가시화)",
+    desc: "마스터와 자사몰 product_no/variant_code의 연결 상태를 가시화합니다.",
+  },
 };
 
 type MappingRow = {
@@ -4196,20 +4294,101 @@ export default function ShoppingAutoPricePage() {
       { label: "오류", value: `${counts?.error ?? 0}건`, tone: (counts?.error ?? 0) > 0 ? "warn" as const : "good" as const },
     ];
   }, [summaryQuery.data]);
+  const [activeSection, setActiveSection] = useState<AutoPriceSection>("storefront-preview");
+  const activeSectionMeta = AUTO_PRICE_SECTION_META[activeSection];
 
   return (
-    <div className="space-y-4">
-      <ActionBar title="자동 가격 반영" subtitle="신규 v2 파이프라인: floor guard + pinned compute + intent/outbox" />
+    <div className="flex h-[calc(100vh-4rem)] overflow-hidden bg-[var(--background)]">
+      <div className="w-80 flex-none border-r border-[var(--panel-border)] bg-[var(--panel)] z-20 shadow-xl flex flex-col">
+        <div className="p-4 border-b border-[var(--panel-border)] bg-[var(--panel)]">
+          <h2 className="text-lg font-bold flex items-center gap-2">
+            <SettingsIcon className="w-5 h-5" />
+            자동 가격 반영
+          </h2>
+          <p className="text-xs text-[var(--muted)] mt-1">settings와 같은 셸에서 쇼핑몰/설정/상태 작업을 분리합니다</p>
+        </div>
+        <div className="flex-1 overflow-y-auto p-2 space-y-4">
+          {AUTO_PRICE_SECTION_GROUPS.map((group) => (
+            <div key={group.key} className="space-y-1">
+              <div className="px-2 pt-1 pb-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--muted)] flex items-center gap-2">
+                {group.icon}
+                <span>{group.label}</span>
+              </div>
+              {group.items.map((section) => {
+                const isSelected = activeSection === section.key;
+                return (
+                  <button
+                    key={section.key}
+                    type="button"
+                    onClick={() => setActiveSection(section.key)}
+                    className={cn(
+                      "w-full text-left p-3 rounded-lg transition-all border group relative",
+                      isSelected
+                        ? "bg-[var(--chip)] border-[var(--primary)] shadow-sm"
+                        : "border-transparent hover:bg-[var(--panel-hover)]"
+                    )}
+                  >
+                    <div className="flex justify-between items-start mb-1">
+                      <span className={cn("font-bold text-sm", isSelected ? "text-[var(--primary)]" : "text-[var(--foreground)]")}>
+                        {section.label}
+                      </span>
+                    </div>
+                    <div className="text-[11px] text-[var(--muted)]">{section.desc}</div>
+                    {isSelected ? <div className="absolute left-0 top-0 bottom-0 w-1 bg-[var(--primary)] rounded-l-lg" /> : null}
+                  </button>
+                );
+              })}
+            </div>
+          ))}
+        </div>
+      </div>
 
-      <ShoppingPageHeader
-        purpose="저장된 계산 스냅샷(compute_request_id)을 기준으로 자동 반영하며, 바닥가격 아래로는 절대 반영하지 않습니다."
-        status={statusItems}
-        nextActions={[
-          { label: "동기화 로그", href: "/settings/shopping/sync-jobs" },
-          { label: "채널 설정", href: "/settings/shopping/channels" },
-        ]}
-      />
+      <div className="flex-1 flex flex-col min-w-0 bg-[var(--background)]">
+        <div className="shrink-0 border-b border-[var(--panel-border)] bg-[var(--panel)] p-6 shadow-sm z-10">
+          <div className="flex items-center gap-3 mb-1">
+            <h1 className="text-2xl font-bold tracking-tight">{activeSectionMeta.title}</h1>
+          </div>
+          <p className="text-sm text-[var(--muted)]">{activeSectionMeta.desc}</p>
+        </div>
 
+        <div className="flex-1 overflow-y-auto p-6 space-y-4">
+          {activeSection === "status-intro" ? (
+            <div className="space-y-4">
+              <Card>
+                <CardHeader title="이 화면에서 하는 일" description="신규 v2 파이프라인: floor guard + pinned compute + intent/outbox" />
+                <CardBody className="space-y-4">
+                  <div className="rounded-[var(--radius)] border border-[var(--hairline)] bg-[var(--panel)] p-4 text-sm leading-6 text-[var(--foreground)]">
+                    저장된 계산 스냅샷(`compute_request_id`)을 기준으로 자동 반영 대상을 만들고, 바닥가격 아래로는 절대 반영하지 않도록 운영하는 화면입니다.
+                  </div>
+                  <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
+                    {statusItems.map((item) => (
+                      <div key={item.label} className="rounded border border-[var(--hairline)] px-3 py-2 text-sm">
+                        <div className="text-[var(--muted)]">{item.label}</div>
+                        <div className="mt-1 font-semibold">{item.value}</div>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                    <div className="rounded border border-[var(--hairline)] bg-[var(--panel)] p-3 text-xs text-[var(--muted)] leading-5">
+                      <div className="mb-2 text-sm font-semibold text-[var(--foreground)]">작업 흐름</div>
+                      <p>1. 쇼핑몰 상품을 미리보기로 불러옵니다.</p>
+                      <p>2. 상세수정에서 옵션/판매가/프로필을 조정합니다.</p>
+                      <p>3. 정책과 run을 통해 자동동기화 대상을 생성/실행합니다.</p>
+                    </div>
+                    <div className="rounded border border-[var(--hairline)] bg-[var(--panel)] p-3 text-xs text-[var(--muted)] leading-5">
+                      <div className="mb-2 text-sm font-semibold text-[var(--foreground)]">바로가기</div>
+                      <div className="space-y-1">
+                        <a className="block rounded border border-[var(--hairline)] px-3 py-2 hover:bg-[var(--panel-hover)]" href="/settings/shopping/sync-jobs">동기화 로그</a>
+                        <a className="block rounded border border-[var(--hairline)] px-3 py-2 hover:bg-[var(--panel-hover)]" href="/settings/shopping/channels">채널 설정</a>
+                      </div>
+                    </div>
+                  </div>
+                </CardBody>
+              </Card>
+            </div>
+          ) : null}
+
+          {activeSection === "status-linkage" ? (
       <Card>
         <CardHeader title="연동 상태(가시화)" description="마스터 ↔ 자사몰 product_no ↔ variant_code 연결 현황" />
         <CardBody className="space-y-3">
@@ -4244,7 +4423,10 @@ export default function ShoppingAutoPricePage() {
           </div>
         </CardBody>
       </Card>
+          ) : null}
 
+          {activeSection === "storefront-preview" ? (
+      <>
       <Card>
         <CardHeader title="쇼핑몰 미리보기 + 상세수정" description="소비자가/판매가/진열상태/옵션가격(additional_amount) 조회·수정" />
         <CardBody className="space-y-3">
@@ -5413,7 +5595,10 @@ export default function ShoppingAutoPricePage() {
           </div>
         </div>
       </Sheet>
+      </>
+          ) : null}
 
+          {activeSection === "basic-settings" ? (
       <Card>
         <CardHeader title="기본 설정" description="채널, 바닥가격, 실행 주기" />
         <CardBody className="grid grid-cols-1 gap-3 md:grid-cols-4">
@@ -5431,7 +5616,9 @@ export default function ShoppingAutoPricePage() {
         </CardBody>
         <div className="px-6 pb-6 text-xs text-[var(--muted)]">바닥가격은 최종 판매가 KRW 기준으로 적용됩니다.</div>
       </Card>
+          ) : null}
 
+          {activeSection === "pricing-policy" ? (
       <Card>
         <CardHeader title="가격 정책(마진/반올림)" description="재계산(recompute) 시 적용되는 기준값" />
         <CardBody className="space-y-3">
@@ -5477,8 +5664,10 @@ export default function ShoppingAutoPricePage() {
           {policySaveError ? <p className="text-xs text-red-500">{policySaveError}</p> : null}
         </CardBody>
       </Card>
+          ) : null}
 
-      <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+          {activeSection === "active-floor-guards" ? (
+      <div className="grid grid-cols-1 gap-4">
         <Card>
           <CardHeader title="활성 바닥가격 목록" description={`${guardsQuery.data?.data.length ?? 0}건`} />
           <CardBody>
@@ -5504,7 +5693,11 @@ export default function ShoppingAutoPricePage() {
             </div>
           </CardBody>
         </Card>
+      </div>
+          ) : null}
 
+          {activeSection === "run-create" ? (
+      <div className="grid grid-cols-1 gap-4">
         <Card>
           <CardHeader title="자동동기화 Run 생성" description="생성 후 실행 버튼으로 push" />
           <CardBody className="space-y-3">
@@ -5541,8 +5734,10 @@ export default function ShoppingAutoPricePage() {
           </CardBody>
         </Card>
       </div>
+          ) : null}
 
-      <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+          {activeSection === "run-list" ? (
+      <div className="grid grid-cols-1 gap-4">
         <Card>
           <CardHeader title="Run 목록" description={`${runsQuery.data?.data.length ?? 0}건`} />
           <CardBody>
@@ -5579,7 +5774,11 @@ export default function ShoppingAutoPricePage() {
             </div>
           </CardBody>
         </Card>
+      </div>
+          ) : null}
 
+          {activeSection === "run-intents" ? (
+      <div className="grid grid-cols-1 gap-4">
         <Card>
           <CardHeader title="Run Intent 상세" description={`${runDetailQuery.data?.data.intents.length ?? 0}건`} />
           <CardBody>
@@ -5677,6 +5876,9 @@ export default function ShoppingAutoPricePage() {
             </div>
           </CardBody>
         </Card>
+      </div>
+          ) : null}
+        </div>
       </div>
     </div>
   );

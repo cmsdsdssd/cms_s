@@ -2,6 +2,7 @@
 import { getShopAdminClient, jsonError, parseJsonObject } from "@/lib/shop/admin";
 import { ensureActiveSyncRuleSet } from "@/lib/shop/active-sync-rule-set";
 import {
+  buildPlatingComboChoices,
   buildMaterialPurityMap,
   getMaterialPurityFromMap,
   isRangeMatched,
@@ -15,8 +16,10 @@ import {
   type SyncRuleR3Row,
   type SyncRuleR4Row,
 } from "@/lib/shop/sync-rules";
-import { normalizeMaterialCode } from "@/lib/material-factors";
-import { computeOptionLaborRuleBuckets, hasAnyActiveOptionLaborRule } from "@/lib/shop/option-labor-rules";
+import { buildMaterialFactorMap, normalizeMaterialCode } from "@/lib/material-factors";
+import { loadEffectiveMarketTicks } from "@/lib/shop/effective-market-ticks.js";
+import { hasAnyActiveOptionLaborRule, type OptionLaborRuleRow } from "@/lib/shop/option-labor-rules";
+import { composePreviewOptionSotDeltas } from "@/lib/shop/preview-option-sot.js";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -54,27 +57,6 @@ type MappingRow = {
   sync_rule_material_enabled?: boolean | null;
 };
 
-type OptionLaborRuleRow = {
-  rule_id: string;
-  channel_id: string;
-  master_item_id: string;
-  external_product_no: string;
-  category_key: "MATERIAL" | "SIZE" | "COLOR_PLATING" | "DECOR" | "OTHER";
-  scope_material_code: string | null;
-  additional_weight_g: number | null;
-  additional_weight_min_g: number | null;
-  additional_weight_max_g: number | null;
-  plating_enabled: boolean | null;
-  color_code: string | null;
-  decoration_master_id: string | null;
-  decoration_model_name: string | null;
-  base_labor_cost_krw: number;
-  additive_delta_krw: number;
-  is_active: boolean;
-  note?: string | null;
-};
-
-
 type CandidatePreview = {
   channel_product_id: string;
   master_item_id: string;
@@ -96,6 +78,11 @@ type CandidatePreview = {
   hit_r3_rule_id: string | null;
   hit_r4_rule_id: string | null;
   bucket_source: "LEGACY_SYNC_RULES" | "OPTION_LABOR_RULES";
+  color_base_delta_krw: number;
+  color_exception_delta_krw: number;
+  color_resolved_delta_krw: number | null;
+  color_sot_status: "VALID" | "UNRESOLVED" | "LEGACY_OUT_OF_RANGE" | null;
+  color_sot_warnings: string[];
   missing_rules: string[];
 };
 
@@ -105,6 +92,14 @@ type MasterRow = {
   category_code: string | null;
   weight_default_g: number | null;
   deduction_weight_default_g: number | null;
+};
+
+type ColorComboRow = {
+  combo_key: string | null;
+  display_name?: string | null;
+  base_delta_krw: number | null;
+  sort_order?: number | null;
+  is_active?: boolean | null;
 };
 
 export async function POST(request: Request) {
@@ -138,11 +133,11 @@ export async function POST(request: Request) {
     mappingQuery.eq("sync_rule_set_id", ruleSetId);
   }
 
-  const [mapRes, masterRes, tickRes, krxGoldTickRes, policyRes, purityRes, r1Res, r2Res, r3Res, r4Res, optionLaborRuleRes] = await Promise.all([
+  const effectiveTicks = await loadEffectiveMarketTicks(sb);
+
+  const [mapRes, masterRes, policyRes, purityRes, r1Res, r2Res, r3Res, r4Res, optionLaborRuleRes, colorComboRes] = await Promise.all([
     mappingQuery,
     sb.from("cms_master_item").select("master_item_id, material_code_default, category_code, weight_default_g, deduction_weight_default_g"),
-    sb.from("cms_v_market_tick_latest_gold_silver_ops_v1").select("gold_price_krw_per_g, silver_price_krw_per_g").maybeSingle(),
-    sb.from("cms_v_market_tick_latest_by_symbol_ops_v1").select("price_krw_per_g").eq("symbol", "KRX_GOLD_TICK").limit(1).maybeSingle(),
     sb.from("pricing_policy").select("option_18k_weight_multiplier").eq("channel_id", channelId).eq("is_active", true).order("updated_at", { ascending: false }).limit(1).maybeSingle(),
     sb.from("cms_material_factor_config").select("material_code, purity_rate, material_adjust_factor, gold_adjust_factor, price_basis"),
     sb.from("sync_rule_r1_material_delta").select("rule_id, rule_set_id, source_material_code, target_material_code, match_category_code, weight_min_g, weight_max_g, option_weight_multiplier, rounding_unit, rounding_mode, priority, is_active").eq("rule_set_id", ruleSetId).eq("is_active", true).order("priority", { ascending: true }),
@@ -150,9 +145,10 @@ export async function POST(request: Request) {
     sb.from("sync_rule_r3_color_margin").select("rule_id, rule_set_id, color_code, margin_min_krw, margin_max_krw, delta_krw, rounding_unit, rounding_mode, priority, is_active").eq("rule_set_id", ruleSetId).eq("is_active", true).order("priority", { ascending: true }),
     sb.from("sync_rule_r4_decoration").select("rule_id, rule_set_id, linked_r1_rule_id, match_decoration_code, match_material_code, match_color_code, match_category_code, delta_krw, rounding_unit, rounding_mode, priority, is_active").eq("rule_set_id", ruleSetId).eq("is_active", true).order("priority", { ascending: true }),
     sb.from("channel_option_labor_rule_v1").select("master_item_id, external_product_no, category_key, scope_material_code, additional_weight_g, additional_weight_min_g, additional_weight_max_g, plating_enabled, color_code, decoration_master_id, decoration_model_name, base_labor_cost_krw, additive_delta_krw, is_active, note").eq("channel_id", channelId),
+    sb.from("channel_color_combo_catalog_v1").select("combo_key, base_delta_krw, is_active").eq("channel_id", channelId),
   ]);
 
-  for (const r of [mapRes, masterRes, tickRes, policyRes, purityRes, r1Res, r2Res, r3Res, r4Res]) {
+  for (const r of [mapRes, masterRes, policyRes, purityRes, r1Res, r2Res, r3Res, r4Res, colorComboRes]) {
     if (r.error) return jsonError(r.error.message ?? "preview 議고쉶 ?ㅽ뙣", 500);
   }
   if (optionLaborRuleRes.error && !isMissingSchemaObjectError(optionLaborRuleRes.error)) {
@@ -203,6 +199,17 @@ export async function POST(request: Request) {
     material_adjust_factor: Number(r.material_adjust_factor ?? Number.NaN),
     gold_adjust_factor: Number(r.gold_adjust_factor ?? Number.NaN),
   })));
+  const materialFactorMap = buildMaterialFactorMap((purityRes.data ?? []).map((r) => ({
+    material_code: normalizeMaterialCode(String(r.material_code ?? "")),
+    purity_rate: Number(r.purity_rate ?? 0),
+    material_adjust_factor: Number(r.material_adjust_factor ?? r.gold_adjust_factor ?? 1),
+    gold_adjust_factor: Number(r.gold_adjust_factor ?? r.material_adjust_factor ?? 1),
+    price_basis: String(r.price_basis ?? "").toUpperCase() === "SILVER"
+      ? "SILVER"
+      : String(r.price_basis ?? "").toUpperCase() === "NONE"
+        ? "NONE"
+        : "GOLD",
+  })));
   const materialAdjustMap = new Map<string, number>();
   const materialBasisMap = new Map<string, "GOLD" | "SILVER" | "NONE">();
   for (const row of purityRes.data ?? []) {
@@ -214,6 +221,13 @@ export async function POST(request: Request) {
     const basis = basisRaw === "SILVER" ? "SILVER" : basisRaw === "NONE" ? "NONE" : "GOLD";
     materialBasisMap.set(code, basis);
   }
+  const factorMultiplierByMaterialCode = Object.fromEntries(materialAdjustMap.entries());
+  const colorBaseDeltaByCode = new Map<string, number>(
+    buildPlatingComboChoices({
+      catalogRows: (colorComboRes.data ?? []) as ColorComboRow[],
+      includeStandard: false,
+    }).map((choice) => [choice.value, Math.max(0, Math.round(Number(choice.delta_krw ?? 0)))]),
+  );
   const tickByMaterialCode = (materialCodeRaw: string): number => {
     const code = normalizeMaterialCode(materialCodeRaw);
     const basis = materialBasisMap.get(code);
@@ -223,10 +237,8 @@ export async function POST(request: Request) {
     return isSilverMaterial(code) ? silverTick : goldTick;
   };
 
-  const defaultGoldTick = toNum(tickRes.data?.gold_price_krw_per_g, 0);
-  const silverTick = toNum(tickRes.data?.silver_price_krw_per_g, 0);
-  const krxGoldTick = !krxGoldTickRes.error ? toNum(krxGoldTickRes.data?.price_krw_per_g, Number.NaN) : Number.NaN;
-  const goldTick = Number.isFinite(krxGoldTick) && krxGoldTick > 0 ? krxGoldTick : defaultGoldTick;
+  const silverTick = toNum(effectiveTicks.silverTickKrwPerG, 0);
+  const goldTick = toNum(effectiveTicks.goldTickKrwPerG, 0);
   const default18kMul = Math.max(toNum(policyRes.data?.option_18k_weight_multiplier, 1.2), 0.000001);
 
   const r1Rules = (r1Res.data ?? []) as SyncRuleR1Row[];
@@ -311,26 +323,50 @@ export async function POST(request: Request) {
     let hitR3: string | null = null;
     let hitR4: string | null = null;
     let bucketSource: CandidatePreview["bucket_source"] = "LEGACY_SYNC_RULES";
+    let colorBaseDelta = 0;
+    let colorExceptionDelta = 0;
+    let colorResolvedDelta: number | null = null;
+    let colorSotStatus: CandidatePreview["color_sot_status"] = null;
+    let colorSotWarnings: string[] = [];
     const optionLaborRows = externalProductNo ? resolveOptionLaborRulesForContext(m.master_item_id, externalProductNo) : [];
     const usesOptionLaborRules = hasAnyActiveOptionLaborRule(optionLaborRows);
     const resolvedDecorationMasterId = decorationMasterIdByCode.get(decorationCode)
       ?? (/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(decorationCode) ? decorationCode : null);
 
     if (usesOptionLaborRules) {
-      const buckets = computeOptionLaborRuleBuckets(optionLaborRows, {
-        materialCode: targetMaterial,
-        additionalWeightG: sizeWeightDelta,
-        platingEnabled: colorCode.length > 0,
-        colorCode: colorCode || null,
-        decorationCode: decorationCode || null,
-        decorationMasterId: resolvedDecorationMasterId,
+      const buckets = composePreviewOptionSotDeltas({
+        optionLaborRows,
+        masterItemId: m.master_item_id,
+        externalProductNo,
+        marketContext: {
+          goldTickKrwPerG: goldTick,
+          silverTickKrwPerG: silverTick,
+          materialFactors: materialFactorMap,
+          factorMultiplierByMaterialCode,
+        },
+        colorBaseDeltaByCode: Object.fromEntries(colorBaseDeltaByCode.entries()),
+        context: {
+          materialCode: targetMaterial,
+          additionalWeightG: sizeValue !== null && Number.isFinite(sizeValue) ? sizeValue : sizeWeightDelta,
+          platingEnabled: colorCode.length > 0,
+          colorCode: colorCode || null,
+          decorationCode: decorationCode || null,
+          decorationMasterId: resolvedDecorationMasterId,
+        },
       });
-      r1Delta = Math.round(buckets.material);
-      r2Delta = Math.round(buckets.size);
-      r3Delta = Math.round(buckets.colorPlating);
-      r4Delta = Math.round(buckets.decor);
-      otherDelta = Math.round(buckets.other);
-      bucketSource = "OPTION_LABOR_RULES";
+      r1Delta = buckets.material_delta_krw;
+      r2Delta = buckets.size_delta_krw;
+      r3Delta = buckets.color_delta_krw;
+      r4Delta = buckets.decor_delta_krw;
+      otherDelta = buckets.other_delta_krw;
+      bucketSource = buckets.bucketSource === "LEGACY_SYNC_RULES" ? "LEGACY_SYNC_RULES" : "OPTION_LABOR_RULES";
+      colorBaseDelta = buckets.color_base_delta_krw;
+      colorExceptionDelta = buckets.color_exception_delta_krw;
+      colorResolvedDelta = buckets.color_resolved_delta_krw;
+      colorSotStatus = buckets.sot_status === 'VALID' || buckets.sot_status === 'UNRESOLVED' || buckets.sot_status === 'LEGACY_OUT_OF_RANGE'
+        ? buckets.sot_status
+        : null;
+      colorSotWarnings = buckets.sot_warnings;
     } else for (const rule of r1Rules) {
       const src = normalizeOptionalMaterialCode(rule.source_material_code);
       const tgt = normalizeOptionalMaterialCode(rule.target_material_code);
@@ -418,6 +454,8 @@ export async function POST(request: Request) {
       if (!hitR2) missingRules.push("R2");
       if (!hitR3) missingRules.push("R3");
       if (!hitR4) missingRules.push("R4");
+    } else if (colorCode && colorSotStatus !== null && colorSotStatus !== "VALID") {
+      missingRules.push("COLOR_SOT");
     }
 
     const candidate: CandidatePreview = {
@@ -441,6 +479,11 @@ export async function POST(request: Request) {
       hit_r3_rule_id: hitR3,
       hit_r4_rule_id: hitR4,
       bucket_source: bucketSource,
+      color_base_delta_krw: colorBaseDelta,
+      color_exception_delta_krw: colorExceptionDelta,
+      color_resolved_delta_krw: colorResolvedDelta,
+      color_sot_status: colorSotStatus,
+      color_sot_warnings: colorSotWarnings,
       missing_rules: missingRules,
     };
 

@@ -1,4 +1,4 @@
-export type OptionRuleCategoryFlags = {
+﻿export type OptionRuleCategoryFlags = {
   material: boolean;
   size: boolean;
   colorPlating: boolean;
@@ -78,11 +78,7 @@ export const composeOptionDeltaBuckets = (input: OptionDeltaBucketInput): Option
     size = round(input.sizePriceOverrideKrw);
   }
 
-  let color = fromRuleOrFallback(
-    input.activeRuleCategories.colorPlating,
-    round(input.colorComboBaseDelta) + round(input.optionLaborRuleResult?.colorPlating),
-    round(input.colorComboBaseDelta) + input.ruleDeltas.color + input.categoryScopedDeltaBuckets.colorPlating,
-  );
+  let color = round(input.colorComboBaseDelta);
   if (Number.isFinite(Number(input.colorAxisResolvedAmount ?? Number.NaN))) {
     color = round(input.colorAxisResolvedAmount);
   }

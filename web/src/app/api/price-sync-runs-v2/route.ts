@@ -308,13 +308,77 @@ export async function GET(request: Request) {
 
   const runsRes = await sb
     .from("price_sync_run_v2")
-    .select("run_id, channel_id, pinned_compute_request_id, interval_minutes, trigger_type, status, total_count, success_count, failed_count, skipped_count, started_at, finished_at, error_message, created_at")
+    .select("run_id, channel_id, pinned_compute_request_id, interval_minutes, trigger_type, status, total_count, success_count, failed_count, skipped_count, started_at, finished_at, error_message, request_payload, created_at")
     .eq("channel_id", channelId)
     .order("started_at", { ascending: false })
     .limit(limit);
 
   if (runsRes.error) return jsonError(runsRes.error.message ?? "?癒?짗??녿┛??run 鈺곌퀬????쎈솭", 500);
-  return NextResponse.json({ data: runsRes.data ?? [] }, { headers: { "Cache-Control": "no-store" } });
+
+  const activeMapRes = await sb
+    .from("sales_channel_product")
+    .select("channel_product_id, master_item_id, current_product_sync_profile")
+    .eq("channel_id", channelId)
+    .eq("is_active", true);
+  if (activeMapRes.error) return jsonError(activeMapRes.error.message ?? "active mapping 조회 실패", 500);
+
+  const scheduleRes = await sb
+    .from("price_sync_master_schedule_v1")
+    .select("master_item_id, effective_sync_profile, cadence_minutes, next_due_at, last_evaluated_at")
+    .eq("channel_id", channelId);
+  const scheduleRows = scheduleRes.error ? [] : (scheduleRes.data ?? []);
+
+  const leaseRes = await sb
+    .from("price_sync_scheduler_lease_v1")
+    .select("channel_id, owner_token, lease_expires_at, last_tick_started_at, last_tick_finished_at, last_tick_status, last_tick_error, updated_at")
+    .eq("channel_id", channelId)
+    .maybeSingle();
+  const lease = leaseRes.error ? null : (leaseRes.data ?? null);
+
+  const nowIso = new Date().toISOString();
+  const activeMapRows = activeMapRes.data ?? [];
+  const activeMasterIds = Array.from(new Set(activeMapRows.map((row) => String(row.master_item_id ?? "").trim()).filter(Boolean)));
+  const profileByMaster = buildCurrentProductSyncProfileByMaster(activeMapRows as ActiveMappingRow[]);
+  const dueMasterIds = activeMasterIds.filter((masterItemId) => {
+    const scheduleRow = scheduleRows.find((row) => String(row.master_item_id ?? "").trim() === masterItemId) ?? null;
+    if (!scheduleRow) return true;
+    const nextDueAtMs = toMs(scheduleRow.next_due_at);
+    return nextDueAtMs === null || nextDueAtMs <= Date.parse(nowIso);
+  });
+  const dueProfileCounts = dueMasterIds.reduce<Record<string, number>>((acc, masterItemId) => {
+    const profile = String(profileByMaster.get(masterItemId) ?? "GENERAL").trim() || "GENERAL";
+    acc[profile] = (acc[profile] ?? 0) + 1;
+    return acc;
+  }, {});
+
+  const runs = (runsRes.data ?? []).map((row) => {
+    const payload = row.request_payload && typeof row.request_payload === "object" && !Array.isArray(row.request_payload)
+      ? (row.request_payload as Record<string, unknown>)
+      : null;
+    const scopeMasterItemIds = payload && Array.isArray(payload.scope_master_item_ids)
+      ? payload.scope_master_item_ids.filter((value): value is string => typeof value === "string")
+      : [];
+    const schedulerReason = payload ? String(payload.scheduler_reason ?? "").trim() || null : null;
+    return {
+      ...row,
+      publish_version: row.pinned_compute_request_id,
+      due_master_count: scopeMasterItemIds.length || null,
+      scheduler_reason: schedulerReason,
+    };
+  });
+
+  return NextResponse.json({
+    data: runs,
+    scheduler: {
+      active_master_count: activeMasterIds.length,
+      scheduled_master_count: scheduleRows.length,
+      due_master_count: dueMasterIds.length,
+      due_profile_counts: dueProfileCounts,
+      lease,
+      migration_ready: !scheduleRes.error && !leaseRes.error,
+      migration_error: scheduleRes.error?.message ?? leaseRes.error?.message ?? null,
+    },
+  }, { headers: { "Cache-Control": "no-store" } });
 }
 
 export async function POST(request: Request) {

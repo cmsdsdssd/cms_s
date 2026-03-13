@@ -13,6 +13,7 @@ import {
 import { POST as recomputePost } from "@/app/api/pricing/recompute/route";
 import { POST as pushPost } from "@/app/api/channel-prices/push/route";
 import { resolveCurrentProductSyncProfile } from "@/lib/shop/current-product-sync-profile.js";
+import { loadEffectiveMarketTicks } from "@/lib/shop/effective-market-ticks.js";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -234,11 +235,7 @@ async function loadEditorMeta(
   masterItemId: string,
   preferredExternalProductNo?: string,
 ): Promise<EditorMeta> {
-  const tickRes = await sb
-    .from("cms_v_market_tick_latest_gold_silver_ops_v1")
-    .select("gold_price_krw_per_g, silver_price_krw_per_g")
-    .maybeSingle();
-  if (tickRes.error) throw new Error(tickRes.error.message ?? "시세 조회 실패");
+  const effectiveTicks = await loadEffectiveMarketTicks(sb);
 
   const productNos = normalizeProductNoCandidates(externalProductNos);
   let stateLatestQuery = sb
@@ -355,8 +352,8 @@ async function loadEditorMeta(
     exclude_plating_labor: excludePlatingLabor,
     plating_labor_sell_krw: platingSell,
     total_labor_sell_krw: Math.max(0, resolvedTotalLaborSell),
-    tick_gold_krw_per_g: toIntCeilNonNegative((tickRes.data as { gold_price_krw_per_g?: number } | null)?.gold_price_krw_per_g ?? 0),
-    tick_silver_krw_per_g: toIntCeilNonNegative((tickRes.data as { silver_price_krw_per_g?: number } | null)?.silver_price_krw_per_g ?? 0),
+    tick_gold_krw_per_g: toIntCeilNonNegative(effectiveTicks.goldTickKrwPerG ?? 0),
+    tick_silver_krw_per_g: toIntCeilNonNegative(effectiveTicks.silverTickKrwPerG ?? 0),
     current_product_sync_profile: resolveCurrentProductSyncProfile(mappingProfileRows),
   };
 }
@@ -1237,8 +1234,8 @@ export async function POST(request: Request) {
     exclude_plating_labor: excludePlatingLabor,
     plating_labor_sell_krw: platingSell,
     total_labor_sell_krw: totalLaborAdjusted,
-    tick_gold_krw_per_g: toIntCeilNonNegative((tickRes.data as { gold_price_krw_per_g?: number } | null)?.gold_price_krw_per_g ?? 0),
-    tick_silver_krw_per_g: toIntCeilNonNegative((tickRes.data as { silver_price_krw_per_g?: number } | null)?.silver_price_krw_per_g ?? 0),
+    tick_gold_krw_per_g: toIntCeilNonNegative(editorMetaBefore.tick_gold_krw_per_g ?? 0),
+    tick_silver_krw_per_g: toIntCeilNonNegative(editorMetaBefore.tick_silver_krw_per_g ?? 0),
     current_product_sync_profile: currentProductSyncProfile ?? editorMetaBefore.current_product_sync_profile,
   };
 

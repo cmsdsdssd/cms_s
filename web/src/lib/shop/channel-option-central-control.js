@@ -1,4 +1,4 @@
-import { resolvePersistedSizeGridCell } from "./weight-grid-store.js";
+﻿import { resolvePersistedSizeGridCell } from "./weight-grid-store.js";
 import { normalizePlatingComboCode } from "./sync-rules.ts";
 
 const WEIGHT_MIN_CENTIGRAM = 0;
@@ -216,32 +216,10 @@ export const resolveCentralOptionMapping = ({
     const baseColorDelta = colorBaseDeltaByCode && typeof colorBaseDeltaByCode === "object"
       ? toRoundedKrw(colorBaseDeltaByCode[base.color_code_selected] ?? 0)
       : 0;
-    const matched = activeRules.filter((rule) => {
-      return rule.rule_type === "COLOR"
-        && rule.material_code === base.material_code_resolved
-        && rule.color_code === base.color_code_selected;
-    });
-    if (matched.length === 0) {
-      return {
-        ...base,
-        resolved_delta_krw: baseColorDelta,
-        source_rule_entry_ids: [],
-      };
-    }
-    const allowedAmounts = [...new Set(matched.map((rule) => toRoundedKrw(rule.delta_krw)))].sort((left, right) => left - right);
-    if (allowedAmounts.length !== 1) {
-      return markUnresolved(base, "색상 중앙 규칙이 하나로 결정되지 않습니다.");
-    }
-    const resolvedAdditive = allowedAmounts[0] ?? 0;
-    const resolvedAmount = baseColorDelta + resolvedAdditive;
-    const sourceRuleEntryIds = matched
-      .filter((rule) => toRoundedKrw(rule.delta_krw) === resolvedAdditive)
-      .map((rule) => rule.rule_id)
-      .filter(Boolean);
     return {
       ...base,
-      resolved_delta_krw: resolvedAmount,
-      source_rule_entry_ids: sourceRuleEntryIds,
+      resolved_delta_krw: baseColorDelta,
+      source_rule_entry_ids: [],
     };
   }
 

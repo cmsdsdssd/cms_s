@@ -20,7 +20,7 @@ export async function GET() {
     supabase
       .schema("public")
       .from("cms_party")
-      .select("party_id,name,party_type,note")
+      .select("party_id,name,party_type,phone,region,address,is_active,note,cms_vendor_fax_config!left(config_id,fax_number,fax_provider,is_active)")
       .eq("party_type", "vendor")
       .order("name"),
     supabase

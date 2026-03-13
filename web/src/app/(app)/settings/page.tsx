@@ -80,6 +80,11 @@ type VendorFaxConfigRow = {
   }[];
 };
 
+type VendorsApiResponse = {
+  data?: VendorFaxConfigRow[];
+  error?: string;
+};
+
 type PricingRuleComponent = "BASE_LABOR" | "SETTING" | "STONE" | "PACKAGE";
 type PricingRuleScope = "ANY" | "SELF" | "PROVIDED" | "FACTORY";
 type PricingRuleApplyUnit = "PER_PIECE" | "PER_STONE" | "PER_G";
@@ -164,6 +169,26 @@ function tabFromRule(rule: PricingRuleRow): GlobalRuleTab {
   if (rule.component === "STONE") return "STONE_FACTORY";
   if (rule.component === "SETTING") return "PLATING_GLOBAL";
   return "BASE_FACTORY";
+}
+
+type SizeGridRebuildResponse = {
+  ok?: boolean;
+  scope_count?: number;
+  rebuilt_count?: number;
+  error?: string;
+};
+
+async function rebuildPersistedSizeGrids(params?: { materialCodes?: string[] }): Promise<SizeGridRebuildResponse> {
+  const response = await fetch("/api/option-labor-rules/rebuild-size-grids", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ material_codes: params?.materialCodes ?? null }),
+  });
+  const payload = (await response.json().catch(() => ({}))) as SizeGridRebuildResponse;
+  if (!response.ok) {
+    throw new Error(String(payload?.error ?? "size grid rebuild failed"));
+  }
+  return payload;
 }
 
 export default function SettingsPage() {
@@ -354,11 +379,19 @@ export default function SettingsPage() {
         p_cs_correction_factor: cs,
         p_silver_kr_correction_factor: kr,
       });
-      cfgQuery.refetch();
     } catch {
-      // useRpcMutation.onError에서 토스트 처리됨
+      return;
     }
 
+    cfgQuery.refetch();
+
+    try {
+      await rebuildPersistedSizeGrids();
+    } catch (error) {
+      toast.error("시세 저장은 완료됐지만 사이즈 그리드 재빌드에 실패했습니다.", {
+        description: error instanceof Error ? error.message : "size grid rebuild failed",
+      });
+    }
   };
 
   const onSaveMaterialFactors = async () => {
@@ -375,6 +408,7 @@ export default function SettingsPage() {
         price_basis: priceBasis,
       };
     });
+    const changedMaterialCodes = Object.keys(materialFactorEdits) as MaterialCode[];
 
     for (const row of rows) {
       if (!Number.isFinite(row.purity_rate) || row.purity_rate < 0 || row.purity_rate > 1) {
@@ -399,7 +433,15 @@ export default function SettingsPage() {
         p_memo: "settings: material factor upsert",
       });
     } catch {
-      // useRpcMutation.onError handles toast
+      return;
+    }
+
+    try {
+      await rebuildPersistedSizeGrids({ materialCodes: changedMaterialCodes });
+    } catch (error) {
+      toast.error("소재 함량/보정 저장은 완료됐지만 사이즈 그리드 재빌드에 실패했습니다.", {
+        description: error instanceof Error ? error.message : "size grid rebuild failed",
+      });
     }
   };
 
@@ -437,32 +479,14 @@ export default function SettingsPage() {
   const vendorsQuery = useQuery({
     queryKey: ["cms_vendor_fax_configs"],
     queryFn: async (): Promise<VendorFaxConfig[]> => {
-      if (!sb) throw new Error("Supabase env is missing");
+      const response = await fetch("/api/vendors", { cache: "no-store" });
+      const payload = (await response.json()) as VendorsApiResponse;
+      if (!response.ok) {
+        throw new Error(payload.error ?? "거래처 조회 실패");
+      }
+      const data = payload.data ?? [];
 
-      // Get vendors from party table with fax config
-      const { data, error } = await sb
-        .from("cms_party")
-        .select(`
-          party_id,
-          name,
-          phone,
-          region,
-          address,
-          is_active,
-          note,
-          cms_vendor_fax_config!left(
-            config_id,
-            fax_number,
-            fax_provider,
-            is_active
-          )
-        `)
-        .eq("party_type", "vendor")
-        .order("name");
-
-      if (error) throw error;
-
-      return (data || []).map((v: VendorFaxConfigRow) => ({
+      return data.map((v: VendorFaxConfigRow) => ({
         config_id: v.cms_vendor_fax_config?.[0]?.config_id || "",
         vendor_party_id: v.party_id,
         vendor_name: v.name,
@@ -1906,7 +1930,7 @@ export default function SettingsPage() {
 
             <div className="flex-1 overflow-y-auto p-6 space-y-6">
               {/* 시세 파이프라인 */}
-              <div className="hidden rounded-lg border border-[var(--panel-border)] bg-[var(--panel)] p-4 space-y-4">
+              <div className="rounded-lg border border-[var(--panel-border)] bg-[var(--panel)] p-4 space-y-4">
                 <div className="flex items-center justify-between gap-2">
                   <div>
                     <div className="text-sm font-semibold">시세 파이프라인 설정</div>

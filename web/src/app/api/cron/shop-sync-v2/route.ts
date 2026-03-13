@@ -5,7 +5,9 @@ import { POST as createRunPost } from "@/app/api/price-sync-runs-v2/route";
 import { POST as executeRunPost } from "@/app/api/price-sync-runs-v2/[run_id]/execute/route";
 import { getShopAdminClient } from "@/lib/shop/admin";
 import { isAuthorizedCronRequest, resolveAllowedCronSecrets } from "@/lib/shop/cron-auth";
+import { buildCurrentProductSyncProfileByMaster } from "@/lib/shop/current-product-sync-profile";
 import { CRON_TICK_ERROR_PREFIX, isCronTickError } from "@/lib/shop/price-sync-guards";
+import { buildFinalizedScheduleRows, buildScopedSyncPlan } from "@/lib/shop/sync-scheduler";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -49,6 +51,10 @@ const resolveDefaultIntervalMinutes = (): number => {
 
 const resolveForcedIntervalMinutes = (): number => {
   return 5;
+};
+
+const resolveSchedulerLeaseSeconds = (): number => {
+  return toPositiveInt(process.env.SHOP_SYNC_SCHEDULER_LEASE_SECONDS, 20 * 60, 24 * 60 * 60);
 };
 
 const resolvePolicyTimezone = (): string => {
@@ -141,6 +147,186 @@ const toDetailSnippet = (value: unknown, depth = 0): unknown => {
 };
 
 type ShopAdminClient = NonNullable<ReturnType<typeof getShopAdminClient>>;
+
+type ActiveSchedulerMappingRow = {
+  channel_product_id?: string | null;
+  master_item_id?: string | null;
+  current_product_sync_profile?: string | null;
+};
+
+type SchedulerStateRow = {
+  master_item_id?: string | null;
+  effective_sync_profile?: string | null;
+  cadence_minutes?: number | null;
+  next_due_at?: string | null;
+  last_evaluated_at?: string | null;
+  last_evaluated_run_id?: string | null;
+  last_evaluated_compute_request_id?: string | null;
+  last_evaluated_reason?: string | null;
+};
+
+const parseMasterItemIds = (value: unknown): string[] => {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => (typeof item === "string" ? item.trim() : ""))
+    .filter((item) => item.length > 0);
+};
+
+const isMissingRpcSchemaCacheError = (message: string): boolean => {
+  const normalized = String(message ?? "").toLowerCase();
+  return normalized.includes("schema cache") || normalized.includes("could not find the function");
+};
+
+async function claimSchedulerLeaseFallback(
+  sb: ShopAdminClient,
+  channelId: string,
+  ownerToken: string,
+  leaseSeconds: number,
+) {
+  const nowIso = new Date().toISOString();
+  const leaseExpiresAt = new Date(Date.now() + (leaseSeconds * 1000)).toISOString();
+  const existingRes = await sb
+    .from("price_sync_scheduler_lease_v1")
+    .select("channel_id, owner_token, lease_expires_at")
+    .eq("channel_id", channelId)
+    .maybeSingle();
+  if (existingRes.error) throw new Error(existingRes.error.message ?? "scheduler lease fallback lookup failed");
+
+  const existing = existingRes.data ?? null;
+  if (!existing) {
+    const insertRes = await sb.from("price_sync_scheduler_lease_v1").insert({
+      channel_id: channelId,
+      owner_token: ownerToken,
+      lease_expires_at: leaseExpiresAt,
+      last_tick_started_at: nowIso,
+      last_tick_status: "RUNNING",
+      last_tick_error: null,
+    });
+    if (insertRes.error) return false;
+    return true;
+  }
+
+  const existingExpiresMs = toMs(existing.lease_expires_at);
+  const expired = existingExpiresMs === null || existingExpiresMs <= Date.now();
+  const sameOwner = String(existing.owner_token ?? "").trim() === ownerToken;
+  if (!expired && !sameOwner) return false;
+
+  const updateRes = await sb
+    .from("price_sync_scheduler_lease_v1")
+    .update({
+      owner_token: ownerToken,
+      lease_expires_at: leaseExpiresAt,
+      last_tick_started_at: nowIso,
+      last_tick_finished_at: null,
+      last_tick_status: "RUNNING",
+      last_tick_error: null,
+    })
+    .eq("channel_id", channelId);
+  if (updateRes.error) throw new Error(updateRes.error.message ?? "scheduler lease fallback update failed");
+  return true;
+};
+
+async function claimSchedulerLease(
+  sb: ShopAdminClient,
+  channelId: string,
+  ownerToken: string,
+  leaseSeconds: number,
+) {
+  const leaseRes = await sb.rpc("claim_price_sync_scheduler_lease_v1", {
+    p_channel_id: channelId,
+    p_owner_token: ownerToken,
+    p_lease_seconds: leaseSeconds,
+  });
+  if (leaseRes.error) {
+    const message = leaseRes.error.message ?? "scheduler lease claim failed";
+    if (isMissingRpcSchemaCacheError(message)) {
+      try {
+        return await claimSchedulerLeaseFallback(sb, channelId, ownerToken, leaseSeconds);
+      } catch (fallbackError) {
+        const fallbackMessage = fallbackError instanceof Error ? fallbackError.message : "scheduler lease fallback failed";
+        if (isMissingRpcSchemaCacheError(fallbackMessage)) return true;
+        throw fallbackError;
+      }
+    }
+    throw new Error(message);
+  }
+  const data = typeof leaseRes.data === "object" && leaseRes.data && !Array.isArray(leaseRes.data)
+    ? leaseRes.data as Record<string, unknown>
+    : {};
+  return Boolean(data.ok === true);
+}
+
+async function releaseSchedulerLease(
+  sb: ShopAdminClient,
+  channelId: string,
+  ownerToken: string,
+  status: "SUCCESS" | "FAILED" | "SKIPPED",
+  errorMessage: string | null,
+) {
+  const releaseRes = await sb.rpc("release_price_sync_scheduler_lease_v1", {
+    p_channel_id: channelId,
+    p_owner_token: ownerToken,
+    p_status: status,
+    p_error: errorMessage,
+  });
+  if (!releaseRes.error) return;
+  const message = releaseRes.error.message ?? "scheduler lease release failed";
+  if (!isMissingRpcSchemaCacheError(message)) throw new Error(message);
+  const nowIso = new Date().toISOString();
+  const updateRes = await sb
+    .from("price_sync_scheduler_lease_v1")
+    .update({
+      lease_expires_at: nowIso,
+      last_tick_finished_at: nowIso,
+      last_tick_status: status,
+      last_tick_error: errorMessage,
+    })
+    .eq("channel_id", channelId)
+    .eq("owner_token", ownerToken);
+  if (updateRes.error) {
+    const fallbackMessage = updateRes.error.message ?? "scheduler lease fallback release failed";
+    if (isMissingRpcSchemaCacheError(fallbackMessage)) return;
+    throw new Error(fallbackMessage);
+  }
+}
+
+async function loadScopedSchedulerState(
+  sb: ShopAdminClient,
+  channelId: string,
+  masterItemIds: string[],
+): Promise<SchedulerStateRow[]> {
+  const rows: SchedulerStateRow[] = [];
+  for (let index = 0; index < masterItemIds.length; index += 500) {
+    const chunk = masterItemIds.slice(index, index + 500);
+    if (chunk.length === 0) continue;
+    const res = await sb
+      .from("price_sync_master_schedule_v1")
+      .select("master_item_id, effective_sync_profile, cadence_minutes, next_due_at, last_evaluated_at, last_evaluated_run_id, last_evaluated_compute_request_id, last_evaluated_reason")
+      .eq("channel_id", channelId)
+      .in("master_item_id", chunk);
+    if (res.error) {
+      const message = res.error.message ?? "price_sync_master_schedule_v1 lookup failed";
+      if (isMissingRpcSchemaCacheError(message)) return [];
+      throw new Error(message);
+    }
+    rows.push(...((res.data ?? []) as SchedulerStateRow[]));
+  }
+  return rows;
+}
+
+async function upsertSchedulerRows(
+  sb: ShopAdminClient,
+  rows: Array<Record<string, unknown>>,
+) {
+  for (let index = 0; index < rows.length; index += 500) {
+    const chunk = rows.slice(index, index + 500);
+    if (chunk.length === 0) continue;
+    const res = await sb
+      .from("price_sync_master_schedule_v1")
+      .upsert(chunk, { onConflict: "channel_id,master_item_id" });
+    if (res.error) throw new Error(res.error.message ?? "price_sync_master_schedule_v1 upsert failed");
+  }
+}
 
 async function recordCronTickRun(
   sb: ShopAdminClient,
@@ -238,6 +424,7 @@ async function runCron(request: Request) {
 
   const { channelId, intervalMinutes, requestedIntervalMinutes, forceFullSyncRequested } = input;
   const runningStaleWindowMs = resolveRunningStaleWindowMs();
+  const schedulerLeaseSeconds = resolveSchedulerLeaseSeconds();
   const executeRoundLimit = toPositiveInt(process.env.SHOP_SYNC_EXECUTE_MAX_ROUNDS, 12, 200);
   const executeIntentBatchSize = toPositiveInt(process.env.SHOP_SYNC_EXECUTE_INTENT_BATCH_SIZE, 300, 5000);
   const pushChunkSize = toPositiveInt(process.env.SHOP_SYNC_PUSH_CHUNK_SIZE, 150, 1000);
@@ -254,15 +441,39 @@ async function runCron(request: Request) {
     );
   }
 
+  const leaseOwnerToken = crypto.randomUUID();
+  let leaseClaimed = false;
+  let leaseStatus: "SUCCESS" | "FAILED" | "SKIPPED" = "SKIPPED";
+  let leaseErrorMessage: string | null = null;
+
+  try {
+    leaseClaimed = await claimSchedulerLease(sb, channelId, leaseOwnerToken, schedulerLeaseSeconds);
+    if (!leaseClaimed) {
+      return NextResponse.json(
+        {
+          ok: true,
+          mode: "AUTO_SYNC_V2",
+          channel_id: channelId,
+          interval_minutes: intervalMinutes,
+          requested_interval_minutes: requestedIntervalMinutes,
+          skipped: true,
+          skip_reason: "LEASE_HELD",
+        },
+        { headers: { "Cache-Control": "no-store" } },
+      );
+    }
+
   const runningRes = await sb
     .from("price_sync_run_v2")
-    .select("run_id, started_at")
+    .select("run_id, started_at, request_payload")
     .eq("channel_id", channelId)
     .eq("status", "RUNNING")
     .order("started_at", { ascending: false })
     .limit(1);
   if (runningRes.error) {
-    return bad(runningRes.error.message ?? "running run 조회 실패", 500);
+    leaseStatus = "FAILED";
+    leaseErrorMessage = runningRes.error.message ?? "running run 조회 실패";
+    return bad(leaseErrorMessage, 500);
   }
 
   const running = (runningRes.data ?? [])[0];
@@ -300,6 +511,8 @@ async function runCron(request: Request) {
                 payload_snippet: toDetailSnippet(resumedExecuteJson),
               },
             });
+            leaseStatus = "FAILED";
+            leaseErrorMessage = `EXECUTE_RUN_FAILED:${executeRes.status}`;
             return NextResponse.json(
               {
                 ok: false,
@@ -321,6 +534,37 @@ async function runCron(request: Request) {
 
         const resumedStatus = String(resumedExecuteJson.status ?? "").trim().toUpperCase();
         if (resumedStatus !== "RUNNING") {
+          const runningPayload = (running as { request_payload?: unknown }).request_payload;
+          const runningPayloadObj = runningPayload && typeof runningPayload === "object" && !Array.isArray(runningPayload)
+            ? runningPayload as Record<string, unknown>
+            : {};
+          const resumedMasterItemIds = parseMasterItemIds(runningPayloadObj.scope_master_item_ids ?? runningPayloadObj.master_item_ids);
+          if (resumedMasterItemIds.length > 0) {
+            const activeMapRes = await sb
+              .from("sales_channel_product")
+              .select("channel_product_id, master_item_id, current_product_sync_profile")
+              .eq("channel_id", channelId)
+              .eq("is_active", true)
+              .in("master_item_id", resumedMasterItemIds);
+            if (activeMapRes.error) {
+              throw new Error(activeMapRes.error.message ?? "active mapping lookup failed for resumed run finalization");
+            }
+            const activeMapRows = (activeMapRes.data ?? []) as ActiveSchedulerMappingRow[];
+            const profileByMaster = buildCurrentProductSyncProfileByMaster(activeMapRows);
+            await upsertSchedulerRows(
+              sb,
+              buildFinalizedScheduleRows({
+                channelId,
+                masterItemIds: resumedMasterItemIds,
+                profileByMaster,
+                now: new Date().toISOString(),
+                runId: activeRunId,
+                computeRequestId: String(runningPayloadObj.compute_request_id ?? "").trim() || null,
+                reason: runningPayloadObj.scheduler_reason === "DAILY_FULL_SYNC" ? "DAILY_FULL_SYNC" : "DUE",
+              }),
+            );
+          }
+          leaseStatus = "SUCCESS";
           return NextResponse.json(
             {
               ok: true,
@@ -374,7 +618,9 @@ async function runCron(request: Request) {
     .order("started_at", { ascending: false })
     .limit(30);
   if (recentRes.error) {
-    return bad(recentRes.error.message ?? "최근 run 조회 실패", 500);
+    leaseStatus = "FAILED";
+    leaseErrorMessage = recentRes.error.message ?? "최근 run 조회 실패";
+    return bad(leaseErrorMessage, 500);
   }
 
   const policyTimezone = resolvePolicyTimezone();
@@ -430,7 +676,62 @@ async function runCron(request: Request) {
     }
   }
 
-  const pullRes = await pullPost(mkJsonRequest("/api/channel-prices/pull", { channel_id: channelId }));
+  const activeMappingsRes = await sb
+    .from("sales_channel_product")
+    .select("channel_product_id, master_item_id, current_product_sync_profile")
+    .eq("channel_id", channelId)
+    .eq("is_active", true);
+  if (activeMappingsRes.error) {
+    throw new Error(activeMappingsRes.error.message ?? "active scheduler mapping lookup failed");
+  }
+  const activeMapRows = (activeMappingsRes.data ?? []) as ActiveSchedulerMappingRow[];
+  const activeMasterItemIds = Array.from(new Set(activeMapRows.map((row) => String(row.master_item_id ?? "").trim()).filter(Boolean)));
+  if (activeMasterItemIds.length === 0) {
+    return NextResponse.json(
+      {
+        ok: true,
+        mode: "AUTO_SYNC_V2",
+        channel_id: channelId,
+        interval_minutes: intervalMinutes,
+        requested_interval_minutes: requestedIntervalMinutes,
+        skipped: true,
+        skip_reason: "NO_ACTIVE_MAPPINGS",
+      },
+      { headers: { "Cache-Control": "no-store" } },
+    );
+  }
+
+  const existingScheduleRows = await loadScopedSchedulerState(sb, channelId, activeMasterItemIds);
+  const scopedPlan = buildScopedSyncPlan({
+    channelId,
+    activeMapRows,
+    existingScheduleRows,
+    now: new Date().toISOString(),
+    forceFullSync,
+  });
+  if (scopedPlan.seedRows.length > 0) {
+    await upsertSchedulerRows(sb, scopedPlan.seedRows);
+  }
+  if (scopedPlan.dueMasterIds.length === 0 || scopedPlan.dueChannelProductIds.length === 0) {
+    return NextResponse.json(
+      {
+        ok: true,
+        mode: "AUTO_SYNC_V2",
+        channel_id: channelId,
+        interval_minutes: intervalMinutes,
+        requested_interval_minutes: requestedIntervalMinutes,
+        skipped: true,
+        skip_reason: "NO_DUE_MASTERS",
+        due_master_count: 0,
+      },
+      { headers: { "Cache-Control": "no-store" } },
+    );
+  }
+
+  const pullRes = await pullPost(mkJsonRequest("/api/channel-prices/pull", {
+    channel_id: channelId,
+    channel_product_ids: scopedPlan.dueChannelProductIds,
+  }));
   const pullJson = await pullRes.json().catch(() => ({}));
   if (!pullRes.ok) {
     await recordCronTickRun(sb, {
@@ -444,13 +745,19 @@ async function runCron(request: Request) {
         payload_snippet: toDetailSnippet(pullJson),
       },
     });
+    leaseStatus = "FAILED";
+    leaseErrorMessage = `PULL_FAILED:${pullRes.status}`;
     return NextResponse.json(
       { ok: false, stage: "pull", status: pullRes.status, detail: pullJson, channel_id: channelId },
       { status: pullRes.status, headers: { "Cache-Control": "no-store" } },
     );
   }
 
-  const recomputeRes = await recomputePost(mkJsonRequest("/api/pricing/recompute", { channel_id: channelId, pricing_algo_version: "REVERSE_FEE_V2" }));
+  const recomputeRes = await recomputePost(mkJsonRequest("/api/pricing/recompute", {
+    channel_id: channelId,
+    master_item_ids: scopedPlan.dueMasterIds,
+    pricing_algo_version: "REVERSE_FEE_V2",
+  }));
   const recomputeJson = await recomputeRes.json().catch(() => ({}));
   if (!recomputeRes.ok) {
     await recordCronTickRun(sb, {
@@ -464,6 +771,8 @@ async function runCron(request: Request) {
         payload_snippet: toDetailSnippet(recomputeJson),
       },
     });
+    leaseStatus = "FAILED";
+    leaseErrorMessage = `RECOMPUTE_FAILED:${recomputeRes.status}`;
     return NextResponse.json(
       { ok: false, stage: "recompute", status: recomputeRes.status, detail: recomputeJson, channel_id: channelId },
       { status: recomputeRes.status, headers: { "Cache-Control": "no-store" } },
@@ -475,9 +784,12 @@ async function runCron(request: Request) {
       channel_id: channelId,
       interval_minutes: intervalMinutes,
       trigger_type: "AUTO",
+      master_item_ids: scopedPlan.dueMasterIds,
+      scope_master_item_ids: scopedPlan.dueMasterIds,
       force_full_sync: forceFullSync,
       daily_full_sync: forceFullSync,
       daily_full_sync_date: forceFullSync ? nowLocal.dateKey : undefined,
+      scheduler_reason: forceFullSync ? "DAILY_FULL_SYNC" : "DUE",
       compute_request_id: String((recomputeJson as { compute_request_id?: unknown }).compute_request_id ?? "").trim() || undefined,
     }),
   );
@@ -494,6 +806,8 @@ async function runCron(request: Request) {
         payload_snippet: toDetailSnippet(runCreateJson),
       },
     });
+    leaseStatus = "FAILED";
+    leaseErrorMessage = `CREATE_RUN_FAILED:${runCreateRes.status}`;
     return NextResponse.json(
       { ok: false, stage: "create_run", status: runCreateRes.status, detail: runCreateJson, channel_id: channelId },
       { status: runCreateRes.status, headers: { "Cache-Control": "no-store" } },
@@ -543,6 +857,8 @@ async function runCron(request: Request) {
         payload_snippet: toDetailSnippet(runCreateJson),
       },
     });
+    leaseStatus = "FAILED";
+    leaseErrorMessage = "CREATE_RUN_FAILED:run_id missing";
     return NextResponse.json(
       { ok: false, stage: "create_run", status: 500, detail: "run_id missing", channel_id: channelId },
       { status: 500, headers: { "Cache-Control": "no-store" } },
@@ -574,6 +890,8 @@ async function runCron(request: Request) {
           payload_snippet: toDetailSnippet(executeJson),
         },
       });
+      leaseStatus = "FAILED";
+      leaseErrorMessage = `EXECUTE_RUN_FAILED:${executeRes.status}`;
       return NextResponse.json(
         { ok: false, stage: "execute_run", status: executeRes.status, detail: executeJson, channel_id: channelId, run_id: runId },
         { status: executeRes.status, headers: { "Cache-Control": "no-store" } },
@@ -583,6 +901,22 @@ async function runCron(request: Request) {
     const runStatus = String(executeJson.status ?? "").trim().toUpperCase();
     const pending = Number(executeJson.pending ?? 0);
     if (runStatus !== "RUNNING" || !Number.isFinite(pending) || pending <= 0) break;
+  }
+
+  const terminalRunStatus = String(executeJson.status ?? "").trim().toUpperCase();
+  if (terminalRunStatus && terminalRunStatus !== "RUNNING") {
+    await upsertSchedulerRows(
+      sb,
+      buildFinalizedScheduleRows({
+        channelId,
+        masterItemIds: scopedPlan.dueMasterIds,
+        profileByMaster: scopedPlan.profileByMaster,
+        now: new Date().toISOString(),
+        runId,
+        computeRequestId: String((recomputeJson as { compute_request_id?: unknown }).compute_request_id ?? "").trim() || null,
+        reason: forceFullSync ? "DAILY_FULL_SYNC" : "DUE",
+      }),
+    );
   }
 
   let cleanupJson: Record<string, unknown> | null = null;
@@ -595,6 +929,7 @@ async function runCron(request: Request) {
     }
   }
 
+  leaseStatus = "SUCCESS";
   return NextResponse.json(
     {
       ok: true,
@@ -607,6 +942,8 @@ async function runCron(request: Request) {
       execute: executeJson,
       force_full_sync: forceFullSync,
       daily_full_sync_date: forceFullSync ? nowLocal.dateKey : null,
+      due_master_count: scopedPlan.dueMasterIds.length,
+      due_channel_product_count: scopedPlan.dueChannelProductIds.length,
       execute_rounds: executeSnapshots,
       execute_round_limit: executeRoundLimit,
       execute_intent_batch_size: executeIntentBatchSize,
@@ -615,6 +952,15 @@ async function runCron(request: Request) {
     },
     { headers: { "Cache-Control": "no-store" } },
   );
+  } catch (error) {
+    leaseStatus = "FAILED";
+    leaseErrorMessage = error instanceof Error ? error.message : "scheduler cron failed";
+    return bad(leaseErrorMessage, 500);
+  } finally {
+    if (leaseClaimed) {
+      await releaseSchedulerLease(sb, channelId, leaseOwnerToken, leaseStatus, leaseErrorMessage).catch(() => null);
+    }
+  }
 }
 
 export async function POST(request: Request) {

@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+﻿import { NextResponse } from "next/server";
 import {
   normalizeAdditionalWeightValue,
   normalizeKrwInteger,
@@ -8,8 +8,7 @@ import {
 } from "@/lib/shop/option-labor-rules";
 import { PLATING_PREFIX, buildPlatingComboChoices, getPlatingComboSortOrder, isPlatingComboCode } from "@/lib/shop/sync-rules";
 import { getShopAdminClient, isMissingSchemaObjectError, jsonError, parseJsonObject } from "@/lib/shop/admin";
-import { buildMaterialFactorMap } from "@/lib/material-factors";
-import { rebuildPersistedSizeGridForScope } from "@/lib/shop/weight-grid-store.js";
+import { syncPersistedSizeGridForScope } from "@/lib/shop/persisted-size-grid-rebuild.js";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -257,75 +256,6 @@ const resolveDecorMasterCost = async (
     decorationModelName: toTrimmed(master.model_name) || null,
     baseLaborCostKrw: Math.round(computeMasterLaborCostPerUnit(master, (absorbRes.data ?? []) as AbsorbRow[])),
   };
-};
-
-type SizeGridMarketContext = {
-  goldTickKrwPerG: number;
-  silverTickKrwPerG: number;
-  materialFactors: ReturnType<typeof buildMaterialFactorMap>;
-};
-
-const loadSizeGridMarketContext = async (
-  sb: NonNullable<ReturnType<typeof getShopAdminClient>>,
-): Promise<SizeGridMarketContext> => {
-  const [materialFactorRes, tickRes] = await Promise.all([
-    sb
-      .from("cms_material_factor_config")
-      .select("material_code, purity_rate, material_adjust_factor, gold_adjust_factor, price_basis"),
-    sb
-      .from("cms_v_market_tick_latest_gold_silver_ops_v1")
-      .select("gold_price_krw_per_g, silver_price_krw_per_g")
-      .maybeSingle(),
-  ]);
-  if (materialFactorRes.error) throw new Error(materialFactorRes.error.message ?? "소재 팩터 조회 실패");
-  if (tickRes.error) throw new Error(tickRes.error.message ?? "시세 조회 실패");
-  return {
-    goldTickKrwPerG: Math.round(Number(tickRes.data?.gold_price_krw_per_g ?? 0)),
-    silverTickKrwPerG: Math.round(Number(tickRes.data?.silver_price_krw_per_g ?? 0)),
-    materialFactors: buildMaterialFactorMap(materialFactorRes.data ?? []),
-  };
-};
-
-const syncPersistedSizeGridForScope = async ({
-  sb,
-  channelId,
-  masterItemId,
-  externalProductNo,
-}: {
-  sb: NonNullable<ReturnType<typeof getShopAdminClient>>;
-  channelId: string;
-  masterItemId: string;
-  externalProductNo: string;
-}): Promise<void> => {
-  const scopeRes = await sb
-    .from("channel_option_labor_rule_v1")
-    .select(RULE_SELECT)
-    .eq("channel_id", channelId)
-    .eq("master_item_id", masterItemId)
-    .eq("external_product_no", externalProductNo)
-    .eq("is_active", true);
-  if (scopeRes.error) throw new Error(scopeRes.error.message ?? "사이즈 규칙 조회 실패");
-  const scopeRows = ((scopeRes.data ?? []) as unknown) as Array<Record<string, unknown>>;
-  const hasSizeRules = scopeRows.some((row) => String(row.category_key ?? "").trim().toUpperCase() === "SIZE");
-  if (!hasSizeRules) {
-    const deleteRes = await sb
-      .from("channel_option_weight_grid_v1")
-      .delete()
-      .eq("channel_id", channelId)
-      .eq("master_item_id", masterItemId)
-      .eq("external_product_no", externalProductNo);
-    if (deleteRes.error) throw new Error(deleteRes.error.message ?? "사이즈 그리드 삭제 실패");
-    return;
-  }
-  const marketContext = await loadSizeGridMarketContext(sb);
-  await rebuildPersistedSizeGridForScope({
-    sb,
-    channelId,
-    masterItemId,
-    externalProductNo,
-    rules: scopeRows,
-    marketContext,
-  });
 };
 
 const readActor = (request: Request, body: Record<string, unknown>): string => {

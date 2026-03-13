@@ -58,7 +58,7 @@ test("composeOptionDeltaBuckets keeps saved category deltas for categories witho
   });
 });
 
-test("composeOptionDeltaBuckets lets explicit rule categories override saved deltas", () => {
+test("composeOptionDeltaBuckets keeps color on central axis source while overriding size and decor", () => {
   const result = composeOptionDeltaBuckets({
     useOptionLaborRuleEngine: true,
     activeRuleCategories: {
@@ -89,8 +89,8 @@ test("composeOptionDeltaBuckets lets explicit rule categories override saved del
       other: 0,
       total: 34200,
     },
-    colorComboBaseDelta: 0,
-    colorAxisResolvedAmount: undefined,
+    colorComboBaseDelta: 4000,
+    colorAxisResolvedAmount: 4000,
     sizePriceOverrideEnabled: false,
     sizePriceOverrideKrw: null,
     baseOptionDelta: 0,
@@ -99,10 +99,10 @@ test("composeOptionDeltaBuckets lets explicit rule categories override saved del
   assert.deepEqual(result, {
     material: 0,
     size: 15000,
-    color: 7000,
+    color: 4000,
     decor: 5000,
     other: 0,
-    total: 27000,
+    total: 24000,
     source: "OPTION_LABOR_RULE_ENGINE",
   });
 });

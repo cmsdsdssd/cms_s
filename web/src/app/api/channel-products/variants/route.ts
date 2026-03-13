@@ -11,6 +11,7 @@ import {
 } from "@/lib/shop/mapping-option-details";
 import { buildMaterialFactorMap, normalizeMaterialCode } from "@/lib/material-factors";
 import { resolveCanonicalProductNo } from "@/lib/shop/canonical-mapping";
+import { loadEffectiveMarketTicks } from "@/lib/shop/effective-market-ticks.js";
 import { createPersistedSizeGridLookup, loadPersistedSizeGridRowsForScope, rebuildAndLoadPersistedSizeGridForScope } from "@/lib/shop/weight-grid-store.js";
 import { buildPlatingComboChoices, normalizePlatingCatalogComboKey } from "@/lib/shop/sync-rules";
 import {
@@ -112,7 +113,7 @@ export async function GET(request: Request) {
   } | null = null;
 
   if (masterItemId) {
-    const [activeProductRes, optionRuleRes, categoryRes, masterRes, otherReasonLogRes, materialFactorRes, tickRes, colorComboRes] = await Promise.all([
+    const [activeProductRes, optionRuleRes, categoryRes, masterRes, otherReasonLogRes, materialFactorRes, effectiveTicks, colorComboRes] = await Promise.all([
       sb
         .from("sales_channel_product")
         .select("external_product_no, external_variant_code, option_material_code, option_color_code, option_decoration_code, option_size_value")
@@ -151,10 +152,7 @@ export async function GET(request: Request) {
       sb
         .from("cms_material_factor_config")
         .select("material_code, purity_rate, material_adjust_factor, gold_adjust_factor, price_basis"),
-      sb
-        .from("cms_v_market_tick_latest_gold_silver_ops_v1")
-        .select("gold_price_krw_per_g, silver_price_krw_per_g")
-        .maybeSingle(),
+      loadEffectiveMarketTicks(sb),
       sb
         .from("channel_color_combo_catalog_v1")
         .select("combo_key, display_name, base_delta_krw, sort_order")
@@ -169,7 +167,6 @@ export async function GET(request: Request) {
     if (masterRes.error) return jsonError(masterRes.error.message ?? "마스터 소재 조회 실패", 500);
     if (otherReasonLogRes.error) return jsonError(otherReasonLogRes.error.message ?? "기타 사유 로그 조회 실패", 500);
     if (materialFactorRes.error) return jsonError(materialFactorRes.error.message ?? "소재 팩터 조회 실패", 500);
-    if (tickRes.error) return jsonError(tickRes.error.message ?? "시세 조회 실패", 500);
     if (colorComboRes.error && !isMissingSchemaObjectError(colorComboRes.error, "channel_color_combo_catalog_v1")) {
       return jsonError(colorComboRes.error.message ?? "색상 중앙금액 조회 실패", 500);
     }
@@ -281,8 +278,8 @@ export async function GET(request: Request) {
       ]),
     );
     sizeMarketContext = {
-      goldTickKrwPerG: Math.round(Number(tickRes.data?.gold_price_krw_per_g ?? 0)),
-      silverTickKrwPerG: Math.round(Number(tickRes.data?.silver_price_krw_per_g ?? 0)),
+      goldTickKrwPerG: Math.round(Number(effectiveTicks.goldTickKrwPerG ?? 0)),
+      silverTickKrwPerG: Math.round(Number(effectiveTicks.silverTickKrwPerG ?? 0)),
       materialFactors: buildMaterialFactorMap(materialFactorRes.data ?? []),
     };
     const activeSizeRuleRows = ((optionRuleRes.data ?? []) as Array<{ category_key?: string | null; is_active?: boolean | null }>)

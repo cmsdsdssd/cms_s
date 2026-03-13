@@ -15,6 +15,8 @@ type SyncRun = {
   channel_id: string;
   pinned_compute_request_id: string | null;
   publish_version?: string | null;
+  due_master_count?: number | null;
+  scheduler_reason?: string | null;
   interval_minutes: number;
   trigger_type: "AUTO" | "MANUAL";
   status: "RUNNING" | "SUCCESS" | "PARTIAL" | "FAILED" | "CANCELLED";
@@ -57,6 +59,27 @@ type ReasonSummaryRow = {
   reason_label: string;
   reason_category: string;
   count: number;
+};
+
+type SchedulerLease = {
+  channel_id: string;
+  owner_token: string;
+  lease_expires_at: string | null;
+  last_tick_started_at: string | null;
+  last_tick_finished_at: string | null;
+  last_tick_status: string | null;
+  last_tick_error: string | null;
+  updated_at: string | null;
+};
+
+type SchedulerSummary = {
+  active_master_count: number;
+  scheduled_master_count: number;
+  due_master_count: number;
+  due_profile_counts?: Record<string, number>;
+  lease: SchedulerLease | null;
+  migration_ready: boolean;
+  migration_error: string | null;
 };
 
 const fmt = (v: number | null | undefined) => (typeof v === "number" && Number.isFinite(v) ? v.toLocaleString() : "-");
@@ -111,11 +134,12 @@ export default function ShoppingCronRunsPage() {
   const runsQuery = useQuery({
     queryKey: ["shop-sync-runs-v2", channelId],
     enabled: Boolean(channelId),
-    queryFn: () => shopApiGet<{ data: SyncRun[] }>(`/api/price-sync-runs-v2?channel_id=${encodeURIComponent(channelId)}&limit=200`),
+    queryFn: () => shopApiGet<{ data: SyncRun[]; scheduler?: SchedulerSummary }>(`/api/price-sync-runs-v2?channel_id=${encodeURIComponent(channelId)}&limit=200`),
     refetchInterval: 10_000,
   });
 
   const runs = runsQuery.data?.data ?? [];
+  const scheduler = runsQuery.data?.scheduler ?? null;
   const [selectedRunId, setSelectedRunId] = useState("");
   useEffect(() => {
     if (!selectedRunId && runs.length > 0) setSelectedRunId(runs[0].run_id);
@@ -153,15 +177,57 @@ export default function ShoppingCronRunsPage() {
         purpose="자동동기화 대상 수, 실행 결과, 사유 코드를 한 화면에서 확인합니다."
         status={[
           { label: "최근 run", value: `${runs.length}건` },
+          { label: "due master", value: scheduler ? `${scheduler.due_master_count}건` : "-", tone: scheduler?.migration_ready ? "good" : "warn" },
+          { label: "lease", value: scheduler?.lease?.last_tick_status ?? (scheduler?.migration_ready ? "idle" : "미적용"), tone: scheduler?.lease?.last_tick_error ? "warn" : "good" },
           { label: "선택 run", value: selectedRunId ? selectedRunId.slice(0, 8) : "미선택", tone: selectedRunId ? "good" : "warn" },
-          { label: "intent", value: `${intents.length}건` },
-          { label: "사유 유형", value: `${reasons.length}개` },
         ]}
         nextActions={[
           { label: "동기화 Job 로그", href: "/settings/shopping/sync-jobs" },
           { label: "자동 가격 설정", href: "/settings/shopping/auto-price" },
         ]}
       />
+
+      <Card>
+        <CardHeader title="Scheduler 상태" description="mixed cadence due/lease 상태를 확인합니다." />
+        <CardBody>
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
+            <div className="rounded-[var(--radius)] border border-[var(--hairline)] p-3">
+              <div className="text-xs text-[var(--muted)]">active master</div>
+              <div className="mt-1 text-lg font-semibold">{scheduler ? fmt(scheduler.active_master_count) : "-"}</div>
+            </div>
+            <div className="rounded-[var(--radius)] border border-[var(--hairline)] p-3">
+              <div className="text-xs text-[var(--muted)]">scheduled master</div>
+              <div className="mt-1 text-lg font-semibold">{scheduler ? fmt(scheduler.scheduled_master_count) : "-"}</div>
+            </div>
+            <div className="rounded-[var(--radius)] border border-[var(--hairline)] p-3">
+              <div className="text-xs text-[var(--muted)]">due master</div>
+              <div className="mt-1 text-lg font-semibold">{scheduler ? fmt(scheduler.due_master_count) : "-"}</div>
+            </div>
+            <div className="rounded-[var(--radius)] border border-[var(--hairline)] p-3">
+              <div className="text-xs text-[var(--muted)]">lease 상태</div>
+              <div className="mt-1 text-lg font-semibold">{scheduler?.lease?.last_tick_status ?? (scheduler?.migration_ready ? "IDLE" : "미적용")}</div>
+            </div>
+          </div>
+          <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
+            <div className="rounded-[var(--radius)] border border-[var(--hairline)] p-3 text-sm">
+              <div className="mb-2 font-medium">due profile 분포</div>
+              <div className="space-y-1 text-xs">
+                <div>GENERAL: {fmt(scheduler?.due_profile_counts?.GENERAL ?? 0)}</div>
+                <div>MARKET_LINKED: {fmt(scheduler?.due_profile_counts?.MARKET_LINKED ?? 0)}</div>
+              </div>
+            </div>
+            <div className="rounded-[var(--radius)] border border-[var(--hairline)] p-3 text-sm">
+              <div className="mb-2 font-medium">lease detail</div>
+              <div className="space-y-1 text-xs text-[var(--muted)]">
+                <div>started: {fmtTs(scheduler?.lease?.last_tick_started_at)}</div>
+                <div>finished: {fmtTs(scheduler?.lease?.last_tick_finished_at)}</div>
+                <div>expires: {fmtTs(scheduler?.lease?.lease_expires_at)}</div>
+                <div>error: {scheduler?.lease?.last_tick_error ?? scheduler?.migration_error ?? '-'}</div>
+              </div>
+            </div>
+          </div>
+        </CardBody>
+      </Card>
 
       <Card>
         <CardHeader title="조회 조건" />
@@ -188,6 +254,7 @@ export default function ShoppingCronRunsPage() {
                     <th className="px-3 py-2">run_id</th>
                     <th className="px-3 py-2">시작시간</th>
                     <th className="px-3 py-2">트리거</th>
+                    <th className="px-3 py-2">scope</th>
                     <th className="px-3 py-2">상태</th>
                     <th className="px-3 py-2">비고</th>
                     <th className="px-3 py-2">성공/실패/건너뜀/총계</th>
@@ -203,6 +270,7 @@ export default function ShoppingCronRunsPage() {
                       <td className="px-3 py-2">{r.run_id}</td>
                       <td className="px-3 py-2 whitespace-nowrap">{fmtTs(r.started_at ?? r.created_at)}</td>
                       <td className="px-3 py-2">{r.trigger_type}</td>
+                      <td className="px-3 py-2 text-xs">{r.scheduler_reason ?? "-"} / {fmt(r.due_master_count)}</td>
                       <td className="px-3 py-2">{toRunStatusKo(r.status)}</td>
                       <td className="px-3 py-2 text-xs">{toRunNote(r)}</td>
                       <td className="px-3 py-2">{r.success_count}/{r.failed_count}/{r.skipped_count}/{r.total_count}</td>
