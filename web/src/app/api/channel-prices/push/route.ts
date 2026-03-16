@@ -1082,7 +1082,7 @@ export async function POST(request: Request) {
         .eq("channel_id", row.channel_id)
         .eq("external_product_no", row.external_product_no)
         .eq("external_variant_code", row.external_variant_code);
-      if (stateUpdateRes.error) return jsonError(stateUpdateRes.error.message ?? "옵션 현재상태 반영결과 저장 실패", 500);
+      if (stateUpdateRes.error && !String(stateUpdateRes.error.message ?? "").toLowerCase().includes("could not find the table")) return jsonError(stateUpdateRes.error.message ?? "옵션 현재상태 반영결과 저장 실패", 500);
     }
   }
 

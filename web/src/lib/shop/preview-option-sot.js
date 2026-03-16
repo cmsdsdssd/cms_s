@@ -1,4 +1,4 @@
-﻿import { normalizePlatingComboCode } from './sync-rules.ts';
+﻿import { normalizePlatingComboCode } from './rule-utils.ts';
 import { composeOptionDeltaBuckets, hasActiveRuleCategory } from './option-delta-buckets.ts';
 import {
   computeOptionLaborRuleBuckets,
@@ -16,7 +16,7 @@ export const composePreviewOptionSotDeltas = (args) => {
   if (!useOptionLaborRuleEngine) {
     return {
       useOptionLaborRuleEngine: false,
-      bucketSource: 'LEGACY_SYNC_RULES',
+      bucketSource: 'UNRESOLVED',
       material_delta_krw: 0,
       size_delta_krw: 0,
       color_delta_krw: 0,
@@ -26,8 +26,8 @@ export const composePreviewOptionSotDeltas = (args) => {
       color_base_delta_krw: 0,
       color_exception_delta_krw: 0,
       color_resolved_delta_krw: null,
-      sot_status: null,
-      sot_warnings: [],
+      sot_status: 'UNRESOLVED',
+      sot_warnings: ['option labor rules are required'],
     };
   }
 

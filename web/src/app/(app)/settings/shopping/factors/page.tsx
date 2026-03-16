@@ -22,6 +22,8 @@ type Policy = {
   fixed_cost_krw?: number | null;
   rounding_unit: number;
   rounding_mode: "CEIL" | "ROUND" | "FLOOR";
+  option_rounding_unit?: number | null;
+  option_rounding_mode?: "CEIL" | "ROUND" | "FLOOR" | null;
   material_factor_set_id: string | null;
   fee_rate?: number | null;
   min_margin_rate_total?: number | null;
@@ -108,6 +110,8 @@ export default function ShoppingFactorsPage() {
   const [fixedCostKrw, setFixedCostKrw] = useState("0");
   const [roundingUnit, setRoundingUnit] = useState("1000");
   const [roundingMode, setRoundingMode] = useState<"CEIL" | "ROUND" | "FLOOR">("CEIL");
+  const [optionRoundingUnit, setOptionRoundingUnit] = useState("500");
+  const [optionRoundingMode, setOptionRoundingMode] = useState<"CEIL" | "ROUND" | "FLOOR">("CEIL");
   const [policyFactorSetId, setPolicyFactorSetId] = useState("");
 
   useEffect(() => {
@@ -126,6 +130,8 @@ export default function ShoppingFactorsPage() {
     setFixedCostKrw(String(Math.max(0, Math.round(Number(activePolicy?.fixed_cost_krw ?? 0)))));
     setRoundingUnit(String(activePolicy?.rounding_unit ?? 1000));
     setRoundingMode((activePolicy?.rounding_mode ?? "CEIL") as "CEIL" | "ROUND" | "FLOOR");
+    setOptionRoundingUnit(String(activePolicy?.option_rounding_unit ?? 500));
+    setOptionRoundingMode((activePolicy?.option_rounding_mode ?? "CEIL") as "CEIL" | "ROUND" | "FLOOR");
     setPolicyFactorSetId(activePolicy?.material_factor_set_id ?? "");
   }, [activePolicy?.policy_id]);
 
@@ -174,6 +180,7 @@ export default function ShoppingFactorsPage() {
       const minMarginRate = parseNumericInput(minMarginRatePercent);
       const fixedCost = parseNumericInput(fixedCostKrw);
       const unit = parseNumericInput(roundingUnit);
+      const optionUnit = parseNumericInput(optionRoundingUnit);
 
       if (marginRate == null || marginRate < 0) throw new Error("마진율(%)은 0 이상 숫자여야 합니다");
       if (materialMarginRate == null || materialMarginRate < 0) throw new Error("소재마진율(%)은 0 이상 숫자여야 합니다");
@@ -183,6 +190,7 @@ export default function ShoppingFactorsPage() {
       if (minMarginRate == null || minMarginRate < 0) throw new Error("최소마진율(%)은 0 이상 숫자여야 합니다");
       if (fixedCost == null || fixedCost < 0) throw new Error("고정가격(원)은 0 이상 숫자여야 합니다");
       if (unit == null || unit <= 0) throw new Error("반올림 단위는 1 이상 숫자여야 합니다");
+      if (optionUnit == null || optionUnit <= 0) throw new Error("옵션 올림 단위는 1 이상 숫자여야 합니다");
 
       const payload = {
         margin_multiplier: 1 + (marginRate / 100),
@@ -194,6 +202,8 @@ export default function ShoppingFactorsPage() {
         fixed_cost_krw: Math.max(0, Math.round(fixedCost)),
         rounding_unit: Math.max(1, Math.round(unit)),
         rounding_mode: roundingMode,
+        option_rounding_unit: Math.max(1, Math.round(optionUnit)),
+        option_rounding_mode: optionRoundingMode,
         material_factor_set_id: policyFactorSetId || null,
         is_active: true,
       };
@@ -447,6 +457,18 @@ export default function ShoppingFactorsPage() {
             <div className="space-y-1">
               <div className="text-xs text-[var(--muted)]">반올림 방식</div>
               <Select value={roundingMode} onChange={(e) => setRoundingMode(e.target.value as "CEIL" | "ROUND" | "FLOOR") }>
+                <option value="CEIL">올림 (CEIL)</option>
+                <option value="ROUND">반올림 (ROUND)</option>
+                <option value="FLOOR">내림 (FLOOR)</option>
+              </Select>
+            </div>
+            <div className="space-y-1">
+              <div className="text-xs text-[var(--muted)]">옵션 올림 단위</div>
+              <Input value={optionRoundingUnit} onChange={(e) => setOptionRoundingUnit(e.target.value)} placeholder="예: 500" />
+            </div>
+            <div className="space-y-1">
+              <div className="text-xs text-[var(--muted)]">옵션 올림 방식</div>
+              <Select value={optionRoundingMode} onChange={(e) => setOptionRoundingMode(e.target.value as "CEIL" | "ROUND" | "FLOOR") }>
                 <option value="CEIL">올림 (CEIL)</option>
                 <option value="ROUND">반올림 (ROUND)</option>
                 <option value="FLOOR">내림 (FLOOR)</option>

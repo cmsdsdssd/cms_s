@@ -7,8 +7,20 @@ import { ActionBar } from "@/components/layout/action-bar";
 import { ShoppingPageHeader } from "@/components/layout/shopping-page-header";
 import { Button } from "@/components/ui/button";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
+import { OptionEntryWorkbench, type WorkbenchEditorGroup, type WorkbenchEditorRow } from "@/components/shopping/OptionEntryWorkbench";
+import { DetailedPriceBreakdownPanel } from "@/components/shopping/DetailedPriceBreakdownPanel";
 import { Input, Select } from "@/components/ui/field";
+import { Sheet } from "@/components/ui/sheet";
+import {
+  buildCurrentProductSyncProfileIndex,
+  DEFAULT_CURRENT_PRODUCT_SYNC_PROFILE,
+  formatCurrentProductSyncProfileLabel,
+  resolveCurrentProductSyncProfile,
+  type CurrentProductSyncProfile,
+} from "@/lib/shop/current-product-sync-profile";
 import { shopApiGet, shopApiSend } from "@/lib/shop/http";
+import { normalizeOptionEntryMappingPayload, sanitizeOptionEntryMappingPayload } from "@/lib/shop/option-entry-mapping";
+import type { GalleryDetailSummary } from "@/lib/shop/channel-products-gallery-detail";
 import {
   inferMappingOptionSelection,
   type MappingOptionAllowlist,
@@ -29,6 +41,7 @@ type Mapping = {
   master_item_id: string;
   external_product_no: string;
   external_variant_code: string | null;
+  current_product_sync_profile?: CurrentProductSyncProfile | null;
   sync_rule_set_id?: string | null;
   option_price_mode?: "SYNC" | "MANUAL" | null;
   option_material_code?: string | null;
@@ -50,19 +63,34 @@ type Mapping = {
   updated_at: string;
 };
 
-type SyncRuleSet = {
-  rule_set_id: string;
-  channel_id: string;
-  name: string;
-  description?: string | null;
-  is_active: boolean;
-};
-
 type PricingPolicy = {
   policy_id: string;
   channel_id: string;
   policy_name: string;
   is_active: boolean;
+};
+
+type GalleryCardSummary = {
+  card_id: string;
+  channel_id: string;
+  master_item_id: string;
+  external_product_no: string;
+  model_name: string | null;
+  thumbnail_url: string | null;
+  variant_count: number;
+  base_count: number;
+  active_count: number;
+  mapping_count: number;
+  has_unresolved: boolean;
+  publish_status: 'PUBLISHED' | 'UNPUBLISHED' | 'UNRESOLVED';
+  published_base_price_krw: number | null;
+  published_min_price_krw: number | null;
+  published_max_price_krw: number | null;
+  updated_at: string | null;
+};
+
+type GalleryCardsResponse = {
+  data: GalleryCardSummary[];
 };
 
 type MasterSuggest = {
@@ -113,8 +141,49 @@ type RecomputeResponse = {
   publish_version?: string;
 };
 
+
+type PushResponse = {
+  ok: boolean;
+  job_id: string;
+  publish_version?: string | null;
+  compute_request_id?: string | null;
+  total: number;
+  success: number;
+  failed: number;
+  skipped: number;
+};
+
+type SaveWorkbenchResponse = {
+  savedRows: Array<Record<string, unknown>>;
+  recompute: RecomputeResponse;
+  push: PushResponse;
+};
+
 type VariantOptionDraft = MappingOptionSelection & {
   option_size_value_text: string;
+};
+
+type WorkbenchDetailResponse = {
+  data: {
+    card: {
+      channel_id: string;
+      master_item_id: string;
+      external_product_no: string;
+      model_name: string | null;
+      image_url: string | null;
+    };
+    detail: GalleryDetailSummary;
+    explicit_mappings: Array<Record<string, unknown>>;
+    central_registries: {
+      materials: Array<{ material_code: string; material_label: string }>;
+      color_buckets: Array<{ color_bucket_id: string; bucket_label: string; sell_delta_krw: number }>;
+      addon_masters: Array<Record<string, unknown>>;
+      notice_codes: Array<Record<string, unknown>>;
+      other_reason_codes: Array<Record<string, unknown>>;
+    };
+    shared_size_choices: Array<{ value: string; label: string; delta_krw?: number | null }>;
+    shared_size_choices_by_material: Record<string, Array<{ value: string; label: string; delta_krw?: number | null }>>;
+  };
 };
 
 type LoadVariantsInput = {
@@ -136,6 +205,7 @@ type MappingWritePayload = {
   option_decoration_code: string | null;
   option_size_value: number | null;
   option_price_delta_krw: number | null;
+  current_product_sync_profile: CurrentProductSyncProfile;
   option_price_mode: "SYNC" | "MANUAL";
   option_manual_target_krw: number | null;
   include_master_plating_labor: boolean;
@@ -245,6 +315,39 @@ const optionSummary = (mapping: Partial<MappingOptionSelection>): string => {
   return parts.join(" / ") || "-";
 };
 
+const normalizeChoiceKey = (value: string | null | undefined): string =>
+  String(value ?? "").trim().toLowerCase().replace(/\s+/g, "");
+
+const inferDecorMasterId = (
+  optionValue: string,
+  choices: Array<{ value: string; label: string }>,
+): string | null => {
+  const normalizedValue = normalizeChoiceKey(optionValue);
+  const match = choices.find((choice) => {
+    const label = normalizeChoiceKey(choice.label);
+    const value = normalizeChoiceKey(choice.value);
+    return normalizedValue && (normalizedValue === label || normalizedValue === value || label.includes(normalizedValue) || normalizedValue.includes(label));
+  });
+  if (match?.value) return match.value;
+  return choices.length === 1 ? choices[0]?.value ?? null : null;
+};
+
+const inferAddonMaster = (
+  optionValue: string,
+  choices: Array<{ value: string; label: string; delta_krw?: number | null }>,
+): { addon_master_id: string | null; delta_krw: number | null } => {
+  const normalizedValue = normalizeChoiceKey(optionValue);
+  const match = choices.find((choice) => {
+    const label = normalizeChoiceKey(choice.label);
+    const value = normalizeChoiceKey(choice.value);
+    return normalizedValue && (normalizedValue === label || normalizedValue === value || label.includes(normalizedValue) || normalizedValue.includes(label));
+  });
+  return {
+    addon_master_id: match?.value ?? null,
+    delta_krw: match?.delta_krw == null ? null : Math.round(Number(match.delta_krw)),
+  };
+};
+
 const axisCellText = (axis: MappingOptionAxis | null | undefined): string => {
   if (!axis) return "-";
   const name = String(axis.name ?? "").trim();
@@ -275,6 +378,13 @@ export default function ShoppingMappingsPage() {
   });
   const mappings = useMemo(() => mappingsQuery.data?.data ?? [], [mappingsQuery.data?.data]);
 
+  const galleryQuery = useQuery({
+    queryKey: ["shop-gallery-products", effectiveChannelId],
+    enabled: Boolean(effectiveChannelId),
+    queryFn: () => shopApiGet<GalleryCardsResponse>(`/api/channel-products/gallery?channel_id=${encodeURIComponent(effectiveChannelId)}`),
+  });
+  const galleryCards = galleryQuery.data?.data ?? [];
+
   const pricingPoliciesQuery = useQuery({
     queryKey: ["shop-pricing-policies", effectiveChannelId],
     enabled: Boolean(effectiveChannelId),
@@ -286,16 +396,6 @@ export default function ShoppingMappingsPage() {
   const pricingPolicies = pricingPoliciesQuery.data?.data ?? [];
 
 
-  const syncRuleSetsQuery = useQuery({
-    queryKey: ["shop-sync-rule-sets", effectiveChannelId],
-    enabled: Boolean(effectiveChannelId),
-    queryFn: () =>
-      shopApiGet<{ data: SyncRuleSet[] }>(
-        `/api/sync-rule-sets?channel_id=${encodeURIComponent(effectiveChannelId)}&only_active=true`,
-      ),
-  });
-  const syncRuleSets = syncRuleSetsQuery.data?.data ?? [];
-
   const [masterItemId, setMasterItemId] = useState("");
   const [masterQuery, setMasterQuery] = useState("");
   const [masterQueryDebounced, setMasterQueryDebounced] = useState("");
@@ -303,7 +403,6 @@ export default function ShoppingMappingsPage() {
   const [externalProductNo, setExternalProductNo] = useState("");
   const [loadedVariants, setLoadedVariants] = useState<VariantCandidate[]>([]);
   const [selectedVariants, setSelectedVariants] = useState<Record<string, boolean>>({});
-  const [variantDeltaByCode, setVariantDeltaByCode] = useState<Record<string, string>>({});
   const [variantOptionDraftsByCode, setVariantOptionDraftsByCode] = useState<Record<string, VariantOptionDraft>>({});
   const [loadedOptionAllowlist, setLoadedOptionAllowlist] = useState<MappingOptionAllowlist>(EMPTY_OPTION_ALLOWLIST);
   const [savedOptionCategories, setSavedOptionCategories] = useState<SavedOptionCategoryRow[]>([]);
@@ -311,6 +410,11 @@ export default function ShoppingMappingsPage() {
   const [canonicalProductNo, setCanonicalProductNo] = useState("");
   const [editingRowId, setEditingRowId] = useState<string | null>(null);
   const [focusedVariantCode, setFocusedVariantCode] = useState("");
+  const [workbenchDraftsByKey, setWorkbenchDraftsByKey] = useState<Record<string, WorkbenchEditorRow>>({});
+  const [currentProductSyncProfileDraft, setCurrentProductSyncProfileDraft] = useState<CurrentProductSyncProfile>(DEFAULT_CURRENT_PRODUCT_SYNC_PROFILE);
+  const [isDetailOpen, setIsDetailOpen] = useState(false);
+  const [isWorkbenchOpen, setIsWorkbenchOpen] = useState(false);
+  const [selectedGalleryCardId, setSelectedGalleryCardId] = useState<string | null>(null);
 
   useEffect(() => {
     const timer = window.setTimeout(() => setMasterQueryDebounced(masterQuery.trim()), 180);
@@ -329,13 +433,10 @@ export default function ShoppingMappingsPage() {
   });
   const masterSuggestions = masterSuggestQuery.data?.data ?? [];
 
-  const effectiveSyncRuleSetId = syncRuleSets[0]?.rule_set_id || "";
-  const activeSyncRuleSetName = syncRuleSets[0]?.name || "-";
-
+    
   const resetVariantState = () => {
     setLoadedVariants([]);
     setSelectedVariants({});
-    setVariantDeltaByCode({});
     setVariantOptionDraftsByCode({});
     setLoadedOptionAllowlist(EMPTY_OPTION_ALLOWLIST);
     setSavedOptionCategories([]);
@@ -346,6 +447,10 @@ export default function ShoppingMappingsPage() {
 
   const resetEditor = () => {
     setEditingRowId(null);
+    setIsDetailOpen(false);
+    setIsWorkbenchOpen(false);
+    setSelectedGalleryCardId(null);
+    setCurrentProductSyncProfileDraft(DEFAULT_CURRENT_PRODUCT_SYNC_PROFILE);
     setMasterItemId("");
     setMasterQuery("");
     setMasterLabel("");
@@ -360,6 +465,13 @@ export default function ShoppingMappingsPage() {
   }, [canonicalProductNo, externalProductNo, resolvedProductNo]);
 
   const activeProductNo = canonicalProductNo || resolvedProductNo || externalProductNo.trim();
+
+  const workbenchDetailQuery = useQuery({
+    queryKey: ["shop-workbench-detail", effectiveChannelId, masterItemId.trim(), activeProductNo],
+    enabled: Boolean(effectiveChannelId && masterItemId.trim() && activeProductNo),
+    queryFn: () => shopApiGet<WorkbenchDetailResponse>(`/api/channel-products/gallery-detail?channel_id=${encodeURIComponent(effectiveChannelId)}&master_item_id=${encodeURIComponent(masterItemId.trim())}&external_product_no=${encodeURIComponent(activeProductNo)}`),
+  });
+  const workbenchDetail = workbenchDetailQuery.data?.data ?? null;
   const hasEditorScope = Boolean(masterItemId.trim() || productCandidates.length > 0);
 
   const editorMappings = useMemo(() => {
@@ -382,6 +494,11 @@ export default function ShoppingMappingsPage() {
     () => editorMappings.some((row) => row.is_active),
     [editorMappings],
   );
+  const resolveScopedCurrentProductSyncProfile = (nextMasterItemId: string, nextExternalProductNo: string) => {
+    return resolveCurrentProductSyncProfile(
+      mappings.filter((row) => row.master_item_id === nextMasterItemId && row.external_product_no.trim() === nextExternalProductNo.trim()),
+    );
+  };
   const activePricingPolicy = useMemo(
     () => pricingPolicies.find((policy) => policy.is_active) ?? null,
     [pricingPolicies],
@@ -408,6 +525,18 @@ export default function ShoppingMappingsPage() {
     ));
     return ids.length === 1 ? ids[0] : "";
   }, [editorMappings]);
+  const scopedCurrentProductSyncProfile = useMemo(
+    () => resolveCurrentProductSyncProfile(editorMappings, DEFAULT_CURRENT_PRODUCT_SYNC_PROFILE),
+    [editorMappings],
+  );
+  const galleryCardSyncProfileIndex = useMemo(
+    () => buildCurrentProductSyncProfileIndex(mappings, (row) => `${row.master_item_id}::${row.external_product_no.trim()}`),
+    [mappings],
+  );
+
+  useEffect(() => {
+    setCurrentProductSyncProfileDraft(scopedCurrentProductSyncProfile);
+  }, [scopedCurrentProductSyncProfile]);
 
 
   const findExistingRowForVariant = (variant: VariantCandidate): Mapping | null => {
@@ -474,7 +603,6 @@ export default function ShoppingMappingsPage() {
         });
 
         nextDrafts[variantCode] = optionDraftWithLegacy(toVariantOptionDraft(inferred), existing);
-        nextDeltas[variantCode] = existing?.option_price_delta_krw != null ? String(existing.option_price_delta_krw) : "";
         if (existing) nextSelected[variantCode] = true;
       }
 
@@ -487,7 +615,6 @@ export default function ShoppingMappingsPage() {
 
       setLoadedVariants(data.variants ?? []);
       setSelectedVariants(nextSelected);
-      setVariantDeltaByCode(nextDeltas);
       setVariantOptionDraftsByCode(nextDrafts);
       setLoadedOptionAllowlist(data.option_detail_allowlist ?? EMPTY_OPTION_ALLOWLIST);
       setSavedOptionCategories(data.saved_option_categories ?? []);
@@ -536,42 +663,34 @@ export default function ShoppingMappingsPage() {
 
   const buildVariantPayload = (variant: VariantCandidate): MappingWritePayload => {
     const variantCode = normalizeVariantCode(variant.variant_code);
-    const existing = findExistingRowForVariant(variant);
     const draft = variantOptionDraftsByCode[variantCode] ?? toVariantOptionDraft(null);
-    const delta = parseOptionalNumber(variantDeltaByCode[variantCode] ?? "");
     const optionSizeValue = parseOptionalNumber(draft.option_size_value_text);
-    const optionPriceMode: "SYNC" | "MANUAL" = existing?.option_price_mode === "MANUAL" ? "MANUAL" : "SYNC";
-    const syncRuleSet = optionPriceMode === "SYNC"
-      ? effectiveSyncRuleSetId
-        || existing?.sync_rule_set_id
-        || inferredSyncRuleSetId
-      : "";
 
     if (!effectiveChannelId) throw new Error("channel_id is required");
     if (!masterItemId.trim()) throw new Error("master_item_id is required");
     if (!activeProductNo) throw new Error("external_product_no is required");
     if (!variantCode) throw new Error("external_variant_code is required");
-    if (delta != null && (!Number.isInteger(delta) || delta % 1000 !== 0)) throw new Error("option_price_delta_krw must be 1000 KRW step");
 
     return {
       channel_id: effectiveChannelId,
       master_item_id: masterItemId.trim(),
       external_product_no: activeProductNo,
       external_variant_code: variantCode,
-      sync_rule_set_id: syncRuleSet || null,
+      sync_rule_set_id: null,
       option_material_code: draft.option_material_code,
       option_color_code: draft.option_color_code,
       option_decoration_code: draft.option_decoration_code,
       option_size_value: optionSizeValue,
-      option_price_delta_krw: delta,
-      option_price_mode: optionPriceMode,
-      option_manual_target_krw: optionPriceMode === "MANUAL" ? existing?.option_manual_target_krw ?? null : null,
-      include_master_plating_labor: existing?.include_master_plating_labor !== false,
-      sync_rule_material_enabled: existing?.sync_rule_material_enabled !== false,
-      sync_rule_weight_enabled: existing?.sync_rule_weight_enabled !== false,
-      sync_rule_plating_enabled: existing?.sync_rule_plating_enabled !== false,
-      sync_rule_decoration_enabled: existing?.sync_rule_decoration_enabled !== false,
-      sync_rule_margin_rounding_enabled: existing?.sync_rule_margin_rounding_enabled !== false,
+      option_price_delta_krw: null,
+      current_product_sync_profile: currentProductSyncProfileDraft,
+      option_price_mode: "SYNC",
+      option_manual_target_krw: null,
+      include_master_plating_labor: true,
+      sync_rule_material_enabled: true,
+      sync_rule_weight_enabled: true,
+      sync_rule_plating_enabled: true,
+      sync_rule_decoration_enabled: true,
+      sync_rule_margin_rounding_enabled: true,
       mapping_source: "MANUAL",
       is_active: true,
     };
@@ -607,6 +726,77 @@ export default function ShoppingMappingsPage() {
     onError: (error: Error) => toast.error(error.message),
   });
 
+  const saveWorkbenchRows = useMutation({
+    mutationFn: async (): Promise<SaveWorkbenchResponse> => {
+      if (!effectiveChannelId) throw new Error('channel_id is required');
+      if (!activeProductNo) throw new Error('external_product_no is required');
+      if (!masterItemId.trim()) throw new Error('master_item_id is required');
+      await shopApiSend<{ ok: boolean }>("/api/channel-products/current-product-sync-profile", "POST", {
+        channel_id: effectiveChannelId,
+        master_item_id: masterItemId.trim(),
+        current_product_sync_profile: currentProductSyncProfileDraft,
+      });
+      if (!hasActivePricingPolicy) {
+        throw new Error('옵션행 저장 후 storefront 반영을 위해 활성 가격 정책이 필요합니다. 정책 및 팩터를 먼저 저장하세요.');
+      }
+      const channelProductIds = mappings
+        .filter((row) => row.channel_id === effectiveChannelId && row.master_item_id === masterItemId.trim() && row.external_product_no === activeProductNo && row.is_active)
+        .map((row) => row.channel_product_id)
+        .filter(Boolean);
+      if (channelProductIds.length === 0) {
+        throw new Error('storefront 반영 대상 활성 매핑이 없습니다. 먼저 매핑을 저장하세요.');
+      }
+      const rows = Object.values(workbenchDraftsByKey).map((row) => sanitizeOptionEntryMappingPayload(normalizeOptionEntryMappingPayload({
+        channel_id: effectiveChannelId,
+        external_product_no: activeProductNo,
+        option_name: row.option_name,
+        option_value: row.option_value,
+        category_key: row.category_key,
+        material_registry_code: row.material_registry_code,
+        weight_g: row.weight_g,
+        combo_code: row.combo_code,
+        color_bucket_id: row.color_bucket_id,
+        decor_master_id: row.decor_master_id,
+        addon_master_id: row.addon_master_id,
+        other_reason_code: row.other_reason_code,
+        explicit_delta_krw: row.explicit_delta_krw,
+        notice_code: row.notice_code,
+        label_snapshot: row.option_value,
+        is_active: true,
+      })));
+      const saved = await shopApiSend<{ data: Array<Record<string, unknown>> }>("/api/channel-option-entry-mappings", "POST", { rows });
+      const recompute = await shopApiSend<RecomputeResponse>("/api/pricing/recompute", "POST", {
+        channel_id: effectiveChannelId,
+        master_item_ids: [masterItemId.trim()],
+        pricing_algo_version: 'REVERSE_FEE_V2',
+        external_product_no: activeProductNo,
+      });
+      if (!recompute.publish_version) {
+        throw new Error('recompute 결과에 publish_version이 없어 storefront push를 진행할 수 없습니다.');
+      }
+      const push = await shopApiSend<PushResponse>("/api/channel-prices/push", "POST", {
+        channel_id: effectiveChannelId,
+        channel_product_ids: channelProductIds,
+        publish_version: recompute.publish_version,
+        run_type: 'MANUAL',
+      });
+      return {
+        savedRows: saved.data ?? [],
+        recompute,
+        push,
+      };
+    },
+    onSuccess: async (result) => {
+      toast.success(`옵션 행 저장 완료 · publish ${result.recompute.publish_version ?? '-'} · storefront push ${result.push.success}/${result.push.total}`);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["shop-workbench-detail", effectiveChannelId, masterItemId.trim(), activeProductNo] }),
+        queryClient.invalidateQueries({ queryKey: ["shop-mappings", effectiveChannelId] }),
+        queryClient.invalidateQueries({ queryKey: ["shop-gallery-products", effectiveChannelId] }),
+      ]);
+    },
+    onError: (error: Error) => toast.error(error.message),
+  });
+
   const recomputeInitialPricing = useMutation({
     mutationFn: async () => {
       const nextMasterItemId = masterItemId.trim();
@@ -619,6 +809,7 @@ export default function ShoppingMappingsPage() {
         channel_id: effectiveChannelId,
         master_item_ids: [nextMasterItemId],
         pricing_algo_version: "REVERSE_FEE_V2",
+        external_product_no: activeProductNo,
       });
     },
     onSuccess: (response) => {
@@ -653,8 +844,28 @@ export default function ShoppingMappingsPage() {
     onError: (error: Error) => toast.error(error.message),
   });
 
+  const openGalleryCard = (card: GalleryCardSummary) => {
+    setSelectedGalleryCardId(card.card_id);
+    const targetRow = mappings.find((row) => row.master_item_id === card.master_item_id && row.external_product_no === card.external_product_no && !String(row.external_variant_code ?? '').trim())
+      ?? mappings.find((row) => row.master_item_id === card.master_item_id && row.external_product_no === card.external_product_no)
+      ?? null;
+    if (!targetRow) {
+      setCurrentProductSyncProfileDraft(resolveScopedCurrentProductSyncProfile(card.master_item_id, card.external_product_no));
+      setMasterItemId(card.master_item_id);
+      setMasterQuery(card.model_name ?? card.master_item_id);
+      setMasterLabel(card.model_name ?? card.master_item_id);
+      setExternalProductNo(card.external_product_no);
+      requestVariantLoad({ masterItemId: card.master_item_id, externalProductNo: card.external_product_no, toastOnSuccess: false });
+      setIsDetailOpen(true);
+      return;
+    }
+    startEdit(targetRow);
+    setIsDetailOpen(true);
+  };
+
   const startEdit = (row: Mapping) => {
     const variantCode = normalizeVariantCode(row.external_variant_code);
+    setCurrentProductSyncProfileDraft(resolveScopedCurrentProductSyncProfile(row.master_item_id, row.external_product_no));
     setEditingRowId(row.channel_product_id);
     setMasterItemId(row.master_item_id);
     setMasterQuery(row.master_item_id);
@@ -724,6 +935,88 @@ export default function ShoppingMappingsPage() {
 
   const activeChannelName = channels.find((channel) => channel.channel_id === effectiveChannelId)?.channel_name ?? "None";
 
+  useEffect(() => {
+    const rows = workbenchDetail?.detail?.editor_rows ?? [];
+    const decorChoices = loadedOptionAllowlist.decors.map((choice) => ({ value: choice.decoration_master_id ?? choice.value, label: choice.label }));
+    const addonChoices = ((workbenchDetail?.central_registries?.addon_masters ?? []) as Array<{ addon_master_id?: string; addon_name?: string; addon_code?: string; base_amount_krw?: number; extra_delta_krw?: number }>).map((row) => ({
+      value: row.addon_master_id ?? "",
+      label: row.addon_name ?? row.addon_code ?? row.addon_master_id ?? "-",
+      delta_krw: Math.round(Number(row.base_amount_krw ?? 0)) + Math.round(Number(row.extra_delta_krw ?? 0)),
+    }));
+    setWorkbenchDraftsByKey(Object.fromEntries(rows.map((row: WorkbenchEditorRow) => {
+      const normalizedCategoryKey = row.option_name === "장식" && row.category_key === "MATERIAL"
+        ? "DECOR"
+        : row.category_key;
+      const normalizedRow = { ...row, category_key: normalizedCategoryKey };
+      if (normalizedCategoryKey === "DECOR" && !normalizedRow.decor_master_id) {
+        const inferredDecorMasterId = inferDecorMasterId(normalizedRow.option_value, decorChoices);
+        return [normalizedRow.entry_key, { ...normalizedRow, decor_master_id: inferredDecorMasterId }];
+      }
+      if (normalizedCategoryKey === "ADDON" && !normalizedRow.addon_master_id) {
+        const inferredAddon = inferAddonMaster(normalizedRow.option_value, addonChoices);
+        return [normalizedRow.entry_key, { ...normalizedRow, addon_master_id: inferredAddon.addon_master_id, resolved_delta_krw: inferredAddon.delta_krw ?? normalizedRow.resolved_delta_krw }];
+      }
+      return [normalizedRow.entry_key, normalizedRow];
+    })));
+  }, [loadedOptionAllowlist.decors, workbenchDetail]);
+
+  const activeWorkbenchMaterialCode = useMemo(() => {
+    const explicitMaterial = Object.values(workbenchDraftsByKey).find((row) => row.category_key === "MATERIAL" && row.material_registry_code)?.material_registry_code;
+    return explicitMaterial ?? workbenchDetail?.detail?.master_material_code ?? null;
+  }, [workbenchDraftsByKey, workbenchDetail]);
+
+  const selectedVariantCount = selectedVariantList.length;
+  const selectedGalleryCard = useMemo(
+    () => galleryCards.find((card) => card.card_id === selectedGalleryCardId) ?? null,
+    [galleryCards, selectedGalleryCardId],
+  );
+  const selectedGalleryCardSyncProfile = useMemo(() => {
+    if (!selectedGalleryCard) return DEFAULT_CURRENT_PRODUCT_SYNC_PROFILE;
+    return galleryCardSyncProfileIndex.get(`${selectedGalleryCard.master_item_id}::${selectedGalleryCard.external_product_no.trim()}`) ?? DEFAULT_CURRENT_PRODUCT_SYNC_PROFILE;
+  }, [galleryCardSyncProfileIndex, selectedGalleryCard]);
+  const focusedVariantPriceRow = useMemo(() => {
+    if (!focusedVariant) return null;
+    const focusedCode = normalizeVariantCode(focusedVariant.variant_code);
+    return (workbenchDetail?.detail?.variant_rows ?? [])
+      .find((row) => normalizeVariantCode(row.variantCode) === focusedCode) ?? null;
+  }, [focusedVariant, workbenchDetail]);
+  const detailBaseBreakdown = workbenchDetail?.detail?.base_breakdown ?? null;
+  const effectiveFocusedVariant = focusedVariant ?? loadedVariants[0] ?? null;
+  const effectiveFocusedVariantCode = effectiveFocusedVariant ? normalizeVariantCode(effectiveFocusedVariant.variant_code) : "";
+  const effectiveFocusedVariantPriceRow = useMemo(() => {
+    if (!effectiveFocusedVariant) return null;
+    const focusedCode = normalizeVariantCode(effectiveFocusedVariant.variant_code);
+    return (workbenchDetail?.detail?.variant_rows ?? [])
+      .find((row) => normalizeVariantCode(row.variantCode) === focusedCode) ?? null;
+  }, [effectiveFocusedVariant, workbenchDetail]);
+  const focusedVariantCurrentAdditionalKrw = useMemo(() => {
+    if (!effectiveFocusedVariant) return null;
+    return (effectiveFocusedVariant.options ?? []).reduce((sum, axis) => {
+      const optionName = String(axis.name ?? '').trim();
+      const optionValue = String(axis.value ?? '').trim();
+      const row = Object.values(workbenchDraftsByKey).find((candidate) => candidate.option_name === optionName && candidate.option_value === optionValue)
+        ?? (workbenchDetail?.detail?.editor_rows ?? []).find((candidate: WorkbenchEditorRow) => candidate.option_name === optionName && candidate.option_value === optionValue)
+        ?? null;
+      return sum + Math.round(Number(row?.resolved_delta_krw ?? 0));
+    }, 0);
+  }, [effectiveFocusedVariant, workbenchDraftsByKey, workbenchDetail]);
+  const focusedVariantCurrentFinalKrw = useMemo(() => {
+    if (focusedVariantCurrentAdditionalKrw == null) return null;
+    return Math.max(0, Math.round(Number(workbenchDetail?.detail?.base_price_krw ?? 0)) + focusedVariantCurrentAdditionalKrw);
+  }, [focusedVariantCurrentAdditionalKrw, workbenchDetail]);
+  const focusedVariantStorefrontFinalKrw = effectiveFocusedVariantPriceRow?.finalPriceKrw ?? null;
+  const focusedVariantIsMatch = focusedVariantCurrentFinalKrw != null
+    && focusedVariantStorefrontFinalKrw != null
+    && focusedVariantCurrentFinalKrw === focusedVariantStorefrontFinalKrw;
+  const focusedStorefrontAxisEntryKeys = useMemo(
+    () => new Set(
+      (effectiveFocusedVariant?.options ?? [])
+        .map((axis) => `${String(axis.name ?? '').trim()}::${String(axis.value ?? '').trim()}`)
+        .filter((entryKey) => entryKey !== '::'),
+    ),
+    [effectiveFocusedVariant],
+  );
+
   return (
     <div className="space-y-4">
       <ActionBar
@@ -780,8 +1073,8 @@ export default function ShoppingMappingsPage() {
         ]}
       />
 
-      <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-        <Card>
+      <div className="space-y-4">
+        <Card className="hidden">
           <CardHeader title="편집기" description={editingRowId ? `수정 중 ${editingRowId}` : "채널, 마스터, 상품번호를 선택하세요."} />
           <CardBody className="space-y-4">
             <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
@@ -801,15 +1094,6 @@ export default function ShoppingMappingsPage() {
                     </option>
                   ))}
                 </Select>
-              </div>
-              <div className="space-y-2">
-                <div className="text-xs text-[var(--muted)]">채널 기본 룰세트</div>
-                <div className="rounded-[var(--radius)] border border-[var(--hairline)] bg-[var(--panel)] px-3 py-2 text-sm">
-                  {activeSyncRuleSetName}
-                </div>
-                <div className="text-[11px] text-[var(--muted)]">
-                  SYNC 저장은 이 채널의 활성 룰세트를 자동으로 사용합니다.
-                </div>
               </div>
             </div>
 
@@ -850,7 +1134,6 @@ export default function ShoppingMappingsPage() {
               </div>
             </div>
 
-
             <div className="grid grid-cols-1 gap-3 rounded-[var(--radius)] border border-[var(--hairline)] bg-[var(--panel)] p-3 text-sm md:grid-cols-4">
               <div>
                 <div className="text-[11px] text-[var(--muted)]">요청값</div>
@@ -878,436 +1161,540 @@ export default function ShoppingMappingsPage() {
                 : "`최초 계산` 전에 `정책 및 팩터`에서 활성 가격 정책을 먼저 저장하세요. 활성 정책이 없으면 현재 마스터의 기본가 row와 옵션 row 계산을 시작할 수 없습니다."}
             </div>
 
-            {(channelsQuery.error || mappingsQuery.error || pricingPoliciesQuery.error || syncRuleSetsQuery.error) ? (
+            {(channelsQuery.error || mappingsQuery.error || pricingPoliciesQuery.error) ? (
               <div className="rounded-[var(--radius)] border border-red-300 bg-red-500/10 px-3 py-2 text-sm text-red-700">
-                {describeError(channelsQuery.error ?? mappingsQuery.error ?? pricingPoliciesQuery.error ?? syncRuleSetsQuery.error)}
+                {describeError(channelsQuery.error ?? mappingsQuery.error ?? pricingPoliciesQuery.error)}
               </div>
             ) : null}
           </CardBody>
         </Card>
 
-        <Card>
-          <CardHeader
-            title="기존 매핑"
-            description={hasEditorScope ? "현재 편집 대상 기준으로 필터링했습니다." : "최신 row를 보여줍니다."}
-          />
-          <CardBody className="space-y-3">
-            <div className="text-xs text-[var(--muted)]">표시 {visibleMappings.length} / 전체 {mappings.length} / 기본가 {statusBaseRowCount} / 옵션 {statusVariantRowCount}</div>
-
-            {visibleMappings.length === 0 ? (
-              <div className="rounded-[var(--radius)] border border-dashed border-[var(--hairline)] px-3 py-8 text-center text-sm text-[var(--muted)]">
-                표시할 매핑이 없습니다.
-              </div>
-            ) : (
-              <div className="max-h-[36rem] overflow-auto rounded-[var(--radius)] border border-[var(--hairline)]">
-                <table className="w-full text-sm">
-                  <thead className="bg-[var(--panel)] text-left">
-                    <tr>
-                      <th className="px-3 py-2">상품</th>
-                      <th className="px-3 py-2">마스터</th>
-                      <th className="px-3 py-2">상세</th>
-                      <th className="px-3 py-2">추가금</th>
-                      <th className="px-3 py-2">수정 시각</th>
-                      <th className="px-3 py-2">작업</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {visibleMappings.map((row) => (
-                      <tr
-                        key={row.channel_product_id}
-                        className={`border-t border-[var(--hairline)] ${editingRowId === row.channel_product_id ? "bg-[var(--panel)]" : ""}`}
-                      >
-                        <td className="px-3 py-2 align-top">
-                          <div className="font-medium">{row.external_product_no}</div>
-                          <div className="text-xs text-[var(--muted)]">{row.external_variant_code || "기본가"}</div>
-                        </td>
-                        <td className="px-3 py-2 align-top">
-                          <div>{row.master_item_id}</div>
-                          <div className="text-xs text-[var(--muted)]">{row.option_price_mode || "SYNC"}</div>
-                        </td>
-                        <td className="px-3 py-2 align-top">{optionSummary(row)}</td>
-                        <td className="px-3 py-2 align-top">{formatMoney(row.option_price_delta_krw)}</td>
-                        <td className="px-3 py-2 align-top text-xs text-[var(--muted)]">{formatWhen(row.updated_at)}</td>
-                        <td className="px-3 py-2 align-top">
-                          <div className="flex flex-wrap gap-2">
-                            <Button size="sm" variant="secondary" onClick={() => startEdit(row)} disabled={loadVariants.isPending}>
-                              Edit
-                            </Button>
-                            <Button
-                              size="sm"
-                              variant="danger"
-                              onClick={() => {
-                                const ok = window.confirm(`Delete mapping ${row.external_product_no} / ${row.external_variant_code || "기본가"}?`);
-                                if (ok) deleteMapping.mutate(row);
-                              }}
-                              disabled={deleteMapping.isPending}
-                            >
-                              Delete
-                            </Button>
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </CardBody>
-        </Card>
-      </div>
-
-      <Card>
-        <CardHeader
-          title="variant 옵션 상세 매핑"
-          description="원본 옵션축을 기준으로 소재, 사이즈, 색상, 장식, variant 추가금을 매핑합니다."
-        />
-        <CardBody className="space-y-4">
-          <div className="rounded-[var(--radius)] border border-[var(--hairline)] bg-[var(--panel)] p-3">
-            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-              <div>
-                <div className="text-sm font-medium">선택 variant 편집</div>
-                <div className="text-xs text-[var(--muted)]">
-                  {focusedVariant ? `${focusedVariantCode} / ${focusedVariant.option_label || "-"}` : "variant를 선택해 편집하고 저장하세요."}
+        <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1.55fr)_minmax(320px,0.95fr)]">
+          <Card>
+            <CardHeader
+              title="쇼핑 갤러리"
+              description="카드가 이 화면의 시작점입니다. 제품 카드를 열면 우측 요약과 아래 option-entry 워크벤치가 같은 범위로 이어집니다."
+            />
+            <CardBody className="space-y-4">
+              <div className="grid grid-cols-1 gap-2 rounded-[var(--radius)] border border-[var(--hairline)] bg-[var(--background)] p-3 text-sm sm:grid-cols-2 xl:grid-cols-4">
+                <div className="rounded-[var(--radius)] border border-[var(--hairline)] bg-[var(--panel)] px-3 py-2">
+                  <div className="text-[11px] text-[var(--muted)]">갤러리 카드</div>
+                  <div className="mt-1 text-base font-semibold">{galleryCards.length}</div>
+                </div>
+                <div className="rounded-[var(--radius)] border border-[var(--hairline)] bg-[var(--panel)] px-3 py-2">
+                  <div className="text-[11px] text-[var(--muted)]">현재 범위 row</div>
+                  <div className="mt-1 text-base font-semibold">{visibleMappings.length}</div>
+                </div>
+                <div className="rounded-[var(--radius)] border border-[var(--hairline)] bg-[var(--panel)] px-3 py-2">
+                  <div className="text-[11px] text-[var(--muted)]">불러온 variant</div>
+                  <div className="mt-1 text-base font-semibold">{loadedVariants.length}</div>
+                </div>
+                <div className="rounded-[var(--radius)] border border-[var(--hairline)] bg-[var(--panel)] px-3 py-2">
+                  <div className="text-[11px] text-[var(--muted)]">워크벤치 행</div>
+                  <div className="mt-1 text-base font-semibold">{(workbenchDetail?.detail?.editor_rows ?? []).length}</div>
                 </div>
               </div>
-              <Button
-                size="sm"
-                onClick={() => {
-                  if (focusedVariant) saveVariant.mutate(focusedVariant);
-                }}
-                disabled={!focusedVariant || saveVariant.isPending}
-              >
-                {saveVariant.isPending && focusedVariant ? "저장 중..." : "선택 variant 저장"}
-              </Button>
-            </div>
 
-            <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-6">
-              <div className="space-y-1">
-                <div className="text-[11px] text-[var(--muted)]">선택 variant</div>
-                <Select value={focusedVariantCode} onChange={(event) => setFocusedVariantCode(event.target.value)}>
-                  <option value="">variant 선택</option>
-                  {loadedVariants.map((variant) => {
-                    const code = normalizeVariantCode(variant.variant_code);
+              {galleryCards.length === 0 ? (
+                <div className="rounded-[var(--radius-lg)] border border-dashed border-[var(--hairline)] bg-[var(--background)] px-3 py-10 text-center text-sm text-[var(--muted)]">
+                  표시할 갤러리 카드가 없습니다.
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-7">
+                  {galleryCards.map((card) => {
+                    const isActive = masterItemId.trim() === card.master_item_id && productCandidates.includes(card.external_product_no.trim());
+                    const syncProfile = galleryCardSyncProfileIndex.get(`${card.master_item_id}::${card.external_product_no.trim()}`) ?? DEFAULT_CURRENT_PRODUCT_SYNC_PROFILE;
+                    const isMarketLinkedCard = syncProfile === "MARKET_LINKED";
                     return (
-                      <option key={code} value={code}>
-                        {code}
-                      </option>
+                      <div
+                        key={card.card_id}
+                        role="button"
+                        tabIndex={0}
+                        className={[
+                          "cursor-pointer rounded-[var(--radius-lg)] border p-3 text-left transition-[transform,border-color,box-shadow,background-color] duration-200",
+                          isMarketLinkedCard
+                            ? isActive
+                              ? "border-[var(--warning)] bg-[linear-gradient(180deg,var(--warning-soft),var(--panel)_42%)] shadow-[var(--shadow)]"
+                              : "border-[var(--warning-soft)] bg-[linear-gradient(180deg,var(--warning-soft),var(--panel)_48%)] hover:-translate-y-0.5 hover:bg-[linear-gradient(180deg,var(--warning-soft),var(--background)_70%)] hover:shadow-[var(--shadow-sm)]"
+                            : isActive
+                              ? "border-[var(--primary)] bg-[var(--panel)] shadow-[var(--shadow)]"
+                              : "border-[var(--hairline)] bg-[var(--panel)] hover:-translate-y-0.5 hover:bg-[var(--background)] hover:shadow-[var(--shadow-sm)]",
+                        ].join(" ")}
+                        onClick={() => openGalleryCard(card)}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter" || event.key === " ") {
+                            event.preventDefault();
+                            openGalleryCard(card);
+                          }
+                        }}
+                      >
+                        <div className="aspect-[4/3] overflow-hidden rounded-[var(--radius)] bg-[var(--background)]">
+                          {card.thumbnail_url ? (
+                            <img src={card.thumbnail_url} alt={card.model_name ?? card.external_product_no} className="h-full w-full object-cover" />
+                          ) : (
+                            <div className="flex h-full items-center justify-center bg-[linear-gradient(135deg,var(--primary-soft),transparent_62%),linear-gradient(180deg,var(--panel),var(--background))] text-xs text-[var(--muted)]">
+                              이미지 없음
+                            </div>
+                          )}
+                        </div>
+                        <div className="mt-3 flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="truncate text-sm font-medium text-[var(--foreground)]">{card.model_name || card.external_product_no}</div>
+                            <div className="mt-1 text-xs text-[var(--muted)]">{card.master_item_id} / {card.external_product_no}</div>
+                          </div>
+                          <div className="flex shrink-0 flex-wrap justify-end gap-1.5">
+                            {isMarketLinkedCard ? (
+                              <div className="rounded-full border border-[var(--warning-soft)] bg-[var(--warning-soft)] px-2 py-1 text-[10px] font-semibold text-[var(--warning)]">
+                                {formatCurrentProductSyncProfileLabel(syncProfile)}
+                              </div>
+                            ) : null}
+                            <div className={`rounded-full border px-2 py-1 text-[10px] ${card.publish_status === "UNRESOLVED" ? "border-[var(--warning-soft)] bg-[var(--warning-soft)] text-[var(--warning)]" : card.publish_status === "PUBLISHED" ? "border-[var(--success-soft)] bg-[var(--success-soft)] text-[var(--success)]" : "border-[var(--hairline)] bg-[var(--background)] text-[var(--muted)]"}`}>
+                              {card.publish_status}
+                            </div>
+                          </div>
+                        </div>
+                        <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-[var(--muted-strong)]">
+                          <div className="rounded-[var(--radius)] border border-[var(--hairline)] bg-[var(--background)] px-2.5 py-2">base {formatMoney(card.published_base_price_krw)}</div>
+                          <div className="rounded-[var(--radius)] border border-[var(--hairline)] bg-[var(--background)] px-2.5 py-2">range {formatMoney(card.published_min_price_krw)} - {formatMoney(card.published_max_price_krw)}</div>
+                          <div className="rounded-[var(--radius)] border border-[var(--hairline)] bg-[var(--background)] px-2.5 py-2">variants {card.variant_count}</div>
+                          <div className="rounded-[var(--radius)] border border-[var(--hairline)] bg-[var(--background)] px-2.5 py-2">rows {card.mapping_count}</div>
+                        </div>
+                        <div className="mt-3 flex justify-end">
+                          <Button size="sm" variant="secondary" onClick={(event) => { event.stopPropagation(); openGalleryCard(card); }}>
+                            열기
+                          </Button>
+                        </div>
+                      </div>
                     );
                   })}
-                </Select>
-              </div>
+                </div>
+              )}
+            </CardBody>
+          </Card>
 
-              <div className="space-y-1">
-                <div className="text-[11px] text-[var(--muted)]">소재</div>
-                <Select
-                  value={focusedDraft?.option_material_code ?? ""}
-                  onChange={(event) => {
-                    if (!focusedVariantCode) return;
-                    const nextMaterial = event.target.value || null;
-                    updateVariantOptionDraft(focusedVariantCode, (current) => {
-                      const nextSizePool = loadedOptionAllowlist.sizes_by_material[nextMaterial ?? ""] ?? [];
-                      const keepCurrentSize = current.option_size_value_text
-                        ? nextSizePool.some((choice) => choice.value === current.option_size_value_text)
-                        : false;
-                      return {
-                        ...current,
-                        option_material_code: nextMaterial,
-                        option_size_value: keepCurrentSize ? current.option_size_value : null,
-                        option_size_value_text: keepCurrentSize ? current.option_size_value_text : "",
-                      };
-                    });
-                  }}
-                  disabled={!focusedDraft}
-                >
-                  <option value="">선택 안함</option>
-                  {focusedMaterialChoices.map((choice) => (
-                    <option key={choice.value} value={choice.value}>
-                      {choice.label}
-                    </option>
-                  ))}
-                </Select>
-              </div>
-
-              <div className="space-y-1">
-                <div className="text-[11px] text-[var(--muted)]">사이즈</div>
-                <Select
-                  value={focusedDraft?.option_size_value_text ?? ""}
-                  onChange={(event) => {
-                    if (!focusedVariantCode) return;
-                    const nextSizeText = event.target.value;
-                    updateVariantOptionDraft(focusedVariantCode, (current) => ({
-                      ...current,
-                      option_size_value: nextSizeText ? Number(nextSizeText) : null,
-                      option_size_value_text: nextSizeText,
-                    }));
-                  }}
-                  disabled={!focusedDraft}
-                >
-                  <option value="">선택 안함</option>
-                  {focusedSizeChoices.map((choice) => (
-                    <option key={choice.value} value={choice.value}>
-                      {choice.label}
-                    </option>
-                  ))}
-                </Select>
-              </div>
-
-              <div className="space-y-1">
-                <div className="text-[11px] text-[var(--muted)]">색상</div>
-                <Select
-                  value={focusedDraft?.option_color_code ?? ""}
-                  onChange={(event) => {
-                    if (!focusedVariantCode) return;
-                    updateVariantOptionDraft(focusedVariantCode, (current) => ({
-                      ...current,
-                      option_color_code: event.target.value || null,
-                    }));
-                  }}
-                  disabled={!focusedDraft}
-                >
-                  <option value="">선택 안함</option>
-                  {focusedColorChoices.map((choice) => (
-                    <option key={choice.value} value={choice.value}>
-                      {choice.label}
-                    </option>
-                  ))}
-                </Select>
-              </div>
-
-              <div className="space-y-1">
-                <div className="text-[11px] text-[var(--muted)]">장식</div>
-                <Select
-                  value={focusedDraft?.option_decoration_code ?? ""}
-                  onChange={(event) => {
-                    if (!focusedVariantCode) return;
-                    updateVariantOptionDraft(focusedVariantCode, (current) => ({
-                      ...current,
-                      option_decoration_code: event.target.value || null,
-                    }));
-                  }}
-                  disabled={!focusedDraft}
-                >
-                  <option value="">선택 안함</option>
-                  {focusedDecorChoices.map((choice) => (
-                    <option key={choice.value} value={choice.value}>
-                      {choice.label}
-                    </option>
-                  ))}
-                </Select>
-              </div>
-
-              <div className="space-y-1">
-                <div className="text-[11px] text-[var(--muted)]">선택 variant 추가금</div>
-                <Input
-                  value={focusedVariantCode ? (variantDeltaByCode[focusedVariantCode] ?? "") : ""}
-                  onChange={(event) => {
-                    if (!focusedVariantCode) return;
-                    setVariantDeltaByCode((prev) => ({ ...prev, [focusedVariantCode]: event.target.value }));
-                  }}
-                  placeholder="예: 3000"
-                  inputMode="numeric"
-                  disabled={!focusedVariantCode}
-                />
-                <div className="text-[11px] text-[var(--muted)]">{optionSummary(focusedExistingMapping ?? {})}</div>
-              </div>
-            </div>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-2">
-            <Button size="sm" variant="secondary" onClick={() => toggleAllVariants(true)} disabled={loadedVariants.length === 0}>
-              Select all
-            </Button>
-            <Button size="sm" variant="secondary" onClick={() => toggleAllVariants(false)} disabled={loadedVariants.length === 0}>
-              Clear all
-            </Button>
-            <Button size="sm" variant="secondary" onClick={selectUnmappedVariants} disabled={loadedVariants.length === 0}>
-              Select unmapped
-            </Button>
-            <Button size="sm" onClick={() => bulkSave.mutate(selectedVariantList)} disabled={bulkSave.isPending || selectedVariantList.length === 0}>
-              {bulkSave.isPending ? "저장 중..." : `일괄 저장 ${selectedVariantList.length}`}
-            </Button>
-            <div className="text-xs text-[var(--muted)]">
-              저장된 카테고리 {savedOptionCategories.length} / allowlist 비어있음 {loadedOptionAllowlist.is_empty ? "예" : "아니오"}
-            </div>
-          </div>
-
-          {loadedVariants.length === 0 ? (
-            <div className="rounded-[var(--radius)] border border-dashed border-[var(--hairline)] px-3 py-10 text-center text-sm text-[var(--muted)]">
-              variant를 불러오면 옵션 매핑을 시작할 수 있습니다.
-            </div>
-          ) : (
-            <div className="overflow-auto rounded-[var(--radius)] border border-[var(--hairline)]">
-              <table className="w-full min-w-[1400px] text-sm">
-                <thead className="bg-[var(--panel)] text-left">
-                  <tr>
-                    <th className="px-3 py-2">선택</th>
-                    <th className="px-3 py-2">variant</th>
-                    <th className="px-3 py-2">상태</th>
-                    {Array.from({ length: variantAxisCount }).map((_, index) => (
-                      <th key={`axis-column-${index + 1}`} className="px-3 py-2">{`Axis ${index + 1}`}</th>
-                    ))}
-                    <th className="px-3 py-2">소재</th>
-                    <th className="px-3 py-2">사이즈</th>
-                    <th className="px-3 py-2">색상</th>
-                    <th className="px-3 py-2">장식</th>
-                    <th className="px-3 py-2">추가금</th>
-                    <th className="px-3 py-2">작업</th>
-                  </tr>
-                </thead>
-                <tbody>
-              {loadedVariants.map((variant) => {
-                const variantCode = normalizeVariantCode(variant.variant_code);
-                const existing = findExistingRowForVariant(variant);
-                const draft = variantOptionDraftsByCode[variantCode] ?? toVariantOptionDraft(null);
-                const materialChoices = withLegacyChoice(loadedOptionAllowlist.materials, draft.option_material_code);
-                const colorChoices = withLegacyChoice(loadedOptionAllowlist.colors, draft.option_color_code);
-                const decorChoices = withLegacyChoice(loadedOptionAllowlist.decors, draft.option_decoration_code);
-                const sizeChoicesBase = loadedOptionAllowlist.sizes_by_material[draft.option_material_code ?? ""] ?? [];
-                const sizeChoices = sizeChoicesBase.length > 0
-                  ? withLegacyChoice(sizeChoicesBase, draft.option_size_value_text)
-                  : [];
-
-                return (
-                  <tr key={variantCode} className={`border-t border-[var(--hairline)] align-top ${focusedVariantCode === variantCode ? "bg-[var(--panel)]" : ""}`}>
-                    <td className="px-3 py-2">
-                      <label className="flex items-center gap-2 text-xs text-[var(--muted)]">
-                          <input
-                            type="checkbox"
-                            checked={selectedVariants[variantCode] === true}
-                            onChange={(event) => setSelectedVariants((prev) => ({ ...prev, [variantCode]: event.target.checked }))}
-                          />
-                          bulk
-                        </label>
-                    </td>
-                    <td className="px-3 py-2">
-                      <div className="font-medium">{variantCode}</div>
-                      {variant.custom_variant_code ? <div className="text-xs text-[var(--muted)]">커스텀 {variant.custom_variant_code}</div> : null}
-                      <div className="text-xs text-[var(--muted)]">{variant.option_label || "-"}</div>
-                    </td>
-                    <td className="px-3 py-2 text-xs">
-                      <div className={`inline-flex rounded-full px-2 py-0.5 ${existing ? "bg-emerald-500/15 text-emerald-700" : "bg-[var(--panel)] text-[var(--muted)]"}`}>
-                        {existing ? "저장됨" : "신규"}
+          <div className="space-y-4">
+            <Card className="hidden">
+              <CardHeader
+                title="선택 제품 요약"
+                description="갤러리에서 연 제품의 가격/상태/option row 범위를 compact하게 확인합니다."
+              />
+              <CardBody className="space-y-4">
+                {selectedGalleryCard ? (
+                  <>
+                    <div className="flex items-start gap-3">
+                      <div className="h-20 w-20 overflow-hidden rounded-[var(--radius)] border border-[var(--hairline)] bg-[var(--background)] shrink-0">
+                        {selectedGalleryCard.thumbnail_url ? (
+                          <img src={selectedGalleryCard.thumbnail_url} alt={selectedGalleryCard.model_name ?? selectedGalleryCard.external_product_no} className="h-full w-full object-cover" />
+                        ) : (
+                          <div className="flex h-full w-full items-center justify-center text-[11px] text-[var(--muted)]">NO IMAGE</div>
+                        )}
                       </div>
-                      <div className="mt-2 text-[var(--muted)]">실몰 {formatMoney(variant.additional_amount)}</div>
-                      <div className="text-[var(--muted)]">매핑 {optionSummary(existing ?? {})}</div>
-                    </td>
-                    {Array.from({ length: variantAxisCount }).map((_, index) => (
-                      <td key={`${variantCode}-axis-${index + 1}`} className="px-3 py-2 text-xs text-[var(--foreground)]">
-                        {axisCellText(variant.options[index])}
-                      </td>
-                    ))}
-                    <td className="px-3 py-2">
-                        <Select
-                          value={draft.option_material_code ?? ""}
-                          onChange={(event) => {
-                            const nextMaterial = event.target.value || null;
-                            updateVariantOptionDraft(variantCode, (current) => {
-                              const nextSizePool = loadedOptionAllowlist.sizes_by_material[nextMaterial ?? ""] ?? [];
-                              const keepCurrentSize = current.option_size_value_text
-                                ? nextSizePool.some((choice) => choice.value === current.option_size_value_text)
-                                : false;
-                              return {
-                                ...current,
-                                option_material_code: nextMaterial,
-                                option_size_value: keepCurrentSize ? current.option_size_value : null,
-                                option_size_value_text: keepCurrentSize ? current.option_size_value_text : "",
-                              };
-                            });
-                          }}
-                        >
-                          <option value="">선택 안함</option>
-                          {materialChoices.map((choice) => (
-                            <option key={choice.value} value={choice.value}>
-                              {choice.label}
-                            </option>
-                          ))}
-                        </Select>
-                    </td>
-                    <td className="px-3 py-2">
-                        <Select
-                          value={draft.option_size_value_text}
-                          onChange={(event) => {
-                            const nextSizeText = event.target.value;
-                            updateVariantOptionDraft(variantCode, (current) => ({
-                              ...current,
-                              option_size_value: nextSizeText ? Number(nextSizeText) : null,
-                              option_size_value_text: nextSizeText,
-                            }));
-                          }}
-                        >
-                          <option value="">선택 안함</option>
-                          {sizeChoices.map((choice) => (
-                            <option key={choice.value} value={choice.value}>
-                              {choice.label}
-                            </option>
-                          ))}
-                        </Select>
-                    </td>
-                    <td className="px-3 py-2">
-                        <Select
-                          value={draft.option_color_code ?? ""}
-                          onChange={(event) => updateVariantOptionDraft(variantCode, (current) => ({
-                            ...current,
-                            option_color_code: event.target.value || null,
-                          }))}
-                        >
-                          <option value="">선택 안함</option>
-                          {colorChoices.map((choice) => (
-                            <option key={choice.value} value={choice.value}>
-                              {choice.label}
-                            </option>
-                          ))}
-                        </Select>
-                    </td>
-                    <td className="px-3 py-2">
-                        <Select
-                          value={draft.option_decoration_code ?? ""}
-                          onChange={(event) => updateVariantOptionDraft(variantCode, (current) => ({
-                            ...current,
-                            option_decoration_code: event.target.value || null,
-                          }))}
-                        >
-                          <option value="">선택 안함</option>
-                          {decorChoices.map((choice) => (
-                            <option key={choice.value} value={choice.value}>
-                              {choice.label}
-                            </option>
-                          ))}
-                        </Select>
-                    </td>
-                    <td className="px-3 py-2">
-                        <Input
-                          value={variantDeltaByCode[variantCode] ?? ""}
-                          onChange={(event) => setVariantDeltaByCode((prev) => ({ ...prev, [variantCode]: event.target.value }))}
-                          list={`delta-options-${variantCode}`}
-                          placeholder="예: 3000"
-                          inputMode="numeric"
-                        />
-                        <datalist id={`delta-options-${variantCode}`}>
-                          {DELTA_OPTIONS.map((amount) => (
-                            <option key={amount} value={String(amount)} />
-                          ))}
-                        </datalist>
-                    </td>
-                    <td className="px-3 py-2">
-                      <div className="flex flex-wrap gap-2">
-                        <Button size="sm" variant="secondary" onClick={() => setFocusedVariantCode(variantCode)}>
-                          Focus
-                        </Button>
-                        <Button size="sm" onClick={() => saveVariant.mutate(variant)} disabled={saveVariant.isPending}>
-                          {saveVariant.isPending && focusedVariantCode === variantCode ? "저장 중..." : "저장"}
-                        </Button>
+                      <div className="min-w-0">
+                        <div className="text-sm font-semibold text-[var(--foreground)]">{selectedGalleryCard.model_name || selectedGalleryCard.external_product_no}</div>
+                        <div className="mt-1 text-xs text-[var(--muted)]">{selectedGalleryCard.master_item_id}</div>
+                        <div className="mt-1 text-xs text-[var(--muted)]">{selectedGalleryCard.external_product_no}</div>
                       </div>
-                    </td>
-                  </tr>
-                );
-              })}
-                </tbody>
-              </table>
-            </div>
-          )}
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2 text-sm">
+                      <div className="rounded-[var(--radius)] border border-[var(--hairline)] bg-[var(--background)] px-3 py-2">
+                        <div className="text-[11px] text-[var(--muted)]">게시 기준가</div>
+                        <div className="mt-1 font-semibold">{formatMoney(selectedGalleryCard.published_base_price_krw)}</div>
+                      </div>
+                      <div className="rounded-[var(--radius)] border border-[var(--hairline)] bg-[var(--background)] px-3 py-2">
+                        <div className="text-[11px] text-[var(--muted)]">게시 가격 범위</div>
+                        <div className="mt-1 font-semibold">{formatMoney(selectedGalleryCard.published_min_price_krw)} - {formatMoney(selectedGalleryCard.published_max_price_krw)}</div>
+                      </div>
+                      <div className="rounded-[var(--radius)] border border-[var(--hairline)] bg-[var(--background)] px-3 py-2">
+                        <div className="text-[11px] text-[var(--muted)]">variant / active row</div>
+                        <div className="mt-1 font-semibold">{selectedGalleryCard.variant_count} / {selectedGalleryCard.active_count}</div>
+                      </div>
+                      <div className="rounded-[var(--radius)] border border-[var(--hairline)] bg-[var(--background)] px-3 py-2">
+                        <div className="text-[11px] text-[var(--muted)]">저장된 option entry</div>
+                        <div className="mt-1 font-semibold">{workbenchDetail?.detail?.mapping_count ?? selectedGalleryCard.mapping_count}</div>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 gap-2 rounded-[var(--radius)] border border-[var(--hairline)] bg-[var(--background)] p-3 text-xs sm:grid-cols-2">
+                      <div>
+                        <div className="text-[11px] text-[var(--muted)]">요청 / 해석 / 기준 상품번호</div>
+                        <div className="mt-1 text-[var(--foreground)]">{externalProductNo.trim() || "-"} / {resolvedProductNo || "-"} / {canonicalProductNo || "-"}</div>
+                      </div>
+                      <div>
+                        <div className="text-[11px] text-[var(--muted)]">설정 상태</div>
+                        <div className="mt-1 text-[var(--foreground)]">{savedOptionCategories.length} saved categories / {loadedOptionAllowlist.materials.length} materials / {loadedOptionAllowlist.colors.length} colors</div>
+                      </div>
+                    </div>
+
+                    {selectedGalleryCard.has_unresolved || workbenchDetail?.detail?.unresolved ? (
+                      <div className="rounded-[var(--radius)] border border-[var(--warning-soft)] bg-[var(--warning-soft)] px-3 py-2 text-sm text-[var(--foreground)]">
+                        <div className="font-medium">미해결 상태가 있습니다.</div>
+                        <div className="mt-1 text-xs text-[var(--muted-strong)]">
+                          {(workbenchDetail?.detail?.unresolved_reasons ?? []).join(" / ") || "갤러리 카드 또는 워크벤치 상태를 확인하세요."}
+                        </div>
+                      </div>
+                    ) : null}
+
+                    <div className="space-y-2">
+                      <div className="text-xs font-semibold tracking-wide text-[var(--muted)]">OPTION ROW SUMMARY</div>
+                      {(workbenchDetail?.detail?.option_rows ?? []).length > 0 ? (
+                        <div className="flex flex-wrap gap-2">
+                          {((workbenchDetail?.detail?.option_rows ?? []) as Array<{ option_axis_index: number; option_name: string; option_value: string; published_delta_krw: number }>).slice(0, 6).map((row) => (
+                            <div key={`${row.option_axis_index}-${row.option_name}-${row.option_value}`} className="rounded-full border border-[var(--hairline)] bg-[var(--panel)] px-3 py-1.5 text-xs text-[var(--foreground)]">
+                              Axis {row.option_axis_index} · {row.option_name} / {row.option_value}
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="rounded-[var(--radius)] border border-dashed border-[var(--hairline)] px-3 py-4 text-sm text-[var(--muted)]">
+                          아직 option row summary가 없습니다.
+                        </div>
+                      )}
+                    </div>
+                  </>
+                ) : (
+                  <div className="rounded-[var(--radius)] border border-dashed border-[var(--hairline)] bg-[var(--background)] px-3 py-10 text-center text-sm text-[var(--muted)]">
+                    갤러리 카드 하나를 열면 이곳에 제품 요약이 붙습니다.
+                  </div>
+                )}
+              </CardBody>
+            </Card>
+
+            <Card className="hidden">
+              <CardHeader
+                title="variant 요약"
+                description="선택한 variant의 저장 상태와 옵션 draft를 compact하게 다룹니다."
+              />
+              <CardBody className="space-y-4">
+                {focusedVariant && focusedDraft ? (
+                  <>
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div>
+                        <div className="text-sm font-semibold text-[var(--foreground)]">{focusedVariant.option_label || normalizeVariantCode(focusedVariant.variant_code) || "variant"}</div>
+                        <div className="mt-1 text-xs text-[var(--muted)]">{normalizeVariantCode(focusedVariant.variant_code) || "variant_code 없음"}</div>
+                      </div>
+                      <div className="flex flex-wrap gap-2 text-[11px]">
+                        <span className={`rounded-full border px-2 py-1 ${focusedExistingMapping ? "border-[var(--success-soft)] bg-[var(--success-soft)] text-[var(--success)]" : "border-[var(--warning-soft)] bg-[var(--warning-soft)] text-[var(--warning)]"}`}>
+                          {focusedExistingMapping ? "저장됨" : "미저장"}
+                        </span>
+                        <span className={`rounded-full border px-2 py-1 ${selectedVariants[focusedVariantCode] ? "border-[var(--primary-soft)] bg-[var(--primary-soft)] text-[var(--primary)]" : "border-[var(--hairline)] bg-[var(--panel)] text-[var(--muted)]"}`}>
+                          {selectedVariants[focusedVariantCode] ? "저장 목록 포함" : "저장 목록 제외"}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2 text-sm">
+                      <div className="rounded-[var(--radius)] border border-[var(--hairline)] bg-[var(--background)] px-3 py-2">
+                        <div className="text-[11px] text-[var(--muted)]">채널 추가금</div>
+                        <div className="mt-1 font-semibold">{formatMoney(focusedVariant.additional_amount)}</div>
+                      </div>
+                      <div className="rounded-[var(--radius)] border border-[var(--hairline)] bg-[var(--background)] px-3 py-2">
+                        <div className="text-[11px] text-[var(--muted)]">예상 최종가</div>
+                        <div className="mt-1 font-semibold">{formatMoney(focusedVariantPriceRow?.finalPriceKrw ?? null)}</div>
+                      </div>
+                      <div className="rounded-[var(--radius)] border border-[var(--hairline)] bg-[var(--background)] px-3 py-2">
+                        <div className="text-[11px] text-[var(--muted)]">매핑 요약</div>
+                        <div className="mt-1 font-semibold">{optionSummary(focusedDraft)}</div>
+                      </div>
+                      <div className="rounded-[var(--radius)] border border-[var(--hairline)] bg-[var(--background)] px-3 py-2">
+                        <div className="text-[11px] text-[var(--muted)]">선택한 저장 대상</div>
+                        <div className="mt-1 font-semibold">{selectedVariantCount}</div>
+                      </div>
+                    </div>
+
+                    <div className="rounded-[var(--radius)] border border-[var(--hairline)] bg-[var(--background)] p-3">
+                      <div className="text-[11px] text-[var(--muted)]">옵션 축</div>
+                      <div className="mt-2 space-y-2">
+                        {(focusedVariant.options ?? []).map((axis, index) => (
+                          <div key={`${axis.name}-${axis.value}-${index}`} className="rounded-[var(--radius)] border border-[var(--hairline)] bg-[var(--panel)] px-3 py-2 text-sm text-[var(--foreground)]">
+                            {axisCellText(axis)}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                      <div className="space-y-2">
+                        <div className="text-xs text-[var(--muted)]">소재</div>
+                        <Select
+                          value={focusedDraft.option_material_code ?? ""}
+                          onChange={(event) => updateVariantOptionDraft(focusedVariantCode, (current) => ({ ...current, option_material_code: event.target.value || null }))}
+                        >
+                          <option value="">선택 안함</option>
+                          {focusedMaterialChoices.map((choice) => <option key={choice.value} value={choice.value}>{choice.label}</option>)}
+                        </Select>
+                      </div>
+                      <div className="space-y-2">
+                        <div className="text-xs text-[var(--muted)]">사이즈</div>
+                        <Select
+                          value={focusedDraft.option_size_value_text}
+                          onChange={(event) => updateVariantOptionDraft(focusedVariantCode, (current) => ({ ...current, option_size_value_text: event.target.value, option_size_value: parseOptionalNumber(event.target.value) }))}
+                        >
+                          <option value="">선택 안함</option>
+                          {focusedSizeChoices.map((choice) => <option key={choice.value} value={choice.value}>{choice.label}</option>)}
+                        </Select>
+                      </div>
+                      <div className="space-y-2">
+                        <div className="text-xs text-[var(--muted)]">색상</div>
+                        <Select
+                          value={focusedDraft.option_color_code ?? ""}
+                          onChange={(event) => updateVariantOptionDraft(focusedVariantCode, (current) => ({ ...current, option_color_code: event.target.value || null }))}
+                        >
+                          <option value="">선택 안함</option>
+                          {focusedColorChoices.map((choice) => <option key={choice.value} value={choice.value}>{choice.label}</option>)}
+                        </Select>
+                      </div>
+                      <div className="space-y-2">
+                        <div className="text-xs text-[var(--muted)]">장식</div>
+                        <Select
+                          value={focusedDraft.option_decoration_code ?? ""}
+                          onChange={(event) => updateVariantOptionDraft(focusedVariantCode, (current) => ({ ...current, option_decoration_code: event.target.value || null }))}
+                        >
+                          <option value="">선택 안함</option>
+                          {focusedDecorChoices.map((choice) => <option key={choice.value} value={choice.value}>{choice.label}</option>)}
+                        </Select>
+                      </div>
+                    </div>
+
+                    <div className="flex flex-wrap gap-2">
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        onClick={() => {
+                          const variantCode = normalizeVariantCode(focusedVariant.variant_code);
+                          setSelectedVariants((prev) => ({ ...prev, [variantCode]: !prev[variantCode] }));
+                        }}
+                      >
+                        {selectedVariants[focusedVariantCode] ? "저장 목록에서 제거" : "저장 목록에 추가"}
+                      </Button>
+                      <Button size="sm" onClick={() => saveVariant.mutate(focusedVariant)} disabled={saveVariant.isPending}>
+                        {saveVariant.isPending ? "저장 중..." : "현재 variant 저장"}
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        onClick={() => bulkSave.mutate(selectedVariantList)}
+                        disabled={bulkSave.isPending || selectedVariantCount === 0}
+                      >
+                        {bulkSave.isPending ? "일괄 저장 중..." : `선택 ${selectedVariantCount}건 일괄 저장`}
+                      </Button>
+                      {focusedExistingMapping ? (
+                        <Button
+                          size="sm"
+                          variant="danger"
+                          onClick={() => {
+                            const ok = window.confirm(`Delete mapping ${focusedExistingMapping.external_product_no} / ${focusedExistingMapping.external_variant_code || "기본가"}?`);
+                            if (ok) deleteMapping.mutate(focusedExistingMapping);
+                          }}
+                          disabled={deleteMapping.isPending}
+                        >
+                          현재 저장 삭제
+                        </Button>
+                      ) : null}
+                    </div>
+                  </>
+                ) : (
+                  <div className="rounded-[var(--radius)] border border-dashed border-[var(--hairline)] bg-[var(--background)] px-3 py-10 text-center text-sm text-[var(--muted)]">
+                    갤러리에서 제품을 열면 variant 요약과 저장 액션이 이곳에 표시됩니다.
+                  </div>
+                )}
+              </CardBody>
+            </Card>
+          </div>
+        </div>
+      </div>
+
+      <Card className="hidden">
+        <CardHeader
+          title="option-entry 워크벤치"
+          description="선택한 제품과 variant 범위를 유지한 채 option entry를 정리합니다. 기존 목록 표 대신 워크벤치가 바로 이어집니다."
+        />
+        <CardBody className="space-y-4">
+          <OptionEntryWorkbench
+            basePriceText={formatMoney(workbenchDetail?.detail?.base_price_krw)}
+            groups={(workbenchDetail?.detail?.editor_groups ?? []) as WorkbenchEditorGroup[]}
+            draftsByKey={workbenchDraftsByKey}
+            currentProductSyncProfile={currentProductSyncProfileDraft}
+            compact
+            materialReadonly
+            categoryChoices={[{ value: "MATERIAL", label: "MATERIAL" }, { value: "SIZE", label: "SIZE" }, { value: "COLOR_PLATING", label: "COLOR_PLATING" }, { value: "DECOR", label: "DECOR" }, { value: "ADDON", label: "ADDON" }, { value: "OTHER", label: "OTHER" }, { value: "NOTICE", label: "NOTICE" }]}
+            materialChoices={((workbenchDetail?.central_registries?.materials ?? []) as Array<{ material_code: string; material_label: string }>).map((row) => ({ value: row.material_code, label: row.material_label }))}
+            colorChoices={loadedOptionAllowlist.colors}
+            sizeChoicesByMaterial={(workbenchDetail?.shared_size_choices_by_material ?? {})}
+            activeMaterialCode={activeWorkbenchMaterialCode}
+            colorBucketChoices={((workbenchDetail?.central_registries?.color_buckets ?? []) as Array<{ color_bucket_id: string; bucket_label: string; sell_delta_krw: number }>)}
+            decorChoices={loadedOptionAllowlist.decors.map((choice) => ({ value: choice.decoration_master_id ?? choice.value, label: choice.label, delta_krw: choice.delta_krw ?? null }))}
+            addonChoices={((workbenchDetail?.central_registries?.addon_masters ?? []) as Array<{ addon_master_id?: string; addon_name?: string; addon_code?: string; base_amount_krw?: number; extra_delta_krw?: number }>).map((row) => ({ value: row.addon_master_id ?? "", label: row.addon_name ?? row.addon_code ?? row.addon_master_id ?? "-", delta_krw: Math.round(Number(row.base_amount_krw ?? 0)) + Math.round(Number(row.extra_delta_krw ?? 0)) }))}
+            onChangeCurrentProductSyncProfile={setCurrentProductSyncProfileDraft}
+            onChangeRow={(entryKey, updater) => {
+              setWorkbenchDraftsByKey((prev) => ({
+                ...prev,
+                [entryKey]: updater(prev[entryKey] ?? (workbenchDetail?.detail?.editor_rows ?? []).find((row: WorkbenchEditorRow) => row.entry_key === entryKey)!),
+              }));
+            }}
+            onChangeGroup={(group, updater) => {
+              setWorkbenchDraftsByKey((prev) => {
+                const next = { ...prev };
+                for (const row of group.rows) {
+                  const current = prev[row.entry_key] ?? (workbenchDetail?.detail?.editor_rows ?? []).find((candidate: WorkbenchEditorRow) => candidate.entry_key === row.entry_key)!;
+                  next[row.entry_key] = updater(current);
+                }
+                return next;
+              });
+            }}
+            onSave={() => saveWorkbenchRows.mutate()}
+            savePending={saveWorkbenchRows.isPending}
+          />
         </CardBody>
       </Card>
+
+
+      <Sheet
+        open={isDetailOpen && Boolean(selectedGalleryCard)}
+        onOpenChange={setIsDetailOpen}
+        title="상품 상세"
+        description="게시 가격과 옵션 구성, variant 결과를 확인합니다."
+        side="right"
+        className="w-full lg:w-[1460px] xl:w-[1560px]"
+      >
+        <div className="flex h-full flex-col">
+          <div className="border-b border-[var(--hairline)] px-5 py-4">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <div className="text-sm font-semibold">{selectedGalleryCard?.model_name || selectedGalleryCard?.external_product_no}</div>
+                  {selectedGalleryCardSyncProfile === "MARKET_LINKED" ? (
+                    <div className="rounded-full border border-[var(--warning-soft)] bg-[var(--warning-soft)] px-2 py-1 text-[10px] font-semibold text-[var(--warning)]">
+                      {formatCurrentProductSyncProfileLabel(selectedGalleryCardSyncProfile)}
+                    </div>
+                  ) : null}
+                </div>
+                <div className="mt-1 text-xs text-[var(--muted)]">{selectedGalleryCard?.master_item_id} / {selectedGalleryCard?.external_product_no}</div>
+              </div>
+              <div className="flex gap-2">
+                <Button size="sm" variant="secondary" onClick={() => setIsWorkbenchOpen(true)} disabled={!workbenchDetail?.detail?.editor_rows?.length}>옵션수정</Button>
+                <Button size="sm" onClick={() => recomputeInitialPricing.mutate()} disabled={recomputeInitialPricing.isPending || !activeProductNo || !masterItemId.trim() || !hasActivePricingPolicy}>{recomputeInitialPricing.isPending ? '계산 중...' : '최초 계산'}</Button>
+              </div>
+            </div>
+          </div>
+          <div className="flex-1 space-y-4 overflow-auto px-5 py-4">
+            <div className="grid grid-cols-1 gap-4 xl:grid-cols-[360px_1fr]">
+              <div className="space-y-3">
+                <div className="aspect-[4/3] overflow-hidden rounded-[var(--radius)] bg-[var(--panel)]">
+                  {selectedGalleryCard?.thumbnail_url ? <img src={selectedGalleryCard.thumbnail_url} alt={selectedGalleryCard.model_name ?? selectedGalleryCard.external_product_no} className="h-full w-full object-cover" /> : <div className="flex h-full items-center justify-center text-sm text-[var(--muted)]">이미지 없음</div>}
+                </div>
+                <div className={`rounded-[var(--radius)] border p-3 text-sm ${selectedGalleryCardSyncProfile === "MARKET_LINKED" ? "border-[var(--warning-soft)] bg-[linear-gradient(180deg,var(--warning-soft),var(--panel)_58%)]" : "border-[var(--hairline)] bg-[var(--panel)]"}`}>
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="text-[11px] text-[var(--muted)]">게시 base 가격</div>
+                    {selectedGalleryCardSyncProfile === "MARKET_LINKED" ? (
+                      <div className="rounded-full border border-[var(--warning-soft)] bg-[var(--warning-soft)] px-2 py-1 text-[10px] font-semibold text-[var(--warning)]">
+                        {formatCurrentProductSyncProfileLabel(selectedGalleryCardSyncProfile)}
+                      </div>
+                    ) : null}
+                  </div>
+                  <div className="mt-1 font-medium">{formatMoney(workbenchDetail?.detail?.base_price_krw)}</div>
+                  <div className="mt-3 text-[11px] text-[var(--muted)]">master 소재</div>
+                  <div className="mt-1 font-medium">{workbenchDetail?.detail?.master_material_code || '-'}</div>
+                  <div className="mt-3 text-[11px] text-[var(--muted)]">옵션 행 수</div>
+                  <div className="mt-1 font-medium">{workbenchDetail?.detail?.editor_rows?.length ?? 0}</div>
+                </div>
+                <div className="rounded-[var(--radius)] border border-[var(--hairline)] bg-[var(--panel)] p-3 text-sm">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="text-sm font-medium">선택 조합 비교</div>
+                    <span className={`rounded-full border px-2 py-1 text-[11px] ${focusedVariantIsMatch ? 'border-emerald-200 bg-emerald-100 text-emerald-700' : 'border-amber-200 bg-amber-100 text-amber-700'}`}>
+                      {focusedVariantIsMatch ? '일치' : '비교중'}
+                    </span>
+                  </div>
+                  <div className="mt-2 space-y-2">
+                    <div>
+                      <div className="text-[11px] text-[var(--muted)]">조합 선택</div>
+                      <Select value={effectiveFocusedVariantCode} onChange={(event) => setFocusedVariantCode(event.target.value)}>
+                        {loadedVariants.map((variant) => {
+                          const code = normalizeVariantCode(variant.variant_code);
+                          return <option key={code} value={code}>{variant.option_label || code}</option>;
+                        })}
+                      </Select>
+                    </div>
+                    <div className="rounded-[var(--radius)] border border-[var(--hairline)] bg-[var(--background)] px-3 py-2">
+                      <div className="text-[11px] text-[var(--muted)]">선택 조합</div>
+                      <div className="mt-1 text-xs text-[var(--foreground)]">{effectiveFocusedVariant ? summarizeAxes(effectiveFocusedVariant) : '-'}</div>
+                    </div>
+                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                      <div className="rounded-[var(--radius)] border border-[var(--hairline)] bg-[var(--background)] px-3 py-2">
+                        <div className="text-[11px] text-[var(--muted)]">현재 계산 최종값</div>
+                        <div className="mt-1 font-semibold">{formatMoney(focusedVariantCurrentFinalKrw)}</div>
+                        <div className="mt-1 text-[11px] text-[var(--muted)]">base + 현재 row delta 합</div>
+                      </div>
+                      <div className="rounded-[var(--radius)] border border-[var(--hairline)] bg-[var(--background)] px-3 py-2">
+                        <div className="text-[11px] text-[var(--muted)]">storefront 저장값</div>
+                        <div className="mt-1 font-semibold">{formatMoney(focusedVariantStorefrontFinalKrw)}</div>
+                        <div className="mt-1 text-[11px] text-[var(--muted)]">현재 publish/storefront final</div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div className="space-y-4">
+                <DetailedPriceBreakdownPanel
+                  baseBreakdown={detailBaseBreakdown}
+                  publishedMinPriceKrw={selectedGalleryCard?.published_min_price_krw}
+                  publishedMaxPriceKrw={selectedGalleryCard?.published_max_price_krw}
+                />
+              </div>
+            </div>
+          </div>
+        </div>
+      </Sheet>
+
+      <Sheet
+        open={isWorkbenchOpen}
+        onOpenChange={setIsWorkbenchOpen}
+        title="옵션 수정"
+        description="각 옵션별로 카테고리와 매핑을 수정합니다."
+        side="left"
+        className="w-full lg:w-[1500px] xl:w-[1620px]"
+      >
+        <div className="flex h-full min-h-0 flex-col px-5 py-4">
+          <div className="min-h-0 flex-1 overflow-y-auto pr-2">
+            <OptionEntryWorkbench
+            basePriceText={formatMoney(workbenchDetail?.detail?.base_price_krw)}
+            groups={(workbenchDetail?.detail?.editor_groups ?? []) as WorkbenchEditorGroup[]}
+            draftsByKey={workbenchDraftsByKey}
+            currentProductSyncProfile={currentProductSyncProfileDraft}
+            compact
+            materialReadonly
+            categoryChoices={[{ value: "MATERIAL", label: "MATERIAL" }, { value: "SIZE", label: "SIZE" }, { value: "COLOR_PLATING", label: "COLOR_PLATING" }, { value: "DECOR", label: "DECOR" }, { value: "ADDON", label: "ADDON" }, { value: "OTHER", label: "OTHER" }, { value: "NOTICE", label: "NOTICE" }]}
+            materialChoices={((workbenchDetail?.central_registries?.materials ?? []) as Array<{ material_code: string; material_label: string }>).map((row) => ({ value: row.material_code, label: row.material_label }))}
+            colorChoices={loadedOptionAllowlist.colors}
+            sizeChoicesByMaterial={(workbenchDetail?.shared_size_choices_by_material ?? {})}
+            activeMaterialCode={activeWorkbenchMaterialCode}
+            colorBucketChoices={((workbenchDetail?.central_registries?.color_buckets ?? []) as Array<{ color_bucket_id: string; bucket_label: string; sell_delta_krw: number }>)}
+            decorChoices={loadedOptionAllowlist.decors.map((choice) => ({ value: choice.decoration_master_id ?? choice.value, label: choice.label, delta_krw: choice.delta_krw ?? null }))}
+            addonChoices={((workbenchDetail?.central_registries?.addon_masters ?? []) as Array<{ addon_master_id?: string; addon_name?: string; addon_code?: string; base_amount_krw?: number; extra_delta_krw?: number }>).map((row) => ({ value: row.addon_master_id ?? "", label: row.addon_name ?? row.addon_code ?? row.addon_master_id ?? "-", delta_krw: Math.round(Number(row.base_amount_krw ?? 0)) + Math.round(Number(row.extra_delta_krw ?? 0)) }))}
+            onChangeCurrentProductSyncProfile={setCurrentProductSyncProfileDraft}
+            onChangeRow={(entryKey, updater) => {
+              setWorkbenchDraftsByKey((prev) => ({
+                ...prev,
+                [entryKey]: updater(prev[entryKey] ?? (workbenchDetail?.detail?.editor_rows ?? []).find((row: WorkbenchEditorRow) => row.entry_key === entryKey)!),
+              }));
+            }}
+            onChangeGroup={(group, updater) => {
+              setWorkbenchDraftsByKey((prev) => {
+                const next = { ...prev };
+                for (const row of group.rows) {
+                  const current = prev[row.entry_key] ?? (workbenchDetail?.detail?.editor_rows ?? []).find((candidate: WorkbenchEditorRow) => candidate.entry_key === row.entry_key)!;
+                  next[row.entry_key] = updater(current);
+                }
+                return next;
+              });
+            }}
+            onSave={() => saveWorkbenchRows.mutate()}
+            savePending={saveWorkbenchRows.isPending}
+          />
+          </div>
+        </div>
+      </Sheet>
+
     </div>
   );
 }

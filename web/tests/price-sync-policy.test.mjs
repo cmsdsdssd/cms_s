@@ -203,6 +203,11 @@ test('invalid values fall back to normalized defaults', () => {
 
 test('option additional sync policy uses dedicated defaults', () => {
   assert.deepEqual(normalizeOptionAdditionalSyncPolicy(), DEFAULT_OPTION_ADDITIONAL_SYNC_POLICY);
+  assert.deepEqual(DEFAULT_OPTION_ADDITIONAL_SYNC_POLICY, {
+    always_sync: false,
+    min_change_krw: 2000,
+    min_change_rate: 0.02,
+  });
   assert.deepEqual(normalizeOptionAdditionalSyncPolicy({ min_change_krw: 1500.2, min_change_rate: '0.02' }), {
     always_sync: false,
     min_change_krw: 1500,
@@ -210,7 +215,7 @@ test('option additional sync policy uses dedicated defaults', () => {
   });
 });
 
-test('option additional sync uses OR semantics and ignores rate threshold when current amount is zero', () => {
+test('option additional sync uses MAX semantics and ignores rate threshold when current amount is zero', () => {
   assert.deepEqual(
     shouldSyncOptionAdditionalChange({
       currentAdditionalKrw: 100000,
@@ -218,12 +223,13 @@ test('option additional sync uses OR semantics and ignores rate threshold when c
       policy: { min_change_krw: 1000, min_change_rate: 0.005 },
     }),
     {
-      should_sync: true,
+      should_sync: false,
       threshold_bypassed: false,
       additional_delta_krw: 700,
       flat_min_change_krw: 1000,
       rate_min_change_krw: 500,
-      effective_mode: 'OR',
+      effective_min_change_krw: 1000,
+      effective_mode: 'MAX',
       policy: {
         always_sync: false,
         min_change_krw: 1000,
@@ -244,6 +250,7 @@ test('option additional sync uses OR semantics and ignores rate threshold when c
       additional_delta_krw: 900,
       flat_min_change_krw: 1000,
       rate_min_change_krw: null,
+      effective_min_change_krw: 1000,
       effective_mode: 'FLAT_ONLY',
       policy: {
         always_sync: false,

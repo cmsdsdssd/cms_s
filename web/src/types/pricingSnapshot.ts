@@ -86,6 +86,9 @@ export type PricingSnapshotExplainRow = {
 
   fee_rate?: number | null;
   min_margin_rate_total?: number | null;
+  gm_material_rate?: number | null;
+  gm_labor_rate?: number | null;
+  gm_fixed_rate?: number | null;
   cost_sum_krw?: number | null;
   material_pre_fee_krw?: number | null;
   labor_pre_fee_krw?: number | null;

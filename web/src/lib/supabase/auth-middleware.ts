@@ -8,6 +8,7 @@ const PUBLIC_API_PREFIXES = [
     "/api/cron/shop-sync", // Cloud Scheduler secured endpoint (x-shop-sync-secret)
     "/api/cron/shop-sync-v2", // Cloud Scheduler secured endpoint v2 (x-shop-sync-secret)
     "/api/public/storefront-option-breakdown", // 카페24 테마에서 읽는 옵션 분해값
+    "/api/public/storefront-option-breakdown-script", // 카페24 테마에서 읽는 옵션 표시 스크립트
 ];
 
 function isPublicPath(pathname: string) {

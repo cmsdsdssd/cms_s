@@ -1,0 +1,116 @@
+
+> web@0.1.0 start
+> next start --port 3023
+
+▲ Next.js 16.1.4
+- Local:         http://localhost:3023
+- Network:       http://192.168.0.69:3023
+
+✓ Starting...
+✓ Ready in 560ms
+⨯ Error: ENOENT: no such file or directory, open 'C:\Users\RICH\.gemini\antigravity\scratch\cms_s\web\.next\build-manifest.json'
+    at async Module.L (C:\Users\RICH\.gemini\antigravity\scratch\cms_s\web\.next\server\chunks\ssr\_1d75fbd4._.js:1:2639) {
+  errno: -4058,
+  code: 'ENOENT',
+  syscall: 'open',
+  path: 'C:\\Users\\RICH\\.gemini\\antigravity\\scratch\\cms_s\\web\\.next\\build-manifest.json'
+}
+⨯ Error: ENOENT: no such file or directory, open 'C:\Users\RICH\.gemini\antigravity\scratch\cms_s\web\.next\build-manifest.json'
+    at async Module.L (C:\Users\RICH\.gemini\antigravity\scratch\cms_s\web\.next\server\chunks\ssr\_1d75fbd4._.js:1:2639) {
+  errno: -4058,
+  code: 'ENOENT',
+  syscall: 'open',
+  path: 'C:\\Users\\RICH\\.gemini\\antigravity\\scratch\\cms_s\\web\\.next\\build-manifest.json'
+}
+⨯ Error: Failed to load static file for page: /500 ENOENT: no such file or directory, open 'C:\Users\RICH\.gemini\antigravity\scratch\cms_s\web\.next\server\pages\500.html'
+    at ignore-listed frames
+⨯ Error: ENOENT: no such file or directory, open 'C:\Users\RICH\.gemini\antigravity\scratch\cms_s\web\.next\build-manifest.json'
+    at async Module.L (C:\Users\RICH\.gemini\antigravity\scratch\cms_s\web\.next\server\chunks\ssr\_1d75fbd4._.js:1:2639) {
+  errno: -4058,
+  code: 'ENOENT',
+  syscall: 'open',
+  path: 'C:\\Users\\RICH\\.gemini\\antigravity\\scratch\\cms_s\\web\\.next\\build-manifest.json'
+}
+⨯ Error: Failed to load static file for page: /500 ENOENT: no such file or directory, open 'C:\Users\RICH\.gemini\antigravity\scratch\cms_s\web\.next\server\pages\500.html'
+    at ignore-listed frames
+⨯ Error: ENOENT: no such file or directory, open 'C:\Users\RICH\.gemini\antigravity\scratch\cms_s\web\.next\required-server-files.json'
+    at async Module.L (C:\Users\RICH\.gemini\antigravity\scratch\cms_s\web\.next\server\chunks\ssr\_1d75fbd4._.js:1:2639) {
+  errno: -4058,
+  code: 'ENOENT',
+  syscall: 'open',
+  path: 'C:\\Users\\RICH\\.gemini\\antigravity\\scratch\\cms_s\\web\\.next\\required-server-files.json'
+}
+⨯ Error: Failed to load static file for page: /500 ENOENT: no such file or directory, open 'C:\Users\RICH\.gemini\antigravity\scratch\cms_s\web\.next\server\pages\500.html'
+    at ignore-listed frames
+⨯ Error: ENOENT: no such file or directory, open 'C:\Users\RICH\.gemini\antigravity\scratch\cms_s\web\.next\required-server-files.json'
+    at async Module.L (C:\Users\RICH\.gemini\antigravity\scratch\cms_s\web\.next\server\chunks\ssr\_1d75fbd4._.js:1:2639) {
+  errno: -4058,
+  code: 'ENOENT',
+  syscall: 'open',
+  path: 'C:\\Users\\RICH\\.gemini\\antigravity\\scratch\\cms_s\\web\\.next\\required-server-files.json'
+}
+⨯ Error: Failed to load static file for page: /500 ENOENT: no such file or directory, open 'C:\Users\RICH\.gemini\antigravity\scratch\cms_s\web\.next\server\pages\500.html'
+    at ignore-listed frames
+⨯ Error: ENOENT: no such file or directory, open 'C:\Users\RICH\.gemini\antigravity\scratch\cms_s\web\.next\required-server-files.json'
+    at async Module.L (C:\Users\RICH\.gemini\antigravity\scratch\cms_s\web\.next\server\chunks\ssr\_1d75fbd4._.js:1:2639) {
+  errno: -4058,
+  code: 'ENOENT',
+  syscall: 'open',
+  path: 'C:\\Users\\RICH\\.gemini\\antigravity\\scratch\\cms_s\\web\\.next\\required-server-files.json'
+}
+⨯ Error: Failed to load static file for page: /500 ENOENT: no such file or directory, open 'C:\Users\RICH\.gemini\antigravity\scratch\cms_s\web\.next\server\pages\500.html'
+    at ignore-listed frames
+⨯ Error: ENOENT: no such file or directory, open 'C:\Users\RICH\.gemini\antigravity\scratch\cms_s\web\.next\required-server-files.json'
+    at async Module.L (C:\Users\RICH\.gemini\antigravity\scratch\cms_s\web\.next\server\chunks\ssr\_1d75fbd4._.js:1:2639) {
+  errno: -4058,
+  code: 'ENOENT',
+  syscall: 'open',
+  path: 'C:\\Users\\RICH\\.gemini\\antigravity\\scratch\\cms_s\\web\\.next\\required-server-files.json'
+}
+⨯ Error: Failed to load static file for page: /500 ENOENT: no such file or directory, open 'C:\Users\RICH\.gemini\antigravity\scratch\cms_s\web\.next\server\pages\500.html'
+    at ignore-listed frames
+⨯ Error: ENOENT: no such file or directory, open 'C:\Users\RICH\.gemini\antigravity\scratch\cms_s\web\.next\required-server-files.json'
+    at async Module.L (C:\Users\RICH\.gemini\antigravity\scratch\cms_s\web\.next\server\chunks\ssr\_1d75fbd4._.js:1:2639) {
+  errno: -4058,
+  code: 'ENOENT',
+  syscall: 'open',
+  path: 'C:\\Users\\RICH\\.gemini\\antigravity\\scratch\\cms_s\\web\\.next\\required-server-files.json'
+}
+⨯ Error: Failed to load static file for page: /500 ENOENT: no such file or directory, open 'C:\Users\RICH\.gemini\antigravity\scratch\cms_s\web\.next\server\pages\500.html'
+    at ignore-listed frames
+⨯ Error: ENOENT: no such file or directory, open 'C:\Users\RICH\.gemini\antigravity\scratch\cms_s\web\.next\required-server-files.json'
+    at async Module.L (C:\Users\RICH\.gemini\antigravity\scratch\cms_s\web\.next\server\chunks\ssr\_1d75fbd4._.js:1:2639) {
+  errno: -4058,
+  code: 'ENOENT',
+  syscall: 'open',
+  path: 'C:\\Users\\RICH\\.gemini\\antigravity\\scratch\\cms_s\\web\\.next\\required-server-files.json'
+}
+⨯ Error: Failed to load static file for page: /500 ENOENT: no such file or directory, open 'C:\Users\RICH\.gemini\antigravity\scratch\cms_s\web\.next\server\pages\500.html'
+    at ignore-listed frames
+⨯ Error: ENOENT: no such file or directory, open 'C:\Users\RICH\.gemini\antigravity\scratch\cms_s\web\.next\required-server-files.json'
+    at async Module.L (C:\Users\RICH\.gemini\antigravity\scratch\cms_s\web\.next\server\chunks\ssr\_1d75fbd4._.js:1:2639) {
+  errno: -4058,
+  code: 'ENOENT',
+  syscall: 'open',
+  path: 'C:\\Users\\RICH\\.gemini\\antigravity\\scratch\\cms_s\\web\\.next\\required-server-files.json'
+}
+⨯ Error: Failed to load static file for page: /500 ENOENT: no such file or directory, open 'C:\Users\RICH\.gemini\antigravity\scratch\cms_s\web\.next\server\pages\500.html'
+    at ignore-listed frames
+⨯ Error: ENOENT: no such file or directory, open 'C:\Users\RICH\.gemini\antigravity\scratch\cms_s\web\.next\required-server-files.json'
+    at async Module.L (C:\Users\RICH\.gemini\antigravity\scratch\cms_s\web\.next\server\chunks\ssr\_1d75fbd4._.js:1:2639) {
+  errno: -4058,
+  code: 'ENOENT',
+  syscall: 'open',
+  path: 'C:\\Users\\RICH\\.gemini\\antigravity\\scratch\\cms_s\\web\\.next\\required-server-files.json'
+}
+⨯ Error: Failed to load static file for page: /500 ENOENT: no such file or directory, open 'C:\Users\RICH\.gemini\antigravity\scratch\cms_s\web\.next\server\pages\500.html'
+    at ignore-listed frames
+⨯ Error: ENOENT: no such file or directory, open 'C:\Users\RICH\.gemini\antigravity\scratch\cms_s\web\.next\BUILD_ID'
+    at async Module.L (C:\Users\RICH\.gemini\antigravity\scratch\cms_s\web\.next\server\chunks\ssr\_1d75fbd4._.js:1:2639) {
+  errno: -4058,
+  code: 'ENOENT',
+  syscall: 'open',
+  path: 'C:\\Users\\RICH\\.gemini\\antigravity\\scratch\\cms_s\\web\\.next\\BUILD_ID'
+}
+⨯ Error: Failed to load static file for page: /500 ENOENT: no such file or directory, open 'C:\Users\RICH\.gemini\antigravity\scratch\cms_s\web\.next\server\pages\500.html'
+    at ignore-listed frames

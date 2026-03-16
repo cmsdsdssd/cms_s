@@ -1,0 +1,8 @@
+import { chromium } from 'playwright';
+const browser = await chromium.launch({ headless: true });
+const page = await browser.newPage();
+await page.goto('http://127.0.0.1:3000/settings/shopping/mappings', { waitUntil: 'networkidle' });
+console.log('URL', page.url());
+console.log('TITLE', await page.title());
+console.log('TEXT', (await page.locator('body').innerText()).slice(0, 600));
+await browser.close();

@@ -393,6 +393,11 @@ function parseVariantAdditionalAmount(variant: Record<string, unknown> | null): 
   return null;
 }
 
+export function parseCafe24VariantAdditionalAmountFromRaw(raw: unknown): number | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  return parseVariantAdditionalAmount(parseVariantFromJson(raw as Record<string, unknown>));
+}
+
 function parseVariantPrice(variant: Record<string, unknown> | null): number | null {
   if (!variant) return null;
   const toCafe24Number = (value: unknown): number | null => {

@@ -100,8 +100,8 @@ test('buildOptionEntryRowsFromBreakdown and buildOptionAxisFromPublishedEntries 
   assert.equal(axis.first.name, '14K/18K');
   assert.equal(axis.second.name, '색상');
   assert.deepEqual(axis.second.values, [
-    { label: '로즈골드(P)', delta_krw: 199600, delta_display: '+199,600' },
-    { label: '화이트골드(W)', delta_krw: 1110800, delta_display: '+1,110,800' },
+    { label: '로즈골드(P)', delta_krw: 199600, delta_display: '+199,600', display_label: '로즈골드(P) (+199,600원)' },
+    { label: '화이트골드(W)', delta_krw: 1110800, delta_display: '+1,110,800', display_label: '화이트골드(W) (+1,110,800원)' },
   ]);
 });
 
@@ -164,4 +164,34 @@ test('validateAdditiveBreakdown rejects combination-only pricing exceptions', ()
   assert.equal(invalid.ok, false);
   assert.equal(invalid.violations[0].variant_code, 'B');
   assert.equal(invalid.violations[0].expected_total_delta_krw, 52400);
+});
+
+
+test('buildOptionEntryRowsFromBreakdown applies option 500 CEIL rounding before publishing labels', () => {
+  const rows = buildOptionEntryRowsFromBreakdown({
+    channelId: 'c1',
+    masterItemId: 'm1',
+    externalProductNo: '33',
+    publishVersion: 'pub-2',
+    computedAt: '2026-03-16T00:00:00.000Z',
+    optionRoundingUnit: 500,
+    optionRoundingMode: 'CEIL',
+    breakdown: {
+      axes: [
+        { index: 2, name: '사이즈', values: [{ label: '1호', delta_krw: 9200 }, { label: '2호', delta_krw: 14600 }] },
+        { index: 4, name: '장식', values: [{ label: '붕어장식', delta_krw: 164700 }] },
+      ],
+      byVariant: [],
+    },
+  });
+
+  assert.deepEqual(rows.map((row) => [row.option_value, row.published_delta_krw]), [
+    ['1호', 9500],
+    ['2호', 15000],
+    ['붕어장식', 165000],
+  ]);
+
+  const axis = buildOptionAxisFromPublishedEntries(rows);
+  assert.deepEqual(axis.axes[0].values.map((value) => value.display_label), ['1호 (+9,500원)', '2호 (+15,000원)']);
+  assert.equal(axis.axes[1].values[0].display_label, '붕어장식 (+165,000원)');
 });

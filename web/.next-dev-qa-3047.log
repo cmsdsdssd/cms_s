@@ -1,0 +1,26 @@
+
+> web@0.1.0 dev
+> next dev --port 3047
+
+▲ Next.js 16.1.4 (Turbopack)
+- Local:         http://localhost:3047
+- Network:       http://192.168.0.69:3047
+- Environments: .env.local, .env
+
+✓ Starting...
+
+thread 'tokio-runtime-worker' (86392) panicked at turbopack\crates\turbo-persistence\src\static_sorted_file.rs:387:51:
+range start index 857918 out of range for slice of length 857894
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+-----
+[1m[31mFATAL[39m[0m: An unexpected Turbopack error occurred. A panic log has been written to C:\Users\RICH\AppData\Local\Temp\next-panic-61e04b38be7424e072a4e5288fa786a.log.
+
+To help make Turbopack better, report this error by clicking here: https://github.com/vercel/next.js/discussions/new?category=turbopack-error-report&title=Turbopack%20Error%3A%20range%20start%20index%20857918%20out%20of%20range%20for%20slice%20of%20length%20857894&body=Turbopack%20version%3A%20%60da605e0c%60%0ANext.js%20version%3A%20%600.0.0%60%0A%0AError%20message%3A%0A%60%60%60%0ATurbopack%20Error%3A%20range%20start%20index%20857918%20out%20of%20range%20for%20slice%20of%20length%20857894%0A%60%60%60&labels=Turbopack,Turbopack%20Panic%20Backtrace
+-----
+
+Error [TurbopackInternalError]: range start index 857918 out of range for slice of length 857894
+    at <unknown> (TurbopackInternalError: range start index 857918 out of range for slice of length 857894) {
+  location: 'turbopack\\crates\\turbo-persistence\\src\\static_sorted_file.rs:387:51'
+}
+[?25h

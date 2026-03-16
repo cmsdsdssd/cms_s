@@ -37,7 +37,8 @@ export const buildMissingActiveMappingSummary = ({ snapshotRows, activeByChannel
   };
 };
 
-export const resolveNoIntentsReason = ({ thresholdFilteredCount, missingActiveMappingProductCount }) => {
+export const resolveNoIntentsReason = ({ thresholdFilteredCount, optionThresholdFilteredCount, missingActiveMappingProductCount }) => {
+  if (Number(optionThresholdFilteredCount) > 0) return 'NO_INTENTS_AFTER_OPTION_MIN_CHANGE_THRESHOLD';
   if (Number(thresholdFilteredCount) > 0) return 'NO_INTENTS_AFTER_MIN_CHANGE_THRESHOLD';
   if (Number(missingActiveMappingProductCount) > 0) return 'NO_ACTIVE_MAPPING_FOR_SNAPSHOT_ROWS';
   return 'NO_INTENTS';
@@ -53,3 +54,25 @@ export const buildThresholdProfileSummary = ({ channelThresholdProfile, effectiv
     && channelThresholdProfile.trim() !== effectiveThresholdProfile.trim(),
   ),
 });
+
+
+export const selectLatestMeaningfulSyncRun = (rows) => {
+  const normalizedRows = Array.isArray(rows) ? rows : [];
+  for (const row of normalizedRows) {
+    const reason = String(row?.error_message ?? '').trim().toUpperCase();
+    if (reason.startsWith('CRON_TICK:')) continue;
+    return row;
+  }
+  return normalizedRows[0] ?? null;
+};
+
+
+export const selectPreviewComputeRequestId = ({ latestMeaningfulRun, recentRunDetailQueries }) => {
+  const fromRun = String(latestMeaningfulRun?.pinned_compute_request_id ?? '').trim();
+  if (fromRun) return fromRun;
+  for (const query of Array.isArray(recentRunDetailQueries) ? recentRunDetailQueries : []) {
+    const computeRequestId = String(query?.data?.data?.run?.pinned_compute_request_id ?? '').trim();
+    if (computeRequestId) return computeRequestId;
+  }
+  return '';
+};

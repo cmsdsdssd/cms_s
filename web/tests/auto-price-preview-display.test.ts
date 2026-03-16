@@ -10,6 +10,7 @@ const { buildAppliedTargetSummary, resolveColorPlatingDisplay, summarizeOptionSt
     appliedKrw: number | null | undefined;
     targetKrw: number | null | undefined;
     thresholdNoPushNormal?: boolean | null | undefined;
+    downsyncSuppressedNormal?: boolean | null | undefined;
   }) => {
     appliedKrw: number | null;
     targetKrw: number | null;
@@ -17,6 +18,7 @@ const { buildAppliedTargetSummary, resolveColorPlatingDisplay, summarizeOptionSt
     isMismatch: boolean;
     statusLabel: string;
     isThresholdNoPushNormal?: boolean;
+    isDownsyncSuppressedNormal?: boolean;
   };
   resolveColorPlatingDisplay: (args: {
     candidateAmounts: Array<number | null | undefined>;
@@ -61,6 +63,7 @@ test('buildAppliedTargetSummary marks matching applied and target values as sync
     isMismatch: false,
     statusLabel: '일치',
     isThresholdNoPushNormal: false,
+    isDownsyncSuppressedNormal: false,
   });
 });
 
@@ -74,6 +77,7 @@ test('buildAppliedTargetSummary marks differing applied and target values as pen
     isMismatch: true,
     statusLabel: '미적용',
     isThresholdNoPushNormal: false,
+    isDownsyncSuppressedNormal: false,
   });
 });
 
@@ -190,5 +194,25 @@ test('buildAppliedTargetSummary marks threshold-filtered no-push as normal', () 
     isMismatch: true,
     statusLabel: '정상(Threshold 미통과)',
     isThresholdNoPushNormal: true,
+    isDownsyncSuppressedNormal: false,
+  });
+});
+
+
+test('buildAppliedTargetSummary marks downsync-suppressed no-push as normal', () => {
+  const result = buildAppliedTargetSummary({
+    appliedKrw: 3523000,
+    targetKrw: 3508000,
+    downsyncSuppressedNormal: true,
+  });
+
+  assert.deepEqual(result, {
+    appliedKrw: 3523000,
+    targetKrw: 3508000,
+    deltaKrw: -15000,
+    isMismatch: true,
+    statusLabel: '정상(다운싱크 억제)',
+    isThresholdNoPushNormal: false,
+    isDownsyncSuppressedNormal: true,
   });
 });

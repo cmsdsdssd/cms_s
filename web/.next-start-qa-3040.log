@@ -1,0 +1,11 @@
+
+> web@0.1.0 start
+> next start --port 3040
+
+▲ Next.js 16.1.4
+- Local:         http://localhost:3040
+- Network:       http://192.168.0.69:3040
+
+✓ Starting...
+Error: Could not find a production build in the '.next' directory. Try building your app with 'next build' before starting the production server. https://nextjs.org/docs/messages/production-start-no-build-id
+    at ignore-listed frames

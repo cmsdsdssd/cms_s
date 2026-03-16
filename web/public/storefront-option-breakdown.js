@@ -1,15 +1,9 @@
 (() => {
   const stripSuffix = (text) => String(text ?? "").replace(/\s*\([+-][\d,]+원\)\s*$/u, "").trim();
 
-  const formatWithDelta = (base, delta) => {
-    const clean = stripSuffix(base);
-    const rounded = Math.round(Number(delta ?? 0));
-    if (!Number.isFinite(rounded) || rounded === 0) return clean;
-    const sign = rounded >= 0 ? "+" : "-";
-    return `${clean} (${sign}${Math.abs(rounded).toLocaleString("ko-KR")}원)`;
-  };
-
   const detectProductNo = () => {
+    const fromQuery = new URL(window.location.href).searchParams.get("product_no");
+    if (fromQuery && fromQuery.trim()) return fromQuery.trim();
     const m = window.location.pathname.match(/\/product\/[^/]+\/([^/]+)\//i);
     return m?.[1] ? decodeURIComponent(m[1]) : "";
   };
@@ -45,54 +39,15 @@
       .filter((axisValue) => axisValue.name && axisValue.value);
   };
 
-  const buildDirectDeltaMap = (axis) => new Map(
-    (Array.isArray(axis?.values) ? axis.values : []).map((value) => [
-      stripSuffix(String(value?.label ?? "").trim()),
-      Math.round(Number(value?.delta_krw ?? 0)),
-    ]).filter(([label]) => label),
-  );
-
   const buildDisplayLabelMap = (axis) => new Map(
     (Array.isArray(axis?.values) ? axis.values : []).map((value) => {
       const canonical = stripSuffix(String(value?.label ?? "").trim());
-      const display = String(value?.display_label ?? "").trim();
-      return [canonical, display || formatWithDelta(canonical, value?.delta_krw)];
+      const display = String(value?.display_label ?? value?.label ?? "").trim();
+      return [canonical, display || canonical];
     }).filter(([label]) => label),
   );
 
-  const buildConditionalDeltaMap = (axisDefs, axisIndex, selectedPriorLabels, byVariant) => {
-    const totalsByLabel = new Map();
-    for (const row of Array.isArray(byVariant) ? byVariant : []) {
-      const axisValues = getVariantAxisValues(row, axisDefs);
-      const current = axisValues[axisIndex] ?? null;
-      if (!current?.value) continue;
-      let matched = true;
-      for (let i = 0; i < axisIndex; i += 1) {
-        const expected = String(selectedPriorLabels[i] ?? "").trim();
-        if (!expected) continue;
-        if (String(axisValues[i]?.value ?? "").trim() !== expected) {
-          matched = false;
-          break;
-        }
-      }
-      if (!matched) continue;
-      const label = String(current.value ?? "").trim();
-      const total = Math.round(Number(row?.total_delta_krw ?? Number.NaN));
-      if (!label || !Number.isFinite(total)) continue;
-      const bucket = totalsByLabel.get(label) ?? new Set();
-      bucket.add(total);
-      totalsByLabel.set(label, bucket);
-    }
-    const map = new Map();
-    for (const [label, totals] of totalsByLabel.entries()) {
-      if (totals.size === 1) {
-        map.set(label, Array.from(totals)[0] ?? 0);
-      }
-    }
-    return map;
-  };
-
-  const applyAxisDeltasToSelect = (selectEl, deltaByLabel, displayLabelByLabel) => {
+  const applyAxisDisplayLabelsToSelect = (selectEl, displayLabelByLabel) => {
     if (!selectEl || !(selectEl instanceof HTMLSelectElement)) return;
     for (const option of Array.from(selectEl.options)) {
       const raw = String(option.textContent ?? option.innerText ?? "").trim();
@@ -100,8 +55,7 @@
       if (!normalized) continue;
       if (/^[-]+$/.test(normalized)) continue;
       if (normalized.includes("필수") || normalized.includes("선택")) continue;
-      option.textContent = displayLabelByLabel?.get(normalized)
-        ?? (deltaByLabel.has(normalized) ? formatWithDelta(normalized, deltaByLabel.get(normalized)) : normalized);
+      option.textContent = displayLabelByLabel?.get(normalized) ?? normalized;
     }
   };
 
@@ -165,11 +119,14 @@
 
   const run = async () => {
     const cfg = window.CMS_OPTION_BREAKDOWN_CONFIG ?? {};
-    const apiBase = String(cfg.apiBase ?? "").trim();
+    const currentScript = document.currentScript instanceof HTMLScriptElement ? document.currentScript : null;
+    const scriptUrl = currentScript?.src ? new URL(currentScript.src) : null;
+    const scriptOrigin = scriptUrl?.origin ?? "";
+    const apiBase = String(cfg.apiBase ?? scriptOrigin).trim();
     if (!apiBase) return;
 
-    const mallId = String(cfg.mallId ?? detectMallId()).trim().toLowerCase();
-    const productNo = String(cfg.productNo ?? detectProductNo()).trim();
+    const mallId = String(cfg.mallId ?? scriptUrl?.searchParams.get("mall_id") ?? detectMallId()).trim().toLowerCase();
+    const productNo = String(cfg.productNo ?? scriptUrl?.searchParams.get("product_no") ?? detectProductNo()).trim();
     const token = String(cfg.token ?? "").trim();
     if (!mallId || !productNo) return;
 
@@ -189,27 +146,15 @@
 
     const axisDefs = getAxisDefinitions(payload);
     if (axisDefs.length === 0) return;
-    const byVariant = Array.isArray(payload.by_variant) ? payload.by_variant : [];
-
     let renderTimer = null;
     const bindAndRender = () => {
       const { realSelects, syntheticSelects } = ensureSyntheticSelects(axisDefs);
       const controls = axisDefs.map((_, index) => realSelects[index] ?? syntheticSelects[index - realSelects.length] ?? null);
-      const selectedPriorLabels = [];
 
       for (let i = 0; i < axisDefs.length; i += 1) {
         const axis = axisDefs[i];
-        const directMap = buildDirectDeltaMap(axis);
-        const directDisplayMap = buildDisplayLabelMap(axis);
-        const conditionalMap = i === 0
-          ? directMap
-          : buildConditionalDeltaMap(axisDefs, i, selectedPriorLabels, byVariant);
-        const effectiveMap = conditionalMap.size > 0 ? conditionalMap : directMap;
-        const effectiveDisplayMap = conditionalMap.size > 0
-          ? new Map(Array.from(conditionalMap.entries()).map(([label, delta]) => [label, formatWithDelta(label, delta)]))
-          : directDisplayMap;
-        applyAxisDeltasToSelect(controls[i], effectiveMap, effectiveDisplayMap);
-        selectedPriorLabels[i] = getSelectedLabel(controls[i]);
+        const displayLabelMap = buildDisplayLabelMap(axis);
+        applyAxisDisplayLabelsToSelect(controls[i], displayLabelMap);
       }
 
       controls.forEach((control) => {

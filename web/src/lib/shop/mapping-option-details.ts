@@ -6,8 +6,7 @@ import {
 } from "@/lib/shop/option-labor-rules";
 import { resolveCentralOptionMapping } from "@/lib/shop/channel-option-central-control.js";
 import { getPersistedSizeChoicesByMaterial } from "@/lib/shop/weight-grid-store.js";
-import { roundSizeDeltaKrw } from "@/lib/shop/market-linked-size-grid.js";
-import { PLATING_PREFIX, formatPlatingComboLabel, getPlatingComboSortOrder, normalizePlatingCatalogComboKey } from "@/lib/shop/sync-rules";
+import { PLATING_PREFIX, formatPlatingComboLabel, getPlatingComboSortOrder, normalizePlatingCatalogComboKey } from "@/lib/shop/rule-utils";
 import { stripPriceDeltaSuffix } from "@/lib/shop/option-labels.js";
 
 export type OptionDetailCategory = "MATERIAL" | "SIZE" | "COLOR_PLATING" | "DECOR";
@@ -46,7 +45,7 @@ export type MappingOptionAllowlist = {
 export type SavedOptionCategoryRow = {
   option_name: string;
   option_value: string;
-  category_key: "MATERIAL" | "SIZE" | "COLOR_PLATING" | "DECOR" | "OTHER" | "NOTICE";
+  category_key: "MATERIAL" | "SIZE" | "COLOR_PLATING" | "DECOR" | "ADDON" | "OTHER" | "NOTICE";
 };
 
 export type SavedOptionCategoryRowWithDelta = SavedOptionCategoryRow & {
@@ -62,7 +61,7 @@ export type MappingOptionEntryRow = {
 
 export type MappingCanonicalOptionRow = MappingOptionEntryRow & {
   category_key: SavedOptionCategoryRow["category_key"];
-  resolved_category_key: "MATERIAL" | "SIZE" | "COLOR" | "DECOR" | "OTHER" | "NOTICE";
+  resolved_category_key: "MATERIAL" | "SIZE" | "COLOR" | "DECOR" | "ADDON" | "OTHER" | "NOTICE";
   sync_delta_krw_legacy: number;
   resolved_delta_krw: number;
   legacy_status: "VALID" | "LEGACY_OUT_OF_RANGE" | "UNRESOLVED";
@@ -81,6 +80,8 @@ export type MappingCanonicalOptionRow = MappingOptionEntryRow & {
   other_reason: string | null;
   decor_extra_delta_krw: number | null;
   decor_final_amount_krw: number | null;
+  addon_master_item_id_selected: string | null;
+  addon_final_amount_krw: number | null;
   notice_value_selected: string | null;
 };
 
@@ -309,49 +310,6 @@ const buildSavedCategoryIndexes = (rows: SavedOptionCategoryRowWithDelta[]) => {
   return { byEntryKey, byOptionName };
 };
 
-const readRecordValue = (value: unknown, key: string): unknown => {
-  if (!value || typeof value !== "object") return undefined;
-  return Reflect.get(value, key);
-};
-
-const buildSyntheticMarketLinkedSizeChoices = (
-  materialCode: string,
-  marketContext: {
-    goldTickKrwPerG?: number | null;
-    silverTickKrwPerG?: number | null;
-    materialFactors?: Record<string, unknown> | null;
-  } | null | undefined,
-): MappingOptionAllowlistChoice[] => {
-  const normalizedMaterialCode = normalizeMaterialSelection(materialCode);
-  if (!normalizedMaterialCode) return [];
-  const factorRow = readRecordValue(marketContext?.materialFactors, normalizedMaterialCode);
-  const rawPriceBasis = String(readRecordValue(factorRow, "price_basis") ?? "").trim().toUpperCase();
-  const purityRate = Number(readRecordValue(factorRow, "purity_rate") ?? 0);
-  const adjustFactor = Number(
-    readRecordValue(factorRow, "material_adjust_factor")
-      ?? readRecordValue(factorRow, "gold_adjust_factor")
-      ?? 1,
-  );
-  const tickKrwPerG = rawPriceBasis === "SILVER"
-    ? Math.round(Number(marketContext?.silverTickKrwPerG ?? 0))
-    : Math.round(Number(marketContext?.goldTickKrwPerG ?? 0));
-  if (!(purityRate > 0) || !(adjustFactor > 0) || !(tickKrwPerG > 0) || rawPriceBasis === "NONE") return [];
-  const effectiveFactor = purityRate * adjustFactor;
-  const choices: MappingOptionAllowlistChoice[] = [];
-  for (let centigram = 0; centigram <= 10000; centigram += 1) {
-    const value = (centigram / 100).toFixed(2);
-    const deltaKrw = centigram === 0
-      ? 0
-      : roundSizeDeltaKrw((centigram / 100) * tickKrwPerG * effectiveFactor, 100, "UP");
-    choices.push({
-      value,
-      label: `${value}g`,
-      delta_krw: deltaKrw,
-    });
-  }
-  return choices;
-};
-
 export const buildObservedOptionValuePool = (args: {
   productOptions?: Array<{ option_name?: string | null; option_value?: Array<{ option_text?: string | null }> | null }>;
   variants?: Array<{ options?: Array<{ name?: string | null; value?: string | null }> | null }>;
@@ -401,6 +359,131 @@ export const buildObservedOptionValuePool = (args: {
   };
 };
 
+const pickMostCommon = (values: string[]): string | null => {
+  const freq = new Map<string, number>();
+  for (const value of values.filter(Boolean)) {
+    freq.set(value, (freq.get(value) ?? 0) + 1);
+  }
+  return Array.from(freq.entries()).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0]?.[0] ?? null;
+};
+
+export const deriveRuleOnlyCanonicalInputs = (args: {
+  variants?: Array<{ variantCode?: string | null; options?: Array<{ name?: string | null; value?: string | null }> | null }>;
+  mappings?: Array<Partial<MappingOptionSelection> & { external_variant_code?: string | null }>;
+  rules?: Array<Partial<OptionLaborRuleRow> | null | undefined>;
+  masterMaterialCode?: string | null;
+}): {
+  savedOptionCategories: SavedOptionCategoryRowWithDelta[];
+  categoryOverrideByEntryKey: Record<string, SavedOptionCategoryRow["category_key"]>;
+  axisSelectionByEntryKey: Record<string, {
+    axis1_value?: string | null;
+    axis2_value?: string | null;
+    axis3_value?: string | null;
+    decor_master_item_id?: string | null;
+    decor_extra_delta_krw?: number | null;
+    decor_final_amount_krw?: number | null;
+  }>;
+  otherReasonByEntryKey: Record<string, string>;
+} => {
+  const entries = buildMappingOptionEntries({ variants: args.variants?.map((variant) => ({ options: variant.options })) ?? [] });
+  const variantEntryKeys = new Map<string, Set<string>>();
+  for (const variant of args.variants ?? []) {
+    const variantCode = toTrimmed(variant?.variantCode);
+    if (!variantCode) continue;
+    const keys = new Set<string>();
+    for (const option of variant.options ?? []) {
+      const key = mappingOptionEntryKey(option?.name, option?.value);
+      if (key) keys.add(key);
+    }
+    variantEntryKeys.set(variantCode, keys);
+  }
+  const mappingsByEntryKey = new Map<string, Array<Partial<MappingOptionSelection>>>();
+  for (const mapping of args.mappings ?? []) {
+    const variantCode = toTrimmed(mapping?.external_variant_code);
+    const keys = variantEntryKeys.get(variantCode);
+    if (!keys) continue;
+    for (const key of keys) {
+      const bucket = mappingsByEntryKey.get(key) ?? [];
+      bucket.push(mapping);
+      mappingsByEntryKey.set(key, bucket);
+    }
+  }
+
+  const savedOptionCategories: SavedOptionCategoryRowWithDelta[] = [];
+  const categoryOverrideByEntryKey: Record<string, SavedOptionCategoryRow["category_key"]> = {};
+  const axisSelectionByEntryKey: Record<string, { axis1_value?: string | null; axis2_value?: string | null; axis3_value?: string | null; decor_master_item_id?: string | null; decor_extra_delta_krw?: number | null; decor_final_amount_krw?: number | null; }> = {};
+  const otherReasonByEntryKey: Record<string, string> = {};
+
+  for (const entry of entries) {
+    const matchingMappings = mappingsByEntryKey.get(entry.entry_key) ?? [];
+    const materialChoices = matchingMappings.map((row) => normalizeMaterialSelection(row.option_material_code)).filter((value): value is string => Boolean(value));
+    const colorChoices = matchingMappings.map((row) => normalizeColorSelection(row.option_color_code)).filter((value): value is string => Boolean(value));
+    const decorChoices = matchingMappings.map((row) => normalizeDecorSelection(row.option_decoration_code)).filter((value): value is string => Boolean(value));
+    const sizeChoices = matchingMappings
+      .map((row) => row.option_size_value == null ? null : normalizeSizeSelection(row.option_size_value))
+      .filter((value): value is string => Boolean(value));
+
+    const guessedCategory = guessMappingOptionCategoryByName(entry.option_name);
+    const materialFromValue = normalizeMaterialSelection(entry.option_value);
+    const colorFromValue = normalizeColorSelection(entry.option_value);
+    const decorRule = findDecorRuleForOptionValue(entry.option_value, args.rules ?? []);
+
+    let categoryKey: SavedOptionCategoryRow["category_key"] = guessedCategory;
+    if (guessedCategory === 'MATERIAL' || (materialFromValue && materialChoices.includes(materialFromValue))) {
+      categoryKey = 'MATERIAL';
+    } else if (guessedCategory === 'SIZE') {
+      categoryKey = 'SIZE';
+    } else if (guessedCategory === 'COLOR_PLATING') {
+      categoryKey = 'COLOR_PLATING';
+    } else if (guessedCategory === 'DECOR') {
+      categoryKey = 'DECOR';
+    } else if (guessedCategory === 'NOTICE') {
+      categoryKey = 'NOTICE';
+    } else if (colorChoices.length > 0 && (Boolean(colorFromValue) || colorChoices.length >= sizeChoices.length)) {
+      categoryKey = 'COLOR_PLATING';
+    } else if (decorChoices.length > 0 || Boolean(decorRule)) {
+      categoryKey = 'DECOR';
+    } else if (sizeChoices.length > 0) {
+      categoryKey = 'SIZE';
+    } else {
+      categoryKey = 'OTHER';
+    }
+
+    savedOptionCategories.push({
+      option_name: entry.option_name,
+      option_value: entry.option_value,
+      category_key: categoryKey,
+      sync_delta_krw: null,
+    });
+    categoryOverrideByEntryKey[entry.entry_key] = categoryKey;
+
+    const materialChoice = pickMostCommon(materialChoices) ?? normalizeMaterialSelection(args.masterMaterialCode) ?? null;
+    if (categoryKey === 'SIZE') {
+      axisSelectionByEntryKey[entry.entry_key] = {
+        axis1_value: materialChoice,
+        axis2_value: pickMostCommon(sizeChoices),
+      };
+    } else if (categoryKey === 'COLOR_PLATING') {
+      axisSelectionByEntryKey[entry.entry_key] = {
+        axis1_value: materialChoice,
+        axis2_value: pickMostCommon(colorChoices) ?? colorFromValue,
+      };
+    } else if (categoryKey === 'DECOR') {
+      axisSelectionByEntryKey[entry.entry_key] = {
+        axis1_value: materialChoice,
+        decor_master_item_id: toTrimmed(decorRule?.decoration_master_id) || null,
+      };
+    }
+  }
+
+  return {
+    savedOptionCategories,
+    categoryOverrideByEntryKey,
+    axisSelectionByEntryKey,
+    otherReasonByEntryKey,
+  };
+};
+
 const findDecorRuleForOptionValue = (
   optionValue: string,
   rules: Array<Partial<OptionLaborRuleRow> | null | undefined>,
@@ -444,8 +527,13 @@ export const buildCanonicalOptionRows = (args: {
     decor_master_item_id?: string | null | undefined;
     decor_extra_delta_krw?: number | null | undefined;
     decor_final_amount_krw?: number | null | undefined;
+    addon_master_item_id?: string | null | undefined;
+    addon_final_amount_krw?: number | null | undefined;
   } | null | undefined>;
   colorBaseDeltaByCode?: Record<string, number> | null;
+  addonAmountById?: Record<string, number> | null;
+  optionRoundingUnit?: number | null;
+  optionRoundingMode?: "CEIL" | "ROUND" | "FLOOR" | null;
 }): MappingCanonicalOptionRow[] => {
   const entries = buildMappingOptionEntries({
     productOptions: args.productOptions,
@@ -506,6 +594,10 @@ export const buildCanonicalOptionRows = (args: {
       persisted.decor_total_labor_cost_snapshot = matchedDecorRule?.base_labor_cost_krw ?? null;
       persisted.decor_extra_delta_krw = axisSelection?.decor_extra_delta_krw ?? axisDecorExtraDelta ?? matchedDecorRule?.additive_delta_krw ?? null;
       persisted.decor_final_amount_krw = axisSelection?.decor_final_amount_krw ?? axisDecorFinalAmount ?? null;
+    } else if (categoryKey === "ADDON") {
+      const axisSelection = args.axisSelectionByEntryKey?.[entry.entry_key] ?? null;
+      persisted.addon_master_item_id_selected = toTrimmed(axisSelection?.addon_master_item_id ?? axisSelection?.axis1_value) || null;
+      persisted.addon_final_amount_krw = toRoundedOrNull(axisSelection?.addon_final_amount_krw ?? axisSelection?.axis3_value);
     } else if (categoryKey === "OTHER") {
       const axisSelection = args.axisSelectionByEntryKey?.[entry.entry_key] ?? null;
       const axisReason = toTrimmed(axisSelection?.axis2_value ?? axisSelection?.axis1_value);
@@ -531,6 +623,9 @@ export const buildCanonicalOptionRows = (args: {
         factorMultiplierByMaterialCode?: Record<string, number> | null;
       } | null;
       colorBaseDeltaByCode?: Record<string, number> | null;
+      addonAmountById?: Record<string, number> | null;
+      optionRoundingUnit?: number | null;
+      optionRoundingMode?: "CEIL" | "ROUND" | "FLOOR" | null;
     } = {
       category: categoryKey,
       masterMaterialCode: args.masterMaterialCode ?? null,
@@ -544,9 +639,12 @@ export const buildCanonicalOptionRows = (args: {
       persistedSizeLookup: args.persistedSizeLookup ?? null,
       sizeMarketContext: args.sizeMarketContext ?? null,
       colorBaseDeltaByCode: args.colorBaseDeltaByCode ?? null,
+      addonAmountById: args.addonAmountById ?? null,
+      optionRoundingUnit: args.optionRoundingUnit ?? null,
+      optionRoundingMode: args.optionRoundingMode ?? null,
     };
     const resolved = resolveCentralOptionMapping(resolveArgs) as {
-      category: "MATERIAL" | "SIZE" | "COLOR" | "DECOR" | "OTHER" | "NOTICE";
+      category: "MATERIAL" | "SIZE" | "COLOR" | "DECOR" | "ADDON" | "OTHER" | "NOTICE";
       material_code_resolved: string | null;
       material_label_resolved: string | null;
       size_weight_g_selected: number | null;
@@ -560,6 +658,8 @@ export const buildCanonicalOptionRows = (args: {
       other_reason: string | null;
       decor_extra_delta_krw: number | null;
       decor_final_amount_krw: number | null;
+      addon_master_item_id_selected: string | null;
+      addon_final_amount_krw: number | null;
       notice_value_selected: string | null;
       resolved_delta_krw: number;
       source_rule_entry_ids: string[];
@@ -589,6 +689,8 @@ export const buildCanonicalOptionRows = (args: {
       other_reason: resolved.other_reason,
       decor_extra_delta_krw: resolved.decor_extra_delta_krw,
       decor_final_amount_krw: resolved.decor_final_amount_krw,
+      addon_master_item_id_selected: resolved.addon_master_item_id_selected,
+      addon_final_amount_krw: resolved.addon_final_amount_krw,
       notice_value_selected: resolved.notice_value_selected,
     };
   });
@@ -713,18 +815,6 @@ export const buildMappingOptionAllowlist = (
       materialSet.add(scopedMaterialCode);
     }
     if (rule.category_key === "SIZE") {
-      const materialCode = scopedMaterialCode;
-      const minValue = normalizeSizeSelection(rule.additional_weight_min_g ?? rule.additional_weight_g);
-      const maxValue = normalizeSizeSelection(rule.additional_weight_max_g ?? rule.additional_weight_g);
-      const minCentigram = weightStringToCentigram(minValue);
-      const maxCentigram = weightStringToCentigram(maxValue);
-      if (!materialCode || minCentigram == null || maxCentigram == null || minCentigram > maxCentigram) continue;
-      materialSet.add(materialCode);
-      const sizeSet = sizeSets.get(materialCode) ?? new Set<string>();
-      for (let current = minCentigram; current <= maxCentigram; current += 1) {
-        sizeSet.add((current / 100).toFixed(2));
-      }
-      sizeSets.set(materialCode, sizeSet);
       continue;
     }
     if (rule.category_key === "COLOR_PLATING") {
@@ -783,15 +873,6 @@ export const buildMappingOptionAllowlist = (
         sizeSets.set(materialCode, new Set<string>());
       }
       sizeDeltaByMaterial.set(materialCode, deltaByValue);
-    }
-  } else {
-    for (const materialCode of Array.from(materialSet)) {
-      const syntheticChoices = buildSyntheticMarketLinkedSizeChoices(materialCode, options?.sizeMarketContext ?? null);
-      sizeSets.set(materialCode, new Set(syntheticChoices.map((choice) => choice.value)));
-      sizeDeltaByMaterial.set(
-        materialCode,
-        new Map(syntheticChoices.map((choice) => [choice.value, choice.delta_krw ?? null])),
-      );
     }
   }
 
@@ -858,7 +939,8 @@ export const inferMappingOptionSelection = (args: {
   };
 
   const sizeAllowedForMaterial = (materialCode: string | null, sizeValue: string | null): boolean => {
-    return Boolean(materialCode && sizeValue);
+    if (!materialCode || !sizeValue) return false;
+    return allowedSizes.get(materialCode)?.has(sizeValue) === true;
   };
 
   const replaceSelection = (
@@ -1022,10 +1104,12 @@ export const validateMappingOptionSelection = (args: {
   }
 
   if (current.option_size_value) {
-    const unchangedLegacy = current.option_size_value === previous.option_size_value
-      && current.option_material_code === previous.option_material_code;
     if (!current.option_material_code) {
-      if (!unchangedLegacy) errors.push("option_material_code is required when option_size_value is set");
+      errors.push("option_material_code is required when option_size_value is set");
+    } else if (
+      allowedSizes.get(current.option_material_code)?.has(current.option_size_value) !== true
+    ) {
+      errors.push(`option_size_value '${current.option_size_value}' is not allowed by saved settings for material '${current.option_material_code}'`);
     }
   }
 

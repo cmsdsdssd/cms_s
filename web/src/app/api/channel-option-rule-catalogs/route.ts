@@ -9,7 +9,9 @@ const CATALOGS = [
   { category_key: 'SIZE', label: '사이즈' },
   { category_key: 'COLOR_PLATING', label: '색상/도금' },
   { category_key: 'DECOR', label: '장식' },
+  { category_key: 'ADDON', label: '부가옵션' },
   { category_key: 'OTHER', label: '기타' },
+  { category_key: 'NOTICE', label: '안내' },
 ] as const;
 
 export async function GET(request: Request) {

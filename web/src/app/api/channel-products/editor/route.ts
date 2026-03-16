@@ -14,7 +14,7 @@ import { POST as recomputePost } from "@/app/api/pricing/recompute/route";
 import { POST as pushPost } from "@/app/api/channel-prices/push/route";
 import { resolveCurrentProductSyncProfile } from "@/lib/shop/current-product-sync-profile.js";
 import { loadEffectiveMarketTicks } from "@/lib/shop/effective-market-ticks.js";
-import { summarizeOptionStateMoments } from "@/lib/shop/auto-price-preview-display.js";
+import { loadPublishedPriceStateByChannelProducts } from "@/lib/shop/publish-price-state";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -176,28 +176,33 @@ async function loadDbOptionAdditionalByVariant(
   const map = new Map<string, number>();
   if (externalProductNos.length === 0) return map;
 
-  let stateQuery = sb
-    .from("channel_option_current_state_v1")
-    .select("state_id, external_variant_code, final_target_additional_amount_krw, updated_at")
+  let mappingQuery = sb
+    .from("sales_channel_product")
+    .select("channel_product_id, external_variant_code")
     .eq("channel_id", channelId)
-    .order("updated_at", { ascending: false })
-    .order("state_id", { ascending: false });
+    .eq("is_active", true)
+    .order("updated_at", { ascending: false });
   if (externalProductNos.length === 1) {
-    stateQuery = stateQuery.eq("external_product_no", externalProductNos[0]);
+    mappingQuery = mappingQuery.eq("external_product_no", externalProductNos[0]);
   } else {
-    stateQuery = stateQuery.in("external_product_no", externalProductNos);
+    mappingQuery = mappingQuery.in("external_product_no", externalProductNos);
   }
-  const stateRes = await stateQuery;
-  if (stateRes.error) {
-    throw new Error(stateRes.error.message ?? "current_state 조회 실패");
-  }
-  for (const row of stateRes.data ?? []) {
-    const code = String((row as { external_variant_code?: string | null }).external_variant_code ?? "").trim();
-    if (!code) continue;
-    if (map.has(code)) continue;
-    const amount = toIntCeil((row as { final_target_additional_amount_krw?: number | null }).final_target_additional_amount_krw ?? Number.NaN, Number.NaN);
-    if (!Number.isFinite(amount)) continue;
-    map.set(code, amount);
+  const mappingRes = await mappingQuery;
+  if (mappingRes.error) throw new Error(mappingRes.error.message ?? "publish 대상 매핑 조회 실패");
+  const channelProductIds = Array.from(new Set((mappingRes.data ?? []).map((row) => String(row.channel_product_id ?? "").trim()).filter(Boolean)));
+  if (channelProductIds.length === 0) return map;
+
+  const publishRes = await loadPublishedPriceStateByChannelProducts({
+    sb,
+    channelId,
+    channelProductIds,
+  });
+  if (!publishRes.available) return map;
+  for (const row of publishRes.rowsByChannelProduct.values()) {
+    const variantCode = String(row.externalVariantCode ?? "").trim();
+    if (!variantCode) continue;
+    if (map.has(variantCode)) continue;
+    map.set(variantCode, Math.round(Number(row.publishedAdditionalAmountKrw ?? 0)));
   }
   return map;
 }
@@ -243,19 +248,6 @@ async function loadEditorMeta(
   const effectiveTicks = await loadEffectiveMarketTicks(sb);
 
   const productNos = normalizeProductNoCandidates(externalProductNos);
-  let stateLatestQuery = sb
-    .from("channel_option_current_state_v1")
-    .select("external_product_no, exclude_plating_labor, plating_labor_sell_krw, total_labor_sell_krw, floor_price_krw, updated_at, last_pushed_at, last_verified_at, last_push_status, last_push_error")
-    .eq("channel_id", channelId)
-    .order("updated_at", { ascending: false })
-    .order("state_id", { ascending: false });
-  if (productNos.length === 1) {
-    stateLatestQuery = stateLatestQuery.eq("external_product_no", productNos[0]);
-  } else if (productNos.length > 1) {
-    stateLatestQuery = stateLatestQuery.in("external_product_no", productNos);
-  }
-  const stateLatestRes = await stateLatestQuery;
-  if (stateLatestRes.error) throw new Error(stateLatestRes.error.message ?? 'current_state 조회 실패');
 
   const buildMappingProfileQuery = () => {
     let mappingProfileQuery = sb
@@ -315,28 +307,8 @@ async function loadEditorMeta(
     : { data: null, error: null };
   if (latestSnapshotRes.error) throw new Error(latestSnapshotRes.error.message ?? "최근 스냅샷 조회 실패");
 
-  const stateRows = ((stateLatestRes.data ?? []) as Array<{
-    exclude_plating_labor?: boolean;
-    plating_labor_sell_krw?: number;
-    total_labor_sell_krw?: number;
-    floor_price_krw?: number;
-    external_product_no?: string | null;
-    updated_at?: string | null;
-    last_pushed_at?: string | null;
-    last_verified_at?: string | null;
-    last_push_status?: string | null;
-    last_push_error?: string | null;
-  }>).filter((row) => Boolean(row) && typeof row === "object");
-  const preferredProductNo = String(preferredExternalProductNo ?? "").trim();
-  const relevantStateRows = (() => {
-    if (!preferredProductNo) return stateRows;
-    const exactRows = stateRows.filter((row) => String(row.external_product_no ?? "").trim() === preferredProductNo);
-    return exactRows.length > 0 ? exactRows : stateRows;
-  })();
-  const hasSingleRelevantStateRow = relevantStateRows.length === 1;
-  const state = hasSingleRelevantStateRow ? (relevantStateRows[0] ?? null) : null;
   const master = (masterRes.data as Partial<MasterMeta> | null) ?? null;
-  const rawPlatingSell = toIntCeilNonNegative(state?.plating_labor_sell_krw ?? master?.plating_price_sell_default ?? 0);
+  const rawPlatingSell = toIntCeilNonNegative(master?.plating_price_sell_default ?? 0);
   const laborFromSnapshot = toIntCeil((latestSnapshotRes.data as { labor_raw_krw?: number } | null)?.labor_raw_krw ?? Number.NaN, Number.NaN);
   const laborFallback = toIntCeilNonNegative(
     Number(master?.labor_base_sell ?? 0)
@@ -347,18 +319,14 @@ async function loadEditorMeta(
   );
   const totalLabor = Number.isFinite(laborFromSnapshot) ? laborFromSnapshot : laborFallback;
 
-  const excludePlatingLabor = relevantStateRows.length > 0
-    && relevantStateRows.every((row) => row.exclude_plating_labor === true);
-  const optionStateMoments = summarizeOptionStateMoments(relevantStateRows);
-  const platingSell = excludePlatingLabor ? 0 : rawPlatingSell;
-  const resolvedTotalLaborSell = excludePlatingLabor
-    ? (Number.isFinite(laborFromSnapshot) ? laborFromSnapshot : Math.max(0, laborFallback - rawPlatingSell))
-    : toIntCeil(state?.total_labor_sell_krw ?? totalLabor);
+  const excludePlatingLabor = false;
+  const platingSell = rawPlatingSell;
+  const resolvedTotalLaborSell = totalLabor;
 
   return {
     floor_price_krw: Math.max(
       0,
-      toIntCeil((floorRes.data as { floor_price_krw?: number } | null)?.floor_price_krw ?? state?.floor_price_krw ?? 0),
+      toIntCeil((floorRes.data as { floor_price_krw?: number } | null)?.floor_price_krw ?? 0),
     ),
     exclude_plating_labor: excludePlatingLabor,
     plating_labor_sell_krw: platingSell,
@@ -366,10 +334,10 @@ async function loadEditorMeta(
     tick_gold_krw_per_g: toIntCeilNonNegative(effectiveTicks.goldTickKrwPerG ?? 0),
     tick_silver_krw_per_g: toIntCeilNonNegative(effectiveTicks.silverTickKrwPerG ?? 0),
     current_product_sync_profile: resolveCurrentProductSyncProfile(mappingProfileRows),
-    last_option_pushed_at: optionStateMoments.lastPushedAt,
-    last_option_verified_at: optionStateMoments.lastVerifiedAt,
-    last_option_push_status: optionStateMoments.lastPushStatus,
-    last_option_push_error: optionStateMoments.lastPushError,
+    last_option_pushed_at: null,
+    last_option_verified_at: null,
+    last_option_push_status: null,
+    last_option_push_error: null,
   };
 }
 
@@ -992,90 +960,6 @@ export async function POST(request: Request) {
   const deductionWeightG = Number(masterMeta?.deduction_weight_default_g ?? 0);
   const netWeightG = Math.max(weightG - deductionWeightG, 0);
 
-  const requestedStateRows = variantPatches.map((patch) => {
-    const resolvedVariantCode = canonicalVariantCodeByAnyCode.get(patch.variant_code) ?? patch.variant_code;
-    const mapping = mappingByVariantCode.get(resolvedVariantCode);
-    const masterItemId = mapping?.master_item_id || resolvedMasterItemId;
-    const sourceHash = [
-      channelId,
-      externalProductNo,
-      resolvedVariantCode,
-      String(basePriceResolved),
-      String(patch.additional_amount),
-      String(floorPriceResolved),
-      excludePlatingLabor ? "1" : "0",
-    ].join("|");
-    return {
-      channel_id: channelId,
-      channel_product_id: mapping?.channel_product_id || null,
-      master_item_id: masterItemId || null,
-      external_product_no: resolvedExternalProductNo,
-      external_variant_code: resolvedVariantCode,
-      product_name: detailBeforeData.productName ?? null,
-      option_path: variantOptionPathByAnyCode.get(resolvedVariantCode) ?? variantOptionPathByAnyCode.get(patch.variant_code) ?? [],
-      material_code: mapping?.option_material_code || String(masterMeta?.material_code_default ?? "").trim() || null,
-      weight_g: Number.isFinite(weightG) ? weightG : null,
-      deduction_weight_g: Number.isFinite(deductionWeightG) ? deductionWeightG : null,
-      net_weight_g: Number.isFinite(netWeightG) ? netWeightG : null,
-      material_price_krw: null,
-      tick_gold_krw_per_g: toIntCeilNonNegative((tickRes.data as { gold_price_krw_per_g?: number } | null)?.gold_price_krw_per_g ?? 0),
-      tick_silver_krw_per_g: toIntCeilNonNegative((tickRes.data as { silver_price_krw_per_g?: number } | null)?.silver_price_krw_per_g ?? 0),
-      base_price_krw: basePriceResolved,
-      retail_price_krw: retailPriceResolved,
-      floor_price_krw: floorPriceResolved,
-      exclude_plating_labor: excludePlatingLabor,
-      plating_labor_sell_krw: platingSell,
-      total_labor_sell_krw: totalLaborAdjusted,
-      option_sync_delta_krw: toIntCeil(patch.additional_amount),
-      final_target_additional_amount_krw: toIntCeil(patch.additional_amount),
-      last_push_status: "PENDING",
-      last_push_http_status: null,
-      last_push_error: null,
-      source_snapshot_hash: sourceHash,
-      updated_by: "AUTO_PRICE_EDITOR_APPLY",
-      created_by: "AUTO_PRICE_EDITOR_APPLY",
-    };
-  });
-
-  if (requestedStateRows.length > 0) {
-    const stateUpsertRes = await sb
-      .from("channel_option_current_state_v1")
-      .upsert(requestedStateRows, { onConflict: "channel_id,external_product_no,external_variant_code" })
-      .select("state_id, channel_id, external_product_no, external_variant_code");
-    if (stateUpsertRes.error) return jsonError(stateUpsertRes.error.message ?? "current_state 저장 실패", 500);
-
-    const stateIdByVariant = new Map<string, string>();
-    for (const row of (stateUpsertRes.data ?? []) as Array<{ state_id: string; external_variant_code: string }>) {
-      const variantCode = String(row.external_variant_code ?? "").trim();
-      const stateId = String(row.state_id ?? "").trim();
-      if (variantCode && stateId) stateIdByVariant.set(variantCode, stateId);
-    }
-
-    const requestLogs = requestedStateRows.map((row) => ({
-      state_id: stateIdByVariant.get(String(row.external_variant_code)) ?? null,
-      channel_id: row.channel_id,
-      channel_product_id: row.channel_product_id,
-      master_item_id: row.master_item_id,
-      external_product_no: row.external_product_no,
-      external_variant_code: row.external_variant_code,
-      action_type: "REQUESTED",
-      result_status: "PENDING",
-      expected_additional_amount_krw: row.final_target_additional_amount_krw,
-      request_payload: {
-        base_price_krw: row.base_price_krw,
-        retail_price_krw: row.retail_price_krw,
-        floor_price_krw: row.floor_price_krw,
-        exclude_plating_labor: row.exclude_plating_labor,
-      },
-      source_snapshot_hash: row.source_snapshot_hash,
-      triggered_by: "AUTO_PRICE_EDITOR_APPLY",
-    }));
-    if (requestLogs.length > 0) {
-      const logInsertRes = await sb.from("channel_option_apply_log_v1").insert(requestLogs);
-      if (logInsertRes.error) return jsonError(logInsertRes.error.message ?? "apply 로그(REQUESTED) 저장 실패", 500);
-    }
-  }
-
   const variantResults: Array<Record<string, unknown>> = [];
   const concurrency = 4;
   for (let i = 0; i < variantPatches.length; i += concurrency) {
@@ -1156,82 +1040,6 @@ export async function POST(request: Request) {
     await sleep(waitMs);
     detailAfter = await cafe24GetProductDetail(account, accessToken, resolvedExternalProductNo);
     hydrateActualMap();
-  }
-
-  const resultStateRows = variantResults.map((row) => {
-    const resolvedVariantCode = String(row.resolved_variant_code ?? row.requested_variant_code ?? "").trim();
-    const expected = toIntCeil(row.target_additional_amount ?? 0);
-    const actual = actualAdditionalByVariant.get(resolvedVariantCode) ?? null;
-    const transportOk = row.ok === true;
-    const verified = actual !== null && actual === expected;
-    const status = !transportOk ? "FAILED" : (verified ? "SUCCEEDED" : "VERIFY_FAILED");
-    return {
-      channel_id: channelId,
-      external_product_no: resolvedExternalProductNo,
-      external_variant_code: resolvedVariantCode,
-      last_pushed_additional_amount_krw: transportOk ? expected : null,
-      last_push_status: status,
-      last_push_http_status: Number.isFinite(Number(row.status)) ? Number(row.status) : null,
-      last_push_error: !transportOk
-        ? String(row.error ?? "variant apply failed")
-        : (verified ? null : "verify pending or mismatch"),
-      last_pushed_at: new Date().toISOString(),
-      last_verified_at: verified ? new Date().toISOString() : null,
-      updated_by: "AUTO_PRICE_EDITOR_APPLY",
-    };
-  }).filter((row) => row.external_variant_code);
-  if (resultStateRows.length > 0) {
-    for (const row of resultStateRows) {
-      const stateUpdateRes = await sb
-        .from("channel_option_current_state_v1")
-        .update({
-          last_pushed_additional_amount_krw: row.last_pushed_additional_amount_krw,
-          last_push_status: row.last_push_status,
-          last_push_http_status: row.last_push_http_status,
-          last_push_error: row.last_push_error,
-          last_pushed_at: row.last_pushed_at,
-          last_verified_at: row.last_verified_at,
-          updated_by: row.updated_by,
-        })
-        .eq("channel_id", row.channel_id)
-        .eq("external_product_no", row.external_product_no)
-        .eq("external_variant_code", row.external_variant_code);
-      if (stateUpdateRes.error) return jsonError(stateUpdateRes.error.message ?? "current_state 반영결과 저장 실패", 500);
-    }
-  }
-
-  const resultLogs = variantResults.map((row) => {
-    const resolvedVariantCode = String(row.resolved_variant_code ?? row.requested_variant_code ?? "").trim();
-    const expected = toIntCeil(row.target_additional_amount ?? 0);
-    const actual = actualAdditionalByVariant.get(resolvedVariantCode) ?? null;
-    const transportOk = row.ok === true;
-    const verified = actual !== null && actual === expected;
-    const logStatus = !transportOk ? "FAILED" : (verified ? "SUCCEEDED" : "VERIFY_FAILED");
-    return {
-      channel_id: channelId,
-      channel_product_id: null,
-      master_item_id: resolvedMasterItemId || null,
-      external_product_no: resolvedExternalProductNo,
-      external_variant_code: resolvedVariantCode || null,
-      action_type: transportOk ? "VERIFIED" : "FAILED",
-      result_status: logStatus,
-      expected_additional_amount_krw: expected,
-      actual_additional_amount_krw: actual,
-      http_status: Number.isFinite(Number(row.status)) ? Number(row.status) : null,
-      error_message: !transportOk
-        ? String(row.error ?? "variant apply failed")
-        : (verified ? null : "verify pending or mismatch"),
-      response_payload: row.raw ?? null,
-      verify_payload: {
-        actual_additional_amount: actual,
-      },
-      source_snapshot_hash: [channelId, resolvedExternalProductNo, resolvedVariantCode, String(expected)].join("|"),
-      triggered_by: "AUTO_PRICE_EDITOR_APPLY",
-    };
-  });
-  if (resultLogs.length > 0) {
-    const resultLogRes = await sb.from("channel_option_apply_log_v1").insert(resultLogs);
-    if (resultLogRes.error) return jsonError(resultLogRes.error.message ?? "apply 로그(RESULT) 저장 실패", 500);
   }
 
   const strictFailedCount = variantResults.filter((row) => {

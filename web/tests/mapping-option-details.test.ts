@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import {
   buildMappingOptionAllowlist,
   buildObservedOptionValuePool,
+  validateMappingOptionSelection,
 } from '../src/lib/shop/mapping-option-details.ts';
 
 test('buildMappingOptionAllowlist exposes persisted size grid choices even without local SIZE rules', () => {
@@ -64,7 +65,7 @@ test('buildObservedOptionValuePool infers material and plating codes from raw op
   assert.deepEqual(observed.colors, ['P', 'P+W', '[도] W']);
 });
 
-test('buildMappingOptionAllowlist synthesizes market-linked size choices from observed materials', () => {
+test('buildMappingOptionAllowlist does not synthesize size choices without persisted grid', () => {
   const allowlist = buildMappingOptionAllowlist([], {
     observedOptionValues: {
       materials: ['925'],
@@ -72,21 +73,53 @@ test('buildMappingOptionAllowlist synthesizes market-linked size choices from ob
       colors: [],
       decors: [],
     },
-    sizeMarketContext: {
-      goldTickKrwPerG: 200000,
-      silverTickKrwPerG: 5000,
-      materialFactors: {
-        '925': {
-          material_code: '925',
-          purity_rate: 0.925,
-          material_adjust_factor: 1.2,
-          price_basis: 'SILVER',
-        },
-      },
+  });
+
+  assert.deepEqual(allowlist.sizes_by_material['925'], []);
+});
+
+test('validateMappingOptionSelection rejects size values outside persisted grid choices', () => {
+  const allowlist = buildMappingOptionAllowlist([], {
+    persistedSizeLookup: {
+      choicesByMaterial: new Map([
+        ['925', [{ value: '1.00', label: '1.00g', delta_krw: 7000 }]],
+      ]),
+    },
+  });
+  const result = validateMappingOptionSelection({
+    allowlist,
+    current: {
+      option_material_code: '925',
+      option_size_value: 2,
     },
   });
 
-  assert.equal(allowlist.sizes_by_material['925']?.[0]?.value, '0.00');
-  assert.equal(allowlist.sizes_by_material['925']?.[1]?.value, '0.01');
-  assert.equal(allowlist.sizes_by_material['925']?.[1]?.delta_krw, 100);
+  assert.equal(result.ok, false);
+  if (result.ok) throw new Error('expected invalid result');
+  assert.match(result.errors[0] ?? '', /option_size_value/);
+});
+
+test('validateMappingOptionSelection rejects unchanged stale size values', () => {
+  const allowlist = buildMappingOptionAllowlist([], {
+    persistedSizeLookup: {
+      choicesByMaterial: new Map([
+        ['925', [{ value: '1.00', label: '1.00g', delta_krw: 7000 }]],
+      ]),
+    },
+  });
+  const result = validateMappingOptionSelection({
+    allowlist,
+    current: {
+      option_material_code: '925',
+      option_size_value: 2,
+    },
+    previous: {
+      option_material_code: '925',
+      option_size_value: 2,
+    },
+  });
+
+  assert.equal(result.ok, false);
+  if (result.ok) throw new Error('expected invalid result');
+  assert.match(result.errors[0] ?? '', /option_size_value/);
 });

@@ -1,0 +1,53 @@
+
+> web@0.1.0 dev
+> next dev --port 3045
+
+▲ Next.js 16.1.4 (Turbopack)
+- Local:         http://localhost:3045
+- Network:       http://192.168.0.69:3045
+- Environments: .env.local, .env
+
+✓ Starting...
+⚠ Turbopack's filesystem cache has been deleted because we previously detected an internal error in Turbopack. Builds or page loads may be slower as a result.
+⚠ The "middleware" file convention is deprecated. Please use "proxy" instead. Learn more: https://nextjs.org/docs/messages/middleware-to-proxy
+✓ Ready in 1092ms
+ GET /settings/shopping/mappings 404 in 2.1s (compile: 2.0s, render: 101ms)
+ GET /settings/shopping/mappings 200 in 948ms (compile: 719ms, proxy.ts: 70ms, render: 159ms)
+ GET /settings/shopping/mappings 200 in 68ms (compile: 4ms, proxy.ts: 4ms, render: 61ms)
+⚠ Cross origin request detected from 127.0.0.1 to /_next/* resource. In a future major version of Next.js, you will need to explicitly configure "allowedDevOrigins" in next.config to allow this.
+Read more: https://nextjs.org/docs/app/api-reference/config/next-config-js/allowedDevOrigins
+ GET /api/market-ticks 200 in 516ms (compile: 251ms, proxy.ts: 4ms, render: 262ms)
+ GET /api/channels 200 in 635ms (compile: 298ms, proxy.ts: 3ms, render: 335ms)
+ GET /api/pricing-policies?channel_id=c80a4fd4-bb77-4f81-ba86-f93d3c86b7b8 200 in 159ms (compile: 85ms, proxy.ts: 5ms, render: 70ms)
+ GET /api/channel-products?channel_id=c80a4fd4-bb77-4f81-ba86-f93d3c86b7b8 200 in 193ms (compile: 109ms, proxy.ts: 6ms, render: 78ms)
+ GET /api/channel-products/gallery?channel_id=c80a4fd4-bb77-4f81-ba86-f93d3c86b7b8 200 in 350ms (compile: 129ms, proxy.ts: 5ms, render: 216ms)
+ POST /api/new-receipt-workbench/model-name-suggest 200 in 127ms (compile: 71ms, proxy.ts: 3ms, render: 53ms)
+ GET /api/channel-products/gallery-detail?channel_id=c80a4fd4-bb77-4f81-ba86-f93d3c86b7b8&master_item_id=4551f046-607f-4bf0-85db-9eafab542cd0&external_product_no=33 200 in 825ms (compile: 138ms, proxy.ts: 5ms, render: 683ms)
+ GET /api/channel-products/variants?channel_id=c80a4fd4-bb77-4f81-ba86-f93d3c86b7b8&master_item_id=4551f046-607f-4bf0-85db-9eafab542cd0&external_product_no=33 200 in 906ms (compile: 104ms, proxy.ts: 5ms, render: 797ms)
+ GET /api/channel-products/gallery-detail?channel_id=c80a4fd4-bb77-4f81-ba86-f93d3c86b7b8&master_item_id=4551f046-607f-4bf0-85db-9eafab542cd0&external_product_no=33 200 in 985ms (compile: 2ms, proxy.ts: 3ms, render: 979ms)
+ GET /settings/shopping/mappings 200 in 69ms (compile: 6ms, proxy.ts: 3ms, render: 60ms)
+ GET /api/channels 200 in 101ms (compile: 9ms, proxy.ts: 3ms, render: 89ms)
+ GET /api/pricing-policies?channel_id=c80a4fd4-bb77-4f81-ba86-f93d3c86b7b8 200 in 78ms (compile: 10ms, proxy.ts: 5ms, render: 63ms)
+ GET /api/channel-products?channel_id=c80a4fd4-bb77-4f81-ba86-f93d3c86b7b8 200 in 96ms (compile: 6ms, proxy.ts: 4ms, render: 86ms)
+ GET /api/market-ticks 200 in 213ms (compile: 5ms, proxy.ts: 3ms, render: 206ms)
+ GET /api/channel-products/gallery?channel_id=c80a4fd4-bb77-4f81-ba86-f93d3c86b7b8 200 in 189ms (compile: 8ms, proxy.ts: 4ms, render: 177ms)
+ POST /api/new-receipt-workbench/model-name-suggest 200 in 49ms (compile: 2ms, proxy.ts: 3ms, render: 44ms)
+ GET /api/channel-products/gallery-detail?channel_id=c80a4fd4-bb77-4f81-ba86-f93d3c86b7b8&master_item_id=4551f046-607f-4bf0-85db-9eafab542cd0&external_product_no=33 200 in 676ms (compile: 39ms, proxy.ts: 6ms, render: 631ms)
+ GET /api/channel-products/variants?channel_id=c80a4fd4-bb77-4f81-ba86-f93d3c86b7b8&master_item_id=4551f046-607f-4bf0-85db-9eafab542cd0&external_product_no=33 200 in 800ms (compile: 1766µs, proxy.ts: 5ms, render: 794ms)
+
+thread 'tokio-runtime-worker' (113348) panicked at turbopack\crates\turbo-persistence\src\static_sorted_file.rs:411:46:
+range start index 486539353 out of range for slice of length 240126
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'tokio-runtime-worker' (167928) panicked at C:\actions-runner\_work\next.js\next.js\turbopack\crates\turbo-tasks-backend\src\backend\operation\mod.rs:156:17:
+Failed to restore task data (corrupted database or bug): Meta for Code::debug_id (TaskId 167730))
+
+Caused by:
+    0: Looking up data for TaskId 167730 from database failed
+    1: Unable to open static sorted file referenced from 00000065.meta
+    2: Unable to open static sorted file 00000061.sst
+    3: 지정된 파일을 찾을 수 없습니다. (os error 2)
+ GET /settings/shopping/mappings 200 in 224ms (compile: 76ms, proxy.ts: 2ms, render: 146ms)
+ GET /api/channels 404 in 38ms (compile: 13ms, proxy.ts: 1992µs, render: 23ms)
+ GET /api/market-ticks 200 in 137ms (compile: 4ms, proxy.ts: 3ms, render: 131ms)
+ GET /api/channels 404 in 25ms (compile: 4ms, proxy.ts: 2ms, render: 19ms)

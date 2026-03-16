@@ -9,6 +9,16 @@ type ProfileRow = {
 
 export const DEFAULT_CURRENT_PRODUCT_SYNC_PROFILE: CurrentProductSyncProfile = 'GENERAL';
 
+export const formatCurrentProductSyncProfileLabel = (profile: CurrentProductSyncProfile): string => {
+  return profile === 'MARKET_LINKED' ? '시장연동형' : '일반형';
+};
+
+export const describeCurrentProductSyncProfile = (profile: CurrentProductSyncProfile): string => {
+  return profile === 'MARKET_LINKED'
+    ? '시세 기준 uplift와 시장연동 threshold를 우선 적용합니다.'
+    : '기본 threshold와 일반 상품 기준으로 계산과 자동 동기화를 진행합니다.';
+};
+
 const isKnownCurrentProductSyncProfile = (value: unknown): value is CurrentProductSyncProfile => {
   const profile = String(value ?? '').trim().toUpperCase();
   return profile === 'GENERAL' || profile === 'MARKET_LINKED';

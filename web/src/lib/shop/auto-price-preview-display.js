@@ -4,7 +4,7 @@ function toRoundedKrw(value) {
   return Number.isFinite(num) ? Math.round(num) : null;
 }
 
-export function buildAppliedTargetSummary({ appliedKrw, targetKrw, thresholdNoPushNormal = false }) {
+export function buildAppliedTargetSummary({ appliedKrw, targetKrw, thresholdNoPushNormal = false, downsyncSuppressedNormal = false }) {
   const applied = toRoundedKrw(appliedKrw);
   const target = toRoundedKrw(targetKrw);
 
@@ -29,13 +29,16 @@ export function buildAppliedTargetSummary({ appliedKrw, targetKrw, thresholdNoPu
   }
 
   const delta = target - applied;
+  const isThresholdNormal = delta !== 0 && thresholdNoPushNormal;
+  const isDownsyncNormal = delta !== 0 && !isThresholdNormal && downsyncSuppressedNormal;
   return {
     appliedKrw: applied,
     targetKrw: target,
     deltaKrw: delta,
     isMismatch: delta !== 0,
-    statusLabel: delta === 0 ? '일치' : (thresholdNoPushNormal ? '정상(Threshold 미통과)' : '미적용'),
-    isThresholdNoPushNormal: delta !== 0 && thresholdNoPushNormal,
+    statusLabel: delta === 0 ? '일치' : (isThresholdNormal ? '정상(Threshold 미통과)' : isDownsyncNormal ? '정상(다운싱크 억제)' : '미적용'),
+    isThresholdNoPushNormal: isThresholdNormal,
+    isDownsyncSuppressedNormal: isDownsyncNormal,
   };
 }
 
@@ -103,8 +106,9 @@ export function buildPreviewTruthSections({
   lastVerifiedAt,
   computedAt,
   thresholdNoPushNormal = false,
+  downsyncSuppressedNormal = false,
 }) {
-  const summary = buildAppliedTargetSummary({ appliedKrw, targetKrw, thresholdNoPushNormal });
+  const summary = buildAppliedTargetSummary({ appliedKrw, targetKrw, thresholdNoPushNormal, downsyncSuppressedNormal });
   const computeRows = [
     { label: '타겟값', value: summary.targetKrw },
     ...(summary.isMismatch && summary.deltaKrw != null ? [{ label: '차이', value: summary.deltaKrw }] : []),

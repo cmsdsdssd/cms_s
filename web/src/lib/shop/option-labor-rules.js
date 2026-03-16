@@ -1,4 +1,4 @@
-import { resolveMarketLinkedSizeCell } from "./market-linked-size-grid.js";
+import { resolvePersistedSizeGridCell } from "./weight-grid-store.js";
 
 const CATEGORY_KEYS = ["MATERIAL", "SIZE", "COLOR_PLATING", "DECOR", "OTHER"];
 
@@ -225,18 +225,15 @@ export const computeOptionLaborBuckets = (rows, context, options = {}) => {
   const decorRules = Array.isArray(matched.decorRules) ? matched.decorRules : (matched.decor ? [matched.decor] : []);
   const material = 0;
   const hasExplicitSizeMode = sizeRules.some((row) => String(row?.size_price_mode ?? '').trim().length > 0 || row?.fixed_delta_krw != null);
-  const resolvedSizeCell = hasExplicitSizeMode
-    ? resolveMarketLinkedSizeCell({
-      rows: sourceRows,
-      masterItemId: options?.masterItemId ?? null,
-      externalProductNo: options?.externalProductNo ?? null,
+  const resolvedSizeCell = hasExplicitSizeMode && options?.persistedSizeLookup
+    ? resolvePersistedSizeGridCell({
+      lookup: options.persistedSizeLookup,
       materialCode,
       additionalWeightG: context?.additionalWeightG,
-      marketContext: options?.marketContext ?? null,
     })
     : null;
-  const size = resolvedSizeCell
-    ? (resolvedSizeCell.valid ? Math.round(resolvedSizeCell.computed_delta_krw ?? 0) : 0)
+  const size = hasExplicitSizeMode
+    ? (resolvedSizeCell?.valid ? Math.round(resolvedSizeCell.computed_delta_krw ?? 0) : 0)
     : sizeRules.reduce((sum, row) => sum + normalizeKrwInteger(row.additive_delta_krw, 0), 0);
   const colorPlating = colorPlatingRules.reduce((sum, row) => sum + normalizeKrwInteger(row.additive_delta_krw, 0), 0);
   const decor = decorRules.reduce((sum, row) => {

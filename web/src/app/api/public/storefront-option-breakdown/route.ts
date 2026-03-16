@@ -1,8 +1,7 @@
 import { NextResponse } from "next/server";
 import { getShopAdminClient, jsonError } from "@/lib/shop/admin";
-import { selectStorefrontBreakdownSource } from "@/lib/shop/single-sot-pricing.js";
+import { buildOptionAxisFromPublishedEntries, buildVariantBreakdownFromPublishedEntries } from "@/lib/shop/single-sot-pricing.js";
 import { loadPublishedPriceStateByChannelProducts } from "@/lib/shop/publish-price-state";
-import { GET as getChannelProductVariants } from "@/app/api/channel-products/variants/route";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -124,32 +123,7 @@ export async function GET(request: Request) {
   const basePublished = baseChannelProductId ? publishedByChannelProduct.get(baseChannelProductId) ?? null : null;
   let previewAxis = null;
   let breakdown = { byVariant: [] as Array<Record<string, unknown>> };
-  let previewSource = "published_entries";
   let optionEntryRows: Array<Record<string, unknown>> = [];
-  let canonicalOptionRows: Array<Record<string, unknown>> = [];
-  let optionDetailAllowlist: Record<string, unknown> | null = null;
-
-  let adminVariants: Array<Record<string, unknown>> = [];
-  if (String(baseMapping?.master_item_id ?? "").trim()) {
-    const variantsUrl = new URL("http://local/api/channel-products/variants");
-    variantsUrl.searchParams.set("channel_id", channelId);
-    variantsUrl.searchParams.set("external_product_no", productNo);
-    variantsUrl.searchParams.set("master_item_id", String(baseMapping?.master_item_id ?? "").trim());
-    try {
-      const variantsRes = await getChannelProductVariants(new Request(variantsUrl.toString(), { method: "GET" }));
-      if (variantsRes.ok) {
-        const variantsPayload = await variantsRes.json();
-        const variantsData = variantsPayload?.data ?? null;
-        adminVariants = Array.isArray(variantsData?.variants) ? variantsData.variants : [];
-        canonicalOptionRows = Array.isArray(variantsData?.canonical_option_rows) ? variantsData.canonical_option_rows : [];
-        optionDetailAllowlist = variantsData?.option_detail_allowlist && typeof variantsData.option_detail_allowlist === "object"
-          ? variantsData.option_detail_allowlist
-          : null;
-      }
-    } catch {
-      // fall back to published entries below
-    }
-  }
 
   if (publishVersion && baseMapping?.master_item_id) {
     const optionEntryRes = await sb
@@ -167,15 +141,9 @@ export async function GET(request: Request) {
     }
   }
 
-  const selectedBreakdown = selectStorefrontBreakdownSource({
-    canonicalOptionRows,
-    canonicalVariants: adminVariants,
-    optionEntryRows,
-  });
-  if (selectedBreakdown.axis.axes.length > 0) {
-    previewAxis = selectedBreakdown.axis;
-    breakdown = selectedBreakdown.breakdown;
-    previewSource = selectedBreakdown.previewSource;
+  if (optionEntryRows.length > 0) {
+    previewAxis = buildOptionAxisFromPublishedEntries(optionEntryRows);
+    breakdown = buildVariantBreakdownFromPublishedEntries(optionEntryRows);
   }
   if (!basePublished) {
     return withCors(jsonError("published base price missing for product", 422, {
@@ -220,9 +188,7 @@ export async function GET(request: Request) {
     publish_version_sources: publishVersion ? [publishVersion] : [],
     axis: previewAxis,
     by_variant: breakdown.byVariant,
-    option_detail_allowlist: optionDetailAllowlist,
-    canonical_option_rows: canonicalOptionRows,
-    preview_source: previewSource,
+    preview_source: "published_entries",
     generated_at: new Date().toISOString(),
   }, {
     headers: { "Cache-Control": "no-store" },

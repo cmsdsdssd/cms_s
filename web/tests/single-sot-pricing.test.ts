@@ -125,3 +125,19 @@ test("prefer published storefront source when both published and canonical data 
   assert.equal(result.breakdown.byVariant[0]?.total_delta_krw, 3000);
   assert.equal(result.axis.axes[0]?.values[0]?.delta_krw, 3000);
 });
+
+test("do not fall back to canonical rows when published entries are missing", () => {
+  const result = selectStorefrontBreakdownSource({
+    canonicalOptionRows: [
+      { axis_index: 1, option_name: "색상", option_value: "골드", resolved_delta_krw: 0 },
+    ],
+    canonicalVariants: [
+      { variantCode: "V1", options: [{ name: "색상", value: "골드" }] },
+    ],
+    optionEntryRows: [],
+  });
+
+  assert.equal(result.previewSource, "missing_published_entries");
+  assert.equal(result.axis.axes.length, 0);
+  assert.equal(result.breakdown.byVariant.length, 0);
+});

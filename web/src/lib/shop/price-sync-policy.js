@@ -64,8 +64,8 @@ const toNonNegativeRate = (value, fallback) => {
 /** @type {Readonly<PriceSyncPolicy>} */
 export const DEFAULT_OPTION_ADDITIONAL_SYNC_POLICY = Object.freeze({
   always_sync: false,
-  min_change_krw: 1000,
-  min_change_rate: 0.01,
+  min_change_krw: 2000,
+  min_change_rate: 0.02,
 });
 
 export const normalizeOptionAdditionalSyncPolicy = (policy, defaults = DEFAULT_OPTION_ADDITIONAL_SYNC_POLICY) =>
@@ -74,23 +74,37 @@ export const normalizeOptionAdditionalSyncPolicy = (policy, defaults = DEFAULT_O
 /**
  * @param {{ currentAdditionalKrw?: unknown, nextAdditionalKrw?: unknown, policy?: PriceSyncPolicyInput, defaults?: PriceSyncPolicyInput }} [args]
  */
-export const shouldSyncOptionAdditionalChange = ({ currentAdditionalKrw, nextAdditionalKrw, policy, defaults } = {}) => {
+export const resolveEffectiveOptionAdditionalMinChangeKrw = ({ currentAdditionalKrw, policy, defaults } = {}) => {
   const normalizedPolicy = normalizeOptionAdditionalSyncPolicy(policy, defaults);
+  const normalizedCurrentAdditionalKrw = normalizeCurrentPriceKrw(currentAdditionalKrw);
+  const rateMinChangeKrw = normalizedCurrentAdditionalKrw > 0
+    ? Math.round(normalizedCurrentAdditionalKrw * normalizedPolicy.min_change_rate)
+    : null;
+  return {
+    flatMinChangeKrw: normalizedPolicy.min_change_krw,
+    rateMinChangeKrw,
+    effectiveMinChangeKrw: Math.max(normalizedPolicy.min_change_krw, rateMinChangeKrw ?? 0),
+    effectiveMode: rateMinChangeKrw !== null ? 'MAX' : 'FLAT_ONLY',
+    policy: normalizedPolicy,
+  };
+};
+
+export const shouldSyncOptionAdditionalChange = ({ currentAdditionalKrw, nextAdditionalKrw, policy, defaults } = {}) => {
+  const resolved = resolveEffectiveOptionAdditionalMinChangeKrw({ currentAdditionalKrw, policy, defaults });
   const normalizedCurrentAdditionalKrw = normalizeCurrentPriceKrw(currentAdditionalKrw);
   const normalizedNextAdditionalKrw = normalizeCurrentPriceKrw(nextAdditionalKrw);
   const additionalDeltaKrw = Math.abs(normalizedNextAdditionalKrw - normalizedCurrentAdditionalKrw);
 
-  if (normalizedPolicy.always_sync) {
+  if (resolved.policy.always_sync) {
     return {
       should_sync: true,
       threshold_bypassed: true,
       additional_delta_krw: additionalDeltaKrw,
-      flat_min_change_krw: normalizedPolicy.min_change_krw,
-      rate_min_change_krw: normalizedCurrentAdditionalKrw > 0
-        ? Math.round(normalizedCurrentAdditionalKrw * normalizedPolicy.min_change_rate)
-        : null,
-      effective_mode: normalizedCurrentAdditionalKrw > 0 ? 'OR' : 'FLAT_ONLY',
-      policy: normalizedPolicy,
+      flat_min_change_krw: resolved.flatMinChangeKrw,
+      rate_min_change_krw: resolved.rateMinChangeKrw,
+      effective_min_change_krw: resolved.effectiveMinChangeKrw,
+      effective_mode: resolved.effectiveMode,
+      policy: resolved.policy,
     };
   }
 
@@ -99,29 +113,23 @@ export const shouldSyncOptionAdditionalChange = ({ currentAdditionalKrw, nextAdd
       should_sync: false,
       threshold_bypassed: false,
       additional_delta_krw: 0,
-      flat_min_change_krw: normalizedPolicy.min_change_krw,
-      rate_min_change_krw: normalizedCurrentAdditionalKrw > 0
-        ? Math.round(normalizedCurrentAdditionalKrw * normalizedPolicy.min_change_rate)
-        : null,
-      effective_mode: normalizedCurrentAdditionalKrw > 0 ? 'OR' : 'FLAT_ONLY',
-      policy: normalizedPolicy,
+      flat_min_change_krw: resolved.flatMinChangeKrw,
+      rate_min_change_krw: resolved.rateMinChangeKrw,
+      effective_min_change_krw: resolved.effectiveMinChangeKrw,
+      effective_mode: resolved.effectiveMode,
+      policy: resolved.policy,
     };
   }
 
-  const rateMinChangeKrw = normalizedCurrentAdditionalKrw > 0
-    ? Math.round(normalizedCurrentAdditionalKrw * normalizedPolicy.min_change_rate)
-    : null;
-  const passesThreshold = additionalDeltaKrw >= normalizedPolicy.min_change_krw
-    || (rateMinChangeKrw !== null && additionalDeltaKrw >= rateMinChangeKrw);
-
   return {
-    should_sync: passesThreshold,
+    should_sync: additionalDeltaKrw >= resolved.effectiveMinChangeKrw,
     threshold_bypassed: false,
     additional_delta_krw: additionalDeltaKrw,
-    flat_min_change_krw: normalizedPolicy.min_change_krw,
-    rate_min_change_krw: rateMinChangeKrw,
-    effective_mode: rateMinChangeKrw !== null ? 'OR' : 'FLAT_ONLY',
-    policy: normalizedPolicy,
+    flat_min_change_krw: resolved.flatMinChangeKrw,
+    rate_min_change_krw: resolved.rateMinChangeKrw,
+    effective_min_change_krw: resolved.effectiveMinChangeKrw,
+    effective_mode: resolved.effectiveMode,
+    policy: resolved.policy,
   };
 };
 

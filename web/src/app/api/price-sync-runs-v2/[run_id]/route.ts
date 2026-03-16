@@ -1,4 +1,4 @@
-﻿import { NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 import { getShopAdminClient, isMissingColumnError, jsonError } from "@/lib/shop/admin";
 import { buildSyncReasonSummary, inferSyncReasonCode, syncReasonMeta } from "@/lib/shop/sync-reasons";
 import { buildThresholdProfileSummary } from "@/lib/shop/price-sync-run-summary.js";
@@ -19,6 +19,14 @@ type IntentDecisionContext = {
   floor_price_krw: number | null;
   final_desired_price_krw: number | null;
   floor_applied: boolean | null;
+  option_sync_mode?: string | null;
+  option_additional_target_krw?: number | null;
+  option_additional_current_krw?: number | null;
+  option_additional_out_of_sync?: boolean | null;
+  option_additional_threshold_delta_krw?: number | null;
+  option_effective_threshold_krw?: number | null;
+  option_threshold_passed?: boolean | null;
+  option_threshold_reason?: string | null;
 };
 
 const toNullableNumber = (value: unknown): number | null => {
@@ -41,6 +49,14 @@ const toDecisionContext = (value: unknown): IntentDecisionContext | null => {
     floor_price_krw: toNullableNumber(raw.floor_price_krw),
     final_desired_price_krw: toNullableNumber(raw.final_desired_price_krw),
     floor_applied: typeof raw.floor_applied === "boolean" ? raw.floor_applied : null,
+    option_sync_mode: typeof raw.option_sync_mode === "string" ? raw.option_sync_mode : null,
+    option_additional_target_krw: toNullableNumber(raw.option_additional_target_krw),
+    option_additional_current_krw: toNullableNumber(raw.option_additional_current_krw),
+    option_additional_out_of_sync: typeof raw.option_additional_out_of_sync === "boolean" ? raw.option_additional_out_of_sync : null,
+    option_additional_threshold_delta_krw: toNullableNumber(raw.option_additional_threshold_delta_krw),
+    option_effective_threshold_krw: toNullableNumber(raw.option_effective_threshold_krw),
+    option_threshold_passed: typeof raw.option_threshold_passed === "boolean" ? raw.option_threshold_passed : null,
+    option_threshold_reason: typeof raw.option_threshold_reason === "string" ? raw.option_threshold_reason : null,
   };
 };
 

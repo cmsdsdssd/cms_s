@@ -1,0 +1,76 @@
+
+> web@0.1.0 dev
+> next dev --port 3050
+
+▲ Next.js 16.1.4 (Turbopack)
+- Local:         http://localhost:3050
+- Network:       http://192.168.0.69:3050
+- Environments: .env.local, .env
+
+✓ Starting...
+⚠ The "middleware" file convention is deprecated. Please use "proxy" instead. Learn more: https://nextjs.org/docs/messages/middleware-to-proxy
+✓ Ready in 953ms
+ GET /settings/shopping/mappings 404 in 301ms (compile: 200ms, render: 101ms)
+ GET /settings/shopping/mappings 200 in 230ms (compile: 68ms, proxy.ts: 41ms, render: 121ms)
+ GET /settings/shopping/mappings 200 in 62ms (compile: 4ms, proxy.ts: 4ms, render: 54ms)
+⚠ Cross origin request detected from 127.0.0.1 to /_next/* resource. In a future major version of Next.js, you will need to explicitly configure "allowedDevOrigins" in next.config to allow this.
+Read more: https://nextjs.org/docs/app/api-reference/config/next-config-js/allowedDevOrigins
+
+thread 'tokio-runtime-worker' (176480) panicked at turbopack\crates\turbo-persistence\src\static_sorted_file.rs:387:51:
+range start index 14776524 out of range for slice of length 14776376
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'tokio-runtime-worker' (176480) panicked at turbopack\crates\turbo-persistence\src\static_sorted_file.rs:387:51:
+range start index 14776524 out of range for slice of length 14776376
+ GET /api/market-ticks 200 in 487ms (compile: 62ms, proxy.ts: 4ms, render: 421ms)
+○ Compiling /api/market-ticks ...
+ GET /api/market-ticks 200 in 137ms (compile: 1877µs, proxy.ts: 3ms, render: 132ms)
+ GET /settings/shopping/mappings 200 in 53ms (compile: 3ms, proxy.ts: 4ms, render: 46ms)
+ GET /api/market-ticks 200 in 158ms (compile: 5ms, proxy.ts: 3ms, render: 150ms)
+ GET /api/market-ticks 200 in 176ms (compile: 1664µs, proxy.ts: 3ms, render: 172ms)
+ GET /settings/shopping/mappings 200 in 48ms (compile: 3ms, proxy.ts: 2ms, render: 43ms)
+ GET /api/market-ticks 200 in 130ms (compile: 4ms, proxy.ts: 3ms, render: 123ms)
+
+thread 'tokio-runtime-worker' (119740) panicked at turbopack\crates\turbo-persistence\src\static_sorted_file.rs:387:51:
+range start index 14776524 out of range for slice of length 14776376
+
+thread 'tokio-runtime-worker' (109736) panicked at turbopack\crates\turbo-persistence\src\static_sorted_file.rs:387:51:
+range start index 14776524 out of range for slice of length 14776376
+
+thread 'tokio-runtime-worker' (119740) panicked at turbopack\crates\turbo-persistence\src\static_sorted_file.rs:387:51:
+range start index 14776524 out of range for slice of length 14776376
+
+thread 'tokio-runtime-worker' (52332) panicked at turbopack\crates\turbo-persistence\src\static_sorted_file.rs:387:51:
+range start index 14776524 out of range for slice of length 14776376
+
+thread 'tokio-runtime-worker' (119740) panicked at turbopack\crates\turbo-persistence\src\static_sorted_file.rs:387:51:
+range start index 14776524 out of range for slice of length 14776376
+
+thread 'tokio-runtime-worker' (52332) panicked at turbopack\crates\turbo-persistence\src\static_sorted_file.rs:387:51:
+range start index 14776524 out of range for slice of length 14776376
+
+thread 'tokio-runtime-worker' (52332) panicked at turbopack\crates\turbo-persistence\src\static_sorted_file.rs:387:51:
+range start index 14776524 out of range for slice of length 14776376
+
+thread 'tokio-runtime-worker' (52332) panicked at turbopack\crates\turbo-persistence\src\static_sorted_file.rs:387:51:
+range start index 14776524 out of range for slice of length 14776376
+
+thread 'tokio-runtime-worker' (52332) panicked at turbopack\crates\turbo-persistence\src\static_sorted_file.rs:387:51:
+range start index 14776524 out of range for slice of length 14776376
+
+thread 'tokio-runtime-worker' (176480) panicked at turbopack\crates\turbo-persistence\src\static_sorted_file.rs:387:51:
+range start index 14776524 out of range for slice of length 14776376
+
+thread 'tokio-runtime-worker' (176480) panicked at turbopack\crates\turbo-persistence\src\static_sorted_file.rs:387:51:
+range start index 14776524 out of range for slice of length 14776376
+Persisting failed: Unable to open static sorted file referenced from 00000119.meta
+
+Caused by:
+    0: Unable to open static sorted file 00000118.sst
+    1: 지정된 파일을 찾을 수 없습니다. (os error 2)
+Persisting failed: Another write batch or compaction is already active (Only a single write operations is allowed at a time)
+Persisting failed: Another write batch or compaction is already active (Only a single write operations is allowed at a time)
+Persisting failed: Another write batch or compaction is already active (Only a single write operations is allowed at a time)
+Persisting failed: Another write batch or compaction is already active (Only a single write operations is allowed at a time)
+Persisting failed: Another write batch or compaction is already active (Only a single write operations is allowed at a time)
+Persisting failed: Another write batch or compaction is already active (Only a single write operations is allowed at a time)

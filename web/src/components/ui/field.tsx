@@ -108,9 +108,13 @@ export const Input = React.forwardRef<
 );
 Input.displayName = "Input";
 
-export function Select({ className, ...props }: React.SelectHTMLAttributes<HTMLSelectElement>) {
+export const Select = React.forwardRef<
+  HTMLSelectElement,
+  React.SelectHTMLAttributes<HTMLSelectElement>
+>(({ className, ...props }, ref) => {
   return (
     <select
+      ref={ref}
       className={cn(
         "flex h-10 w-full rounded-[var(--radius)] border border-[var(--input-border)] bg-[var(--input-bg)] px-3 py-2 text-sm text-[var(--foreground)] ring-offset-[var(--background)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:border-[var(--primary)] disabled:cursor-not-allowed disabled:opacity-50 transition-all",
         className
@@ -118,7 +122,8 @@ export function Select({ className, ...props }: React.SelectHTMLAttributes<HTMLS
       {...props}
     />
   );
-}
+});
+Select.displayName = "Select";
 
 export function Textarea({ className, ...props }: React.TextareaHTMLAttributes<HTMLTextAreaElement>) {
   return (

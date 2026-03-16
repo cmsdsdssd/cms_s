@@ -1,0 +1,96 @@
+
+      <Sheet
+        open={isDetailOpen && Boolean(selectedGalleryCard)}
+        onOpenChange={setIsDetailOpen}
+        title="상품 상세"
+        description="게시 가격과 옵션 구성, variant 결과를 확인합니다."
+        side="right"
+        className="w-full lg:w-[1200px]"
+      >
+        <div className="flex h-full flex-col">
+          <div className="border-b border-[var(--hairline)] px-5 py-4">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <div className="text-sm font-semibold">{selectedGalleryCard?.model_name || selectedGalleryCard?.external_product_no}</div>
+                <div className="mt-1 text-xs text-[var(--muted)]">{selectedGalleryCard?.master_item_id} / {selectedGalleryCard?.external_product_no}</div>
+              </div>
+              <div className="flex gap-2">
+                <Button size="sm" variant="secondary" onClick={() => setIsWorkbenchOpen(true)} disabled={!workbenchDetail?.detail?.editor_rows?.length}>옵션수정</Button>
+                <Button size="sm" onClick={() => recomputeInitialPricing.mutate()} disabled={recomputeInitialPricing.isPending || !activeProductNo || !masterItemId.trim() || !hasActivePricingPolicy}>{recomputeInitialPricing.isPending ? '계산 중...' : '최초 계산'}</Button>
+              </div>
+            </div>
+          </div>
+          <div className="flex-1 space-y-4 overflow-auto px-5 py-4">
+            <div className="grid grid-cols-1 gap-4 xl:grid-cols-[320px_1fr]">
+              <div className="space-y-3">
+                <div className="aspect-[4/3] overflow-hidden rounded-[var(--radius)] bg-[var(--panel)]">
+                  {selectedGalleryCard?.thumbnail_url ? <img src={selectedGalleryCard.thumbnail_url} alt={selectedGalleryCard.model_name ?? selectedGalleryCard.external_product_no} className="h-full w-full object-cover" /> : <div className="flex h-full items-center justify-center text-sm text-[var(--muted)]">이미지 없음</div>}
+                </div>
+                <div className="rounded-[var(--radius)] border border-[var(--hairline)] bg-[var(--panel)] p-3 text-sm">
+                  <div className="text-[11px] text-[var(--muted)]">게시 base 가격</div>
+                  <div className="mt-1 font-medium">{formatMoney(workbenchDetail?.detail?.base_price_krw)}</div>
+                  <div className="mt-3 text-[11px] text-[var(--muted)]">master 소재</div>
+                  <div className="mt-1 font-medium">{workbenchDetail?.detail?.master_material_code || '-'}</div>
+                  <div className="mt-3 text-[11px] text-[var(--muted)]">옵션 행 수</div>
+                  <div className="mt-1 font-medium">{workbenchDetail?.detail?.editor_rows?.length ?? 0}</div>
+                </div>
+              </div>
+              <div className="space-y-4">
+                <div className="rounded-[var(--radius)] border border-[var(--hairline)] bg-[var(--panel)] p-3">
+                  <div className="mb-2 text-sm font-medium">가격 구성 상세</div>
+                  <div className="text-xs text-[var(--muted)]">base {formatMoney(workbenchDetail?.detail?.base_price_krw)} + 각 옵션 행 추가금 = 최종가</div>
+                  <div className="mt-3 space-y-2">
+                    {(workbenchDetail?.detail?.editor_rows ?? []).map((row: WorkbenchEditorRow) => (
+                      <div key={row.entry_key} className="flex items-center justify-between gap-3 rounded-[var(--radius)] bg-[var(--background)] px-3 py-2 text-xs">
+                        <div>{row.option_name} / {row.option_value}</div>
+                        <div>{formatMoney(row.published_delta_krw)}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                <div className="rounded-[var(--radius)] border border-[var(--hairline)] bg-[var(--panel)] p-3">
+                  <div className="mb-2 text-sm font-medium">조합 미리보기</div>
+                  <div className="max-h-72 space-y-2 overflow-auto">
+                    {(((workbenchDetail?.detail?.variant_rows ?? []) as Array<{ variantCode: string; finalPriceKrw: number; optionLabel: string }>)).map((row) => (
+                      <div key={row.variantCode} className="flex items-center justify-between gap-3 rounded-[var(--radius)] bg-[var(--background)] px-3 py-2 text-xs">
+                        <div className="min-w-0 truncate">{row.optionLabel || row.variantCode}</div>
+                        <div className="font-medium">{formatMoney(row.finalPriceKrw)}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </Sheet>
+
+      <Sheet
+        open={isWorkbenchOpen}
+        onOpenChange={setIsWorkbenchOpen}
+        title="옵션 수정"
+        description="각 옵션별로 카테고리와 매핑을 수정합니다."
+        side="left"
+        className="w-full lg:w-[1280px]"
+      >
+        <div className="flex h-full flex-col px-5 py-4">
+          <OptionEntryWorkbench
+            basePriceText={formatMoney(workbenchDetail?.detail?.base_price_krw)}
+            groups={(workbenchDetail?.detail?.editor_groups ?? []) as WorkbenchEditorGroup[]}
+            draftsByKey={workbenchDraftsByKey}
+            materialChoices={loadedOptionAllowlist.materials}
+            colorChoices={loadedOptionAllowlist.colors}
+            sizeChoices={workbenchDetail?.shared_size_choices ?? []}
+            colorBucketChoices={((workbenchDetail?.central_registries?.color_buckets ?? []) as Array<{ color_bucket_id: string; bucket_label: string; sell_delta_krw: number }>)}
+            decorChoices={loadedOptionAllowlist.decors}
+            onChangeRow={(entryKey, updater) => {
+              setWorkbenchDraftsByKey((prev) => ({
+                ...prev,
+                [entryKey]: updater(prev[entryKey] ?? (workbenchDetail?.detail?.editor_rows ?? []).find((row: WorkbenchEditorRow) => row.entry_key === entryKey)!),
+              }));
+            }}
+            onSave={() => saveWorkbenchRows.mutate()}
+            savePending={saveWorkbenchRows.isPending}
+          />
+        </div>
+      </Sheet>

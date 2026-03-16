@@ -1,0 +1,132 @@
+      const masterItemId = String(sampleRow.master_item_id ?? "").trim();
+      if (!masterItemId) continue;
+      const variantRows = variantsRes.variants.map((variant) => ({
+        variantCode: String(variant.variantCode ?? "").trim(),
+        options: variant.options ?? [],
+      }));
+      const validEntryKeys = new Set(
+        variantRows.flatMap((variant) => (variant.options ?? []).map((option) => mappingOptionEntryKey(String(option?.name ?? "").trim(), String(option?.value ?? "").trim()))).filter(Boolean),
+      );
+      const savedRows = (savedOptionCategoryRowsByScope.get(`${masterItemId}::${externalProductNo}`) ?? [])
+        .filter((row) => validEntryKeys.has(mappingOptionEntryKey(row.option_name, row.option_value)))
+        .reduce<Array<{ option_name: string; option_value: string; category_key: string; sync_delta_krw: number }>>((acc, row) => {
+          if (acc.some((existing) => existing.option_name === row.option_name && existing.option_value === row.option_value)) return acc;
+          acc.push(row);
+          return acc;
+        }, []);
+      const savedCategoryEntryKeys = new Set(savedRows.map((row) => mappingOptionEntryKey(row.option_name, row.option_value)).filter(Boolean));
+      const axisPrefix = `${externalProductNo}::`;
+      const otherReasonByEntryKey: Record<string, string> = {};
+      const categoryOverrideByEntryKey: Record<string, "MATERIAL" | "SIZE" | "COLOR_PLATING" | "DECOR" | "OTHER" | "NOTICE"> = {};
+      const axisSelectionByEntryKey: Record<string, {
+        axis1_value?: string | null;
+        axis2_value?: string | null;
+        axis3_value?: string | null;
+        decor_master_item_id?: string | null;
+        decor_extra_delta_krw?: number | null;
+        decor_final_amount_krw?: number | null;
+      }> = {};
+      for (const row of optionAxisLogRes.data ?? []) {
+        const typedRow = row as { axis_key?: string | null; axis_value?: string | null; new_row?: unknown };
+        const axisValue = String(typedRow.axis_value ?? "").trim();
+        if (!axisValue.startsWith(axisPrefix)) continue;
+        const entryKey = axisValue.slice(axisPrefix.length).trim();
+        if (!entryKey || !validEntryKeys.has(entryKey)) continue;
+        const axisKey = String(typedRow.axis_key ?? "").trim().toUpperCase();
+        const nextRow = typedRow.new_row && typeof typedRow.new_row === "object" ? typedRow.new_row as Record<string, unknown> : null;
+        if (!nextRow) continue;
+        if (axisKey === "OTHER_REASON") {
+          const reason = String(nextRow.other_reason ?? "").trim();
+          if (reason) otherReasonByEntryKey[entryKey] = reason;
+          continue;
+        }
+        if (axisKey === "OPTION_CATEGORY" && !savedCategoryEntryKeys.has(entryKey)) {
+          const categoryKey = String(nextRow.category_key ?? "").trim().toUpperCase();
+          if (["MATERIAL", "SIZE", "COLOR_PLATING", "DECOR", "OTHER", "NOTICE"].includes(categoryKey)) {
+            categoryOverrideByEntryKey[entryKey] = categoryKey as typeof categoryOverrideByEntryKey[string];
+          }
+          continue;
+        }
+        if (axisKey === "OPTION_AXIS_SELECTION") {
+          axisSelectionByEntryKey[entryKey] = {
+            axis1_value: String(nextRow.axis1_value ?? "").trim() || null,
+            axis2_value: String(nextRow.axis2_value ?? "").trim() || null,
+            axis3_value: String(nextRow.axis3_value ?? "").trim() || null,
+            decor_master_item_id: String(nextRow.decor_master_item_id ?? "").trim() || null,
+            decor_extra_delta_krw: Number.isFinite(Number(nextRow.decor_extra_delta_krw)) ? Math.round(Number(nextRow.decor_extra_delta_krw)) : null,
+            decor_final_amount_krw: Number.isFinite(Number(nextRow.decor_final_amount_krw)) ? Math.round(Number(nextRow.decor_final_amount_krw)) : null,
+          };
+        }
+      }
+      const master = masterMap.get(masterItemId) ?? null;
+      const canonicalRows = buildCanonicalOptionRows({
+        variants: variantRows.map((variant) => ({ options: variant.options })),
+        savedOptionCategories: savedRows,
+        rules: resolveOptionLaborRulesForContext(masterItemId, externalProductNo),
+        masterMaterialCode: String(master?.material_code_default ?? "").trim() || null,
+        masterMaterialLabel: String(master?.material_code_default ?? "").trim() || null,
+        otherReasonByEntryKey,
+        categoryOverrideByEntryKey,
+        masterItemId,
+        externalProductNo,
+        persistedSizeLookup: persistedSizeLookupByScope.get(`${masterItemId}::${externalProductNo}`) ?? null,
+        sizeMarketContext: {
+          goldTickKrwPerG: goldTick,
+          silverTickKrwPerG: silverTick,
+          materialFactors,
+          factorMultiplierByMaterialCode,
+        },
+        axisSelectionByEntryKey,
+        colorBaseDeltaByCode: Object.fromEntries(Array.from(colorComboBaseDeltaByCode.entries())),
+      });
+      const invalidCanonicalRows = canonicalRows.filter((row) => row.legacy_status !== "VALID");
+      if (invalidCanonicalRows.length > 0) {
+        return jsonError("publish option entries require fully resolved canonical rows", 422, {
+          code: "PUBLISH_CANONICAL_ROWS_UNRESOLVED",
+          external_product_no: externalProductNo,
+          publish_version: computeRequestId,
+          rows: invalidCanonicalRows.map((row) => ({
+            option_name: row.option_name,
+            option_value: row.option_value,
+            category_key: row.category_key,
+            legacy_status: row.legacy_status,
+            warnings: row.warnings,
+          })),
+        });
+      }
+      const axis = buildOptionAxisFromCanonicalRows(canonicalRows);
+      const breakdown = buildVariantBreakdownFromCanonicalRows({
+        variants: variantRows,
+        canonicalRows,
+      });
+      const additiveValidation = validateAdditiveBreakdown(breakdown);
+      if (!additiveValidation.ok) {
+        return jsonError("non-additive canonical option pricing combinations are not allowed", 422, {
+          code: "NON_ADDITIVE_CANONICAL_OPTION_COMBINATION",
+          external_product_no: externalProductNo,
+          publish_version: computeRequestId,
+          violations: additiveValidation.violations,
+        });
+      }
+      optionEntryRows.push(...buildOptionEntryRowsFromBreakdown({
+        channelId,
+        masterItemId,
+        externalProductNo,
+        publishVersion: computeRequestId,
+        breakdown: {
+          axes: axis.axes,
+          byVariant: breakdown.byVariant,
+        },
+        computedAt: recomputeAt,
+      }));
+      const canonicalDeltaByVariantCode = new Map(
+        breakdown.byVariant.map((row) => [String(row.variant_code ?? "").trim(), Math.round(Number(row.total_delta_krw ?? 0))] as [string, number]),
+      );
+      for (const row of productRows) {
+        const variantCode = String(row.external_variant_code ?? "").trim();
+        const nextDelta = canonicalDeltaByVariantCode.get(variantCode);
+        if (!variantCode || nextDelta == null) continue;
+        const basePrice = Math.round(Number(row.published_base_price_krw ?? 0));
+        row.published_additional_amount_krw = nextDelta;
+        row.published_total_price_krw = Math.max(0, basePrice + nextDelta);
+      }

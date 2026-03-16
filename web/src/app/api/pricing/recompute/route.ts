@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+﻿import { NextResponse } from "next/server";
 import { getShopAdminClient, jsonError, parseJsonObject, parseUuidArray } from "@/lib/shop/admin";
 import {
   buildMaterialPurityMap,
@@ -14,7 +14,7 @@ import {
   type SyncRuleR2Row,
   type SyncRuleR3Row,
   type SyncRuleR4Row,
-} from "@/lib/shop/sync-rules";
+} from "@/lib/shop/rule-utils";
 import { buildMaterialFactorMap, normalizeMaterialCode } from "@/lib/material-factors";
 import { loadEffectiveMarketTicks } from "@/lib/shop/effective-market-ticks.js";
 import {
@@ -22,9 +22,14 @@ import {
   hasAnyActiveOptionLaborRule,
 } from "@/lib/shop/option-labor-rules";
 import { buildSavedCategoryBucketsFromVariantOptions, composeOptionDeltaBuckets, hasActiveRuleCategory } from "@/lib/shop/option-delta-buckets";
+import { buildCanonicalOptionRows, deriveRuleOnlyCanonicalInputs, type SavedOptionCategoryRowWithDelta } from "@/lib/shop/mapping-option-details";
 import { CONTRACTS } from "@/lib/contracts";
 import { cafe24ListProductVariants, ensureValidCafe24AccessToken, loadCafe24Account } from "@/lib/shop/cafe24";
-import { buildOptionAxisBreakdownFromPublishedVariants, buildOptionEntryRowsFromBreakdown, validateAdditiveBreakdown } from "@/lib/shop/single-sot-pricing.js";
+import { buildOptionAxisFromCanonicalRows, buildOptionEntryRowsFromBreakdown, buildVariantBreakdownFromCanonicalRows, validateAdditiveBreakdown } from "@/lib/shop/single-sot-pricing.js";
+import { createPersistedSizeGridLookup } from "@/lib/shop/weight-grid-store.js";
+import { ensureSharedSizeGridRowsForChannel } from "@/lib/shop/shared-size-grid-runtime";
+import { buildCanonicalInputsFromExplicitOptionEntries } from "@/lib/shop/explicit-option-entry-canonical-inputs";
+import { resolveBaseMaterialFinalKrw } from "@/lib/shop/base-material-price";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -96,7 +101,6 @@ type MappingRow = {
   master_item_id: string;
   external_product_no: string | null;
   external_variant_code: string | null;
-  sync_rule_set_id: string | null;
   option_material_code: string | null;
   option_color_code: string | null;
   option_decoration_code: string | null;
@@ -472,10 +476,11 @@ export async function POST(request: Request) {
 
   const channelId = String(body.channel_id ?? "").trim();
   const masterItemIds = parseUuidArray(body.master_item_ids);
+  const externalProductNoFilter = String(body.external_product_no ?? "").trim();
   const factorSetOverride = typeof body.factor_set_id === "string" ? body.factor_set_id.trim() : null;
   if (!channelId) return jsonError("channel_id is required", 400);
 
-  const policySelectV2 = "policy_id, margin_multiplier, rounding_unit, rounding_mode, option_18k_weight_multiplier, material_factor_set_id, gm_material, gm_labor, gm_fixed, fee_rate, min_margin_rate_total, fixed_cost_krw, pricing_algo_default";
+  const policySelectV2 = "policy_id, margin_multiplier, rounding_unit, rounding_mode, option_rounding_unit, option_rounding_mode, option_18k_weight_multiplier, material_factor_set_id, gm_material, gm_labor, gm_fixed, fee_rate, min_margin_rate_total, fixed_cost_krw, pricing_algo_default";
   const policySelectLegacy = "policy_id, margin_multiplier, rounding_unit, rounding_mode, option_18k_weight_multiplier, material_factor_set_id";
 
   let policy: Record<string, unknown> | null = null;
@@ -490,7 +495,7 @@ export async function POST(request: Request) {
 
   if (policyRes.error) {
     const msg = String(policyRes.error.message ?? "");
-    if (!msg.includes("gm_material")) return jsonError(msg || "가격 정책 조회 실패", 500);
+    if (!msg.includes("gm_material") && !msg.includes("option_rounding_unit") && !msg.includes("option_rounding_mode")) return jsonError(msg || "가격 정책 조회 실패", 500);
     const legacyRes = await sb
       .from("pricing_policy")
       .select(policySelectLegacy)
@@ -506,6 +511,8 @@ export async function POST(request: Request) {
         gm_material: 0,
         gm_labor: 0,
         gm_fixed: 0,
+        option_rounding_unit: 500,
+        option_rounding_mode: "CEIL",
         fee_rate: 0,
         min_margin_rate_total: 0,
         fixed_cost_krw: 0,
@@ -548,10 +555,11 @@ export async function POST(request: Request) {
 
   const mapQuery = sb
     .from("sales_channel_product")
-    .select("channel_product_id, channel_id, master_item_id, external_product_no, external_variant_code, sync_rule_set_id, option_material_code, option_color_code, option_decoration_code, option_size_value, material_multiplier_override, size_weight_delta_g, size_price_override_enabled, size_price_override_krw, option_price_delta_krw, option_price_mode, option_manual_target_krw, include_master_plating_labor, sync_rule_material_enabled, sync_rule_weight_enabled, sync_rule_plating_enabled, sync_rule_decoration_enabled, sync_rule_margin_rounding_enabled")
+    .select("channel_product_id, channel_id, master_item_id, external_product_no, external_variant_code")
     .eq("channel_id", channelId)
     .eq("is_active", true);
   if (masterItemIds && masterItemIds.length > 0) mapQuery.in("master_item_id", masterItemIds);
+  if (externalProductNoFilter) mapQuery.eq("external_product_no", externalProductNoFilter);
 
   const mappingRes = await mapQuery;
   if (mappingRes.error) return jsonError(mappingRes.error.message ?? "留ㅽ븨 議고쉶 ?ㅽ뙣", 500);
@@ -561,16 +569,7 @@ export async function POST(request: Request) {
   }
 
   const mappingChannelProductIds = Array.from(new Set(mappings.map((row) => String(row.channel_product_id ?? "").trim()).filter(Boolean)));
-  const currentStateRes = mappingChannelProductIds.length > 0
-    ? await sb
-      .from("channel_option_current_state_v1")
-      .select("channel_product_id, master_item_id, external_product_no, external_variant_code, last_pushed_additional_amount_krw, last_push_status, last_push_http_status, last_push_error, last_pushed_at, last_verified_at, updated_at")
-      .eq("channel_id", channelId)
-      .in("master_item_id", Array.from(new Set(mappings.map((row) => String(row.master_item_id ?? "").trim()).filter(Boolean))))
-      .order("updated_at", { ascending: false })
-    : { data: [], error: null };
-  if (currentStateRes.error) return jsonError(currentStateRes.error.message ?? "current_state 議고쉶 ?ㅽ뙣", 500);
-  const currentStateRows = (currentStateRes.data ?? []) as Array<CurrentStateRow & { updated_at?: string | null }>;
+  const currentStateRows: Array<CurrentStateRow & { updated_at?: string | null }> = [];
   const currentStateByChannelProductId = new Map<string, CurrentStateRow>();
   const currentStateByVariantKey = new Map<string, CurrentStateRow>();
   const currentStateByProductNo = new Map<string, CurrentStateRow>();
@@ -604,74 +603,6 @@ export async function POST(request: Request) {
         currentStateByProductNo.set(productKey, normalizedRow);
       }
     }
-  }
-
-  const syncRuleSetByMaster = new Map<string, string>();
-  const syncRowsMissingRuleSet: Array<{ channel_product_id: string; master_item_id: string }> = [];
-  const inconsistentRuleSetRows: Array<{ channel_product_id: string; master_item_id: string; expected_rule_set_id: string; actual_rule_set_id: string }> = [];
-  for (const row of mappings) {
-    const masterId = String(row.master_item_id ?? "").trim();
-    const channelProductId = String(row.channel_product_id ?? "").trim();
-    const optionMode = String(row.option_price_mode ?? "SYNC").trim().toUpperCase();
-    const ruleSetId = String(row.sync_rule_set_id ?? "").trim();
-    if (!masterId || optionMode !== "SYNC") continue;
-    if (!ruleSetId) {
-      if (channelProductId) {
-        syncRowsMissingRuleSet.push({
-          channel_product_id: channelProductId,
-          master_item_id: masterId,
-        });
-      }
-      continue;
-    }
-    const existingRuleSetId = syncRuleSetByMaster.get(masterId);
-    if (!existingRuleSetId) {
-      syncRuleSetByMaster.set(masterId, ruleSetId);
-      continue;
-    }
-    if (existingRuleSetId !== ruleSetId) {
-      inconsistentRuleSetRows.push({
-        channel_product_id: channelProductId,
-        master_item_id: masterId,
-        expected_rule_set_id: existingRuleSetId,
-        actual_rule_set_id: ruleSetId,
-      });
-    }
-  }
-  const resolvableMissingSyncRows = syncRowsMissingRuleSet.filter((row) => syncRuleSetByMaster.has(row.master_item_id));
-  if (resolvableMissingSyncRows.length > 0) {
-    for (const row of resolvableMissingSyncRows) {
-      const resolvedRuleSetId = syncRuleSetByMaster.get(row.master_item_id);
-      if (!resolvedRuleSetId) continue;
-      const patchRes = await sb
-        .from("sales_channel_product")
-        .update({ sync_rule_set_id: resolvedRuleSetId })
-        .eq("channel_product_id", row.channel_product_id)
-        .eq("channel_id", channelId)
-        .eq("option_price_mode", "SYNC")
-        .is("sync_rule_set_id", null);
-      if (patchRes.error) {
-        return jsonError(patchRes.error.message ?? "?꾨씫??sync_rule_set_id ?먮룞 蹂댁젙 ?ㅽ뙣", 500);
-      }
-    }
-  }
-
-  const unresolvedMissingSyncRows = syncRowsMissingRuleSet.filter((row) => !syncRuleSetByMaster.has(row.master_item_id));
-  if (unresolvedMissingSyncRows.length > 0) {
-    const unresolvedMasterIds = Array.from(new Set(unresolvedMissingSyncRows.map((row) => row.master_item_id).filter(Boolean)));
-    return jsonError("SYNC mappings require sync_rule_set_id", 422, {
-      code: "SOT_SYNC_RULESET_REQUIRED",
-      channel_product_ids: unresolvedMissingSyncRows.map((row) => row.channel_product_id).slice(0, 100),
-      master_item_ids: unresolvedMasterIds.slice(0, 50),
-      count: unresolvedMissingSyncRows.length,
-    });
-  }
-  if (inconsistentRuleSetRows.length > 0) {
-    return jsonError("SYNC mappings under one master_item_id must use the same sync_rule_set_id", 422, {
-      code: "SOT_RULESET_INCONSISTENT",
-      examples: inconsistentRuleSetRows.slice(0, 50),
-      count: inconsistentRuleSetRows.length,
-    });
   }
 
   const uniqueMasterIds = [...new Set(mappings.map((m) => m.master_item_id))];
@@ -709,133 +640,6 @@ export async function POST(request: Request) {
     return hasAnyActiveOptionLaborRule(masterRows) ? masterRows : [];
   };
 
-  const [optionCategoryRes, scopedOptionDeltaRes, optionAxisLogRes] = await Promise.all([
-    sb
-      .from("channel_option_category_v2")
-      .select("master_item_id, external_product_no, option_name, option_value, category_key, sync_delta_krw")
-      .eq("channel_id", channelId)
-      .in("master_item_id", uniqueMasterIds)
-      .in("external_product_no", uniqueExternalProductNos),
-    sb
-      .from("channel_option_category_delta_v1")
-      .select("master_item_id, external_product_no, category_key, scope_material_code, sync_delta_krw")
-      .eq("channel_id", channelId)
-      .in("master_item_id", uniqueMasterIds)
-      .in("external_product_no", uniqueExternalProductNos),
-    sb
-      .from("channel_option_value_policy_log")
-      .select("master_item_id, axis_value, new_row, created_at")
-      .eq("channel_id", channelId)
-      .eq("axis_key", "OPTION_AXIS_SELECTION")
-      .in("master_item_id", uniqueMasterIds)
-      .order("created_at", { ascending: false })
-      .limit(20000),
-  ]);
-
-  if (optionCategoryRes.error) return jsonError(optionCategoryRes.error.message ?? "?듭뀡 移댄뀒怨좊━ ?명?(legacy) 議고쉶 ?ㅽ뙣", 500);
-
-  if (scopedOptionDeltaRes.error) {
-    return jsonError(scopedOptionDeltaRes.error.message ?? "?듭뀡 移댄뀒怨좊━ ?명?(scoped) 議고쉶 ?ㅽ뙣", 500);
-  }
-  if (optionAxisLogRes.error) {
-    return jsonError(optionAxisLogRes.error.message ?? "옵션 축 저장로그 조회 실패", 500);
-  }
-
-  const savedOptionCategoryRowsByScope = new Map<string, Array<{
-    option_name: string;
-    option_value: string;
-    category_key: string;
-    sync_delta_krw: number;
-  }>>();
-  for (const row of (optionCategoryRes.data ?? []) as Array<{
-    master_item_id?: string | null;
-    external_product_no?: string | null;
-    option_name?: string | null;
-    option_value?: string | null;
-    category_key?: string | null;
-    sync_delta_krw?: number | null;
-  }>) {
-    const masterId = String(row.master_item_id ?? '').trim();
-    const productNo = String(row.external_product_no ?? '').trim();
-    const optionName = String(row.option_name ?? '').trim();
-    const optionValue = String(row.option_value ?? '').trim();
-    const categoryKey = String(row.category_key ?? '').trim().toUpperCase();
-    if (!masterId || !productNo || !optionName || !optionValue || !categoryKey) continue;
-    const scopeKey = `${masterId}::${productNo}`;
-    const prev = savedOptionCategoryRowsByScope.get(scopeKey) ?? [];
-    prev.push({
-      option_name: optionName,
-      option_value: optionValue,
-      category_key: categoryKey,
-      sync_delta_krw: Math.round(Number(row.sync_delta_krw ?? 0)),
-    });
-    savedOptionCategoryRowsByScope.set(scopeKey, prev);
-  }
-
-  const categoryDeltaByScope = new Map<string, number>();
-  const categoryDeltaFreqByScope = new Map<string, Map<number, number>>();
-  for (const row of (optionCategoryRes.data ?? []) as OptionCategoryDeltaRow[]) {
-    const masterId = String(row.master_item_id ?? "").trim();
-    const productNo = String(row.external_product_no ?? "").trim();
-    const categoryKey = String(row.category_key ?? "").trim().toUpperCase();
-    if (!masterId || !productNo || !categoryKey) continue;
-    const delta = Math.round(Number(row.sync_delta_krw ?? 0));
-    const scopeKey = `${masterId}::${productNo}::${categoryKey}`;
-    const freq = categoryDeltaFreqByScope.get(scopeKey) ?? new Map<number, number>();
-    freq.set(delta, (freq.get(delta) ?? 0) + 1);
-    categoryDeltaFreqByScope.set(scopeKey, freq);
-  }
-  for (const [scopeKey, freq] of categoryDeltaFreqByScope.entries()) {
-    const selected = Array.from(freq.entries()).sort((a, b) => {
-      if (b[1] !== a[1]) return b[1] - a[1];
-      if (Math.abs(a[0]) !== Math.abs(b[0])) return Math.abs(a[0]) - Math.abs(b[0]);
-      return a[0] - b[0];
-    })[0]?.[0] ?? 0;
-    categoryDeltaByScope.set(scopeKey, selected);
-  }
-
-  const scopedCategoryDeltaMap = new Map<string, number>();
-  for (const row of (scopedOptionDeltaRes.data ?? []) as OptionCategoryScopedDeltaRow[]) {
-    const masterId = String(row.master_item_id ?? "").trim();
-    const productNo = String(row.external_product_no ?? "").trim();
-    const categoryKey = String(row.category_key ?? "").trim().toUpperCase();
-    if (!masterId || !productNo || !categoryKey) continue;
-    const normalizedScope = normalizeOptionalMaterialCode(row.scope_material_code ?? "");
-    const scopeMaterial = normalizedScope === "00" ? "" : normalizedScope;
-    const delta = Math.round(Number(row.sync_delta_krw ?? 0));
-    scopedCategoryDeltaMap.set(`${masterId}::${productNo}::${categoryKey}::${scopeMaterial}`, delta);
-  }
-
-  const colorAxisResolvedAmountByScope = new Map<string, number>();
-  const sortedProductPrefixes = uniqueExternalProductNos
-    .slice()
-    .sort((left, right) => right.length - left.length)
-    .map((productNo) => `${productNo}::`);
-  for (const row of (optionAxisLogRes.data ?? []) as Array<{
-    master_item_id?: string | null;
-    axis_value?: string | null;
-    new_row?: unknown;
-  }>) {
-    const masterId = String(row.master_item_id ?? "").trim();
-    const axisValue = String(row.axis_value ?? "").trim();
-    if (!masterId || !axisValue) continue;
-    const matchedPrefix = sortedProductPrefixes.find((prefix) => axisValue.startsWith(prefix));
-    if (!matchedPrefix) continue;
-    const productNo = matchedPrefix.slice(0, -2);
-    const nextRow = row.new_row && typeof row.new_row === "object" ? (row.new_row as Record<string, unknown>) : null;
-    if (!nextRow) continue;
-    const categoryKey = String(nextRow.category_key ?? "").trim().toUpperCase();
-    if (categoryKey !== "COLOR_PLATING") continue;
-    const materialCode = normalizeOptionalMaterialCode(nextRow.axis1_value ?? "");
-    const colorCode = normalizePlatingComboCode(String(nextRow.axis2_value ?? ""));
-    const resolvedAmount = Math.round(Number(nextRow.axis3_value ?? Number.NaN));
-    if (!materialCode || !colorCode || !Number.isFinite(resolvedAmount)) continue;
-    const key = `${masterId}::${productNo}::${materialCode}::${colorCode}`;
-    if (!colorAxisResolvedAmountByScope.has(key)) {
-      colorAxisResolvedAmountByScope.set(key, resolvedAmount);
-    }
-  }
-
   const cafe24VariantsByProductNo = new Map<string, Awaited<ReturnType<typeof cafe24ListProductVariants>>>();
   if (uniqueExternalProductNos.length > 0) {
     const account = await loadCafe24Account(sb, channelId);
@@ -866,28 +670,6 @@ export async function POST(request: Request) {
       cafe24VariantsByProductNo.set(externalProductNo, variantsRes);
     }
   }
-
-  const resolveCategoryDelta = (
-    masterId: string,
-    productNo: string,
-    categoryKey: "MATERIAL" | "SIZE" | "COLOR_PLATING" | "DECOR" | "OTHER",
-    optionMaterialCode: string,
-  ): number => {
-    const normalizedMaterial = normalizeOptionalMaterialCode(optionMaterialCode);
-    const scopedMaterial = normalizedMaterial === "00" ? "" : normalizedMaterial;
-    if (scopedMaterial) {
-      const exactScoped = scopedCategoryDeltaMap.get(`${masterId}::${productNo}::${categoryKey}::${scopedMaterial}`);
-      if (exactScoped != null) return exactScoped;
-    }
-
-    const defaultScoped = scopedCategoryDeltaMap.get(`${masterId}::${productNo}::${categoryKey}::`);
-    if (defaultScoped != null) return defaultScoped;
-
-    const legacy = categoryDeltaByScope.get(`${masterId}::${productNo}::${categoryKey}`);
-    if (legacy != null) return legacy;
-
-    return 0;
-  };
 
   const floorGuardRes = await sb
     .from("product_price_guard_v2")
@@ -1108,11 +890,7 @@ export async function POST(request: Request) {
     return isSilverMaterial(code) ? silverTick : goldTick;
   };
 
-  const ruleSetIds = [...new Set(
-    mappings
-      .map((m) => String(m.sync_rule_set_id ?? "").trim())
-      .filter((v) => v.length > 0),
-  )];
+  const ruleSetIds: string[] = [];
 
   const [r1Res, r2Res, r3Res, r4Res] = await Promise.all([
     ruleSetIds.length > 0
@@ -1230,27 +1008,7 @@ export async function POST(request: Request) {
     laborDeltaByMaster.set(key, prev + toNum(row.delta_krw, 0));
   }
 
-  const optionStateRes = await sb
-    .from("channel_option_current_state_v1")
-    .select("state_id, master_item_id, external_product_no, external_variant_code, final_target_additional_amount_krw, updated_at")
-    .eq("channel_id", channelId)
-    .in("master_item_id", uniqueMasterIds)
-    .order("updated_at", { ascending: false })
-    .order("state_id", { ascending: false });
-  if (optionStateRes.error) return jsonError(optionStateRes.error.message ?? "?듭뀡 ?꾩옱?곹깭 議고쉶 ?ㅽ뙣", 500);
-
   const optionStateDeltaByProductVariant = new Map<string, { additionalKrw: number; productNo: string }>();
-  for (const row of optionStateRes.data ?? []) {
-    const masterId = String((row as { master_item_id?: string | null }).master_item_id ?? "").trim();
-    const productNo = String((row as { external_product_no?: string | null }).external_product_no ?? "").trim();
-    const variantCode = String((row as { external_variant_code?: string | null }).external_variant_code ?? "").trim();
-    if (!masterId || !productNo || !variantCode) continue;
-    const additional = Math.round(Number((row as { final_target_additional_amount_krw?: unknown }).final_target_additional_amount_krw ?? Number.NaN));
-    if (!Number.isFinite(additional)) continue;
-    const key = `${masterId}::${productNo}::${variantCode}`;
-    if (optionStateDeltaByProductVariant.has(key)) continue;
-    optionStateDeltaByProductVariant.set(key, { additionalKrw: additional, productNo });
-  }
 
   const colorComboBaseDeltaByCode = new Map<string, number>();
   const colorComboRes = await sb
@@ -1269,6 +1027,9 @@ export async function POST(request: Request) {
     return jsonError(colorComboRes.error.message ?? "색상 중앙금액 조회 실패", 500);
   }
 
+  const sharedSizeGridRows = await ensureSharedSizeGridRowsForChannel({ sb, channelId });
+  const sharedPersistedSizeLookup = createPersistedSizeGridLookup(sharedSizeGridRows);
+
   const blockedByMissingRules: Array<{ channel_product_id: string; missing_rules: string[] }> = [];
   const recomputeAt = new Date().toISOString();
   const computeRequestId = crypto.randomUUID();
@@ -1276,36 +1037,6 @@ export async function POST(request: Request) {
 
   const laborComponentRowsByChannelProductId = new Map<string, V2LaborComponentInput[]>();
 
-  const currentStateRowsByVariantKey = new Map<string, {
-    channel_id: string;
-    channel_product_id: string;
-    master_item_id: string;
-    external_product_no: string;
-    external_variant_code: string;
-    product_name: string | null;
-    material_code: string | null;
-    weight_g: number | null;
-    deduction_weight_g: number | null;
-    net_weight_g: number | null;
-    material_price_krw: number | null;
-    tick_gold_krw_per_g: number | null;
-    tick_silver_krw_per_g: number | null;
-    base_price_krw: number;
-    floor_price_krw: number;
-    exclude_plating_labor: boolean;
-    plating_labor_sell_krw: number;
-    total_labor_sell_krw: number;
-    option_sync_delta_krw: number;
-    final_target_additional_amount_krw: number;
-    last_pushed_additional_amount_krw: number | null;
-    last_push_status: string | null;
-    last_push_http_status: number | null;
-    last_push_error: string | null;
-    last_pushed_at: string | null;
-    last_verified_at: string | null;
-    source_snapshot_hash: string;
-    updated_by: string;
-  }>();
   const publishBaseRowsByChannelProductId = new Map<string, Record<string, unknown>>();
   const publishVariantRowsByChannelProductId = new Map<string, Record<string, unknown>>();
 
@@ -1322,17 +1053,17 @@ export async function POST(request: Request) {
     const applyRule1 = false;
     const applyRule2 = canApplySyncRules && m.sync_rule_weight_enabled !== false;
     const applyRule3 = canApplySyncRules && m.sync_rule_plating_enabled !== false;
-    const applyRuleDecor = canApplySyncRules && m.sync_rule_decoration_enabled !== false;
+    const applyRuleDecor = false;
     const applyRule4 = true;
-    const sizeWeightDelta = toNum(m.size_weight_delta_g, 0);
+    const sizeWeightDelta = 0;
     const sizeWeightDeltaApplied = applyRule2 ? sizeWeightDelta : 0;
     const netWeight = Math.max(baseNetWeight + sizeWeightDeltaApplied, 0);
 
-    const optionMaterialCode = normalizeKnownMaterialCode(m.option_material_code, materialCode);
-    const optionColorCode = normalizePlatingComboCode(String(m.option_color_code ?? ""));
-    const optionColorPlatingEnabled = isPlatingComboCode(optionColorCode);
-    const optionDecorationCode = String(m.option_decoration_code ?? "").trim().toUpperCase();
-    const optionSizeValue = m.option_size_value == null ? null : Number(m.option_size_value);
+    const optionMaterialCode = materialCode;
+    const optionColorCode = "";
+    const optionColorPlatingEnabled = false;
+    const optionDecorationCode = "";
+    const optionSizeValue = null;
     const mappingProductNo = String(m.external_product_no ?? "").trim();
 
     const targetTick = tickByMaterialCode(optionMaterialCode);
@@ -1340,31 +1071,23 @@ export async function POST(request: Request) {
     const factor = factorMap.get(optionMaterialCode) ?? 1;
     const variantCode = String(m.external_variant_code ?? "").trim();
     const hasVariant = variantCode.length > 0;
-    const hasStructuredOptionSignal = Boolean(
-      String(m.option_material_code ?? "").trim()
-      || optionColorCode
-      || optionDecorationCode
-      || (optionSizeValue !== null && Number.isFinite(optionSizeValue)),
-    );
+    const hasStructuredOptionSignal = false;
     const optionStateDelta = hasVariant && mappingProductNo
       ? optionStateDeltaByProductVariant.get(`${m.master_item_id}::${mappingProductNo}::${variantCode}`)
       : undefined;
     const needsR1 = false;
-    const needsR2 = applyRule2 && hasVariant && optionSizeValue !== null && Number.isFinite(optionSizeValue);
-    const needsR3 = applyRule3 && hasVariant && optionColorCode.length > 0;
-    const needsR4Decor = applyRuleDecor && hasVariant && optionDecorationCode.length > 0;
+    const needsR2 = false;
+    const needsR3 = false;
+    const needsR4Decor = false;
     const option18Multiplier = Math.max(toNum(policy.option_18k_weight_multiplier, 1.2), 0.000001);
-    const rawMaterialMultiplierOverride = toNum(m.material_multiplier_override, Number.NaN);
+    const rawMaterialMultiplierOverride = Number.NaN;
     const effectiveMaterialMultiplier = Number.isFinite(rawMaterialMultiplierOverride) && rawMaterialMultiplierOverride > 0
       ? rawMaterialMultiplierOverride
       : option18Multiplier;
-    const optionMaterialMultiplier = hasVariant ? effectiveMaterialMultiplier : 1;
+    const optionMaterialMultiplier = 1;
 
-    const mappingRuleSetId = String(m.sync_rule_set_id ?? "").trim();
-    const effectiveRuleSetId = optionMode === "SYNC"
-      ? (syncRuleSetByMaster.get(m.master_item_id) ?? mappingRuleSetId)
-      : "";
-    const useRuleSetEngine = optionMode === "SYNC" && effectiveRuleSetId.length > 0;
+    const effectiveRuleSetId = "";
+    const useRuleSetEngine = false;
 
     const missingRules: string[] = [];
 
@@ -1503,13 +1226,18 @@ export async function POST(request: Request) {
       }
     }
 
-    const materialFinal = applyRuleSetPricing
-      ? baseMaterialPrice
-      : (applyRule1 ? materialRaw * factor * optionMaterialMultiplier : 0);
+    const materialFinal = resolveBaseMaterialFinalKrw({
+      useRuleSetEngine: applyRuleSetPricing,
+      applyRule1,
+      baseMaterialPrice,
+      materialRaw,
+      factor,
+      optionMaterialMultiplier,
+    });
 
     const mappingChannelProductId = String(m.channel_product_id ?? "").trim();
     const mappingVariantCode = String(m.external_variant_code ?? "").trim();
-    const includePlating = m.include_master_plating_labor !== false;
+    const includePlating = true;
     const masterAbsorbItems = absorbByMasterId.get(m.master_item_id) ?? [];
     const masterLaborSell = computeMasterLaborSellPerUnit(master, masterAbsorbItems, includePlating);
     const masterLaborProfile = computeMasterLaborProfileWithoutAbsorb(master, includePlating);
@@ -1634,60 +1362,7 @@ export async function POST(request: Request) {
       .filter((a) => a.apply_to === "TOTAL" && a.stage === "POST_MARGIN")
       .reduce((sum, a) => sum + toAdjKrw(a.amount_type, a.amount_value, afterMargin), 0);
 
-    const categoryScopedDeltaBuckets = (() => {
-      if (!mappingProductNo) {
-        return {
-          material: 0,
-          size: 0,
-          colorPlating: 0,
-          decor: 0,
-          other: 0,
-          total: 0,
-        };
-      }
-
-      const liveVariantOptions = String(m.external_variant_code ?? "").trim()
-        ? (cafe24VariantsByProductNo.get(mappingProductNo)?.variants ?? []).find((variant) => String(variant.variantCode ?? "").trim() === variantCode)?.options ?? []
-        : [];
-      if (liveVariantOptions.length > 0) {
-        return buildSavedCategoryBucketsFromVariantOptions(
-          liveVariantOptions,
-          savedOptionCategoryRowsByScope.get(`${m.master_item_id}::${mappingProductNo}`) ?? [],
-        );
-      }
-
-      let material = 0;
-      let size = 0;
-      let colorPlating = 0;
-      let decor = 0;
-      let other = 0;
-
-      if (String(m.external_variant_code ?? "").trim()) {
-        if (String(m.option_material_code ?? "").trim()) {
-          material = resolveCategoryDelta(m.master_item_id, mappingProductNo, "MATERIAL", optionMaterialCode);
-        }
-        if (optionSizeValue !== null && Number.isFinite(optionSizeValue)) {
-          size = resolveCategoryDelta(m.master_item_id, mappingProductNo, "SIZE", optionMaterialCode);
-        }
-        if (optionColorCode) {
-          colorPlating = resolveCategoryDelta(m.master_item_id, mappingProductNo, "COLOR_PLATING", optionMaterialCode);
-        }
-        if (optionDecorationCode) {
-          decor = resolveCategoryDelta(m.master_item_id, mappingProductNo, "DECOR", optionMaterialCode);
-        }
-      } else {
-        other = resolveCategoryDelta(m.master_item_id, mappingProductNo, "OTHER", optionMaterialCode);
-      }
-
-      return {
-        material,
-        size,
-        colorPlating,
-        decor,
-        other,
-        total: material + size + colorPlating + decor + other,
-      };
-    })();
+    const categoryScopedDeltaBuckets = { material: 0, size: 0, colorPlating: 0, decor: 0, other: 0, total: 0 };
 
     const contextOptionLaborRules = resolveOptionLaborRulesForContext(m.master_item_id, mappingProductNo);
     const useOptionLaborRuleEngine = optionMode === "SYNC" && hasAnyActiveOptionLaborRule(contextOptionLaborRules);
@@ -1707,6 +1382,7 @@ export async function POST(request: Request) {
       }, {
         masterItemId: m.master_item_id,
         externalProductNo: mappingProductNo,
+        persistedSizeLookup: sharedPersistedSizeLookup,
         marketContext: {
           goldTickKrwPerG: goldTick,
           silverTickKrwPerG: silverTick,
@@ -1720,13 +1396,11 @@ export async function POST(request: Request) {
     const ruleSizeDelta = applyRuleSetPricing && applyRule2 ? r2Delta : 0;
     const ruleColorDelta = applyRuleSetPricing && applyRule3 ? r3Delta : 0;
     const ruleDecorDelta = applyRuleSetPricing && applyRuleDecor ? r4Delta : 0;
-    const baseOptionDelta = toNum(m.option_price_delta_krw, 0);
+    const baseOptionDelta = 0;
     const colorComboBaseDelta = optionColorCode ? Math.round(Number(colorComboBaseDeltaByCode.get(optionColorCode) ?? 0)) : 0;
-    const colorAxisResolvedAmount = optionColorCode
-      ? colorAxisResolvedAmountByScope.get(`${m.master_item_id}::${mappingProductNo}::${optionMaterialCode}::${optionColorCode}`)
-      : undefined;
-    const sizePriceOverrideEnabled = m.size_price_override_enabled === true;
-    const sizePriceOverrideKrw = Number.isFinite(Number(m.size_price_override_krw)) ? Math.round(Number(m.size_price_override_krw)) : null;
+    const colorAxisResolvedAmount = undefined;
+    const sizePriceOverrideEnabled = false;
+    const sizePriceOverrideKrw = null;
     const activeRuleCategories = {
       material: hasActiveRuleCategory(contextOptionLaborRules, "MATERIAL"),
       size: hasActiveRuleCategory(contextOptionLaborRules, "SIZE"),
@@ -1769,8 +1443,8 @@ export async function POST(request: Request) {
       ? roundByRule(targetRawSync, roundingUnit, roundingMode)
       : Math.round(targetRawSync);
 
-    const manualTarget = toNum(m.option_manual_target_krw, Number.NaN);
-    const useManual = hasVariant && optionMode === "MANUAL" && Number.isFinite(manualTarget) && manualTarget >= 0;
+    const manualTarget = Number.NaN;
+    const useManual = false;
     const rounded = useManual ? Math.round(manualTarget) : roundedSync;
     const targetRaw = useManual ? manualTarget : targetRawSync;
 
@@ -1809,45 +1483,6 @@ export async function POST(request: Request) {
       String(finalTarget),
       String(optionPriceDelta),
     ].join("|");
-
-    if (hasVariant && mappingProductNo) {
-      const stateKey = `${m.master_item_id}::${mappingProductNo}::${variantCode}`;
-      const existingState =
-        currentStateByChannelProductId.get(String(m.channel_product_id ?? "").trim())
-        ?? currentStateByVariantKey.get(stateKey)
-        ?? currentStateByProductNo.get(`${m.master_item_id}::${mappingProductNo}`)
-        ?? null;
-      currentStateRowsByVariantKey.set(stateKey, {
-        channel_id: m.channel_id,
-        channel_product_id: m.channel_product_id,
-        master_item_id: m.master_item_id,
-        external_product_no: mappingProductNo,
-        external_variant_code: variantCode,
-        product_name: String(master.model_name ?? "").trim() || null,
-        material_code: materialCode || null,
-        weight_g: Number.isFinite(weight) ? weight : null,
-        deduction_weight_g: Number.isFinite(deduction) ? deduction : null,
-        net_weight_g: Number.isFinite(netWeight) ? netWeight : null,
-        material_price_krw: Math.max(0, Math.round(materialFinal)),
-        tick_gold_krw_per_g: Number.isFinite(goldTick) ? Math.round(goldTick) : null,
-        tick_silver_krw_per_g: Number.isFinite(silverTick) ? Math.round(silverTick) : null,
-        base_price_krw: basePriceForState,
-        floor_price_krw: Math.max(0, pricingAlgoVersion === "REVERSE_FEE_V2" ? 0 : floorPrice),
-        exclude_plating_labor: !includePlating,
-        plating_labor_sell_krw: Math.max(0, Math.round(masterLaborProfile.platingSell + masterAbsorbSummary.plating)),
-        total_labor_sell_krw: Math.max(0, Math.round(laborRawBase)),
-        option_sync_delta_krw: optionPriceDelta,
-        final_target_additional_amount_krw: optionPriceDelta,
-        source_snapshot_hash: sourceSnapshotHash,
-        last_pushed_additional_amount_krw: existingState?.last_pushed_additional_amount_krw ?? null,
-        last_push_status: existingState?.last_push_status ?? "PENDING",
-        last_push_http_status: existingState?.last_push_http_status ?? null,
-        last_push_error: existingState?.last_push_error ?? null,
-        last_pushed_at: existingState?.last_pushed_at ?? null,
-        last_verified_at: existingState?.last_verified_at ?? null,
-        updated_by: "RECOMPUTE_PREVIEW",
-      });
-    }
 
     if (!hasVariant && mappingProductNo) {
       publishBaseRowsByChannelProductId.set(String(m.channel_product_id ?? "").trim(), {
@@ -2009,7 +1644,7 @@ export async function POST(request: Request) {
         option_color_code: optionColorCode || null,
         option_decoration_code: optionDecorationCode || null,
         option_size_value: optionSizeValue,
-        sync_rule_set_id: effectiveRuleSetId || null,
+        sync_rule_set_id: null,
         use_rule_set_engine: useRuleSetEngine,
         rule_set_engine_applied: applyRuleSetPricing,
         use_option_labor_rule_engine: useOptionLaborRuleEngine,
@@ -2072,34 +1707,8 @@ export async function POST(request: Request) {
     }, { headers: { "Cache-Control": "no-store" } });
   }
 
-  const insertRes = await sb.from("pricing_snapshot").insert(rows).select("snapshot_id, channel_product_id");
-  if (insertRes.error) return jsonError(insertRes.error.message ?? "?ㅻ깄??????ㅽ뙣", 500);
-
   const publishBaseRows = Array.from(publishBaseRowsByChannelProductId.values());
-  if (publishBaseRows.length > 0) {
-    const publishBaseRes = await sb
-      .from("product_price_publish_base_v1")
-      .upsert(publishBaseRows, { onConflict: "channel_product_id,publish_version" });
-    if (publishBaseRes.error) {
-      if (isMissingSchemaObjectError(publishBaseRes.error)) {
-        return jsonError(publishBaseRes.error.message ?? "publish base table missing", 500, { code: "PUBLISH_BASE_TABLE_MISSING" });
-      }
-      return jsonError(publishBaseRes.error.message ?? "publish base upsert failed", 500);
-    }
-  }
-
   const publishVariantRows = Array.from(publishVariantRowsByChannelProductId.values());
-  if (publishVariantRows.length > 0) {
-    const publishVariantRes = await sb
-      .from("product_price_publish_variant_v1")
-      .upsert(publishVariantRows, { onConflict: "channel_product_id,publish_version" });
-    if (publishVariantRes.error) {
-      if (isMissingSchemaObjectError(publishVariantRes.error)) {
-        return jsonError(publishVariantRes.error.message ?? "publish variant table missing", 500, { code: "PUBLISH_VARIANT_TABLE_MISSING" });
-      }
-      return jsonError(publishVariantRes.error.message ?? "publish variant upsert failed", 500);
-    }
-  }
 
   if (publishVariantRows.length > 0) {
     const account = await loadCafe24Account(sb, channelId);
@@ -2121,6 +1730,37 @@ export async function POST(request: Request) {
     }
 
     const optionEntryRows: Array<Record<string, unknown>> = [];
+    const colorBucketRes = await sb
+      .from("channel_option_color_bucket_v1")
+      .select("color_bucket_id, sell_delta_krw")
+      .eq("channel_id", channelId)
+      .eq("is_active", true)
+      .limit(5000);
+    if (colorBucketRes.error && !isMissingSchemaObjectError(colorBucketRes.error)) {
+      return jsonError(colorBucketRes.error.message ?? "color bucket lookup failed", 500);
+    }
+    const colorBucketDeltaById = Object.fromEntries(
+      ((colorBucketRes.data ?? []) as Array<{ color_bucket_id?: string | null; sell_delta_krw?: number | null }>)
+        .map((row) => [String(row.color_bucket_id ?? '').trim(), Math.max(0, Math.round(Number(row.sell_delta_krw ?? 0)))])
+        .filter(([key]) => Boolean(key)),
+    );
+    const addonMasterRes = await sb
+      .from("channel_option_addon_master_v1")
+      .select("addon_master_id, base_amount_krw, extra_delta_krw")
+      .eq("channel_id", channelId)
+      .eq("is_active", true)
+      .limit(5000);
+    if (addonMasterRes.error && !isMissingSchemaObjectError(addonMasterRes.error)) {
+      return jsonError(addonMasterRes.error.message ?? "addon master lookup failed", 500);
+    }
+    const addonAmountById = Object.fromEntries(
+      ((addonMasterRes.data ?? []) as Array<{ addon_master_id?: string | null; base_amount_krw?: number | null; extra_delta_krw?: number | null }>)
+        .map((row) => [
+          String(row.addon_master_id ?? '').trim(),
+          Math.max(0, Math.round(Number(row.base_amount_krw ?? 0)) + Math.round(Number(row.extra_delta_krw ?? 0))),
+        ])
+        .filter(([key]) => Boolean(key)),
+    );
     for (const [externalProductNo, productRows] of publishVariantsByProductNo.entries()) {
       let variantsRes = await cafe24ListProductVariants(account, accessToken, externalProductNo);
       if (!variantsRes.ok && variantsRes.status === 401) {
@@ -2138,45 +1778,155 @@ export async function POST(request: Request) {
           status: variantsRes.status,
         });
       }
-      const deltaByVariantCode = new Map(
-        productRows.map((row) => [String(row.external_variant_code ?? "").trim(), Math.round(Number(row.published_additional_amount_krw ?? 0))] as [string, number]),
-      );
-      const missingVariantCodes = variantsRes.variants
-        .map((variant) => String(variant.variantCode ?? "").trim())
-        .filter((variantCode) => variantCode.length > 0 && !deltaByVariantCode.has(variantCode));
-      if (missingVariantCodes.length > 0) {
-        return jsonError("publish option entry variants missing published deltas", 422, {
-          code: "PUBLISH_OPTION_ENTRY_VARIANT_DELTA_MISSING",
+      const sampleRow = productRows[0] ?? null;
+      if (!sampleRow) continue;
+      const masterItemId = String(sampleRow.master_item_id ?? "").trim();
+      if (!masterItemId) continue;
+      const explicitEntryMappingsRes = await sb
+        .from("channel_product_option_entry_mapping_v1")
+        .select("option_name, option_value, category_key, material_registry_code, weight_g, combo_code, color_bucket_id, decor_master_id, addon_master_id, other_reason_code, explicit_delta_krw, notice_code")
+        .eq("channel_id", channelId)
+        .eq("external_product_no", externalProductNo)
+        .eq("is_active", true);
+      if (explicitEntryMappingsRes.error && !isMissingSchemaObjectError(explicitEntryMappingsRes.error)) {
+        return jsonError(explicitEntryMappingsRes.error.message ?? "explicit option entry mapping lookup failed", 500);
+      }
+      const explicitEntryMappings = (explicitEntryMappingsRes.data ?? []) as Array<Record<string, unknown>>;
+      const variantRows = variantsRes.variants.map((variant) => ({
+        variantCode: String(variant.variantCode ?? "").trim(),
+        options: variant.options ?? [],
+      }));
+      const master = masterMap.get(masterItemId) ?? null;
+      const persistedSizeLookup = sharedPersistedSizeLookup;
+      const ruleOnlyCanonicalInputs = explicitEntryMappings.length > 0
+        ? buildCanonicalInputsFromExplicitOptionEntries({
+            rows: explicitEntryMappings.map((row) => ({
+              option_name: String(row.option_name ?? ''),
+              option_value: String(row.option_value ?? ''),
+              category_key: String(row.category_key ?? '').trim().toUpperCase() as 'MATERIAL' | 'SIZE' | 'COLOR_PLATING' | 'DECOR' | 'ADDON' | 'OTHER' | 'NOTICE',
+              material_registry_code: String(row.material_registry_code ?? '').trim() || null,
+              weight_g: row.weight_g == null ? null : Number(row.weight_g),
+              combo_code: String(row.combo_code ?? '').trim() || null,
+              color_bucket_id: String(row.color_bucket_id ?? '').trim() || null,
+              decor_master_id: String(row.decor_master_id ?? '').trim() || null,
+              addon_master_id: String(row.addon_master_id ?? '').trim() || null,
+              other_reason_code: String(row.other_reason_code ?? '').trim() || null,
+              explicit_delta_krw: row.explicit_delta_krw == null ? null : Number(row.explicit_delta_krw),
+              notice_code: String(row.notice_code ?? '').trim() || null,
+            })),
+            colorBucketDeltaById,
+            addonAmountById,
+          })
+        : deriveRuleOnlyCanonicalInputs({
+            variants: variantRows,
+            mappings: productRows,
+            rules: resolveOptionLaborRulesForContext(masterItemId, externalProductNo),
+            masterMaterialCode: String(master?.material_code_default ?? '').trim() || null,
+          });
+      const canonicalRows = buildCanonicalOptionRows({
+        variants: variantRows.map((variant) => ({ options: variant.options })),
+        savedOptionCategories: ruleOnlyCanonicalInputs.savedOptionCategories,
+        rules: resolveOptionLaborRulesForContext(masterItemId, externalProductNo),
+        masterMaterialCode: String(master?.material_code_default ?? "").trim() || null,
+        masterMaterialLabel: String(master?.material_code_default ?? "").trim() || null,
+        otherReasonByEntryKey: ruleOnlyCanonicalInputs.otherReasonByEntryKey,
+        categoryOverrideByEntryKey: ruleOnlyCanonicalInputs.categoryOverrideByEntryKey,
+        masterItemId,
+        externalProductNo,
+        persistedSizeLookup,
+        sizeMarketContext: {
+          goldTickKrwPerG: goldTick,
+          silverTickKrwPerG: silverTick,
+          materialFactors,
+          factorMultiplierByMaterialCode,
+        },
+        axisSelectionByEntryKey: ruleOnlyCanonicalInputs.axisSelectionByEntryKey,
+        colorBaseDeltaByCode: Object.fromEntries(Array.from(colorComboBaseDeltaByCode.entries())),
+        addonAmountById,
+        optionRoundingUnit: Number(policy.option_rounding_unit ?? 500),
+        optionRoundingMode: String(policy.option_rounding_mode ?? "CEIL") as "CEIL" | "ROUND" | "FLOOR",
+      });
+      const businessCanonicalRows = canonicalRows.filter((row) => !(String(row.option_name ?? '').trim() === '분류' && String(row.option_value ?? '').trim() === '분류'));
+      const invalidCanonicalRows = businessCanonicalRows.filter((row) => row.legacy_status !== "VALID");
+      if (invalidCanonicalRows.length > 0) {
+        return jsonError("publish option entries require fully resolved canonical rows", 422, {
+          code: "PUBLISH_CANONICAL_ROWS_UNRESOLVED",
           external_product_no: externalProductNo,
-          missing_variant_codes: missingVariantCodes,
+          publish_version: computeRequestId,
+          rows: invalidCanonicalRows.map((row) => ({
+            option_name: row.option_name,
+            option_value: row.option_value,
+            category_key: row.category_key,
+            legacy_status: row.legacy_status,
+            warnings: row.warnings,
+          })),
         });
       }
-      const breakdown = buildOptionAxisBreakdownFromPublishedVariants(
-        variantsRes.variants.map((variant) => ({
-          variantCode: String(variant.variantCode ?? "").trim(),
-          options: variant.options ?? [],
-          publishedAdditionalAmountKrw: deltaByVariantCode.get(String(variant.variantCode ?? "").trim()) ?? 0,
-        })),
-      );
+      const axis = buildOptionAxisFromCanonicalRows(businessCanonicalRows);
+      const businessAxisKeys = new Set(businessCanonicalRows.map((row) => `${String(row.option_name ?? '').trim()}::${String(row.option_value ?? '').trim()}`));
+      const businessVariants = variantRows.map((variant) => ({
+        ...variant,
+        options: (variant.options ?? []).filter((option) => businessAxisKeys.has(`${String(option.name ?? '').trim()}::${String(option.value ?? '').trim()}`)),
+      }));
+      const breakdown = buildVariantBreakdownFromCanonicalRows({
+        variants: businessVariants,
+        canonicalRows: businessCanonicalRows,
+      });
       const additiveValidation = validateAdditiveBreakdown(breakdown);
       if (!additiveValidation.ok) {
-        return jsonError("non-additive option pricing combinations are not allowed", 422, {
-          code: "NON_ADDITIVE_OPTION_COMBINATION",
+        return jsonError("non-additive canonical option pricing combinations are not allowed", 422, {
+          code: "NON_ADDITIVE_CANONICAL_OPTION_COMBINATION",
           external_product_no: externalProductNo,
           publish_version: computeRequestId,
           violations: additiveValidation.violations,
         });
       }
-      const sampleRow = productRows[0] ?? null;
-      if (!sampleRow) continue;
       optionEntryRows.push(...buildOptionEntryRowsFromBreakdown({
         channelId,
-        masterItemId: String(sampleRow.master_item_id ?? "").trim(),
+        masterItemId,
         externalProductNo,
         publishVersion: computeRequestId,
-        breakdown,
+        breakdown: {
+          axes: axis.axes,
+          byVariant: breakdown.byVariant,
+        },
         computedAt: recomputeAt,
+        optionRoundingUnit: Number(policy.option_rounding_unit ?? 500),
+        optionRoundingMode: String(policy.option_rounding_mode ?? "CEIL") as "CEIL" | "ROUND" | "FLOOR",
       }));
+      const canonicalDeltaByVariantCode = new Map(
+        breakdown.byVariant.map((row) => [String(row.variant_code ?? "").trim(), Math.round(Number(row.total_delta_krw ?? 0))] as [string, number]),
+      );
+      for (const row of productRows) {
+        const variantCode = String(row.external_variant_code ?? "").trim();
+        const nextDelta = canonicalDeltaByVariantCode.get(variantCode);
+        if (!variantCode || nextDelta == null) continue;
+        const basePrice = Math.round(Number(row.published_base_price_krw ?? 0));
+        row.published_additional_amount_krw = nextDelta;
+        row.published_total_price_krw = Math.max(0, basePrice + nextDelta);
+      }
+    }
+
+    if (publishBaseRows.length > 0) {
+      const publishBaseRes = await sb
+        .from("product_price_publish_base_v1")
+        .upsert(publishBaseRows, { onConflict: "channel_product_id,publish_version" });
+      if (publishBaseRes.error) {
+        if (isMissingSchemaObjectError(publishBaseRes.error)) {
+          return jsonError(publishBaseRes.error.message ?? "publish base table missing", 500, { code: "PUBLISH_BASE_TABLE_MISSING" });
+        }
+        return jsonError(publishBaseRes.error.message ?? "publish base upsert failed", 500);
+      }
+    }
+
+    const canonicalPublishVariantRes = await sb
+      .from("product_price_publish_variant_v1")
+      .upsert(publishVariantRows, { onConflict: "channel_product_id,publish_version" });
+    if (canonicalPublishVariantRes.error) {
+      if (isMissingSchemaObjectError(canonicalPublishVariantRes.error)) {
+        return jsonError(canonicalPublishVariantRes.error.message ?? "publish variant table missing", 500, { code: "PUBLISH_VARIANT_TABLE_MISSING" });
+      }
+      return jsonError(canonicalPublishVariantRes.error.message ?? "publish variant upsert failed", 500);
     }
 
     if (optionEntryRows.length > 0) {
@@ -2194,16 +1944,8 @@ export async function POST(request: Request) {
     }
   }
 
-  if (currentStateRowsByVariantKey.size > 0) {
-    {
-      const stateUpsertRes = await sb
-        .from("channel_option_current_state_v1")
-        .upsert(Array.from(currentStateRowsByVariantKey.values()), {
-          onConflict: "channel_id,external_product_no,external_variant_code",
-        });
-      if (stateUpsertRes.error) return jsonError(stateUpsertRes.error.message ?? "?듭뀡 ?꾩옱?곹깭 ?꾨━酉?媛깆떊 ?ㅽ뙣", 500);
-    }
-  }
+  const insertRes = await sb.from("pricing_snapshot").insert(rows).select("snapshot_id, channel_product_id");
+  if (insertRes.error) return jsonError(insertRes.error.message ?? "pricing_snapshot insert failed", 500);
 
   if (pricingAlgoVersion === "REVERSE_FEE_V2") {
     const insertedRows = (insertRes.data ?? []) as Array<{ snapshot_id?: string | null; channel_product_id?: string | null }>;

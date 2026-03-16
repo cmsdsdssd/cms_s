@@ -1,5 +1,5 @@
 ﻿import { resolvePersistedSizeGridCell } from "./weight-grid-store.js";
-import { normalizePlatingComboCode } from "./sync-rules.ts";
+import { normalizePlatingComboCode, roundByRule } from "./rule-utils.ts";
 
 const WEIGHT_MIN_CENTIGRAM = 0;
 const WEIGHT_MAX_CENTIGRAM = 10000;
@@ -8,6 +8,7 @@ const toTrimmed = (value) => String(value ?? "").trim();
 const toUpper = (value) => toTrimmed(value).toUpperCase();
 
 const toFiniteNumber = (value) => {
+  if (value === null || value === undefined || value === '') return null;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
 };
@@ -39,7 +40,7 @@ const centigramToWeightString = (centigram) => {
 const normalizeRuleType = (value) => {
   const normalized = toUpper(value);
   if (normalized === "COLOR_PLATING") return "COLOR";
-  if (normalized === "MATERIAL" || normalized === "SIZE" || normalized === "COLOR" || normalized === "DECOR" || normalized === "OTHER" || normalized === "NOTICE") {
+  if (normalized === "MATERIAL" || normalized === "SIZE" || normalized === "COLOR" || normalized === "DECOR" || normalized === "ADDON" || normalized === "OTHER" || normalized === "NOTICE") {
     return normalized;
   }
   return null;
@@ -150,6 +151,7 @@ export const collectAllowedColors = (rules, masterMaterialCode) => {
  *   persistedSizeLookup?: unknown,
  *   sizeMarketContext?: unknown,
  *   colorBaseDeltaByCode?: unknown,
+ *   addonAmountById?: unknown,
  * }} args
  */
 export const resolveCentralOptionMapping = ({
@@ -161,6 +163,9 @@ export const resolveCentralOptionMapping = ({
   persistedSizeLookup = null,
   sizeMarketContext = null,
   colorBaseDeltaByCode = null,
+  addonAmountById = null,
+  optionRoundingUnit = null,
+  optionRoundingMode = null,
 }) => {
   const normalizedCategory = normalizeRuleType(category);
   const base = createBaseResult({
@@ -172,6 +177,12 @@ export const resolveCentralOptionMapping = ({
   const activeRules = (Array.isArray(rules) ? rules : [])
     .map((rule) => normalizeRuleRow(rule))
     .filter((rule) => rule && rule.is_active);
+  const applyOptionRounding = (value) => {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) return 0;
+    if (optionRoundingUnit == null || optionRoundingMode == null) return toRoundedKrw(parsed);
+    return roundByRule(parsed, optionRoundingUnit, optionRoundingMode);
+  };
 
   if (normalizedCategory === "MATERIAL") {
     if (!base.material_code_resolved) return markUnresolved(base, "마스터 소재를 찾지 못했습니다.");
@@ -182,13 +193,6 @@ export const resolveCentralOptionMapping = ({
     const selectedCentigram = normalizeWeightCentigram(base.size_weight_g_selected);
     if (!base.material_code_resolved) return markUnresolved(base, "소재가 없어서 사이즈를 계산할 수 없습니다.");
     if (selectedCentigram === null) return markUnresolved(base, "추가중량을 선택해야 합니다.");
-    if (selectedCentigram === 0) {
-      return {
-        ...base,
-        resolved_delta_krw: 0,
-        source_rule_entry_ids: [],
-      };
-    }
     if (!persistedSizeLookup) {
       return markUnresolved(base, "사이즈 중앙 그리드가 없어 추가중량을 계산할 수 없습니다.");
     }
@@ -198,14 +202,11 @@ export const resolveCentralOptionMapping = ({
       additionalWeightG: selectedCentigram / 100,
     });
     if (!resolvedSizeCell.valid) {
-      if (String(resolvedSizeCell.error_message ?? "").includes("size rule not found")) {
-        return markLegacy(base, "현재 선택한 추가중량이 중앙 허용 범위 밖입니다.");
-      }
       return markUnresolved(base, String(resolvedSizeCell.error_message ?? "중량 계산에 필요한 시세/소재 정보가 부족합니다."));
     }
     return {
       ...base,
-      resolved_delta_krw: Math.round(resolvedSizeCell.computed_delta_krw ?? 0),
+      resolved_delta_krw: applyOptionRounding(resolvedSizeCell.computed_delta_krw ?? 0),
       source_rule_entry_ids: Array.isArray(resolvedSizeCell.source_rule_ids) ? resolvedSizeCell.source_rule_ids : [],
     };
   }
@@ -213,12 +214,14 @@ export const resolveCentralOptionMapping = ({
   if (normalizedCategory === "COLOR") {
     if (!base.material_code_resolved) return markUnresolved(base, "소재가 없어서 색상을 결정할 수 없습니다.");
     if (!base.color_code_selected) return markUnresolved(base, "색상을 선택해야 합니다.");
+    const hasPersistedResolvedDelta = persisted && persisted.resolved_delta_krw !== undefined && persisted.resolved_delta_krw !== null;
+    const persistedColorDelta = hasPersistedResolvedDelta ? toRoundedKrw(persisted.resolved_delta_krw) : null;
     const baseColorDelta = colorBaseDeltaByCode && typeof colorBaseDeltaByCode === "object"
       ? toRoundedKrw(colorBaseDeltaByCode[base.color_code_selected] ?? 0)
       : 0;
     return {
       ...base,
-      resolved_delta_krw: baseColorDelta,
+      resolved_delta_krw: applyOptionRounding(persistedColorDelta ?? baseColorDelta),
       source_rule_entry_ids: [],
     };
   }
@@ -232,7 +235,7 @@ export const resolveCentralOptionMapping = ({
     const primary = matched[0];
     const baseLabor = toRoundedKrw(primary.decor_total_labor_cost_snapshot);
     const extraDelta = toRoundedKrw(base.decor_extra_delta_krw ?? primary.delta_krw);
-    const finalAmount = toRoundedKrw(base.decor_final_amount_krw ?? (baseLabor + extraDelta));
+    const finalAmount = applyOptionRounding(base.decor_final_amount_krw ?? (baseLabor + extraDelta));
     return {
       ...base,
       decor_model_name_selected: primary.decor_model_name_snapshot,
@@ -246,6 +249,20 @@ export const resolveCentralOptionMapping = ({
     };
   }
 
+  if (normalizedCategory === "ADDON") {
+    if (!base.addon_master_item_id_selected) return markUnresolved(base, "부가옵션 마스터를 선택해야 합니다.");
+    const addonAmount = addonAmountById && typeof addonAmountById === "object"
+      ? applyOptionRounding(addonAmountById[base.addon_master_item_id_selected] ?? base.addon_final_amount_krw)
+      : applyOptionRounding(base.addon_final_amount_krw);
+    if (!Number.isFinite(addonAmount)) return markUnresolved(base, "부가옵션 금액을 계산할 수 없습니다.");
+    return {
+      ...base,
+      resolved_delta_krw: addonAmount,
+      addon_final_amount_krw: addonAmount,
+      source_rule_entry_ids: [],
+    };
+  }
+
   if (normalizedCategory === "NOTICE") {
     const noticeValue = toTrimmed(base.notice_value_selected);
     if (!noticeValue) return markUnresolved({ ...base, resolved_delta_krw: 0 }, "공지 값을 선택해야 합니다.");
@@ -253,7 +270,7 @@ export const resolveCentralOptionMapping = ({
   }
 
   if (normalizedCategory === "OTHER") {
-    const delta = toRoundedKrw(base.other_delta_krw ?? base.resolved_delta_krw);
+    const delta = applyOptionRounding(base.other_delta_krw ?? base.resolved_delta_krw);
     const reason = toTrimmed(base.other_reason);
     if (!reason) {
       return markUnresolved({ ...base, resolved_delta_krw: delta }, "기타 카테고리는 사유가 필요합니다.");

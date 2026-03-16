@@ -6,8 +6,9 @@ export const revalidate = 0;
 
 const AUTO_SYNC_THRESHOLD_PROFILES = ["GENERAL", "MARKET_LINKED"] as const;
 const PRICING_POLICY_SELECT_BASE =
-  "policy_id, channel_id, policy_name, margin_multiplier, gm_material, gm_labor, gm_fixed, fixed_cost_krw, rounding_unit, rounding_mode, option_18k_weight_multiplier, material_factor_set_id, fee_rate, min_margin_rate_total, auto_sync_force_full, auto_sync_min_change_krw, auto_sync_min_change_rate, option_sync_force_full, option_sync_min_change_krw, option_sync_min_change_rate, is_active, created_at, updated_at";
+  "policy_id, channel_id, policy_name, margin_multiplier, gm_material, gm_labor, gm_fixed, fixed_cost_krw, rounding_unit, rounding_mode, option_rounding_unit, option_rounding_mode, option_18k_weight_multiplier, material_factor_set_id, fee_rate, min_margin_rate_total, auto_sync_force_full, auto_sync_min_change_krw, auto_sync_min_change_rate, option_sync_force_full, option_sync_min_change_krw, option_sync_min_change_rate, is_active, created_at, updated_at";
 const PRICING_POLICY_SELECT_COLS = `${PRICING_POLICY_SELECT_BASE}, auto_sync_threshold_profile`;
+const PRICING_POLICY_SELECT_LEGACY = "policy_id, channel_id, policy_name, margin_multiplier, gm_material, gm_labor, gm_fixed, fixed_cost_krw, rounding_unit, rounding_mode, option_18k_weight_multiplier, material_factor_set_id, fee_rate, min_margin_rate_total, auto_sync_force_full, auto_sync_min_change_krw, auto_sync_min_change_rate, option_sync_force_full, option_sync_min_change_krw, option_sync_min_change_rate, is_active, created_at, updated_at";
 
 function parseAutoSyncThresholdProfile(value: unknown): (typeof AUTO_SYNC_THRESHOLD_PROFILES)[number] {
   const profile = String(value ?? "GENERAL").trim().toUpperCase();
@@ -32,11 +33,23 @@ export async function GET(request: Request) {
   };
 
   let { data, error } = await buildQuery(true);
-  if (error && isMissingColumnError(error, "pricing_policy.auto_sync_threshold_profile")) {
-    ({ data, error } = await buildQuery(false));
+  let responseData: Array<Record<string, unknown>> = ((data ?? []) as unknown as Array<Record<string, unknown>>);
+  if (error && (isMissingColumnError(error, "pricing_policy.auto_sync_threshold_profile") || isMissingColumnError(error, "pricing_policy.option_rounding_unit") || isMissingColumnError(error, "pricing_policy.option_rounding_mode"))) {
+    const legacyQuery = sb
+      .from("pricing_policy")
+      .select(PRICING_POLICY_SELECT_LEGACY)
+      .order("updated_at", { ascending: false });
+    const legacyRes = channelId ? await legacyQuery.eq("channel_id", channelId) : await legacyQuery;
+    responseData = ((legacyRes.data ?? []) as unknown as Array<Record<string, unknown>>).map((row) => ({
+      ...row,
+      option_rounding_unit: 500,
+      option_rounding_mode: "CEIL",
+      auto_sync_threshold_profile: "GENERAL",
+    }));
+    error = legacyRes.error;
   }
   if (error) return jsonError(error.message ?? "정책 조회 실패", 500);
-  return NextResponse.json({ data: data ?? [] }, { headers: { "Cache-Control": "no-store" } });
+  return NextResponse.json({ data: responseData }, { headers: { "Cache-Control": "no-store" } });
 }
 
 export async function POST(request: Request) {
@@ -51,6 +64,8 @@ export async function POST(request: Request) {
   const hasMargin = Object.prototype.hasOwnProperty.call(body, "margin_multiplier");
   const hasRoundingUnit = Object.prototype.hasOwnProperty.call(body, "rounding_unit");
   const hasRoundingMode = Object.prototype.hasOwnProperty.call(body, "rounding_mode");
+  const hasOptionRoundingUnit = Object.prototype.hasOwnProperty.call(body, "option_rounding_unit");
+  const hasOptionRoundingMode = Object.prototype.hasOwnProperty.call(body, "option_rounding_mode");
   const hasOption18k = Object.prototype.hasOwnProperty.call(body, "option_18k_weight_multiplier");
   const hasFeeRate = Object.prototype.hasOwnProperty.call(body, "fee_rate");
   const hasMinMarginRateTotal = Object.prototype.hasOwnProperty.call(body, "min_margin_rate_total");
@@ -69,6 +84,8 @@ export async function POST(request: Request) {
   const roundingUnit = hasRoundingUnit ? Number(body.rounding_unit) : 1000;
   const roundingMode = String(hasRoundingMode ? body.rounding_mode : "CEIL").toUpperCase();
   const option18kWeightMultiplier = hasOption18k ? Number(body.option_18k_weight_multiplier) : 1.2;
+  const optionRoundingUnit = hasOptionRoundingUnit ? Number(body.option_rounding_unit) : 500;
+  const optionRoundingMode = String(hasOptionRoundingMode ? body.option_rounding_mode : "CEIL").toUpperCase();
   const feeRate = hasFeeRate ? Number(body.fee_rate) : 0;
   const minMarginRateTotal = hasMinMarginRateTotal ? Number(body.min_margin_rate_total) : 0;
   const gmMaterial = hasGmMaterial ? Number(body.gm_material) : 0;
@@ -94,6 +111,8 @@ export async function POST(request: Request) {
     margin_multiplier: marginMultiplier,
     rounding_unit: roundingUnit,
     rounding_mode: roundingMode,
+    option_rounding_unit: optionRoundingUnit,
+    option_rounding_mode: optionRoundingMode,
     option_18k_weight_multiplier: option18kWeightMultiplier,
     gm_material: gmMaterial,
     gm_labor: gmLabor,
@@ -116,6 +135,7 @@ export async function POST(request: Request) {
   if (!basePayload.policy_name) return jsonError("policy_name is required", 400);
   if (!Number.isFinite(basePayload.margin_multiplier) || basePayload.margin_multiplier < 0) return jsonError("margin_multiplier must be >= 0", 400);
   if (!Number.isFinite(basePayload.rounding_unit) || basePayload.rounding_unit <= 0) return jsonError("rounding_unit must be > 0", 400);
+  if (!Number.isFinite(basePayload.option_rounding_unit) || Number(basePayload.option_rounding_unit) <= 0) return jsonError("option_rounding_unit must be > 0", 400);
   if (!Number.isFinite(basePayload.option_18k_weight_multiplier) || basePayload.option_18k_weight_multiplier <= 0) return jsonError("option_18k_weight_multiplier must be > 0", 400);
   if (!Number.isFinite(basePayload.gm_material) || basePayload.gm_material < 0) return jsonError("gm_material must be >= 0", 400);
   if (!Number.isFinite(basePayload.gm_labor) || basePayload.gm_labor < 0) return jsonError("gm_labor must be >= 0", 400);
@@ -128,6 +148,7 @@ export async function POST(request: Request) {
   if (!Number.isFinite(basePayload.option_sync_min_change_krw) || basePayload.option_sync_min_change_krw < 0) return jsonError("option_sync_min_change_krw must be >= 0", 400);
   if (!Number.isFinite(basePayload.option_sync_min_change_rate) || basePayload.option_sync_min_change_rate < 0 || basePayload.option_sync_min_change_rate > 1) return jsonError("option_sync_min_change_rate must be between 0 and 1", 400);
   if (!["CEIL", "ROUND", "FLOOR"].includes(basePayload.rounding_mode)) return jsonError("rounding_mode must be CEIL/ROUND/FLOOR", 400);
+  if (!["CEIL", "ROUND", "FLOOR"].includes(String(basePayload.option_rounding_mode))) return jsonError("option_rounding_mode must be CEIL/ROUND/FLOOR", 400);
   const deactivateOtherPolicies = async (savedPolicyId: string) => {
     if (!basePayload.is_active) return;
     await sb
@@ -142,6 +163,17 @@ export async function POST(request: Request) {
   if (!firstTry.error) {
     await deactivateOtherPolicies(String(firstTry.data.policy_id));
     return NextResponse.json({ data: firstTry.data }, { headers: { "Cache-Control": "no-store" } });
+  }
+
+  if (firstTry.error && (isMissingColumnError(firstTry.error, "pricing_policy.option_rounding_unit") || isMissingColumnError(firstTry.error, "pricing_policy.option_rounding_mode"))) {
+    const fallbackPayload: Record<string, unknown> = { ...basePayload };
+    delete fallbackPayload.option_rounding_unit;
+    delete fallbackPayload.option_rounding_mode;
+    const fallbackTry = await sb.from("pricing_policy").insert(fallbackPayload).select(PRICING_POLICY_SELECT_LEGACY).single();
+    if (!fallbackTry.error) {
+      await deactivateOtherPolicies(String(fallbackTry.data.policy_id));
+      return NextResponse.json({ data: { ...fallbackTry.data, option_rounding_unit: 500, option_rounding_mode: "CEIL", auto_sync_threshold_profile: autoSyncThresholdProfile } }, { headers: { "Cache-Control": "no-store" } });
+    }
   }
 
   const firstMsg = firstTry.error.message ?? "정책 생성 실패";

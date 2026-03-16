@@ -1,4 +1,5 @@
 import { formatOptionDisplayLabel, stripPriceDeltaSuffix } from './option-labels.js';
+import { roundByRule } from './rule-utils.ts';
 
 export { stripPriceDeltaSuffix } from './option-labels.js';
 
@@ -142,15 +143,23 @@ export const buildOptionEntryRowsFromBreakdown = ({
   publishVersion,
   breakdown,
   computedAt,
+  optionRoundingUnit = 500,
+  optionRoundingMode = 'CEIL',
 }) => {
   const rows = [];
+  const roundOptionDelta = (value) => {
+    const parsed = Number(value ?? Number.NaN);
+    if (!Number.isFinite(parsed)) return Number.NaN;
+    if (optionRoundingUnit == null || optionRoundingMode == null) return Math.round(parsed);
+    return roundByRule(parsed, optionRoundingUnit, optionRoundingMode);
+  };
   const axes = resolveAxesFromBreakdown(breakdown);
   for (const axis of axes) {
     const normalizedAxisName = String(axis?.name ?? '').trim();
     if (!normalizedAxisName) continue;
     for (const value of Array.isArray(axis?.values) ? axis.values : []) {
       const label = String(value?.label ?? '').trim();
-      const delta = Math.round(Number(value?.delta_krw ?? Number.NaN));
+      const delta = roundOptionDelta(value?.delta_krw);
       if (!label || !Number.isFinite(delta)) continue;
       rows.push({
         channel_id: channelId,
@@ -257,23 +266,10 @@ export const selectStorefrontBreakdownSource = ({
     };
   }
 
-  const axis = buildOptionAxisFromCanonicalRows(canonicalOptionRows);
-  if (axis.axes.length > 0) {
-    const breakdown = buildVariantBreakdownFromCanonicalRows({
-      variants: canonicalVariants,
-      canonicalRows: canonicalOptionRows,
-    });
-    return {
-      axis,
-      breakdown,
-      previewSource: 'canonical_rows',
-    };
-  }
-
   return {
     axis: buildBreakdownShape([], []),
     breakdown: buildBreakdownShape([], []),
-    previewSource: 'published_entries',
+    previewSource: 'missing_published_entries',
   };
 };
 

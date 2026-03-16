@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
@@ -11,13 +11,37 @@ import { buildThresholdProfileSummary } from "@/lib/shop/price-sync-run-summary.
 
 type Channel = { channel_id: string; channel_name: string; channel_code: string };
 
+type SyncRunSummary = {
+  threshold_profile?: "GENERAL" | "MARKET_LINKED" | null;
+  threshold_min_change_krw?: number;
+  threshold_min_change_rate?: number;
+  option_sync_min_change_krw?: number;
+  option_sync_min_change_rate?: number;
+  option_sync_effective_mode?: string | null;
+  threshold_evaluated_count?: number;
+  threshold_filtered_count?: number;
+  option_threshold_evaluated_count?: number;
+  option_threshold_filtered_count?: number;
+  option_current_missing_count?: number;
+  option_intent_count?: number;
+  market_gap_forced_count?: number;
+  downsync_suppressed_count?: number;
+  pressure_downsync_release_count?: number;
+  large_downsync_release_count?: number;
+  cooldown_block_count?: number;
+  staleness_release_count?: number;
+  pressure_decay_count?: number;
+  force_full_sync?: boolean;
+  force_full_sync_source?: string | null;
+};
+
 type SyncRun = {
   run_id: string;
   channel_id: string;
   pinned_compute_request_id: string | null;
   publish_version?: string | null;
   channel_threshold_profile?: "GENERAL" | "MARKET_LINKED" | null;
-  request_payload?: { summary?: { threshold_profile?: "GENERAL" | "MARKET_LINKED" | null } | null } | null;
+  request_payload?: { summary?: SyncRunSummary | null } | null;
   due_master_count?: number | null;
   scheduler_reason?: string | null;
   interval_minutes: number;
@@ -49,6 +73,16 @@ type RunIntent = {
   channel_threshold_profile?: "GENERAL" | "MARKET_LINKED" | null;
   effective_threshold_profile?: "GENERAL" | "MARKET_LINKED" | null;
   threshold_profile_override_active?: boolean | null;
+  decision_context?: {
+    option_sync_mode?: string | null;
+    option_additional_target_krw?: number | null;
+    option_additional_current_krw?: number | null;
+    option_additional_out_of_sync?: boolean | null;
+    option_additional_threshold_delta_krw?: number | null;
+    option_effective_threshold_krw?: number | null;
+    option_threshold_passed?: boolean | null;
+    option_threshold_reason?: string | null;
+  } | null;
   updated_at: string | null;
   created_at: string;
   reason_code?: string | null;
@@ -344,6 +378,14 @@ export default function ShoppingCronRunsPage() {
                 <div className="text-right">{selectedRunThreshold.effectiveThresholdProfile ?? "-"}</div>
                 <div>override</div>
                 <div className="text-right">{selectedRunThreshold.isOverrideActive ? "Y" : "N"}</div>
+                <div>base threshold 평가/제외</div>
+                <div className="text-right">{fmt(run?.request_payload?.summary?.threshold_evaluated_count ?? 0)} / {fmt(run?.request_payload?.summary?.threshold_filtered_count ?? 0)}</div>
+                <div>option threshold 평가/제외</div>
+                <div className="text-right">{fmt(run?.request_payload?.summary?.option_threshold_evaluated_count ?? 0)} / {fmt(run?.request_payload?.summary?.option_threshold_filtered_count ?? 0)}</div>
+                <div>option 현재값 없음</div>
+                <div className="text-right">{fmt(run?.request_payload?.summary?.option_current_missing_count ?? 0)}</div>
+                <div>option intent 생성</div>
+                <div className="text-right">{fmt(run?.request_payload?.summary?.option_intent_count ?? 0)}</div>
               </div>
             </div>
 
@@ -362,6 +404,7 @@ export default function ShoppingCronRunsPage() {
                     <th className="px-3 py-2">채널 기본 threshold</th>
                     <th className="px-3 py-2">상품 적용 threshold</th>
                     <th className="px-3 py-2">상태</th>
+                    <th className="px-3 py-2">option threshold</th>
                     <th className="px-3 py-2">사유코드</th>
                     <th className="px-3 py-2">오류</th>
                   </tr>
@@ -380,7 +423,8 @@ export default function ShoppingCronRunsPage() {
                       <td className="px-3 py-2">{it.channel_threshold_profile ?? run?.channel_threshold_profile ?? run?.request_payload?.summary?.threshold_profile ?? "-"}</td>
                       <td className="px-3 py-2">{it.effective_threshold_profile ?? it.threshold_profile ?? "-"}</td>
                       <td className="px-3 py-2">{toIntentStateKo(it.state)}</td>
-                      <td className="px-3 py-2">{it.reason_code ?? "-"}</td>
+                      <td className="px-3 py-2 text-xs">{it.decision_context?.option_sync_mode === "OPTION_ADDITIONAL" ? `${fmt(it.decision_context?.option_additional_current_krw)} -> ${fmt(it.decision_context?.option_additional_target_krw)} / gate ${fmt(it.decision_context?.option_effective_threshold_krw)}` : "-"}</td>
+                      <td className="px-3 py-2">{it.reason_code ?? it.decision_context?.option_threshold_reason ?? "-"}</td>
                       <td className="px-3 py-2 text-xs">{it.task_last_error ?? "-"}</td>
                     </tr>
                   ))}

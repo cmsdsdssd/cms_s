@@ -1,0 +1,76 @@
+
+> web@0.1.0 dev
+> next dev --port 3049
+
+▲ Next.js 16.1.4 (Turbopack)
+- Local:         http://localhost:3049
+- Network:       http://192.168.0.69:3049
+- Environments: .env.local, .env
+
+✓ Starting...
+⚠ Turbopack's filesystem cache has been deleted because we previously detected an internal error in Turbopack. Builds or page loads may be slower as a result.
+⚠ The "middleware" file convention is deprecated. Please use "proxy" instead. Learn more: https://nextjs.org/docs/messages/middleware-to-proxy
+✓ Ready in 1117ms
+ GET /settings/shopping/mappings 404 in 2.2s (compile: 2.1s, render: 101ms)
+ GET /settings/shopping/mappings 200 in 1215ms (compile: 981ms, proxy.ts: 69ms, render: 166ms)
+ GET /settings/shopping/mappings 200 in 60ms (compile: 4ms, proxy.ts: 4ms, render: 53ms)
+⚠ Cross origin request detected from 127.0.0.1 to /_next/* resource. In a future major version of Next.js, you will need to explicitly configure "allowedDevOrigins" in next.config to allow this.
+Read more: https://nextjs.org/docs/app/api-reference/config/next-config-js/allowedDevOrigins
+ GET /api/market-ticks 200 in 458ms (compile: 272ms, proxy.ts: 4ms, render: 182ms)
+ GET /api/channels 200 in 606ms (compile: 233ms, proxy.ts: 2ms, render: 371ms)
+ GET /api/pricing-policies?channel_id=c80a4fd4-bb77-4f81-ba86-f93d3c86b7b8 200 in 162ms (compile: 82ms, proxy.ts: 5ms, render: 75ms)
+ GET /api/channel-products?channel_id=c80a4fd4-bb77-4f81-ba86-f93d3c86b7b8 200 in 241ms (compile: 126ms, proxy.ts: 5ms, render: 110ms)
+ GET /api/channel-products/gallery?channel_id=c80a4fd4-bb77-4f81-ba86-f93d3c86b7b8 200 in 284ms (compile: 103ms, proxy.ts: 5ms, render: 176ms)
+ POST /api/new-receipt-workbench/model-name-suggest 200 in 123ms (compile: 74ms, proxy.ts: 5ms, render: 45ms)
+ GET /api/channel-products/gallery-detail?channel_id=c80a4fd4-bb77-4f81-ba86-f93d3c86b7b8&master_item_id=4551f046-607f-4bf0-85db-9eafab542cd0&external_product_no=33 200 in 875ms (compile: 116ms, proxy.ts: 6ms, render: 754ms)
+ GET /api/channel-products/variants?channel_id=c80a4fd4-bb77-4f81-ba86-f93d3c86b7b8&master_item_id=4551f046-607f-4bf0-85db-9eafab542cd0&external_product_no=33 200 in 1019ms (compile: 150ms, proxy.ts: 5ms, render: 864ms)
+Persisting failed: Unable to commit operations
+
+Caused by:
+    0: Unable to write meta file 00000059.meta
+    1: 요청한 작업은, 사용자가 매핑한 구역이 열려 있는 상태인 파일에서 수행할 수 없습니다. (os error 1224)
+Persisting failed: Another write batch or compaction is already active (Only a single write operations is allowed at a time)
+Persisting failed: Another write batch or compaction is already active (Only a single write operations is allowed at a time)
+Persisting failed: Another write batch or compaction is already active (Only a single write operations is allowed at a time)
+Persisting failed: Another write batch or compaction is already active (Only a single write operations is allowed at a time)
+Persisting failed: Another write batch or compaction is already active (Only a single write operations is allowed at a time)
+Persisting failed: Another write batch or compaction is already active (Only a single write operations is allowed at a time)
+Persisting failed: Another write batch or compaction is already active (Only a single write operations is allowed at a time)
+Persisting failed: Another write batch or compaction is already active (Only a single write operations is allowed at a time)
+Persisting failed: Another write batch or compaction is already active (Only a single write operations is allowed at a time)
+ GET /settings/shopping/mappings 200 in 244ms (compile: 87ms, proxy.ts: 4ms, render: 153ms)
+ GET /api/channels 404 in 46ms (compile: 15ms, proxy.ts: 2ms, render: 30ms)
+ GET /api/market-ticks 200 in 144ms (compile: 4ms, proxy.ts: 3ms, render: 137ms)
+ GET /api/channel-products/gallery-detail?channel_id=c80a4fd4-bb77-4f81-ba86-f93d3c86b7b8&master_item_id=4551f046-607f-4bf0-85db-9eafab542cd0&external_product_no=33 404 in 56ms (compile: 34ms, proxy.ts: 3ms, render: 19ms)
+ GET /api/channels 404 in 25ms (compile: 5ms, proxy.ts: 3ms, render: 17ms)
+Persisting failed: Another write batch or compaction is already active (Only a single write operations is allowed at a time)
+Persisting failed: Another write batch or compaction is already active (Only a single write operations is allowed at a time)
+Persisting failed: Another write batch or compaction is already active (Only a single write operations is allowed at a time)
+Persisting failed: Another write batch or compaction is already active (Only a single write operations is allowed at a time)
+Persisting failed: Another write batch or compaction is already active (Only a single write operations is allowed at a time)
+Persisting failed: Another write batch or compaction is already active (Only a single write operations is allowed at a time)
+Persisting failed: Another write batch or compaction is already active (Only a single write operations is allowed at a time)
+Persisting failed: Another write batch or compaction is already active (Only a single write operations is allowed at a time)
+Persisting failed: Another write batch or compaction is already active (Only a single write operations is allowed at a time)
+Persisting failed: Another write batch or compaction is already active (Only a single write operations is allowed at a time)
+Persisting failed: Another write batch or compaction is already active (Only a single write operations is allowed at a time)
+Persisting failed: Another write batch or compaction is already active (Only a single write operations is allowed at a time)
+Persisting failed: Another write batch or compaction is already active (Only a single write operations is allowed at a time)
+Persisting failed: Another write batch or compaction is already active (Only a single write operations is allowed at a time)
+Persisting failed: Another write batch or compaction is already active (Only a single write operations is allowed at a time)
+Persisting failed: Another write batch or compaction is already active (Only a single write operations is allowed at a time)
+Persisting failed: Another write batch or compaction is already active (Only a single write operations is allowed at a time)
+Persisting failed: Another write batch or compaction is already active (Only a single write operations is allowed at a time)
+Persisting failed: Another write batch or compaction is already active (Only a single write operations is allowed at a time)
+Persisting failed: Another write batch or compaction is already active (Only a single write operations is allowed at a time)
+Persisting failed: Another write batch or compaction is already active (Only a single write operations is allowed at a time)
+Persisting failed: Another write batch or compaction is already active (Only a single write operations is allowed at a time)
+Persisting failed: Another write batch or compaction is already active (Only a single write operations is allowed at a time)
+Persisting failed: Another write batch or compaction is already active (Only a single write operations is allowed at a time)
+Persisting failed: Another write batch or compaction is already active (Only a single write operations is allowed at a time)
+Persisting failed: Another write batch or compaction is already active (Only a single write operations is allowed at a time)
+Persisting failed: Another write batch or compaction is already active (Only a single write operations is allowed at a time)
+Persisting failed: Another write batch or compaction is already active (Only a single write operations is allowed at a time)
+Persisting failed: Another write batch or compaction is already active (Only a single write operations is allowed at a time)
+Persisting failed: Another write batch or compaction is already active (Only a single write operations is allowed at a time)
+Persisting failed: Another write batch or compaction is already active (Only a single write operations is allowed at a time)

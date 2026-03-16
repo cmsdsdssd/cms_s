@@ -1,7 +1,8 @@
-import { buildMaterialFactorMap } from "../material-factors.ts";
+import { buildMaterialFactorMap, normalizeMaterialCode } from "../material-factors.ts";
+import { buildSharedSizeGridSeedsFromLegacySources } from "./shared-size-grid-bootstrap.ts";
 import { loadEffectiveMarketTicks } from "./effective-market-ticks.js";
 import { normalizeMaterialScopeCode } from "./option-labor-rules.ts";
-import { rebuildPersistedSizeGridForScope } from "./weight-grid-store.js";
+import { rebuildPersistedSizeGridForScope, loadSharedSizeGridRowsForChannel, upsertPersistedSizeGridRows } from "./weight-grid-store.js";
 
 const SIZE_GRID_SCOPE_SELECT = [
   "channel_id",
@@ -162,4 +163,70 @@ export const rebuildAffectedSizeGridsForSourceChange = async ({ sb, materialCode
   }
 
   return { scopes, rebuiltCount: scopes.length };
+};
+
+
+export const ensureSharedSizeGridRowsForChannel = async ({ sb, channelId }) => {
+  let sharedRows = await loadSharedSizeGridRowsForChannel({ sb, channelId });
+  if (sharedRows.length > 0) return sharedRows;
+
+  await rebuildAffectedSizeGridsForSourceChange({ sb, materialCodes: null });
+  sharedRows = await loadSharedSizeGridRowsForChannel({ sb, channelId });
+  if (sharedRows.length > 0) return sharedRows;
+
+  const [legacyMappingRes, masterRes, publishSizeRes] = await Promise.all([
+    sb.from('sales_channel_product').select('master_item_id, external_product_no, option_size_value').eq('channel_id', channelId).eq('is_active', true).not('option_size_value', 'is', null),
+    sb.from('cms_master_item').select('master_item_id, material_code_default'),
+    sb.from('product_price_publish_option_entry_v1').select('master_item_id, external_product_no, option_name, published_delta_krw').eq('channel_id', channelId),
+  ]);
+  if (legacyMappingRes.error) throw new Error(legacyMappingRes.error.message ?? 'legacy size mapping lookup failed');
+  if (masterRes.error) throw new Error(masterRes.error.message ?? 'master material lookup failed');
+  if (publishSizeRes.error) throw new Error(publishSizeRes.error.message ?? 'publish size lookup failed');
+
+  const masterMaterialById = new Map((masterRes.data ?? []).map((row) => [String(row.master_item_id ?? '').trim(), normalizeMaterialCode(String(row.material_code_default ?? ''))]));
+  const weightsByMaster = new Map();
+  const productNoByMaster = new Map();
+  for (const row of (legacyMappingRes.data ?? [])) {
+    const masterItemId = String(row.master_item_id ?? '').trim();
+    const externalProductNo = String(row.external_product_no ?? '').trim();
+    const weight = Number(row.option_size_value ?? Number.NaN);
+    if (!masterItemId || !externalProductNo || !Number.isFinite(weight)) continue;
+    const bucket = weightsByMaster.get(masterItemId) ?? [];
+    bucket.push(weight);
+    weightsByMaster.set(masterItemId, bucket);
+    if (!productNoByMaster.has(masterItemId)) productNoByMaster.set(masterItemId, externalProductNo);
+  }
+  const deltasByMaster = new Map();
+  for (const row of (publishSizeRes.data ?? [])) {
+    if (String(row.option_name ?? '').trim() !== '사이즈') continue;
+    const masterItemId = String(row.master_item_id ?? '').trim();
+    const delta = Number(row.published_delta_krw ?? Number.NaN);
+    if (!masterItemId || !Number.isFinite(delta)) continue;
+    const bucket = deltasByMaster.get(masterItemId) ?? [];
+    bucket.push(delta);
+    deltasByMaster.set(masterItemId, bucket);
+  }
+
+  const bootstrapRows = Array.from(weightsByMaster.keys()).flatMap((masterItemId) => {
+    const materialCode = masterMaterialById.get(masterItemId) ?? '';
+    const externalProductNo = productNoByMaster.get(masterItemId) ?? '';
+    const weights = weightsByMaster.get(masterItemId) ?? [];
+    const deltas = deltasByMaster.get(masterItemId) ?? [];
+    if (!materialCode || !externalProductNo || weights.length === 0 || deltas.length === 0) return [];
+    return buildSharedSizeGridSeedsFromLegacySources({
+      channelId,
+      masterItemId,
+      externalProductNo,
+      materialCode,
+      weights,
+      deltas,
+    });
+  });
+
+  if (bootstrapRows.length > 0) {
+    await upsertPersistedSizeGridRows({ sb, rows: bootstrapRows });
+  }
+
+  sharedRows = await loadSharedSizeGridRowsForChannel({ sb, channelId });
+  return sharedRows;
 };

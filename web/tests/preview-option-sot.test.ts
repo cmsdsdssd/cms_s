@@ -125,3 +125,24 @@ test('composePreviewOptionSotDeltas ignores color exception rows and keeps centr
   assert.equal(result.color_delta_krw, 4000);
   assert.deepEqual(result.sot_warnings, []);
 });
+
+test('composePreviewOptionSotDeltas does not use legacy sync fallback when no option rules exist', () => {
+  const result = composePreviewOptionSotDeltas({
+    optionLaborRows: [],
+    context: {
+      materialCode: '18',
+      additionalWeightG: 0,
+      platingEnabled: true,
+      colorCode: '[도] G',
+      decorationCode: null,
+      decorationMasterId: null,
+    },
+    colorBaseDeltaByCode: {
+      '[도] G': 4000,
+    },
+  });
+
+  assert.equal(result.bucketSource, 'UNRESOLVED');
+  assert.equal(result.sot_status, 'UNRESOLVED');
+  assert.match(result.sot_warnings[0] ?? '', /option labor rules/i);
+});

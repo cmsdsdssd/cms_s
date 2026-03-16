@@ -1,4 +1,4 @@
-﻿import { NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 import { getShopAdminClient, jsonError, parseJsonObject, parseUuidArray } from "@/lib/shop/admin";
 import { buildMissingActiveMappingSummary, resolveNoIntentsReason } from "@/lib/shop/price-sync-run-summary";
 import {
@@ -8,14 +8,18 @@ import {
   resolveAutoSyncPressurePolicyConfig,
 } from "@/lib/shop/price-sync-pressure-policy";
 import {
+  normalizeOptionAdditionalSyncPolicy,
   normalizePriceSyncPolicy,
   normalizePriceSyncThresholdProfile,
+  resolveEffectiveOptionAdditionalMinChangeKrw,
   resolvePriceSyncThresholdProfilePolicy,
   resolveRateDerivedThresholdKrw,
+  shouldSyncOptionAdditionalChange,
   shouldSyncPriceChange,
 } from "@/lib/shop/price-sync-policy";
 import { buildCurrentProductSyncProfileByMaster } from "@/lib/shop/current-product-sync-profile";
 import { loadPublishedPriceStateByVersion } from "@/lib/shop/publish-price-state";
+import { parseCafe24VariantAdditionalAmountFromRaw } from "@/lib/shop/cafe24";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -115,10 +119,14 @@ type IntentDecisionContext = {
   floor_price_krw: number;
   final_desired_price_krw: number;
   floor_applied: boolean;
+  option_sync_mode?: "BASE_TOTAL" | "OPTION_ADDITIONAL" | null;
   option_additional_target_krw?: number | null;
   option_additional_current_krw?: number | null;
   option_additional_out_of_sync?: boolean;
   option_additional_threshold_delta_krw?: number | null;
+  option_effective_threshold_krw?: number | null;
+  option_threshold_passed?: boolean | null;
+  option_threshold_reason?: string | null;
 };
 
 const isActiveDuringWindow = ({
@@ -269,6 +277,38 @@ const evaluateAutoSyncThreshold = ({
     diffKrw: result.price_delta_krw,
     rateThresholdKrw,
     effectiveThresholdKrw: result.effective_min_change_krw,
+    bypassedByAlwaysSync: result.threshold_bypassed,
+    passesThreshold: result.should_sync,
+  };
+};
+
+const evaluateOptionAdditionalThreshold = ({
+  currentAdditionalKrw,
+  targetAdditionalKrw,
+  policy,
+}: {
+  currentAdditionalKrw: number;
+  targetAdditionalKrw: number;
+  policy: { always_sync?: unknown; min_change_krw?: unknown; min_change_rate?: unknown };
+}) => {
+  const normalizedPolicy = normalizeOptionAdditionalSyncPolicy(policy);
+  const threshold = resolveEffectiveOptionAdditionalMinChangeKrw({
+    currentAdditionalKrw,
+    policy: normalizedPolicy,
+  });
+  const result = shouldSyncOptionAdditionalChange({
+    currentAdditionalKrw,
+    nextAdditionalKrw: targetAdditionalKrw,
+    policy: normalizedPolicy,
+  });
+  return {
+    forceFullSync: normalizedPolicy.always_sync,
+    minChangeKrw: normalizedPolicy.min_change_krw,
+    minChangeRate: normalizedPolicy.min_change_rate,
+    diffKrw: result.additional_delta_krw,
+    flatThresholdKrw: threshold.flatMinChangeKrw,
+    rateThresholdKrw: threshold.rateMinChangeKrw,
+    effectiveThresholdKrw: threshold.effectiveMinChangeKrw,
     bypassedByAlwaysSync: result.threshold_bypassed,
     passesThreshold: result.should_sync,
   };
@@ -590,11 +630,11 @@ export async function POST(request: Request) {
   const forceFullSync = autoSyncPolicy.forceFullSync;
   const minChangeKrw = autoSyncPolicy.minChangeKrw;
   const minChangeRate = autoSyncPolicy.minChangeRate;
-  const optionSyncPolicyInput = {
+  const optionSyncPolicyInput = normalizeOptionAdditionalSyncPolicy({
     always_sync: policyRes.data?.option_sync_force_full === true,
-    min_change_krw: policyRes.data?.option_sync_min_change_krw,
-    min_change_rate: policyRes.data?.option_sync_min_change_rate,
-  };
+    min_change_krw: 2000,
+    min_change_rate: 0.02,
+  });
 
   const thresholdPolicyInput = {
     auto_sync_force_full: false,
@@ -785,23 +825,34 @@ export async function POST(request: Request) {
     activeByChannelProduct,
   });
 
-  const currentRows: Array<{ channel_product_id: string | null; current_price_krw: number | null }> = [];
+  const currentSnapshotRows: Array<{
+    channel_product_id: string | null;
+    current_price_krw: number | null;
+    raw_json?: unknown;
+    fetched_at?: string | null;
+  }> = [];
   for (const idChunk of chunkArray(snapshotChannelProductIds, IN_QUERY_CHUNK_SIZE)) {
     if (idChunk.length === 0) continue;
     const currentRes = await sb
-      .from("channel_price_snapshot_latest")
-      .select("channel_product_id, current_price_krw")
+      .from("channel_price_snapshot")
+      .select("channel_product_id, current_price_krw, raw_json, fetched_at")
       .eq("channel_id", channelId)
-      .in("channel_product_id", idChunk);
-    if (currentRes.error) return jsonError(currentRes.error.message ?? "?袁⑹삺揶쎛 ??산퉬??鈺곌퀬????쎈솭", 500);
-    currentRows.push(...(currentRes.data ?? []));
+      .in("channel_product_id", idChunk)
+      .order("fetched_at", { ascending: false });
+    if (currentRes.error) return jsonError(currentRes.error.message ?? "current snapshot lookup failed", 500);
+    currentSnapshotRows.push(...((currentRes.data ?? []) as Array<typeof currentSnapshotRows[number]>));
   }
   const currentByChannelProduct = new Map<string, number>();
-  for (const row of currentRows) {
+  const currentOptionAdditionalByChannelProduct = new Map<string, number>();
+  for (const row of currentSnapshotRows) {
     const key = String(row.channel_product_id ?? "").trim();
     if (!key || currentByChannelProduct.has(key)) continue;
     const current = Number(row.current_price_krw ?? Number.NaN);
     if (Number.isFinite(current)) currentByChannelProduct.set(key, Math.round(current));
+    const currentAdditional = parseCafe24VariantAdditionalAmountFromRaw(row.raw_json ?? null);
+    if (currentAdditional != null && Number.isFinite(Number(currentAdditional))) {
+      currentOptionAdditionalByChannelProduct.set(key, Math.round(Number(currentAdditional)));
+    }
   }
 
   const pressureStateRows: Array<{
@@ -883,6 +934,10 @@ export async function POST(request: Request) {
   const taskRows: Array<Record<string, unknown>> = [];
   let thresholdFilteredCount = 0;
   let thresholdEvaluatedCount = 0;
+  let optionThresholdFilteredCount = 0;
+  let optionThresholdEvaluatedCount = 0;
+  let optionCurrentMissingCount = 0;
+  let optionIntentCount = 0;
   let marketGapForcedCount = 0;
   let downsyncSuppressedCount = 0;
   let pressureDownsyncReleaseCount = 0;
@@ -930,8 +985,19 @@ export async function POST(request: Request) {
 
     const currentPrice = currentByChannelProduct.get(channelProductId);
     const snapshotOptionAdditional = variantCode ? published.publishedAdditionalAmountKrw : null;
-    const lastKnownOptionAdditional = null;
-    const optionAdditionalOutOfSync = false;
+    const lastKnownOptionAdditional = variantCode
+      ? (currentOptionAdditionalByChannelProduct.get(channelProductId) ?? null)
+      : null;
+    const optionThresholdDecision = variantCode && lastKnownOptionAdditional != null && snapshotOptionAdditional != null
+      ? evaluateOptionAdditionalThreshold({
+        currentAdditionalKrw: lastKnownOptionAdditional,
+        targetAdditionalKrw: snapshotOptionAdditional,
+        policy: optionSyncPolicyInput,
+      })
+      : null;
+    const optionAdditionalOutOfSync = snapshotOptionAdditional != null
+      && lastKnownOptionAdditional != null
+      && Math.round(Number(snapshotOptionAdditional)) !== Math.round(Number(lastKnownOptionAdditional));
     const rowCurrentRounded = Number.isFinite(Number(currentPrice ?? Number.NaN))
       ? Math.round(Number(currentPrice))
       : null;
@@ -959,21 +1025,31 @@ export async function POST(request: Request) {
       }
     }
 
-    const marketUpliftPriceKrw = desired > target ? desired : null;
-    const activePricingOverride = activePricingOverrideByMaster.get(masterItemId) ?? null;
+    let marketUpliftPriceKrw = desired > target ? desired : null;
+    let activePricingOverride = variantCode.length === 0 ? (activePricingOverrideByMaster.get(masterItemId) ?? null) : null;
     const pricingOverridePriceKrwRaw = Number(activePricingOverride?.override_price_krw ?? Number.NaN);
-    const pricingOverridePriceKrw = Number.isFinite(pricingOverridePriceKrwRaw)
+    let pricingOverridePriceKrw = Number.isFinite(pricingOverridePriceKrwRaw)
       ? Math.max(0, Math.round(pricingOverridePriceKrwRaw))
       : null;
     if (pricingOverridePriceKrw !== null) desired = pricingOverridePriceKrw;
 
-    const activeFloorGuard = activeFloorGuardByMaster.get(masterItemId) ?? null;
+    let activeFloorGuard = variantCode.length === 0 ? (activeFloorGuardByMaster.get(masterItemId) ?? null) : null;
     const floorPriceKrwRaw = Number(activeFloorGuard?.floor_price_krw ?? 0);
-    const floorPriceKrw = Number.isFinite(floorPriceKrwRaw)
+    let floorPriceKrw = Number.isFinite(floorPriceKrwRaw)
       ? Math.max(0, Math.round(floorPriceKrwRaw))
       : 0;
-    const floorApplied = floorPriceKrw > desired;
+    let floorApplied = floorPriceKrw > desired;
     if (floorApplied) desired = floorPriceKrw;
+
+    if (variantCode.length > 0) {
+      marketUpliftPriceKrw = null;
+      activePricingOverride = null;
+      pricingOverridePriceKrw = null;
+      activeFloorGuard = null;
+      floorPriceKrw = 0;
+      floorApplied = false;
+      desired = target;
+    }
 
     const decisionContext: IntentDecisionContext = {
       threshold_profile: masterThresholdPolicy.thresholdProfile,
@@ -986,60 +1062,84 @@ export async function POST(request: Request) {
       floor_price_krw: floorPriceKrw,
       final_desired_price_krw: desired,
       floor_applied: floorApplied,
+      option_sync_mode: variantCode ? "OPTION_ADDITIONAL" : "BASE_TOTAL",
       option_additional_target_krw: snapshotOptionAdditional,
       option_additional_current_krw: lastKnownOptionAdditional,
       option_additional_out_of_sync: optionAdditionalOutOfSync,
-      option_additional_threshold_delta_krw: null,
+      option_additional_threshold_delta_krw: optionThresholdDecision?.diffKrw ?? null,
+      option_effective_threshold_krw: optionThresholdDecision?.effectiveThresholdKrw ?? null,
+      option_threshold_passed: optionThresholdDecision?.passesThreshold ?? null,
+      option_threshold_reason: variantCode
+        ? (lastKnownOptionAdditional == null
+          ? "OPTION_CURRENT_MISSING"
+          : optionThresholdDecision?.passesThreshold
+            ? "OPTION_THRESHOLD_PASSED"
+            : "OPTION_THRESHOLD_NOT_MET")
+        : null,
     };
 
-    if (triggerType === "AUTO" && Number.isFinite(Number(currentPrice ?? Number.NaN))) {
-      const currentRounded = Math.round(Number(currentPrice));
-      const thresholdDecision = evaluateAutoSyncThreshold({
-        desiredPriceKrw: desired,
-        currentPriceKrw: currentRounded,
-        policy: masterThresholdPolicy.policyInput,
-      });
-      const isForcedBaseUplift = variantCode.length === 0
-        && marketUpliftPriceKrw !== null
-        && pricingOverridePriceKrw === null
-        && !floorApplied;
-      const pressureDecision = evaluateAutoSyncPressurePolicy({
-        currentPriceKrw: currentRounded,
-        desiredPriceKrw: desired,
-        state: nextPressureStateByChannelProduct.get(channelProductId) ?? pressureStateByChannelProduct.get(channelProductId),
-        minChangeKrw: masterThresholdPolicy.minChangeKrw,
-        minChangeRate: masterThresholdPolicy.minChangeRate,
-        now: runNowIso,
-        config: pressurePolicyConfig,
-      });
-      nextPressureStateByChannelProduct.set(channelProductId, pressureDecision.nextState);
-      pressureStateMetadataByChannelProduct.set(channelProductId, {
-        masterItemId,
-        externalProductNo: mapping.external_product_no,
-        externalVariantCode: variantCode,
-      });
+    if (triggerType === "AUTO") {
+      if (variantCode.length > 0) {
+        if (!forceFullSync) {
+          optionThresholdEvaluatedCount += 1;
+          if (lastKnownOptionAdditional == null) {
+            optionCurrentMissingCount += 1;
+            continue;
+          }
+          if (!optionThresholdDecision?.passesThreshold) {
+            optionThresholdFilteredCount += 1;
+            continue;
+          }
+        }
+      } else if (Number.isFinite(Number(currentPrice ?? Number.NaN))) {
+        const currentRounded = Math.round(Number(currentPrice));
+        const thresholdDecision = evaluateAutoSyncThreshold({
+          desiredPriceKrw: desired,
+          currentPriceKrw: currentRounded,
+          policy: masterThresholdPolicy.policyInput,
+        });
+        const isForcedBaseUplift = marketUpliftPriceKrw !== null
+          && pricingOverridePriceKrw === null
+          && !floorApplied;
+        const pressureDecision = evaluateAutoSyncPressurePolicy({
+          currentPriceKrw: currentRounded,
+          desiredPriceKrw: desired,
+          state: nextPressureStateByChannelProduct.get(channelProductId) ?? pressureStateByChannelProduct.get(channelProductId),
+          minChangeKrw: masterThresholdPolicy.minChangeKrw,
+          minChangeRate: masterThresholdPolicy.minChangeRate,
+          now: runNowIso,
+          config: pressurePolicyConfig,
+        });
+        nextPressureStateByChannelProduct.set(channelProductId, pressureDecision.nextState);
+        pressureStateMetadataByChannelProduct.set(channelProductId, {
+          masterItemId,
+          externalProductNo: mapping.external_product_no,
+          externalVariantCode: variantCode,
+        });
 
-      if (!forceFullSync && !isForcedBaseUplift) {
-        if (pressureDecision.pressureDecayApplied) pressureDecayCount += 1;
-        if (pressureDecision.cooldownBlocked) cooldownBlockCount += 1;
-        if (pressureDecision.pressureReleaseTriggered) pressureDownsyncReleaseCount += 1;
-        if (pressureDecision.largeDownsyncTriggered) largeDownsyncReleaseCount += 1;
-        if (pressureDecision.stalenessReleaseTriggered) stalenessReleaseCount += 1;
-      }
+        if (!forceFullSync && !isForcedBaseUplift) {
+          if (pressureDecision.pressureDecayApplied) pressureDecayCount += 1;
+          if (pressureDecision.cooldownBlocked) cooldownBlockCount += 1;
+          if (pressureDecision.pressureReleaseTriggered) pressureDownsyncReleaseCount += 1;
+          if (pressureDecision.largeDownsyncTriggered) largeDownsyncReleaseCount += 1;
+          if (pressureDecision.stalenessReleaseTriggered) stalenessReleaseCount += 1;
+        }
 
-      if (!forceFullSync && !isForcedBaseUplift && desired <= currentRounded && !pressureDecision.shouldCreateDownsyncIntent) {
-        downsyncSuppressedCount += 1;
-        continue;
-      }
-
-      if (!forceFullSync) {
-        thresholdEvaluatedCount += 1;
-        if (!isForcedBaseUplift && !pressureDecision.shouldCreateDownsyncIntent && !thresholdDecision.passesThreshold) {
-          thresholdFilteredCount += 1;
+        if (!forceFullSync && !isForcedBaseUplift && desired <= currentRounded && !pressureDecision.shouldCreateDownsyncIntent) {
+          downsyncSuppressedCount += 1;
           continue;
+        }
+
+        if (!forceFullSync) {
+          thresholdEvaluatedCount += 1;
+          if (!isForcedBaseUplift && !pressureDecision.shouldCreateDownsyncIntent && !thresholdDecision.passesThreshold) {
+            thresholdFilteredCount += 1;
+            continue;
+          }
         }
       }
     }
+    if (variantCode.length > 0) optionIntentCount += 1;
 
     const intentId = crypto.randomUUID();
     const computeRequestId = String(row.compute_request_id ?? "").trim();
@@ -1138,16 +1238,22 @@ export async function POST(request: Request) {
     });
   }
 
+  const normalizedOptionSyncPolicy = normalizeOptionAdditionalSyncPolicy(optionSyncPolicyInput);
   const runSummary = {
     threshold_profile: autoSyncThresholdProfile,
     threshold_min_change_krw: minChangeKrw,
     threshold_min_change_rate: minChangeRate,
-    option_sync_min_change_krw: null,
-    option_sync_min_change_rate: null,
+    option_sync_min_change_krw: normalizedOptionSyncPolicy.min_change_krw,
+    option_sync_min_change_rate: normalizedOptionSyncPolicy.min_change_rate,
+    option_sync_effective_mode: "MAX",
     sync_policy_mode: syncPolicyMode,
     auto_downsync_policy_mode: pressurePolicyConfig.mode,
     threshold_evaluated_count: thresholdEvaluatedCount,
     threshold_filtered_count: thresholdFilteredCount,
+    option_threshold_evaluated_count: optionThresholdEvaluatedCount,
+    option_threshold_filtered_count: optionThresholdFilteredCount,
+    option_current_missing_count: optionCurrentMissingCount,
+    option_intent_count: optionIntentCount,
     market_gap_forced_count: marketGapForcedCount,
     downsync_suppressed_count: downsyncSuppressedCount,
     pressure_downsync_release_count: pressureDownsyncReleaseCount,
@@ -1192,6 +1298,7 @@ export async function POST(request: Request) {
   if (intentRows.length === 0) {
     const reason = resolveNoIntentsReason({
       thresholdFilteredCount,
+      optionThresholdFilteredCount,
       missingActiveMappingProductCount: missingMappingSummary.missing_active_mapping_product_count,
     });
     await sb

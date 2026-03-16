@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getShopAdminClient, jsonError, parseJsonObject } from "@/lib/shop/admin";
-import { normalizePlatingComboCode } from "@/lib/shop/sync-rules";
+import { normalizePlatingComboCode } from "@/lib/shop/rule-utils";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;

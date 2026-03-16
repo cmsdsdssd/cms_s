@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getShopAdminClient, jsonError, parseJsonObject } from "@/lib/shop/admin";
+import { getShopAdminClient, isMissingColumnError, jsonError, parseJsonObject } from "@/lib/shop/admin";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -7,7 +7,7 @@ export const revalidate = 0;
 type Params = { params: Promise<{ id: string }> };
 
 const PRICING_POLICY_SELECT_COLS =
-  "policy_id, channel_id, policy_name, margin_multiplier, gm_material, gm_labor, gm_fixed, fixed_cost_krw, rounding_unit, rounding_mode, option_18k_weight_multiplier, material_factor_set_id, fee_rate, min_margin_rate_total, auto_sync_force_full, auto_sync_min_change_krw, auto_sync_min_change_rate, option_sync_force_full, option_sync_min_change_krw, option_sync_min_change_rate, auto_sync_threshold_profile, is_active, created_at, updated_at";
+  "policy_id, channel_id, policy_name, margin_multiplier, gm_material, gm_labor, gm_fixed, fixed_cost_krw, rounding_unit, rounding_mode, option_rounding_unit, option_rounding_mode, option_18k_weight_multiplier, material_factor_set_id, fee_rate, min_margin_rate_total, auto_sync_force_full, auto_sync_min_change_krw, auto_sync_min_change_rate, option_sync_force_full, option_sync_min_change_krw, option_sync_min_change_rate, auto_sync_threshold_profile, is_active, created_at, updated_at";
 
 function parseAutoSyncThresholdProfile(value: unknown): "GENERAL" | "MARKET_LINKED" {
   const profile = String(value ?? "GENERAL").trim().toUpperCase();
@@ -38,6 +38,16 @@ export async function PUT(request: Request, { params }: Params) {
     const unit = Number(body.rounding_unit);
     if (!Number.isFinite(unit) || unit <= 0) return jsonError("rounding_unit must be > 0", 400);
     patch.rounding_unit = Math.max(1, Math.round(unit));
+  }
+  if (body.option_rounding_unit !== undefined) {
+    const unit = Number(body.option_rounding_unit);
+    if (!Number.isFinite(unit) || unit <= 0) return jsonError("option_rounding_unit must be > 0", 400);
+    patch.option_rounding_unit = Math.max(1, Math.round(unit));
+  }
+  if (typeof body.option_rounding_mode === "string") {
+    const mode = body.option_rounding_mode.toUpperCase();
+    if (!["CEIL", "ROUND", "FLOOR"].includes(mode)) return jsonError("option_rounding_mode must be CEIL/ROUND/FLOOR", 400);
+    patch.option_rounding_mode = mode;
   }
   if (typeof body.rounding_mode === "string") {
     const mode = body.rounding_mode.toUpperCase();
@@ -115,12 +125,25 @@ export async function PUT(request: Request, { params }: Params) {
   if (body.material_factor_set_id !== undefined) patch.material_factor_set_id = body.material_factor_set_id || null;
   if (body.is_active !== undefined) patch.is_active = body.is_active === true;
 
-  const { data, error } = await sb
+  let { data, error } = await sb
     .from("pricing_policy")
     .update(patch)
     .eq("policy_id", policyId)
     .select(PRICING_POLICY_SELECT_COLS)
     .single();
+  if (error && (isMissingColumnError(error, "pricing_policy.option_rounding_unit") || isMissingColumnError(error, "pricing_policy.option_rounding_mode"))) {
+    const fallbackPatch = { ...patch };
+    delete fallbackPatch.option_rounding_unit;
+    delete fallbackPatch.option_rounding_mode;
+    const fallbackRes = await sb
+      .from("pricing_policy")
+      .update(fallbackPatch)
+      .eq("policy_id", policyId)
+      .select("policy_id, channel_id, policy_name, margin_multiplier, gm_material, gm_labor, gm_fixed, fixed_cost_krw, rounding_unit, rounding_mode, option_18k_weight_multiplier, material_factor_set_id, fee_rate, min_margin_rate_total, auto_sync_force_full, auto_sync_min_change_krw, auto_sync_min_change_rate, option_sync_force_full, option_sync_min_change_krw, option_sync_min_change_rate, auto_sync_threshold_profile, is_active, created_at, updated_at")
+      .single();
+    data = fallbackRes.data ? { ...fallbackRes.data, option_rounding_unit: 500, option_rounding_mode: "CEIL" } : fallbackRes.data;
+    error = fallbackRes.error;
+  }
   if (error) return jsonError(error.message ?? "정책 수정 실패", 400);
 
   if (data?.is_active === true) {

@@ -5,6 +5,8 @@ import {
   buildMissingActiveMappingSummary,
   buildThresholdProfileSummary,
   resolveNoIntentsReason,
+  selectLatestMeaningfulSyncRun,
+  selectPreviewComputeRequestId,
 } from "../src/lib/shop/price-sync-run-summary.js";
 
 test("buildMissingActiveMappingSummary counts only rows with channel_product_id and missing active mapping", () => {
@@ -51,17 +53,21 @@ test("buildMissingActiveMappingSummary limits samples to 20", () => {
   assert.equal(summary.missing_active_mapping_samples.length, 20);
 });
 
-test("resolveNoIntentsReason prioritizes threshold filter reason", () => {
+test("resolveNoIntentsReason prioritizes option threshold and generic threshold reasons", () => {
   assert.equal(
-    resolveNoIntentsReason({ thresholdFilteredCount: 1, missingActiveMappingProductCount: 99 }),
+    resolveNoIntentsReason({ optionThresholdFilteredCount: 1, thresholdFilteredCount: 1, missingActiveMappingProductCount: 99 }),
+    "NO_INTENTS_AFTER_OPTION_MIN_CHANGE_THRESHOLD",
+  );
+  assert.equal(
+    resolveNoIntentsReason({ optionThresholdFilteredCount: 0, thresholdFilteredCount: 1, missingActiveMappingProductCount: 99 }),
     "NO_INTENTS_AFTER_MIN_CHANGE_THRESHOLD",
   );
   assert.equal(
-    resolveNoIntentsReason({ thresholdFilteredCount: 0, missingActiveMappingProductCount: 2 }),
+    resolveNoIntentsReason({ optionThresholdFilteredCount: 0, thresholdFilteredCount: 0, missingActiveMappingProductCount: 2 }),
     "NO_ACTIVE_MAPPING_FOR_SNAPSHOT_ROWS",
   );
   assert.equal(
-    resolveNoIntentsReason({ thresholdFilteredCount: 0, missingActiveMappingProductCount: 0 }),
+    resolveNoIntentsReason({ optionThresholdFilteredCount: 0, thresholdFilteredCount: 0, missingActiveMappingProductCount: 0 }),
     "NO_INTENTS",
   );
 });
@@ -78,4 +84,26 @@ test("buildThresholdProfileSummary separates channel and effective profiles", ()
     effectiveThresholdProfile: "MARKET_LINKED",
     isOverrideActive: true,
   });
+});
+
+
+test("selectLatestMeaningfulSyncRun skips CRON_TICK cancelled rows", () => {
+  const run = selectLatestMeaningfulSyncRun([
+    { run_id: "cron", error_message: "CRON_TICK:INTERVAL_NOT_ELAPSED" },
+    { run_id: "real", error_message: null },
+  ]);
+
+  assert.deepEqual(run, { run_id: "real", error_message: null });
+});
+
+
+test("selectPreviewComputeRequestId prefers latest meaningful run pinned compute id", () => {
+  const computeRequestId = selectPreviewComputeRequestId({
+    latestMeaningfulRun: { pinned_compute_request_id: "run-compute" },
+    recentRunDetailQueries: [
+      { data: { data: { run: { pinned_compute_request_id: "detail-compute" } } } },
+    ],
+  });
+
+  assert.equal(computeRequestId, "run-compute");
 });

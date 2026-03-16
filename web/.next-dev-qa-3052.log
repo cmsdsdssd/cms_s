@@ -1,0 +1,30 @@
+
+> web@0.1.0 dev
+> next dev --port 3052
+
+▲ Next.js 16.1.4 (Turbopack)
+- Local:         http://localhost:3052
+- Network:       http://192.168.0.69:3052
+- Environments: .env.local, .env
+
+✓ Starting...
+⚠ Turbopack's filesystem cache has been deleted because we previously detected an internal error in Turbopack. Builds or page loads may be slower as a result.
+⚠ The "middleware" file convention is deprecated. Please use "proxy" instead. Learn more: https://nextjs.org/docs/messages/middleware-to-proxy
+✓ Ready in 1288ms
+ GET /settings/shopping/mappings 404 in 2.0s (compile: 1934ms, render: 104ms)
+ GET /settings/shopping/mappings 404 in 2.1s (compile: 2.0s, render: 47ms)
+⚠ Cross origin request detected from 127.0.0.1 to /_next/* resource. In a future major version of Next.js, you will need to explicitly configure "allowedDevOrigins" in next.config to allow this.
+Read more: https://nextjs.org/docs/app/api-reference/config/next-config-js/allowedDevOrigins
+ GET /settings/shopping/mappings 200 in 877ms (compile: 731ms, proxy.ts: 42ms, render: 103ms)
+Persisting failed: Unable to write SST file 00000051.sst
+
+Caused by:
+    요청한 작업은, 사용자가 매핑한 구역이 열려 있는 상태인 파일에서 수행할 수 없습니다. (os error 1224)
+Persisting failed: Another write batch or compaction is already active (Only a single write operations is allowed at a time)
+Persisting failed: Another write batch or compaction is already active (Only a single write operations is allowed at a time)
+Persisting failed: Another write batch or compaction is already active (Only a single write operations is allowed at a time)
+Persisting failed: Another write batch or compaction is already active (Only a single write operations is allowed at a time)
+Persisting failed: Another write batch or compaction is already active (Only a single write operations is allowed at a time)
+Persisting failed: Another write batch or compaction is already active (Only a single write operations is allowed at a time)
+Persisting failed: Another write batch or compaction is already active (Only a single write operations is allowed at a time)
+Persisting failed: Another write batch or compaction is already active (Only a single write operations is allowed at a time)

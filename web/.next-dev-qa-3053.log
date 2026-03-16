@@ -1,0 +1,32 @@
+
+> web@0.1.0 dev
+> next dev --port 3053
+
+▲ Next.js 16.1.4 (Turbopack)
+- Local:         http://localhost:3053
+- Network:       http://192.168.0.69:3053
+- Environments: .env.local, .env
+
+✓ Starting...
+⚠ The "middleware" file convention is deprecated. Please use "proxy" instead. Learn more: https://nextjs.org/docs/messages/middleware-to-proxy
+✓ Ready in 1036ms
+ GET /api/channel-products/gallery-detail?channel_id=c80a4fd4-bb77-4f81-ba86-f93d3c86b7b8&master_item_id=4551f046-607f-4bf0-85db-9eafab542cd0&external_product_no=33 404 in 291ms (compile: 186ms, render: 105ms)
+ GET /settings/shopping/mappings 200 in 247ms (compile: 73ms, proxy.ts: 41ms, render: 134ms)
+⚠ Cross origin request detected from 127.0.0.1 to /_next/* resource. In a future major version of Next.js, you will need to explicitly configure "allowedDevOrigins" in next.config to allow this.
+Read more: https://nextjs.org/docs/app/api-reference/config/next-config-js/allowedDevOrigins
+ GET /api/market-ticks 200 in 419ms (compile: 271ms, proxy.ts: 4ms, render: 144ms)
+ GET /api/channels 200 in 589ms (compile: 233ms, proxy.ts: 3ms, render: 353ms)
+ GET /api/pricing-policies?channel_id=c80a4fd4-bb77-4f81-ba86-f93d3c86b7b8 200 in 143ms (compile: 79ms, proxy.ts: 9ms, render: 55ms)
+ GET /api/channel-products?channel_id=c80a4fd4-bb77-4f81-ba86-f93d3c86b7b8 200 in 178ms (compile: 124ms, proxy.ts: 10ms, render: 45ms)
+ GET /api/channel-products/gallery?channel_id=c80a4fd4-bb77-4f81-ba86-f93d3c86b7b8 200 in 239ms (compile: 101ms, proxy.ts: 9ms, render: 130ms)
+ GET /api/channel-products/gallery-detail?channel_id=c80a4fd4-bb77-4f81-ba86-f93d3c86b7b8&master_item_id=4551f046-607f-4bf0-85db-9eafab542cd0&external_product_no=33 200 in 530ms (compile: 76ms, proxy.ts: 3ms, render: 451ms)
+ POST /api/new-receipt-workbench/model-name-suggest 200 in 119ms (compile: 63ms, proxy.ts: 4ms, render: 51ms)
+ GET /api/channel-products/gallery-detail?channel_id=c80a4fd4-bb77-4f81-ba86-f93d3c86b7b8&master_item_id=4551f046-607f-4bf0-85db-9eafab542cd0&external_product_no=33 200 in 458ms (compile: 4ms, proxy.ts: 6ms, render: 449ms)
+ GET /api/channel-products/variants?channel_id=c80a4fd4-bb77-4f81-ba86-f93d3c86b7b8&master_item_id=4551f046-607f-4bf0-85db-9eafab542cd0&external_product_no=33 200 in 853ms (compile: 111ms, proxy.ts: 5ms, render: 737ms)
+ GET /settings/shopping/mappings 200 in 49ms (compile: 4ms, proxy.ts: 3ms, render: 42ms)
+ GET /api/channels 200 in 98ms (compile: 8ms, proxy.ts: 1855µs, render: 88ms)
+ GET /api/pricing-policies?channel_id=c80a4fd4-bb77-4f81-ba86-f93d3c86b7b8 200 in 85ms (compile: 11ms, proxy.ts: 4ms, render: 70ms)
+ GET /api/market-ticks 200 in 202ms (compile: 4ms, proxy.ts: 3ms, render: 196ms)
+ GET /api/channel-products?channel_id=c80a4fd4-bb77-4f81-ba86-f93d3c86b7b8 200 in 97ms (compile: 4ms, proxy.ts: 6ms, render: 87ms)
+ GET /api/channel-products/gallery?channel_id=c80a4fd4-bb77-4f81-ba86-f93d3c86b7b8 200 in 176ms (compile: 7ms, proxy.ts: 5ms, render: 164ms)
+ GET /api/channel-products/gallery-detail?channel_id=c80a4fd4-bb77-4f81-ba86-f93d3c86b7b8&master_item_id=4551f046-607f-4bf0-85db-9eafab542cd0&external_product_no=33 200 in 460ms (compile: 1937µs, proxy.ts: 3ms, render: 456ms)
