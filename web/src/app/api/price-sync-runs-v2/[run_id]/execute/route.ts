@@ -261,7 +261,7 @@ export async function POST(_request: Request, { params }: Params) {
           channel_product_ids: productChunk,
           compute_request_id: computeRequestId,
           publish_version: computeRequestId,
-          run_type: "AUTO",
+          run_type: runTriggerType,
           dry_run: false,
           sync_option_labels: false,
         }),

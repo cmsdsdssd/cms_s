@@ -15,6 +15,7 @@ function parseAutoSyncThresholdProfile(value: unknown): "GENERAL" | "MARKET_LINK
   throw new Error("auto_sync_threshold_profile must be GENERAL/MARKET_LINKED");
 }
 
+
 export async function PUT(request: Request, { params }: Params) {
   const sb = getShopAdminClient();
   if (!sb) return jsonError("Supabase server env missing", 500);

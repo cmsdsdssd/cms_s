@@ -31,6 +31,12 @@ type MarketTickConfig = {
   updated_at?: string | null;
 };
 
+type BaseLaborSellConfig = {
+  base_labor_sell_mode: "RULE" | "MULTIPLIER";
+  base_labor_sell_multiplier: number | null;
+  updated_at?: string | null;
+};
+
 type VendorFaxConfig = {
   config_id: string;
   vendor_party_id: string;
@@ -222,6 +228,8 @@ export default function SettingsPage() {
   const [csFactor, setCsFactor] = useState<string | null>(null);
   const [silverKrFactor, setSilverKrFactor] = useState<string | null>(null);
   const [ruleRoundingUnit, setRuleRoundingUnit] = useState<string | null>(null);
+  const [baseLaborSellMode, setBaseLaborSellMode] = useState<"RULE" | "MULTIPLIER" | null>(null);
+  const [baseLaborSellMultiplier, setBaseLaborSellMultiplier] = useState<string | null>(null);
   const [materialFactorEdits, setMaterialFactorEdits] = useState<
     Partial<Record<MaterialCode, { purity_rate: string; material_adjust_factor: string; price_basis: "GOLD" | "SILVER" | "NONE" }>>
   >({});
@@ -475,6 +483,77 @@ export default function SettingsPage() {
   // Vendor Fax Config Section
   // ============================================
   const queryClient = useQueryClient();
+  const baseLaborSellConfigQuery = useQuery({
+    queryKey: ["base-labor-sell-config"],
+    queryFn: async (): Promise<BaseLaborSellConfig> => {
+      const response = await fetch("/api/base-labor-sell-config", { cache: "no-store" });
+      const payload = (await response.json().catch(() => ({}))) as {
+        data?: BaseLaborSellConfig;
+        error?: string;
+      };
+      if (!response.ok) throw new Error(payload.error ?? "기본공임 판매 설정 조회 실패");
+      return payload.data ?? {
+        base_labor_sell_mode: "RULE",
+        base_labor_sell_multiplier: null,
+        updated_at: null,
+      };
+    },
+  });
+
+  const displayBaseLaborSellMode =
+    baseLaborSellMode ?? (baseLaborSellConfigQuery.data?.base_labor_sell_mode ?? "RULE");
+  const displayBaseLaborSellMultiplier =
+    baseLaborSellMultiplier
+    ?? (baseLaborSellConfigQuery.data?.base_labor_sell_multiplier == null
+      ? ""
+      : String(baseLaborSellConfigQuery.data.base_labor_sell_multiplier));
+
+  const saveBaseLaborSellConfigMutation = useMutation({
+    mutationFn: async () => {
+      let nextMultiplier: number | null = null;
+
+      if (displayBaseLaborSellMode === "MULTIPLIER") {
+        const parsedMultiplier = Number(displayBaseLaborSellMultiplier);
+        if (!Number.isFinite(parsedMultiplier) || parsedMultiplier <= 0) {
+          throw new Error("배수는 0보다 큰 숫자여야 합니다.");
+        }
+        nextMultiplier = parsedMultiplier;
+      }
+
+      const response = await fetch("/api/base-labor-sell-config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          base_labor_sell_mode: displayBaseLaborSellMode,
+          base_labor_sell_multiplier: nextMultiplier,
+        }),
+      });
+      const payload = (await response.json().catch(() => ({}))) as {
+        data?: BaseLaborSellConfig;
+        error?: string;
+      };
+      if (!response.ok) throw new Error(payload.error ?? "기본공임 판매 설정 저장 실패");
+      return payload.data ?? {
+        base_labor_sell_mode: "RULE",
+        base_labor_sell_multiplier: null,
+        updated_at: null,
+      };
+    },
+    onSuccess: async (data) => {
+      setBaseLaborSellMode(data.base_labor_sell_mode === "MULTIPLIER" ? "MULTIPLIER" : "RULE");
+      setBaseLaborSellMultiplier(
+        data.base_labor_sell_multiplier == null ? "" : String(data.base_labor_sell_multiplier)
+      );
+      await queryClient.invalidateQueries({ queryKey: ["base-labor-sell-config"] });
+      toast.success("기본공임 판매 설정 저장 완료");
+    },
+    onError: (error) => {
+      toast.error("기본공임 판매 설정 저장 실패", {
+        description: error instanceof Error ? error.message : "설정 저장 중 오류가 발생했습니다.",
+      });
+    },
+  });
+
 
   const vendorsQuery = useQuery({
     queryKey: ["cms_vendor_fax_configs"],
@@ -1342,6 +1421,41 @@ export default function SettingsPage() {
                     </div>
 
                     <div className="space-y-4 min-w-0">
+
+                      {activeGlobalRuleTab === "BASE_FACTORY" && (
+                        <div className="rounded-lg border border-[var(--panel-border)] bg-[var(--panel)] p-3 space-y-3">
+                          <div className="text-xs font-semibold">기본공임 판매 설정</div>
+                          <div className="grid grid-cols-1 md:grid-cols-[minmax(0,220px),minmax(0,220px),auto] gap-2 items-end">
+                            <label className="space-y-1">
+                              <div className="text-xs text-[var(--muted)]">판매가 계산 방식</div>
+                              <Select
+                                value={displayBaseLaborSellMode}
+                                onChange={(e) => setBaseLaborSellMode(e.target.value as "RULE" | "MULTIPLIER")}
+                              >
+                                <option value="RULE">RULE</option>
+                                <option value="MULTIPLIER">MULTIPLIER</option>
+                              </Select>
+                            </label>
+                            <label className="space-y-1">
+                              <div className="text-xs text-[var(--muted)]">배수</div>
+                              <Input
+                                value={displayBaseLaborSellMultiplier}
+                                onChange={(e) => setBaseLaborSellMultiplier(e.target.value)}
+                                inputMode="decimal"
+                                placeholder={displayBaseLaborSellMode === "MULTIPLIER" ? "예: 1.2" : "RULE 모드"}
+                                disabled={displayBaseLaborSellMode !== "MULTIPLIER"}
+                              />
+                            </label>
+                            <Button
+                              onClick={() => saveBaseLaborSellConfigMutation.mutate()}
+                              disabled={saveBaseLaborSellConfigMutation.isPending || baseLaborSellConfigQuery.isLoading}
+                            >
+                              {saveBaseLaborSellConfigMutation.isPending ? "저장 중..." : "저장"}
+                            </Button>
+                          </div>
+                          <div className="text-[11px] text-[var(--muted)]">카탈로그 기본공임 자동 계산에만 적용되며, 유효하지 않은 설정은 RULE로 닫힙니다.</div>
+                        </div>
+                      )}
 
                       <div className="rounded-lg border border-[var(--panel-border)] bg-[var(--surface)] p-3 space-y-2">
                         <div className="flex items-center justify-between">

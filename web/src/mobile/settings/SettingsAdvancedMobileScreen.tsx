@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { toast } from "sonner";
 import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Input, Select } from "@/components/ui/field";
@@ -28,7 +29,8 @@ export function SettingsAdvancedMobileScreen() {
   const [fxMarkup, setFxMarkup] = useState("");
   const [csFactor, setCsFactor] = useState("");
   const [silverFactor, setSilverFactor] = useState("");
-  const [roundUnit, setRoundUnit] = useState("0");
+  const [roundUnit, setRoundUnit] = useState("");
+  const [roundUnitDirty, setRoundUnitDirty] = useState(false);
   const [vendorId, setVendorId] = useState("");
   const [faxNumber, setFaxNumber] = useState("");
   const [faxProvider, setFaxProvider] = useState("mock");
@@ -40,7 +42,7 @@ export function SettingsAdvancedMobileScreen() {
       const { data, error } = await sb
         .from("cms_market_tick_config")
         .select("fx_markup,cs_correction_factor,silver_kr_correction_factor,rule_rounding_unit_krw")
-        .eq("config_key", "default")
+        .eq("config_key", "DEFAULT")
         .maybeSingle();
       if (error) throw error;
       return (data ?? {}) as MarketConfigRow;
@@ -86,9 +88,9 @@ export function SettingsAdvancedMobileScreen() {
       fx: fxMarkup || String(currentConfig?.fx_markup ?? 1.03),
       cs: csFactor || String(currentConfig?.cs_correction_factor ?? 1.2),
       silver: silverFactor || String(currentConfig?.silver_kr_correction_factor ?? 1.2),
-      round: roundUnit || String(currentConfig?.rule_rounding_unit_krw ?? 0),
+      round: roundUnitDirty ? roundUnit : String(currentConfig?.rule_rounding_unit_krw ?? 0),
     };
-  }, [currentConfig, fxMarkup, csFactor, silverFactor, roundUnit]);
+  }, [currentConfig, fxMarkup, csFactor, silverFactor, roundUnit, roundUnitDirty]);
 
   return (
     <MobilePage title="고급설정" subtitle="마진 · 시세 · 팩스 설정">
@@ -102,14 +104,19 @@ export function SettingsAdvancedMobileScreen() {
         <MobileSection title="마진 / 올림 단위">
           <div className="space-y-2">
             <div className="text-xs text-[var(--muted)]">룰 올림 단위 (KRW)</div>
-            <Input inputMode="numeric" value={marketValues.round} onChange={(event) => setRoundUnit(event.target.value)} />
+            <Input inputMode="numeric" value={marketValues.round} onChange={(event) => { setRoundUnitDirty(true); setRoundUnit(event.target.value); }} />
           </div>
           <div className="mt-3">
             <Button
               className="w-full"
               onClick={() => {
+                const parsedRoundUnit = Number(marketValues.round);
+                if (!Number.isFinite(parsedRoundUnit) || parsedRoundUnit < 0) {
+                  toast.error("룰 올림 단위 값이 올바르지 않습니다.");
+                  return;
+                }
                 void setRoundMutation.mutateAsync({
-                  p_rounding_unit_krw: Number(marketValues.round) || 0,
+                  p_rounding_unit_krw: parsedRoundUnit,
                   p_actor_person_id: process.env.NEXT_PUBLIC_CMS_ACTOR_ID ?? null,
                   p_session_id: null,
                   p_memo: "mobile settings",
@@ -136,10 +143,25 @@ export function SettingsAdvancedMobileScreen() {
             <Button
               className="w-full"
               onClick={() => {
+                const parsedFxMarkup = Number(marketValues.fx);
+                const parsedCsFactor = Number(marketValues.cs);
+                const parsedSilverFactor = Number(marketValues.silver);
+                if (!Number.isFinite(parsedFxMarkup) || parsedFxMarkup <= 0) {
+                  toast.error("FX 마크업 값이 올바르지 않습니다.");
+                  return;
+                }
+                if (!Number.isFinite(parsedCsFactor) || parsedCsFactor <= 0) {
+                  toast.error("중국 CS 보정 값이 올바르지 않습니다.");
+                  return;
+                }
+                if (!Number.isFinite(parsedSilverFactor) || parsedSilverFactor <= 0) {
+                  toast.error("한국 실버 보정 값이 올바르지 않습니다.");
+                  return;
+                }
                 void upsertMarketMutation.mutateAsync({
-                  p_fx_markup: Number(marketValues.fx),
-                  p_cs_correction_factor: Number(marketValues.cs),
-                  p_silver_kr_correction_factor: Number(marketValues.silver),
+                  p_fx_markup: parsedFxMarkup,
+                  p_cs_correction_factor: parsedCsFactor,
+                  p_silver_kr_correction_factor: parsedSilverFactor,
                 });
               }}
             >

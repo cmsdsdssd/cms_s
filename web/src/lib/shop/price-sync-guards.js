@@ -29,3 +29,36 @@ export const restoreVariantTargetFromRawDelta = ({
   if (normalizedTarget !== normalizedBaseFinal) return normalizedTarget;
   return normalizedBaseFinal + rawDelta;
 };
+
+
+const normalizeRoundedPositiveInt = (value) => {
+  const numeric = Number(value ?? Number.NaN);
+  if (!Number.isFinite(numeric)) return null;
+  const rounded = Math.round(numeric);
+  return rounded > 0 ? rounded : null;
+};
+
+export const shouldAllowAutoMarketUplift = ({
+  pricingAlgoVersion,
+  baseTotalPreMarginKrw,
+  marketAfterMarginKrw,
+  baseTargetKrw,
+}) => {
+  const normalizedPricingAlgoVersion = String(pricingAlgoVersion ?? "").trim().toUpperCase();
+  const normalizedBaseTotalPreMarginKrw = normalizeRoundedPositiveInt(baseTotalPreMarginKrw);
+  const normalizedMarketAfterMarginKrw = normalizeRoundedPositiveInt(marketAfterMarginKrw);
+  const normalizedBaseTargetKrw = normalizeRoundedPositiveInt(baseTargetKrw);
+
+  if (normalizedPricingAlgoVersion === "REVERSE_FEE_V2") return false;
+  if (
+    normalizedBaseTotalPreMarginKrw === null
+    || normalizedMarketAfterMarginKrw === null
+    || normalizedBaseTargetKrw === null
+  ) {
+    return false;
+  }
+  if (normalizedMarketAfterMarginKrw < normalizedBaseTotalPreMarginKrw) return false;
+
+  const sanityCeilingKrw = Math.max(normalizedBaseTotalPreMarginKrw, normalizedBaseTargetKrw) * 2;
+  return normalizedMarketAfterMarginKrw <= sanityCeilingKrw;
+};

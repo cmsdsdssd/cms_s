@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useRef } from "react";
 import { Button } from "@/components/ui/button";
@@ -285,7 +285,7 @@ export function OptionEntryWorkbench({
 
                   <div>
                     <div className={labelClassName}>최종금액</div>
-                    <div className={bodyTextClassName}>{draft.resolved_delta_krw.toLocaleString()} KRW</div>
+                    <div className={bodyTextClassName}>{draft.resolved_delta_krw.toLocaleString()}원</div>
                   </div>
                 </div>
               );

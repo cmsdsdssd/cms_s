@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, useRef } from "react";
+import { useEffect, useMemo, useState, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useForm } from "react-hook-form";
 import { toast } from "sonner";
@@ -57,12 +57,6 @@ type TickForm = {
     price_krw_per_g: number;
     source: string;
     note: string;
-};
-
-type MarketTickConfigUpsert = {
-    config_key: string;
-    fx_markup: number;
-    cs_correction_factor: number;
 };
 
 // ===================== HELPERS =====================
@@ -288,6 +282,8 @@ export default function MarketPage() {
 
     const [csFxMarkup, setCsFxMarkup] = useState<string>("1.030000");
     const [csCorrectionFactor, setCsCorrectionFactor] = useState<string>("1.000000");
+    const [csFxMarkupDirty, setCsFxMarkupDirty] = useState(false);
+    const [csCorrectionFactorDirty, setCsCorrectionFactorDirty] = useState(false);
     const [csConfigSaving, setCsConfigSaving] = useState(false);
 
     const { data: latestData } = useQuery({
@@ -318,6 +314,12 @@ export default function MarketPage() {
             return data as CsConfig | null;
         },
     });
+
+    useEffect(() => {
+        if (!csConfigData) return;
+        if (csConfigData.fx_markup != null && !csFxMarkupDirty) setCsFxMarkup(String(csConfigData.fx_markup));
+        if (csConfigData.cs_correction_factor != null && !csCorrectionFactorDirty) setCsCorrectionFactor(String(csConfigData.cs_correction_factor));
+    }, [csConfigData, csFxMarkupDirty, csCorrectionFactorDirty]);
 
     const { data: seriesData = [] } = useQuery({
         queryKey: ["market", "series", monthFilter],
@@ -373,6 +375,14 @@ export default function MarketPage() {
         },
     });
 
+    const upsertMarketConfigMutation = useRpcMutation<{ ok?: boolean }>({
+        fn: CONTRACTS.functions.marketTickConfigUpsert,
+        successMessage: "CS 설정 저장 완료",
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ["market", "csConfig"] });
+        },
+    });
+
     const onSubmit = (values: TickForm) => {
         if (!values.price_krw_per_g || values.price_krw_per_g <= 0) {
             toast.error("가격을 입력해주세요");
@@ -405,23 +415,10 @@ export default function MarketPage() {
 
         try {
             setCsConfigSaving(true);
-            const client = getSchemaClient();
-            if (!client) throw new Error("Supabase client not initialized");
-            const { error } = await (
-                client.from("cms_market_tick_config") as unknown as {
-                    upsert: (values: MarketTickConfigUpsert) => Promise<{ error: { message?: string } | null }>;
-                }
-            ).upsert({
-                config_key: "DEFAULT",
-                fx_markup: fx,
-                cs_correction_factor: corr,
+            await upsertMarketConfigMutation.mutateAsync({
+                p_fx_markup: fx,
+                p_cs_correction_factor: corr,
             });
-            if (error) throw error;
-            toast.success("CS 설정 저장 완료");
-            queryClient.invalidateQueries({ queryKey: ["market", "csConfig"] });
-        } catch (e) {
-            const msg = e instanceof Error ? e.message : "저장 실패";
-            toast.error("CS 설정 저장 실패", { description: msg });
         } finally {
             setCsConfigSaving(false);
         }
@@ -697,7 +694,7 @@ export default function MarketPage() {
                                             type="number"
                                             step="0.000001"
                                             value={csFxMarkup}
-                                            onChange={(e) => setCsFxMarkup(e.target.value)}
+                                            onChange={(e) => { setCsFxMarkupDirty(true); setCsFxMarkup(e.target.value); }}
                                             className="h-8 text-sm"
                                         />
                                     </div>
@@ -707,7 +704,7 @@ export default function MarketPage() {
                                             type="number"
                                             step="0.000001"
                                             value={csCorrectionFactor}
-                                            onChange={(e) => setCsCorrectionFactor(e.target.value)}
+                                            onChange={(e) => { setCsCorrectionFactorDirty(true); setCsCorrectionFactor(e.target.value); }}
                                             className="h-8 text-sm"
                                         />
                                     </div>

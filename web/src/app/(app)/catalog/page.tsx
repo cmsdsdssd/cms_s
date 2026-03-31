@@ -21,6 +21,8 @@ import { compressImage } from "@/lib/image-utils";
 import { deriveCategoryCodeFromModelName } from "@/lib/model-name";
 import { roundUpToUnit } from "@/lib/number";
 import { buildPromptText } from "@/lib/nanobanana/prompt-template";
+import { resolveBaseLaborSell, resolveBaseLaborSellConfig } from "@/lib/catalog/base-labor-sell-mode";
+import { normalizeCatalogSaveSnapshot } from "@/lib/catalog/catalog-save-normalization";
 import {
   buildMaterialFactorMap,
   calcMaterialAmountSellKrw,
@@ -1189,6 +1191,37 @@ export default function CatalogPage() {
     () => buildMaterialFactorMap(materialFactorQuery.data ?? null),
     [materialFactorQuery.data]
   );
+
+  const baseLaborSellConfigQuery = useQuery({
+    queryKey: ["base-labor-sell-config"],
+    queryFn: async () => {
+      const response = await fetch("/api/base-labor-sell-config", { cache: "no-store" });
+      const payload = (await response.json().catch(() => ({}))) as {
+        data?: {
+          base_labor_sell_mode?: string | null;
+          base_labor_sell_multiplier?: number | null;
+        } | null;
+        error?: string;
+      };
+      if (!response.ok) {
+        throw new Error(payload.error ?? "기본공임 판매 설정 조회 실패");
+      }
+      return payload.data ?? null;
+    },
+    staleTime: 60_000,
+  });
+
+  const resolvedBaseLaborSellConfig = resolveBaseLaborSellConfig(baseLaborSellConfigQuery.data);
+
+  useEffect(() => {
+    if (baseLaborSellConfigQuery.error) {
+      toast.error("기본공임 판매 설정 조회 실패", {
+        description: baseLaborSellConfigQuery.error instanceof Error
+          ? baseLaborSellConfigQuery.error.message
+          : "기본 RULE로 처리합니다.",
+      });
+    }
+  }, [baseLaborSellConfigQuery.error]);
 
   // Reset saving state when modal opens/closes to prevent stuck state
   useEffect(() => {
@@ -4153,45 +4186,73 @@ export default function CatalogPage() {
       setMaterialCode("00");
     }
 
-    const payload = {
-      master_id: masterId || null,
-      model_name: modelName,
-      master_kind: masterKind,
-      category_code: categoryCode || null,
-      material_code_default: normalizedMaterialCode,
-      weight_default_g: masterKind === "BUNDLE" ? null : weightDefault ? Number(weightDefault) : null,
-      deduction_weight_default_g: masterKind === "BUNDLE" ? 0 : deductionWeight ? Number(deductionWeight) : 0,
-      center_qty_default: masterKind === "BUNDLE" ? 0 : centerQty,
-      sub1_qty_default: masterKind === "BUNDLE" ? 0 : sub1Qty,
-      sub2_qty_default: masterKind === "BUNDLE" ? 0 : sub2Qty,
-      center_stone_name_default: centerStoneName || null,
-      sub1_stone_name_default: sub1StoneName || null,
-      sub2_stone_name_default: sub2StoneName || null,
-      center_stone_source_default: centerStoneSourceDefault,
-      sub1_stone_source_default: sub1StoneSourceDefault,
-      sub2_stone_source_default: sub2StoneSourceDefault,
-      buy_margin_profile_id: null,
-      labor_base_sell: laborBaseSell,
-      labor_center_sell: laborCenterSell,
-      labor_sub1_sell: laborSub1Sell,
-      labor_sub2_sell: laborSub2Sell,
-      labor_base_cost: laborBaseCost,
-      labor_center_cost: laborCenterCost,
-      labor_sub1_cost: laborSub1Cost,
-      labor_sub2_cost: laborSub2Cost,
-      plating_price_sell_default: platingSell,
-      plating_price_cost_default: platingCost,
-      labor_profile_mode: normalizedLaborProfileMode,
-      labor_band_code: normalizedLaborBandCode,
-      setting_addon_margin_krw_per_piece: settingAddonMarginKrwPerPiece,
-      stone_addon_margin_krw_per_piece: stoneAddonMarginKrwPerPiece,
-      vendor_party_id: isUuid(vendorId) ? vendorId : null,
-      note,
-      image_path: imagePath || null,
-    } as const;
-
     setIsSaving(true);
     try {
+      const normalizedSaveValues = await normalizeCatalogSaveSnapshot(
+        {
+          laborBaseCost,
+          laborCenterCost,
+          laborSub1Cost,
+          laborSub2Cost,
+          platingCost,
+          centerStoneSourceDefault,
+          sub1StoneSourceDefault,
+          sub2StoneSourceDefault,
+          centerSelfMargin,
+          sub1SelfMargin,
+          sub2SelfMargin,
+        },
+        {
+          resolveBaseLaborSell: async (costKrw) => resolveGlobalLaborSellFromCost("BASE_LABOR", costKrw),
+          resolveStoneSell: async ({ source, costKrw, marginKrw }) =>
+            resolveStoneSellBySource(source, costKrw, marginKrw),
+          resolvePlatingSell: async (costKrw) => resolveGlobalPlatingSellFromCost(costKrw),
+        }
+      );
+
+      setLaborBaseSell(normalizedSaveValues.laborBaseSell);
+      setLaborCenterSell(normalizedSaveValues.laborCenterSell);
+      setLaborSub1Sell(normalizedSaveValues.laborSub1Sell);
+      setLaborSub2Sell(normalizedSaveValues.laborSub2Sell);
+      setPlatingSell(normalizedSaveValues.platingSell);
+
+      const payload = {
+        master_id: masterId || null,
+        model_name: modelName,
+        master_kind: masterKind,
+        category_code: categoryCode || null,
+        material_code_default: normalizedMaterialCode,
+        weight_default_g: masterKind === "BUNDLE" ? null : weightDefault ? Number(weightDefault) : null,
+        deduction_weight_default_g: masterKind === "BUNDLE" ? 0 : deductionWeight ? Number(deductionWeight) : 0,
+        center_qty_default: masterKind === "BUNDLE" ? 0 : centerQty,
+        sub1_qty_default: masterKind === "BUNDLE" ? 0 : sub1Qty,
+        sub2_qty_default: masterKind === "BUNDLE" ? 0 : sub2Qty,
+        center_stone_name_default: centerStoneName || null,
+        sub1_stone_name_default: sub1StoneName || null,
+        sub2_stone_name_default: sub2StoneName || null,
+        center_stone_source_default: centerStoneSourceDefault,
+        sub1_stone_source_default: sub1StoneSourceDefault,
+        sub2_stone_source_default: sub2StoneSourceDefault,
+        buy_margin_profile_id: null,
+        labor_base_sell:normalizedSaveValues.laborBaseSell,
+        labor_center_sell:normalizedSaveValues.laborCenterSell,
+        labor_sub1_sell:normalizedSaveValues.laborSub1Sell,
+        labor_sub2_sell:normalizedSaveValues.laborSub2Sell,
+        labor_base_cost: laborBaseCost,
+        labor_center_cost: laborCenterCost,
+        labor_sub1_cost: laborSub1Cost,
+        labor_sub2_cost: laborSub2Cost,
+        plating_price_sell_default:normalizedSaveValues.platingSell,
+        plating_price_cost_default: platingCost,
+        labor_profile_mode: normalizedLaborProfileMode,
+        labor_band_code: normalizedLaborBandCode,
+        setting_addon_margin_krw_per_piece: settingAddonMarginKrwPerPiece,
+        stone_addon_margin_krw_per_piece: stoneAddonMarginKrwPerPiece,
+        vendor_party_id: isUuid(vendorId) ? vendorId : null,
+        note,
+        image_path: imagePath || null,
+      } as const;
+
       const response = await fetch("/api/master-item", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -4203,7 +4264,6 @@ export default function CatalogPage() {
 
       const savedId = result.master_id ?? masterId;
 
-      // China cost inputs: add-only backend endpoint
       if (savedId) {
         const cnSaveResult = await saveCnCostPayload(savedId, { silent: false });
         if (!cnSaveResult.ok) {
@@ -4214,8 +4274,6 @@ export default function CatalogPage() {
       }
 
       toast.success("저장 완료");
-
-      // ✅ 저장 성공 시 즉시 닫기
       setRegisterOpen(false);
       setIsEditMode(false);
 
@@ -4224,7 +4282,6 @@ export default function CatalogPage() {
         setSelectedItemId(savedId);
       }
 
-      // ✅ 목록 갱신은 기다리지 않음(지연돼도 저장 흐름 안 막음)
       void fetchCatalogItems();
     } catch (error) {
       const message = error instanceof Error ? error.message : "저장에 실패했습니다.";
@@ -4233,14 +4290,42 @@ export default function CatalogPage() {
       setIsSaving(false);
     }
   };
+  type SaveTimeRecalculationOptions = {
+    throwOnError?: boolean;
+  };
+
+  const resolveGlobalLaborSellFromCost = async (
+    laborComponent: "BASE_LABOR" | "STONE",
+    nextCost: number
+  ) => {
+    let resolvedSell = Number.NaN;
+    await applyGlobalLaborSellFromCost(
+      laborComponent,
+      nextCost,
+      (value) => {
+        resolvedSell = value;
+      },
+      { throwOnError: true }
+    );
+    if (!Number.isFinite(resolvedSell)) {
+      throw new Error("Labor sell normalization did not produce a value");
+    }
+    return resolvedSell;
+  };
 
   const applyGlobalLaborSellFromCost = async (
     laborComponent: "BASE_LABOR" | "STONE",
     nextCost: number,
-    setSell: (value: number) => void
+    setSell: (value: number) => void,
+    options?: SaveTimeRecalculationOptions
   ) => {
     const normalizedCost = Number(nextCost);
-    if (!Number.isFinite(normalizedCost) || normalizedCost < 0) return;
+    if (!Number.isFinite(normalizedCost) || normalizedCost < 0) {
+      if (options?.throwOnError) {
+        throw new Error("Labor cost must be a non-negative finite number");
+      }
+      return;
+    }
 
     const attempts: Array<{ scope: "FACTORY"; vendor_party_id: string | null }> = [
       { scope: "FACTORY", vendor_party_id: vendorId || null },
@@ -4248,6 +4333,50 @@ export default function CatalogPage() {
     ];
 
     try {
+      if (laborComponent === "BASE_LABOR") {
+        const nextSell = await resolveBaseLaborSell({
+          mode: resolvedBaseLaborSellConfig.mode,
+          costKrw: normalizedCost,
+          multiplier: resolvedBaseLaborSellConfig.multiplier,
+          pickRuleSell: async (costKrw) => {
+            let pickedMarkup = 0;
+
+            for (const attempt of attempts) {
+              const response = await fetch("/api/pricing-rule-pick", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  component: laborComponent,
+                  scope: attempt.scope,
+                  apply_unit: "PER_PIECE",
+                  stone_role: null,
+                  vendor_party_id: attempt.vendor_party_id,
+                  cost_basis_krw: costKrw,
+                }),
+              });
+
+              if (!response.ok) continue;
+
+              const payload = (await response.json()) as {
+                data?: { picked_rule_id?: string | null; markup_krw?: number | null } | Array<{ picked_rule_id?: string | null; markup_krw?: number | null }> | null;
+              };
+              const picked = Array.isArray(payload.data) ? payload.data[0] : payload.data;
+              const markup = Number(picked?.markup_krw ?? 0);
+              const hasPickedRule = Boolean(picked?.picked_rule_id);
+              if (Number.isFinite(markup) && hasPickedRule) {
+                pickedMarkup = Math.max(markup, 0);
+                break;
+              }
+            }
+
+            return costKrw + pickedMarkup;
+          },
+        });
+
+        setSell(nextSell);
+        return;
+      }
+
       let pickedMarkup = 0;
 
       for (const attempt of attempts) {
@@ -4279,14 +4408,39 @@ export default function CatalogPage() {
       }
 
       setSell(normalizedCost + pickedMarkup);
-    } catch {
+    } catch (error) {
+      if (options?.throwOnError) throw error;
       // 룰 조회 실패 시 현재 입력값을 유지합니다.
     }
   };
 
-  const applyGlobalPlatingSellFromCost = async (nextCost: number, setSell: (value: number) => void) => {
+  const resolveGlobalPlatingSellFromCost = async (nextCost: number) => {
+    let resolvedSell = Number.NaN;
+    await applyGlobalPlatingSellFromCost(
+      nextCost,
+      (value) => {
+        resolvedSell = value;
+      },
+      { throwOnError: true }
+    );
+    if (!Number.isFinite(resolvedSell)) {
+      throw new Error("Plating sell normalization did not produce a value");
+    }
+    return resolvedSell;
+  };
+
+  const applyGlobalPlatingSellFromCost = async (
+    nextCost: number,
+    setSell: (value: number) => void,
+    options?: SaveTimeRecalculationOptions
+  ) => {
     const normalizedCost = Number(nextCost);
-    if (!Number.isFinite(normalizedCost) || normalizedCost < 0) return;
+    if (!Number.isFinite(normalizedCost) || normalizedCost < 0) {
+      if (options?.throwOnError) {
+        throw new Error("Plating cost must be a non-negative finite number");
+      }
+      return;
+    }
 
     type PlatingRuleRow = {
       is_active?: boolean;
@@ -4391,30 +4545,63 @@ export default function CatalogPage() {
 
       const nextSell = Math.max(roundUpDisplayHundred(normalizedCost + safeFixed + safePerG * netWeight), 0);
       setSell(nextSell);
-    } catch {
+    } catch (error) {
+      if (options?.throwOnError) throw error;
       setSell(normalizedCost);
     }
   };
 
-  const applySelfStoneSellFromCost = (nextCost: number, margin: number, setSell: (value: number) => void) => {
+  const applySelfStoneSellFromCost = (
+    nextCost: number,
+    margin: number,
+    setSell: (value: number) => void,
+    options?: SaveTimeRecalculationOptions
+  ) => {
     const normalizedCost = Number(nextCost);
     const normalizedMargin = Number(margin);
-    if (!Number.isFinite(normalizedCost) || normalizedCost < 0) return;
+    if (!Number.isFinite(normalizedCost) || normalizedCost < 0) {
+      if (options?.throwOnError) {
+        throw new Error("Stone labor cost must be a non-negative finite number");
+      }
+      return;
+    }
     const safeMargin = Number.isFinite(normalizedMargin) ? normalizedMargin : 0;
     setSell(Math.max(roundUpDisplayHundred(normalizedCost + safeMargin), 0));
+  };
+
+  const resolveStoneSellBySource = async (
+    source: CatalogStoneSource,
+    nextCost: number,
+    margin: number
+  ) => {
+    let resolvedSell = Number.NaN;
+    await applyStoneSellBySource(
+      source,
+      nextCost,
+      margin,
+      (value) => {
+        resolvedSell = value;
+      },
+      { throwOnError: true }
+    );
+    if (!Number.isFinite(resolvedSell)) {
+      throw new Error("Stone sell normalization did not produce a value");
+    }
+    return resolvedSell;
   };
 
   const applyStoneSellBySource = async (
     source: CatalogStoneSource,
     nextCost: number,
     margin: number,
-    setSell: (value: number) => void
+    setSell: (value: number) => void,
+    options?: SaveTimeRecalculationOptions
   ) => {
     if (source === "SELF") {
-      applySelfStoneSellFromCost(nextCost, margin, setSell);
+      applySelfStoneSellFromCost(nextCost, margin, setSell, options);
       return;
     }
-    await applyGlobalLaborSellFromCost("STONE", nextCost, setSell);
+    await applyGlobalLaborSellFromCost("STONE", nextCost, setSell, options);
   };
 
   useEffect(() => {

@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -226,10 +226,14 @@ export default function ShoppingFactorsPage() {
 
   const [selectedFactorSetId, setSelectedFactorSetId] = useState("");
   useEffect(() => {
-    if (!selectedFactorSetId && (factorSetsQuery.data?.length ?? 0) > 0) {
-      setSelectedFactorSetId(factorSetsQuery.data?.[0]?.factor_set_id ?? "");
+    const availableFactorSetIds = new Set((factorSetsQuery.data ?? []).map((row) => row.factor_set_id));
+    const nextSelectedFactorSetId = selectedFactorSetId && availableFactorSetIds.has(selectedFactorSetId)
+      ? selectedFactorSetId
+      : (factorSetsQuery.data?.[0]?.factor_set_id ?? "");
+    if (nextSelectedFactorSetId !== selectedFactorSetId) {
+      setSelectedFactorSetId(nextSelectedFactorSetId);
     }
-  }, [selectedFactorSetId, factorSetsQuery.data]);
+  }, [channelId, selectedFactorSetId, factorSetsQuery.data]);
 
   const factorDetailQuery = useQuery({
     queryKey: ["shop-factor-set-detail", selectedFactorSetId],
@@ -318,6 +322,7 @@ export default function ShoppingFactorsPage() {
   const removeFactorRow = (idx: number) => {
     setFactorRows((prev) => prev.filter((_, i) => i !== idx));
   };
+
 
   const rowByCode = useMemo(() => {
     const map = new Map<string, FactorRow>();

@@ -19,6 +19,7 @@ import {
 } from "@/lib/shop/price-sync-policy";
 import { buildCurrentProductSyncProfileByMaster } from "@/lib/shop/current-product-sync-profile";
 import { loadPublishedPriceStateByVersion } from "@/lib/shop/publish-price-state";
+import { shouldAllowAutoMarketUplift } from "@/lib/shop/price-sync-guards.js";
 import { parseCafe24VariantAdditionalAmountFromRaw } from "@/lib/shop/cafe24";
 
 export const dynamic = "force-dynamic";
@@ -492,7 +493,7 @@ export async function POST(request: Request) {
 
   const recentNonTickRows = (recentRes.data ?? []).filter((row) => !isCronTickError((row as { error_message?: unknown }).error_message));
   const latestTerminal = pickMostRecentByStartedAt(recentNonTickRows);
-  if (latestTerminal) {
+  if (triggerType === "AUTO" && latestTerminal) {
     const startedAtMs = toMs(latestTerminal.started_at);
     if (startedAtMs !== null) {
       const elapsedMs = nowMs - startedAtMs;
@@ -631,9 +632,9 @@ export async function POST(request: Request) {
   const minChangeKrw = autoSyncPolicy.minChangeKrw;
   const minChangeRate = autoSyncPolicy.minChangeRate;
   const optionSyncPolicyInput = normalizeOptionAdditionalSyncPolicy({
-    always_sync: policyRes.data?.option_sync_force_full === true,
-    min_change_krw: 2000,
-    min_change_rate: 0.02,
+    always_sync: forceFullSync || policyRes.data?.option_sync_force_full === true,
+    min_change_krw: policyRes.data?.option_sync_min_change_krw,
+    min_change_rate: policyRes.data?.option_sync_min_change_rate,
   });
 
   const thresholdPolicyInput = {
@@ -887,6 +888,7 @@ export async function POST(request: Request) {
     externalVariantCode: string;
   }>();
 
+  const marketUpliftGuardBlockedChannelProducts = new Set<string>();
   const baseSnapshotTargetByMaster = new Map<string, PreferredMasterTarget>();
   const forcedBaseTargetByMaster = new Map<string, PreferredMasterTarget>();
   for (const row of snapshotRows) {
@@ -915,7 +917,16 @@ export async function POST(request: Request) {
     const marketBasePrice = Math.round(Number(row.base_total_pre_margin_krw ?? Number.NaN));
     const marketAfterMarginRaw = Number(row.total_after_margin_krw ?? Number.NaN);
     const marketAfterMargin = roundByMode(marketAfterMarginRaw, roundingUnit, roundingMode);
-    if (!Number.isFinite(marketBasePrice) || !Number.isFinite(marketAfterMargin) || marketAfterMargin <= 0) continue;
+    const marketUpliftAllowed = shouldAllowAutoMarketUplift({
+      pricingAlgoVersion: row.pricing_algo_version,
+      baseTotalPreMarginKrw: marketBasePrice,
+      marketAfterMarginKrw: marketAfterMargin,
+      baseTargetKrw: baseTarget,
+    });
+    if (!marketUpliftAllowed) {
+      marketUpliftGuardBlockedChannelProducts.add(channelProductId);
+      continue;
+    }
 
     const marketForceDecision = evaluateAutoSyncThreshold({
       desiredPriceKrw: marketAfterMargin,
@@ -1001,13 +1012,22 @@ export async function POST(request: Request) {
     const rowCurrentRounded = Number.isFinite(Number(currentPrice ?? Number.NaN))
       ? Math.round(Number(currentPrice))
       : null;
+    const rowMarketBasePrice = Math.round(Number(row.base_total_pre_margin_krw ?? Number.NaN));
     const rowMarketAfterMarginRaw = Number(row.total_after_margin_krw ?? Number.NaN);
     const rowMarketAfterMargin = roundByMode(rowMarketAfterMarginRaw, roundingUnit, roundingMode);
-    const rowMarketForceDecision = triggerType === "AUTO"
+    const rowMarketUpliftAllowed = triggerType === "AUTO"
       && variantCode.length === 0
       && rowCurrentRounded !== null
-      && Number.isFinite(rowMarketAfterMargin)
-      && rowMarketAfterMargin > 0
+      && shouldAllowAutoMarketUplift({
+        pricingAlgoVersion: row.pricing_algo_version,
+        baseTotalPreMarginKrw: rowMarketBasePrice,
+        marketAfterMarginKrw: rowMarketAfterMargin,
+        baseTargetKrw: target,
+      });
+    if (triggerType === "AUTO" && variantCode.length === 0 && rowCurrentRounded !== null && !rowMarketUpliftAllowed) {
+      marketUpliftGuardBlockedChannelProducts.add(channelProductId);
+    }
+    const rowMarketForceDecision = rowMarketUpliftAllowed
       ? evaluateAutoSyncThreshold({
         desiredPriceKrw: rowMarketAfterMargin,
         currentPriceKrw: rowCurrentRounded,
@@ -1078,7 +1098,7 @@ export async function POST(request: Request) {
         : null,
     };
 
-    if (triggerType === "AUTO") {
+    {
       if (variantCode.length > 0) {
         if (!forceFullSync) {
           optionThresholdEvaluatedCount += 1;
@@ -1255,6 +1275,7 @@ export async function POST(request: Request) {
     option_current_missing_count: optionCurrentMissingCount,
     option_intent_count: optionIntentCount,
     market_gap_forced_count: marketGapForcedCount,
+    market_uplift_guard_block_count: marketUpliftGuardBlockedChannelProducts.size,
     downsync_suppressed_count: downsyncSuppressedCount,
     pressure_downsync_release_count: pressureDownsyncReleaseCount,
     large_downsync_release_count: largeDownsyncReleaseCount,

@@ -1,9 +1,12 @@
-import type { GalleryDetailBaseBreakdown } from "@/lib/shop/channel-products-gallery-detail";
+﻿import type { GalleryDetailBaseBreakdown } from "@/lib/shop/channel-products-gallery-detail";
+import type { VariantCompareStatus } from "@/lib/shop/variant-compare-status";
 
 type Props = {
   baseBreakdown: GalleryDetailBaseBreakdown | null | undefined;
   publishedMinPriceKrw: number | null | undefined;
   publishedMaxPriceKrw: number | null | undefined;
+  compareStatusOverride?: VariantCompareStatus | null | undefined;
+  compareDetailOverride?: string | null | undefined;
 };
 
 type Fact = {
@@ -12,8 +15,10 @@ type Fact = {
   secondaryValue?: string | null;
   detail?: string | null;
   formula?: string | null;
+  leadingHighlights?: string[];
   highlights?: string[];
   tone?: "default" | "success" | "warning" | "danger" | "primary";
+  surfaceTone?: "default" | "success" | "primary";
   wide?: boolean;
   compact?: boolean;
   cardClassName?: string;
@@ -21,7 +26,7 @@ type Fact = {
 
 const formatMoney = (value: number | null | undefined): string => {
   if (value == null || !Number.isFinite(value)) return "-";
-  return `${Math.round(value).toLocaleString()} KRW`;
+  return `${Math.round(value).toLocaleString()}원`;
 };
 
 const formatRate = (value: number | null | undefined): string => {
@@ -60,7 +65,7 @@ const formatCompactTimestamp = (value: string | null | undefined): string | null
   const minutes = padTwoDigits(date.getMinutes());
   const seconds = padTwoDigits(date.getSeconds());
 
-  return `${year}${month}${day}|${hours}:${minutes}:${seconds}`;
+  return `${year}${month}${day} |${hours}:${minutes}:${seconds}`;
 };
 
 const formatBasis = (value: string | null | undefined): string => {
@@ -81,10 +86,10 @@ const formatSelectedBasis = (value: string | null | undefined): string => {
   return value;
 };
 
-const formatStorefrontCompareStatus = (value: "MATCH" | "NORMAL_UNCHANGED" | "MISMATCH" | "UNAVAILABLE" | null | undefined): string => {
+const formatStorefrontCompareStatus = (value: "MATCH" | "THRESHOLD_HELD" | "OUT_OF_SYNC" | "UNAVAILABLE" | null | undefined): string => {
   if (value === "MATCH") return "일치";
-  if (value === "NORMAL_UNCHANGED") return "정상 유지";
-  if (value === "MISMATCH") return "불일치";
+  if (value === "THRESHOLD_HELD") return "정상 보류";
+  if (value === "OUT_OF_SYNC") return "차이 있음";
   return "비교 불가";
 };
 
@@ -117,6 +122,16 @@ const toneClassName = (tone: Fact["tone"] = "default") => {
   return "text-[var(--foreground)]";
 };
 
+const surfaceToneClassName = (tone: Fact["surfaceTone"] = "default") => {
+  if (tone === "success") {
+    return "border-[var(--success-soft)] bg-[linear-gradient(180deg,var(--success-soft),var(--panel)_60%)]";
+  }
+  if (tone === "primary") {
+    return "border-[var(--primary-soft)] bg-[linear-gradient(180deg,var(--primary-soft),var(--panel)_60%)]";
+  }
+  return "border-[var(--hairline)] bg-[var(--panel)]";
+};
+
 function SummaryCard({ label, value, detail, tone = "default" }: Fact) {
   return (
     <div className="rounded-[var(--radius)] border border-[var(--hairline)] bg-[var(--background)] px-3 py-3">
@@ -136,7 +151,8 @@ function FactCard({ fact, dense = false }: { fact: Fact; dense?: boolean }) {
   return (
     <div
       className={[
-        "rounded-[var(--radius)] border border-[var(--hairline)] bg-[var(--panel)] text-xs",
+        "rounded-[var(--radius)] border text-xs",
+        surfaceToneClassName(fact.surfaceTone),
         dense ? "px-2 py-2" : "px-2.5 py-2.5",
         fact.cardClassName ?? (fact.wide ? (dense ? "sm:col-span-2 xl:col-span-4" : "md:col-span-2") : ""),
       ].join(" ")}
@@ -144,6 +160,14 @@ function FactCard({ fact, dense = false }: { fact: Fact; dense?: boolean }) {
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+            {fact.leadingHighlights?.map((highlight) => (
+              <span
+                key={`${fact.label}-leading-${highlight}`}
+                className="inline-flex items-center rounded-[var(--radius-pill)] border border-[var(--hairline)] bg-[var(--background)] px-1.5 py-0.5 text-[10px] font-medium leading-none tabular-nums text-[var(--muted-strong)]"
+              >
+                {highlight}
+              </span>
+            ))}
             <div className="font-semibold text-[var(--foreground)]">{fact.label}</div>
             {fact.highlights?.map((highlight) => (
               <span
@@ -248,7 +272,13 @@ function FlowStep({
   );
 }
 
-export function DetailedPriceBreakdownPanel({ baseBreakdown, publishedMinPriceKrw, publishedMaxPriceKrw }: Props) {
+export function DetailedPriceBreakdownPanel({
+  baseBreakdown,
+  publishedMinPriceKrw,
+  publishedMaxPriceKrw,
+  compareStatusOverride,
+  compareDetailOverride,
+}: Props) {
   const detailed = baseBreakdown?.detailed ?? null;
   const summaryRows = baseBreakdown?.rows ?? [];
   const laborComponents = detailed?.laborComponents ?? [];
@@ -270,6 +300,9 @@ export function DetailedPriceBreakdownPanel({ baseBreakdown, publishedMinPriceKr
     : null;
   const storefrontValueMissing = !detailed || !hasNumber(detailed.storefrontPriceKrw);
   const selectedValueMissing = !detailed || !hasNumber(detailed.selectedPriceKrw);
+  const effectiveCompareStatus: VariantCompareStatus | null = selectedValueMissing || storefrontValueMissing
+    ? "UNAVAILABLE"
+    : (compareStatusOverride ?? detailed?.storefrontCompareStatus ?? null);
   const freshnessText = baseBreakdown.snapshot_available
     ? (() => {
         const timestamp = detailed?.marketTickAsOf ?? baseBreakdown.computed_at;
@@ -277,6 +310,7 @@ export function DetailedPriceBreakdownPanel({ baseBreakdown, publishedMinPriceKr
         return formatted !== "-" ? formatted : "snapshot ready";
       })()
     : "snapshot unavailable";
+  const showRoundedStage = Boolean(detailed && hasNumber(detailed.roundedTargetPriceKrw));
 
   const outcomeFacts: Fact[] = [
     {
@@ -303,23 +337,25 @@ export function DetailedPriceBreakdownPanel({ baseBreakdown, publishedMinPriceKr
       tone: storefrontValueMissing ? "warning" : "default",
     },
     {
-      label: "diff / pass",
+      label: "compare status",
       value: selectedValueMissing || storefrontValueMissing
         ? "비교 불가"
-        : formatStorefrontCompareStatus(detailed.storefrontCompareStatus),
+        : formatStorefrontCompareStatus(effectiveCompareStatus),
       detail: selectedValueMissing
         ? "선택 기준가 없음"
         : storefrontValueMissing
           ? null
           : joinDetail(
+              compareDetailOverride,
+              effectiveCompareStatus === "THRESHOLD_HELD" && !compareDetailOverride ? "threshold 미만 보류" : null,
               detailed?.storefrontDiffKrw == null ? null : `차이 ${formatMoney(detailed.storefrontDiffKrw)}`,
               detailed?.storefrontDiffPct == null ? null : formatRate(detailed.storefrontDiffPct)
             ),
       tone: selectedValueMissing || storefrontValueMissing
         ? "warning"
-        : detailed?.storefrontCompareStatus === "MATCH"
+        : effectiveCompareStatus === "MATCH"
           ? "success"
-          : detailed?.storefrontCompareStatus === "NORMAL_UNCHANGED"
+          : effectiveCompareStatus === "THRESHOLD_HELD"
             ? "primary"
             : "danger",
     },
@@ -374,17 +410,18 @@ export function DetailedPriceBreakdownPanel({ baseBreakdown, publishedMinPriceKr
         }
       : null,
     detailed && hasNumber(detailed.materialPriceKrw)
-      ? {
-          label: "소재가 총합",
-          value: formatMoney(detailed.materialPriceKrw),
-          highlights: compact<string>([
-            formatNamedRate("소재 마진", detailed.materialMarginRate),
-          ]),
-          formula:
-            hasNumber(detailed.materialMarginRate) && hasNumber(detailed.materialPriceAfterMarginKrw)
-              ? `${formatMoney(detailed.materialPriceKrw)} x (1 + ${formatRate(detailed.materialMarginRate)}) = ${formatMoney(detailed.materialPriceAfterMarginKrw)}`
-              : hasNumber(detailed.materialMarginRate)
-                ? `소재가 x (1 + ${formatRate(detailed.materialMarginRate)})`
+        ? {
+            label: "소재가 총합",
+            value: formatMoney(detailed.materialPriceKrw),
+            leadingHighlights: compact<string>([
+              formatNamedRate("소재 마진", detailed.materialMarginRate),
+            ]),
+            surfaceTone: "success",
+            formula:
+              hasNumber(detailed.materialMarginRate) && hasNumber(detailed.materialPriceAfterMarginKrw)
+                ? `${formatMoney(detailed.materialPriceKrw)} x (1 + ${formatRate(detailed.materialMarginRate)}) = ${formatMoney(detailed.materialPriceAfterMarginKrw)}`
+                : hasNumber(detailed.materialMarginRate)
+                  ? `소재가 x (1 + ${formatRate(detailed.materialMarginRate)})`
                 : null,
           detail: joinDetail(
             hasNumber(detailed.materialMarginAmountKrw) ? `마진 ${formatMoney(detailed.materialMarginAmountKrw)}` : null,
@@ -398,11 +435,11 @@ export function DetailedPriceBreakdownPanel({ baseBreakdown, publishedMinPriceKr
   const stepOneFacts = stepOneFactsBase.length === 4
     ? stepOneFactsBase.map((fact, index) => ({
         ...fact,
-        cardClassName: index === 0 ? "xl:col-span-2" : "xl:col-span-3",
+        cardClassName: index === 0 ? "xl:col-span-1" : index === 1 ? "xl:col-span-4" : index === 3 ? "xl:col-span-4" : "xl:col-span-3",
       }))
     : stepOneFactsBase;
   const stepOneCompactGridClass = stepOneFacts.length === 4
-    ? "grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-11"
+    ? "grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-12"
     : "grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-4";
 
   const stepTwoLaborFacts = compact<Fact>([
@@ -465,16 +502,22 @@ export function DetailedPriceBreakdownPanel({ baseBreakdown, publishedMinPriceKr
         }
       : null,
     detailed && hasNumber(detailed.laborTotalIncludingAbsorbKrw)
-      ? { label: "공임원가합(흡수 포함)", value: formatMoney(detailed.laborTotalIncludingAbsorbKrw), compact: true }
+      ? {
+          label: "공임원가합(흡수 포함)",
+          value: formatMoney(detailed.laborTotalIncludingAbsorbKrw),
+          leadingHighlights: compact<string>([
+            formatNamedRate("공임 마진", detailed.laborMarginRate),
+          ]),
+          compact: true,
+        }
       : null,
   ]);
 
   const stepTwoFinalFacts = compact<Fact>([
     detailed && hasNumber(detailed.laborPriceAfterMarginKrw)
       ? {
-          label: "공임 pre-fee입력",
+          label: "공임 마진 적용",
           value: formatMoney(detailed.laborPriceAfterMarginKrw),
-          highlights: compact<string>([formatNamedRate("공임 마진", detailed.laborMarginRate)]),
           formula:
             hasNumber(detailed.laborTotalIncludingAbsorbKrw) && hasNumber(detailed.laborMarginRate)
               ? `${formatMoney(detailed.laborTotalIncludingAbsorbKrw)} x (1 + ${formatRate(detailed.laborMarginRate)}) = ${formatMoney(detailed.laborPriceAfterMarginKrw)}`
@@ -496,7 +539,12 @@ export function DetailedPriceBreakdownPanel({ baseBreakdown, publishedMinPriceKr
         }
       : null,
     detailed && hasNumber(detailed.laborPriceAfterMarginKrw)
-      ? { label: "최종공임", value: formatMoney(detailed.laborPriceAfterMarginKrw), compact: true }
+      ? {
+          label: "공임가 총합",
+          value: formatMoney(detailed.laborPriceAfterMarginKrw),
+          compact: true,
+          surfaceTone: "success",
+        }
       : null,
   ]);
 
@@ -524,7 +572,7 @@ export function DetailedPriceBreakdownPanel({ baseBreakdown, publishedMinPriceKr
           label: "후보기준가",
           compact: true,
           value: formatMoney(detailed.candidatePriceKrw),
-          highlights: compact<string>([
+          leadingHighlights: compact<string>([
             formatNamedRate("수수료", detailed.feeRate),
           ]),
           formula:
@@ -542,8 +590,10 @@ export function DetailedPriceBreakdownPanel({ baseBreakdown, publishedMinPriceKr
           label: "가드레일",
           compact: true,
           value: formatMoney(detailed.guardrailPriceKrw),
-          highlights: compact<string>([
+          leadingHighlights: compact<string>([
             formatNamedRate("수수료", detailed.feeRate),
+          ]),
+          highlights: compact<string>([
             formatNamedRate("가드레일", detailed.guardrailRate),
           ]),
           formula:
@@ -557,16 +607,14 @@ export function DetailedPriceBreakdownPanel({ baseBreakdown, publishedMinPriceKr
           ),
         }
       : null,
-    detailed && (hasNumber(detailed.roundedTargetPriceKrw) || hasNumber(detailed.roundingUnitKrw))
+    detailed && hasNumber(detailed.roundedTargetPriceKrw)
       ? {
           label: "반올림 결과",
           compact: true,
-          value: hasNumber(detailed.roundedTargetPriceKrw)
-            ? formatMoney(detailed.roundedTargetPriceKrw)
-            : `${Math.round(detailed.roundingUnitKrw ?? 0).toLocaleString()} KRW 단위`,
+          value: formatMoney(detailed.roundedTargetPriceKrw),
           detail: joinDetail(
             hasNumber(detailed.roundingUnitKrw)
-              ? `단위 ${Math.round(detailed.roundingUnitKrw).toLocaleString()} KRW`
+              ? `단위 ${Math.round(detailed.roundingUnitKrw).toLocaleString()}원`
               : null,
             hasText(detailed.roundingMode) ? detailed.roundingMode : null
           ),
@@ -581,6 +629,7 @@ export function DetailedPriceBreakdownPanel({ baseBreakdown, publishedMinPriceKr
       value: selectedValueMissing ? "선택 기준가 없음" : formatMoney(detailed?.selectedPriceKrw),
       detail: selectedValueMissing ? "blocking field" : joinDetail(formatSelectedBasis(detailed?.selectedPriceBasis ?? null), hasNumber(detailed?.candidatePriceKrw) ? `후보 ${formatMoney(detailed?.candidatePriceKrw ?? null)}` : null, hasNumber(detailed?.guardrailPriceKrw) ? `가드레일 ${formatMoney(detailed?.guardrailPriceKrw ?? null)}` : null),
       tone: selectedValueMissing ? "warning" : "primary",
+      surfaceTone: selectedValueMissing ? "default" : "primary",
     },
     {
       label: "게시 기준가",
@@ -631,7 +680,7 @@ export function DetailedPriceBreakdownPanel({ baseBreakdown, publishedMinPriceKr
         <FlowStep
           index={2}
           title="공임 / 고정 입력"
-          summary="공임 합계와 흡수 반영, pre-fee 입력, 고정 항목을 분리해 봅니다."
+          summary="공임 합계와 흡수 반영, 공임 마진 적용, 고정 항목을 분리해 봅니다."
           facts={stepTwoFacts}
           groups={[
             { facts: stepTwoLaborFacts, gridClass: "grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-4", dense: true },
@@ -645,8 +694,8 @@ export function DetailedPriceBreakdownPanel({ baseBreakdown, publishedMinPriceKr
 
         <FlowStep
           index={3}
-          title="후보가 / 가드레일 / 반올림"
-          summary="후보 기준가가 어떻게 guardrail과 rounding을 거쳐 정리되는지 순서대로 봅니다."
+          title={showRoundedStage ? "후보가 / 가드레일 / 반올림" : "후보가 / 가드레일"}
+          summary={showRoundedStage ? "후보 기준가가 어떻게 guardrail과 rounding을 거쳐 정리되는지 순서대로 봅니다." : "후보 기준가와 가드레일 중 어떤 값이 선택되는지 순서대로 봅니다."}
           facts={stepThreeFacts}
           compactGridClass="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-4"
           regularGridClass="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-4"

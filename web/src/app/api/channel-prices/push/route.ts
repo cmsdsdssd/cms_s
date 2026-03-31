@@ -121,6 +121,11 @@ async function verifyAppliedVariantPrice(
 }
 
 export async function POST(request: Request) {
+  const requestUrl = new URL(request.url);
+  if (requestUrl.hostname !== "internal.local") {
+    return jsonError("channel-prices/push is internal-only; use price-sync-runs-v2 execute flow", 403);
+  }
+
   const sb = getShopAdminClient();
   if (!sb) return jsonError("Supabase server env missing", 500);
 

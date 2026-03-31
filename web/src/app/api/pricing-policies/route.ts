@@ -4,17 +4,18 @@ import { getShopAdminClient, isMissingColumnError, jsonError, parseJsonObject } 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
-const AUTO_SYNC_THRESHOLD_PROFILES = ["GENERAL", "MARKET_LINKED"] as const;
+type AutoSyncThresholdProfile = "GENERAL" | "MARKET_LINKED";
 const PRICING_POLICY_SELECT_BASE =
   "policy_id, channel_id, policy_name, margin_multiplier, gm_material, gm_labor, gm_fixed, fixed_cost_krw, rounding_unit, rounding_mode, option_rounding_unit, option_rounding_mode, option_18k_weight_multiplier, material_factor_set_id, fee_rate, min_margin_rate_total, auto_sync_force_full, auto_sync_min_change_krw, auto_sync_min_change_rate, option_sync_force_full, option_sync_min_change_krw, option_sync_min_change_rate, is_active, created_at, updated_at";
 const PRICING_POLICY_SELECT_COLS = `${PRICING_POLICY_SELECT_BASE}, auto_sync_threshold_profile`;
 const PRICING_POLICY_SELECT_LEGACY = "policy_id, channel_id, policy_name, margin_multiplier, gm_material, gm_labor, gm_fixed, fixed_cost_krw, rounding_unit, rounding_mode, option_18k_weight_multiplier, material_factor_set_id, fee_rate, min_margin_rate_total, auto_sync_force_full, auto_sync_min_change_krw, auto_sync_min_change_rate, option_sync_force_full, option_sync_min_change_krw, option_sync_min_change_rate, is_active, created_at, updated_at";
 
-function parseAutoSyncThresholdProfile(value: unknown): (typeof AUTO_SYNC_THRESHOLD_PROFILES)[number] {
+function parseAutoSyncThresholdProfile(value: unknown): AutoSyncThresholdProfile {
   const profile = String(value ?? "GENERAL").trim().toUpperCase();
   if (profile === "GENERAL" || profile === "MARKET_LINKED") return profile;
   throw new Error("auto_sync_threshold_profile must be GENERAL/MARKET_LINKED");
 }
+
 
 export async function GET(request: Request) {
   const sb = getShopAdminClient();
@@ -32,8 +33,9 @@ export async function GET(request: Request) {
     return q;
   };
 
-  let { data, error } = await buildQuery(true);
+  const { data, error: initialError } = await buildQuery(true);
   let responseData: Array<Record<string, unknown>> = ((data ?? []) as unknown as Array<Record<string, unknown>>);
+  let error = initialError;
   if (error && (isMissingColumnError(error, "pricing_policy.auto_sync_threshold_profile") || isMissingColumnError(error, "pricing_policy.option_rounding_unit") || isMissingColumnError(error, "pricing_policy.option_rounding_mode"))) {
     const legacyQuery = sb
       .from("pricing_policy")
@@ -98,7 +100,8 @@ export async function POST(request: Request) {
   const optionSyncForceFull = hasOptionSyncForceFull ? body.option_sync_force_full === true : false;
   const optionSyncMinChangeKrw = hasOptionSyncMinChangeKrw ? Number(body.option_sync_min_change_krw) : 1000;
   const optionSyncMinChangeRate = hasOptionSyncMinChangeRate ? Number(body.option_sync_min_change_rate) : 0.01;
-  let autoSyncThresholdProfile: (typeof AUTO_SYNC_THRESHOLD_PROFILES)[number];
+
+  let autoSyncThresholdProfile: AutoSyncThresholdProfile;
   try {
     autoSyncThresholdProfile = parseAutoSyncThresholdProfile(body.auto_sync_threshold_profile);
   } catch (error) {

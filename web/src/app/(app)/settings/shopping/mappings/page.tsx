@@ -18,6 +18,11 @@ import {
   resolveCurrentProductSyncProfile,
   type CurrentProductSyncProfile,
 } from "@/lib/shop/current-product-sync-profile";
+import {
+  resolveCompareThresholdPolicy,
+  resolveVariantCompareState,
+  type VariantCompareStatus,
+} from "@/lib/shop/variant-compare-status";
 import { shopApiGet, shopApiSend } from "@/lib/shop/http";
 import { normalizeOptionEntryMappingPayload, sanitizeOptionEntryMappingPayload } from "@/lib/shop/option-entry-mapping";
 import type { GalleryDetailSummary } from "@/lib/shop/channel-products-gallery-detail";
@@ -67,6 +72,11 @@ type PricingPolicy = {
   policy_id: string;
   channel_id: string;
   policy_name: string;
+  auto_sync_threshold_profile?: "GENERAL" | "MARKET_LINKED" | null;
+  auto_sync_min_change_krw?: number | null;
+  auto_sync_min_change_rate?: number | null;
+  option_sync_min_change_krw?: number | null;
+  option_sync_min_change_rate?: number | null;
   is_active: boolean;
 };
 
@@ -244,13 +254,27 @@ const formatOptionSizeValue = (value: number | null | undefined): string => {
 
 const formatMoney = (value: number | null | undefined): string => {
   if (value == null || !Number.isFinite(value)) return "-";
-  return `${value.toLocaleString()} KRW`;
+  return `${value.toLocaleString()}원`;
 };
 
 const formatWhen = (value: string | null | undefined): string => {
   if (!value) return "-";
   const parsed = Date.parse(value);
   return Number.isFinite(parsed) ? new Date(parsed).toLocaleString() : value;
+};
+
+const formatVariantCompareStatusLabel = (value: VariantCompareStatus): string => {
+  if (value === "MATCH") return "일치";
+  if (value === "THRESHOLD_HELD") return "정상 보류";
+  if (value === "OUT_OF_SYNC") return "차이 있음";
+  return "비교 불가";
+};
+
+const variantCompareBadgeClassName = (value: VariantCompareStatus): string => {
+  if (value === "MATCH") return "border-emerald-200 bg-emerald-100 text-emerald-700";
+  if (value === "THRESHOLD_HELD") return "border-sky-200 bg-sky-100 text-sky-700";
+  if (value === "OUT_OF_SYNC") return "border-amber-200 bg-amber-100 text-amber-700";
+  return "border-[var(--hairline)] bg-[var(--panel)] text-[var(--muted)]";
 };
 
 const describeError = (error: unknown): string => {
@@ -1000,14 +1024,92 @@ export default function ShoppingMappingsPage() {
       return sum + Math.round(Number(row?.resolved_delta_krw ?? 0));
     }, 0);
   }, [effectiveFocusedVariant, workbenchDraftsByKey, workbenchDetail]);
+  const focusedVariantPublishedBaseKrw = useMemo(() => {
+    const publishedBase = Number(workbenchDetail?.detail?.base_price_krw ?? Number.NaN);
+    return Number.isFinite(publishedBase) ? Math.round(publishedBase) : null;
+  }, [workbenchDetail]);
+  const focusedVariantDesiredBaseKrw = useMemo(() => {
+    const snapshotSelectedBase = Number(detailBaseBreakdown?.detailed?.selectedPriceKrw ?? Number.NaN);
+    if (Number.isFinite(snapshotSelectedBase)) return Math.round(snapshotSelectedBase);
+    return focusedVariantPublishedBaseKrw;
+  }, [detailBaseBreakdown, focusedVariantPublishedBaseKrw]);
   const focusedVariantCurrentFinalKrw = useMemo(() => {
-    if (focusedVariantCurrentAdditionalKrw == null) return null;
-    return Math.max(0, Math.round(Number(workbenchDetail?.detail?.base_price_krw ?? 0)) + focusedVariantCurrentAdditionalKrw);
-  }, [focusedVariantCurrentAdditionalKrw, workbenchDetail]);
-  const focusedVariantStorefrontFinalKrw = effectiveFocusedVariantPriceRow?.finalPriceKrw ?? null;
-  const focusedVariantIsMatch = focusedVariantCurrentFinalKrw != null
-    && focusedVariantStorefrontFinalKrw != null
-    && focusedVariantCurrentFinalKrw === focusedVariantStorefrontFinalKrw;
+    if (focusedVariantCurrentAdditionalKrw == null || focusedVariantDesiredBaseKrw == null) return null;
+    return Math.max(0, focusedVariantDesiredBaseKrw + focusedVariantCurrentAdditionalKrw);
+  }, [focusedVariantCurrentAdditionalKrw, focusedVariantDesiredBaseKrw]);
+  const focusedVariantSavedFinalKrw = effectiveFocusedVariantPriceRow?.finalPriceKrw ?? null;
+  const focusedVariantSavedAdditionalKrw = useMemo(() => {
+    if (focusedVariantSavedFinalKrw == null || focusedVariantPublishedBaseKrw == null) return null;
+    return Math.max(0, focusedVariantSavedFinalKrw - focusedVariantPublishedBaseKrw);
+  }, [focusedVariantPublishedBaseKrw, focusedVariantSavedFinalKrw]);
+  const focusedVariantBaseThresholdPolicy = useMemo(() => {
+    if (!activePricingPolicy) return null;
+    return resolveCompareThresholdPolicy({
+      policyThresholdProfile: activePricingPolicy.auto_sync_threshold_profile,
+      currentProductSyncProfile: selectedGalleryCardSyncProfile,
+      policyMinChangeKrw: activePricingPolicy.auto_sync_min_change_krw,
+      policyMinChangeRate: activePricingPolicy.auto_sync_min_change_rate,
+    });
+  }, [activePricingPolicy, selectedGalleryCardSyncProfile]);
+  const focusedVariantCompareState = useMemo(() => resolveVariantCompareState({
+    desiredBasePriceKrw: focusedVariantDesiredBaseKrw,
+    publishedBasePriceKrw: focusedVariantPublishedBaseKrw,
+    desiredAdditionalKrw: focusedVariantCurrentAdditionalKrw,
+    publishedAdditionalKrw: focusedVariantSavedAdditionalKrw,
+    baseThresholdPolicy: focusedVariantBaseThresholdPolicy
+      ? {
+          min_change_krw: focusedVariantBaseThresholdPolicy.minChangeKrw,
+          min_change_rate: focusedVariantBaseThresholdPolicy.minChangeRate,
+        }
+      : null,
+    optionThresholdPolicy: activePricingPolicy
+      ? {
+          min_change_krw: activePricingPolicy.option_sync_min_change_krw,
+          min_change_rate: activePricingPolicy.option_sync_min_change_rate,
+        }
+      : null,
+  }), [
+    activePricingPolicy,
+    focusedVariantBaseThresholdPolicy,
+    focusedVariantCurrentAdditionalKrw,
+    focusedVariantDesiredBaseKrw,
+    focusedVariantPublishedBaseKrw,
+    focusedVariantSavedAdditionalKrw,
+  ]);
+  const focusedVariantCompareExplanation = useMemo(() => {
+    if (focusedVariantCompareState.status === "MATCH") {
+      return "현재 목표값과 마지막 게시/storefront 저장값이 같습니다.";
+    }
+    if (focusedVariantCompareState.status === "THRESHOLD_HELD") {
+      return `기준가 차이 ${formatMoney(focusedVariantCompareState.baseDiffKrw)} / 옵션 차이 ${formatMoney(focusedVariantCompareState.optionDiffKrw)} - 임계값 미만이라 저장값 유지가 정상입니다.`;
+    }
+    if (focusedVariantCompareState.status === "OUT_OF_SYNC") {
+      return `기준가 차이 ${formatMoney(focusedVariantCompareState.baseDiffKrw)} / 옵션 차이 ${formatMoney(focusedVariantCompareState.optionDiffKrw)} - 임계값을 넘는 차이가 있어 재게시 흐름 확인이 필요합니다.`;
+    }
+    return "현재 목표값 또는 마지막 게시값이 아직 준비되지 않았습니다.";
+  }, [focusedVariantCompareState]);
+  const detailBaseCompareState = useMemo(() => resolveVariantCompareState({
+    desiredBasePriceKrw: detailBaseBreakdown?.detailed?.selectedPriceKrw,
+    publishedBasePriceKrw: focusedVariantPublishedBaseKrw,
+    desiredAdditionalKrw: 0,
+    publishedAdditionalKrw: 0,
+    baseThresholdPolicy: focusedVariantBaseThresholdPolicy
+      ? {
+          min_change_krw: focusedVariantBaseThresholdPolicy.minChangeKrw,
+          min_change_rate: focusedVariantBaseThresholdPolicy.minChangeRate,
+        }
+      : null,
+    optionThresholdPolicy: { min_change_krw: 0, min_change_rate: 0 },
+  }), [detailBaseBreakdown, focusedVariantBaseThresholdPolicy, focusedVariantPublishedBaseKrw]);
+  const detailBaseCompareExplanation = useMemo(() => {
+    if (detailBaseCompareState.status === "THRESHOLD_HELD") {
+      return `기준가 차이 ${formatMoney(detailBaseCompareState.baseDiffKrw)} - 임계값 미만이라 저장값 유지가 정상입니다.`;
+    }
+    if (detailBaseCompareState.status === "OUT_OF_SYNC") {
+      return `기준가 차이 ${formatMoney(detailBaseCompareState.baseDiffKrw)} - 임계값을 넘는 차이가 있습니다.`;
+    }
+    return null;
+  }, [detailBaseCompareState]);
   const focusedStorefrontAxisEntryKeys = useMemo(
     () => new Set(
       (effectiveFocusedVariant?.options ?? [])
@@ -1601,8 +1703,8 @@ export default function ShoppingMappingsPage() {
                 <div className="rounded-[var(--radius)] border border-[var(--hairline)] bg-[var(--panel)] p-3 text-sm">
                   <div className="flex items-center justify-between gap-2">
                     <div className="text-sm font-medium">선택 조합 비교</div>
-                    <span className={`rounded-full border px-2 py-1 text-[11px] ${focusedVariantIsMatch ? 'border-emerald-200 bg-emerald-100 text-emerald-700' : 'border-amber-200 bg-amber-100 text-amber-700'}`}>
-                      {focusedVariantIsMatch ? '일치' : '비교중'}
+                    <span className={`rounded-full border px-2 py-1 text-[11px] ${variantCompareBadgeClassName(focusedVariantCompareState.status)}`}>
+                      {formatVariantCompareStatusLabel(focusedVariantCompareState.status)}
                     </span>
                   </div>
                   <div className="mt-2 space-y-2">
@@ -1619,16 +1721,19 @@ export default function ShoppingMappingsPage() {
                       <div className="text-[11px] text-[var(--muted)]">선택 조합</div>
                       <div className="mt-1 text-xs text-[var(--foreground)]">{effectiveFocusedVariant ? summarizeAxes(effectiveFocusedVariant) : '-'}</div>
                     </div>
+                    <div className="rounded-[var(--radius)] border border-[var(--hairline)] bg-[var(--background)] px-3 py-2 text-[11px] text-[var(--muted)]">
+                      {focusedVariantCompareExplanation}
+                    </div>
                     <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                       <div className="rounded-[var(--radius)] border border-[var(--hairline)] bg-[var(--background)] px-3 py-2">
-                        <div className="text-[11px] text-[var(--muted)]">현재 계산 최종값</div>
+                        <div className="text-[11px] text-[var(--muted)]">현재 계산 목표값</div>
                         <div className="mt-1 font-semibold">{formatMoney(focusedVariantCurrentFinalKrw)}</div>
-                        <div className="mt-1 text-[11px] text-[var(--muted)]">base + 현재 row delta 합</div>
+                        <div className="mt-1 text-[11px] text-[var(--muted)]">snapshot selected base + 현재 row delta 합</div>
                       </div>
                       <div className="rounded-[var(--radius)] border border-[var(--hairline)] bg-[var(--background)] px-3 py-2">
-                        <div className="text-[11px] text-[var(--muted)]">storefront 저장값</div>
-                        <div className="mt-1 font-semibold">{formatMoney(focusedVariantStorefrontFinalKrw)}</div>
-                        <div className="mt-1 text-[11px] text-[var(--muted)]">현재 publish/storefront final</div>
+                        <div className="text-[11px] text-[var(--muted)]">마지막 게시/storefront 저장값</div>
+                        <div className="mt-1 font-semibold">{formatMoney(focusedVariantSavedFinalKrw)}</div>
+                        <div className="mt-1 text-[11px] text-[var(--muted)]">last successful publish final</div>
                       </div>
                     </div>
                   </div>
@@ -1639,6 +1744,8 @@ export default function ShoppingMappingsPage() {
                   baseBreakdown={detailBaseBreakdown}
                   publishedMinPriceKrw={selectedGalleryCard?.published_min_price_krw}
                   publishedMaxPriceKrw={selectedGalleryCard?.published_max_price_krw}
+                  compareStatusOverride={detailBaseCompareState.status}
+                  compareDetailOverride={detailBaseCompareExplanation}
                 />
               </div>
             </div>

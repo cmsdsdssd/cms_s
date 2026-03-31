@@ -25,11 +25,12 @@ import { buildSavedCategoryBucketsFromVariantOptions, composeOptionDeltaBuckets,
 import { buildCanonicalOptionRows, deriveRuleOnlyCanonicalInputs, type SavedOptionCategoryRowWithDelta } from "@/lib/shop/mapping-option-details";
 import { CONTRACTS } from "@/lib/contracts";
 import { cafe24ListProductVariants, ensureValidCafe24AccessToken, loadCafe24Account } from "@/lib/shop/cafe24";
-import { buildOptionAxisFromCanonicalRows, buildOptionEntryRowsFromBreakdown, buildVariantBreakdownFromCanonicalRows, validateAdditiveBreakdown } from "@/lib/shop/single-sot-pricing.js";
+import { buildOptionAxisFromCanonicalRows, buildOptionEntryRowsFromBreakdown, buildVariantBreakdownFromCanonicalRows, canOverwriteCanonicalVariantPublishRows, validateAdditiveBreakdown } from "@/lib/shop/single-sot-pricing.js";
 import { createPersistedSizeGridLookup } from "@/lib/shop/weight-grid-store.js";
 import { ensureSharedSizeGridRowsForChannel } from "@/lib/shop/shared-size-grid-runtime";
 import { buildCanonicalInputsFromExplicitOptionEntries } from "@/lib/shop/explicit-option-entry-canonical-inputs";
 import { resolveBaseMaterialFinalKrw } from "@/lib/shop/base-material-price";
+import { parsePriceEndingPolicy, resolveEndedBasePrice } from "@/lib/shop/price-ending-policy";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -480,7 +481,7 @@ export async function POST(request: Request) {
   const factorSetOverride = typeof body.factor_set_id === "string" ? body.factor_set_id.trim() : null;
   if (!channelId) return jsonError("channel_id is required", 400);
 
-  const policySelectV2 = "policy_id, margin_multiplier, rounding_unit, rounding_mode, option_rounding_unit, option_rounding_mode, option_18k_weight_multiplier, material_factor_set_id, gm_material, gm_labor, gm_fixed, fee_rate, min_margin_rate_total, fixed_cost_krw, pricing_algo_default";
+  const policySelectV2 = "policy_id, margin_multiplier, rounding_unit, rounding_mode, option_rounding_unit, option_rounding_mode, option_18k_weight_multiplier, material_factor_set_id, gm_material, gm_labor, gm_fixed, fee_rate, min_margin_rate_total, fixed_cost_krw, pricing_algo_default, base_price_ending_policy_json";
   const policySelectLegacy = "policy_id, margin_multiplier, rounding_unit, rounding_mode, option_18k_weight_multiplier, material_factor_set_id";
 
   let policy: Record<string, unknown> | null = null;
@@ -495,7 +496,7 @@ export async function POST(request: Request) {
 
   if (policyRes.error) {
     const msg = String(policyRes.error.message ?? "");
-    if (!msg.includes("gm_material") && !msg.includes("option_rounding_unit") && !msg.includes("option_rounding_mode")) return jsonError(msg || "가격 정책 조회 실패", 500);
+    if (!msg.includes("gm_material") && !msg.includes("option_rounding_unit") && !msg.includes("option_rounding_mode") && !msg.includes("base_price_ending_policy_json")) return jsonError(msg || "가격 정책 조회 실패", 500);
     const legacyRes = await sb
       .from("pricing_policy")
       .select(policySelectLegacy)
@@ -517,10 +518,18 @@ export async function POST(request: Request) {
         min_margin_rate_total: 0,
         fixed_cost_krw: 0,
         pricing_algo_default: "LEGACY_V1",
+        base_price_ending_policy_json: null,
       };
     }
   } else {
     policy = (policyRes.data as Record<string, unknown> | null);
+  }
+
+  let basePriceEndingPolicy = null;
+  try {
+    basePriceEndingPolicy = parsePriceEndingPolicy(policy?.base_price_ending_policy_json ?? null);
+  } catch (error) {
+    return jsonError(error instanceof Error ? error.message : "기본가 끝자리 정책이 올바르지 않습니다", 400);
   }
 
   if (!policy) {
@@ -1323,6 +1332,7 @@ export async function POST(request: Request) {
       min_margin_price_krw: minMarginPriceKrw,
       guardrail_price_krw: guardrailPriceKrw,
       guardrail_reason_code: guardrailReasonCode,
+      final_target_price_v2_krw: guardrailPriceKrw,
     });
 
     if (matchedR4Rule) {
@@ -1466,9 +1476,22 @@ export async function POST(request: Request) {
     const finalTargetV2BeforeOverride = Math.round(Number(guardrail.guardrail_price_krw ?? 0));
     const finalTargetV2 = override
       ? Math.round(toNum(override.override_price_krw, finalTargetV2BeforeOverride))
-      : finalTargetV2BeforeOverride;
+      : resolveEndedBasePrice({
+          safeTargetKrw: finalTargetV2BeforeOverride,
+          bands: basePriceEndingPolicy,
+        }).finalEndedPriceKrw;
+    const legacyFinalTargetWithEnding = override
+      ? legacyFinalTarget
+      : resolveEndedBasePrice({
+          safeTargetKrw: legacyFinalTarget,
+          bands: basePriceEndingPolicy,
+        }).finalEndedPriceKrw;
 
-    const finalTarget = pricingAlgoVersion === "REVERSE_FEE_V2" ? finalTargetV2 : legacyFinalTarget;
+    const finalTarget = pricingAlgoVersion === "REVERSE_FEE_V2" ? finalTargetV2 : legacyFinalTargetWithEnding;
+    const guardrailTrace = guardrailTraceByChannelProductId.get(m.channel_product_id);
+    if (guardrailTrace) {
+      guardrailTrace.final_target_price_v2_krw = finalTargetV2;
+    }
     const finalTargetBeforeFloor = pricingAlgoVersion === "REVERSE_FEE_V2" ? finalTargetV2BeforeOverride : legacyFinalBeforeFloor;
     const floorClamped = pricingAlgoVersion === "REVERSE_FEE_V2" ? false : (legacyFinalTarget > legacyFinalBeforeFloor);
     const basePriceForState = Math.max(0, finalTarget - optionPriceDelta);
@@ -1709,6 +1732,7 @@ export async function POST(request: Request) {
 
   const publishBaseRows = Array.from(publishBaseRowsByChannelProductId.values());
   const publishVariantRows = Array.from(publishVariantRowsByChannelProductId.values());
+  let canonicalVariantGuardBlockCount = 0;
 
   if (publishVariantRows.length > 0) {
     const account = await loadCafe24Account(sb, channelId);
@@ -1881,6 +1905,42 @@ export async function POST(request: Request) {
           violations: additiveValidation.violations,
         });
       }
+      const publishedVariantsForGuard: Array<{
+        variantCode: string;
+        publishedAdditionalAmountKrw: number;
+        options: Array<{ name: string; value: string }>;
+      }> = [];
+      for (const row of productRows) {
+        const variantCode = String(row.external_variant_code ?? "").trim();
+        if (!variantCode) continue;
+        const variant = businessVariants.find((candidate) => String(candidate.variantCode ?? "").trim() === variantCode) ?? null;
+        if (!variant) continue;
+        const normalizedOptions = (variant.options ?? [])
+          .map((option) => ({
+            name: String(option?.name ?? "").trim(),
+            value: String(option?.value ?? "").trim(),
+          }))
+          .filter((option) => option.name && option.value);
+        if (normalizedOptions.length === 0) continue;
+        publishedVariantsForGuard.push({
+          variantCode,
+          publishedAdditionalAmountKrw: Math.round(Number(row.published_additional_amount_krw ?? Number.NaN)),
+          options: normalizedOptions,
+        });
+      }
+      const canonicalOverwriteAllowed = canOverwriteCanonicalVariantPublishRows({
+        publishedVariants: publishedVariantsForGuard,
+        canonicalBreakdown: {
+          axes: axis.axes,
+          byVariant: breakdown.byVariant.filter((row) => publishedVariantsForGuard.some((variant) => variant.variantCode === String(row.variant_code ?? "").trim())),
+        },
+        optionRoundingUnit: Number(policy.option_rounding_unit ?? 500),
+        optionRoundingMode: String(policy.option_rounding_mode ?? "CEIL") as "CEIL" | "ROUND" | "FLOOR",
+      });
+      if (!canonicalOverwriteAllowed) {
+        canonicalVariantGuardBlockCount += 1;
+        continue;
+      }
       optionEntryRows.push(...buildOptionEntryRowsFromBreakdown({
         channelId,
         masterItemId,
@@ -1980,7 +2040,7 @@ export async function POST(request: Request) {
           min_margin_price_krw: Number(guardrailTrace.min_margin_price_krw ?? 0),
           guardrail_price_krw: Number(guardrailTrace.guardrail_price_krw ?? 0),
           guardrail_reason_code: String(guardrailTrace.guardrail_reason_code ?? "COMPONENT_CANDIDATE_WIN"),
-          final_target_price_v2_krw: Number(guardrailTrace.guardrail_price_krw ?? 0),
+          final_target_price_v2_krw: Number(guardrailTrace.final_target_price_v2_krw ?? 0),
         });
       }
     }
@@ -2027,6 +2087,7 @@ export async function POST(request: Request) {
     factor_set_id_used: selectedFactorSetId,
     publish_version: computeRequestId,
     compute_request_id: computeRequestId,
+      canonical_variant_guard_block_count: 0,
   }, { headers: { "Cache-Control": "no-store" } });
 }
 

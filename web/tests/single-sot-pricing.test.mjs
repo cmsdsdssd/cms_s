@@ -195,3 +195,4 @@ test('buildOptionEntryRowsFromBreakdown applies option 500 CEIL rounding before 
   assert.deepEqual(axis.axes[0].values.map((value) => value.display_label), ['1호 (+9,500원)', '2호 (+15,000원)']);
   assert.equal(axis.axes[1].values[0].display_label, '붕어장식 (+165,000원)');
 });
+

@@ -151,3 +151,69 @@ test('buildDetailedBaseBreakdown derives fallback rates when snapshot rate field
   assert.ok(Math.abs((detailed?.laborMarginRate ?? 0) - ((400000 - 280000) / 280000)) < 0.000001);
   assert.ok(Math.abs((detailed?.guardrailRate ?? 0) - (1 - (1 - (610000 / 683200)) - (444440 / 700000))) < 0.000001);
 });
+
+test('buildDetailedBaseBreakdown marks published-preview zero diff as match', () => {
+  const detailed = buildDetailedBaseBreakdown({
+    publishedBasePriceKrw: 3481000,
+    snapshot: {
+      final_target_price_v2_krw: 3481000,
+      diff_krw: 0,
+      diff_pct: 0,
+    },
+  });
+
+  assert.ok(detailed);
+  assert.equal(detailed?.storefrontPriceSource, 'PUBLISHED_PREVIEW');
+  assert.equal(detailed?.storefrontCompareStatus, 'MATCH');
+});
+
+test('buildDetailedBaseBreakdown marks non-zero diff as out of sync', () => {
+  const detailed = buildDetailedBaseBreakdown({
+    publishedBasePriceKrw: 3481000,
+    snapshot: {
+      final_target_price_v2_krw: 3481600,
+      current_channel_price_krw: 3481000,
+      diff_krw: 600,
+      diff_pct: 600 / 3481000,
+    },
+  });
+
+  assert.ok(detailed);
+  assert.equal(detailed?.storefrontPriceSource, 'LIVE');
+  assert.equal(detailed?.storefrontCompareStatus, 'OUT_OF_SYNC');
+});
+
+
+test('buildBaseBreakdownRows hides legacy rounding row for v2 snapshots', () => {
+  const rows = buildBaseBreakdownRows({
+    publishedBasePriceKrw: 3292000,
+    snapshot: {
+      candidate_price_krw: 2372000,
+      guardrail_price_krw: 3292000,
+      rounded_target_price_krw: 2665000,
+      final_target_price_v2_krw: 3292000,
+    },
+  });
+
+  assert.deepEqual(rows.map((row) => row.label), [
+    '후보 기준가',
+    '가드레일',
+    '게시 기준가',
+  ]);
+});
+
+test('buildDetailedBaseBreakdown hides legacy rounded target for v2 snapshots', () => {
+  const detailed = buildDetailedBaseBreakdown({
+    publishedBasePriceKrw: 3292000,
+    snapshot: {
+      candidate_price_krw: 2372000,
+      guardrail_price_krw: 3292000,
+      rounded_target_price_krw: 2665000,
+      final_target_price_v2_krw: 3292000,
+    },
+  });
+
+  assert.ok(detailed);
+  assert.equal(detailed?.selectedPriceKrw, 3292000);
+  assert.equal(detailed?.roundedTargetPriceKrw, null);
+});

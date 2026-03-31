@@ -131,7 +131,7 @@ export type DetailedBaseBreakdown = {
   storefrontDiffKrw: number | null;
   storefrontDiffPct: number | null;
   storefrontSyncPass: boolean | null;
-  storefrontCompareStatus: "MATCH" | "NORMAL_UNCHANGED" | "MISMATCH" | "UNAVAILABLE";
+  storefrontCompareStatus: "MATCH" | "THRESHOLD_HELD" | "OUT_OF_SYNC" | "UNAVAILABLE";
   laborComponents: DetailedLaborComponent[];
 };
 
@@ -256,12 +256,13 @@ export function buildBaseBreakdownRows(args: {
 
   if (snapshot) {
     const materialCode = toStringOrNull(snapshot.material_code_effective);
+    const hasV2SelectedPrice = toRoundedInt(snapshot.final_target_price_v2_krw) !== null;
     pushRow('소재 구성', snapshot.material_final_krw, materialCode ? materialCode + ' 기준' : null);
     pushRow('공임 구성', snapshot.labor_cost_applied_krw ?? snapshot.labor_sell_total_plus_absorb_krw);
     pushRow('고정 구성', snapshot.fixed_pre_fee_krw);
     pushRow('후보 기준가', snapshot.candidate_price_krw);
     pushRow('가드레일', snapshot.guardrail_price_krw, toStringOrNull(snapshot.guardrail_reason_code));
-    pushRow('반올림', snapshot.rounded_target_price_krw);
+    if (!hasV2SelectedPrice) pushRow('반올림', snapshot.rounded_target_price_krw);
   } else if (targetPriceRawKrw !== null) {
     pushRow('계산 목표가', targetPriceRawKrw, 'publish raw target');
   }
@@ -310,6 +311,7 @@ export function buildDetailedBaseBreakdown(args: {
   const laborAfterMarginKrw = toRoundedInt(snapshot.labor_pre_fee_krw);
   const candidatePreFeeKrw = toRoundedInt(snapshot.candidate_pre_fee_krw);
   const candidatePriceKrw = toRoundedInt(snapshot.candidate_price_krw);
+  const selectedPriceV2Krw = toRoundedInt(snapshot.final_target_price_v2_krw);
   const costSumKrw = toRoundedInt(snapshot.cost_sum_krw);
   const marginMultiplier = toNumberOrNull(snapshot.shop_margin_multiplier);
   const legacyMarginRate = marginMultiplier !== null ? marginMultiplier - 1 : null;
@@ -328,8 +330,8 @@ export function buildDetailedBaseBreakdown(args: {
   const storefrontCompareStatus = storefrontPriceKrw == null || selectedPriceKrw == null
     ? "UNAVAILABLE"
     : storefrontSyncPass
-      ? (storefrontPriceSource === "LIVE" ? "MATCH" : "NORMAL_UNCHANGED")
-      : "MISMATCH";
+      ? "MATCH"
+      : "OUT_OF_SYNC";
   const laborComponentByKey = new Map(laborComponents.map((component) => [component.key, component]));
   const baseLaborComponent = laborComponentByKey.get('BASE_LABOR') ?? null;
   const stoneLaborComponent = laborComponentByKey.get('STONE_LABOR') ?? null;
@@ -380,7 +382,7 @@ export function buildDetailedBaseBreakdown(args: {
     guardrailRate,
     guardrailPriceKrw: toRoundedInt(snapshot.guardrail_price_krw ?? snapshot.min_margin_price_krw),
     guardrailReasonCode: toStringOrNull(snapshot.guardrail_reason_code),
-    roundedTargetPriceKrw: toRoundedInt(snapshot.rounded_target_price_krw),
+    roundedTargetPriceKrw: selectedPriceV2Krw !== null ? null : toRoundedInt(snapshot.rounded_target_price_krw),
     roundingUnitKrw: toRoundedInt((snapshot as { rounding_unit_used?: unknown }).rounding_unit_used),
     roundingMode: toStringOrNull((snapshot as { rounding_mode_used?: unknown }).rounding_mode_used),
     selectedPriceKrw,
@@ -390,7 +392,7 @@ export function buildDetailedBaseBreakdown(args: {
       floorPriceKrw: toRoundedInt(snapshot.floor_price_krw),
       floorClamped: toBooleanOrNull(snapshot.floor_clamped),
       guardrailPriceKrw: toRoundedInt(snapshot.guardrail_price_krw ?? snapshot.min_margin_price_krw),
-      roundedTargetPriceKrw: toRoundedInt(snapshot.rounded_target_price_krw),
+      roundedTargetPriceKrw: selectedPriceV2Krw !== null ? null : toRoundedInt(snapshot.rounded_target_price_krw),
       candidatePriceKrw,
       publishedBasePriceKrw: toRoundedInt(args.publishedBasePriceKrw),
     }),

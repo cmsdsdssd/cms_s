@@ -1,0 +1,19 @@
+steps:
+- name: gcr.io/cloud-builders/docker
+  args:
+    - build
+    - -t
+    - ${_IMAGE}
+    - --build-arg
+    - NEXT_PUBLIC_SUPABASE_URL=https://ptxmypzrqonokuikpqzr.supabase.co
+    - --build-arg
+    - NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InB0eG15cHpycW9ub2t1aWtwcXpyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njg3NDQ0NzEsImV4cCI6MjA4NDMyMDQ3MX0.EiCkAgaNwmuOhqwu1sEAHMv7sN0_WBlblpXERKfxZlE
+    - --build-arg
+    - NEXT_PUBLIC_CMS_ACTOR_ID=7088db6c-1ebb-4466-9b72-8a29fa008ebb
+    - --build-arg
+    - NEXT_PUBLIC_CMS_ACTOR_TYPE=staff
+    - --build-arg
+    - NEXT_PUBLIC_CMS_CORRELATION_ID=7088db6c-1ebb-4466-9b72-8a29fa008ebb
+    - .
+images:
+- ${_IMAGE}

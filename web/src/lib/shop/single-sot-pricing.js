@@ -374,6 +374,74 @@ export const validateAdditiveBreakdown = (breakdown) => {
   };
 };
 
+
+const buildComparableOptionEntryKeys = ({ breakdown, optionRoundingUnit, optionRoundingMode }) => {
+  const rows = buildOptionEntryRowsFromBreakdown({
+    channelId: '__cmp__',
+    masterItemId: '__cmp__',
+    externalProductNo: '__cmp__',
+    publishVersion: '__cmp__',
+    computedAt: '1970-01-01T00:00:00.000Z',
+    breakdown,
+    optionRoundingUnit,
+    optionRoundingMode,
+  });
+  return rows
+    .map((row) => [
+      Number(row.option_axis_index ?? Number.NaN),
+      String(row.option_name ?? '').trim(),
+      String(row.option_value ?? '').trim(),
+      Math.round(Number(row.published_delta_krw ?? Number.NaN)),
+    ])
+    .filter(([axisIndex, optionName, optionValue, delta]) => Number.isFinite(axisIndex) && optionName && optionValue && Number.isFinite(delta))
+    .map(([axisIndex, optionName, optionValue, delta]) => `${axisIndex}::${optionName}::${optionValue}::${delta}`)
+    .sort((left, right) => left.localeCompare(right, 'ko'));
+};
+
+export const canOverwriteCanonicalVariantPublishRows = ({
+  publishedVariants,
+  canonicalBreakdown,
+  optionRoundingUnit = 500,
+  optionRoundingMode = 'CEIL',
+}) => {
+  const normalizedPublishedVariants = (Array.isArray(publishedVariants) ? publishedVariants : [])
+    .map((variant) => ({
+      variantCode: String(variant?.variantCode ?? variant?.variant_code ?? '').trim(),
+      publishedAdditionalAmountKrw: Math.round(Number(variant?.publishedAdditionalAmountKrw ?? variant?.published_additional_amount_krw ?? Number.NaN)),
+      options: Array.isArray(variant?.options) ? variant.options : [],
+    }))
+    .filter((variant) => variant.variantCode && Number.isFinite(variant.publishedAdditionalAmountKrw) && variant.options.length > 0);
+  if (normalizedPublishedVariants.length === 0) return false;
+
+  const preCanonicalBreakdown = buildOptionAxisBreakdownFromPublishedVariants(normalizedPublishedVariants);
+  const preCanonicalValidation = validateAdditiveBreakdown(preCanonicalBreakdown);
+  if (!preCanonicalValidation.ok) return false;
+  const canonicalValidation = validateAdditiveBreakdown(canonicalBreakdown);
+  if (!canonicalValidation.ok) return false;
+
+  const canonicalTotalsByVariantCode = new Map(
+    (Array.isArray(canonicalBreakdown?.byVariant) ? canonicalBreakdown.byVariant : [])
+      .map((row) => [String(row?.variant_code ?? '').trim(), Math.round(Number(row?.total_delta_krw ?? Number.NaN))])
+      .filter(([variantCode, totalDelta]) => variantCode && Number.isFinite(totalDelta)),
+  );
+  for (const variant of normalizedPublishedVariants) {
+    if (canonicalTotalsByVariantCode.get(variant.variantCode) !== variant.publishedAdditionalAmountKrw) return false;
+  }
+
+  const preCanonicalOptionEntryKeys = buildComparableOptionEntryKeys({
+    breakdown: preCanonicalBreakdown,
+    optionRoundingUnit,
+    optionRoundingMode,
+  });
+  const canonicalOptionEntryKeys = buildComparableOptionEntryKeys({
+    breakdown: canonicalBreakdown,
+    optionRoundingUnit,
+    optionRoundingMode,
+  });
+  if (preCanonicalOptionEntryKeys.length !== canonicalOptionEntryKeys.length) return false;
+  return preCanonicalOptionEntryKeys.every((key, index) => key === canonicalOptionEntryKeys[index]);
+};
+
 export const buildOptionAxisBreakdownFromPublishedVariants = (variants) => {
   const normalizedVariants = Array.isArray(variants) ? variants : [];
   const axisNames = [];
